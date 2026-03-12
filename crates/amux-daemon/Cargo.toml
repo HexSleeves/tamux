@@ -1,0 +1,40 @@
+[package]
+name = "amux-daemon"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "amux-daemon"
+path = "src/main.rs"
+
+[dependencies]
+amux-protocol = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+uuid = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+tokio-util = { workspace = true }
+portable-pty = "0.8"
+strip-ansi-escapes = "0.2"
+regex = "1"
+dirs = "6"
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
+sysinfo = "0.30"
+tree-sitter = "0.22"
+tree-sitter-bash = "0.21"
+walkdir = "2"
+base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+interprocess = { version = "2", features = ["tokio"] }
+
+[target.'cfg(unix)'.dependencies]
+tokio = { workspace = true, features = ["net"] }

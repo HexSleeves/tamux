@@ -1,0 +1,36 @@
+schemaVersion: 1
+title: "Web Browser"
+when: "webBrowserOpen"
+blocks:
+  browserPanelShell:
+    title: "Browser Panel Shell"
+    builder:
+      category: "panel"
+      editable: true
+    defaults:
+      visible: true
+      style:
+        position: "relative"
+        width: "48vw"
+        zIndex: 2900
+    layout:
+      id: "blocks/browserPanelShell/layout"
+      use: "amux-primitive-box"
+      builder:
+        editable: true
+layout:
+  id: "web-browser-root"
+  use: "browserPanelShell"
+  builder:
+    editable: true
+  children:
+    - id: "web-browser-panel"
+      type: "WebBrowserPanel"
+      props:
+        visible: true
+        resizable: true
+        resizeAxis: "horizontal"
+        minWidth: 420
+        maxWidth: "80vw"
+      builder:
+        editable: true

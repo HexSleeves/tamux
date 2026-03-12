@@ -1,0 +1,24 @@
+[package]
+name = "amux-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "amux"
+path = "src/main.rs"
+
+[dependencies]
+amux-protocol = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+base64 = "0.22"

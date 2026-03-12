@@ -1,0 +1,254 @@
+import { create } from "zustand";
+import { TranscriptEntry, TranscriptReason, WorkspaceId, SurfaceId, PaneId } from "./types";
+import { DEFAULT_SETTINGS } from "./types";
+import {
+  readLegacyLocalStorageJson,
+  readPersistedJson,
+  scheduleJsonWrite,
+  schedulePathDelete,
+  scheduleTextWrite,
+  writeLegacyLocalStorageJson,
+} from "./persistence";
+
+let _txId = 0;
+const STORAGE_KEY = "amux_transcripts";
+const TRANSCRIPT_INDEX_FILE = "transcript-index.json";
+const TRANSCRIPT_DIR = "transcripts";
+const LIVE_TRANSCRIPT_DIR = `${TRANSCRIPT_DIR}/live`;
+
+function readRetentionDays(): number {
+  if (typeof window === "undefined") {
+    return DEFAULT_SETTINGS.transcriptRetentionDays;
+  }
+
+  try {
+    const raw = window.localStorage.getItem("amux_settings");
+    if (!raw) {
+      return DEFAULT_SETTINGS.transcriptRetentionDays;
+    }
+
+    const parsed = JSON.parse(raw) as {
+      settings?: { transcriptRetentionDays?: unknown };
+      transcriptRetentionDays?: unknown;
+    };
+    const candidate = parsed.settings?.transcriptRetentionDays ?? parsed.transcriptRetentionDays;
+    const retentionDays = typeof candidate === "number" ? candidate : Number(candidate);
+
+    return Number.isFinite(retentionDays)
+      ? retentionDays
+      : DEFAULT_SETTINGS.transcriptRetentionDays;
+  } catch {
+    return DEFAULT_SETTINGS.transcriptRetentionDays;
+  }
+}
+
+function loadTranscripts(): TranscriptEntry[] {
+  try {
+    const parsed = readLegacyLocalStorageJson<TranscriptEntry[]>(STORAGE_KEY) ?? [];
+    let maxId = 0;
+    for (const entry of parsed) {
+      const match = /^tx_(\d+)$/.exec(entry.id);
+      if (match) {
+        maxId = Math.max(maxId, Number(match[1]));
+      }
+    }
+    _txId = maxId;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistTranscripts(transcripts: TranscriptEntry[]) {
+  writeLegacyLocalStorageJson(STORAGE_KEY, transcripts);
+  scheduleJsonWrite(TRANSCRIPT_INDEX_FILE, transcripts, 200);
+}
+
+function buildFinalTranscriptFilePath(reason: TranscriptReason, paneId?: string | null) {
+  const now = new Date();
+  const dateStr = now.toISOString().slice(0, 10);
+  const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, "");
+  const relativePath = `${TRANSCRIPT_DIR}/${dateStr}/${timeStr}_${reason}_${paneId ?? "unknown"}.log`;
+  return {
+    filename: `${dateStr}/${timeStr}_${reason}_${paneId ?? "unknown"}.log`,
+    filePath: relativePath,
+  };
+}
+
+function buildLiveTranscriptFilePath(paneId?: string | null) {
+  const safePaneId = paneId ?? "unknown";
+  return {
+    filename: `live/${safePaneId}.log`,
+    filePath: `${LIVE_TRANSCRIPT_DIR}/${safePaneId}.log`,
+  };
+}
+
+function pruneTranscripts(entries: TranscriptEntry[]): TranscriptEntry[] {
+  const retentionDays = readRetentionDays();
+
+  if (retentionDays <= 0) {
+    return entries;
+  }
+
+  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  return entries.filter((entry) => entry.capturedAt >= cutoff);
+}
+
+export interface TranscriptState {
+  transcripts: TranscriptEntry[];
+
+  addTranscript: (opts: {
+    content: string;
+    reason: TranscriptReason;
+    workspaceId?: WorkspaceId | null;
+    surfaceId?: SurfaceId | null;
+    paneId?: PaneId | null;
+    cwd?: string | null;
+  }) => void;
+
+  search: (query: string) => TranscriptEntry[];
+  getByWorkspace: (workspaceId: WorkspaceId) => TranscriptEntry[];
+  getById: (id: string) => TranscriptEntry | undefined;
+  removeTranscript: (id: string) => void;
+  clearAll: () => void;
+  upsertLiveTranscript: (opts: {
+    content: string;
+    workspaceId?: WorkspaceId | null;
+    surfaceId?: SurfaceId | null;
+    paneId?: PaneId | null;
+    cwd?: string | null;
+  }) => void;
+  hydrateTranscripts: (transcripts: TranscriptEntry[]) => void;
+}
+
+const initialTranscripts = pruneTranscripts(loadTranscripts());
+
+export const useTranscriptStore = create<TranscriptState>((set, get) => ({
+  transcripts: initialTranscripts,
+
+  addTranscript: (opts) => {
+    const paths = buildFinalTranscriptFilePath(opts.reason, opts.paneId);
+
+    const entry: TranscriptEntry = {
+      id: `tx_${++_txId}`,
+      filename: paths.filename,
+      filePath: paths.filePath,
+      reason: opts.reason,
+      workspaceId: opts.workspaceId ?? null,
+      surfaceId: opts.surfaceId ?? null,
+      paneId: opts.paneId ?? null,
+      cwd: opts.cwd ?? null,
+      capturedAt: Date.now(),
+      sizeBytes: new TextEncoder().encode(opts.content).length,
+      preview: opts.content.slice(0, 500),
+      content: opts.content,
+    };
+    set((s) => {
+      const transcripts = pruneTranscripts([entry, ...s.transcripts]);
+      scheduleTextWrite(paths.filePath, opts.content, 50);
+      persistTranscripts(transcripts);
+      return { transcripts };
+    });
+  },
+
+  upsertLiveTranscript: (opts) => {
+    const content = opts.content.trim();
+    if (!content) return;
+
+    const paths = buildLiveTranscriptFilePath(opts.paneId);
+    const now = Date.now();
+    const liveId = `live_${opts.paneId ?? "unknown"}`;
+    const entry: TranscriptEntry = {
+      id: liveId,
+      filename: paths.filename,
+      filePath: paths.filePath,
+      reason: "live",
+      workspaceId: opts.workspaceId ?? null,
+      surfaceId: opts.surfaceId ?? null,
+      paneId: opts.paneId ?? null,
+      cwd: opts.cwd ?? null,
+      capturedAt: now,
+      sizeBytes: new TextEncoder().encode(content).length,
+      preview: content.slice(0, 500),
+      content,
+    };
+
+    set((s) => {
+      const transcripts = pruneTranscripts([
+        entry,
+        ...s.transcripts.filter((current) => current.id !== liveId),
+      ]);
+      scheduleTextWrite(paths.filePath, content, 300);
+      persistTranscripts(transcripts);
+      return { transcripts };
+    });
+  },
+
+  search: (query) => {
+    const lower = query.toLowerCase();
+    return get().transcripts.filter(
+      (t) =>
+        t.filename.toLowerCase().includes(lower) ||
+        t.preview.toLowerCase().includes(lower) ||
+        (t.cwd && t.cwd.toLowerCase().includes(lower))
+    );
+  },
+
+  getByWorkspace: (workspaceId) =>
+    get().transcripts.filter((t) => t.workspaceId === workspaceId),
+
+  getById: (id) => get().transcripts.find((t) => t.id === id),
+
+  removeTranscript: (id) => {
+    const target = get().transcripts.find((entry) => entry.id === id);
+    if (!target) return;
+
+    schedulePathDelete(target.filePath, 0);
+    set((state) => {
+      const transcripts = state.transcripts.filter((entry) => entry.id !== id);
+      persistTranscripts(transcripts);
+      return { transcripts };
+    });
+  },
+
+  clearAll: () => {
+    for (const transcript of get().transcripts) {
+      schedulePathDelete(transcript.filePath, 0);
+    }
+    persistTranscripts([]);
+    set({ transcripts: [] });
+  },
+
+  hydrateTranscripts: (transcripts) => {
+    const pruned = pruneTranscripts(transcripts);
+    persistTranscripts(pruned);
+    set({ transcripts: pruned });
+  },
+}));
+
+export async function hydrateTranscriptStore(): Promise<void> {
+  const diskTranscripts = await readPersistedJson<TranscriptEntry[]>(TRANSCRIPT_INDEX_FILE);
+  if (Array.isArray(diskTranscripts)) {
+    const hydrated = diskTranscripts.map((entry) => ({
+      ...entry,
+      filePath: entry.filePath ?? entry.filename,
+    }));
+    useTranscriptStore.getState().hydrateTranscripts(hydrated);
+    return;
+  }
+
+  if (initialTranscripts.length > 0) {
+    for (const transcript of initialTranscripts) {
+      const filePath = transcript.filePath ?? transcript.filename;
+      scheduleTextWrite(filePath, transcript.content, 0);
+    }
+    scheduleJsonWrite(
+      TRANSCRIPT_INDEX_FILE,
+      initialTranscripts.map((transcript) => ({
+        ...transcript,
+        filePath: transcript.filePath ?? transcript.filename,
+      })),
+      0,
+    );
+  }
+}

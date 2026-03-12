@@ -1,0 +1,36 @@
+# Build artifacts
+/target/
+/dist/
+/frontend/dist/
+/frontend/node_modules/
+/frontend/release/
+/dist-release/
+.history
+tmp
+.claude
+agents.md
+.codex
+.vsc
+# IDE
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+
+# Logs
+*.log
+dist-release/amux Setup 0.1.0.exe
+dist-release/amux-daemon.exe
+dist-release/amux-gateway.exe
+dist-release/amux-mcp.exe
+dist-release/amux-portable.exe
+dist-release/amux.exe

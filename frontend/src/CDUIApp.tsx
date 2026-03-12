@@ -1,0 +1,188 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AppContext, defaultAppState } from "./context/AppContext";
+import { ViewBuilderOverlay } from "./components/ViewBuilderOverlay";
+import {
+  compileViewDocument,
+  loadCDUIViewStack,
+  rollbackViewToDefault,
+  type LoadedCDUIView,
+} from "./lib/cduiLoader";
+import { useViewBuilderStore } from "./lib/viewBuilderStore";
+import "./plugins/globalAPI";
+import DynamicRenderer from "./renderers/DynamicRenderer";
+import { ViewErrorBoundary } from "./renderers/ViewErrorBoundary";
+import { registerBaseCommands } from "./registry/registerBaseCommands";
+import { registerBaseComponents } from "./registry/registerBaseComponents";
+import { isCDUIViewVisible, useCDUIVisibilityFlags } from "./lib/cduiVisibility";
+import { registerCodingAgentsPlugin } from "./plugins/coding-agents/registerPlugin";
+
+const EMBEDDED_VIEW_IDS = new Set([
+  "search-overlay",
+  "time-travel-slider",
+  "web-browser-panel",
+  "agent-chat-panel",
+]);
+
+const CDUIApp = () => {
+  const [views, setViews] = useState<LoadedCDUIView[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const pendingCrashHandling = useRef<Set<string>>(new Set());
+  const isEditMode = useViewBuilderStore((state) => state.isEditMode);
+  const activeViewId = useViewBuilderStore((state) => state.activeViewId);
+  const draftDocuments = useViewBuilderStore((state) => state.draftDocuments);
+  const syncLoadedViews = useViewBuilderStore((state) => state.syncLoadedViews);
+  const workspaceFlags = useCDUIVisibilityFlags();
+
+  const reloadViews = useCallback(async () => {
+    try {
+      const loadedViews = await loadCDUIViewStack();
+      setViews(loadedViews);
+      setError(null);
+    } catch (loadError) {
+      console.error("Failed to load CDUI view stack", loadError);
+      setError("Failed to load UI view stack");
+    }
+  }, []);
+
+  useEffect(() => {
+    registerBaseComponents();
+    registerBaseCommands();
+    registerCodingAgentsPlugin();
+  }, []);
+
+  useEffect(() => {
+    void reloadViews();
+  }, [reloadViews]);
+
+  useEffect(() => {
+    if (views) {
+      syncLoadedViews(views);
+    }
+  }, [syncLoadedViews, views]);
+
+  useEffect(() => {
+    const onPluginViewsUpdated = () => {
+      void reloadViews();
+    };
+    const onManualViewsReload = () => {
+      void reloadViews();
+    };
+
+    window.addEventListener("amux-cdui-plugin-views-updated", onPluginViewsUpdated);
+    window.addEventListener("amux-cdui-views-reload", onManualViewsReload);
+    return () => {
+      window.removeEventListener("amux-cdui-plugin-views-updated", onPluginViewsUpdated);
+      window.removeEventListener("amux-cdui-views-reload", onManualViewsReload);
+    };
+  }, [reloadViews]);
+
+  const handleViewCrash = useCallback((viewId: string, crashError: Error) => {
+    if (pendingCrashHandling.current.has(viewId)) {
+      return;
+    }
+    pendingCrashHandling.current.add(viewId);
+
+    // Defer state updates outside the current error boundary commit cycle.
+    window.setTimeout(() => {
+      setViews((current) => {
+        if (!current) {
+          return current;
+        }
+
+        const crashingView = current.find((view) => view.id === viewId);
+        if (!crashingView) {
+          return current;
+        }
+
+        // If the default view itself crashes, remove it to break render loops.
+        if (crashingView.source === "default") {
+          console.error(`Default view '${viewId}' crashed and was disabled.`, crashError);
+          return current.filter((view) => view.id !== viewId);
+        }
+
+        console.error(`View '${viewId}' crashed. Rolling back to default.`, crashError);
+        void rollbackViewToDefault(viewId).then((fallbackView) => {
+          setViews((next) => {
+            if (!next) {
+              return next;
+            }
+
+            if (!fallbackView) {
+              return next.filter((view) => view.id !== viewId);
+            }
+
+            return next.map((view) => (view.id === viewId ? fallbackView : view));
+          });
+        });
+
+        return current;
+      });
+
+      pendingCrashHandling.current.delete(viewId);
+    }, 0);
+  }, []);
+
+  const renderedViews = useMemo(() => {
+    if (!views) {
+      return null;
+    }
+
+    return views.map((view) => {
+      if (!isEditMode || activeViewId !== view.id) {
+        return view;
+      }
+
+      const draftDocument = draftDocuments[view.id];
+      if (!draftDocument) {
+        return view;
+      }
+
+      try {
+        return {
+          ...view,
+          document: draftDocument,
+          config: compileViewDocument(draftDocument, `builder:${view.id}`),
+        } satisfies LoadedCDUIView;
+      } catch (draftError) {
+        console.warn(`Failed to compile builder draft for '${view.id}'.`, draftError);
+        return view;
+      }
+    });
+  }, [activeViewId, draftDocuments, isEditMode, views]);
+
+  if (error) {
+    return <div style={{ color: "red", padding: 16 }}>{error}</div>;
+  }
+
+  if (!views || !renderedViews) {
+    return <div style={{ padding: 16 }}>Loading CDUI...</div>;
+  }
+
+  return (
+    <AppContext.Provider value={defaultAppState}>
+      {renderedViews.map((view) => {
+        if (EMBEDDED_VIEW_IDS.has(view.id)) {
+          return null;
+        }
+
+        if (!isCDUIViewVisible(workspaceFlags, view.id, view.config.when)) {
+          return null;
+        }
+
+        return (
+          <ViewErrorBoundary
+            key={`${view.id}:${view.resetKey}`}
+            viewId={view.id}
+            resetKey={view.resetKey}
+            onCrash={handleViewCrash}
+          >
+            <DynamicRenderer viewId={view.id} config={view.config.layout} fallback={view.config.fallback} />
+          </ViewErrorBoundary>
+        );
+      })}
+      <ViewBuilderOverlay />
+    </AppContext.Provider>
+  );
+};
+
+export default CDUIApp;
