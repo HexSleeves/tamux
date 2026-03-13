@@ -102,11 +102,25 @@ const CDUIApp = () => {
   }, [syncLoadedViews, views]);
 
   useEffect(() => {
+    // Collapse multiple same-tick events into a single reloadViews() invocation
+    let reloadScheduled = false;
+
+    const scheduleReload = () => {
+      if (reloadScheduled) {
+        return;
+      }
+      reloadScheduled = true;
+      window.setTimeout(() => {
+        reloadScheduled = false;
+        void reloadViews();
+      }, 0);
+    };
+
     const onPluginViewsUpdated = () => {
-      void reloadViews();
+      scheduleReload();
     };
     const onManualViewsReload = () => {
-      void reloadViews();
+      scheduleReload();
     };
 
     CDUI_PLUGIN_VIEWS_UPDATED_EVENTS.forEach((eventName) => window.addEventListener(eventName, onPluginViewsUpdated));
