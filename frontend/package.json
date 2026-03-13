@@ -46,26 +46,26 @@
     "appId": "app.tamux.desktop",
     "productName": "tamux",
     "directories": {
-      "output": "release"
+    "output": "release"
     },
-    "extraResources": [
-      {
-        "from": "dist/tamux-daemon.exe",
-        "to": "bin/tamux-daemon.exe"
-      },
-      {
-        "from": "dist/tamux.exe",
-        "to": "bin/tamux.exe"
-      }
-    ],
     "files": [
-      "dist/**/*",
-      "electron/**/*"
+    "dist/**/*",
+    "electron/**/*"
     ],
     "win": {
       "target": [
         "portable",
         "nsis"
+      ],
+      "extraResources": [
+        {
+          "from": "dist/tamux-daemon.exe",
+          "to": "bin/tamux-daemon.exe"
+        },
+          {
+            "from": "dist/tamux.exe",
+            "to": "bin/tamux.exe"
+          }
       ],
       "icon": "assets/icon.ico"
     },
@@ -73,6 +73,16 @@
       "target": [
         "AppImage",
         "deb"
+      ],
+      "extraResources": [
+        {
+          "from": "dist/tamux-daemon",
+          "to": "bin/tamux-daemon"
+        },
+        {
+          "from": "dist/tamux",
+          "to": "bin/tamux"
+        }
       ],
       "icon": "assets/icon.ico"
     },
