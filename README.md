@@ -156,11 +156,11 @@ Key design principles:
 
 | Crate | Role |
 |---|---|
-| `amux-protocol` | Shared message types, length-prefixed bincode codec, and configuration |
-| `amux-daemon` | Background daemon: PTY management, lane queue, snapshots, policy engine, CRIU, credential scrubbing, WORM telemetry, tree-sitter indexing, SQLite/FTS5 history |
-| `amux-cli` | Command-line client crate that builds the `tamux` binary (`tamux list`, `tamux new`, `tamux attach`, `tamux kill`, `tamux exec`, `tamux ping`) |
-| `amux-gateway` | Chat platform bridge crate that builds the `tamux-gateway` binary |
-| `amux-mcp` | MCP server crate that builds the `tamux-mcp` binary |
+| `tamux-protocol` | Shared message types, length-prefixed bincode codec, and configuration |
+| `tamux-daemon` | Background daemon: PTY management, lane queue, snapshots, policy engine, CRIU, credential scrubbing, WORM telemetry, tree-sitter indexing, SQLite/FTS5 history |
+| `tamux-cli` | Command-line client crate that builds the `tamux` binary (`tamux list`, `tamux new`, `tamux attach`, `tamux kill`, `tamux exec`, `tamux ping`) |
+| `tamux-gateway` | Chat platform bridge crate that builds the `tamux-gateway` binary |
+| `tamux-mcp` | MCP server crate that builds the `tamux-mcp` binary |
 
 ---
 
