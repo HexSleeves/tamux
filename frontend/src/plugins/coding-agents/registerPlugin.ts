@@ -193,7 +193,7 @@ export function registerCodingAgentsPlugin() {
                 return {
                     toolCallId: call.id,
                     name: call.function.name,
-                    content: `Prepared ${launchedAgent?.label ?? agentId} for pane [${target.paneId}] on surface [${target.surfaceId}] in workspace [${target.workspaceId}]${selectedMode ? ` using ${selectedMode.label} mode` : ""}. Launch must be initiated by the user from the UI or through the managed terminal command tool.` ,
+                    content: `Prepared ${launchedAgent?.label ?? agentId} for pane [${target.paneId}] on surface [${target.surfaceId}] in workspace [${target.workspaceId}]${selectedMode ? ` using ${selectedMode.label} mode` : ""}. Launch must be initiated by the user from the UI or through the managed terminal command tool.`,
                 };
             },
         },
