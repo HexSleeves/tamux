@@ -37,6 +37,8 @@ pub struct PtySession {
     scrollback: Arc<std::sync::Mutex<Vec<u8>>>,
     dead: Arc<AtomicBool>,
     managed_lane: Arc<std::sync::Mutex<ManagedLaneState>>,
+    /// Last active (still-running) command detected via shell integration markers.
+    active_command: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 struct ManagedQueuedCommand {
@@ -116,6 +118,8 @@ impl PtySession {
 
         let dead = Arc::new(AtomicBool::new(false));
         let managed_lane = Arc::new(std::sync::Mutex::new(ManagedLaneState::default()));
+        let active_command: Arc<std::sync::Mutex<Option<String>>> =
+            Arc::new(std::sync::Mutex::new(None));
 
         let created_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -129,6 +133,7 @@ impl PtySession {
             let dead = dead.clone();
             let master_write = master_write.clone();
             let managed_lane = managed_lane.clone();
+            let active_command = active_command.clone();
             let workspace_id = workspace_id.clone();
             let cwd = cwd.clone();
             std::thread::Builder::new()
@@ -142,6 +147,7 @@ impl PtySession {
                         scrollback,
                         dead,
                         managed_lane,
+                        active_command,
                         history,
                         workspace_id,
                         cwd,
@@ -164,6 +170,7 @@ impl PtySession {
             scrollback,
             dead,
             managed_lane,
+            active_command,
         })
     }
 
@@ -334,6 +341,13 @@ impl PtySession {
     pub fn is_dead(&self) -> bool {
         self.dead.load(Ordering::SeqCst)
     }
+
+    /// Return the last active (still-running) command detected via shell
+    /// integration markers, or `None` if the shell has no integration or
+    /// the last command has finished.
+    pub fn active_command(&self) -> Option<String> {
+        self.active_command.lock().unwrap().clone()
+    }
 }
 
 /// Background thread that continuously reads PTY output and fans it out.
@@ -345,6 +359,7 @@ fn pty_reader_loop(
     scrollback: Arc<std::sync::Mutex<Vec<u8>>>,
     dead: Arc<AtomicBool>,
     managed_lane: Arc<std::sync::Mutex<ManagedLaneState>>,
+    active_command: Arc<std::sync::Mutex<Option<String>>>,
     history: HistoryStore,
     workspace_id: Option<String>,
     cwd: Option<String>,
@@ -359,6 +374,7 @@ fn pty_reader_loop(
                 break;
             }
             Ok(n) => {
+                tracing::trace!(%id, bytes = n, "PTY reader got output");
                 let mut chunk = Vec::with_capacity(marker_tail.len() + n);
                 if !marker_tail.is_empty() {
                     chunk.extend_from_slice(&marker_tail);
@@ -390,6 +406,7 @@ fn pty_reader_loop(
                 for marker in markers {
                     match marker {
                         CommandLifecycleMarker::Started(command) => {
+                            *active_command.lock().unwrap() = Some(command.clone());
                             let _ = tx.send(DaemonMessage::CommandStarted {
                                 id,
                                 command: command.clone(),
@@ -405,6 +422,7 @@ fn pty_reader_loop(
                             }
                         }
                         CommandLifecycleMarker::Finished(exit_code) => {
+                            *active_command.lock().unwrap() = None;
                             let _ = tx.send(DaemonMessage::CommandFinished { id, exit_code });
 
                             let completed = {
@@ -596,6 +614,57 @@ fn extract_command_markers(data: &[u8]) -> (Vec<CommandLifecycleMarker>, Vec<u8>
     }
 
     (markers, cleaned, trailing)
+}
+
+/// Strip CSI sequences that are terminal-to-host responses (focus events,
+/// device attribute responses, cursor position reports) which are meaningless
+/// and disruptive when replayed into a new terminal session.
+pub fn sanitize_scrollback_for_replay(data: &[u8]) -> Vec<u8> {
+    let mut cleaned = Vec::with_capacity(data.len());
+    let mut i = 0;
+
+    while i < data.len() {
+        // Detect CSI: ESC [
+        if i + 1 < data.len() && data[i] == 0x1b && data[i + 1] == b'[' {
+            let mut j = i + 2;
+            // Skip parameter bytes (0x30..=0x3F): digits ; ? > =
+            while j < data.len() && (0x30..=0x3F).contains(&data[j]) {
+                j += 1;
+            }
+            // Skip intermediate bytes (0x20..=0x2F)
+            while j < data.len() && (0x20..=0x2F).contains(&data[j]) {
+                j += 1;
+            }
+            // Final byte (0x40..=0x7E)
+            if j < data.len() && (0x40..=0x7E).contains(&data[j]) {
+                let final_byte = data[j];
+                let params_start = i + 2;
+                let should_strip = match final_byte {
+                    b'I' | b'O' => true, // Focus In / Focus Out
+                    b'c' => {
+                        // DA1 (\x1b[?..c), DA2 (\x1b[>..c), DA3 (\x1b[=..c), plain DA
+                        let first = data.get(params_start).copied();
+                        matches!(first, Some(b'?') | Some(b'>') | Some(b'='))
+                            || params_start == j
+                    }
+                    b'R' => {
+                        // Cursor Position Report: \x1b[<digits>;<digits>R
+                        data[params_start..j]
+                            .iter()
+                            .all(|&b| b.is_ascii_digit() || b == b';')
+                    }
+                    _ => false,
+                };
+                if should_strip {
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+        cleaned.push(data[i]);
+        i += 1;
+    }
+    cleaned
 }
 
 fn notify_session_exited(
