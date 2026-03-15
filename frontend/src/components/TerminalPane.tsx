@@ -70,7 +70,8 @@ const INLINE_APPROVAL_RESPONSE_HINT_RE = [
 ];
 
 function detectInlineApprovalPrompt(buffer: string): string | null {
-  const normalized = stripAnsi(buffer).replace(/\r/g, "\n");
+  // buffer is already ANSI-stripped by the caller
+  const normalized = buffer.replace(/\r/g, "\n");
   const lines = normalized
     .split("\n")
     .map((line) => line.trim())
@@ -503,6 +504,11 @@ export function TerminalPane({ paneId, sessionId }: TerminalPaneProps) {
     const nextBuffer = `${inlinePromptBufferRef.current}${cleaned}`.slice(-4096);
     inlinePromptBufferRef.current = nextBuffer;
 
+    // Fast path: skip expensive regex detection when no approval-like content
+    // is present in the last portion of the buffer
+    const tail = nextBuffer.slice(-512);
+    if (!/trust|approv|do you|\?\s*$/i.test(tail)) return;
+
     const prompt = detectInlineApprovalPrompt(nextBuffer);
     if (!prompt) return;
 
@@ -878,7 +884,7 @@ export function TerminalPane({ paneId, sessionId }: TerminalPaneProps) {
       clearTimeout(rollingSnapshotTimeout);
       rollingSnapshotTimeout = window.setTimeout(() => {
         captureRollingTranscript();
-      }, 300);
+      }, 2000);
     };
 
     void (async () => {
