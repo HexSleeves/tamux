@@ -257,6 +257,76 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "enqueue_task",
+            "description": "Queue a daemon-managed background task. Supports dependencies and scheduled execution for reminders, follow-up gateway messages, and deferred automation.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Optional short title for the task"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Detailed task instructions for the daemon agent"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": ["low", "normal", "high", "urgent"],
+                        "description": "Task priority"
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "Optional preferred command or entrypoint"
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional target terminal session"
+                    },
+                    "dependencies": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Task IDs that must complete first"
+                    },
+                    "scheduled_at": {
+                        "type": "integer",
+                        "description": "Optional Unix timestamp in milliseconds"
+                    },
+                    "schedule_at": {
+                        "type": "string",
+                        "description": "Optional RFC3339 timestamp"
+                    },
+                    "delay_seconds": {
+                        "type": "integer",
+                        "description": "Optional relative delay before task start"
+                    }
+                },
+                "required": ["description"]
+            }
+        },
+        {
+            "name": "list_tasks",
+            "description": "List daemon-managed background tasks with status, schedule, and dependency metadata.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "cancel_task",
+            "description": "Cancel a queued, blocked, running, or approval-pending daemon task by ID.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID to cancel"
+                    }
+                },
+                "required": ["task_id"]
+            }
+        },
+        {
             "name": "get_git_status",
             "description": "Get git status for a working directory, showing modified, staged, and untracked files.",
             "inputSchema": {
@@ -346,6 +416,9 @@ async fn dispatch_tool(name: &str, args: &Value) -> Result<Value> {
         "verify_integrity" => tool_verify_integrity(args).await,
         "get_terminal_content" => tool_get_terminal_content(args).await,
         "type_in_terminal" => tool_type_in_terminal(args).await,
+        "enqueue_task" => tool_enqueue_task(args).await,
+        "list_tasks" => tool_list_tasks().await,
+        "cancel_task" => tool_cancel_task(args).await,
         "get_git_status" => tool_get_git_status(args).await,
         _ => anyhow::bail!("unknown tool: {name}"),
     }
@@ -677,6 +750,152 @@ async fn tool_get_terminal_content(args: &Value) -> Result<Value> {
         DaemonMessage::Error { message } => anyhow::bail!("daemon error: {message}"),
         other => anyhow::bail!("unexpected daemon response: {other:?}"),
     }
+}
+
+async fn tool_enqueue_task(args: &Value) -> Result<Value> {
+    let description = args
+        .get("description")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing required parameter: description"))?
+        .trim()
+        .to_string();
+    if description.is_empty() {
+        anyhow::bail!("description must not be empty");
+    }
+
+    let command = args
+        .get("command")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned);
+    let title = args
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| default_task_title(&description, command.as_deref()));
+    let priority = args
+        .get("priority")
+        .and_then(|v| v.as_str())
+        .unwrap_or("normal")
+        .to_string();
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned);
+    let dependencies = args
+        .get("dependencies")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let scheduled_at = parse_scheduled_at(args)?;
+
+    let resp = daemon_roundtrip(ClientMessage::AgentAddTask {
+        title,
+        description,
+        priority,
+        command,
+        session_id,
+        scheduled_at,
+        dependencies,
+    })
+    .await?;
+
+    match resp {
+        DaemonMessage::AgentTaskEnqueued { task_json } => Ok(serde_json::json!({
+            "task": serde_json::from_str::<Value>(&task_json).unwrap_or(Value::String(task_json)),
+        })),
+        DaemonMessage::Error { message } => anyhow::bail!("daemon error: {message}"),
+        other => anyhow::bail!("unexpected daemon response: {other:?}"),
+    }
+}
+
+async fn tool_list_tasks() -> Result<Value> {
+    let resp = daemon_roundtrip(ClientMessage::AgentListTasks).await?;
+
+    match resp {
+        DaemonMessage::AgentTaskList { tasks_json } => Ok(serde_json::json!({
+            "tasks": serde_json::from_str::<Value>(&tasks_json).unwrap_or(Value::Array(Vec::new())),
+        })),
+        DaemonMessage::Error { message } => anyhow::bail!("daemon error: {message}"),
+        other => anyhow::bail!("unexpected daemon response: {other:?}"),
+    }
+}
+
+async fn tool_cancel_task(args: &Value) -> Result<Value> {
+    let task_id = args
+        .get("task_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing required parameter: task_id"))?
+        .to_string();
+
+    let resp = daemon_roundtrip(ClientMessage::AgentCancelTask {
+        task_id: task_id.clone(),
+    })
+    .await?;
+
+    match resp {
+        DaemonMessage::AgentTaskCancelled { task_id, cancelled } => Ok(serde_json::json!({
+            "task_id": task_id,
+            "cancelled": cancelled,
+        })),
+        DaemonMessage::Error { message } => anyhow::bail!("daemon error: {message}"),
+        other => anyhow::bail!("unexpected daemon response: {other:?}"),
+    }
+}
+
+fn default_task_title(description: &str, command: Option<&str>) -> String {
+    let source = command.unwrap_or(description).trim();
+    if source.is_empty() {
+        return "Queued task".to_string();
+    }
+
+    let mut title = source.lines().next().unwrap_or(source).trim().to_string();
+    if title.len() > 72 {
+        title.truncate(69);
+        title.push_str("...");
+    }
+    title
+}
+
+fn parse_scheduled_at(args: &Value) -> Result<Option<u64>> {
+    if let Some(timestamp) = args.get("scheduled_at").and_then(|value| value.as_u64()) {
+        return Ok(Some(timestamp));
+    }
+
+    if let Some(value) = args.get("schedule_at").and_then(|value| value.as_str()) {
+        let timestamp = humantime::parse_rfc3339_weak(value)
+            .map_err(|error| anyhow::anyhow!("invalid schedule_at value: {error}"))?;
+        let millis = timestamp
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| anyhow::anyhow!("invalid schedule_at value: {error}"))?
+            .as_millis() as u64;
+        return Ok(Some(millis));
+    }
+
+    if let Some(delay_seconds) = args.get("delay_seconds").and_then(|value| value.as_u64()) {
+        return Ok(Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| anyhow::anyhow!("system clock error: {error}"))?
+                .as_millis() as u64
+                + delay_seconds.saturating_mul(1000),
+        ));
+    }
+
+    Ok(None)
 }
 
 async fn tool_type_in_terminal(args: &Value) -> Result<Value> {

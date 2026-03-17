@@ -6,15 +6,18 @@
 
 use std::sync::Arc;
 
-use amux_protocol::SessionId;
+use amux_protocol::{
+    DaemonMessage, ManagedCommandRequest, ManagedCommandSource, SecurityLevel, SessionId,
+};
 use anyhow::Result;
 use tokio::sync::broadcast;
 
 use crate::session_manager::SessionManager;
 
+use super::AgentEngine;
 use super::types::{
     AgentConfig, AgentEvent, NotificationSeverity, ToolCall, ToolDefinition, ToolFunctionDef,
-    ToolResult,
+    ToolPendingApproval, ToolResult,
 };
 
 const ONECONTEXT_TOOL_QUERY_MAX_CHARS: usize = 300;
@@ -267,6 +270,49 @@ pub fn get_available_tools(config: &AgentConfig) -> Vec<ToolDefinition> {
         },
         "required": ["command"]
     })));
+    tools.push(tool_def("execute_managed_command", "Queue a command in a daemon-managed terminal lane. Use this when the command should run in a real PTY, may need TTY semantics, or should go through the operator approval policy. If session is omitted, uses the first active terminal session.", serde_json::json!({
+        "type": "object",
+        "properties": {
+            "command": { "type": "string", "description": "Shell command to run in the managed terminal session" },
+            "rationale": { "type": "string", "description": "Why this command should run" },
+            "session": { "type": "string", "description": "Optional session ID or unique substring" },
+            "cwd": { "type": "string", "description": "Optional working directory" },
+            "allow_network": { "type": "boolean", "description": "Whether network access is expected" },
+            "sandbox_enabled": { "type": "boolean", "description": "Whether sandboxing should be requested" },
+            "security_level": { "type": "string", "enum": ["highest", "moderate", "lowest", "yolo"], "description": "Approval strictness level" },
+            "language_hint": { "type": "string", "description": "Optional language hint for validation" }
+        },
+        "required": ["command", "rationale"]
+    })));
+    tools.push(tool_def("enqueue_task", "Create a daemon-managed background task. Use this for work that should run later, survive disconnects, wait on dependencies, or schedule follow-up actions like reminders and gateway messages.", serde_json::json!({
+        "type": "object",
+        "properties": {
+            "title": { "type": "string", "description": "Short task title" },
+            "description": { "type": "string", "description": "Detailed task instructions for the daemon agent" },
+            "priority": { "type": "string", "enum": ["low", "normal", "high", "urgent"], "description": "Task priority" },
+            "command": { "type": "string", "description": "Optional preferred command or entrypoint" },
+            "session": { "type": "string", "description": "Optional preferred terminal session ID or substring" },
+            "dependencies": { "type": "array", "items": { "type": "string" }, "description": "Task IDs that must complete first" },
+            "scheduled_at": { "type": "integer", "description": "Optional Unix timestamp in milliseconds for when the task may start" },
+            "schedule_at": { "type": "string", "description": "Optional RFC3339 timestamp for when the task may start" },
+            "delay_seconds": { "type": "integer", "description": "Optional relative delay before the task may start" }
+        },
+        "required": ["description"]
+    })));
+    tools.push(tool_def("list_tasks", "List daemon-managed background tasks and their status, dependencies, schedule, and recent execution metadata.", serde_json::json!({
+        "type": "object",
+        "properties": {
+            "status": { "type": "string", "enum": ["queued", "in_progress", "awaiting_approval", "blocked", "failed_analyzing", "completed", "failed", "cancelled"] },
+            "limit": { "type": "integer", "description": "Maximum number of tasks to return" }
+        }
+    })));
+    tools.push(tool_def("cancel_task", "Cancel a queued, blocked, running, approval-pending, or retrying background task by ID.", serde_json::json!({
+        "type": "object",
+        "properties": {
+            "task_id": { "type": "string", "description": "Task ID to cancel" }
+        },
+        "required": ["task_id"]
+    })));
     tools.push(tool_def("type_in_terminal", "Type text into an existing terminal session as raw keyboard input. Use this for: interactive TUI programs (codex, vim, htop), REPLs (python, node), typing commands in running shells, or any program that needs a real TTY. Text and Enter are sent with a small delay between them so TUIs process correctly. You can also send special keys like ctrl+c, escape, tab, arrow keys, etc.", serde_json::json!({
         "type": "object",
         "properties": {
@@ -383,8 +429,9 @@ fn tool_def(name: &str, description: &str, parameters: serde_json::Value) -> Too
 
 pub async fn execute_tool(
     tool_call: &ToolCall,
+    agent: &AgentEngine,
     session_manager: &Arc<SessionManager>,
-    _session_id: Option<SessionId>,
+    session_id: Option<SessionId>,
     event_tx: &broadcast::Sender<AgentEvent>,
     agent_data_dir: &std::path::Path,
     http_client: &reqwest::Client,
@@ -398,11 +445,23 @@ pub async fn execute_tool(
         "agent tool call"
     );
 
+    let mut pending_approval = None;
+
     let result = match tool_call.function.name.as_str() {
         // Terminal/session tools (daemon owns sessions directly)
         "list_terminals" | "list_sessions" => execute_list_sessions(session_manager).await,
         "read_active_terminal_content" => execute_read_terminal(&args, session_manager).await,
         "run_terminal_command" => execute_run_terminal_command(&args, session_manager).await,
+        "execute_managed_command" => match execute_managed_command(&args, session_manager, session_id).await {
+            Ok((content, approval)) => {
+                pending_approval = approval;
+                Ok(content)
+            }
+            Err(error) => Err(error),
+        },
+        "enqueue_task" => execute_enqueue_task(&args, agent).await,
+        "list_tasks" => execute_list_tasks(&args, agent).await,
+        "cancel_task" => execute_cancel_task(&args, agent).await,
         "type_in_terminal" => execute_type_in_terminal(&args, session_manager).await,
         // Gateway messaging (execute via CLI)
         "send_slack_message" | "send_discord_message" | "send_telegram_message" | "send_whatsapp_message" =>
@@ -438,6 +497,7 @@ pub async fn execute_tool(
                 name: tool_call.function.name.clone(),
                 content,
                 is_error: false,
+                pending_approval,
             }
         }
         Err(e) => {
@@ -447,6 +507,7 @@ pub async fn execute_tool(
                 name: tool_call.function.name.clone(),
                 content: format!("Error: {e}"),
                 is_error: true,
+                pending_approval: None,
             }
         }
     }
@@ -1069,6 +1130,265 @@ async fn execute_run_terminal_command(
     // Agent uses direct process execution — bypasses the managed lane
     // and approval system. The daemon agent is a trusted process.
     execute_bash(args).await
+}
+
+async fn execute_managed_command(
+    args: &serde_json::Value,
+    session_manager: &Arc<SessionManager>,
+    session_id: Option<SessionId>,
+) -> Result<(String, Option<ToolPendingApproval>)> {
+    let command = args
+        .get("command")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'command' argument"))?;
+    let rationale = args
+        .get("rationale")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'rationale' argument"))?;
+
+    let sessions = session_manager.list().await;
+    if sessions.is_empty() {
+        anyhow::bail!("No active terminal sessions are available for managed execution");
+    }
+
+    let resolved_session_id = if let Some(session_ref) = args.get("session").and_then(|v| v.as_str()) {
+        sessions
+            .iter()
+            .find(|session| session.id.to_string() == session_ref || session.id.to_string().contains(session_ref))
+            .map(|session| session.id)
+            .ok_or_else(|| anyhow::anyhow!("session not found: {session_ref}"))?
+    } else {
+        session_id.unwrap_or(sessions[0].id)
+    };
+
+    let security_level = match args
+        .get("security_level")
+        .and_then(|value| value.as_str())
+        .unwrap_or("moderate")
+    {
+        "highest" => SecurityLevel::Highest,
+        "lowest" => SecurityLevel::Lowest,
+        "yolo" => SecurityLevel::Yolo,
+        _ => SecurityLevel::Moderate,
+    };
+
+    let request = ManagedCommandRequest {
+        command: command.to_string(),
+        rationale: rationale.to_string(),
+        allow_network: args
+            .get("allow_network")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        sandbox_enabled: args
+            .get("sandbox_enabled")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        security_level,
+        cwd: args
+            .get("cwd")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned),
+        language_hint: args
+            .get("language_hint")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned),
+        source: ManagedCommandSource::Agent,
+    };
+
+    match session_manager
+        .execute_managed_command(resolved_session_id, request)
+        .await?
+    {
+        DaemonMessage::ManagedCommandQueued {
+            execution_id,
+            position,
+            snapshot,
+            ..
+        } => Ok((
+            format!(
+                "Managed command queued in session {} as {} at lane position {}{}",
+                resolved_session_id,
+                execution_id,
+                position,
+                snapshot
+                    .map(|item| format!(" (snapshot: {})", item.snapshot_id))
+                    .unwrap_or_default(),
+            ),
+            None,
+        )),
+        DaemonMessage::ApprovalRequired { approval, .. } => Ok((
+            format!(
+                "Managed command requires approval before execution. Approval ID: {}\nRisk: {}\nBlast radius: {}\nCommand: {}",
+                approval.approval_id,
+                approval.risk_level,
+                approval.blast_radius,
+                approval.command,
+            ),
+            Some(ToolPendingApproval {
+                approval_id: approval.approval_id,
+                execution_id: approval.execution_id,
+                command: approval.command,
+                rationale: approval.rationale,
+                risk_level: approval.risk_level,
+                blast_radius: approval.blast_radius,
+                reasons: approval.reasons,
+                session_id: Some(resolved_session_id.to_string()),
+            }),
+        )),
+        other => Err(anyhow::anyhow!(
+            "unexpected managed command response: {}",
+            serde_json::to_string(&other).unwrap_or_else(|_| "<unserializable>".to_string())
+        )),
+    }
+}
+
+async fn execute_enqueue_task(args: &serde_json::Value, agent: &AgentEngine) -> Result<String> {
+    let description = args
+        .get("description")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing 'description' argument"))?
+        .trim()
+        .to_string();
+    if description.is_empty() {
+        anyhow::bail!("'description' must not be empty");
+    }
+
+    let command = args
+        .get("command")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let title = args
+        .get("title")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| default_task_title(&description, command.as_deref()));
+    let priority = args
+        .get("priority")
+        .and_then(|value| value.as_str())
+        .unwrap_or("normal");
+    let session = args
+        .get("session")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let dependencies = args
+        .get("dependencies")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let scheduled_at = parse_scheduled_at(args)?;
+
+    let task = agent
+        .enqueue_task(
+            title,
+            description,
+            priority,
+            command,
+            session,
+            dependencies,
+            scheduled_at,
+            "agent",
+        )
+        .await;
+
+    Ok(serde_json::to_string_pretty(&task).unwrap_or_else(|_| format!("queued task {}", task.id)))
+}
+
+async fn execute_list_tasks(args: &serde_json::Value, agent: &AgentEngine) -> Result<String> {
+    let status_filter = args
+        .get("status")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_ascii_lowercase());
+    let limit = args
+        .get("limit")
+        .and_then(|value| value.as_u64())
+        .map(|value| value as usize);
+
+    let mut tasks = agent.list_tasks().await;
+    if let Some(status_filter) = status_filter {
+        tasks.retain(|task| serde_json::to_value(task.status)
+            .ok()
+            .and_then(|value| value.as_str().map(ToOwned::to_owned))
+            .map(|value| value == status_filter)
+            .unwrap_or(false));
+    }
+    if let Some(limit) = limit {
+        tasks.truncate(limit);
+    }
+
+    Ok(serde_json::to_string_pretty(&tasks).unwrap_or_else(|_| "[]".to_string()))
+}
+
+async fn execute_cancel_task(args: &serde_json::Value, agent: &AgentEngine) -> Result<String> {
+    let task_id = args
+        .get("task_id")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing 'task_id' argument"))?;
+    let cancelled = agent.cancel_task(task_id).await;
+    Ok(serde_json::json!({
+        "task_id": task_id,
+        "cancelled": cancelled,
+    })
+    .to_string())
+}
+
+fn default_task_title(description: &str, command: Option<&str>) -> String {
+    let source = command.unwrap_or(description).trim();
+    if source.is_empty() {
+        return "Queued task".to_string();
+    }
+
+    let mut title = source.lines().next().unwrap_or(source).trim().to_string();
+    if title.len() > 72 {
+        title.truncate(69);
+        title.push_str("...");
+    }
+    title
+}
+
+fn parse_scheduled_at(args: &serde_json::Value) -> Result<Option<u64>> {
+    if let Some(timestamp) = args.get("scheduled_at").and_then(|value| value.as_u64()) {
+        return Ok(Some(timestamp));
+    }
+
+    if let Some(value) = args.get("schedule_at").and_then(|value| value.as_str()) {
+        let timestamp = humantime::parse_rfc3339_weak(value)
+            .map_err(|error| anyhow::anyhow!("invalid 'schedule_at' value: {error}"))?;
+        let millis = timestamp
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| anyhow::anyhow!("invalid 'schedule_at' value: {error}"))?
+            .as_millis() as u64;
+        return Ok(Some(millis));
+    }
+
+    if let Some(delay_seconds) = args.get("delay_seconds").and_then(|value| value.as_u64()) {
+        return Ok(Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| anyhow::anyhow!("system clock error: {error}"))?
+                .as_millis() as u64
+                + delay_seconds.saturating_mul(1000),
+        ));
+    }
+
+    Ok(None)
 }
 
 async fn execute_type_in_terminal(

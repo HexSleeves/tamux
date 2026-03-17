@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 license = "MIT"
 authors = ["tamux contributors"]
@@ -31,6 +31,7 @@ futures = "0.3"
 tokio-util = { version = "0.7", features = ["codec"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio-stream = "0.1"
+humantime = "2"
 
 # Protocol
 amux-protocol = { package = "tamux-protocol", path = "crates/amux-protocol" }
