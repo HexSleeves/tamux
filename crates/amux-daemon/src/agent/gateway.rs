@@ -60,7 +60,13 @@ pub async fn poll_telegram(state: &mut GatewayState) -> Vec<IncomingMessage> {
         state.telegram_offset
     );
 
-    let resp = match state.http_client.get(&url).timeout(std::time::Duration::from_secs(5)).send().await {
+    let resp = match state
+        .http_client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             tracing::debug!("telegram poll error: {e}");
@@ -78,7 +84,10 @@ pub async fn poll_telegram(state: &mut GatewayState) -> Vec<IncomingMessage> {
 
     if let Some(results) = body.get("result").and_then(|v| v.as_array()) {
         for update in results {
-            let update_id = update.get("update_id").and_then(|v| v.as_i64()).unwrap_or(0);
+            let update_id = update
+                .get("update_id")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
             if update_id >= state.telegram_offset {
                 state.telegram_offset = update_id + 1;
             }
@@ -141,9 +150,8 @@ pub async fn poll_slack(state: &mut GatewayState, channels: &[String]) -> Vec<In
             .cloned()
             .unwrap_or_default();
 
-        let mut url = format!(
-            "https://slack.com/api/conversations.history?channel={channel}&limit=5"
-        );
+        let mut url =
+            format!("https://slack.com/api/conversations.history?channel={channel}&limit=5");
         if !oldest.is_empty() {
             url.push_str(&format!("&oldest={oldest}"));
         }
@@ -221,7 +229,10 @@ pub async fn poll_slack(state: &mut GatewayState, channels: &[String]) -> Vec<In
 // Discord: poll channel messages REST API
 // ---------------------------------------------------------------------------
 
-pub async fn poll_discord(state: &mut GatewayState, channel_ids: &[String]) -> Vec<IncomingMessage> {
+pub async fn poll_discord(
+    state: &mut GatewayState,
+    channel_ids: &[String],
+) -> Vec<IncomingMessage> {
     let token = &state.config.discord_token;
     if token.is_empty() {
         return vec![];
@@ -232,9 +243,7 @@ pub async fn poll_discord(state: &mut GatewayState, channel_ids: &[String]) -> V
     for channel_id in channel_ids {
         let had_last_id = state.discord_last_id.contains_key(channel_id);
 
-        let mut url = format!(
-            "https://discord.com/api/v10/channels/{channel_id}/messages?limit=5"
-        );
+        let mut url = format!("https://discord.com/api/v10/channels/{channel_id}/messages?limit=5");
 
         if let Some(after) = state.discord_last_id.get(channel_id) {
             url.push_str(&format!("&after={after}"));
@@ -271,11 +280,14 @@ pub async fn poll_discord(state: &mut GatewayState, channel_ids: &[String]) -> V
 
         // Track the newest message ID (for ALL messages including bot) so we
         // never re-fetch. Discord returns newest first.
-        let newest_id = msgs.first()
+        let newest_id = msgs
+            .first()
             .and_then(|m| m.get("id").and_then(|v| v.as_str()))
             .unwrap_or("");
         if !newest_id.is_empty() {
-            state.discord_last_id.insert(channel_id.clone(), newest_id.to_string());
+            state
+                .discord_last_id
+                .insert(channel_id.clone(), newest_id.to_string());
         }
 
         // On first poll (no prior last_id), skip historical messages —

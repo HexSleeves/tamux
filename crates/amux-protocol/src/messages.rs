@@ -147,17 +147,13 @@ pub enum ClientMessage {
     UpsertTranscriptIndex { entry_json: String },
 
     /// List indexed transcript records.
-    ListTranscriptIndex {
-        workspace_id: Option<WorkspaceId>,
-    },
+    ListTranscriptIndex { workspace_id: Option<WorkspaceId> },
 
     /// Insert or update an indexed snapshot record.
     UpsertSnapshotIndex { entry_json: String },
 
     /// List indexed snapshot records.
-    ListSnapshotIndex {
-        workspace_id: Option<WorkspaceId>,
-    },
+    ListSnapshotIndex { workspace_id: Option<WorkspaceId> },
 
     /// Insert or update an agent event record.
     UpsertAgentEvent { event_json: String },
@@ -210,7 +206,6 @@ pub enum ClientMessage {
     // -----------------------------------------------------------------------
     // Agent engine
     // -----------------------------------------------------------------------
-
     /// Send a message to the agent (triggers an LLM turn with tool loop).
     AgentSendMessage {
         thread_id: Option<String>,
@@ -455,7 +450,6 @@ pub enum DaemonMessage {
     // -----------------------------------------------------------------------
     // Agent engine responses
     // -----------------------------------------------------------------------
-
     /// Streamed agent event (delta, tool call, done, etc.).
     AgentEvent { event_json: String },
 
@@ -538,10 +532,8 @@ pub struct PaneTopologyEntry {
 /// Format a workspace topology into a human-readable string, enriched with
 /// session metadata (CWD, active command) where available.
 pub fn format_topology(topology: &WorkspaceTopology, sessions: &[SessionInfo]) -> String {
-    let session_map: std::collections::HashMap<String, &SessionInfo> = sessions
-        .iter()
-        .map(|s| (s.id.to_string(), s))
-        .collect();
+    let session_map: std::collections::HashMap<String, &SessionInfo> =
+        sessions.iter().map(|s| (s.id.to_string(), s)).collect();
 
     let mut lines = Vec::new();
     for ws in &topology.workspaces {
@@ -568,7 +560,9 @@ pub fn format_topology(topology: &WorkspaceTopology, sessions: &[SessionInfo]) -
                 } else if let Some(sid) = &pane.session_id {
                     parts.push(format!("session={sid}"));
                     // Prefer panel-level CWD (live from shell integration), fall back to session CWD.
-                    let cwd = pane.cwd.as_deref()
+                    let cwd = pane
+                        .cwd
+                        .as_deref()
                         .or_else(|| session_map.get(sid).and_then(|s| s.cwd.as_deref()));
                     if let Some(cwd) = cwd {
                         parts.push(format!("cwd={cwd}"));

@@ -1,11 +1,9 @@
-use anyhow::{Context, Result};
+use crate::agent::types::{AgentTask, AgentTaskLogEntry, TaskLogLevel, TaskPriority, TaskStatus};
 use amux_protocol::{
     AgentDbMessage, AgentDbThread, AgentEventRow, CommandLogEntry, HistorySearchHit,
     SnapshotIndexEntry, TranscriptIndexEntry, WormChainTip,
 };
-use crate::agent::types::{
-    AgentTask, AgentTaskLogEntry, TaskLogLevel, TaskPriority, TaskStatus,
-};
+use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -107,33 +105,42 @@ impl HistoryStore {
             params![record.execution_id, record.command, excerpt, record.rationale],
         )?;
 
-        self.append_telemetry("operational", json!({
-            "timestamp": timestamp,
-            "execution_id": record.execution_id,
-            "session_id": record.session_id,
-            "workspace_id": record.workspace_id,
-            "command": record.command,
-            "exit_code": record.exit_code,
-            "duration_ms": record.duration_ms,
-            "snapshot": record.snapshot_path,
-        }))?;
-        self.append_telemetry("cognitive", json!({
-            "timestamp": timestamp,
-            "execution_id": record.execution_id,
-            "source": record.source,
-            "rationale": record.rationale,
-        }))?;
+        self.append_telemetry(
+            "operational",
+            json!({
+                "timestamp": timestamp,
+                "execution_id": record.execution_id,
+                "session_id": record.session_id,
+                "workspace_id": record.workspace_id,
+                "command": record.command,
+                "exit_code": record.exit_code,
+                "duration_ms": record.duration_ms,
+                "snapshot": record.snapshot_path,
+            }),
+        )?;
+        self.append_telemetry(
+            "cognitive",
+            json!({
+                "timestamp": timestamp,
+                "execution_id": record.execution_id,
+                "source": record.source,
+                "rationale": record.rationale,
+            }),
+        )?;
 
         let mut system = System::new_all();
         system.refresh_memory();
         system.refresh_cpu();
-        self.append_telemetry("contextual", json!({
-            "timestamp": timestamp,
-            "execution_id": record.execution_id,
-            "total_memory": system.total_memory(),
-            "used_memory": system.used_memory(),
-            "cpu_usage": system.global_cpu_info().cpu_usage(),
-        }))?;
+        self.append_telemetry(
+            "contextual",
+            json!({
+                "timestamp": timestamp,
+                "execution_id": record.execution_id,
+                "total_memory": system.total_memory(),
+                "used_memory": system.used_memory(),
+                "cpu_usage": system.global_cpu_info().cpu_usage(),
+            }),
+        )?;
 
         Ok(())
     }
@@ -166,17 +173,33 @@ impl HistoryStore {
         Ok((summary, hits))
     }
 
-    pub fn generate_skill(&self, query: Option<&str>, title: Option<&str>) -> Result<(String, String)> {
+    pub fn generate_skill(
+        &self,
+        query: Option<&str>,
+        title: Option<&str>,
+    ) -> Result<(String, String)> {
         let title = title.unwrap_or("Recovered Workflow").trim();
-        let (summary, hits) = self.search(query.unwrap_or("*"), 8).unwrap_or_else(|_| ("No history available.".to_string(), Vec::new()));
+        let (summary, hits) = self
+            .search(query.unwrap_or("*"), 8)
+            .unwrap_or_else(|_| ("No history available.".to_string(), Vec::new()));
         let safe_name = title
             .chars()
             .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
             .collect::<String>()
             .trim_matches('-')
             .to_ascii_lowercase();
-        let path = self.skill_dir.join(format!("{}.md", if safe_name.is_empty() { "recovered-workflow" } else { &safe_name }));
-        let mut body = format!("# {}\n\n## Summary\n{}\n\n## Retrieved Steps\n", title, summary);
+        let path = self.skill_dir.join(format!(
+            "{}.md",
+            if safe_name.is_empty() {
+                "recovered-workflow"
+            } else {
+                &safe_name
+            }
+        ));
+        let mut body = format!(
+            "# {}\n\n## Summary\n{}\n\n## Retrieved Steps\n",
+            title, summary
+        );
         for hit in &hits {
             body.push_str(&format!("- {}\n", hit.title));
             body.push_str(&format!("  {}\n", hit.excerpt));
@@ -184,7 +207,8 @@ impl HistoryStore {
         if hits.is_empty() {
             body.push_str("- No matching executions were available.\n");
         }
-        std::fs::write(&path, body).with_context(|| format!("failed to write {}", path.display()))?;
+        std::fs::write(&path, body)
+            .with_context(|| format!("failed to write {}", path.display()))?;
         Ok((title.to_string(), path.to_string_lossy().into_owned()))
     }
 
@@ -257,10 +281,9 @@ impl HistoryStore {
 
         let mut stmt = connection.prepare(sql)?;
         let rows = match (workspace_id, pane_id) {
-            (Some(workspace_id), Some(pane_id)) => stmt.query_map(
-                params![workspace_id, pane_id, limit],
-                map_command_log_entry,
-            )?,
+            (Some(workspace_id), Some(pane_id)) => {
+                stmt.query_map(params![workspace_id, pane_id, limit], map_command_log_entry)?
+            }
             (Some(workspace_id), None) => {
                 stmt.query_map(params![workspace_id, limit], map_command_log_entry)?
             }
@@ -403,7 +426,11 @@ impl HistoryStore {
         Ok(())
     }
 
-    pub fn list_messages(&self, thread_id: &str, limit: Option<usize>) -> Result<Vec<AgentDbMessage>> {
+    pub fn list_messages(
+        &self,
+        thread_id: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<AgentDbMessage>> {
         let connection = self.open_connection()?;
         let limit = limit.unwrap_or(500).max(1) as i64;
         let mut stmt = connection.prepare(
@@ -463,7 +490,10 @@ impl HistoryStore {
         Ok(())
     }
 
-    pub fn list_transcript_index(&self, workspace_id: Option<&str>) -> Result<Vec<TranscriptIndexEntry>> {
+    pub fn list_transcript_index(
+        &self,
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<TranscriptIndexEntry>> {
         let connection = self.open_connection()?;
         let sql = if workspace_id.is_some() {
             "SELECT id, pane_id, workspace_id, surface_id, filename, reason, captured_at, size_bytes, preview \
@@ -501,7 +531,10 @@ impl HistoryStore {
         Ok(())
     }
 
-    pub fn list_snapshot_index(&self, workspace_id: Option<&str>) -> Result<Vec<SnapshotIndexEntry>> {
+    pub fn list_snapshot_index(
+        &self,
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<SnapshotIndexEntry>> {
         let connection = self.open_connection()?;
         let sql = if workspace_id.is_some() {
             "SELECT snapshot_id, workspace_id, session_id, kind, label, path, created_at, details_json \
@@ -581,9 +614,15 @@ impl HistoryStore {
         };
         let mut stmt = connection.prepare(sql)?;
         let rows = match (category, pane_id) {
-            (Some(category), Some(pane_id)) => stmt.query_map(params![category, pane_id, limit], map_agent_event_row)?,
-            (Some(category), None) => stmt.query_map(params![category, limit], map_agent_event_row)?,
-            (None, Some(pane_id)) => stmt.query_map(params![pane_id, limit], map_agent_event_row)?,
+            (Some(category), Some(pane_id)) => {
+                stmt.query_map(params![category, pane_id, limit], map_agent_event_row)?
+            }
+            (Some(category), None) => {
+                stmt.query_map(params![category, limit], map_agent_event_row)?
+            }
+            (None, Some(pane_id)) => {
+                stmt.query_map(params![pane_id, limit], map_agent_event_row)?
+            }
             (None, None) => stmt.query_map(params![limit], map_agent_event_row)?,
         };
         Ok(rows.filter_map(|row| row.ok()).collect())
@@ -638,7 +677,10 @@ impl HistoryStore {
             )?;
         }
 
-        transaction.execute("DELETE FROM agent_task_logs WHERE task_id = ?1", params![&task.id])?;
+        transaction.execute(
+            "DELETE FROM agent_task_logs WHERE task_id = ?1",
+            params![&task.id],
+        )?;
         for log in &task.logs {
             transaction.execute(
                 "INSERT OR REPLACE INTO agent_task_logs (id, task_id, timestamp, level, phase, message, details, attempt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -917,10 +959,7 @@ impl HistoryStore {
             CREATE INDEX IF NOT EXISTS idx_snapshot_ts ON snapshot_index(created_at DESC);
             ",
         )?;
-        let _ = connection.execute(
-            "ALTER TABLE agent_tasks ADD COLUMN session_id TEXT",
-            [],
-        );
+        let _ = connection.execute("ALTER TABLE agent_tasks ADD COLUMN session_id TEXT", []);
         let _ = connection.execute(
             "ALTER TABLE agent_tasks ADD COLUMN scheduled_at INTEGER",
             [],
@@ -963,7 +1002,7 @@ impl HistoryStore {
         let mut stmt = connection.prepare(
             "SELECT id, kind, title, excerpt, path, timestamp FROM history_entries \
              WHERE kind = 'managed-command' \
-             ORDER BY timestamp DESC LIMIT 20"
+             ORDER BY timestamp DESC LIMIT 20",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(HistorySearchHit {
@@ -1098,9 +1137,7 @@ fn map_agent_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentDbMessage
     })
 }
 
-fn map_transcript_index_entry(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<TranscriptIndexEntry> {
+fn map_transcript_index_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<TranscriptIndexEntry> {
     Ok(TranscriptIndexEntry {
         id: row.get(0)?,
         pane_id: row.get(1)?,
@@ -1114,9 +1151,7 @@ fn map_transcript_index_entry(
     })
 }
 
-fn map_snapshot_index_entry(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<SnapshotIndexEntry> {
+fn map_snapshot_index_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<SnapshotIndexEntry> {
     Ok(SnapshotIndexEntry {
         snapshot_id: row.get(0)?,
         workspace_id: row.get(1)?,
@@ -1292,7 +1327,10 @@ fn verify_ledger_file(kind: &str, path: &PathBuf) -> WormIntegrityResult {
             Err(e) => {
                 if first_invalid_seq.is_none() {
                     first_invalid_seq = Some(expected_seq);
-                    failure_message = Some(format!("IO error reading line at seq {}: {}", expected_seq, e));
+                    failure_message = Some(format!(
+                        "IO error reading line at seq {}: {}",
+                        expected_seq, e
+                    ));
                 }
                 break;
             }
@@ -1309,7 +1347,8 @@ fn verify_ledger_file(kind: &str, path: &PathBuf) -> WormIntegrityResult {
             Err(e) => {
                 if first_invalid_seq.is_none() {
                     first_invalid_seq = Some(expected_seq);
-                    failure_message = Some(format!("JSON parse error at seq {}: {}", expected_seq, e));
+                    failure_message =
+                        Some(format!("JSON parse error at seq {}: {}", expected_seq, e));
                 }
                 break;
             }
@@ -1406,7 +1445,10 @@ fn verify_ledger_file(kind: &str, path: &PathBuf) -> WormIntegrityResult {
 
     let valid = first_invalid_seq.is_none();
     let message = if valid {
-        format!("{} ledger: all {} entries verified successfully.", kind, total)
+        format!(
+            "{} ledger: all {} entries verified successfully.",
+            kind, total
+        )
     } else {
         failure_message.unwrap_or_else(|| format!("{} ledger: integrity check failed.", kind))
     };

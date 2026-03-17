@@ -645,7 +645,8 @@ where
                         Ok(thread) => {
                             let messages = manager.list_agent_messages(&thread_id, None)?;
                             let thread_json = serde_json::to_string(&thread).unwrap_or_default();
-                            let messages_json = serde_json::to_string(&messages).unwrap_or_default();
+                            let messages_json =
+                                serde_json::to_string(&messages).unwrap_or_default();
                             framed
                                 .send(DaemonMessage::AgentDbThreadDetail {
                                     thread_json,
@@ -692,7 +693,8 @@ where
                         Ok(messages) => {
                             let thread = manager.get_agent_thread(&thread_id)?;
                             let thread_json = serde_json::to_string(&thread).unwrap_or_default();
-                            let messages_json = serde_json::to_string(&messages).unwrap_or_default();
+                            let messages_json =
+                                serde_json::to_string(&messages).unwrap_or_default();
                             framed
                                 .send(DaemonMessage::AgentDbThreadDetail {
                                     thread_json,
@@ -822,22 +824,24 @@ where
                     category,
                     pane_id,
                     limit,
-                } => match manager.list_agent_events(category.as_deref(), pane_id.as_deref(), limit)
-                {
-                    Ok(events) => {
-                        let events_json = serde_json::to_string(&events).unwrap_or_default();
-                        framed
-                            .send(DaemonMessage::AgentEventRows { events_json })
-                            .await?;
+                } => {
+                    match manager.list_agent_events(category.as_deref(), pane_id.as_deref(), limit)
+                    {
+                        Ok(events) => {
+                            let events_json = serde_json::to_string(&events).unwrap_or_default();
+                            framed
+                                .send(DaemonMessage::AgentEventRows { events_json })
+                                .await?;
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::Error {
+                                    message: e.to_string(),
+                                })
+                                .await?;
+                        }
                     }
-                    Err(e) => {
-                        framed
-                            .send(DaemonMessage::Error {
-                                message: e.to_string(),
-                            })
-                            .await?;
-                    }
-                },
+                }
 
                 ClientMessage::GenerateSkill { query, title } => {
                     match manager.generate_skill(query.as_deref(), title.as_deref()) {

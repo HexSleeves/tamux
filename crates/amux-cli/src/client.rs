@@ -1,7 +1,7 @@
 use amux_protocol::{
     AmuxCodec, ApprovalDecision, ApprovalPayload, ClientMessage, DaemonMessage, HistorySearchHit,
-    ManagedCommandRequest, ManagedCommandSource, OscNotificationPayload, SecurityLevel, SessionInfo, SnapshotInfo,
-    SymbolMatch,
+    ManagedCommandRequest, ManagedCommandSource, OscNotificationPayload, SecurityLevel,
+    SessionInfo, SnapshotInfo, SymbolMatch,
 };
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -343,7 +343,9 @@ pub async fn clone_session(
     })
     .await?
     {
-        DaemonMessage::SessionCloned { id, active_command, .. } => Ok((id.to_string(), active_command)),
+        DaemonMessage::SessionCloned {
+            id, active_command, ..
+        } => Ok((id.to_string(), active_command)),
         DaemonMessage::Error { message } => anyhow::bail!("daemon error: {message}"),
         other => anyhow::bail!("unexpected response: {other:?}"),
     }

@@ -12,8 +12,8 @@ mod router;
 mod slack;
 mod telegram;
 
+use amux_protocol::{AmuxCodec, ClientMessage, DaemonMessage, SessionId};
 use anyhow::{Context, Result};
-use amux_protocol::{ClientMessage, AmuxCodec, DaemonMessage, SessionId};
 use futures::{SinkExt, StreamExt};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
@@ -78,8 +78,7 @@ async fn connect_to_daemon(
 ) -> Result<Framed<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin, AmuxCodec>> {
     #[cfg(unix)]
     {
-        let runtime_dir =
-            std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+        let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
         let path = std::path::PathBuf::from(runtime_dir).join("tamux-daemon.sock");
         let stream = tokio::net::UnixStream::connect(&path)
             .await
@@ -212,8 +211,7 @@ impl Gateway {
 
         // Channel for outbound responses that need to be sent back to chat
         // platforms.  Maps channel_id -> response text.
-        let (response_tx, mut response_rx) =
-            mpsc::unbounded_channel::<(String, GatewayResponse)>();
+        let (response_tx, mut response_rx) = mpsc::unbounded_channel::<(String, GatewayResponse)>();
 
         // Map to track which channel_id belongs to which provider index.
         let pending_channels: Arc<Mutex<HashMap<String, usize>>> =
@@ -223,13 +221,11 @@ impl Gateway {
         // --- Provider polling tasks ---
         // Each provider runs in its own task, sending received messages into a
         // shared channel.
-        let (incoming_tx, mut incoming_rx) =
-            mpsc::unbounded_channel::<(usize, GatewayMessage)>();
+        let (incoming_tx, mut incoming_rx) = mpsc::unbounded_channel::<(usize, GatewayMessage)>();
 
         let mut provider_tasks = Vec::new();
         // Move providers into individual tasks.
-        let providers_vec: Vec<Box<dyn GatewayProvider>> =
-            self.providers.into_iter().collect();
+        let providers_vec: Vec<Box<dyn GatewayProvider>> = self.providers.into_iter().collect();
 
         for (idx, mut provider) in providers_vec.into_iter().enumerate() {
             let tx = incoming_tx.clone();
@@ -493,9 +489,7 @@ impl Gateway {
         // Kill the daemon session.
         {
             let mut tx = daemon_tx.lock().await;
-            let _ = tx
-                .send(ClientMessage::KillSession { id: session_id })
-                .await;
+            let _ = tx.send(ClientMessage::KillSession { id: session_id }).await;
         }
 
         tracing::info!("amux-gateway shut down");
@@ -506,12 +500,20 @@ impl Gateway {
 fn format_task_enqueued_message(task_json: &str) -> String {
     let value: Value = serde_json::from_str(task_json).unwrap_or(Value::Null);
     let task_id = value.get("id").and_then(Value::as_str).unwrap_or("unknown");
-    let title = value.get("title").and_then(Value::as_str).unwrap_or("Queued task");
-    let status = value.get("status").and_then(Value::as_str).unwrap_or("queued");
+    let title = value
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("Queued task");
+    let status = value
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("queued");
     let scheduled = value.get("scheduled_at").and_then(Value::as_u64);
     let mut text = format!("Queued task {task_id}: {title} [{status}]");
     if let Some(scheduled) = scheduled {
-        let when = humantime::format_rfc3339_seconds(std::time::UNIX_EPOCH + std::time::Duration::from_millis(scheduled));
+        let when = humantime::format_rfc3339_seconds(
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(scheduled),
+        );
         text.push_str(&format!("\nScheduled for {when}"));
     }
     if let Some(reason) = value.get("blocked_reason").and_then(Value::as_str) {
@@ -531,8 +533,14 @@ fn format_task_list_message(tasks_json: &str) -> String {
     let mut lines = Vec::new();
     for task in tasks.iter().take(8) {
         let task_id = task.get("id").and_then(Value::as_str).unwrap_or("unknown");
-        let title = task.get("title").and_then(Value::as_str).unwrap_or("Queued task");
-        let status = task.get("status").and_then(Value::as_str).unwrap_or("queued");
+        let title = task
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("Queued task");
+        let status = task
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("queued");
         lines.push(format!("- {task_id} [{status}] {title}"));
     }
     if tasks.len() > 8 {
@@ -549,7 +557,9 @@ fn format_task_list_message(tasks_json: &str) -> String {
 async fn main() -> Result<()> {
     // Initialise tracing with file-based log output alongside stderr.
     let log_path = amux_protocol::log_file_path("tamux-gateway.log");
-    let log_dir = log_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let log_dir = log_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
     let file_appender = tracing_appender::rolling::daily(log_dir, "tamux-gateway.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 

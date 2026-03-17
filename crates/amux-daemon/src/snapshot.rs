@@ -1,5 +1,5 @@
-use anyhow::{Context, Result};
 use amux_protocol::{SessionId, SnapshotIndexEntry, SnapshotInfo, WorkspaceId};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -81,7 +81,8 @@ fn encode_snapshot(snapshot: &SnapshotInfo) -> SnapshotIndexEntry {
             command: snapshot.command.clone(),
             status: Some(snapshot.status.clone()),
             details: Some(snapshot.details.clone()),
-        }).ok(),
+        })
+        .ok(),
     }
 }
 
@@ -225,10 +226,7 @@ impl SnapshotBackend for TarBackend {
         let (status, details) = match tar_status {
             Ok(result) if result.success() => (
                 "ready".to_string(),
-                format!(
-                    "workspace checkpoint created at {}",
-                    archive_path.display()
-                ),
+                format!("workspace checkpoint created at {}", archive_path.display()),
             ),
             Ok(result) => (
                 "degraded".to_string(),
@@ -319,7 +317,10 @@ impl ZfsBackend {
         let root = amux_protocol::ensure_amux_data_dir()?.join("snapshots");
         std::fs::create_dir_all(&root)?;
         let index_path = root.join("index.json");
-        Ok(Self { dataset, index_path })
+        Ok(Self {
+            dataset,
+            index_path,
+        })
     }
 }
 
@@ -341,10 +342,7 @@ impl SnapshotBackend for ZfsBackend {
         let snap_tag = format!("amux-{safe_label}-{timestamp}");
         let full_snap = format!("{}@{}", self.dataset, snap_tag);
 
-        let zfs_status = Command::new("zfs")
-            .arg("snapshot")
-            .arg(&full_snap)
-            .status();
+        let zfs_status = Command::new("zfs").arg("snapshot").arg(&full_snap).status();
 
         let (status, details) = match zfs_status {
             Ok(result) if result.success() => (
@@ -400,10 +398,7 @@ impl SnapshotBackend for ZfsBackend {
                 true,
                 format!("rolled back to ZFS snapshot {}", snapshot.path),
             )),
-            Ok(result) => Ok((
-                false,
-                format!("zfs rollback exited with status {result}"),
-            )),
+            Ok(result) => Ok((false, format!("zfs rollback exited with status {result}"))),
             Err(error) => Ok((false, format!("zfs rollback failed: {error}"))),
         }
     }
@@ -415,8 +410,7 @@ impl SnapshotBackend for ZfsBackend {
             .into_iter()
             .filter(|snapshot| {
                 snapshot.kind == "zfs"
-                    && (workspace_id.is_none()
-                        || snapshot.workspace_id.as_deref() == workspace_id)
+                    && (workspace_id.is_none() || snapshot.workspace_id.as_deref() == workspace_id)
             })
             .collect())
     }
@@ -542,10 +536,7 @@ impl SnapshotBackend for BtrfsBackend {
         match status {
             Ok(result) if result.success() => Ok((
                 true,
-                format!(
-                    "restored BTRFS snapshot into {}",
-                    target_root.display()
-                ),
+                format!("restored BTRFS snapshot into {}", target_root.display()),
             )),
             Ok(result) => Ok((
                 false,
@@ -562,8 +553,7 @@ impl SnapshotBackend for BtrfsBackend {
             .into_iter()
             .filter(|snapshot| {
                 snapshot.kind == "btrfs"
-                    && (workspace_id.is_none()
-                        || snapshot.workspace_id.as_deref() == workspace_id)
+                    && (workspace_id.is_none() || snapshot.workspace_id.as_deref() == workspace_id)
             })
             .collect())
     }
@@ -593,7 +583,9 @@ pub fn detect_snapshot_backend(
                 tracing::info!(dataset = %dataset, "snapshot backend: ZFS (forced)");
                 return Box::new(ZfsBackend::new(dataset).expect("failed to init ZFS backend"));
             }
-            tracing::warn!("ZFS backend requested but workspace is not on a ZFS dataset; falling back to tar");
+            tracing::warn!(
+                "ZFS backend requested but workspace is not on a ZFS dataset; falling back to tar"
+            );
         }
         "btrfs" => {
             if is_btrfs(workspace_root) {
@@ -625,11 +617,7 @@ pub fn detect_snapshot_backend(
 
 /// Try to find the ZFS dataset for a given path using `df -T`.
 fn detect_zfs_dataset(path: &str) -> Option<String> {
-    let output = Command::new("df")
-        .arg("-T")
-        .arg(path)
-        .output()
-        .ok()?;
+    let output = Command::new("df").arg("-T").arg(path).output().ok()?;
 
     if !output.status.success() {
         return None;
@@ -678,7 +666,9 @@ impl SnapshotStore {
     pub fn new() -> Result<Self> {
         let root = amux_protocol::ensure_amux_data_dir()?.join("snapshots");
         std::fs::create_dir_all(&root)?;
-        Ok(Self { history: HistoryStore::new()? })
+        Ok(Self {
+            history: HistoryStore::new()?,
+        })
     }
 
     pub fn create_snapshot(
@@ -708,7 +698,8 @@ impl SnapshotStore {
             command,
         )?;
 
-        self.history.upsert_snapshot_index(&encode_snapshot(&snapshot))?;
+        self.history
+            .upsert_snapshot_index(&encode_snapshot(&snapshot))?;
 
         Ok(Some(snapshot))
     }

@@ -280,13 +280,27 @@ impl AgentEngine {
                             tool_call_id: message
                                 .metadata_json
                                 .as_deref()
-                                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-                                .and_then(|value| value.get("tool_call_id").and_then(|v| v.as_str()).map(ToOwned::to_owned)),
+                                .and_then(|json| {
+                                    serde_json::from_str::<serde_json::Value>(json).ok()
+                                })
+                                .and_then(|value| {
+                                    value
+                                        .get("tool_call_id")
+                                        .and_then(|v| v.as_str())
+                                        .map(ToOwned::to_owned)
+                                }),
                             tool_name: message
                                 .metadata_json
                                 .as_deref()
-                                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-                                .and_then(|value| value.get("tool_name").and_then(|v| v.as_str()).map(ToOwned::to_owned)),
+                                .and_then(|json| {
+                                    serde_json::from_str::<serde_json::Value>(json).ok()
+                                })
+                                .and_then(|value| {
+                                    value
+                                        .get("tool_name")
+                                        .and_then(|v| v.as_str())
+                                        .map(ToOwned::to_owned)
+                                }),
                             input_tokens: message.input_tokens.unwrap_or(0) as u64,
                             output_tokens: message.output_tokens.unwrap_or(0) as u64,
                             reasoning: message.reasoning,
@@ -338,7 +352,8 @@ impl AgentEngine {
                 if tasks_path.exists() {
                     match tokio::fs::read_to_string(&tasks_path).await {
                         Ok(raw) => {
-                            if let Ok(mut tasks) = serde_json::from_str::<VecDeque<AgentTask>>(&raw) {
+                            if let Ok(mut tasks) = serde_json::from_str::<VecDeque<AgentTask>>(&raw)
+                            {
                                 for task in tasks.iter_mut() {
                                     if task.status == TaskStatus::InProgress {
                                         task.status = TaskStatus::Queued;
@@ -387,29 +402,49 @@ impl AgentEngine {
         let gw = &config.gateway;
 
         // Read settings.json once and extract all gateway-related values
-        let (slack_token, telegram_token, discord_token, discord_channel_filter, slack_channel_filter) =
-            if !gw.slack_token.is_empty() || !gw.telegram_token.is_empty() || !gw.discord_token.is_empty() {
-                (gw.slack_token.clone(), gw.telegram_token.clone(), gw.discord_token.clone(), String::new(), String::new())
-            } else {
-                let settings_path = self
-                    .data_dir
-                    .parent()
-                    .unwrap_or(std::path::Path::new("."))
-                    .join("settings.json");
-                match tokio::fs::read_to_string(&settings_path).await {
-                    Ok(raw) => {
-                        let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
-                        (
-                            read_setting_str(&v, "slackToken"),
-                            read_setting_str(&v, "telegramToken"),
-                            read_setting_str(&v, "discordToken"),
-                            read_setting_str(&v, "discordChannelFilter"),
-                            read_setting_str(&v, "slackChannelFilter"),
-                        )
-                    }
-                    Err(_) => (String::new(), String::new(), String::new(), String::new(), String::new()),
+        let (
+            slack_token,
+            telegram_token,
+            discord_token,
+            discord_channel_filter,
+            slack_channel_filter,
+        ) = if !gw.slack_token.is_empty()
+            || !gw.telegram_token.is_empty()
+            || !gw.discord_token.is_empty()
+        {
+            (
+                gw.slack_token.clone(),
+                gw.telegram_token.clone(),
+                gw.discord_token.clone(),
+                String::new(),
+                String::new(),
+            )
+        } else {
+            let settings_path = self
+                .data_dir
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("settings.json");
+            match tokio::fs::read_to_string(&settings_path).await {
+                Ok(raw) => {
+                    let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+                    (
+                        read_setting_str(&v, "slackToken"),
+                        read_setting_str(&v, "telegramToken"),
+                        read_setting_str(&v, "discordToken"),
+                        read_setting_str(&v, "discordChannelFilter"),
+                        read_setting_str(&v, "slackChannelFilter"),
+                    )
                 }
-            };
+                Err(_) => (
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ),
+            }
+        };
 
         let has_any =
             !slack_token.is_empty() || !telegram_token.is_empty() || !discord_token.is_empty();
@@ -860,11 +895,7 @@ impl AgentEngine {
     }
 
     /// Get or create a thread, returning the thread ID and whether it was newly created.
-    async fn get_or_create_thread(
-        &self,
-        thread_id: Option<&str>,
-        content: &str,
-    ) -> (String, bool) {
+    async fn get_or_create_thread(&self, thread_id: Option<&str>, content: &str) -> (String, bool) {
         let given_id = thread_id.map(|s| s.to_string());
         let id = given_id.unwrap_or_else(|| format!("thread_{}", Uuid::new_v4()));
         let title = content.chars().take(50).collect::<String>();
@@ -913,8 +944,7 @@ impl AgentEngine {
         preferred_session_hint: Option<&str>,
         content: &str,
     ) -> Result<SendMessageOutcome> {
-        self
-            .send_message_inner(thread_id, content, Some(task_id), preferred_session_hint)
+        self.send_message_inner(thread_id, content, Some(task_id), preferred_session_hint)
             .await
     }
 
@@ -981,9 +1011,8 @@ impl AgentEngine {
         drop(memory);
         if let Some(recall) = onecontext_bootstrap {
             system_prompt.push_str("\n\n## OneContext Recall\n");
-            system_prompt.push_str(
-                "Use this as historical context from prior sessions when relevant:\n",
-            );
+            system_prompt
+                .push_str("Use this as historical context from prior sessions when relevant:\n");
             system_prompt.push_str(&recall);
         }
 
@@ -1653,7 +1682,8 @@ impl AgentEngine {
                         if current.retry_count <= current.max_retries {
                             current.status = TaskStatus::FailedAnalyzing;
                             current.completed_at = None;
-                            current.next_retry_at = Some(now_millis().saturating_add(retry_delay_ms));
+                            current.next_retry_at =
+                                Some(now_millis().saturating_add(retry_delay_ms));
                             current.blocked_reason = Some(format!(
                                 "retry {} of {} scheduled in {}s",
                                 current.retry_count,
@@ -1690,10 +1720,9 @@ impl AgentEngine {
                 self.emit_task_update(
                     &updated,
                     Some(match updated.status {
-                        TaskStatus::FailedAnalyzing => format!(
-                            "Attempt {} failed; retry scheduled",
-                            updated.retry_count
-                        ),
+                        TaskStatus::FailedAnalyzing => {
+                            format!("Attempt {} failed; retry scheduled", updated.retry_count)
+                        }
                         _ => format!("Failed: {error_text}"),
                     }),
                 );
@@ -2205,12 +2234,22 @@ fn refresh_task_queue_state(
         .collect();
     let occupied_lanes = tasks
         .iter()
-        .filter(|task| matches!(task.status, TaskStatus::InProgress | TaskStatus::AwaitingApproval))
+        .filter(|task| {
+            matches!(
+                task.status,
+                TaskStatus::InProgress | TaskStatus::AwaitingApproval
+            )
+        })
         .map(current_task_lane_key)
         .collect::<HashSet<_>>();
     let occupied_workspaces = tasks
         .iter()
-        .filter(|task| matches!(task.status, TaskStatus::InProgress | TaskStatus::AwaitingApproval))
+        .filter(|task| {
+            matches!(
+                task.status,
+                TaskStatus::InProgress | TaskStatus::AwaitingApproval
+            )
+        })
         .filter_map(|task| task_workspace_key(task, sessions))
         .collect::<HashSet<_>>();
     let mut changed = Vec::new();
@@ -2226,7 +2265,9 @@ fn refresh_task_queue_state(
         if matches!(task.status, TaskStatus::Queued | TaskStatus::Blocked) {
             if !unresolved.is_empty() {
                 let reason = format!("waiting for dependencies: {}", unresolved.join(", "));
-                if task.status != TaskStatus::Blocked || task.blocked_reason.as_deref() != Some(reason.as_str()) {
+                if task.status != TaskStatus::Blocked
+                    || task.blocked_reason.as_deref() != Some(reason.as_str())
+                {
                     task.status = TaskStatus::Blocked;
                     task.blocked_reason = Some(reason.clone());
                     task.logs.push(make_task_log_entry(
@@ -2261,10 +2302,16 @@ fn refresh_task_queue_state(
             }
 
             let resource_reason = if occupied_lanes.contains(&task_lane_key(task)) {
-                Some(format!("waiting for lane availability: {}", task_lane_key(task)))
+                Some(format!(
+                    "waiting for lane availability: {}",
+                    task_lane_key(task)
+                ))
             } else if let Some(workspace_key) = task_workspace_key(task, sessions) {
                 if occupied_workspaces.contains(&workspace_key) {
-                    Some(format!("waiting for workspace lock: {}", workspace_key.replace("workspace:", "")))
+                    Some(format!(
+                        "waiting for workspace lock: {}",
+                        workspace_key.replace("workspace:", "")
+                    ))
                 } else {
                     None
                 }
@@ -2273,7 +2320,9 @@ fn refresh_task_queue_state(
             };
 
             if let Some(reason) = resource_reason {
-                if task.status != TaskStatus::Blocked || task.blocked_reason.as_deref() != Some(reason.as_str()) {
+                if task.status != TaskStatus::Blocked
+                    || task.blocked_reason.as_deref() != Some(reason.as_str())
+                {
                     task.status = TaskStatus::Blocked;
                     task.blocked_reason = Some(reason.clone());
                     task.logs.push(make_task_log_entry(
@@ -2303,7 +2352,10 @@ fn refresh_task_queue_state(
         }
 
         if task.status == TaskStatus::FailedAnalyzing
-            && task.next_retry_at.map(|deadline| deadline <= now).unwrap_or(true)
+            && task
+                .next_retry_at
+                .map(|deadline| deadline <= now)
+                .unwrap_or(true)
         {
             task.status = TaskStatus::Queued;
             task.next_retry_at = None;
@@ -2328,12 +2380,22 @@ fn select_ready_task_indices(
 ) -> Vec<usize> {
     let mut occupied_lanes = tasks
         .iter()
-        .filter(|task| matches!(task.status, TaskStatus::InProgress | TaskStatus::AwaitingApproval))
+        .filter(|task| {
+            matches!(
+                task.status,
+                TaskStatus::InProgress | TaskStatus::AwaitingApproval
+            )
+        })
         .map(current_task_lane_key)
         .collect::<HashSet<_>>();
     let mut occupied_workspaces = tasks
         .iter()
-        .filter(|task| matches!(task.status, TaskStatus::InProgress | TaskStatus::AwaitingApproval))
+        .filter(|task| {
+            matches!(
+                task.status,
+                TaskStatus::InProgress | TaskStatus::AwaitingApproval
+            )
+        })
         .filter_map(|task| task_workspace_key(task, sessions))
         .collect::<HashSet<_>>();
 
@@ -2378,10 +2440,7 @@ fn current_task_lane_key(task: &AgentTask) -> String {
     task.lane_id.clone().unwrap_or_else(|| task_lane_key(task))
 }
 
-fn task_workspace_key(
-    task: &AgentTask,
-    sessions: &[amux_protocol::SessionInfo],
-) -> Option<String> {
+fn task_workspace_key(task: &AgentTask, sessions: &[amux_protocol::SessionInfo]) -> Option<String> {
     let session_hint = task.session_id.as_deref()?.trim();
     if session_hint.is_empty() {
         return None;
@@ -2446,8 +2505,7 @@ fn build_task_prompt(task: &AgentTask) -> String {
     if task.retry_count > 0 {
         prompt.push_str(&format!(
             "\n\nThis is self-healing retry attempt {} of {}.",
-            task.retry_count,
-            task.max_retries
+            task.retry_count, task.max_retries
         ));
         if let Some(last_error) = task.last_error.as_deref() {
             prompt.push_str(&format!("\nLast failure: {last_error}"));
@@ -2541,9 +2599,7 @@ fn agent_data_dir() -> PathBuf {
 }
 
 fn ordered_memory_dirs(agent_data_dir: &std::path::Path) -> Vec<PathBuf> {
-    let root = agent_data_dir
-        .parent()
-        .unwrap_or(std::path::Path::new("."));
+    let root = agent_data_dir.parent().unwrap_or(std::path::Path::new("."));
     let mut dirs = vec![root.join("agent-mission"), agent_data_dir.to_path_buf()];
     dirs.dedup();
     dirs

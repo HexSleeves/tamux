@@ -207,7 +207,8 @@ async fn main() -> Result<()> {
             workspace,
             cwd,
         } => {
-            let (id, active_command) = client::clone_session(&source, workspace, cols, rows, cwd).await?;
+            let (id, active_command) =
+                client::clone_session(&source, workspace, cols, rows, cwd).await?;
             println!("{id}");
             if let Some(cmd) = active_command {
                 println!("active_command:{cmd}");

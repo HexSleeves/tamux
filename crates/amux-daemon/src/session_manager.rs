@@ -1,8 +1,7 @@
 use amux_protocol::{
-    AgentDbMessage, AgentDbThread, AgentEventRow, ApprovalDecision, CommandLogEntry,
-    DaemonMessage, HistorySearchHit, ManagedCommandRequest, SessionId, SessionInfo,
-    SnapshotIndexEntry, SnapshotInfo, SymbolMatch, TelemetryLedgerStatus,
-    TranscriptIndexEntry, WorkspaceTopology,
+    AgentDbMessage, AgentDbThread, AgentEventRow, ApprovalDecision, CommandLogEntry, DaemonMessage,
+    HistorySearchHit, ManagedCommandRequest, SessionId, SessionInfo, SnapshotIndexEntry,
+    SnapshotInfo, SymbolMatch, TelemetryLedgerStatus, TranscriptIndexEntry, WorkspaceTopology,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -89,7 +88,11 @@ impl SessionManager {
         rows: Option<u16>,
         replay_scrollback: bool,
         cwd_override: Option<String>,
-    ) -> Result<(SessionId, broadcast::Receiver<DaemonMessage>, Option<String>)> {
+    ) -> Result<(
+        SessionId,
+        broadcast::Receiver<DaemonMessage>,
+        Option<String>,
+    )> {
         let source = self
             .sessions
             .read()
@@ -98,7 +101,15 @@ impl SessionManager {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("session not found: {source_id}"))?;
 
-        let (shell, cwd, source_workspace_id, source_cols, source_rows, replay_bytes, src_active_cmd) = {
+        let (
+            shell,
+            cwd,
+            source_workspace_id,
+            source_cols,
+            source_rows,
+            replay_bytes,
+            src_active_cmd,
+        ) = {
             let source = source.lock().await;
             (
                 source.shell().map(ToOwned::to_owned),
@@ -128,8 +139,7 @@ impl SessionManager {
             .await?;
 
         if replay_scrollback && !replay_bytes.is_empty() {
-            let sanitized =
-                crate::pty_session::sanitize_scrollback_for_replay(&replay_bytes);
+            let sanitized = crate::pty_session::sanitize_scrollback_for_replay(&replay_bytes);
             if let Some(cloned_session) = self.sessions.read().await.get(&id).cloned() {
                 cloned_session.lock().await.preload_output(&sanitized);
             }
@@ -439,7 +449,8 @@ impl SessionManager {
         exit_code: Option<i32>,
         duration_ms: Option<i64>,
     ) -> Result<()> {
-        self.history.complete_command_log(id, exit_code, duration_ms)
+        self.history
+            .complete_command_log(id, exit_code, duration_ms)
     }
 
     pub fn query_command_log(

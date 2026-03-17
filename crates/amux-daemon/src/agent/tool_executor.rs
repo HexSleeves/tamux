@@ -4,21 +4,22 @@
 //! state (workspace/pane/browser) are not available in daemon mode — only
 //! tools that can execute headlessly are included here.
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use amux_protocol::{
     DaemonMessage, ManagedCommandRequest, ManagedCommandSource, SecurityLevel, SessionId,
 };
 use anyhow::Result;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::broadcast;
 
 use crate::session_manager::SessionManager;
 
-use super::AgentEngine;
 use super::types::{
     AgentConfig, AgentEvent, NotificationSeverity, ToolCall, ToolDefinition, ToolFunctionDef,
     ToolPendingApproval, ToolResult,
 };
+use super::AgentEngine;
 
 const ONECONTEXT_TOOL_QUERY_MAX_CHARS: usize = 300;
 const ONECONTEXT_TOOL_OUTPUT_MAX_CHARS: usize = 12_000;
@@ -253,7 +254,11 @@ pub fn get_available_tools(config: &AgentConfig) -> Vec<ToolDefinition> {
     }
 
     // Terminal pane tools
-    tools.push(tool_def("list_terminals", "List all open terminal panes with their IDs and names.", serde_json::json!({"type":"object","properties":{}})));
+    tools.push(tool_def(
+        "list_terminals",
+        "List all open terminal panes with their IDs and names.",
+        serde_json::json!({"type":"object","properties":{}}),
+    ));
     tools.push(tool_def("read_active_terminal_content", "Read the current terminal buffer content from a pane, or browser panel info. For browser panels, returns URL and title; use include_dom to get page text content.", serde_json::json!({
         "type": "object",
         "properties": {
@@ -306,13 +311,17 @@ pub fn get_available_tools(config: &AgentConfig) -> Vec<ToolDefinition> {
             "limit": { "type": "integer", "description": "Maximum number of tasks to return" }
         }
     })));
-    tools.push(tool_def("cancel_task", "Cancel a queued, blocked, running, approval-pending, or retrying background task by ID.", serde_json::json!({
-        "type": "object",
-        "properties": {
-            "task_id": { "type": "string", "description": "Task ID to cancel" }
-        },
-        "required": ["task_id"]
-    })));
+    tools.push(tool_def(
+        "cancel_task",
+        "Cancel a queued, blocked, running, approval-pending, or retrying background task by ID.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "description": "Task ID to cancel" }
+            },
+            "required": ["task_id"]
+        }),
+    ));
     tools.push(tool_def("type_in_terminal", "Type text into an existing terminal session as raw keyboard input. Use this for: interactive TUI programs (codex, vim, htop), REPLs (python, node), typing commands in running shells, or any program that needs a real TTY. Text and Enter are sent with a small delay between them so TUIs process correctly. You can also send special keys like ctrl+c, escape, tab, arrow keys, etc.", serde_json::json!({
         "type": "object",
         "properties": {
@@ -325,31 +334,47 @@ pub fn get_available_tools(config: &AgentConfig) -> Vec<ToolDefinition> {
     })));
 
     // Workspace tools — executed via WorkspaceCommand event on the frontend
-    tools.push(tool_def("list_workspaces", "List workspaces, surfaces, and panes (with names and IDs).", serde_json::json!({"type":"object","properties":{}})));
-    tools.push(tool_def("create_workspace", "Create a new workspace and make it active.", serde_json::json!({
-        "type": "object",
-        "properties": { "name": { "type": "string", "description": "Optional workspace name" } }
-    })));
+    tools.push(tool_def(
+        "list_workspaces",
+        "List workspaces, surfaces, and panes (with names and IDs).",
+        serde_json::json!({"type":"object","properties":{}}),
+    ));
+    tools.push(tool_def(
+        "create_workspace",
+        "Create a new workspace and make it active.",
+        serde_json::json!({
+            "type": "object",
+            "properties": { "name": { "type": "string", "description": "Optional workspace name" } }
+        }),
+    ));
     tools.push(tool_def("set_active_workspace", "Set the active workspace by ID or name.", serde_json::json!({
         "type": "object",
         "properties": { "workspace": { "type": "string", "description": "Workspace ID or name" } },
         "required": ["workspace"]
     })));
-    tools.push(tool_def("create_surface", "Create a new surface (tab) in a workspace.", serde_json::json!({
-        "type": "object",
-        "properties": {
-            "workspace": { "type": "string", "description": "Optional workspace ID or name" },
-            "name": { "type": "string", "description": "Optional surface name" }
-        }
-    })));
-    tools.push(tool_def("set_active_surface", "Set active surface by ID or name.", serde_json::json!({
-        "type": "object",
-        "properties": {
-            "surface": { "type": "string", "description": "Surface ID or name" },
-            "workspace": { "type": "string", "description": "Optional workspace scope" }
-        },
-        "required": ["surface"]
-    })));
+    tools.push(tool_def(
+        "create_surface",
+        "Create a new surface (tab) in a workspace.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "workspace": { "type": "string", "description": "Optional workspace ID or name" },
+                "name": { "type": "string", "description": "Optional surface name" }
+            }
+        }),
+    ));
+    tools.push(tool_def(
+        "set_active_surface",
+        "Set active surface by ID or name.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "surface": { "type": "string", "description": "Surface ID or name" },
+                "workspace": { "type": "string", "description": "Optional workspace scope" }
+            },
+            "required": ["surface"]
+        }),
+    ));
     tools.push(tool_def("split_pane", "Split a pane horizontally or vertically. Works in BSP layout mode. In canvas mode, creates a new panel instead.", serde_json::json!({
         "type": "object",
         "properties": {
@@ -359,14 +384,18 @@ pub fn get_available_tools(config: &AgentConfig) -> Vec<ToolDefinition> {
         },
         "required": ["direction"]
     })));
-    tools.push(tool_def("rename_pane", "Rename a pane.", serde_json::json!({
-        "type": "object",
-        "properties": {
-            "pane": { "type": "string", "description": "Optional pane ID or name" },
-            "name": { "type": "string", "description": "New pane name" }
-        },
-        "required": ["name"]
-    })));
+    tools.push(tool_def(
+        "rename_pane",
+        "Rename a pane.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane": { "type": "string", "description": "Optional pane ID or name" },
+                "name": { "type": "string", "description": "New pane name" }
+            },
+            "required": ["name"]
+        }),
+    ));
     tools.push(tool_def("set_layout_preset", "Apply a layout preset to a surface.", serde_json::json!({
         "type": "object",
         "properties": {
@@ -376,28 +405,40 @@ pub fn get_available_tools(config: &AgentConfig) -> Vec<ToolDefinition> {
         },
         "required": ["preset"]
     })));
-    tools.push(tool_def("equalize_layout", "Equalize all split ratios in a surface.", serde_json::json!({
-        "type": "object",
-        "properties": {
-            "surface": { "type": "string", "description": "Optional surface ID or name" },
-            "workspace": { "type": "string", "description": "Optional workspace scope" }
-        }
-    })));
-    tools.push(tool_def("list_snippets", "List saved snippets with names and content previews.", serde_json::json!({
-        "type": "object",
-        "properties": { "owner": { "type": "string", "enum": ["user", "assistant", "both"] } }
-    })));
-    tools.push(tool_def("create_snippet", "Create a new snippet.", serde_json::json!({
-        "type": "object",
-        "properties": {
-            "name": { "type": "string" },
-            "content": { "type": "string" },
-            "category": { "type": "string" },
-            "description": { "type": "string" },
-            "tags": { "type": "array", "items": { "type": "string" } }
-        },
-        "required": ["name", "content"]
-    })));
+    tools.push(tool_def(
+        "equalize_layout",
+        "Equalize all split ratios in a surface.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "surface": { "type": "string", "description": "Optional surface ID or name" },
+                "workspace": { "type": "string", "description": "Optional workspace scope" }
+            }
+        }),
+    ));
+    tools.push(tool_def(
+        "list_snippets",
+        "List saved snippets with names and content previews.",
+        serde_json::json!({
+            "type": "object",
+            "properties": { "owner": { "type": "string", "enum": ["user", "assistant", "both"] } }
+        }),
+    ));
+    tools.push(tool_def(
+        "create_snippet",
+        "Create a new snippet.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" },
+                "content": { "type": "string" },
+                "category": { "type": "string" },
+                "description": { "type": "string" },
+                "tags": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["name", "content"]
+        }),
+    ));
     tools.push(tool_def("run_snippet", "Execute a snippet by ID or name in a pane.", serde_json::json!({
         "type": "object",
         "properties": {
@@ -436,8 +477,8 @@ pub async fn execute_tool(
     agent_data_dir: &std::path::Path,
     http_client: &reqwest::Client,
 ) -> ToolResult {
-    let args: serde_json::Value = serde_json::from_str(&tool_call.function.arguments)
-        .unwrap_or(serde_json::json!({}));
+    let args: serde_json::Value =
+        serde_json::from_str(&tool_call.function.arguments).unwrap_or(serde_json::json!({}));
 
     tracing::info!(
         tool = %tool_call.function.name,
@@ -452,26 +493,47 @@ pub async fn execute_tool(
         "list_terminals" | "list_sessions" => execute_list_sessions(session_manager).await,
         "read_active_terminal_content" => execute_read_terminal(&args, session_manager).await,
         "run_terminal_command" => execute_run_terminal_command(&args, session_manager).await,
-        "execute_managed_command" => match execute_managed_command(&args, session_manager, session_id).await {
-            Ok((content, approval)) => {
-                pending_approval = approval;
-                Ok(content)
+        "execute_managed_command" => {
+            match execute_managed_command(&args, session_manager, session_id).await {
+                Ok((content, approval)) => {
+                    pending_approval = approval;
+                    Ok(content)
+                }
+                Err(error) => Err(error),
             }
-            Err(error) => Err(error),
-        },
+        }
         "enqueue_task" => execute_enqueue_task(&args, agent).await,
         "list_tasks" => execute_list_tasks(&args, agent).await,
         "cancel_task" => execute_cancel_task(&args, agent).await,
         "type_in_terminal" => execute_type_in_terminal(&args, session_manager).await,
         // Gateway messaging (execute via CLI)
-        "send_slack_message" | "send_discord_message" | "send_telegram_message" | "send_whatsapp_message" =>
-            execute_gateway_message(tool_call.function.name.as_str(), &args, http_client, agent_data_dir).await,
+        "send_slack_message"
+        | "send_discord_message"
+        | "send_telegram_message"
+        | "send_whatsapp_message" => {
+            execute_gateway_message(
+                tool_call.function.name.as_str(),
+                &args,
+                http_client,
+                agent_data_dir,
+            )
+            .await
+        }
         // Workspace/snippet tools (read/write persistence files directly)
-        "list_workspaces" | "create_workspace" | "set_active_workspace" |
-        "create_surface" | "set_active_surface" | "split_pane" | "rename_pane" |
-        "set_layout_preset" | "equalize_layout" |
-        "list_snippets" | "create_snippet" | "run_snippet" =>
-            execute_workspace_tool(tool_call.function.name.as_str(), &args, event_tx).await,
+        "list_workspaces"
+        | "create_workspace"
+        | "set_active_workspace"
+        | "create_surface"
+        | "set_active_surface"
+        | "split_pane"
+        | "rename_pane"
+        | "set_layout_preset"
+        | "equalize_layout"
+        | "list_snippets"
+        | "create_snippet"
+        | "run_snippet" => {
+            execute_workspace_tool(tool_call.function.name.as_str(), &args, event_tx).await
+        }
         // Daemon-native tools
         "bash_command" => execute_bash(&args).await,
         "list_files" => execute_list_files(&args).await,
@@ -536,12 +598,9 @@ async fn execute_bash(args: &serde_json::Value) -> Result<String> {
         cmd.current_dir(dir);
     }
 
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(timeout_secs),
-        cmd.output(),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("command timed out after {timeout_secs}s"))??;
+    let output = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output())
+        .await
+        .map_err(|_| anyhow::anyhow!("command timed out after {timeout_secs}s"))??;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -550,7 +609,11 @@ async fn execute_bash(args: &serde_json::Value) -> Result<String> {
     // Truncate large output
     let max_chars = 50_000;
     let stdout_str = if stdout.len() > max_chars {
-        format!("{}...\n(truncated, {} chars total)", &stdout[..max_chars], stdout.len())
+        format!(
+            "{}...\n(truncated, {} chars total)",
+            &stdout[..max_chars],
+            stdout.len()
+        )
     } else {
         stdout.to_string()
     };
@@ -572,10 +635,7 @@ async fn execute_bash(args: &serde_json::Value) -> Result<String> {
 }
 
 async fn execute_list_files(args: &serde_json::Value) -> Result<String> {
-    let path = args
-        .get("path")
-        .and_then(|v| v.as_str())
-        .unwrap_or(".");
+    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
     let mut entries = tokio::fs::read_dir(path).await?;
     let mut items = Vec::new();
@@ -626,19 +686,77 @@ async fn execute_write_file(args: &serde_json::Value) -> Result<String> {
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing 'path' argument"))?;
+    validate_write_path(path)?;
 
     let content = args
         .get("content")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing 'content' argument"))?;
 
+    let file_path = Path::new(path);
+
     // Ensure parent directory exists
-    if let Some(parent) = std::path::Path::new(path).parent() {
+    if let Some(parent) = file_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    tokio::fs::write(path, content).await?;
-    Ok(format!("Written {} bytes to {path}", content.len()))
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(file_path)
+        .await?;
+    file.write_all(content.as_bytes()).await?;
+    file.sync_all().await?;
+    drop(file);
+
+    let metadata = tokio::fs::metadata(file_path).await?;
+    if !metadata.is_file() {
+        return Err(anyhow::anyhow!(
+            "write verification failed: target is not a regular file: {path}"
+        ));
+    }
+
+    let persisted = tokio::fs::read(file_path).await?;
+    if persisted != content.as_bytes() {
+        return Err(anyhow::anyhow!(
+            "write verification failed for {path}: expected {} bytes, found {} bytes",
+            content.len(),
+            persisted.len()
+        ));
+    }
+
+    let resolved_suffix = tokio::fs::canonicalize(file_path)
+        .await
+        .ok()
+        .map(|resolved| format!(" (resolved: {})", resolved.display()))
+        .unwrap_or_default();
+
+    Ok(format!(
+        "Written {} bytes to {path}{resolved_suffix}",
+        content.len()
+    ))
+}
+
+fn validate_write_path(path: &str) -> Result<()> {
+    if path.is_empty() {
+        return Err(anyhow::anyhow!("'path' must not be empty"));
+    }
+    if path.trim().is_empty() {
+        return Err(anyhow::anyhow!("'path' must not be blank"));
+    }
+    if path.trim() != path {
+        return Err(anyhow::anyhow!(
+            "invalid 'path': leading/trailing whitespace is not allowed"
+        ));
+    }
+    if path.chars().any(|ch| ch.is_control()) {
+        return Err(anyhow::anyhow!(
+            "invalid 'path': control characters are not allowed"
+        ));
+    }
+
+    Ok(())
 }
 
 async fn execute_search_files(args: &serde_json::Value) -> Result<String> {
@@ -647,10 +765,7 @@ async fn execute_search_files(args: &serde_json::Value) -> Result<String> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing 'pattern' argument"))?;
 
-    let path = args
-        .get("path")
-        .and_then(|v| v.as_str())
-        .unwrap_or(".");
+    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
     let max_results = args
         .get("max_results")
@@ -721,10 +836,7 @@ async fn execute_system_info() -> Result<String> {
 }
 
 async fn execute_list_processes(args: &serde_json::Value) -> Result<String> {
-    let limit = args
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(20) as usize;
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
 
     use sysinfo::System;
     let mut sys = System::new_all();
@@ -745,7 +857,10 @@ async fn execute_list_processes(args: &serde_json::Value) -> Result<String> {
 
     procs.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
-    let header = format!("{:<8} {:<30} {:>8} {:>12}", "PID", "NAME", "CPU%", "MEM(MB)");
+    let header = format!(
+        "{:<8} {:<30} {:>8} {:>12}",
+        "PID", "NAME", "CPU%", "MEM(MB)"
+    );
     let rows: Vec<String> = procs
         .iter()
         .take(limit)
@@ -772,10 +887,7 @@ async fn execute_search_history(
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing 'query' argument"))?;
 
-    let limit = args
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(20) as usize;
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
 
     let (summary, hits) = session_manager.search_history(query, limit)?;
 
@@ -875,8 +987,7 @@ async fn execute_onecontext_search(args: &serde_json::Value) -> Result<String> {
             .collect::<String>();
         format!(
             "{}\n\n(truncated, {} chars total)",
-            shortened,
-            trimmed_chars
+            shortened, trimmed_chars
         )
     } else {
         trimmed.to_string()
@@ -937,10 +1048,7 @@ async fn execute_notify(
         .get("title")
         .and_then(|v| v.as_str())
         .unwrap_or("Notification");
-    let message = args
-        .get("message")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("");
     let severity = match args.get("severity").and_then(|v| v.as_str()) {
         Some("warning") => NotificationSeverity::Warning,
         Some("alert") => NotificationSeverity::Alert,
@@ -1009,7 +1117,9 @@ async fn execute_web_search(
         let trimmed = line.trim();
         if trimmed.starts_with("<a rel=\"nofollow\"") {
             // Extract URL and text
-            if let (Some(href_start), Some(href_end)) = (trimmed.find("href=\""), trimmed.find("\">")) {
+            if let (Some(href_start), Some(href_end)) =
+                (trimmed.find("href=\""), trimmed.find("\">"))
+            {
                 let url = &trimmed[href_start + 6..href_end];
                 let text_start = href_end + 2;
                 if let Some(text_end) = trimmed[text_start..].find("</a>") {
@@ -1026,7 +1136,10 @@ async fn execute_web_search(
     if results.is_empty() {
         Ok(format!("No web results found for: {query}"))
     } else {
-        Ok(format!("Web results for \"{query}\":\n\n{}", results.join("\n\n")))
+        Ok(format!(
+            "Web results for \"{query}\":\n\n{}",
+            results.join("\n\n")
+        ))
     }
 }
 
@@ -1083,7 +1196,10 @@ async fn execute_read_terminal(
     }
 
     let target_id = if let Some(pane) = args.get("pane").and_then(|v| v.as_str()) {
-        sessions.iter().find(|s| s.id.to_string().contains(pane)).map(|s| s.id)
+        sessions
+            .iter()
+            .find(|s| s.id.to_string().contains(pane))
+            .map(|s| s.id)
     } else {
         None
     };
@@ -1103,8 +1219,13 @@ async fn execute_read_terminal(
 
             // Take last 200 lines to keep output manageable
             let lines: Vec<&str> = text.lines().collect();
-            let start = if lines.len() > 200 { lines.len() - 200 } else { 0 };
-            let visible: Vec<&str> = lines[start..].iter()
+            let start = if lines.len() > 200 {
+                lines.len() - 200
+            } else {
+                0
+            };
+            let visible: Vec<&str> = lines[start..]
+                .iter()
                 .filter(|l| !l.trim().is_empty())
                 .copied()
                 .collect();
@@ -1155,15 +1276,19 @@ async fn execute_managed_command(
         anyhow::bail!("No active terminal sessions are available for managed execution");
     }
 
-    let resolved_session_id = if let Some(session_ref) = args.get("session").and_then(|v| v.as_str()) {
-        sessions
-            .iter()
-            .find(|session| session.id.to_string() == session_ref || session.id.to_string().contains(session_ref))
-            .map(|session| session.id)
-            .ok_or_else(|| anyhow::anyhow!("session not found: {session_ref}"))?
-    } else {
-        session_id.unwrap_or(sessions[0].id)
-    };
+    let resolved_session_id =
+        if let Some(session_ref) = args.get("session").and_then(|v| v.as_str()) {
+            sessions
+                .iter()
+                .find(|session| {
+                    session.id.to_string() == session_ref
+                        || session.id.to_string().contains(session_ref)
+                })
+                .map(|session| session.id)
+                .ok_or_else(|| anyhow::anyhow!("session not found: {session_ref}"))?
+        } else {
+            session_id.unwrap_or(sessions[0].id)
+        };
 
     let security_level = match args
         .get("security_level")
@@ -1323,11 +1448,13 @@ async fn execute_list_tasks(args: &serde_json::Value, agent: &AgentEngine) -> Re
 
     let mut tasks = agent.list_tasks().await;
     if let Some(status_filter) = status_filter {
-        tasks.retain(|task| serde_json::to_value(task.status)
-            .ok()
-            .and_then(|value| value.as_str().map(ToOwned::to_owned))
-            .map(|value| value == status_filter)
-            .unwrap_or(false));
+        tasks.retain(|task| {
+            serde_json::to_value(task.status)
+                .ok()
+                .and_then(|value| value.as_str().map(ToOwned::to_owned))
+                .map(|value| value == status_filter)
+                .unwrap_or(false)
+        });
     }
     if let Some(limit) = limit {
         tasks.truncate(limit);
@@ -1401,7 +1528,10 @@ async fn execute_type_in_terminal(
     }
 
     let target_id = if let Some(pane) = args.get("pane").and_then(|v| v.as_str()) {
-        sessions.iter().find(|s| s.id.to_string().contains(pane)).map(|s| s.id)
+        sessions
+            .iter()
+            .find(|s| s.id.to_string().contains(pane))
+            .map(|s| s.id)
     } else {
         sessions.first().map(|s| s.id)
     };
@@ -1415,7 +1545,10 @@ async fn execute_type_in_terminal(
         resolve_key_sequence(key)
     } else {
         let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
-        let press_enter = args.get("press_enter").and_then(|v| v.as_bool()).unwrap_or(true);
+        let press_enter = args
+            .get("press_enter")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
 
         description = if press_enter {
             format!("{text} + Enter")
@@ -1450,8 +1583,13 @@ async fn execute_type_in_terminal(
             let stripped = strip_ansi_escapes::strip(&data);
             let text_out = String::from_utf8_lossy(&stripped);
             let lines: Vec<&str> = text_out.lines().collect();
-            let start = if lines.len() > 30 { lines.len() - 30 } else { 0 };
-            let visible: Vec<&str> = lines[start..].iter()
+            let start = if lines.len() > 30 {
+                lines.len() - 30
+            } else {
+                0
+            };
+            let visible: Vec<&str> = lines[start..]
+                .iter()
                 .filter(|l| !l.trim().is_empty())
                 .copied()
                 .collect();
@@ -1461,9 +1599,7 @@ async fn execute_type_in_terminal(
                 visible.join("\n"),
             ))
         }
-        Err(_) => {
-            Ok(format!("Sent '{description}' to session {sid}"))
-        }
+        Err(_) => Ok(format!("Sent '{description}' to session {sid}")),
     }
 }
 
@@ -1515,7 +1651,9 @@ async fn execute_gateway_message(
     http_client: &reqwest::Client,
     agent_data_dir: &std::path::Path,
 ) -> Result<String> {
-    let message = args.get("message").and_then(|v| v.as_str())
+    let message = args
+        .get("message")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing 'message' argument"))?;
 
     // Read gateway tokens from agent config or settings.json
@@ -1533,9 +1671,21 @@ async fn execute_gateway_message(
 
         if let Ok(raw) = tokio::fs::read_to_string(&config_path).await {
             if let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&raw) {
-                st = cfg.pointer("/gateway/slack_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                tt = cfg.pointer("/gateway/telegram_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                dt = cfg.pointer("/gateway/discord_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                st = cfg
+                    .pointer("/gateway/slack_token")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                tt = cfg
+                    .pointer("/gateway/telegram_token")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                dt = cfg
+                    .pointer("/gateway/discord_token")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
             }
         }
 
@@ -1543,9 +1693,24 @@ async fn execute_gateway_message(
         if st.is_empty() && tt.is_empty() && dt.is_empty() {
             if let Ok(raw) = tokio::fs::read_to_string(&settings_path).await {
                 if let Ok(s) = serde_json::from_str::<serde_json::Value>(&raw) {
-                    st = s.pointer("/settings/slackToken").or_else(|| s.get("slackToken")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    tt = s.pointer("/settings/telegramToken").or_else(|| s.get("telegramToken")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    dt = s.pointer("/settings/discordToken").or_else(|| s.get("discordToken")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    st = s
+                        .pointer("/settings/slackToken")
+                        .or_else(|| s.get("slackToken"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    tt = s
+                        .pointer("/settings/telegramToken")
+                        .or_else(|| s.get("telegramToken"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    dt = s
+                        .pointer("/settings/discordToken")
+                        .or_else(|| s.get("discordToken"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                 }
             }
         }
@@ -1554,31 +1719,36 @@ async fn execute_gateway_message(
     };
 
     // Read default targets from settings for when user doesn't specify
-    let settings: serde_json::Value = if let Ok(raw) = tokio::fs::read_to_string(&settings_path).await {
-        serde_json::from_str(&raw).unwrap_or_default()
-    } else {
-        serde_json::Value::Null
-    };
+    let settings: serde_json::Value =
+        if let Ok(raw) = tokio::fs::read_to_string(&settings_path).await {
+            serde_json::from_str(&raw).unwrap_or_default()
+        } else {
+            serde_json::Value::Null
+        };
 
     let setting = |key: &str| -> String {
-        settings.pointer(&format!("/settings/{key}"))
+        settings
+            .pointer(&format!("/settings/{key}"))
             .or_else(|| settings.get(key))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string()
     };
 
-    let first_csv = |val: &str| -> String {
-        val.split(',').next().unwrap_or("").trim().to_string()
-    };
+    let first_csv =
+        |val: &str| -> String { val.split(',').next().unwrap_or("").trim().to_string() };
 
     match tool_name {
         "send_slack_message" => {
-            let channel = args.get("channel").and_then(|v| v.as_str())
+            let channel = args
+                .get("channel")
+                .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| first_csv(&setting("slackChannelFilter")));
             if channel.is_empty() {
-                return Err(anyhow::anyhow!("No channel specified and no default slackChannelFilter in settings"));
+                return Err(anyhow::anyhow!(
+                    "No channel specified and no default slackChannelFilter in settings"
+                ));
             }
             let channel = channel.as_str();
             if slack_token.is_empty() {
@@ -1589,18 +1759,30 @@ async fn execute_gateway_message(
                 .post("https://slack.com/api/chat.postMessage")
                 .bearer_auth(&slack_token)
                 .json(&serde_json::json!({ "channel": channel, "text": message }))
-                .send().await?;
+                .send()
+                .await?;
             let body: serde_json::Value = resp.json().await?;
             if body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
                 Ok(format!("Slack message sent to #{channel}"))
             } else {
-                let err = body.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
+                let err = body
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error");
                 Err(anyhow::anyhow!("Slack API error: {err}"))
             }
         }
         "send_discord_message" => {
-            let mut channel_id = args.get("channel_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let mut user_id = args.get("user_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let mut channel_id = args
+                .get("channel_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let mut user_id = args
+                .get("user_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             // Fall back to defaults from settings
             if channel_id.is_empty() && user_id.is_empty() {
                 let default_channel = first_csv(&setting("discordChannelFilter"));
@@ -1627,9 +1809,11 @@ async fn execute_gateway_message(
                     .post("https://discord.com/api/v10/users/@me/channels")
                     .header("Authorization", format!("Bot {discord_token}"))
                     .json(&serde_json::json!({ "recipient_id": user_id }))
-                    .send().await?;
+                    .send()
+                    .await?;
                 let body: serde_json::Value = resp.json().await?;
-                body.get("id").and_then(|v| v.as_str())
+                body.get("id")
+                    .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow::anyhow!("Failed to create DM channel: {body}"))?
                     .to_string()
             } else {
@@ -1638,10 +1822,13 @@ async fn execute_gateway_message(
 
             tracing::info!(platform = "discord", channel = %target_channel, message = %message, "gateway: sending message");
             let resp = http_client
-                .post(format!("https://discord.com/api/v10/channels/{target_channel}/messages"))
+                .post(format!(
+                    "https://discord.com/api/v10/channels/{target_channel}/messages"
+                ))
                 .header("Authorization", format!("Bot {discord_token}"))
                 .json(&serde_json::json!({ "content": message }))
-                .send().await?;
+                .send()
+                .await?;
 
             if resp.status().is_success() {
                 Ok(format!("Discord message sent to {target_channel}"))
@@ -1651,11 +1838,15 @@ async fn execute_gateway_message(
             }
         }
         "send_telegram_message" => {
-            let chat_id = args.get("chat_id").and_then(|v| v.as_str())
+            let chat_id = args
+                .get("chat_id")
+                .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| first_csv(&setting("telegramAllowedChats")));
             if chat_id.is_empty() {
-                return Err(anyhow::anyhow!("No chat_id specified and no default telegramAllowedChats in settings"));
+                return Err(anyhow::anyhow!(
+                    "No chat_id specified and no default telegramAllowedChats in settings"
+                ));
             }
             let chat_id = chat_id.as_str();
             if telegram_token.is_empty() {
@@ -1666,33 +1857,52 @@ async fn execute_gateway_message(
             let resp = http_client
                 .post(&url)
                 .json(&serde_json::json!({ "chat_id": chat_id, "text": message }))
-                .send().await?;
+                .send()
+                .await?;
             let body: serde_json::Value = resp.json().await?;
             if body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
                 Ok(format!("Telegram message sent to {chat_id}"))
             } else {
-                let desc = body.get("description").and_then(|v| v.as_str()).unwrap_or("unknown error");
+                let desc = body
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error");
                 Err(anyhow::anyhow!("Telegram API error: {desc}"))
             }
         }
         "send_whatsapp_message" => {
-            let phone = args.get("phone").and_then(|v| v.as_str())
+            let phone = args
+                .get("phone")
+                .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| first_csv(&setting("whatsappAllowedContacts")));
             if phone.is_empty() {
-                return Err(anyhow::anyhow!("No phone specified and no default whatsappAllowedContacts in settings"));
+                return Err(anyhow::anyhow!(
+                    "No phone specified and no default whatsappAllowedContacts in settings"
+                ));
             }
             let phone = phone.as_str();
             // WhatsApp requires separate phone_number_id and token — read from settings
-            let settings: serde_json::Value = if let Ok(raw) = tokio::fs::read_to_string(&settings_path).await {
-                serde_json::from_str(&raw).unwrap_or_default()
-            } else {
-                serde_json::Value::Null
-            };
-            let wa_token = settings.pointer("/settings/whatsappToken").or_else(|| settings.get("whatsappToken")).and_then(|v| v.as_str()).unwrap_or("");
-            let phone_id = settings.pointer("/settings/whatsappPhoneNumberId").or_else(|| settings.get("whatsappPhoneNumberId")).and_then(|v| v.as_str()).unwrap_or("");
+            let settings: serde_json::Value =
+                if let Ok(raw) = tokio::fs::read_to_string(&settings_path).await {
+                    serde_json::from_str(&raw).unwrap_or_default()
+                } else {
+                    serde_json::Value::Null
+                };
+            let wa_token = settings
+                .pointer("/settings/whatsappToken")
+                .or_else(|| settings.get("whatsappToken"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let phone_id = settings
+                .pointer("/settings/whatsappPhoneNumberId")
+                .or_else(|| settings.get("whatsappPhoneNumberId"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if wa_token.is_empty() || phone_id.is_empty() {
-                return Err(anyhow::anyhow!("WhatsApp token/phoneNumberId not configured"));
+                return Err(anyhow::anyhow!(
+                    "WhatsApp token/phoneNumberId not configured"
+                ));
             }
             tracing::info!(platform = "whatsapp", phone = %phone, "gateway: sending message");
             let url = format!("https://graph.facebook.com/v18.0/{phone_id}/messages");
@@ -1705,7 +1915,8 @@ async fn execute_gateway_message(
                     "type": "text",
                     "text": { "body": message }
                 }))
-                .send().await?;
+                .send()
+                .await?;
             if resp.status().is_success() {
                 Ok(format!("WhatsApp message sent to {phone}"))
             } else {
@@ -1726,7 +1937,10 @@ async fn execute_workspace_tool(
     args: &serde_json::Value,
     event_tx: &broadcast::Sender<AgentEvent>,
 ) -> Result<String> {
-    let data_dir = super::agent_data_dir().parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+    let data_dir = super::agent_data_dir()
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
 
     match tool_name {
         "list_workspaces" => {
@@ -1741,7 +1955,11 @@ async fn execute_workspace_tool(
                             for w in ws {
                                 let name = w.get("name").and_then(|v| v.as_str()).unwrap_or("?");
                                 let id = w.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-                                let surfaces = w.get("surfaces").and_then(|v| v.as_array()).map(|s| s.len()).unwrap_or(0);
+                                let surfaces = w
+                                    .get("surfaces")
+                                    .and_then(|v| v.as_array())
+                                    .map(|s| s.len())
+                                    .unwrap_or(0);
                                 lines.push(format!("- {name} (id: {id}, {surfaces} surfaces)"));
                             }
                             Ok(lines.join("\n"))
@@ -1763,7 +1981,8 @@ async fn execute_workspace_tool(
                             let mut lines = Vec::new();
                             for s in ss {
                                 let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-                                let content = s.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                                let content =
+                                    s.get("content").and_then(|v| v.as_str()).unwrap_or("");
                                 let preview: String = content.chars().take(60).collect();
                                 lines.push(format!("- {name}: {preview}"));
                             }
@@ -1807,9 +2026,14 @@ fn strip_ansi_codes(text: &str) -> String {
                     chars.next();
                     // Skip OSC until BEL or ST
                     while let Some(c) = chars.next() {
-                        if c == '\x07' { break; }
+                        if c == '\x07' {
+                            break;
+                        }
                         if c == '\x1b' {
-                            if chars.peek() == Some(&'\\') { chars.next(); break; }
+                            if chars.peek() == Some(&'\\') {
+                                chars.next();
+                                break;
+                            }
                         }
                     }
                 }
@@ -1889,5 +2113,80 @@ mod urlencoding {
             }
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::execute_write_file;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    fn test_root() -> PathBuf {
+        std::env::temp_dir().join(format!("tamux-write-file-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[tokio::test]
+    async fn write_file_persists_content() {
+        let root = test_root();
+        let _ = tokio::fs::remove_dir_all(&root).await;
+
+        let path = root.join("nested").join("Dockerfile");
+        let content = "FROM scratch\n";
+        let args = json!({
+            "path": path.to_string_lossy().to_string(),
+            "content": content
+        });
+
+        let result = execute_write_file(&args)
+            .await
+            .expect("write_file should succeed");
+
+        assert!(result.contains("Written"));
+        assert!(result.contains(path.to_string_lossy().as_ref()));
+
+        let written = tokio::fs::read_to_string(&path)
+            .await
+            .expect("written file should exist");
+        assert_eq!(written, content);
+
+        let metadata = tokio::fs::metadata(&path)
+            .await
+            .expect("written file metadata should be readable");
+        assert!(metadata.is_file());
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    #[tokio::test]
+    async fn write_file_rejects_paths_with_trailing_whitespace() {
+        let root = test_root();
+        let bad_path = format!("{} ", root.join("Dockerfile").display());
+        let args = json!({
+            "path": bad_path,
+            "content": "x"
+        });
+
+        let error = execute_write_file(&args)
+            .await
+            .expect_err("write_file should reject trailing whitespace");
+        let message = error.to_string();
+        assert!(message.contains("leading/trailing whitespace"));
+    }
+
+    #[tokio::test]
+    async fn write_file_rejects_paths_with_control_characters() {
+        let root = test_root();
+        let bad_path = format!("{}/dock\nerfile", root.display());
+        let args = json!({
+            "path": bad_path,
+            "content": "x"
+        });
+
+        let error = execute_write_file(&args)
+            .await
+            .expect_err("write_file should reject control characters");
+        let message = error.to_string();
+        assert!(message.contains("control characters"));
     }
 }

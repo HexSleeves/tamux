@@ -689,8 +689,7 @@ pub fn sanitize_scrollback_for_replay(data: &[u8]) -> Vec<u8> {
                     b'c' => {
                         // DA1 (\x1b[?..c), DA2 (\x1b[>..c), DA3 (\x1b[=..c), plain DA
                         let first = data.get(params_start).copied();
-                        matches!(first, Some(b'?') | Some(b'>') | Some(b'='))
-                            || params_start == j
+                        matches!(first, Some(b'?') | Some(b'>') | Some(b'=')) || params_start == j
                     }
                     b'R' => {
                         // Cursor Position Report: \x1b[<digits>;<digits>R
@@ -811,7 +810,11 @@ fn windows_path_to_wsl(path: &std::path::Path) -> String {
 }
 
 #[cfg(windows)]
-fn configure_shell_command(shell_program: &str, cmd: &mut CommandBuilder, cwd: Option<&str>) -> Result<()> {
+fn configure_shell_command(
+    shell_program: &str,
+    cmd: &mut CommandBuilder,
+    cwd: Option<&str>,
+) -> Result<()> {
     let shell_name = std::path::Path::new(shell_program)
         .file_name()
         .and_then(|name| name.to_str())
@@ -851,7 +854,11 @@ fn configure_shell_command(shell_program: &str, cmd: &mut CommandBuilder, cwd: O
 }
 
 #[cfg(not(windows))]
-fn configure_shell_command(shell_program: &str, cmd: &mut CommandBuilder, _cwd: Option<&str>) -> Result<()> {
+fn configure_shell_command(
+    shell_program: &str,
+    cmd: &mut CommandBuilder,
+    _cwd: Option<&str>,
+) -> Result<()> {
     let shell_name = std::path::Path::new(shell_program)
         .file_name()
         .and_then(|name| name.to_str())

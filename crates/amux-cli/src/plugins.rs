@@ -36,7 +36,11 @@ struct PackageJson {
 #[serde(untagged)]
 enum AmuxPluginManifest {
     EntryPath(String),
-    Detailed { entry: String, #[serde(default)] format: Option<String> },
+    Detailed {
+        entry: String,
+        #[serde(default)]
+        format: Option<String>,
+    },
 }
 
 impl AmuxPluginManifest {
@@ -230,7 +234,9 @@ pub fn install_plugin(package_spec: &str) -> Result<InstalledPluginRecord> {
         .arg(&root)
         .arg(package_spec)
         .status()
-        .with_context(|| "failed to launch npm; ensure Node.js and npm are installed and on PATH")?;
+        .with_context(|| {
+            "failed to launch npm; ensure Node.js and npm are installed and on PATH"
+        })?;
 
     if !status.success() {
         bail!("npm install failed for plugin spec '{package_spec}'");
