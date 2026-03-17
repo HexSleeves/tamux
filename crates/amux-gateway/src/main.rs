@@ -15,12 +15,20 @@ mod telegram;
 use anyhow::{Context, Result};
 use amux_protocol::{ClientMessage, AmuxCodec, DaemonMessage, SessionId};
 use futures::{SinkExt, StreamExt};
-use std::collections::HashMap;
+use serde_json::Value;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::codec::Framed;
 
-use crate::router::{GatewayMessage, GatewayResponse};
+use crate::router::{GatewayAction, GatewayMessage, GatewayResponse};
+
+#[derive(Debug, Clone, Copy)]
+enum PendingAgentRequestKind {
+    EnqueueTask,
+    ListTasks,
+    CancelTask,
+}
 
 // ---------------------------------------------------------------------------
 // GatewayProvider trait
@@ -210,6 +218,7 @@ impl Gateway {
         // Map to track which channel_id belongs to which provider index.
         let pending_channels: Arc<Mutex<HashMap<String, usize>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let mut pending_agent_requests = VecDeque::<(String, PendingAgentRequestKind)>::new();
 
         // --- Provider polling tasks ---
         // Each provider runs in its own task, sending received messages into a
@@ -278,25 +287,58 @@ impl Gateway {
                     }
 
                     // Route through the message router.
-                    if let Some(request) = router::route_to_command(&msg) {
-                        tracing::info!(
-                            command = %request.command,
-                            "routing message as managed command"
-                        );
-                        let mut tx = daemon_tx.lock().await;
-                        if let Err(e) = tx
-                            .send(ClientMessage::ExecuteManagedCommand {
-                                id: session_id,
-                                request,
-                            })
-                            .await
-                        {
-                            tracing::error!(error = %e, "failed to send command to daemon");
+                    match router::route_message(&msg) {
+                        Some(GatewayAction::ManagedCommand(request)) => {
+                            tracing::info!(
+                                command = %request.command,
+                                "routing message as managed command"
+                            );
+                            let mut tx = daemon_tx.lock().await;
+                            if let Err(e) = tx
+                                .send(ClientMessage::ExecuteManagedCommand {
+                                    id: session_id,
+                                    request,
+                                })
+                                .await
+                            {
+                                tracing::error!(error = %e, "failed to send command to daemon");
+                            }
                         }
-                    } else {
-                        tracing::debug!(
-                            "message did not match a command prefix — ignoring"
-                        );
+                        Some(GatewayAction::EnqueueTask(task)) => {
+                            tracing::info!(title = %task.title, scheduled_at = task.scheduled_at, "routing message as queued task");
+                            let mut tx = daemon_tx.lock().await;
+                            match tx.send(ClientMessage::AgentAddTask {
+                                title: task.title,
+                                description: task.description,
+                                priority: task.priority,
+                                command: task.command,
+                                session_id: task.session_id,
+                                scheduled_at: task.scheduled_at,
+                                dependencies: task.dependencies,
+                            }).await {
+                                Ok(()) => pending_agent_requests.push_back((msg.channel_id.clone(), PendingAgentRequestKind::EnqueueTask)),
+                                Err(e) => tracing::error!(error = %e, "failed to send queued task to daemon"),
+                            }
+                        }
+                        Some(GatewayAction::ListTasks) => {
+                            let mut tx = daemon_tx.lock().await;
+                            match tx.send(ClientMessage::AgentListTasks).await {
+                                Ok(()) => pending_agent_requests.push_back((msg.channel_id.clone(), PendingAgentRequestKind::ListTasks)),
+                                Err(e) => tracing::error!(error = %e, "failed to request task list from daemon"),
+                            }
+                        }
+                        Some(GatewayAction::CancelTask { task_id }) => {
+                            let mut tx = daemon_tx.lock().await;
+                            match tx.send(ClientMessage::AgentCancelTask { task_id }).await {
+                                Ok(()) => pending_agent_requests.push_back((msg.channel_id.clone(), PendingAgentRequestKind::CancelTask)),
+                                Err(e) => tracing::error!(error = %e, "failed to send task cancellation to daemon"),
+                            }
+                        }
+                        None => {
+                            tracing::debug!(
+                                "message did not match a command prefix — ignoring"
+                            );
+                        }
                     }
                 }
 
@@ -353,6 +395,46 @@ impl Gateway {
                                     GatewayResponse {
                                         text: format!("Command rejected: {message}"),
                                         channel_id: channel_id.clone(),
+                                    },
+                                ));
+                            }
+                        }
+                        Ok(DaemonMessage::AgentTaskEnqueued { task_json }) => {
+                            if let Some((channel_id, PendingAgentRequestKind::EnqueueTask)) = pending_agent_requests.pop_front() {
+                                let text = format_task_enqueued_message(&task_json);
+                                let _ = response_tx.send((
+                                    channel_id.clone(),
+                                    GatewayResponse {
+                                        text,
+                                        channel_id,
+                                    },
+                                ));
+                            }
+                        }
+                        Ok(DaemonMessage::AgentTaskList { tasks_json }) => {
+                            if let Some((channel_id, PendingAgentRequestKind::ListTasks)) = pending_agent_requests.pop_front() {
+                                let text = format_task_list_message(&tasks_json);
+                                let _ = response_tx.send((
+                                    channel_id.clone(),
+                                    GatewayResponse {
+                                        text,
+                                        channel_id,
+                                    },
+                                ));
+                            }
+                        }
+                        Ok(DaemonMessage::AgentTaskCancelled { task_id, cancelled }) => {
+                            if let Some((channel_id, PendingAgentRequestKind::CancelTask)) = pending_agent_requests.pop_front() {
+                                let text = if cancelled {
+                                    format!("Cancelled task {task_id}")
+                                } else {
+                                    format!("Task {task_id} could not be cancelled")
+                                };
+                                let _ = response_tx.send((
+                                    channel_id.clone(),
+                                    GatewayResponse {
+                                        text,
+                                        channel_id,
                                     },
                                 ));
                             }
@@ -419,6 +501,44 @@ impl Gateway {
         tracing::info!("amux-gateway shut down");
         Ok(())
     }
+}
+
+fn format_task_enqueued_message(task_json: &str) -> String {
+    let value: Value = serde_json::from_str(task_json).unwrap_or(Value::Null);
+    let task_id = value.get("id").and_then(Value::as_str).unwrap_or("unknown");
+    let title = value.get("title").and_then(Value::as_str).unwrap_or("Queued task");
+    let status = value.get("status").and_then(Value::as_str).unwrap_or("queued");
+    let scheduled = value.get("scheduled_at").and_then(Value::as_u64);
+    let mut text = format!("Queued task {task_id}: {title} [{status}]");
+    if let Some(scheduled) = scheduled {
+        let when = humantime::format_rfc3339_seconds(std::time::UNIX_EPOCH + std::time::Duration::from_millis(scheduled));
+        text.push_str(&format!("\nScheduled for {when}"));
+    }
+    if let Some(reason) = value.get("blocked_reason").and_then(Value::as_str) {
+        if !reason.is_empty() {
+            text.push_str(&format!("\n{reason}"));
+        }
+    }
+    text
+}
+
+fn format_task_list_message(tasks_json: &str) -> String {
+    let tasks: Vec<Value> = serde_json::from_str(tasks_json).unwrap_or_default();
+    if tasks.is_empty() {
+        return "No daemon tasks queued.".to_string();
+    }
+
+    let mut lines = Vec::new();
+    for task in tasks.iter().take(8) {
+        let task_id = task.get("id").and_then(Value::as_str).unwrap_or("unknown");
+        let title = task.get("title").and_then(Value::as_str).unwrap_or("Queued task");
+        let status = task.get("status").and_then(Value::as_str).unwrap_or("queued");
+        lines.push(format!("- {task_id} [{status}] {title}"));
+    }
+    if tasks.len() > 8 {
+        lines.push(format!("- ... {} more task(s)", tasks.len() - 8));
+    }
+    format!("Daemon tasks:\n{}", lines.join("\n"))
 }
 
 // ---------------------------------------------------------------------------

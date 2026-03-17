@@ -83,6 +83,7 @@ enum AgentBridgeCommand {
         priority: Option<String>,
         command: Option<String>,
         session_id: Option<String>,
+        scheduled_at: Option<u64>,
         #[serde(default)]
         dependencies: Vec<String>,
     },
@@ -849,6 +850,7 @@ pub async fn run_agent_bridge() -> Result<()> {
                                 priority,
                                 command,
                                 session_id,
+                                scheduled_at,
                                 dependencies,
                             } => {
                                 framed.send(ClientMessage::AgentAddTask {
@@ -857,6 +859,7 @@ pub async fn run_agent_bridge() -> Result<()> {
                                     priority: priority.unwrap_or_else(|| "normal".into()),
                                     command,
                                     session_id,
+                                    scheduled_at,
                                     dependencies,
                                 }).await?;
                             }
@@ -902,6 +905,14 @@ pub async fn run_agent_bridge() -> Result<()> {
                     }
                     Some(Ok(DaemonMessage::AgentTaskList { tasks_json })) => {
                         let msg = serde_json::json!({"type":"task-list","data":serde_json::from_str::<serde_json::Value>(&tasks_json).unwrap_or_default()});
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentTaskEnqueued { task_json })) => {
+                        let msg = serde_json::json!({"type":"task-enqueued","data":serde_json::from_str::<serde_json::Value>(&task_json).unwrap_or_default()});
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentTaskCancelled { task_id, cancelled })) => {
+                        let msg = serde_json::json!({"type":"task-cancelled","task_id":task_id,"cancelled":cancelled});
                         emit_agent_event(&msg.to_string())?;
                     }
                     Some(Ok(DaemonMessage::AgentConfigResponse { config_json })) => {

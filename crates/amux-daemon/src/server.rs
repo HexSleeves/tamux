@@ -1023,16 +1023,33 @@ where
                     priority,
                     command,
                     session_id,
+                    scheduled_at,
                     dependencies,
                 } => {
-                    let task_id = agent
-                        .add_task(title, description, &priority, command, session_id, dependencies)
+                    let task = agent
+                        .enqueue_task(
+                            title,
+                            description,
+                            &priority,
+                            command,
+                            session_id,
+                            dependencies,
+                            scheduled_at,
+                            "user",
+                        )
                         .await;
-                    tracing::info!(%task_id, "agent task added");
+                    tracing::info!(task_id = %task.id, "agent task added");
+                    let json = serde_json::to_string(&task).unwrap_or_default();
+                    framed
+                        .send(DaemonMessage::AgentTaskEnqueued { task_json: json })
+                        .await?;
                 }
 
                 ClientMessage::AgentCancelTask { task_id } => {
-                    agent.cancel_task(&task_id).await;
+                    let cancelled = agent.cancel_task(&task_id).await;
+                    framed
+                        .send(DaemonMessage::AgentTaskCancelled { task_id, cancelled })
+                        .await?;
                 }
 
                 ClientMessage::AgentListTasks => {

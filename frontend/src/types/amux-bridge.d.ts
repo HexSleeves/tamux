@@ -101,7 +101,7 @@ declare global {
         dbGetThread?: (id: string) => Promise<{ thread: unknown; messages: unknown[] }>;
         dbAddMessage?: (message: unknown) => Promise<boolean>;
         dbListMessages?: (threadId: string, limit?: number | null) => Promise<unknown[]>;
-        agentAddTask?: (payload: { title: string; description: string; priority?: string; command?: string | null; sessionId?: string | null; dependencies?: string[] }) => Promise<unknown>;
+        agentAddTask?: (payload: { title: string; description: string; priority?: string; command?: string | null; sessionId?: string | null; scheduledAt?: number | null; dependencies?: string[] }) => Promise<unknown>;
         dbUpsertTranscriptIndex?: (entry: unknown) => Promise<boolean>;
         dbListTranscriptIndex?: (workspaceId?: string | null) => Promise<unknown[]>;
         dbUpsertSnapshotIndex?: (entry: unknown) => Promise<boolean>;

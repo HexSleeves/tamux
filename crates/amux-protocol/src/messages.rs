@@ -236,6 +236,7 @@ pub enum ClientMessage {
         priority: String,
         command: Option<String>,
         session_id: Option<String>,
+        scheduled_at: Option<u64>,
         #[serde(default)]
         dependencies: Vec<String>,
     },
@@ -466,6 +467,12 @@ pub enum DaemonMessage {
 
     /// Response to AgentListTasks.
     AgentTaskList { tasks_json: String },
+
+    /// Response to AgentAddTask.
+    AgentTaskEnqueued { task_json: String },
+
+    /// Response to AgentCancelTask.
+    AgentTaskCancelled { task_id: String, cancelled: bool },
 
     /// Response to AgentGetConfig.
     AgentConfigResponse { config_json: String },

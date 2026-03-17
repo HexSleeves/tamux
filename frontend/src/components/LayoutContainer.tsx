@@ -3,7 +3,6 @@ import { allLeafIds, computeLeafRects, computeSplitBoundaries, findLeaf, SplitBo
 import { useWorkspaceStore } from "../lib/workspaceStore";
 import { TerminalPane } from "./TerminalPane";
 import { InfiniteCanvasSurface } from "./InfiniteCanvasSurface";
-import { TaskTray } from "./TaskTray";
 
 export function LayoutContainer() {
   const surface = useWorkspaceStore((s) => s.activeSurface());
@@ -39,7 +38,6 @@ export function LayoutContainer() {
     return (
       <div style={{ width: "100%", height: "100%", position: "relative" }}>
         <InfiniteCanvasSurface surface={surface} />
-        <TaskTray />
       </div>
     );
   }
@@ -54,7 +52,6 @@ export function LayoutContainer() {
           paneId={zoomedPaneId}
           sessionId={zoomedLeaf?.sessionId}
         />
-        <TaskTray />
       </div>
     );
   }
@@ -108,7 +105,6 @@ export function LayoutContainer() {
         />
       ))}
 
-      <TaskTray />
     </div>
   );
 }

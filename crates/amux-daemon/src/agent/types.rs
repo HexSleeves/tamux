@@ -423,6 +423,8 @@ pub struct AgentTask {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_retry_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduled_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub awaiting_approval_id: Option<String>,

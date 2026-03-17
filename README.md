@@ -59,7 +59,9 @@ Key design principles:
 - **16 built-in providers** (see table below) plus a custom endpoint option.
 - **Daemon-owned agent task queue** for background work that survives UI disconnects and restarts.
 - **Task dependencies, retries, and session targeting** so queued work can model ordered execution and bind managed commands to a specific PTY session.
+- **First-class queue tools for daemon agents and MCP clients** -- agents can enqueue, inspect, cancel, and schedule background jobs instead of treating the queue as a UI-only feature.
 - **Approval-aware background execution** -- queued tasks can pause in `awaiting_approval` and resume or fail when an operator resolves the approval request.
+- **Scheduled execution** for delayed automations, reminders, and follow-up gateway actions using either relative delays or absolute timestamps.
 - **Honcho memory integration** for cross-session recall, with either managed cloud or a self-hosted base URL.
 - **Configurable system prompts** and agent personas.
 - **Context compaction** -- automatic summarization when the conversation exceeds a configurable token budget, preserving recent messages while compressing history.
@@ -106,14 +108,26 @@ Key design principles:
 ### MCP Server
 
 - **tamux-mcp** exposes the daemon as a Model Context Protocol server over JSON-RPC stdio transport.
-- Register it with Claude Code, Cursor, or any MCP-compatible client to give external agents access to terminal sessions, managed execution, snapshot management, and history search.
+- Register it with Claude Code, Cursor, or any MCP-compatible client to give external agents access to terminal sessions, managed execution, snapshot management, history search, and the daemon task queue.
+- MCP clients can enqueue delayed jobs with task metadata such as dependencies, preferred session, and scheduled execution time.
 
 ### Chat Gateway
 
 - **tamux-gateway** bridges Slack, Discord, and Telegram to the daemon.
 - Incoming messages matching a command prefix are translated into managed command requests.
+- Queue-aware gateway commands can enqueue immediate or scheduled daemon tasks, including reminders that reply back to the originating chat destination.
 - Daemon responses are streamed back to the originating chat channel.
 - Per-chat session stores maintain conversation context across messages.
+
+Gateway command examples:
+
+- `/run cargo test` -- run immediately in the shared gateway session.
+- `/task investigate why the nightly build failed and send the summary back here` -- enqueue background work for the daemon agent.
+- `/schedule 30m -- !git fetch --all` -- run a managed command after a delay.
+- `/schedule 2026-03-18T09:00:00Z -- send a standup reminder to this channel` -- schedule a general agent task at an absolute time.
+- `/remind 10m -- Standup starts in ten minutes` -- schedule a reminder back to the same Slack/Discord/Telegram destination.
+- `/tasks` -- list daemon-managed tasks.
+- `/cancel-task <task-id>` -- cancel a daemon-managed task.
 
 ### Embedded Browser
 

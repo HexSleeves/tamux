@@ -596,8 +596,8 @@ impl HistoryStore {
 
         transaction.execute(
             "INSERT OR REPLACE INTO agent_tasks \
-             (id, title, description, status, priority, progress, created_at, started_at, completed_at, error, result, thread_id, source, notify_on_complete, notify_channels_json, command, session_id, retry_count, max_retries, next_retry_at, blocked_reason, awaiting_approval_id, lane_id, last_error) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+             (id, title, description, status, priority, progress, created_at, started_at, completed_at, error, result, thread_id, source, notify_on_complete, notify_channels_json, command, session_id, retry_count, max_retries, next_retry_at, scheduled_at, blocked_reason, awaiting_approval_id, lane_id, last_error) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
             params![
                 &task.id,
                 &task.title,
@@ -619,6 +619,7 @@ impl HistoryStore {
                 task.retry_count as i64,
                 task.max_retries as i64,
                 task.next_retry_at.map(|value| value as i64),
+                task.scheduled_at.map(|value| value as i64),
                 &task.blocked_reason,
                 &task.awaiting_approval_id,
                 &task.lane_id,
@@ -702,7 +703,7 @@ impl HistoryStore {
         }
 
         let mut stmt = connection.prepare(
-            "SELECT id, title, description, status, priority, progress, created_at, started_at, completed_at, error, result, thread_id, source, notify_on_complete, notify_channels_json, command, session_id, retry_count, max_retries, next_retry_at, blocked_reason, awaiting_approval_id, lane_id, last_error \
+            "SELECT id, title, description, status, priority, progress, created_at, started_at, completed_at, error, result, thread_id, source, notify_on_complete, notify_channels_json, command, session_id, retry_count, max_retries, next_retry_at, scheduled_at, blocked_reason, awaiting_approval_id, lane_id, last_error \
              FROM agent_tasks \
              ORDER BY CASE status \
                  WHEN 'in_progress' THEN 0 \
@@ -745,10 +746,11 @@ impl HistoryStore {
                 retry_count: row.get::<_, i64>(17)? as u32,
                 max_retries: row.get::<_, i64>(18)? as u32,
                 next_retry_at: row.get::<_, Option<i64>>(19)?.map(|value| value as u64),
-                blocked_reason: row.get(20)?,
-                awaiting_approval_id: row.get(21)?,
-                lane_id: row.get(22)?,
-                last_error: row.get(23)?,
+                scheduled_at: row.get::<_, Option<i64>>(20)?.map(|value| value as u64),
+                blocked_reason: row.get(21)?,
+                awaiting_approval_id: row.get(22)?,
+                lane_id: row.get(23)?,
+                last_error: row.get(24)?,
                 logs: Vec::new(),
             })
         })?;
@@ -865,6 +867,7 @@ impl HistoryStore {
                 retry_count          INTEGER NOT NULL DEFAULT 0,
                 max_retries          INTEGER NOT NULL DEFAULT 3,
                 next_retry_at        INTEGER,
+                scheduled_at         INTEGER,
                 blocked_reason       TEXT,
                 awaiting_approval_id TEXT,
                 lane_id              TEXT,
@@ -916,6 +919,10 @@ impl HistoryStore {
         )?;
         let _ = connection.execute(
             "ALTER TABLE agent_tasks ADD COLUMN session_id TEXT",
+            [],
+        );
+        let _ = connection.execute(
+            "ALTER TABLE agent_tasks ADD COLUMN scheduled_at INTEGER",
             [],
         );
         Ok(())

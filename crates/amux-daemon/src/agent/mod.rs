@@ -836,6 +836,7 @@ impl AgentEngine {
 
                                 let _ = tool_executor::execute_tool(
                                     &auto_tool,
+                                    self,
                                     &self.session_manager,
                                     None,
                                     &self.event_tx,
@@ -1218,6 +1219,7 @@ impl AgentEngine {
 
                         let result = execute_tool(
                             tc,
+                            self,
                             &self.session_manager,
                             preferred_session_id,
                             &self.event_tx,
@@ -1315,12 +1317,45 @@ impl AgentEngine {
         session_id: Option<String>,
         dependencies: Vec<String>,
     ) -> String {
+        self.enqueue_task(
+            title,
+            description,
+            priority,
+            command,
+            session_id,
+            dependencies,
+            None,
+            "user",
+        )
+        .await
+        .id
+    }
+
+    pub async fn enqueue_task(
+        &self,
+        title: String,
+        description: String,
+        priority: &str,
+        command: Option<String>,
+        session_id: Option<String>,
+        dependencies: Vec<String>,
+        scheduled_at: Option<u64>,
+        source: &str,
+    ) -> AgentTask {
         let id = format!("task_{}", Uuid::new_v4());
+        let now = now_millis();
+        let initial_schedule_reason = scheduled_at
+            .filter(|deadline| *deadline > now)
+            .map(describe_scheduled_time);
         let task = AgentTask {
             id: id.clone(),
             title,
             description,
-            status: TaskStatus::Queued,
+            status: if initial_schedule_reason.is_some() {
+                TaskStatus::Blocked
+            } else {
+                TaskStatus::Queued
+            },
             priority: match priority {
                 "urgent" => TaskPriority::Urgent,
                 "high" => TaskPriority::High,
@@ -1328,13 +1363,13 @@ impl AgentEngine {
                 _ => TaskPriority::Normal,
             },
             progress: 0,
-            created_at: now_millis(),
+            created_at: now,
             started_at: None,
             completed_at: None,
             error: None,
             result: None,
             thread_id: None,
-            source: "user".into(),
+            source: source.into(),
             notify_on_complete: true,
             notify_channels: vec!["in-app".into()],
             dependencies,
@@ -1343,7 +1378,8 @@ impl AgentEngine {
             retry_count: 0,
             max_retries: self.config.read().await.max_retries.max(1),
             next_retry_at: None,
-            blocked_reason: None,
+            scheduled_at,
+            blocked_reason: initial_schedule_reason.clone(),
             awaiting_approval_id: None,
             lane_id: None,
             last_error: None,
@@ -1351,19 +1387,29 @@ impl AgentEngine {
                 0,
                 TaskLogLevel::Info,
                 "queue",
-                "task enqueued",
-                None,
+                if initial_schedule_reason.is_some() {
+                    "task scheduled"
+                } else {
+                    "task enqueued"
+                },
+                initial_schedule_reason,
             )],
         };
 
         self.tasks.lock().await.push_back(task);
         self.persist_tasks().await;
 
-        if let Some(task) = self.tasks.lock().await.iter().find(|task| task.id == id).cloned() {
-            self.emit_task_update(&task, Some("Task queued".into()));
-        }
+        let task = self
+            .tasks
+            .lock()
+            .await
+            .iter()
+            .find(|task| task.id == id)
+            .cloned()
+            .expect("enqueued task missing from queue");
+        self.emit_task_update(&task, Some(status_message(&task).into()));
 
-        id
+        task
     }
 
     pub async fn cancel_task(&self, task_id: &str) -> bool {
@@ -2195,6 +2241,25 @@ fn refresh_task_queue_state(
                 continue;
             }
 
+            if let Some(scheduled_at) = task.scheduled_at.filter(|deadline| *deadline > now) {
+                let reason = describe_scheduled_time(scheduled_at);
+                if task.status != TaskStatus::Blocked
+                    || task.blocked_reason.as_deref() != Some(reason.as_str())
+                {
+                    task.status = TaskStatus::Blocked;
+                    task.blocked_reason = Some(reason.clone());
+                    task.logs.push(make_task_log_entry(
+                        task.retry_count,
+                        TaskLogLevel::Info,
+                        "schedule",
+                        "task waiting for scheduled time",
+                        Some(reason),
+                    ));
+                    changed.push(task.clone());
+                }
+                continue;
+            }
+
             let resource_reason = if occupied_lanes.contains(&task_lane_key(task)) {
                 Some(format!("waiting for lane availability: {}", task_lane_key(task)))
             } else if let Some(workspace_key) = task_workspace_key(task, sessions) {
@@ -2364,6 +2429,13 @@ fn build_task_prompt(task: &AgentTask) -> String {
         prompt.push_str(&format!("\nPreferred terminal session: {session_id}"));
     }
 
+    if let Some(scheduled_at) = task.scheduled_at {
+        prompt.push_str(&format!(
+            "\nOriginal schedule: {}",
+            describe_scheduled_time(scheduled_at)
+        ));
+    }
+
     if !task.dependencies.is_empty() {
         prompt.push_str(&format!(
             "\nResolved dependencies: {}",
@@ -2404,6 +2476,14 @@ fn build_task_prompt(task: &AgentTask) -> String {
     }
 
     prompt
+}
+
+fn describe_scheduled_time(timestamp_ms: u64) -> String {
+    let system_time = UNIX_EPOCH + Duration::from_millis(timestamp_ms);
+    format!(
+        "scheduled for {}",
+        humantime::format_rfc3339_seconds(system_time)
+    )
 }
 
 fn status_message(task: &AgentTask) -> &'static str {

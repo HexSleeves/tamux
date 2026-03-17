@@ -44,6 +44,7 @@ export interface AgentQueueTask {
     retry_count?: number;
     max_retries?: number;
     next_retry_at?: number | null;
+    scheduled_at?: number | null;
     blocked_reason?: string | null;
     awaiting_approval_id?: string | null;
     lane_id?: string | null;

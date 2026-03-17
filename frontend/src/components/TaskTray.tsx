@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useRef, useMemo, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import {
     fetchAgentTasks,
     formatTaskStatus,
@@ -10,39 +10,32 @@ import {
 
 const pulseAnimation = "task-tray-pulse 1.2s ease-in-out infinite";
 
-export function TaskTray() {
-    const [collapsed, setCollapsed] = useState(false);
+export function TaskTrayButton() {
+    const [open, setOpen] = useState(false);
     const [tasks, setTasks] = useState<AgentQueueTask[]>([]);
     const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+    const anchorRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         let mounted = true;
 
         const refresh = async () => {
             const next = await fetchAgentTasks();
-            if (!mounted) {
-                return;
-            }
+            if (!mounted) return;
             setTasks(next);
             setSelectedTaskId((current) => current ?? next[0]?.id ?? null);
         };
 
         void refresh();
-        const interval = window.setInterval(() => {
-            void refresh();
-        }, 4000);
-
-        return () => {
-            mounted = false;
-            window.clearInterval(interval);
-        };
+        const interval = window.setInterval(() => void refresh(), 4000);
+        return () => { mounted = false; window.clearInterval(interval); };
     }, []);
 
     useEffect(() => {
+        if (!open) return;
+
         const handleKeyDown = (event: KeyboardEvent) => {
-            if (collapsed || tasks.length === 0 || !(event.ctrlKey || event.metaKey)) {
-                return;
-            }
+            if (tasks.length === 0 || !(event.ctrlKey || event.metaKey)) return;
 
             const currentIndex = Math.max(
                 tasks.findIndex((task) => task.id === selectedTaskId),
@@ -53,7 +46,6 @@ export function TaskTray() {
                 event.preventDefault();
                 setSelectedTaskId(tasks[Math.min(currentIndex + 1, tasks.length - 1)]?.id ?? selectedTaskId);
             }
-
             if (event.key.toLowerCase() === "k") {
                 event.preventDefault();
                 setSelectedTaskId(tasks[Math.max(currentIndex - 1, 0)]?.id ?? selectedTaskId);
@@ -62,21 +54,64 @@ export function TaskTray() {
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [collapsed, selectedTaskId, tasks]);
+    }, [open, selectedTaskId, tasks]);
+
+    // Close on outside click
+    useEffect(() => {
+        if (!open) return;
+        const handle = (e: MouseEvent) => {
+            if (anchorRef.current && !anchorRef.current.contains(e.target as Node)) {
+                setOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", handle);
+        return () => document.removeEventListener("mousedown", handle);
+    }, [open]);
 
     const activeTasks = useMemo(() => tasks.filter(isTaskActive), [tasks]);
     const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? tasks[0] ?? null;
+    const hasActive = activeTasks.length > 0;
 
     return (
-        <>
+        <div ref={anchorRef} style={{ position: "relative" }}>
             <style>{`@keyframes task-tray-pulse { 0%, 100% { transform: scale(0.92); opacity: 0.6; } 50% { transform: scale(1); opacity: 1; } }`}</style>
-            <div
+            <button
+                type="button"
+                onClick={() => setOpen((v) => !v)}
+                title="Task tray"
                 style={{
+                    border: "1px solid var(--glass-border)",
+                    background: hasActive ? "var(--approval-soft)" : "transparent",
+                    color: hasActive ? "var(--accent)" : "var(--text-secondary)",
+                    fontSize: "var(--text-xs)",
+                    fontWeight: 700,
+                    padding: "3px 8px",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                }}
+            >
+                {hasActive && (
+                    <span style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: "50%",
+                        background: "var(--accent)",
+                        animation: pulseAnimation,
+                        flexShrink: 0,
+                    }} />
+                )}
+                Tasks{tasks.length > 0 ? ` (${activeTasks.length}/${tasks.length})` : ""}
+            </button>
+
+            {open && (
+                <div style={{
                     position: "absolute",
-                    right: "var(--space-3)",
-                    bottom: "var(--space-3)",
-                    width: collapsed ? 220 : "min(420px, 42vw)",
-                    maxHeight: collapsed ? 56 : "min(72vh, 680px)",
+                    bottom: "calc(100% + 6px)",
+                    right: 0,
+                    width: "min(420px, 42vw)",
+                    maxHeight: "min(72vh, 680px)",
                     display: "flex",
                     flexDirection: "column",
                     background: "color-mix(in srgb, var(--bg-panel) 92%, black 8%)",
@@ -85,41 +120,36 @@ export function TaskTray() {
                     boxShadow: "var(--shadow-lg)",
                     backdropFilter: "blur(14px)",
                     overflow: "hidden",
-                    zIndex: 18,
-                    pointerEvents: "auto",
-                }}
-            >
-                <div
-                    style={{
+                    zIndex: 100,
+                }}>
+                    <div style={{
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "space-between",
                         gap: "var(--space-2)",
                         padding: "var(--space-3)",
-                        borderBottom: collapsed ? "none" : "1px solid var(--border)",
+                        borderBottom: "1px solid var(--border)",
                         background: "linear-gradient(135deg, var(--bg-tertiary), color-mix(in srgb, var(--bg-panel) 84%, var(--accent) 16%))",
-                    }}
-                >
-                    <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--text-primary)" }}>
-                            Task Tray
+                    }}>
+                        <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--text-primary)" }}>
+                                Task Tray
+                            </div>
+                            <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+                                {activeTasks.length > 0 ? `${activeTasks.length} active` : "No active tasks"}
+                                {tasks.length > 0 ? ` · ${tasks.length} total` : ""}
+                            </div>
                         </div>
-                        <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
-                            {activeTasks.length > 0 ? `${activeTasks.length} active` : "No active tasks"}
-                            {tasks.length > 0 ? ` · ${tasks.length} total` : ""}
-                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setOpen(false)}
+                            style={trayButtonStyle}
+                            title="Close task tray"
+                        >
+                            Close
+                        </button>
                     </div>
-                    <button
-                        type="button"
-                        onClick={() => setCollapsed((value) => !value)}
-                        style={trayButtonStyle}
-                        title={collapsed ? "Expand task tray" : "Collapse task tray"}
-                    >
-                        {collapsed ? "Open" : "Hide"}
-                    </button>
-                </div>
 
-                {!collapsed && (
                     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", overflow: "hidden" }}>
                         <div style={{ padding: "var(--space-2)", overflow: "auto", maxHeight: 320 }}>
                             {tasks.length === 0 ? (
@@ -147,16 +177,14 @@ export function TaskTray() {
                                             }}
                                         >
                                             <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                                                <div
-                                                    style={{
-                                                        width: 9,
-                                                        height: 9,
-                                                        borderRadius: "50%",
-                                                        background: color,
-                                                        animation: task.status === "in_progress" || task.status === "failed_analyzing" ? pulseAnimation : undefined,
-                                                        flexShrink: 0,
-                                                    }}
-                                                />
+                                                <div style={{
+                                                    width: 9,
+                                                    height: 9,
+                                                    borderRadius: "50%",
+                                                    background: color,
+                                                    animation: task.status === "in_progress" || task.status === "failed_analyzing" ? pulseAnimation : undefined,
+                                                    flexShrink: 0,
+                                                }} />
                                                 <div style={{ minWidth: 0, flex: 1 }}>
                                                     <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                                                         {task.title}
@@ -180,9 +208,9 @@ export function TaskTray() {
                             </div>
                         )}
                     </div>
-                )}
-            </div>
-        </>
+                </div>
+            )}
+        </div>
     );
 }
 
@@ -193,9 +221,7 @@ function TaskDetail({ task, onCancelled }: { task: AgentQueueTask; onCancelled: 
     const logs = [...(task.logs ?? [])].slice(-6).reverse();
 
     const handleCancel = async () => {
-        if (!amux?.agentCancelTask) {
-            return;
-        }
+        if (!amux?.agentCancelTask) return;
         await amux.agentCancelTask(task.id);
         onCancelled();
     };

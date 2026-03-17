@@ -7,6 +7,7 @@ import { useAgentMissionStore } from "../lib/agentMissionStore";
 import { InlineSystemMonitor } from "./status-bar/InlineSystemMonitor";
 import { StatusBarMissionStats } from "./status-bar/StatusBarMissionStats";
 import { StatusIndicator } from "./status-bar/StatusPrimitives";
+import { TaskTrayButton } from "./TaskTray";
 import { dividerStyle, statusBarRootStyle } from "./status-bar/shared";
 
 export function StatusBar() {
@@ -122,6 +123,10 @@ export function StatusBar() {
           historyCount={historyHits.length}
           snapshotCount={snapshots.length}
         />
+
+        <div style={dividerStyle} />
+
+        <TaskTrayButton />
 
         <div style={dividerStyle} />
 

@@ -3469,6 +3469,7 @@ function registerIpcHandlers() {
                 priority: payload?.priority || 'normal',
                 command: typeof payload?.command === 'string' && payload.command.trim() ? payload.command.trim() : null,
                 session_id: typeof payload?.sessionId === 'string' && payload.sessionId.trim() ? payload.sessionId.trim() : null,
+                scheduled_at: Number.isFinite(payload?.scheduledAt) ? Number(payload.scheduledAt) : null,
                 dependencies: Array.isArray(payload?.dependencies)
                     ? payload.dependencies
                         .filter((value) => typeof value === 'string' && value.trim())
