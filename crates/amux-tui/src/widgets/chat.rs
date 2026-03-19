@@ -56,6 +56,42 @@ pub fn render(
         }
     }
 
+    // Append active tool calls
+    for tc in chat.active_tool_calls() {
+        let status_span = match tc.status {
+            crate::state::chat::ToolCallStatus::Running => {
+                Span::styled(" \u{25cf} running", theme.accent_secondary)
+            }
+            crate::state::chat::ToolCallStatus::Done => {
+                Span::styled(" \u{2713} done", theme.accent_success)
+            }
+            crate::state::chat::ToolCallStatus::Error => {
+                Span::styled(" \u{2717} error", theme.accent_danger)
+            }
+        };
+        all_lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("\u{2699}", theme.accent_assistant),
+            Span::raw(" "),
+            Span::styled(&tc.name, theme.fg_active),
+            status_span,
+        ]));
+    }
+
+    // Append streaming reasoning if present
+    if !chat.streaming_reasoning().is_empty() {
+        all_lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("\u{25be} Reasoning...", theme.fg_dim),
+        ]));
+        for reasoning_line in chat.streaming_reasoning().lines() {
+            all_lines.push(Line::from(vec![
+                Span::styled("  \u{2502} ", Style::default().fg(Color::Indexed(24))),
+                Span::styled(reasoning_line, theme.fg_dim),
+            ]));
+        }
+    }
+
     // Append streaming content if present
     if !chat.streaming_content().is_empty() {
         all_lines.push(Line::from(vec![

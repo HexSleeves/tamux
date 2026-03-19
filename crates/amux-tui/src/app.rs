@@ -349,6 +349,8 @@ impl TuiModel {
             ClientEvent::Connected => {
                 self.connected = true;
                 self.status_line = "Connected to daemon".to_string();
+                // Sync our config (provider, model, api_key, reasoning_effort) to daemon
+                self.sync_config_to_daemon();
                 self.send_daemon_command(DaemonCommand::Refresh);
                 self.send_daemon_command(DaemonCommand::RefreshServices);
                 // Auto-spawn terminal session
