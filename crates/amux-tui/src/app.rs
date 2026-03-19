@@ -595,41 +595,64 @@ impl StringModel for TuiModel {
         let mut lines = Vec::new();
         let w = self.width as usize;
 
-        // Header widget (3 lines)
+        // Header (3 lines)
         let header_lines = crate::widgets::header::header_widget(
-            &self.config,
-            &self.chat,
-            &self.theme,
-            false,
-            w,
+            &self.config, &self.chat, &self.theme, false, w,
         );
-        // Footer widget (4 lines)
+        lines.extend(header_lines.iter().cloned());
+
+        // Footer (4 lines)
         let footer_lines = crate::widgets::footer::footer_widget(
-            &self.input,
-            &self.theme,
-            self.focus.clone(),
-            self.focus == FocusArea::Input,
-            w,
+            &self.input, &self.theme, self.focus.clone(), self.focus == FocusArea::Input, w,
         );
 
-        for line in &header_lines {
-            lines.push(line.clone());
+        // Body height
+        let body_h = (self.height as usize).saturating_sub(lines.len() + footer_lines.len());
+        if body_h == 0 {
+            lines.extend(footer_lines);
+            return lines.join("\n");
         }
 
-        // Body: chat widget (full width for now, Task 13 adds sidebar split)
-        let body_h = (self.height as usize)
-            .saturating_sub(header_lines.len() + footer_lines.len());
-        let chat_lines = crate::widgets::chat::chat_widget(
-            &self.chat, &self.theme, self.focus == FocusArea::Chat, w, body_h,
-        );
-        for line in &chat_lines {
-            lines.push(line.clone());
+        // Two-pane layout calculation
+        let show_sidebar = w >= 80; // Hide sidebar below 80 cols
+
+        if show_sidebar {
+            let gap = 1; // 1 col gap between panes
+            let sidebar_w = if w >= 120 {
+                (w * 35) / 100  // 35% for wide terminals
+            } else if w >= 100 {
+                (w * 30) / 100  // 30% for medium
+            } else {
+                (w * 30) / 100  // 30% for narrow (80-99)
+            };
+            let chat_w = w.saturating_sub(sidebar_w + gap);
+
+            let chat_lines = crate::widgets::chat::chat_widget(
+                &self.chat, &self.theme, self.focus == FocusArea::Chat, chat_w, body_h,
+            );
+            let sidebar_lines = crate::widgets::sidebar::sidebar_widget(
+                &self.sidebar, &self.tasks, &self.theme,
+                self.focus == FocusArea::Sidebar, sidebar_w, body_h,
+            );
+
+            // Merge side-by-side
+            for i in 0..body_h {
+                let left = chat_lines.get(i).cloned().unwrap_or_default();
+                let right = sidebar_lines.get(i).cloned().unwrap_or_default();
+                // Pad left to chat_w visible chars, add gap, then right
+                let left_padded = crate::widgets::pad_to_width(&left, chat_w);
+                lines.push(format!("{}{}{}", left_padded, " ".repeat(gap), right));
+            }
+        } else {
+            // Single pane: full-width chat
+            let chat_lines = crate::widgets::chat::chat_widget(
+                &self.chat, &self.theme, self.focus == FocusArea::Chat, w, body_h,
+            );
+            lines.extend(chat_lines);
         }
 
-        // Footer widget
-        for line in &footer_lines {
-            lines.push(line.clone());
-        }
+        // Footer
+        lines.extend(footer_lines);
 
         lines.join("\n")
     }

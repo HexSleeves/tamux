@@ -5,7 +5,7 @@ pub mod splash;
 pub mod chat;
 pub mod message;
 // pub mod reasoning;
-// pub mod sidebar;
+pub mod sidebar;
 // pub mod task_tree;
 // pub mod subagents;
 // pub mod command_palette;
