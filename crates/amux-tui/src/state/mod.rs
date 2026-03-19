@@ -1,6 +1,6 @@
 // Sub-module declarations — uncomment as modules are implemented
 // pub mod chat;
-// pub mod input;
+pub mod input;
 // pub mod modal;
 // pub mod sidebar;
 // pub mod task;
@@ -58,7 +58,7 @@ pub enum DaemonCommand {
 pub enum ChatAction {}
 pub enum TaskAction {}
 pub enum SidebarAction {}
-pub enum InputAction {}
+pub use input::{InputState, InputAction, InputMode};
 pub enum ModalAction {}
 pub enum ConfigAction {}
 pub enum ApprovalAction {}
