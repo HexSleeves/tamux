@@ -521,26 +521,58 @@ impl TuiModel {
             return Cmd::none();
         }
 
-        // Generic modal handling
+        // Command palette and thread picker allow typing for search
+        let is_searchable = matches!(kind, modal::ModalKind::CommandPalette | modal::ModalKind::ThreadPicker);
+
         match code {
             KeyCode::Escape => {
                 self.modal.reduce(modal::ModalAction::Pop);
                 self.input.reduce(input::InputAction::Clear);
             }
-            KeyCode::Char('j') | KeyCode::Down => {
+            KeyCode::Down => {
                 self.modal.reduce(modal::ModalAction::Navigate(1));
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            KeyCode::Up => {
                 self.modal.reduce(modal::ModalAction::Navigate(-1));
             }
             KeyCode::Enter => {
                 // Execute selected command
-                if let Some(cmd) = self.modal.selected_command() {
-                    let command = cmd.command.clone();
-                    self.execute_command(&command);
+                if kind == modal::ModalKind::CommandPalette {
+                    if let Some(cmd) = self.modal.selected_command() {
+                        let command = cmd.command.clone();
+                        self.execute_command(&command);
+                    }
+                } else if kind == modal::ModalKind::ThreadPicker {
+                    // Thread selection
+                    let cursor = self.modal.picker_cursor();
+                    if cursor == 0 {
+                        // "+ New conversation"
+                        self.chat.reduce(chat::ChatAction::NewThread);
+                    } else {
+                        // Select thread at index cursor-1
+                        let threads = self.chat.threads();
+                        if let Some(thread) = threads.get(cursor - 1) {
+                            let thread_id = thread.id.clone();
+                            self.chat.reduce(chat::ChatAction::SelectThread(thread_id.clone()));
+                            self.send_daemon_command(DaemonCommand::RequestThread(thread_id));
+                        }
+                    }
                 }
                 self.modal.reduce(modal::ModalAction::Pop);
                 self.input.reduce(input::InputAction::Clear);
+            }
+            KeyCode::Backspace if is_searchable => {
+                self.input.reduce(input::InputAction::Backspace);
+                self.modal.reduce(modal::ModalAction::SetQuery(
+                    self.input.buffer().to_string(),
+                ));
+            }
+            KeyCode::Char(c) if is_searchable => {
+                // Type into input buffer and update filter
+                self.input.reduce(input::InputAction::InsertChar(c));
+                self.modal.reduce(modal::ModalAction::SetQuery(
+                    self.input.buffer().to_string(),
+                ));
             }
             _ => {}
         }
@@ -805,7 +837,12 @@ impl StringModel for TuiModel {
             }
         }
 
-        lines.join("\n")
+        // Safety: truncate every line to screen width to prevent overflow
+        let final_lines: Vec<String> = lines
+            .into_iter()
+            .map(|line| crate::widgets::truncate_to_width(&line, w))
+            .collect();
+        final_lines.join("\n")
     }
 }
 
