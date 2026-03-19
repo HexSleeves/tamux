@@ -9,6 +9,7 @@
 tmp
 .claude
 .superpowers
+.worktrees
 agents.md
 .codex
 .vsc
