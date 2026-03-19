@@ -2,8 +2,8 @@
 pub mod header;
 pub mod footer;
 pub mod splash;
-// pub mod chat;
-// pub mod message;
+pub mod chat;
+pub mod message;
 // pub mod reasoning;
 // pub mod sidebar;
 // pub mod task_tree;

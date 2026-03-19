@@ -616,47 +616,14 @@ impl StringModel for TuiModel {
             lines.push(line.clone());
         }
 
-        // Body
+        // Body: chat widget (full width for now, Task 13 adds sidebar split)
         let body_h = (self.height as usize)
             .saturating_sub(header_lines.len() + footer_lines.len());
-        if self.chat.active_thread().is_none() && self.chat.streaming_content().is_empty() {
-            let splash = crate::widgets::splash::splash_widget(&self.theme, w, body_h);
-            for line in splash {
-                lines.push(line);
-            }
-        } else {
-            // Show messages from active thread
-            let thread = self.chat.active_thread().unwrap();
-            for msg in &thread.messages {
-                let role = match msg.role {
-                    chat::MessageRole::User => "USER",
-                    chat::MessageRole::Assistant => "ASST",
-                    chat::MessageRole::System => "SYS ",
-                    chat::MessageRole::Tool => "TOOL",
-                    chat::MessageRole::Unknown => "??? ",
-                };
-                let max_content = w.saturating_sub(8);
-                let content_display = if msg.content.len() > max_content {
-                    &msg.content[..max_content]
-                } else {
-                    &msg.content
-                };
-                lines.push(truncate_or_pad(
-                    &format!(" [{}] {}", role, content_display),
-                    w,
-                ));
-            }
-            // Show streaming content
-            if !self.chat.streaming_content().is_empty() {
-                lines.push(truncate_or_pad(
-                    &format!(" [ASST] {}", self.chat.streaming_content()),
-                    w,
-                ));
-            }
-            // Pad remaining
-            while lines.len() < header_lines.len() + body_h {
-                lines.push(" ".repeat(w));
-            }
+        let chat_lines = crate::widgets::chat::chat_widget(
+            &self.chat, &self.theme, self.focus == FocusArea::Chat, w, body_h,
+        );
+        for line in &chat_lines {
+            lines.push(line.clone());
         }
 
         // Footer widget
