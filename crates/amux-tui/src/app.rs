@@ -664,6 +664,16 @@ impl StringModel for TuiModel {
                     // Replace lines with overlay
                     lines = overlay;
                 }
+                crate::state::modal::ModalKind::ThreadPicker => {
+                    lines = crate::widgets::thread_picker::thread_picker_widget(
+                        &self.chat, &self.modal, &self.theme, w, self.height as usize,
+                    );
+                }
+                crate::state::modal::ModalKind::ApprovalOverlay => {
+                    lines = crate::widgets::approval::approval_widget(
+                        &self.approval, &self.theme, w, self.height as usize,
+                    );
+                }
                 // Other modals will be added in later tasks
                 _ => {}
             }
