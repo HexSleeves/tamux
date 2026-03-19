@@ -661,6 +661,24 @@ impl TuiModel {
                 }
                 self.modal.reduce(modal::ModalAction::Pop);
             }
+            modal::ModalKind::EffortPicker => {
+                let efforts = ["", "low", "medium", "high", "xhigh"];
+                let cursor = self.modal.picker_cursor();
+                if let Some(&effort) = efforts.get(cursor) {
+                    self.config.reduce(config::ConfigAction::SetReasoningEffort(effort.to_string()));
+                    if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                        "reasoning_effort": effort,
+                    })) {
+                        self.send_daemon_command(DaemonCommand::SetConfigJson(json));
+                    }
+                    self.status_line = if effort.is_empty() {
+                        "Effort: off".to_string()
+                    } else {
+                        format!("Effort: {}", effort)
+                    };
+                }
+                self.modal.reduce(modal::ModalAction::Pop);
+            }
             _ => {
                 // Generic: just pop
                 self.modal.reduce(modal::ModalAction::Pop);
@@ -689,24 +707,7 @@ impl TuiModel {
                 self.status_line = "Tools config: use /settings → Tools tab".to_string();
             }
             "effort" => {
-                // Cycle: "" → "low" → "medium" → "high" → ""
-                let next = match self.config.reasoning_effort() {
-                    "" => "low",
-                    "low" => "medium",
-                    "medium" => "high",
-                    _ => "",
-                };
-                self.config.reduce(config::ConfigAction::SetReasoningEffort(next.to_string()));
-                if let Ok(json) = serde_json::to_string(&serde_json::json!({
-                    "reasoning_effort": next,
-                })) {
-                    self.send_daemon_command(DaemonCommand::SetConfigJson(json));
-                }
-                self.status_line = if next.is_empty() {
-                    "Effort: default".to_string()
-                } else {
-                    format!("Effort: {}", next)
-                };
+                self.modal.reduce(modal::ModalAction::Push(modal::ModalKind::EffortPicker));
             }
             "thread" => self
                 .modal
@@ -966,7 +967,9 @@ impl StringModel for TuiModel {
                         &self.modal, &self.config, &self.theme, w, h,
                     );
                 }
-                // Other modals will be added in later tasks
+                crate::state::modal::ModalKind::EffortPicker => {
+                    lines = render_effort_picker(&self.modal, &self.config, &self.theme, w, h);
+                }
                 _ => {}
             }
         }
@@ -978,6 +981,132 @@ impl StringModel for TuiModel {
             .collect();
         final_lines.join("\n")
     }
+}
+
+// ── Inline picker overlays ───────────────────────────────────────────────────
+
+fn render_effort_picker(
+    modal: &modal::ModalState,
+    config: &config::ConfigState,
+    theme: &ThemeTokens,
+    screen_w: usize,
+    screen_h: usize,
+) -> Vec<String> {
+    use crate::theme::{SHARP_BORDER, FG_CLOSE};
+    use crate::widgets::{repeat_char, pad_to_width, strip_markup_len};
+
+    let bc = theme.accent_secondary.fg();
+    let b = &SHARP_BORDER;
+    let efforts = [
+        ("", "Off"),
+        ("low", "Low"),
+        ("medium", "Medium"),
+        ("high", "High"),
+        ("xhigh", "Extra High"),
+    ];
+
+    let picker_w = 40.min(screen_w);
+    let picker_h = (efforts.len() + 4).min(screen_h); // title + items + hints + borders
+    let inner_w = picker_w.saturating_sub(2);
+    let x_pad = (screen_w.saturating_sub(picker_w)) / 2;
+    let y_pad = (screen_h.saturating_sub(picker_h)) / 2;
+
+    let cursor = modal.picker_cursor();
+    let current = config.reasoning_effort();
+
+    let mut result = Vec::new();
+
+    // Top padding
+    for _ in 0..y_pad {
+        result.push(" ".repeat(screen_w));
+    }
+
+    // Top border
+    let title = " EFFORT ";
+    result.push(format!(
+        "{}{}{}{}{}{}{}{}{}",
+        " ".repeat(x_pad),
+        bc, b.top_left,
+        repeat_char(b.horizontal, 1),
+        title,
+        repeat_char(b.horizontal, inner_w.saturating_sub(title.len() + 1)),
+        b.top_right,
+        FG_CLOSE,
+        " ".repeat(screen_w.saturating_sub(x_pad + picker_w)),
+    ));
+
+    // Items
+    for (i, (value, label)) in efforts.iter().enumerate() {
+        let is_selected = i == cursor;
+        let is_current = *value == current;
+        let marker = if is_current { "●" } else { " " };
+
+        let line = if is_selected {
+            format!(
+                " {}[bg=rgb(178,135,0)]> {} {}[/bg]{}",
+                FG_CLOSE,
+                marker, label,
+                FG_CLOSE,
+            )
+        } else {
+            format!(
+                "   {} {}{}{}{}",
+                marker,
+                if is_current { theme.accent_primary.fg() } else { theme.fg_dim.fg() },
+                label,
+                FG_CLOSE,
+                "",
+            )
+        };
+
+        let padded = pad_to_width(&line, inner_w);
+        result.push(format!(
+            "{}{}{}{}{}{}{}",
+            " ".repeat(x_pad),
+            bc, b.vertical,
+            padded,
+            b.vertical,
+            FG_CLOSE,
+            " ".repeat(screen_w.saturating_sub(x_pad + picker_w)),
+        ));
+    }
+
+    // Hints
+    let hints = format!(
+        " {}j/k{} navigate  {}Enter{} select  {}Esc{} close{}",
+        theme.fg_active.fg(), theme.fg_dim.fg(),
+        theme.fg_active.fg(), theme.fg_dim.fg(),
+        theme.fg_active.fg(), theme.fg_dim.fg(),
+        FG_CLOSE,
+    );
+    let padded_hints = pad_to_width(&hints, inner_w);
+    result.push(format!(
+        "{}{}{}{}{}{}{}",
+        " ".repeat(x_pad),
+        bc, b.vertical,
+        padded_hints,
+        b.vertical,
+        FG_CLOSE,
+        " ".repeat(screen_w.saturating_sub(x_pad + picker_w)),
+    ));
+
+    // Bottom border
+    result.push(format!(
+        "{}{}{}{}{}{}{}",
+        " ".repeat(x_pad),
+        bc, b.bottom_left,
+        repeat_char(b.horizontal, inner_w),
+        b.bottom_right,
+        FG_CLOSE,
+        " ".repeat(screen_w.saturating_sub(x_pad + picker_w)),
+    ));
+
+    // Bottom padding
+    while result.len() < screen_h {
+        result.push(" ".repeat(screen_w));
+    }
+    result.truncate(screen_h);
+    result
 }
 
 // ── Wire-to-state type conversions ───────────────────────────────────────────
