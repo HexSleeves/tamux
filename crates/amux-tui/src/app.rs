@@ -413,9 +413,24 @@ impl TuiModel {
                 self.input.set_mode(input::InputMode::Normal);
             }
             KeyCode::Enter => {
+                // If command palette is open, Enter selects from palette
+                if self.modal.top() == Some(modal::ModalKind::CommandPalette) {
+                    self.handle_modal_enter(modal::ModalKind::CommandPalette);
+                    if self.pending_quit {
+                        self.pending_quit = false;
+                        return Cmd::quit();
+                    }
+                    return Cmd::none();
+                }
                 self.input.reduce(input::InputAction::Submit);
                 if let Some(prompt) = self.input.take_submitted() {
-                    self.submit_prompt(prompt);
+                    // Slash commands: /command args
+                    if prompt.starts_with('/') {
+                        let cmd = prompt.trim_start_matches('/').split_whitespace().next().unwrap_or("");
+                        self.execute_command(cmd);
+                    } else {
+                        self.submit_prompt(prompt);
+                    }
                 }
             }
             KeyCode::Backspace => {
@@ -627,24 +642,19 @@ impl TuiModel {
             modal::ModalKind::ModelPicker => {
                 let models = self.config.fetched_models();
                 if models.is_empty() {
-                    // Still waiting for models — don't pop, re-fetch
-                    self.send_daemon_command(DaemonCommand::FetchModels {
-                        provider_id: self.config.provider.clone(),
-                        base_url: self.config.base_url.clone(),
-                        api_key: self.config.api_key.clone(),
-                    });
-                    self.status_line = "Waiting for models...".to_string();
-                    return; // don't pop
-                }
-                let cursor = self.modal.picker_cursor();
-                if let Some(model) = models.get(cursor) {
-                    let model_id = model.id.clone();
-                    self.config.reduce(config::ConfigAction::SetModel(model_id.clone()));
-                    self.status_line = format!("Model: {}", model_id);
-                    if let Ok(json) = serde_json::to_string(&serde_json::json!({
-                        "model": model_id,
-                    })) {
-                        self.send_daemon_command(DaemonCommand::SetConfigJson(json));
+                    // No models available — close picker
+                    self.status_line = "No models available. Set model in /settings".to_string();
+                } else {
+                    let cursor = self.modal.picker_cursor();
+                    if let Some(model) = models.get(cursor) {
+                        let model_id = model.id.clone();
+                        self.config.reduce(config::ConfigAction::SetModel(model_id.clone()));
+                        self.status_line = format!("Model: {}", model_id);
+                        if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                            "model": model_id,
+                        })) {
+                            self.send_daemon_command(DaemonCommand::SetConfigJson(json));
+                        }
                     }
                 }
                 self.modal.reduce(modal::ModalAction::Pop);
