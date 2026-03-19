@@ -492,6 +492,14 @@ impl TuiModel {
             }
             ClientEvent::Error(message) => {
                 self.status_line = format!("Error: {}", message);
+                // Also show error in chat as a system message
+                if let Some(thread) = self.chat.active_thread_mut() {
+                    thread.messages.push(chat::AgentMessage {
+                        role: chat::MessageRole::System,
+                        content: format!("Error: {}", message),
+                        ..Default::default()
+                    });
+                }
             }
         }
     }
