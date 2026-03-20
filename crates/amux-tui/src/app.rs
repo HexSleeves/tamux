@@ -144,9 +144,20 @@ impl TuiModel {
     /// Calculate the dynamic input area height based on buffer content and attachments.
     /// Grows from 3 (border + 1 line + border) to a max of 12 rows.
     fn input_height(&self) -> u16 {
-        let line_count = self.input.buffer().matches('\n').count() + 1;
+        // Account for visual line wrapping, not just \n count
+        let inner_width = self.width.saturating_sub(5) as usize; // borders + prompt arrow + padding
+        let visual_lines: usize = if inner_width == 0 {
+            1
+        } else {
+            self.input.buffer().split('\n')
+                .map(|line| {
+                    let len = line.chars().count();
+                    if len == 0 { 1 } else { (len + inner_width - 1) / inner_width }
+                })
+                .sum()
+        };
         let attach_count = self.attachments.len();
-        (line_count + attach_count + 2).clamp(3, 12) as u16 // +2 for borders, min 3, max 12
+        (visual_lines + attach_count + 2).clamp(3, 12) as u16 // +2 for borders
     }
 
     /// Handle pasted text (from bracketed paste). Inserts all characters
