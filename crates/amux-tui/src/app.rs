@@ -66,6 +66,9 @@ pub struct TuiModel {
     default_session_id: Option<String>,
     tick_counter: u64,
 
+    // Agent activity state (from daemon events, not local buffers)
+    agent_activity: Option<String>,  // None = idle, Some("thinking"), Some("⚙ bash_command"), etc.
+
     // Error state
     last_error: Option<String>,     // stored for viewing via '!' key
     error_active: bool,             // active indicator (pulsing dot, clears on next action)
@@ -121,6 +124,7 @@ impl TuiModel {
             status_line: "Starting...".to_string(),
             default_session_id: None,
             tick_counter: 0,
+            agent_activity: None,
             last_error: None,
             error_active: false,
             error_tick: 0,
@@ -617,7 +621,7 @@ impl TuiModel {
             self.modal.top().is_some(),
             &self.attachments,
             self.tick_counter,
-            self.chat.is_streaming(),
+            self.agent_activity.as_deref(),
         );
 
         // Render status bar (bare, below input)
@@ -858,6 +862,7 @@ impl TuiModel {
                 thread_id,
                 content,
             } => {
+                self.agent_activity = Some("writing".to_string());
                 self.chat
                     .reduce(chat::ChatAction::Delta { thread_id, content });
             }
@@ -865,6 +870,7 @@ impl TuiModel {
                 thread_id,
                 content,
             } => {
+                self.agent_activity = Some("reasoning".to_string());
                 self.chat
                     .reduce(chat::ChatAction::Reasoning { thread_id, content });
             }
@@ -874,6 +880,7 @@ impl TuiModel {
                 name,
                 arguments,
             } => {
+                self.agent_activity = Some(format!("\u{2699} {}", name));
                 self.chat.reduce(chat::ChatAction::ToolCall {
                     thread_id,
                     call_id,
@@ -888,6 +895,7 @@ impl TuiModel {
                 content,
                 is_error,
             } => {
+                self.agent_activity = Some(format!("\u{2699} {} \u{2713}", name));
                 self.chat.reduce(chat::ChatAction::ToolResult {
                     thread_id,
                     call_id,
@@ -906,6 +914,7 @@ impl TuiModel {
                 tps,
                 generation_ms,
             } => {
+                self.agent_activity = None; // Agent finished
                 self.chat.reduce(chat::ChatAction::TurnDone {
                     thread_id,
                     input_tokens,
@@ -2018,6 +2027,7 @@ impl TuiModel {
         // Keep insert mode so the user can immediately type the next message
         self.input.set_mode(input::InputMode::Insert);
         self.status_line = "Prompt sent".to_string();
+        self.agent_activity = Some("thinking".to_string());
         self.error_active = false; // Clear error on new message
     }
 

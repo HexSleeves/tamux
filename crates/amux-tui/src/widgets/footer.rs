@@ -61,7 +61,7 @@ pub fn render_input(
     modal_open: bool,
     attachments: &[Attachment],
     tick: u64,
-    streaming: bool,
+    agent_activity: Option<&str>,
 ) {
     let border_style = if modal_open {
         theme.fg_dim
@@ -111,30 +111,23 @@ pub fn render_input(
             ]));
         }
 
-        // Animated "thinking" status when assistant is streaming and input is empty
-        if streaming && buf.is_empty() && attachments.is_empty() {
-            let thinking_texts = [
-                "\u{1f9e0} thinking...",
-                "\u{2699}\u{fe0f} working...",
-                "\u{1f4ad} reasoning...",
-                "\u{1f50d} analyzing...",
-                "\u{270d}\u{fe0f} composing...",
-                "\u{1f4a1} planning...",
-            ];
-            let idx = ((tick / 30) as usize) % thinking_texts.len(); // cycle every ~1.5s
-            let spinner_frames = ["\u{28bf}", "\u{28fb}", "\u{28fd}", "\u{28fe}", "\u{28f7}", "\u{28ef}", "\u{28df}", "\u{287f}"];
-            let spinner = spinner_frames[((tick / 4) as usize) % spinner_frames.len()];
+        // Animated activity indicator when agent is working
+        if let Some(activity) = agent_activity {
+            if buf.is_empty() && attachments.is_empty() {
+                let spinner_frames = ["\u{28bf}", "\u{28fb}", "\u{28fd}", "\u{28fe}", "\u{28f7}", "\u{28ef}", "\u{28df}", "\u{287f}"];
+                let spinner = spinner_frames[((tick / 4) as usize) % spinner_frames.len()];
+                let activity_style = Style::default().fg(Color::Indexed(178)); // amber
 
-            let thinking_style = Style::default().fg(Color::Indexed(178)); // amber
-            lines.push(Line::from(vec![
-                Span::raw(" "),
-                Span::styled(spinner, thinking_style),
-                Span::raw(" "),
-                Span::styled(thinking_texts[idx], thinking_style),
-            ]));
+                lines.push(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(spinner, activity_style),
+                    Span::raw(" "),
+                    Span::styled(format!("{}...", activity), activity_style),
+                ]));
 
-            frame.render_widget(Paragraph::new(lines), inner);
-            return;
+                frame.render_widget(Paragraph::new(lines), inner);
+                return;
+            }
         }
 
         // Animated placeholder when buffer is empty
