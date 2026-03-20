@@ -86,6 +86,12 @@ pub struct TuiModel {
 
     // Pending file attachments (prepended to next submitted message)
     attachments: Vec<Attachment>,
+
+    // Queue of prompts submitted while streaming (auto-sent after TurnDone)
+    queued_prompts: Vec<String>,
+
+    // Thread ID whose stream was cancelled via double-Esc (ignore further events)
+    cancelled_thread_id: Option<String>,
 }
 
 impl TuiModel {
@@ -126,6 +132,8 @@ impl TuiModel {
             pending_stop_tick: 0,
 
             attachments: Vec::new(),
+            queued_prompts: Vec::new(),
+            cancelled_thread_id: None,
         }
     }
 
@@ -575,6 +583,7 @@ impl TuiModel {
             self.error_active,
             self.tick_counter,
             self.error_tick,
+            self.queued_prompts.len(),
         );
 
         // Modal overlay
@@ -671,6 +680,28 @@ impl TuiModel {
     }
 
     fn handle_client_event(&mut self, event: ClientEvent) {
+        // Skip streaming events for a cancelled thread (double-Esc stop)
+        if let Some(ref cancelled_id) = self.cancelled_thread_id.clone() {
+            let skip = match &event {
+                ClientEvent::Delta { thread_id, .. }
+                | ClientEvent::Reasoning { thread_id, .. }
+                | ClientEvent::ToolCall { thread_id, .. }
+                | ClientEvent::ToolResult { thread_id, .. } => thread_id == cancelled_id,
+                ClientEvent::Done { thread_id, .. } => {
+                    if thread_id == cancelled_id {
+                        self.cancelled_thread_id = None;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            };
+            if skip {
+                return;
+            }
+        }
+
         match event {
             ClientEvent::Connected => {
                 self.connected = true;
@@ -835,6 +866,12 @@ impl TuiModel {
                     tps,
                     generation_ms,
                 });
+
+                // Send next queued prompt if any
+                if !self.queued_prompts.is_empty() {
+                    let next_prompt = self.queued_prompts.remove(0);
+                    self.submit_prompt(next_prompt);
+                }
             }
             ClientEvent::Error(message) => {
                 self.last_error = Some(message.clone());
@@ -892,8 +929,13 @@ impl TuiModel {
                 self.chat.reduce(chat::ChatAction::ScrollChat(-half_page));
             }
             KeyCode::Char('u') if ctrl => {
-                let half_page = (self.height / 2) as i32;
-                self.chat.reduce(chat::ChatAction::ScrollChat(half_page));
+                if self.focus == FocusArea::Input {
+                    // Clear entire input line
+                    self.input.reduce(input::InputAction::ClearLine);
+                } else {
+                    let half_page = (self.height / 2) as i32;
+                    self.chat.reduce(chat::ChatAction::ScrollChat(half_page));
+                }
             }
             KeyCode::PageDown if self.focus == FocusArea::Chat => {
                 let half_page = (self.height / 2) as i32;
@@ -910,7 +952,8 @@ impl TuiModel {
                     if self.pending_stop
                         && (self.tick_counter.saturating_sub(self.pending_stop_tick)) < 40
                     {
-                        // Double-Esc within ~2 s: force stop
+                        // Double-Esc within ~2 s: force stop + ignore further daemon events
+                        self.cancelled_thread_id = self.chat.active_thread_id().map(String::from);
                         self.chat.reduce(chat::ChatAction::ForceStopStreaming);
                         self.status_line = "Stream stopped".to_string();
                         self.pending_stop = false;
@@ -1063,6 +1106,12 @@ impl TuiModel {
                     }
                 }
             }
+            KeyCode::Backspace if ctrl => {
+                // Ctrl+Backspace: delete word backwards
+                if self.focus == FocusArea::Input {
+                    self.input.reduce(input::InputAction::DeleteWord);
+                }
+            }
             KeyCode::Backspace => {
                 if self.focus == FocusArea::Input {
                     self.input.reduce(input::InputAction::Backspace);
@@ -1082,6 +1131,11 @@ impl TuiModel {
                 self.focus = FocusArea::Input;
                 self.modal
                     .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
+            }
+
+            // ── Ctrl+W: delete word backwards (alternative to Ctrl+Backspace) ──
+            KeyCode::Char('w') if ctrl && self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::DeleteWord);
             }
 
             // ── Copy selected message to clipboard ──────────────────────────
@@ -1806,6 +1860,13 @@ impl TuiModel {
     fn submit_prompt(&mut self, prompt: String) {
         if !self.connected {
             self.status_line = "Not connected to daemon".to_string();
+            return;
+        }
+
+        // Queue the message if the assistant is currently streaming
+        if self.chat.is_streaming() {
+            self.queued_prompts.push(prompt);
+            self.status_line = format!("QUEUED ({})", self.queued_prompts.len());
             return;
         }
 

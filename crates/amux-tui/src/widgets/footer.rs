@@ -1,7 +1,7 @@
 use ratatui::prelude::*;
 use ratatui::style::Color;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Paragraph};
+use ratatui::widgets::{Block, Borders, BorderType, Paragraph, Wrap};
 
 use crate::app::Attachment;
 use crate::state::input::InputState;
@@ -94,7 +94,9 @@ pub fn render_input(
         };
 
         frame.render_widget(
-            Paragraph::new(lines).scroll((scroll_offset, 0)),
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .scroll((scroll_offset, 0)),
             inner,
         );
     }
@@ -109,6 +111,7 @@ pub fn render_status_bar(
     error_active: bool,
     tick: u64,
     error_tick: u64,
+    queued_count: usize,
 ) {
     let mut spans = vec![Span::raw(" ")];
 
@@ -133,6 +136,13 @@ pub fn render_status_bar(
         spans.push(Span::raw("  "));
         spans.push(Span::styled("\u{25cf}", error_color));
         spans.push(Span::styled(" error", theme.fg_dim));
+    }
+
+    // Queued messages indicator
+    if queued_count > 0 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled("\u{25cf}", theme.accent_secondary));
+        spans.push(Span::styled(format!(" queued({})", queued_count), theme.fg_dim));
     }
 
     // Spacer then keyboard hints (right-aligned feel)

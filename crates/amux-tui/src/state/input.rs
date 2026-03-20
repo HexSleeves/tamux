@@ -10,6 +10,8 @@ pub enum InputMode {
 pub enum InputAction {
     InsertChar(char),
     Backspace,
+    DeleteWord,   // delete word before cursor (Ctrl+Backspace / Ctrl+W)
+    ClearLine,    // clear entire input line (Ctrl+U)
     Submit,
     ToggleMode,
     Clear,
@@ -55,6 +57,20 @@ impl InputState {
         match action {
             InputAction::InsertChar(c) => self.buffer.push(c),
             InputAction::Backspace => { self.buffer.pop(); }
+            InputAction::DeleteWord => {
+                // Delete backwards to previous word boundary (whitespace or start)
+                let trimmed_end = self.buffer.trim_end_matches(|c: char| c.is_whitespace());
+                if trimmed_end.is_empty() {
+                    self.buffer.clear();
+                } else if let Some(last_space) = trimmed_end.rfind(|c: char| c.is_whitespace()) {
+                    self.buffer.truncate(last_space + 1);
+                } else {
+                    self.buffer.clear();
+                }
+            }
+            InputAction::ClearLine => {
+                self.buffer.clear();
+            }
             InputAction::Submit => {
                 if !self.buffer.trim().is_empty() {
                     self.submitted = Some(self.buffer.clone());
@@ -159,5 +175,52 @@ mod tests {
         state.reduce(InputAction::Clear);
         assert_eq!(state.buffer(), "");
         assert!(!state.multiline());
+    }
+
+    #[test]
+    fn delete_word_removes_last_word() {
+        let mut state = InputState::new();
+        for c in "hello world".chars() {
+            state.reduce(InputAction::InsertChar(c));
+        }
+        state.reduce(InputAction::DeleteWord);
+        assert_eq!(state.buffer(), "hello ");
+    }
+
+    #[test]
+    fn delete_word_on_single_word_clears() {
+        let mut state = InputState::new();
+        for c in "hello".chars() {
+            state.reduce(InputAction::InsertChar(c));
+        }
+        state.reduce(InputAction::DeleteWord);
+        assert_eq!(state.buffer(), "");
+    }
+
+    #[test]
+    fn delete_word_on_empty_is_noop() {
+        let mut state = InputState::new();
+        state.reduce(InputAction::DeleteWord);
+        assert_eq!(state.buffer(), "");
+    }
+
+    #[test]
+    fn delete_word_with_trailing_spaces() {
+        let mut state = InputState::new();
+        for c in "hello world  ".chars() {
+            state.reduce(InputAction::InsertChar(c));
+        }
+        state.reduce(InputAction::DeleteWord);
+        assert_eq!(state.buffer(), "hello ");
+    }
+
+    #[test]
+    fn clear_line_empties_buffer() {
+        let mut state = InputState::new();
+        for c in "some text here".chars() {
+            state.reduce(InputAction::InsertChar(c));
+        }
+        state.reduce(InputAction::ClearLine);
+        assert_eq!(state.buffer(), "");
     }
 }
