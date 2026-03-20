@@ -1328,10 +1328,10 @@ fn render_agent_tab<'a>(
     let agent_name = if let Some(raw) = config.agent_config_raw() {
         raw.get("agent_name")
             .and_then(|v| v.as_str())
-            .unwrap_or("Sisyphus")
+            .unwrap_or("Tamux")
             .to_string()
     } else {
-        "Sisyphus".to_string()
+        "Tamux".to_string()
     };
 
     let system_prompt = if let Some(raw) = config.agent_config_raw() {

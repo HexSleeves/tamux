@@ -151,7 +151,7 @@ impl TuiModel {
                     .as_ref()
                     .and_then(|raw| raw.get("agent_name"))
                     .and_then(|value| value.as_str())
-                    .unwrap_or("Sisyphus")
+                    .unwrap_or("Tamux")
                     .to_string();
                 self.settings.start_editing("agent_name", &current);
             }
