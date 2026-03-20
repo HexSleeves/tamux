@@ -2077,7 +2077,8 @@ impl TuiModel {
         // Body starts at row 3, ends at height-4 (exclusive).
         // Input occupies rows [height-4, height-1), status is the last row.
         let body_start_row: u16 = 3;
-        let input_start_row: u16 = self.height.saturating_sub(4);
+        let actual_input_height = self.input_height();
+        let input_start_row: u16 = self.height.saturating_sub(actual_input_height + 1); // +1 for status bar
 
         // Horizontal: sidebar is shown when width >= 80 (or overridden).
         // Chat takes (100 - sidebar_pct)% of the body width.
