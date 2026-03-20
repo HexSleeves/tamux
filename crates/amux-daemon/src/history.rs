@@ -568,6 +568,15 @@ impl HistoryStore {
             .map_err(Into::into)
     }
 
+    pub fn delete_snapshot_index(&self, snapshot_id: &str) -> Result<bool> {
+        let connection = self.open_connection()?;
+        let affected = connection.execute(
+            "DELETE FROM snapshot_index WHERE snapshot_id = ?1",
+            params![snapshot_id],
+        )?;
+        Ok(affected > 0)
+    }
+
     pub fn upsert_agent_event(&self, entry: &AgentEventRow) -> Result<()> {
         let connection = self.open_connection()?;
         connection.execute(

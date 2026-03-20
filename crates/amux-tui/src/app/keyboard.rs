@@ -1,0 +1,319 @@
+use super::*;
+
+impl TuiModel {
+    pub fn handle_key_release(&mut self, code: KeyCode, _modifiers: KeyModifiers) {
+        self.update_held_modifier(code, false);
+        self.clear_dismissable_input_notice();
+    }
+
+    pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        self.update_held_modifier(code, true);
+        let modifiers = modifiers | self.held_key_modifiers;
+
+        if matches!(code, KeyCode::Modifier(_)) {
+            return false;
+        }
+        if let Some(modal_kind) = self.modal.top() {
+            return self.handle_key_modal(code, modifiers, modal_kind);
+        }
+
+        let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+        if code != KeyCode::Esc {
+            self.clear_pending_stop();
+        }
+
+        match code {
+            KeyCode::Char('p') if ctrl => self
+                .modal
+                .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette)),
+            KeyCode::Char('t') if ctrl => self
+                .modal
+                .reduce(modal::ModalAction::Push(modal::ModalKind::ThreadPicker)),
+            KeyCode::Char('b') if ctrl => {
+                let current = self.show_sidebar_override.unwrap_or(self.width >= 80);
+                self.show_sidebar_override = Some(!current);
+            }
+            KeyCode::Char('d') if ctrl => {
+                let half_page = (self.height / 2) as i32;
+                self.chat.reduce(chat::ChatAction::ScrollChat(-half_page));
+            }
+            KeyCode::Char('u') if ctrl => {
+                if self.focus == FocusArea::Input {
+                    self.input.reduce(input::InputAction::ClearLine);
+                } else {
+                    let half_page = (self.height / 2) as i32;
+                    self.chat.reduce(chat::ChatAction::ScrollChat(half_page));
+                }
+            }
+            KeyCode::PageDown if self.focus == FocusArea::Chat => {
+                let half_page = (self.height / 2) as i32;
+                self.chat.reduce(chat::ChatAction::ScrollChat(-half_page));
+            }
+            KeyCode::PageUp if self.focus == FocusArea::Chat => {
+                let half_page = (self.height / 2) as i32;
+                self.chat.reduce(chat::ChatAction::ScrollChat(half_page));
+            }
+            KeyCode::Esc => {
+                if self.assistant_busy() {
+                    if self.pending_stop_active() {
+                        self.cancelled_thread_id = self.chat.active_thread_id().map(String::from);
+                        self.chat.reduce(chat::ChatAction::ForceStopStreaming);
+                        self.agent_activity = None;
+                        self.status_line = "Stopped stream".to_string();
+                        self.show_input_notice(
+                            "Stopped stream",
+                            InputNoticeKind::Success,
+                            100,
+                            false,
+                        );
+                        self.pending_stop = false;
+                    } else {
+                        self.pending_stop = true;
+                        self.pending_stop_tick = self.tick_counter;
+                        self.status_line = "Press Esc again to stop stream".to_string();
+                        self.show_input_notice(
+                            "Press Esc again to stop stream",
+                            InputNoticeKind::Warning,
+                            100,
+                            true,
+                        );
+                    }
+                } else {
+                    self.clear_pending_stop();
+                    if self.focus == FocusArea::Chat && self.chat.selected_message().is_some() {
+                        self.chat.select_message(None);
+                        let current_scroll = self.chat.scroll_offset() as i32;
+                        if current_scroll > 0 {
+                            self.chat
+                                .reduce(chat::ChatAction::ScrollChat(-current_scroll));
+                        }
+                    } else if self.focus == FocusArea::Input {
+                        self.focus = FocusArea::Chat;
+                    }
+                }
+            }
+            KeyCode::Tab => self.focus_next(),
+            KeyCode::BackTab => self.focus_prev(),
+            KeyCode::Char('!') if !ctrl && self.focus != FocusArea::Input => {
+                if let Some(err) = &self.last_error {
+                    self.status_line = err.clone();
+                }
+                self.error_active = false;
+                self.last_error = None;
+            }
+            KeyCode::Left if self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::MoveCursorLeft);
+            }
+            KeyCode::Right if self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::MoveCursorRight);
+            }
+            KeyCode::Up if self.focus == FocusArea::Input => {
+                let wrap_w = self.width.saturating_sub(6) as usize;
+                self.input
+                    .reduce(input::InputAction::MoveCursorUpVisual(wrap_w));
+            }
+            KeyCode::Down if self.focus == FocusArea::Input => {
+                let wrap_w = self.width.saturating_sub(6) as usize;
+                self.input
+                    .reduce(input::InputAction::MoveCursorDownVisual(wrap_w));
+            }
+            KeyCode::Home if self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::MoveCursorHome);
+            }
+            KeyCode::End if self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::MoveCursorEnd);
+            }
+            KeyCode::Char('z') if ctrl && self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::Undo);
+            }
+            KeyCode::Char('y') if ctrl && self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::Redo);
+            }
+            KeyCode::Home if self.focus == FocusArea::Chat => {
+                self.chat.reduce(chat::ChatAction::ScrollChat(i32::MAX / 2));
+                self.chat.select_message(Some(0));
+            }
+            KeyCode::End if self.focus == FocusArea::Chat => {
+                let offset = self.chat.scroll_offset() as i32;
+                self.chat.reduce(chat::ChatAction::ScrollChat(-offset));
+                self.chat.select_message(None);
+            }
+            KeyCode::Down if self.focus != FocusArea::Input => match self.focus {
+                FocusArea::Chat => self.chat.select_next_message(),
+                FocusArea::Sidebar => self.sidebar.reduce(sidebar::SidebarAction::Navigate(1)),
+                _ => {}
+            },
+            KeyCode::Up if self.focus != FocusArea::Input => match self.focus {
+                FocusArea::Chat => self.chat.select_prev_message(),
+                FocusArea::Sidebar => self.sidebar.reduce(sidebar::SidebarAction::Navigate(-1)),
+                _ => {}
+            },
+            KeyCode::Char('r') if self.focus == FocusArea::Chat => {
+                if let Some(sel) = self.chat.selected_message() {
+                    self.chat.toggle_reasoning(sel);
+                } else {
+                    self.chat.toggle_last_reasoning();
+                }
+            }
+            KeyCode::Char('e') if self.focus == FocusArea::Chat => {
+                if let Some(sel) = self.chat.selected_message() {
+                    let is_tool = self
+                        .chat
+                        .active_thread()
+                        .and_then(|thread| thread.messages.get(sel))
+                        .map(|msg| msg.role == chat::MessageRole::Tool)
+                        .unwrap_or(false);
+                    if is_tool {
+                        self.chat.toggle_tool_expansion(sel);
+                    }
+                }
+            }
+            KeyCode::Char('j') if ctrl && self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::InsertNewline);
+            }
+            KeyCode::Enter => {
+                let shift = modifiers.contains(KeyModifiers::SHIFT);
+                let alt = modifiers.contains(KeyModifiers::ALT);
+                let ctrl_enter = modifiers.contains(KeyModifiers::CONTROL);
+                if shift || alt || ctrl_enter {
+                    if self.focus != FocusArea::Input {
+                        self.focus = FocusArea::Input;
+                        self.input.set_mode(input::InputMode::Insert);
+                    }
+                    self.input.reduce(input::InputAction::InsertNewline);
+                    return false;
+                }
+                if self.focus == FocusArea::Chat {
+                    if let Some(sel) = self.chat.selected_message() {
+                        let is_tool = self
+                            .chat
+                            .active_thread()
+                            .and_then(|thread| thread.messages.get(sel))
+                            .map(|msg| msg.role == chat::MessageRole::Tool)
+                            .unwrap_or(false);
+                        if is_tool {
+                            self.chat.toggle_tool_expansion(sel);
+                        }
+                        let has_reasoning = self
+                            .chat
+                            .active_thread()
+                            .and_then(|thread| thread.messages.get(sel))
+                            .map(|msg| {
+                                msg.role == chat::MessageRole::Assistant && msg.reasoning.is_some()
+                            })
+                            .unwrap_or(false);
+                        if has_reasoning {
+                            self.chat.toggle_reasoning(sel);
+                        }
+                        return false;
+                    }
+                }
+                if self.focus == FocusArea::Sidebar {
+                    self.handle_sidebar_enter();
+                    return false;
+                }
+                if self.focus != FocusArea::Input {
+                    self.focus = FocusArea::Input;
+                    self.input.set_mode(input::InputMode::Insert);
+                    return false;
+                }
+                self.input.reduce(input::InputAction::Submit);
+                if let Some(prompt) = self.input.take_submitted() {
+                    if prompt.starts_with('/') {
+                        let trimmed = prompt.trim_start_matches('/');
+                        let cmd = trimmed.split_whitespace().next().unwrap_or("");
+                        let args = trimmed[cmd.len()..].trim();
+                        if cmd == "apikey" && !args.is_empty() {
+                            self.config.api_key = args.to_string();
+                            self.status_line =
+                                format!("API key set ({}...)", &args[..args.len().min(8)]);
+                            if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                                "api_key": args,
+                            })) {
+                                self.send_daemon_command(DaemonCommand::SetConfigJson(json));
+                            }
+                        } else if cmd == "attach" && !args.is_empty() {
+                            self.attach_file(args);
+                        } else {
+                            self.execute_command(cmd);
+                        }
+                    } else {
+                        self.submit_prompt(prompt);
+                    }
+                }
+            }
+            KeyCode::Backspace if ctrl => {
+                if self.focus == FocusArea::Input {
+                    self.input.reduce(input::InputAction::DeleteWord);
+                }
+            }
+            KeyCode::Char('h') if ctrl && self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::DeleteWord);
+            }
+            KeyCode::Backspace => {
+                if self.focus == FocusArea::Input {
+                    self.input.reduce(input::InputAction::Backspace);
+                    if self.modal.top() == Some(modal::ModalKind::CommandPalette) {
+                        self.modal.reduce(modal::ModalAction::SetQuery(
+                            self.input.buffer().to_string(),
+                        ));
+                    }
+                }
+            }
+            KeyCode::Char('/') if self.focus != FocusArea::Input => {
+                self.input.reduce(input::InputAction::Clear);
+                self.input.reduce(input::InputAction::InsertChar('/'));
+                self.input.set_mode(input::InputMode::Insert);
+                self.focus = FocusArea::Input;
+                self.modal
+                    .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
+            }
+            KeyCode::Char('w') if ctrl && self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::DeleteWord);
+            }
+            KeyCode::Char('v') if ctrl => {
+                if let Ok(text) = arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
+                    if !text.is_empty() {
+                        self.handle_paste(text);
+                    }
+                }
+            }
+            KeyCode::Char('c')
+                if self.focus == FocusArea::Chat && self.chat.selected_message().is_some() =>
+            {
+                if let Some(sel) = self.chat.selected_message() {
+                    if let Some(thread) = self.chat.active_thread() {
+                        if let Some(msg) = thread.messages.get(sel) {
+                            conversion::copy_to_clipboard(&msg.content);
+                            self.status_line = "Copied to clipboard".to_string();
+                        }
+                    }
+                }
+            }
+            KeyCode::Char(c) => {
+                if self.focus == FocusArea::Input {
+                    self.input.reduce(input::InputAction::InsertChar(c));
+                    if c == '/'
+                        && self.input.buffer() == "/"
+                        && self.modal.top() != Some(modal::ModalKind::CommandPalette)
+                    {
+                        self.modal
+                            .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
+                    }
+                    if self.modal.top() == Some(modal::ModalKind::CommandPalette) {
+                        self.modal.reduce(modal::ModalAction::SetQuery(
+                            self.input.buffer().to_string(),
+                        ));
+                    }
+                } else {
+                    self.focus = FocusArea::Input;
+                    self.input.set_mode(input::InputMode::Insert);
+                    self.input.reduce(input::InputAction::InsertChar(c));
+                }
+            }
+            _ => {}
+        }
+
+        false
+    }
+}

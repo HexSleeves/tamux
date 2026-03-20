@@ -558,6 +558,92 @@ fn render_advanced_tab<'a>(
         lines.push(Line::from(spans));
     }
 
+    // ── Snapshot Retention section ───────────────────────────────────────────
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "  \u{2500}\u{2500} Snapshot Retention \u{2500}\u{2500}",
+        theme.fg_dim,
+    )));
+
+    // Field 9: snapshot_auto_cleanup (toggle)
+    {
+        let is_selected = settings.field_cursor() == 9;
+        let marker = if is_selected { "> " } else { "  " };
+        let marker_style = if is_selected { theme.accent_primary } else { theme.fg_dim };
+        let check = if config.snapshot_auto_cleanup { "[x]" } else { "[ ]" };
+        let check_style = if config.snapshot_auto_cleanup { theme.accent_success } else { theme.fg_dim };
+        let label_style = if is_selected { theme.accent_primary } else { theme.fg_active };
+        let mut spans = vec![
+            Span::styled(marker, marker_style),
+            Span::styled(check, check_style),
+            Span::raw(" "),
+            Span::styled("Auto Cleanup", label_style),
+        ];
+        if is_selected {
+            spans.push(Span::styled("  [Space: toggle]", theme.fg_dim));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    // Fields 10-11: snapshot numeric fields
+    let snapshot_fields: [(usize, &str, String, &str); 2] = [
+        (10, "Max Snapshots:   ", config.snapshot_max_count.to_string(), "snapshot_max_count"),
+        (11, "Max Size (MB):   ", config.snapshot_max_size_mb.to_string(), "snapshot_max_size_mb"),
+    ];
+    for (idx, label, value, field_name) in &snapshot_fields {
+        let is_selected = settings.field_cursor() == *idx;
+        let is_editing = settings.is_editing() && settings.editing_field() == Some(field_name);
+        let marker = if is_selected { "> " } else { "  " };
+        let marker_style = if is_selected { theme.accent_primary } else { theme.fg_dim };
+        let display_value: String = if is_editing {
+            format!("{}\u{2588}", settings.edit_buffer())
+        } else {
+            value.clone()
+        };
+        let value_style = if is_editing {
+            theme.fg_active
+        } else if is_selected {
+            theme.accent_primary
+        } else {
+            theme.fg_active
+        };
+        let mut spans = vec![
+            Span::styled(marker, marker_style),
+            Span::styled(format!("{:<17} ", label), theme.fg_dim),
+            Span::styled(display_value, value_style),
+        ];
+        if is_selected && !is_editing {
+            spans.push(Span::styled("  [Enter: edit]", theme.fg_dim));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    // Field 12: snapshot_stats (read-only info line)
+    {
+        let is_selected = settings.field_cursor() == 12;
+        let marker = if is_selected { "> " } else { "  " };
+        let marker_style = if is_selected { theme.accent_primary } else { theme.fg_dim };
+        let size_display = if config.snapshot_total_size_bytes >= 1024 * 1024 * 1024 {
+            format!(
+                "{:.1} GB",
+                config.snapshot_total_size_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+            )
+        } else {
+            format!(
+                "{:.1} MB",
+                config.snapshot_total_size_bytes as f64 / (1024.0 * 1024.0)
+            )
+        };
+        let info = format!("{} ({})", config.snapshot_count, size_display);
+        let info_style = if is_selected { theme.accent_primary } else { theme.fg_active };
+        let spans = vec![
+            Span::styled(marker, marker_style),
+            Span::styled("Snapshots:        ", theme.fg_dim),
+            Span::styled(info, info_style),
+        ];
+        lines.push(Line::from(spans));
+    }
+
     lines
 }
 

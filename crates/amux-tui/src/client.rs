@@ -440,11 +440,10 @@ impl DaemonClient {
         content: String,
         session_id: Option<String>,
     ) -> Result<()> {
+        let _ = session_id; // session_id no longer part of AgentSendMessage
         self.send(ClientMessage::AgentSendMessage {
             thread_id,
             content,
-            session_id,
-            context_messages_json: None,
         })
     }
 

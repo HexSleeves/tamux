@@ -1,6 +1,7 @@
 use amux_protocol::{SessionId, SnapshotIndexEntry, SnapshotInfo, WorkspaceId};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -654,12 +655,160 @@ fn is_btrfs(path: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Snapshot retention, cleanup, stats
+// ---------------------------------------------------------------------------
+
+/// Configuration for snapshot retention limits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotRetentionConfig {
+    /// Maximum number of snapshots to keep.
+    pub max_snapshots: usize,
+    /// Maximum total size of all snapshots in megabytes.
+    pub max_total_size_mb: u64,
+    /// Whether to automatically enforce retention after each create().
+    pub auto_cleanup: bool,
+}
+
+impl Default for SnapshotRetentionConfig {
+    fn default() -> Self {
+        Self {
+            max_snapshots: 10,
+            max_total_size_mb: 2048,
+            auto_cleanup: true,
+        }
+    }
+}
+
+/// Aggregate statistics about stored snapshots.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotStats {
+    pub count: usize,
+    pub total_size_bytes: u64,
+    pub oldest_timestamp: Option<u64>,
+    pub newest_timestamp: Option<u64>,
+}
+
+/// Remove oldest snapshots to stay within retention limits.
+/// Returns list of removed snapshot IDs.
+///
+/// Only operates on snapshots tracked in the `HistoryStore` (SQLite index).
+pub fn enforce_retention(
+    history: &HistoryStore,
+    config: &SnapshotRetentionConfig,
+) -> Result<Vec<String>> {
+    let mut entries = history.list_snapshot_index(None)?;
+    let mut removed = Vec::new();
+
+    // Sort by created_at ascending (oldest first)
+    entries.sort_by_key(|e| e.created_at);
+
+    // Remove oldest if exceeding max count
+    while entries.len() > config.max_snapshots {
+        if let Some(old) = entries.first() {
+            let _ = std::fs::remove_file(&old.path);
+            let _ = history.delete_snapshot_index(&old.snapshot_id);
+            removed.push(old.snapshot_id.clone());
+            entries.remove(0);
+        }
+    }
+
+    // Remove oldest if exceeding total size
+    loop {
+        let total_size: u64 = entries
+            .iter()
+            .filter_map(|e| std::fs::metadata(&e.path).ok())
+            .map(|m| m.len())
+            .sum();
+        let total_mb = total_size / (1024 * 1024);
+
+        if total_mb <= config.max_total_size_mb || entries.is_empty() {
+            break;
+        }
+
+        if let Some(old) = entries.first() {
+            let _ = std::fs::remove_file(&old.path);
+            let _ = history.delete_snapshot_index(&old.snapshot_id);
+            removed.push(old.snapshot_id.clone());
+            entries.remove(0);
+        }
+    }
+
+    if !removed.is_empty() {
+        tracing::info!(
+            count = removed.len(),
+            ids = ?removed,
+            "snapshot retention: removed old snapshots"
+        );
+    }
+
+    Ok(removed)
+}
+
+/// Compute aggregate statistics for all tracked snapshots.
+pub fn get_snapshot_stats(history: &HistoryStore) -> Result<SnapshotStats> {
+    let mut entries = history.list_snapshot_index(None)?;
+    entries.sort_by_key(|e| e.created_at);
+
+    let total_size: u64 = entries
+        .iter()
+        .filter_map(|e| std::fs::metadata(&e.path).ok())
+        .map(|m| m.len())
+        .sum();
+
+    Ok(SnapshotStats {
+        count: entries.len(),
+        total_size_bytes: total_size,
+        oldest_timestamp: entries.first().map(|e| e.created_at.max(0) as u64),
+        newest_timestamp: entries.last().map(|e| e.created_at.max(0) as u64),
+    })
+}
+
+/// Delete a single snapshot by ID. Returns `true` if a snapshot was found and removed.
+pub fn delete_snapshot(history: &HistoryStore, snapshot_id: &str) -> Result<bool> {
+    let Some(entry) = history.get_snapshot_index(snapshot_id)? else {
+        return Ok(false);
+    };
+    let _ = std::fs::remove_file(&entry.path);
+    history.delete_snapshot_index(snapshot_id)?;
+    tracing::info!(snapshot_id, "deleted snapshot");
+    Ok(true)
+}
+
+/// Scan the snapshots directory and remove `.tar.gz` files not tracked in the index.
+/// Returns the number of orphaned files removed.
+pub fn cleanup_orphaned_files(history: &HistoryStore) -> Result<usize> {
+    let root = amux_protocol::ensure_amux_data_dir()?.join("snapshots");
+    if !root.exists() {
+        return Ok(0);
+    }
+
+    let entries = history.list_snapshot_index(None)?;
+    let known_paths: HashSet<String> = entries.iter().map(|e| e.path.clone()).collect();
+
+    let mut removed = 0;
+    for dir_entry in std::fs::read_dir(&root)? {
+        let dir_entry = dir_entry?;
+        let path = dir_entry.path();
+        if path.extension().map(|e| e == "gz").unwrap_or(false) {
+            let path_str = path.to_string_lossy().to_string();
+            if !known_paths.contains(&path_str) {
+                let _ = std::fs::remove_file(&path);
+                removed += 1;
+                tracing::info!(path = %path_str, "removed orphaned snapshot file");
+            }
+        }
+    }
+    Ok(removed)
+}
+
+// ---------------------------------------------------------------------------
 // SnapshotStore — public facade (preserves existing API)
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
 pub struct SnapshotStore {
     history: HistoryStore,
+    retention: SnapshotRetentionConfig,
 }
 
 impl SnapshotStore {
@@ -668,7 +817,18 @@ impl SnapshotStore {
         std::fs::create_dir_all(&root)?;
         Ok(Self {
             history: HistoryStore::new()?,
+            retention: SnapshotRetentionConfig::default(),
         })
+    }
+
+    /// Update the retention configuration (e.g. when the user changes settings).
+    pub fn set_retention_config(&mut self, config: SnapshotRetentionConfig) {
+        self.retention = config;
+    }
+
+    /// Get the current retention configuration.
+    pub fn retention_config(&self) -> &SnapshotRetentionConfig {
+        &self.retention
     }
 
     pub fn create_snapshot(
@@ -701,6 +861,13 @@ impl SnapshotStore {
         self.history
             .upsert_snapshot_index(&encode_snapshot(&snapshot))?;
 
+        // Enforce retention limits after creating a new snapshot
+        if self.retention.auto_cleanup {
+            if let Err(e) = enforce_retention(&self.history, &self.retention) {
+                tracing::warn!(error = %e, "snapshot retention enforcement failed");
+            }
+        }
+
         Ok(Some(snapshot))
     }
 
@@ -715,5 +882,20 @@ impl SnapshotStore {
         };
         let snapshot = decode_snapshot(entry);
         restore_snapshot_payload(&snapshot)
+    }
+
+    /// Delete a single snapshot by ID.
+    pub fn delete(&self, snapshot_id: &str) -> Result<bool> {
+        delete_snapshot(&self.history, snapshot_id)
+    }
+
+    /// Get aggregate stats for all tracked snapshots.
+    pub fn stats(&self) -> Result<SnapshotStats> {
+        get_snapshot_stats(&self.history)
+    }
+
+    /// Remove orphaned .tar.gz files not tracked in the index.
+    pub fn cleanup_orphaned(&self) -> Result<usize> {
+        cleanup_orphaned_files(&self.history)
     }
 }

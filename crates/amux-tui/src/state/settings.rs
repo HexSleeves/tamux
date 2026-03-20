@@ -191,6 +191,10 @@ impl SettingsState {
                 6 => "compact_threshold_pct",
                 7 => "keep_recent_on_compact",
                 8 => "bash_timeout_secs",
+                9 => "snapshot_auto_cleanup",
+                10 => "snapshot_max_count",
+                11 => "snapshot_max_size_mb",
+                12 => "snapshot_stats",
                 _ => "",
             },
         }
@@ -205,7 +209,7 @@ impl SettingsState {
             SettingsTab::Chat => 6,
             SettingsTab::Gateway => 12,
             SettingsTab::Agent => 3,
-            SettingsTab::Advanced => 9,
+            SettingsTab::Advanced => 13,
         }
     }
 
@@ -652,10 +656,18 @@ mod tests {
         assert_eq!(state.current_field_name(), "keep_recent_on_compact");
         state.reduce(SettingsAction::NavigateField(1));
         assert_eq!(state.current_field_name(), "bash_timeout_secs");
-        // Only 9 fields, can't navigate past it
+        state.reduce(SettingsAction::NavigateField(1));
+        assert_eq!(state.current_field_name(), "snapshot_auto_cleanup");
+        state.reduce(SettingsAction::NavigateField(1));
+        assert_eq!(state.current_field_name(), "snapshot_max_count");
+        state.reduce(SettingsAction::NavigateField(1));
+        assert_eq!(state.current_field_name(), "snapshot_max_size_mb");
+        state.reduce(SettingsAction::NavigateField(1));
+        assert_eq!(state.current_field_name(), "snapshot_stats");
+        // 13 fields total, can't navigate past it
         state.reduce(SettingsAction::NavigateField(5));
-        assert_eq!(state.current_field_name(), "bash_timeout_secs");
-        assert_eq!(state.field_cursor(), 8);
+        assert_eq!(state.current_field_name(), "snapshot_stats");
+        assert_eq!(state.field_cursor(), 12);
     }
 
     #[test]
@@ -673,7 +685,7 @@ mod tests {
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Agent));
         assert_eq!(state.field_count(), 3); // name, prompt, backend
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Advanced));
-        assert_eq!(state.field_count(), 9); // 9 advanced fields
+        assert_eq!(state.field_count(), 13); // 9 advanced + 4 snapshot fields
     }
 
     #[test]

@@ -90,6 +90,15 @@ pub struct ConfigState {
     pub compact_threshold_pct: u32,
     pub keep_recent_on_compact: u32,
     pub bash_timeout_secs: u32,
+
+    // Snapshot retention settings
+    pub snapshot_max_count: u32,
+    pub snapshot_max_size_mb: u32,
+    pub snapshot_auto_cleanup: bool,
+
+    // Snapshot stats (read-only, refreshed periodically)
+    pub snapshot_count: usize,
+    pub snapshot_total_size_bytes: u64,
 }
 
 impl ConfigState {
@@ -142,6 +151,11 @@ impl ConfigState {
             compact_threshold_pct: 80,
             keep_recent_on_compact: 10,
             bash_timeout_secs: 30,
+            snapshot_max_count: 10,
+            snapshot_max_size_mb: 2048,
+            snapshot_auto_cleanup: true,
+            snapshot_count: 0,
+            snapshot_total_size_bytes: 0,
         }
     }
 
