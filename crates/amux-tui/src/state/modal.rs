@@ -11,6 +11,7 @@ pub enum ModalKind {
     EffortPicker,
     ToolsPicker,
     ViewPicker,
+    Help,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +140,7 @@ fn default_command_items() -> Vec<CommandItem> {
         CommandItem { command: "prompt".into(), description: "Edit system prompt".into() },
         CommandItem { command: "attach".into(), description: "Attach a file to the message".into() },
         CommandItem { command: "quit".into(), description: "Exit TUI".into() },
+        CommandItem { command: "help".into(), description: "Show keyboard shortcuts".into() },
     ]
 }
 
