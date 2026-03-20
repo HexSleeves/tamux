@@ -8,7 +8,20 @@
  * All providers are called directly from the frontend via fetch().
  */
 
-import type { AgentProviderId, AgentProviderConfig, AgentMessage } from "./agentStore";
+import type {
+  AgentProviderId,
+  AgentProviderConfig,
+  AgentMessage,
+  AgentThread,
+  ApiTransportMode,
+} from "./agentStore";
+import {
+  getDefaultApiTransport,
+  getProviderApiType,
+  getProviderDefinition,
+  getSupportedApiTransports,
+  providerSupportsResponseContinuity,
+} from "./agentStore";
 import type { ToolDefinition, ToolCall } from "./agentTools";
 
 const APPROX_CHARS_PER_TOKEN = 4;
@@ -31,10 +44,12 @@ export interface ChatRequest {
   signal?: AbortSignal;
   tools?: ToolDefinition[];
   reasoningEffort?: string;
+  previousResponseId?: string;
+  upstreamThreadId?: string;
 }
 
 export interface ChatChunk {
-  type: "delta" | "done" | "error" | "tool_calls";
+  type: "delta" | "done" | "error" | "tool_calls" | "transport_fallback";
   content: string;
   reasoning?: string;
   inputTokens?: number;
@@ -45,6 +60,24 @@ export interface ChatChunk {
   audioTokens?: number;
   videoTokens?: number;
   toolCalls?: ToolCall[];
+  responseId?: string;
+  upstreamThreadId?: string;
+  fromTransport?: ApiTransportMode;
+  toTransport?: ApiTransportMode;
+}
+
+export interface PreparedOpenAIRequest {
+  messages: ApiChatMessage[];
+  transport: ApiTransportMode;
+  previousResponseId?: string;
+  upstreamThreadId?: string;
+}
+
+class TransportCompatibilityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TransportCompatibilityError";
+  }
 }
 
 export interface ContextCompactionSettings {
@@ -78,8 +111,61 @@ export async function* sendChatCompletion(
   }
 
   try {
-    if (req.provider === "anthropic") {
+    const supportedTransports = getSupportedApiTransports(req.provider);
+    const selectedTransport = supportedTransports.includes(req.config.apiTransport)
+      ? req.config.apiTransport
+      : getDefaultApiTransport(req.provider);
+
+    if (getProviderApiType(req.provider, req.config.model) === "anthropic") {
       yield* sendAnthropic(req);
+    } else if (selectedTransport === "native_assistant") {
+      try {
+        yield* sendNativeAssistant({
+          ...req,
+          config: { ...req.config, apiTransport: "native_assistant" },
+        });
+      } catch (err: any) {
+        if (err instanceof TransportCompatibilityError) {
+          yield {
+            type: "transport_fallback",
+            content: err.message,
+            fromTransport: "native_assistant",
+            toTransport: "chat_completions",
+          };
+          yield* sendOpenAICompatible({
+            ...req,
+            config: { ...req.config, apiTransport: "chat_completions" },
+            previousResponseId: undefined,
+            upstreamThreadId: undefined,
+          });
+        } else {
+          throw err;
+        }
+      }
+    } else if (selectedTransport === "responses") {
+      try {
+        yield* sendOpenAIResponses({
+          ...req,
+          config: { ...req.config, apiTransport: "responses" },
+        });
+      } catch (err: any) {
+        if (err instanceof TransportCompatibilityError) {
+          yield {
+            type: "transport_fallback",
+            content: err.message,
+            fromTransport: "responses",
+            toTransport: "chat_completions",
+          };
+          yield* sendOpenAICompatible({
+            ...req,
+            config: { ...req.config, apiTransport: "chat_completions" },
+            previousResponseId: undefined,
+            upstreamThreadId: undefined,
+          });
+        } else {
+          throw err;
+        }
+      }
     } else {
       yield* sendOpenAICompatible(req);
     }
@@ -112,6 +198,199 @@ function buildChatCompletionUrl(provider: AgentProviderId, baseUrl: string): str
 
   // For custom/unversioned endpoints, use explicit /v1 path.
   return `${base}/v1/chat/completions`;
+}
+
+function buildResponsesUrl(baseUrl: string): string {
+  const base = baseUrl.replace(/\/$/, "");
+  const lowerBase = base.toLowerCase();
+
+  if (/(^|\/)api\/v1$/.test(lowerBase) || /(^|\/)v[1-4]$/.test(lowerBase) || /(^|\/)openai\/v1$/.test(lowerBase) || /(^|\/)compatible-mode\/v1$/.test(lowerBase)) {
+    return `${base}/responses`;
+  }
+
+  return `${base}/v1/responses`;
+}
+
+function buildNativeAssistantBaseUrl(provider: AgentProviderId, baseUrl: string): string {
+  const providerBase = getProviderDefinition(provider)?.nativeBaseUrl;
+  return (providerBase || baseUrl).replace(/\/$/, "");
+}
+
+function messageContentToText(message: ApiChatMessage): string {
+  return typeof message.content === "string" ? message.content : "";
+}
+
+async function* sendNativeAssistant(req: ChatRequest): AsyncGenerator<ChatChunk> {
+  const providerDef = getProviderDefinition(req.provider);
+  if (!providerDef?.nativeTransportKind) {
+    throw new TransportCompatibilityError(
+      `${req.provider} does not expose a native assistant API`,
+    );
+  }
+  if (!req.config.assistantId.trim()) {
+    throw new TransportCompatibilityError(
+      `${req.provider} native assistant requires Assistant ID`,
+    );
+  }
+
+  const baseUrl = buildNativeAssistantBaseUrl(req.provider, req.config.baseUrl);
+  const latestUserMessage = [...req.messages]
+    .reverse()
+    .find((message) => message.role === "user");
+  const userText = latestUserMessage ? messageContentToText(latestUserMessage).trim() : "";
+  if (!userText) {
+    throw new Error("native assistant requires a user message");
+  }
+
+  const authHeaders: HeadersInit = {
+    "Content-Type": "application/json",
+    ...(req.config.apiKey ? { Authorization: `Bearer ${req.config.apiKey}` } : {}),
+  };
+  const compatibilityStatuses = new Set([400, 404, 405, 422]);
+
+  let threadId = req.upstreamThreadId?.trim();
+  if (!threadId) {
+    const threadResponse = await fetch(`${baseUrl}/threads`, {
+      method: "POST",
+      headers: authHeaders,
+      body: "{}",
+      signal: req.signal,
+    });
+    if (!threadResponse.ok) {
+      const text = await threadResponse.text().catch(() => "");
+      if (compatibilityStatuses.has(threadResponse.status)) {
+        throw new TransportCompatibilityError(
+          `Native assistant thread creation failed (${threadResponse.status}): ${text.slice(0, 240)}`,
+        );
+      }
+      yield { type: "error", content: `${req.provider} API returned ${threadResponse.status}: ${text.slice(0, 200)}` };
+      return;
+    }
+    const threadJson = await threadResponse.json();
+    threadId = typeof threadJson?.id === "string" ? threadJson.id : "";
+    if (!threadId) {
+      yield { type: "error", content: `${req.provider} native assistant returned no thread id.` };
+      return;
+    }
+  }
+
+  const messageResponse = await fetch(`${baseUrl}/threads/${threadId}/messages`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({ role: "user", content: userText }),
+    signal: req.signal,
+  });
+  if (!messageResponse.ok) {
+    const text = await messageResponse.text().catch(() => "");
+    if (compatibilityStatuses.has(messageResponse.status)) {
+      throw new TransportCompatibilityError(
+        `Native assistant message append failed (${messageResponse.status}): ${text.slice(0, 240)}`,
+      );
+    }
+    yield { type: "error", content: `${req.provider} API returned ${messageResponse.status}: ${text.slice(0, 200)}` };
+    return;
+  }
+
+  const runResponse = await fetch(`${baseUrl}/threads/${threadId}/runs`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({ assistant_id: req.config.assistantId }),
+    signal: req.signal,
+  });
+  if (!runResponse.ok) {
+    const text = await runResponse.text().catch(() => "");
+    if (compatibilityStatuses.has(runResponse.status)) {
+      throw new TransportCompatibilityError(
+        `Native assistant run creation failed (${runResponse.status}): ${text.slice(0, 240)}`,
+      );
+    }
+    yield { type: "error", content: `${req.provider} API returned ${runResponse.status}: ${text.slice(0, 200)}` };
+    return;
+  }
+  const runJson = await runResponse.json();
+  const runId = typeof runJson?.id === "string" ? runJson.id : "";
+  if (!runId) {
+    yield { type: "error", content: `${req.provider} native assistant returned no run id.` };
+    return;
+  }
+
+  let inputTokens = 0;
+  let outputTokens = 0;
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    if (req.signal?.aborted) {
+      return;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    const statusResponse = await fetch(`${baseUrl}/threads/${threadId}/runs/${runId}`, {
+      method: "GET",
+      headers: authHeaders,
+      signal: req.signal,
+    });
+    if (!statusResponse.ok) {
+      const text = await statusResponse.text().catch(() => "");
+      yield { type: "error", content: `${req.provider} API returned ${statusResponse.status}: ${text.slice(0, 200)}` };
+      return;
+    }
+    const statusJson = await statusResponse.json();
+    inputTokens = Number(statusJson?.usage?.prompt_tokens ?? statusJson?.usage?.input_tokens ?? inputTokens);
+    outputTokens = Number(statusJson?.usage?.completion_tokens ?? statusJson?.usage?.output_tokens ?? outputTokens);
+    switch (statusJson?.status) {
+      case "queued":
+      case "in_progress":
+        continue;
+      case "completed": {
+        const messagesResponse = await fetch(`${baseUrl}/threads/${threadId}/messages?order=desc&limit=20`, {
+          method: "GET",
+          headers: authHeaders,
+          signal: req.signal,
+        });
+        if (!messagesResponse.ok) {
+          const text = await messagesResponse.text().catch(() => "");
+          yield { type: "error", content: `${req.provider} API returned ${messagesResponse.status}: ${text.slice(0, 200)}` };
+          return;
+        }
+        const messagesJson = await messagesResponse.json();
+        const data = Array.isArray(messagesJson?.data) ? messagesJson.data : [];
+        const assistantMessage = data.find((message: any) => message?.role === "assistant");
+        const content = Array.isArray(assistantMessage?.content)
+          ? assistantMessage.content
+            .map((part: any) => {
+              if (typeof part?.text?.value === "string") return part.text.value;
+              if (typeof part?.text === "string") return part.text;
+              return "";
+            })
+            .filter(Boolean)
+            .join("\n")
+          : typeof assistantMessage?.content === "string"
+            ? assistantMessage.content
+            : "";
+        yield {
+          type: "done",
+          content,
+          inputTokens,
+          outputTokens,
+          upstreamThreadId: threadId,
+        };
+        return;
+      }
+      case "requires_action":
+        yield { type: "error", content: `${req.provider} native assistant requested external tool action, which is not proxied in legacy mode.` };
+        return;
+      case "failed":
+      case "cancelled":
+      case "expired":
+        yield {
+          type: "error",
+          content: statusJson?.last_error?.message || `${req.provider} native assistant run failed.`,
+        };
+        return;
+      default:
+        yield { type: "error", content: `${req.provider} native assistant entered unexpected status '${String(statusJson?.status ?? "")}'.` };
+        return;
+    }
+  }
+
+  yield { type: "error", content: `${req.provider} native assistant timed out waiting for completion.` };
 }
 
 async function* sendOpenAICompatible(req: ChatRequest): AsyncGenerator<ChatChunk> {
@@ -198,6 +477,112 @@ async function* sendOpenAICompatible(req: ChatRequest): AsyncGenerator<ChatChunk
   }
 }
 
+async function* sendOpenAIResponses(req: ChatRequest): AsyncGenerator<ChatChunk> {
+  const url = buildResponsesUrl(req.config.baseUrl);
+  const body: Record<string, unknown> = {
+    model: req.config.model,
+    instructions: req.systemPrompt,
+    input: req.messages.map((message) => {
+      if (message.role === "tool") {
+        return {
+          type: "function_call_output",
+          call_id: message.tool_call_id,
+          output: message.content,
+        };
+      }
+      return {
+        role: message.role,
+        content: message.content,
+      };
+    }),
+    stream: req.streaming,
+  };
+
+  if (req.previousResponseId) {
+    body.previous_response_id = req.previousResponseId;
+  }
+
+  if (req.tools && req.tools.length > 0) {
+    body.tools = req.tools.map((tool) => ({
+      type: tool.type,
+      name: tool.function.name,
+      description: tool.function.description,
+      parameters: tool.function.parameters,
+    }));
+  }
+
+  if (req.reasoningEffort && req.reasoningEffort !== "none") {
+    body.reasoning = {
+      effort: req.reasoningEffort === "xhigh" ? "high" : req.reasoningEffort,
+    };
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(req.config.apiKey ? { Authorization: `Bearer ${req.config.apiKey}` } : {}),
+    },
+    body: JSON.stringify(body),
+    signal: req.signal,
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    if ([400, 404, 405, 415, 422].includes(response.status)) {
+      throw new TransportCompatibilityError(
+        `Responses API rejected the request (${response.status}): ${text.slice(0, 240)}`,
+      );
+    }
+    yield { type: "error", content: `${req.provider} API returned ${response.status}: ${text.slice(0, 200)}` };
+    return;
+  }
+
+  if (req.streaming && response.body) {
+    yield* parseResponsesSSE(response.body, req.provider, req.signal);
+  } else {
+    const json = await response.json();
+    const responseId = typeof json?.id === "string" ? json.id : undefined;
+    const output = Array.isArray(json?.output) ? json.output : [];
+    const outputText = output
+      .filter((item: any) => item?.type === "message")
+      .flatMap((item: any) => Array.isArray(item?.content) ? item.content : [])
+      .filter((part: any) => typeof part?.text === "string")
+      .map((part: any) => part.text)
+      .join("");
+    const functionCalls = output
+      .filter((item: any) => item?.type === "function_call")
+      .map((item: any) => ({
+        id: item.call_id ?? item.id,
+        type: "function" as const,
+        function: {
+          name: item.name,
+          arguments: item.arguments ?? "",
+        },
+      }));
+
+    if (functionCalls.length > 0) {
+      yield {
+        type: "tool_calls",
+        content: outputText,
+        toolCalls: functionCalls,
+        inputTokens: json?.usage?.input_tokens ?? 0,
+        outputTokens: json?.usage?.output_tokens ?? 0,
+        responseId,
+      };
+      return;
+    }
+
+    yield {
+      type: "done",
+      content: outputText,
+      inputTokens: json?.usage?.input_tokens ?? 0,
+      outputTokens: json?.usage?.output_tokens ?? 0,
+      responseId,
+    };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Anthropic Messages API
 // ---------------------------------------------------------------------------
@@ -205,16 +590,46 @@ async function* sendOpenAICompatible(req: ChatRequest): AsyncGenerator<ChatChunk
 async function* sendAnthropic(req: ChatRequest): AsyncGenerator<ChatChunk> {
   const url = `${req.config.baseUrl.replace(/\/$/, "")}/v1/messages`;
 
+  const anthropicMessages = req.messages.map((m) => {
+    const role = m.role === "system" ? "user" : (m.role === "tool" ? "user" : m.role);
+
+    if (m.role === "tool") {
+      return {
+        role,
+        content: [{ type: "tool_result", tool_use_id: m.tool_call_id, content: m.content }],
+      };
+    }
+
+    if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+      const blocks: Array<Record<string, unknown>> = [];
+      if (m.content) {
+        blocks.push({ type: "text", text: m.content });
+      }
+      for (const toolCall of m.tool_calls) {
+        let parsedArguments: unknown = {};
+        try {
+          parsedArguments = JSON.parse(toolCall.function.arguments || "{}");
+        } catch {
+          parsedArguments = { _raw_arguments: toolCall.function.arguments || "" };
+        }
+        blocks.push({
+          type: "tool_use",
+          id: toolCall.id,
+          name: toolCall.function.name,
+          input: parsedArguments,
+        });
+      }
+      return { role, content: blocks };
+    }
+
+    return { role, content: m.content };
+  });
+
   const body: Record<string, unknown> = {
     model: req.config.model,
     max_tokens: 4096,
     system: req.systemPrompt,
-    messages: req.messages.map((m) => ({
-      role: m.role === "system" ? "user" : (m.role === "tool" ? "user" : m.role),
-      content: m.role === "tool"
-        ? [{ type: "tool_result", tool_use_id: m.tool_call_id, content: m.content }]
-        : m.content,
-    })),
+    messages: anthropicMessages,
     stream: req.streaming,
   };
 
@@ -468,6 +883,170 @@ async function* parseSSEStream(
   }
 }
 
+async function* parseResponsesSSE(
+  body: ReadableStream<Uint8Array>,
+  provider: AgentProviderId,
+  signal?: AbortSignal,
+): AsyncGenerator<ChatChunk> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let totalContent = "";
+  let totalReasoning = "";
+  const pendingToolCalls = new Map<number, { id: string; name: string; args: string }>();
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let responseId: string | undefined;
+  let sawAnyJson = false;
+  let sawResponsesEvent = false;
+
+  try {
+    while (true) {
+      if (signal?.aborted) break;
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const data = line.slice(6).trim();
+        if (!data || data === "[DONE]") continue;
+
+        let parsed: any;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        sawAnyJson = true;
+
+        if (parsed?.choices) {
+          throw new TransportCompatibilityError(
+            "endpoint returned Chat Completions events for a Responses request",
+          );
+        }
+
+        const eventType = typeof parsed?.type === "string" ? parsed.type : "";
+        if (eventType.startsWith("response.") || eventType === "error") {
+          sawResponsesEvent = true;
+        }
+
+        switch (eventType) {
+          case "response.created":
+            responseId = typeof parsed?.response?.id === "string" ? parsed.response.id : responseId;
+            break;
+          case "response.output_text.delta":
+            if (typeof parsed?.delta === "string" && parsed.delta) {
+              totalContent += parsed.delta;
+              yield { type: "delta", content: parsed.delta };
+            }
+            break;
+          case "response.reasoning_summary_text.delta":
+            if (typeof parsed?.delta === "string" && parsed.delta) {
+              totalReasoning += parsed.delta;
+              yield { type: "delta", content: "", reasoning: parsed.delta };
+            }
+            break;
+          case "response.output_item.added":
+          case "response.output_item.done": {
+            const outputIndex = Number(parsed?.output_index ?? 0);
+            const item = parsed?.item;
+            if (item?.type === "function_call") {
+              const entry = pendingToolCalls.get(outputIndex) ?? { id: "", name: "", args: "" };
+              if (typeof item?.call_id === "string") entry.id = item.call_id;
+              if (typeof item?.name === "string") entry.name = item.name;
+              if (typeof item?.arguments === "string") entry.args = item.arguments;
+              pendingToolCalls.set(outputIndex, entry);
+            }
+            break;
+          }
+          case "response.function_call_arguments.delta": {
+            const outputIndex = Number(parsed?.output_index ?? 0);
+            const entry = pendingToolCalls.get(outputIndex) ?? { id: "", name: "", args: "" };
+            if (typeof parsed?.delta === "string") entry.args += parsed.delta;
+            pendingToolCalls.set(outputIndex, entry);
+            break;
+          }
+          case "response.completed":
+          case "response.incomplete":
+            inputTokens = Number(parsed?.response?.usage?.input_tokens ?? inputTokens);
+            outputTokens = Number(parsed?.response?.usage?.output_tokens ?? outputTokens);
+            if (pendingToolCalls.size > 0) {
+              yield {
+                type: "tool_calls",
+                content: totalContent,
+                reasoning: totalReasoning || undefined,
+                toolCalls: Array.from(pendingToolCalls.values()).map((toolCall) => ({
+                  id: toolCall.id,
+                  type: "function" as const,
+                  function: { name: toolCall.name, arguments: toolCall.args },
+                })),
+                inputTokens,
+                outputTokens,
+                responseId,
+              };
+            } else {
+              yield {
+                type: "done",
+                content: totalContent,
+                reasoning: totalReasoning || undefined,
+                inputTokens,
+                outputTokens,
+                responseId,
+              };
+            }
+            return;
+          case "error":
+            yield {
+              type: "error",
+              content: typeof parsed?.message === "string" ? parsed.message : "Responses API error",
+            };
+            return;
+          default:
+            break;
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (sawAnyJson && !sawResponsesEvent) {
+    throw new TransportCompatibilityError(
+      `${provider} did not return recognizable Responses API events`,
+    );
+  }
+
+  if (pendingToolCalls.size > 0) {
+    yield {
+      type: "tool_calls",
+      content: totalContent,
+      reasoning: totalReasoning || undefined,
+      toolCalls: Array.from(pendingToolCalls.values()).map((toolCall) => ({
+        id: toolCall.id,
+        type: "function" as const,
+        function: { name: toolCall.name, arguments: toolCall.args },
+      })),
+      inputTokens,
+      outputTokens,
+      responseId,
+    };
+    return;
+  }
+
+  yield {
+    type: "done",
+    content: totalContent,
+    reasoning: totalReasoning || undefined,
+    inputTokens,
+    outputTokens,
+    responseId,
+  };
+}
+
 async function* parseAnthropicSSE(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
@@ -566,34 +1145,48 @@ async function* parseAnthropicSSE(
 export function messagesToApiFormat(
   messages: AgentMessage[],
 ): ApiChatMessage[] {
-  return messages
-    .filter((m) => !m.isCompactionSummary)
-    .filter((m) => {
-      if (m.role === "user" || m.role === "assistant") {
-        return true;
+  const announcedToolCalls = new Set<string>();
+  const emittedToolResults = new Set<string>();
+  const apiMessages: ApiChatMessage[] = [];
+  for (const m of messages) {
+    if (m.isCompactionSummary) {
+      continue;
+    }
+    if (!(m.role === "user" || m.role === "assistant" || m.role === "tool")) {
+      continue;
+    }
+    if (m.role === "tool" && !(m.toolCallId && (m.toolStatus === "done" || m.toolStatus === "error"))) {
+      continue;
+    }
+
+      if (m.role === "assistant" && Array.isArray(m.toolCalls)) {
+        for (const toolCall of m.toolCalls) {
+          if (toolCall.id?.trim()) {
+            announcedToolCalls.add(toolCall.id);
+          }
+        }
       }
 
       if (m.role === "tool") {
-        return Boolean(m.toolCallId) && (m.toolStatus === "done" || m.toolStatus === "error");
-      }
-
-      return false;
-    })
-    .map((m) => {
-      if (m.role === "tool") {
-        return {
+        if (!m.toolCallId || !announcedToolCalls.has(m.toolCallId) || emittedToolResults.has(m.toolCallId)) {
+          continue;
+        }
+        emittedToolResults.add(m.toolCallId);
+        apiMessages.push({
           role: "tool",
           content: m.content,
           tool_call_id: m.toolCallId,
-        } satisfies ApiChatMessage;
+        } satisfies ApiChatMessage);
+        continue;
       }
 
-      return {
+      apiMessages.push({
         role: m.role,
         content: m.content,
         tool_calls: m.role === "assistant" ? m.toolCalls : undefined,
-      } satisfies ApiChatMessage;
-    });
+      } satisfies ApiChatMessage);
+  }
+  return apiMessages;
 }
 
 export function buildApiMessagesForRequest(
@@ -601,6 +1194,76 @@ export function buildApiMessagesForRequest(
   settings: ContextCompactionSettings,
 ): ApiChatMessage[] {
   return messagesToApiFormat(compactMessagesForRequest(messages, settings));
+}
+
+export function prepareOpenAIRequest(
+  messages: AgentMessage[],
+  settings: ContextCompactionSettings,
+  provider: AgentProviderId,
+  model: string,
+  requestedTransport: ApiTransportMode,
+  assistantId?: string,
+  thread?: Pick<AgentThread, "upstreamThreadId" | "upstreamTransport" | "upstreamProvider" | "upstreamModel" | "upstreamAssistantId">,
+): PreparedOpenAIRequest {
+  const selectedTransport = getSupportedApiTransports(provider).includes(requestedTransport)
+    ? requestedTransport
+    : getDefaultApiTransport(provider);
+  const compacted = compactMessagesForRequest(messages, settings);
+  const compactionActive =
+    compacted.length !== messages.length || compacted.some((message) => message.content.startsWith("[Compacted earlier context]"));
+
+  if (selectedTransport === "native_assistant" && assistantId?.trim()) {
+    const latestUserMessage = [...messages]
+      .reverse()
+      .find((message) => message.role === "user" && !message.isCompactionSummary);
+    if (latestUserMessage) {
+      return {
+        messages: messagesToApiFormat([latestUserMessage]),
+        transport: "native_assistant",
+        upstreamThreadId:
+          thread?.upstreamTransport === "native_assistant"
+            && thread.upstreamProvider === provider
+            && thread.upstreamModel === model
+            && thread.upstreamAssistantId === assistantId
+            ? thread.upstreamThreadId ?? undefined
+            : undefined,
+      };
+    }
+  }
+
+  if (selectedTransport === "responses") {
+    if (!compactionActive && providerSupportsResponseContinuity(provider)) {
+      const responseAnchorIndex = [...messages.keys()].reverse().find((index) => {
+        const message = messages[index];
+        return message.role === "assistant"
+          && typeof message.responseId === "string"
+          && message.provider === provider
+          && message.model === model
+          && message.apiTransport === "responses";
+      });
+
+      if (responseAnchorIndex !== undefined) {
+        const trailingMessages = messagesToApiFormat(messages.slice(responseAnchorIndex + 1));
+        if (trailingMessages.length > 0) {
+          return {
+            messages: trailingMessages,
+            transport: "responses",
+            previousResponseId: messages[responseAnchorIndex]?.responseId,
+          };
+        }
+      }
+    }
+
+    return {
+      messages: messagesToApiFormat(compacted),
+      transport: "responses",
+    };
+  }
+
+  return {
+    messages: messagesToApiFormat(compacted),
+    transport: "chat_completions",
+  };
 }
 
 function compactMessagesForRequest(

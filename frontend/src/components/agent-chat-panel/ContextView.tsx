@@ -1,4 +1,3 @@
-import type { SnapshotRecord } from "../../lib/agentMissionStore";
 import { ActionButton, ContextCard, MetricRibbon, SectionTitle, inputStyle, memoryAreaStyle } from "./shared";
 
 type ContextViewProps = {
@@ -24,14 +23,10 @@ type ContextViewProps = {
     symbolQuery: string;
     setSymbolQuery: (value: string) => void;
     symbolHits: Array<unknown>;
-    snapshots: SnapshotRecord[];
     scopeController?: {
         searchHistory?: (query: string, limit?: number) => Promise<unknown>;
         generateSkill?: (query?: string, title?: string) => Promise<unknown>;
-        listSnapshots?: (workspaceId: string | null) => Promise<unknown>;
-        restoreSnapshot?: (snapshotId: string) => Promise<unknown>;
     } | null;
-    activeWorkspace?: { id?: string } | null;
 };
 
 export function ContextView(props: ContextViewProps) {
@@ -81,85 +76,6 @@ export function ContextView(props: ContextViewProps) {
                 <ActionButton onClick={() => void props.scopeController?.searchHistory?.(props.historyQuery, 8)}>Search</ActionButton>
                 <ActionButton onClick={() => void props.scopeController?.generateSkill?.(props.historyQuery || undefined, props.historyQuery ? `${props.historyQuery} workflow` : "Recovered Workflow")}>Extract Skill</ActionButton>
             </div>
-
-            <SectionTitle title="Snapshots" subtitle="Filesystem checkpoints" />
-            <div style={{ display: "flex", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
-                <ActionButton onClick={() => void props.scopeController?.listSnapshots?.(props.activeWorkspace?.id ?? null)}>
-                    Refresh
-                </ActionButton>
-            </div>
-            {props.snapshots.length === 0 ? (
-                <div
-                    style={{
-                        borderRadius: "var(--radius-lg)",
-                        border: "1px solid var(--glass-border)",
-                        background: "var(--bg-secondary)",
-                        color: "var(--text-muted)",
-                        fontSize: "var(--text-sm)",
-                        padding: "var(--space-3)",
-                    }}
-                >
-                    No snapshots loaded yet.
-                </div>
-            ) : (
-                <div style={{ display: "grid", gap: "var(--space-2)" }}>
-                    {props.snapshots.slice(0, 8).map((snapshot) => (
-                        <div
-                            key={snapshot.snapshotId}
-                            style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "space-between",
-                                gap: "var(--space-3)",
-                                borderRadius: "var(--radius-lg)",
-                                border: "1px solid var(--glass-border)",
-                                background: "var(--bg-secondary)",
-                                padding: "var(--space-3)",
-                            }}
-                        >
-                            <div style={{ minWidth: 0, flex: 1 }}>
-                                <div style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>
-                                    {snapshot.label}
-                                </div>
-                                <div
-                                    style={{
-                                        marginTop: 2,
-                                        color: "var(--text-muted)",
-                                        fontSize: "var(--text-xs)",
-                                        wordBreak: "break-word",
-                                    }}
-                                >
-                                    {new Date(snapshot.createdAt).toLocaleString()} · {snapshot.kind} · {snapshot.status}
-                                </div>
-                                {snapshot.command ? (
-                                    <div
-                                        style={{
-                                            marginTop: "var(--space-1)",
-                                            color: "var(--text-secondary)",
-                                            fontSize: "var(--text-xs)",
-                                            fontFamily: "var(--font-mono)",
-                                            wordBreak: "break-word",
-                                        }}
-                                    >
-                                        {snapshot.command}
-                                    </div>
-                                ) : null}
-                            </div>
-                            <ActionButton
-                                onClick={() => void props.scopeController?.restoreSnapshot?.(snapshot.snapshotId)}
-                                disabled={snapshot.status !== "ready" || !props.scopeController?.restoreSnapshot}
-                            >
-                                Restore
-                            </ActionButton>
-                        </div>
-                    ))}
-                </div>
-            )}
-            {props.snapshots.length > 8 ? (
-                <div style={{ marginTop: "var(--space-2)", color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>
-                    Showing 8 of {props.snapshots.length} snapshots. Use Time Travel for the full list.
-                </div>
-            ) : null}
         </div>
     );
 }

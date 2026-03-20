@@ -13,6 +13,21 @@ pub enum ApiType {
     Anthropic,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiTransport {
+    NativeAssistant,
+    #[default]
+    Responses,
+    ChatCompletions,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeTransportKind {
+    AlibabaAssistantApi,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthMethod {
@@ -38,6 +53,11 @@ pub struct ProviderDefinition {
     pub models: &'static [ModelDefinition],
     pub supports_model_fetch: bool,
     pub anthropic_base_url: Option<&'static str>,
+    pub supported_transports: &'static [ApiTransport],
+    pub default_transport: ApiTransport,
+    pub native_transport_kind: Option<NativeTransportKind>,
+    pub native_base_url: Option<&'static str>,
+    pub supports_response_continuity: bool,
 }
 
 pub const OPENAI_MODELS: &[ModelDefinition] = &[
@@ -80,34 +100,6 @@ pub const OPENAI_MODELS: &[ModelDefinition] = &[
         id: "o1-preview",
         name: "o1 Preview",
         context_window: 128000,
-    },
-];
-
-pub const ANTHROPIC_MODELS: &[ModelDefinition] = &[
-    ModelDefinition {
-        id: "claude-opus-4-20250514",
-        name: "Claude Opus 4",
-        context_window: 200000,
-    },
-    ModelDefinition {
-        id: "claude-sonnet-4-20250514",
-        name: "Claude Sonnet 4",
-        context_window: 200000,
-    },
-    ModelDefinition {
-        id: "claude-3-5-sonnet-20241022",
-        name: "Claude 3.5 Sonnet",
-        context_window: 200000,
-    },
-    ModelDefinition {
-        id: "claude-3-5-haiku-20241022",
-        name: "Claude 3.5 Haiku",
-        context_window: 200000,
-    },
-    ModelDefinition {
-        id: "claude-3-opus-20240229",
-        name: "Claude 3 Opus",
-        context_window: 200000,
     },
 ];
 
@@ -465,6 +457,11 @@ pub const FEATHERLESS_MODELS: &[ModelDefinition] = &[
 ];
 
 pub const EMPTY_MODELS: &[ModelDefinition] = &[];
+pub const CHAT_ONLY_TRANSPORTS: &[ApiTransport] = &[ApiTransport::ChatCompletions];
+pub const RESPONSES_AND_CHAT_TRANSPORTS: &[ApiTransport] =
+    &[ApiTransport::Responses, ApiTransport::ChatCompletions];
+pub const NATIVE_AND_CHAT_TRANSPORTS: &[ApiTransport] =
+    &[ApiTransport::NativeAssistant, ApiTransport::ChatCompletions];
 
 pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
     ProviderDefinition {
@@ -477,6 +474,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: FEATHERLESS_MODELS,
         supports_model_fetch: false,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "openai",
@@ -488,17 +490,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: OPENAI_MODELS,
         supports_model_fetch: true,
         anthropic_base_url: None,
-    },
-    ProviderDefinition {
-        id: "anthropic",
-        name: "Anthropic",
-        default_base_url: "https://api.anthropic.com",
-        default_model: "claude-sonnet-4-20250514",
-        api_type: ApiType::Anthropic,
-        auth_method: AuthMethod::XApiKey,
-        models: ANTHROPIC_MODELS,
-        supports_model_fetch: false,
-        anthropic_base_url: None,
+        supported_transports: RESPONSES_AND_CHAT_TRANSPORTS,
+        default_transport: ApiTransport::Responses,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: true,
     },
     ProviderDefinition {
         id: "qwen",
@@ -510,6 +506,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: QWEN_MODELS,
         supports_model_fetch: true,
         anthropic_base_url: None,
+        supported_transports: NATIVE_AND_CHAT_TRANSPORTS,
+        default_transport: ApiTransport::NativeAssistant,
+        native_transport_kind: Some(NativeTransportKind::AlibabaAssistantApi),
+        native_base_url: Some("https://dashscope-intl.aliyuncs.com/api/v1"),
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "qwen-deepinfra",
@@ -521,6 +522,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: QWEN_MODELS,
         supports_model_fetch: true,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "kimi",
@@ -532,6 +538,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: KIMI_MODELS,
         supports_model_fetch: true,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "kimi-coding-plan",
@@ -543,6 +554,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: KIMI_CODING_MODELS,
         supports_model_fetch: false,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "z.ai",
@@ -554,6 +570,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: ZAI_MODELS,
         supports_model_fetch: false,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "z.ai-coding-plan",
@@ -565,6 +586,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: ZAI_MODELS,
         supports_model_fetch: false,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "openrouter",
@@ -576,6 +602,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: OPENROUTER_MODELS,
         supports_model_fetch: true,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "cerebras",
@@ -587,6 +618,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: CEREBRAS_MODELS,
         supports_model_fetch: true,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "together",
@@ -598,6 +634,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: TOGETHER_MODELS,
         supports_model_fetch: true,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "groq",
@@ -609,6 +650,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: GROQ_MODELS,
         supports_model_fetch: true,
         anthropic_base_url: None,
+        supported_transports: RESPONSES_AND_CHAT_TRANSPORTS,
+        default_transport: ApiTransport::Responses,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "ollama",
@@ -620,6 +666,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: OLLAMA_MODELS,
         supports_model_fetch: true,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "chutes",
@@ -631,6 +682,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: CHUTES_MODELS,
         supports_model_fetch: false,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "huggingface",
@@ -642,6 +698,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: HUGGINGFACE_MODELS,
         supports_model_fetch: false,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "minimax",
@@ -653,6 +714,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: MINIMAX_MODELS,
         supports_model_fetch: false,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "minimax-coding-plan",
@@ -664,6 +730,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: MINIMAX_MODELS,
         supports_model_fetch: false,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "alibaba-coding-plan",
@@ -675,6 +746,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: ALIBABA_CODING_MODELS,
         supports_model_fetch: true,
         anthropic_base_url: Some("https://coding-intl.dashscope.aliyuncs.com/apps/anthropic"),
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "opencode-zen",
@@ -686,6 +762,11 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: OPENCODE_ZEN_MODELS,
         supports_model_fetch: true,
         anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
     },
     ProviderDefinition {
         id: "custom",
@@ -697,11 +778,37 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: EMPTY_MODELS,
         supports_model_fetch: false,
         anthropic_base_url: None,
+        supported_transports: RESPONSES_AND_CHAT_TRANSPORTS,
+        default_transport: ApiTransport::Responses,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: true,
     },
 ];
 
 pub fn get_provider_definition(id: &str) -> Option<&'static ProviderDefinition> {
     PROVIDER_DEFINITIONS.iter().find(|p| p.id == id)
+}
+
+pub fn provider_supports_transport(provider_id: &str, transport: ApiTransport) -> bool {
+    get_provider_definition(provider_id)
+        .map(|definition| definition.supported_transports.contains(&transport))
+        .unwrap_or(matches!(
+            transport,
+            ApiTransport::Responses | ApiTransport::ChatCompletions
+        ))
+}
+
+pub fn default_api_transport_for_provider(provider_id: &str) -> ApiTransport {
+    get_provider_definition(provider_id)
+        .map(|definition| definition.default_transport)
+        .unwrap_or(ApiTransport::ChatCompletions)
+}
+
+pub fn supports_response_continuity(provider_id: &str) -> bool {
+    get_provider_definition(provider_id)
+        .map(|definition| definition.supports_response_continuity)
+        .unwrap_or(false)
 }
 
 pub fn get_provider_api_type(provider_id: &str, model: &str) -> ApiType {
@@ -760,6 +867,10 @@ pub struct AgentConfig {
     pub model: String,
     #[serde(default)]
     pub api_key: String,
+    #[serde(default)]
+    pub assistant_id: String,
+    #[serde(default = "default_api_transport")]
+    pub api_transport: ApiTransport,
     #[serde(default = "default_reasoning_effort")]
     pub reasoning_effort: String,
     #[serde(default = "default_system_prompt")]
@@ -819,6 +930,9 @@ pub struct GatewayConfig {
 fn default_provider() -> String {
     "openai".into()
 }
+fn default_api_transport() -> ApiTransport {
+    default_api_transport_for_provider("openai")
+}
 fn default_system_prompt() -> String {
     "You are tamux, an always-on agentic terminal multiplexer assistant. You can execute terminal commands, monitor systems, and send messages to connected chat platforms. Use your tools proactively. Be concise and direct.".into()
 }
@@ -870,6 +984,8 @@ impl Default for AgentConfig {
             base_url: String::new(),
             model: String::new(),
             api_key: String::new(),
+            assistant_id: String::new(),
+            api_transport: default_api_transport(),
             reasoning_effort: default_reasoning_effort(),
             system_prompt: default_system_prompt(),
             max_tool_loops: default_max_tool_loops(),
@@ -897,6 +1013,10 @@ pub struct ProviderConfig {
     pub base_url: String,
     pub model: String,
     pub api_key: String,
+    #[serde(default)]
+    pub assistant_id: String,
+    #[serde(default = "default_api_transport")]
+    pub api_transport: ApiTransport,
     #[serde(default = "default_reasoning_effort")]
     pub reasoning_effort: String,
     /// When set, request structured output with this JSON schema from the API.
@@ -1083,6 +1203,16 @@ pub struct AgentThread {
     pub id: String,
     pub title: String,
     pub messages: Vec<AgentMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_transport: Option<ApiTransport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_assistant_id: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
     pub total_input_tokens: u64,
@@ -1107,6 +1237,14 @@ pub struct AgentMessage {
     pub input_tokens: u64,
     #[serde(default)]
     pub output_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_transport: Option<ApiTransport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
     pub timestamp: u64,
@@ -1600,12 +1738,21 @@ pub enum CompletionChunk {
         reasoning: Option<String>,
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
+        response_id: Option<String>,
+        upstream_thread_id: Option<String>,
     },
     Done {
         content: String,
         reasoning: Option<String>,
         input_tokens: u64,
         output_tokens: u64,
+        response_id: Option<String>,
+        upstream_thread_id: Option<String>,
+    },
+    TransportFallback {
+        from: ApiTransport,
+        to: ApiTransport,
+        message: String,
     },
     Retry {
         attempt: u32,

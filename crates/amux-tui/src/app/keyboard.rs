@@ -1,6 +1,14 @@
 use super::*;
 
 impl TuiModel {
+    fn paste_from_clipboard(&mut self) {
+        if let Ok(text) = arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
+            if !text.is_empty() {
+                self.handle_paste(text);
+            }
+        }
+    }
+
     pub fn handle_key_release(&mut self, code: KeyCode, _modifiers: KeyModifiers) {
         self.update_held_modifier(code, false);
         self.clear_dismissable_input_notice();
@@ -271,12 +279,10 @@ impl TuiModel {
             KeyCode::Char('w') if ctrl && self.focus == FocusArea::Input => {
                 self.input.reduce(input::InputAction::DeleteWord);
             }
-            KeyCode::Char('v') if ctrl => {
-                if let Ok(text) = arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
-                    if !text.is_empty() {
-                        self.handle_paste(text);
-                    }
-                }
+            KeyCode::Char('v' | 'V') if ctrl => self.paste_from_clipboard(),
+            KeyCode::Char('\u{16}') => self.paste_from_clipboard(),
+            KeyCode::Insert if modifiers.contains(KeyModifiers::SHIFT) => {
+                self.paste_from_clipboard();
             }
             KeyCode::Char('c')
                 if self.focus == FocusArea::Chat && self.chat.selected_message().is_some() =>

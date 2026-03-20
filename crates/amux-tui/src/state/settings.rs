@@ -221,8 +221,10 @@ impl SettingsState {
                 1 => "base_url",
                 2 => "api_key",
                 3 => "model",
-                4 => "reasoning_effort",
-                5 => "context_window_tokens",
+                4 => "api_transport",
+                5 => "assistant_id",
+                6 => "reasoning_effort",
+                7 => "context_window_tokens",
                 _ => "",
             },
             SettingsTab::Tools => match self.field_cursor {
@@ -298,7 +300,7 @@ impl SettingsState {
     /// Number of navigable fields in the current tab (for cursor clamping).
     pub fn field_count(&self) -> usize {
         match self.active_tab {
-            SettingsTab::Provider => 6,
+            SettingsTab::Provider => 8,
             SettingsTab::Tools => 7,
             SettingsTab::WebSearch => 7,
             SettingsTab::Chat => 6,
@@ -518,9 +520,9 @@ mod tests {
     #[test]
     fn navigate_field_clamps_at_max() {
         let mut state = SettingsState::new();
-        // Provider tab has 6 fields (0..5)
+        // Provider tab has 8 fields (0..7)
         state.reduce(SettingsAction::NavigateField(100));
-        assert_eq!(state.field_cursor(), 5);
+        assert_eq!(state.field_cursor(), 7);
     }
 
     #[test]
@@ -677,6 +679,10 @@ mod tests {
         state.reduce(SettingsAction::NavigateField(1));
         assert_eq!(state.current_field_name(), "model");
         state.reduce(SettingsAction::NavigateField(1));
+        assert_eq!(state.current_field_name(), "api_transport");
+        state.reduce(SettingsAction::NavigateField(1));
+        assert_eq!(state.current_field_name(), "assistant_id");
+        state.reduce(SettingsAction::NavigateField(1));
         assert_eq!(state.current_field_name(), "reasoning_effort");
         state.reduce(SettingsAction::NavigateField(1));
         assert_eq!(state.current_field_name(), "context_window_tokens");
@@ -802,7 +808,7 @@ mod tests {
     #[test]
     fn field_count_per_tab() {
         let mut state = SettingsState::new();
-        assert_eq!(state.field_count(), 6); // Provider + context window
+        assert_eq!(state.field_count(), 8); // Provider + transport + assistant id + context window
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Tools));
         assert_eq!(state.field_count(), 7); // 7 tool checkboxes
         state.reduce(SettingsAction::SwitchTab(SettingsTab::WebSearch));

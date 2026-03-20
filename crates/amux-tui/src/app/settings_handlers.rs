@@ -6,6 +6,19 @@ impl TuiModel {
         match field.as_str() {
             "provider" => self.execute_command("provider"),
             "model" => self.execute_command("model"),
+            "api_transport" => {
+                let supported = providers::supported_transports_for(&self.config.provider);
+                let current_idx = supported
+                    .iter()
+                    .position(|transport| *transport == self.config.api_transport)
+                    .unwrap_or(0);
+                let next_idx = (current_idx + 1) % supported.len().max(1);
+                self.config.api_transport = supported.get(next_idx).copied().unwrap_or("chat_completions").to_string();
+                self.sync_config_to_daemon();
+            }
+            "assistant_id" => self
+                .settings
+                .start_editing("assistant_id", &self.config.assistant_id.clone()),
             "reasoning_effort" => self.execute_command("effort"),
             "base_url" => self
                 .settings

@@ -22,6 +22,11 @@ export interface AgentThread {
   totalTokens: number;
   compactionCount: number;
   lastMessagePreview: string;
+  upstreamThreadId?: string | null;
+  upstreamTransport?: ApiTransportMode;
+  upstreamProvider?: AgentProviderId | null;
+  upstreamModel?: string | null;
+  upstreamAssistantId?: string | null;
 }
 
 export type AgentRole = "user" | "assistant" | "system" | "tool";
@@ -29,7 +34,6 @@ export type AgentRole = "user" | "assistant" | "system" | "tool";
 export type AgentProviderId =
   | "featherless"
   | "openai"
-  | "anthropic"
   | "qwen"
   | "qwen-deepinfra"
   | "kimi"
@@ -52,7 +56,6 @@ export type AgentProviderId =
 const AGENT_PROVIDER_IDS: AgentProviderId[] = [
   "featherless",
   "openai",
-  "anthropic",
   "qwen",
   "qwen-deepinfra",
   "kimi",
@@ -94,10 +97,41 @@ export interface AgentProviderConfig {
   baseUrl: string;
   model: string;
   apiKey: string;
+  assistantId: string;
+  apiTransport: ApiTransportMode;
 }
 
 export type ApiType = "openai" | "anthropic";
 export type AuthMethod = "bearer" | "x-api-key";
+export type ApiTransportMode = "native_assistant" | "responses" | "chat_completions";
+export type NativeTransportKind = "alibaba_assistant_api";
+
+function normalizeApiTransport(
+  providerId: AgentProviderId,
+  value: unknown,
+): ApiTransportMode {
+  const normalized = value === "native_assistant"
+    ? "native_assistant"
+    : value === "chat_completions"
+      ? "chat_completions"
+      : "responses";
+  return getSupportedApiTransports(providerId).includes(normalized)
+    ? normalized
+    : getDefaultApiTransport(providerId);
+}
+
+function normalizeProviderConfig(
+  providerId: AgentProviderId,
+  fallback: AgentProviderConfig,
+  value: Partial<AgentProviderConfig> | undefined,
+): AgentProviderConfig {
+  return {
+    ...fallback,
+    ...(value ?? {}),
+    assistantId: typeof value?.assistantId === "string" ? value.assistantId : fallback.assistantId,
+    apiTransport: normalizeApiTransport(providerId, value?.apiTransport ?? fallback.apiTransport),
+  };
+}
 
 export interface ModelDefinition {
   id: string;
@@ -115,21 +149,19 @@ export interface ProviderDefinition {
   models: ModelDefinition[];
   supportsModelFetch: boolean;
   anthropicBaseUrl?: string;
+  supportedTransports: ApiTransportMode[];
+  defaultTransport: ApiTransportMode;
+  nativeTransportKind?: NativeTransportKind;
+  nativeBaseUrl?: string;
+  supportsResponseContinuity: boolean;
 }
 
 const OPENAI_MODELS: ModelDefinition[] = [
-  { id: "gpt-4o", name: "GPT-4o", contextWindow: 128000 },
-  { id: "gpt-4o-mini", name: "GPT-4o Mini", contextWindow: 128000 },
-  { id: "gpt-4-turbo", name: "GPT-4 Turbo", contextWindow: 128000 },
-  { id: "o1", name: "o1", contextWindow: 200000 },
-  { id: "o1-mini", name: "o1 Mini", contextWindow: 128000 },
-];
-
-const ANTHROPIC_MODELS: ModelDefinition[] = [
-  { id: "claude-opus-4-20250514", name: "Claude Opus 4", contextWindow: 200000 },
-  { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", contextWindow: 200000 },
-  { id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet", contextWindow: 200000 },
-  { id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku", contextWindow: 200000 },
+  { id: "gpt-5.4", name: "GPT-5.4", contextWindow: 1_000_000 },
+  { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", contextWindow: 400_000 },
+  { id: "gpt-5.4-nano", name: "GPT-5.4 Nano", contextWindow: 400_000 },
+  { id: "o3", name: "o3", contextWindow: 200_000 },
+  { id: "o4-mini", name: "o4 Mini", contextWindow: 200_000 },
 ];
 
 const ZAI_MODELS: ModelDefinition[] = [
@@ -152,7 +184,6 @@ const KIMI_CODING_MODELS: ModelDefinition[] = [
 const MINIMAX_MODELS: ModelDefinition[] = [
   { id: "MiniMax-M2.7", name: "MiniMax M2.7", contextWindow: 205000 },
   { id: "MiniMax-M2.5", name: "MiniMax M2.5", contextWindow: 205000 },
-  { id: "MiniMax-M1-80k", name: "MiniMax M1 80K", contextWindow: 80000 },
 ];
 
 const ALIBABA_CODING_MODELS: ModelDefinition[] = [
@@ -188,39 +219,53 @@ const OLLAMA_MODELS: ModelDefinition[] = [
 ];
 
 const EMPTY_MODELS: ModelDefinition[] = [];
+const CHAT_ONLY_TRANSPORTS: ApiTransportMode[] = ["chat_completions"];
+const RESPONSES_AND_CHAT_TRANSPORTS: ApiTransportMode[] = ["responses", "chat_completions"];
+const NATIVE_AND_CHAT_TRANSPORTS: ApiTransportMode[] = ["native_assistant", "chat_completions"];
 
 export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
-  { id: "featherless", name: "Featherless", defaultBaseUrl: "https://api.featherless.ai/v1", defaultModel: "meta-llama/Llama-3.3-70B-Instruct", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: false },
-  { id: "openai", name: "OpenAI", defaultBaseUrl: "https://api.openai.com/v1", defaultModel: "gpt-4o", apiType: "openai", authMethod: "bearer", models: OPENAI_MODELS, supportsModelFetch: true },
-  { id: "anthropic", name: "Anthropic", defaultBaseUrl: "https://api.anthropic.com", defaultModel: "claude-sonnet-4-20250514", apiType: "anthropic", authMethod: "x-api-key", models: ANTHROPIC_MODELS, supportsModelFetch: false },
-  { id: "qwen", name: "Qwen", defaultBaseUrl: "https://api.qwen.com/v1", defaultModel: "qwen-max", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true },
-  { id: "qwen-deepinfra", name: "Qwen (DeepInfra)", defaultBaseUrl: "https://api.deepinfra.com/v1/openai", defaultModel: "Qwen/Qwen2.5-72B-Instruct", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true },
-  { id: "kimi", name: "Kimi (Moonshot)", defaultBaseUrl: "https://api.moonshot.ai/v1", defaultModel: "moonshot-v1-32k", apiType: "openai", authMethod: "bearer", models: KIMI_MODELS, supportsModelFetch: true },
-  { id: "kimi-coding-plan", name: "Kimi Coding Plan", defaultBaseUrl: "https://api.kimi.com/coding/v1", defaultModel: "kimi-for-coding", apiType: "openai", authMethod: "bearer", models: KIMI_CODING_MODELS, supportsModelFetch: false },
-  { id: "z.ai", name: "Z.AI (GLM)", defaultBaseUrl: "https://api.z.ai/api/paas/v4", defaultModel: "glm-4-plus", apiType: "openai", authMethod: "bearer", models: ZAI_MODELS, supportsModelFetch: false },
-  { id: "z.ai-coding-plan", name: "Z.AI Coding Plan", defaultBaseUrl: "https://api.z.ai/api/coding/paas/v4", defaultModel: "glm-5", apiType: "openai", authMethod: "bearer", models: ZAI_MODELS, supportsModelFetch: false },
-  { id: "openrouter", name: "OpenRouter", defaultBaseUrl: "https://openrouter.ai/api/v1", defaultModel: "anthropic/claude-sonnet-4", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true },
-  { id: "cerebras", name: "Cerebras", defaultBaseUrl: "https://api.cerebras.ai/v1", defaultModel: "llama-3.3-70b", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true },
-  { id: "together", name: "Together", defaultBaseUrl: "https://api.together.xyz/v1", defaultModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true },
-  { id: "groq", name: "Groq", defaultBaseUrl: "https://api.groq.com/openai/v1", defaultModel: "llama-3.3-70b-versatile", apiType: "openai", authMethod: "bearer", models: GROQ_MODELS, supportsModelFetch: true },
-  { id: "ollama", name: "Ollama", defaultBaseUrl: "http://localhost:11434/v1", defaultModel: "llama3.1", apiType: "openai", authMethod: "bearer", models: OLLAMA_MODELS, supportsModelFetch: true },
-  { id: "chutes", name: "Chutes", defaultBaseUrl: "https://llm.chutes.ai/v1", defaultModel: "deepseek-ai/DeepSeek-V3", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: false },
-  { id: "huggingface", name: "Hugging Face", defaultBaseUrl: "https://api-inference.huggingface.co/v1", defaultModel: "meta-llama/Llama-3.3-70B-Instruct", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: false },
-  { id: "minimax", name: "MiniMax", defaultBaseUrl: "https://api.minimax.io/anthropic", defaultModel: "MiniMax-M1-80k", apiType: "anthropic", authMethod: "bearer", models: MINIMAX_MODELS, supportsModelFetch: false },
-  { id: "minimax-coding-plan", name: "MiniMax Coding Plan", defaultBaseUrl: "https://api.minimax.io/anthropic", defaultModel: "MiniMax-M2.7", apiType: "anthropic", authMethod: "bearer", models: MINIMAX_MODELS, supportsModelFetch: false },
-  { id: "alibaba-coding-plan", name: "Alibaba Coding Plan", defaultBaseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1", defaultModel: "qwen3-coder", apiType: "openai", authMethod: "bearer", models: ALIBABA_CODING_MODELS, supportsModelFetch: true, anthropicBaseUrl: "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic" },
-  { id: "opencode-zen", name: "OpenCode Zen", defaultBaseUrl: "https://opencode.ai/zen/v1", defaultModel: "claude-sonnet-4-5", apiType: "anthropic", authMethod: "bearer", models: OPENCODE_ZEN_MODELS, supportsModelFetch: true },
-  { id: "custom", name: "Custom", defaultBaseUrl: "", defaultModel: "", apiType: "openai", authMethod: "bearer", models: EMPTY_MODELS, supportsModelFetch: false },
+  { id: "featherless", name: "Featherless", defaultBaseUrl: "https://api.featherless.ai/v1", defaultModel: "meta-llama/Llama-3.3-70B-Instruct", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "openai", name: "OpenAI", defaultBaseUrl: "https://api.openai.com/v1", defaultModel: "gpt-4o", apiType: "openai", authMethod: "bearer", models: OPENAI_MODELS, supportsModelFetch: true, supportedTransports: RESPONSES_AND_CHAT_TRANSPORTS, defaultTransport: "responses", supportsResponseContinuity: true },
+  { id: "qwen", name: "Qwen", defaultBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", defaultModel: "qwen-max", apiType: "openai", authMethod: "bearer", models: ALIBABA_CODING_MODELS, supportsModelFetch: true, supportedTransports: NATIVE_AND_CHAT_TRANSPORTS, defaultTransport: "native_assistant", nativeTransportKind: "alibaba_assistant_api", nativeBaseUrl: "https://dashscope-intl.aliyuncs.com/api/v1", supportsResponseContinuity: false },
+  { id: "qwen-deepinfra", name: "Qwen (DeepInfra)", defaultBaseUrl: "https://api.deepinfra.com/v1/openai", defaultModel: "Qwen/Qwen2.5-72B-Instruct", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "kimi", name: "Kimi (Moonshot)", defaultBaseUrl: "https://api.moonshot.ai/v1", defaultModel: "moonshot-v1-32k", apiType: "openai", authMethod: "bearer", models: KIMI_MODELS, supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "kimi-coding-plan", name: "Kimi Coding Plan", defaultBaseUrl: "https://api.kimi.com/coding/v1", defaultModel: "kimi-for-coding", apiType: "openai", authMethod: "bearer", models: KIMI_CODING_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "z.ai", name: "Z.AI (GLM)", defaultBaseUrl: "https://api.z.ai/api/paas/v4", defaultModel: "glm-4-plus", apiType: "openai", authMethod: "bearer", models: ZAI_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "z.ai-coding-plan", name: "Z.AI Coding Plan", defaultBaseUrl: "https://api.z.ai/api/coding/paas/v4", defaultModel: "glm-5", apiType: "openai", authMethod: "bearer", models: ZAI_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "openrouter", name: "OpenRouter", defaultBaseUrl: "https://openrouter.ai/api/v1", defaultModel: "anthropic/claude-sonnet-4", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "cerebras", name: "Cerebras", defaultBaseUrl: "https://api.cerebras.ai/v1", defaultModel: "llama-3.3-70b", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "together", name: "Together", defaultBaseUrl: "https://api.together.xyz/v1", defaultModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "groq", name: "Groq", defaultBaseUrl: "https://api.groq.com/openai/v1", defaultModel: "llama-3.3-70b-versatile", apiType: "openai", authMethod: "bearer", models: GROQ_MODELS, supportsModelFetch: true, supportedTransports: RESPONSES_AND_CHAT_TRANSPORTS, defaultTransport: "responses", supportsResponseContinuity: false },
+  { id: "ollama", name: "Ollama", defaultBaseUrl: "http://localhost:11434/v1", defaultModel: "llama3.1", apiType: "openai", authMethod: "bearer", models: OLLAMA_MODELS, supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "chutes", name: "Chutes", defaultBaseUrl: "https://llm.chutes.ai/v1", defaultModel: "deepseek-ai/DeepSeek-V3", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "huggingface", name: "Hugging Face", defaultBaseUrl: "https://api-inference.huggingface.co/v1", defaultModel: "meta-llama/Llama-3.3-70B-Instruct", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "minimax", name: "MiniMax", defaultBaseUrl: "https://api.minimax.io/anthropic", defaultModel: "MiniMax-M1-80k", apiType: "anthropic", authMethod: "bearer", models: MINIMAX_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "minimax-coding-plan", name: "MiniMax Coding Plan", defaultBaseUrl: "https://api.minimax.io/anthropic", defaultModel: "MiniMax-M2.7", apiType: "anthropic", authMethod: "bearer", models: MINIMAX_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "alibaba-coding-plan", name: "Alibaba Coding Plan", defaultBaseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1", defaultModel: "qwen3-coder", apiType: "openai", authMethod: "bearer", models: ALIBABA_CODING_MODELS, supportsModelFetch: true, anthropicBaseUrl: "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic", supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "opencode-zen", name: "OpenCode Zen", defaultBaseUrl: "https://opencode.ai/zen/v1", defaultModel: "claude-sonnet-4-5", apiType: "anthropic", authMethod: "bearer", models: OPENCODE_ZEN_MODELS, supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportsResponseContinuity: false },
+  { id: "custom", name: "Custom", defaultBaseUrl: "", defaultModel: "", apiType: "openai", authMethod: "bearer", models: EMPTY_MODELS, supportsModelFetch: false, supportedTransports: RESPONSES_AND_CHAT_TRANSPORTS, defaultTransport: "responses", supportsResponseContinuity: true },
 ];
 
 export function getProviderDefinition(id: AgentProviderId): ProviderDefinition | undefined {
   return PROVIDER_DEFINITIONS.find((p) => p.id === id);
 }
 
+export function getSupportedApiTransports(providerId: AgentProviderId): ApiTransportMode[] {
+  return getProviderDefinition(providerId)?.supportedTransports ?? CHAT_ONLY_TRANSPORTS;
+}
+
+export function getDefaultApiTransport(providerId: AgentProviderId): ApiTransportMode {
+  return getProviderDefinition(providerId)?.defaultTransport ?? "chat_completions";
+}
+
+export function providerSupportsResponseContinuity(providerId: AgentProviderId): boolean {
+  return Boolean(getProviderDefinition(providerId)?.supportsResponseContinuity);
+}
+
 export function getProviderApiType(providerId: AgentProviderId, model: string): ApiType {
   const def = getProviderDefinition(providerId);
   if (!def) return "openai";
-  
+
   if (def.anthropicBaseUrl && model.startsWith("claude")) {
     return "anthropic";
   }
@@ -232,10 +277,10 @@ export function getProviderApiType(providerId: AgentProviderId, model: string): 
 
 export function getProviderBaseUrl(providerId: AgentProviderId, model: string, configuredUrl: string): string {
   if (configuredUrl) return configuredUrl;
-  
+
   const def = getProviderDefinition(providerId);
   if (!def) return configuredUrl;
-  
+
   if (def.anthropicBaseUrl && model.startsWith("claude")) {
     return def.anthropicBaseUrl;
   }
@@ -250,6 +295,8 @@ export interface AgentMessage {
   content: string;
   provider?: string;
   model?: string;
+  apiTransport?: ApiTransportMode;
+  responseId?: string;
   toolCalls?: ToolCall[];
   toolName?: string;
   toolCallId?: string;
@@ -293,7 +340,6 @@ export interface AgentSettings {
   activeProvider: AgentProviderId;
   featherless: AgentProviderConfig;
   openai: AgentProviderConfig;
-  anthropic: AgentProviderConfig;
   qwen: AgentProviderConfig;
   "qwen-deepinfra": AgentProviderConfig;
   kimi: AgentProviderConfig;
@@ -360,27 +406,26 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   systemPrompt: "You are tamux, an agentic terminal multiplexer assistant. You can execute terminal commands, check system resources, and send messages to connected chat platforms (Slack, Discord, Telegram, WhatsApp) via the gateway. Use your tools proactively when the user asks you to perform actions. Be concise and direct.",
 
   activeProvider: "openai",
-  featherless: { baseUrl: "https://api.featherless.ai/v1", model: "meta-llama/Llama-3.3-70B-Instruct", apiKey: "" },
-  openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4o", apiKey: "" },
-  anthropic: { baseUrl: "https://api.anthropic.com", model: "claude-sonnet-4-20250514", apiKey: "" },
-  qwen: { baseUrl: "https://api.qwen.com/v1", model: "qwen-max", apiKey: "" },
-  "qwen-deepinfra": { baseUrl: "https://api.deepinfra.com/v1/openai", model: "Qwen/Qwen2.5-72B-Instruct", apiKey: "" },
-  kimi: { baseUrl: "https://api.moonshot.ai/v1", model: "moonshot-v1-32k", apiKey: "" },
-  "kimi-coding-plan": { baseUrl: "https://api.kimi.com/coding/v1", model: "kimi-for-coding", apiKey: "" },
-  "z.ai": { baseUrl: "https://api.z.ai/api/paas/v4", model: "glm-4-plus", apiKey: "" },
-  "z.ai-coding-plan": { baseUrl: "https://api.z.ai/api/coding/paas/v4", model: "glm-5", apiKey: "" },
-  openrouter: { baseUrl: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4", apiKey: "" },
-  cerebras: { baseUrl: "https://api.cerebras.ai/v1", model: "llama-3.3-70b", apiKey: "" },
-  together: { baseUrl: "https://api.together.xyz/v1", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", apiKey: "" },
-  groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", apiKey: "" },
-  ollama: { baseUrl: "http://localhost:11434/v1", model: "llama3.1", apiKey: "" },
-  chutes: { baseUrl: "https://llm.chutes.ai/v1", model: "deepseek-ai/DeepSeek-V3", apiKey: "" },
-  huggingface: { baseUrl: "https://api-inference.huggingface.co/v1", model: "meta-llama/Llama-3.3-70B-Instruct", apiKey: "" },
-  minimax: { baseUrl: "https://api.minimax.io/anthropic", model: "MiniMax-M1-80k", apiKey: "" },
-  "minimax-coding-plan": { baseUrl: "https://api.minimax.io/anthropic", model: "MiniMax-M2.7", apiKey: "" },
-  "alibaba-coding-plan": { baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen3-coder", apiKey: "" },
-  "opencode-zen": { baseUrl: "https://opencode.ai/zen/v1", model: "claude-sonnet-4-5", apiKey: "" },
-  custom: { baseUrl: "", model: "", apiKey: "" },
+  featherless: { baseUrl: "https://api.featherless.ai/v1", model: "meta-llama/Llama-3.3-70B-Instruct", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4o", apiKey: "", assistantId: "", apiTransport: "responses" },
+  qwen: { baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", model: "qwen-max", apiKey: "", assistantId: "", apiTransport: "native_assistant" },
+  "qwen-deepinfra": { baseUrl: "https://api.deepinfra.com/v1/openai", model: "Qwen/Qwen2.5-72B-Instruct", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  kimi: { baseUrl: "https://api.moonshot.ai/v1", model: "moonshot-v1-32k", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  "kimi-coding-plan": { baseUrl: "https://api.kimi.com/coding/v1", model: "kimi-for-coding", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  "z.ai": { baseUrl: "https://api.z.ai/api/paas/v4", model: "glm-4-plus", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  "z.ai-coding-plan": { baseUrl: "https://api.z.ai/api/coding/paas/v4", model: "glm-5", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  openrouter: { baseUrl: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  cerebras: { baseUrl: "https://api.cerebras.ai/v1", model: "llama-3.3-70b", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  together: { baseUrl: "https://api.together.xyz/v1", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", apiKey: "", assistantId: "", apiTransport: "responses" },
+  ollama: { baseUrl: "http://localhost:11434/v1", model: "llama3.1", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  chutes: { baseUrl: "https://llm.chutes.ai/v1", model: "deepseek-ai/DeepSeek-V3", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  huggingface: { baseUrl: "https://api-inference.huggingface.co/v1", model: "meta-llama/Llama-3.3-70B-Instruct", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  minimax: { baseUrl: "https://api.minimax.io/anthropic", model: "MiniMax-M1-80k", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  "minimax-coding-plan": { baseUrl: "https://api.minimax.io/anthropic", model: "MiniMax-M2.7", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  "alibaba-coding-plan": { baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1", model: "qwen3-coder", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  "opencode-zen": { baseUrl: "https://opencode.ai/zen/v1", model: "claude-sonnet-4-5", apiKey: "", assistantId: "", apiTransport: "chat_completions" },
+  custom: { baseUrl: "", model: "", apiKey: "", assistantId: "", apiTransport: "responses" },
 
   enableBashTool: true,
   enableVisionTool: false,
@@ -448,7 +493,7 @@ export interface AgentState {
     threadId: string,
     content: string,
     streaming?: boolean,
-    meta?: Partial<Pick<AgentMessage, "inputTokens" | "outputTokens" | "totalTokens" | "reasoning" | "reasoningTokens" | "audioTokens" | "videoTokens" | "cost" | "tps" | "toolCalls" | "provider" | "model">>
+    meta?: Partial<Pick<AgentMessage, "inputTokens" | "outputTokens" | "totalTokens" | "reasoning" | "reasoningTokens" | "audioTokens" | "videoTokens" | "cost" | "tps" | "toolCalls" | "provider" | "model" | "apiTransport" | "responseId">>
   ) => void;
   getThreadMessages: (threadId: string) => AgentMessage[];
   setThreadTodos: (threadId: string, todos: AgentTodoItem[]) => void;
@@ -518,6 +563,7 @@ type AgentDbThreadRecord = {
   message_count: number;
   total_tokens: number;
   last_preview: string;
+  metadata_json: string | null;
 };
 
 type AgentDbMessageRecord = {
@@ -545,10 +591,144 @@ type AgentDbApi = {
   dbListMessages?: (threadId: string, limit?: number | null) => Promise<AgentDbMessageRecord[]>;
 };
 
+type RemoteAgentMessageRecord = {
+  role?: AgentRole;
+  content?: string;
+  provider?: string | null;
+  model?: string | null;
+  api_transport?: string | null;
+  response_id?: string | null;
+  tool_calls?: ToolCall[] | null;
+  tool_name?: string | null;
+  tool_call_id?: string | null;
+  tool_arguments?: string | null;
+  tool_status?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  reasoning?: string | null;
+  timestamp?: number | null;
+};
+
+type RemoteAgentThreadRecord = {
+  id?: string;
+  title?: string;
+  messages?: RemoteAgentMessageRecord[];
+  upstream_thread_id?: string | null;
+  upstream_transport?: string | null;
+  upstream_provider?: string | null;
+  upstream_model?: string | null;
+  upstream_assistant_id?: string | null;
+  created_at?: number | null;
+  updated_at?: number | null;
+  total_input_tokens?: number | null;
+  total_output_tokens?: number | null;
+};
+
 function getAgentDbApi(): AgentDbApi | null {
   const api = (window as any).tamux ?? (window as any).amux;
   if (!api) return null;
   return api as AgentDbApi;
+}
+
+function shouldPersistHistory(backend: AgentSettings["agentBackend"]): boolean {
+  return backend === "legacy";
+}
+
+function buildHydratedRemoteMessage(
+  threadId: string,
+  message: RemoteAgentMessageRecord,
+): AgentMessage {
+  const provider = typeof message.provider === "string" ? message.provider : undefined;
+  return {
+    id: `msg_${++_msgId}`,
+    threadId,
+    createdAt: Number(message.timestamp ?? Date.now()),
+    role: message.role ?? "assistant",
+    content: typeof message.content === "string" ? message.content : "",
+    provider,
+    model: typeof message.model === "string" ? message.model : undefined,
+    apiTransport: typeof message.api_transport === "string"
+      ? normalizeApiTransport(
+        typeof provider === "string" ? normalizeAgentProviderId(provider) : "openai",
+        message.api_transport,
+      )
+      : undefined,
+    responseId: typeof message.response_id === "string" ? message.response_id : undefined,
+    toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : undefined,
+    toolName: typeof message.tool_name === "string" ? message.tool_name : undefined,
+    toolCallId: typeof message.tool_call_id === "string" ? message.tool_call_id : undefined,
+    toolArguments: typeof message.tool_arguments === "string" ? message.tool_arguments : undefined,
+    toolStatus:
+      message.tool_status === "requested"
+        || message.tool_status === "executing"
+        || message.tool_status === "done"
+        || message.tool_status === "error"
+        ? message.tool_status
+        : undefined,
+    inputTokens: Number(message.input_tokens ?? 0),
+    outputTokens: Number(message.output_tokens ?? 0),
+    totalTokens: Number(message.input_tokens ?? 0) + Number(message.output_tokens ?? 0),
+    reasoning: typeof message.reasoning === "string" ? message.reasoning : undefined,
+    isCompactionSummary: false,
+    isStreaming: false,
+  };
+}
+
+function buildHydratedRemoteThread(thread: RemoteAgentThreadRecord, agentName: string): {
+  thread: AgentThread;
+  messages: AgentMessage[];
+} | null {
+  if (typeof thread.id !== "string" || !thread.id.trim()) {
+    return null;
+  }
+
+  const localThreadId = `thread_${++_threadId}`;
+  const messages = Array.isArray(thread.messages)
+    ? thread.messages.map((message) => buildHydratedRemoteMessage(localThreadId, message))
+    : [];
+  const totalInputTokens = Number(thread.total_input_tokens ?? 0);
+  const totalOutputTokens = Number(thread.total_output_tokens ?? 0);
+
+  return {
+    thread: {
+      id: localThreadId,
+      daemonThreadId: thread.id,
+      workspaceId: null,
+      surfaceId: null,
+      paneId: null,
+      agentName,
+      title: typeof thread.title === "string" && thread.title.trim()
+        ? thread.title
+        : "Conversation",
+      createdAt: Number(thread.created_at ?? Date.now()),
+      updatedAt: Number(thread.updated_at ?? Date.now()),
+      messageCount: messages.length,
+      totalInputTokens,
+      totalOutputTokens,
+      totalTokens: totalInputTokens + totalOutputTokens,
+      compactionCount: 0,
+      lastMessagePreview: messages[messages.length - 1]?.content?.slice(0, 100) ?? "",
+      upstreamThreadId: typeof thread.upstream_thread_id === "string"
+        ? thread.upstream_thread_id
+        : null,
+      upstreamTransport: typeof thread.upstream_transport === "string"
+        ? normalizeApiTransport(
+          typeof thread.upstream_provider === "string"
+            ? normalizeAgentProviderId(thread.upstream_provider)
+            : "openai",
+          thread.upstream_transport,
+        )
+        : undefined,
+      upstreamProvider: typeof thread.upstream_provider === "string"
+        ? normalizeAgentProviderId(thread.upstream_provider)
+        : null,
+      upstreamModel: typeof thread.upstream_model === "string" ? thread.upstream_model : null,
+      upstreamAssistantId: typeof thread.upstream_assistant_id === "string"
+        ? thread.upstream_assistant_id
+        : null,
+    },
+    messages,
+  };
 }
 
 function saveAgentSettings(s: AgentSettings) {
@@ -601,6 +781,13 @@ function serializeThread(thread: AgentThread): AgentDbThreadRecord {
     message_count: thread.messageCount,
     total_tokens: thread.totalTokens,
     last_preview: thread.lastMessagePreview,
+    metadata_json: JSON.stringify({
+      upstreamThreadId: thread.upstreamThreadId ?? null,
+      upstreamTransport: thread.upstreamTransport ?? null,
+      upstreamProvider: thread.upstreamProvider ?? null,
+      upstreamModel: thread.upstreamModel ?? null,
+      upstreamAssistantId: thread.upstreamAssistantId ?? null,
+    }),
   };
 }
 
@@ -623,6 +810,8 @@ function serializeMessage(message: AgentMessage): AgentDbMessageRecord {
       toolCallId: message.toolCallId ?? null,
       toolArguments: message.toolArguments ?? null,
       toolStatus: message.toolStatus ?? null,
+      apiTransport: message.apiTransport ?? null,
+      responseId: message.responseId ?? null,
       reasoningTokens: message.reasoningTokens ?? null,
       audioTokens: message.audioTokens ?? null,
       videoTokens: message.videoTokens ?? null,
@@ -635,6 +824,14 @@ function serializeMessage(message: AgentMessage): AgentDbMessageRecord {
 }
 
 function deserializeThread(thread: AgentDbThreadRecord): AgentThread {
+  let metadata: Record<string, unknown> = {};
+  try {
+    metadata = typeof thread.metadata_json === "string"
+      ? JSON.parse(thread.metadata_json)
+      : {};
+  } catch {
+    metadata = {};
+  }
   return {
     id: thread.id,
     daemonThreadId: null,
@@ -651,6 +848,22 @@ function deserializeThread(thread: AgentDbThreadRecord): AgentThread {
     totalTokens: thread.total_tokens,
     compactionCount: 0,
     lastMessagePreview: thread.last_preview,
+    upstreamThreadId: typeof metadata.upstreamThreadId === "string" ? metadata.upstreamThreadId : null,
+    upstreamTransport: typeof metadata.upstreamTransport === "string"
+      ? normalizeApiTransport(
+        typeof metadata.upstreamProvider === "string"
+          ? normalizeAgentProviderId(metadata.upstreamProvider)
+          : "openai",
+        metadata.upstreamTransport,
+      )
+      : undefined,
+    upstreamProvider: typeof metadata.upstreamProvider === "string"
+      ? normalizeAgentProviderId(metadata.upstreamProvider)
+      : null,
+    upstreamModel: typeof metadata.upstreamModel === "string" ? metadata.upstreamModel : null,
+    upstreamAssistantId: typeof metadata.upstreamAssistantId === "string"
+      ? metadata.upstreamAssistantId
+      : null,
   };
 }
 
@@ -677,6 +890,15 @@ function deserializeMessage(message: AgentDbMessageRecord): AgentMessage {
     content: message.content,
     provider: message.provider ?? undefined,
     model: message.model ?? undefined,
+    apiTransport: typeof metadata.apiTransport === "string"
+      ? normalizeApiTransport(
+        typeof message.provider === "string"
+          ? normalizeAgentProviderId(message.provider)
+          : "openai",
+        metadata.apiTransport,
+      )
+      : undefined,
+    responseId: typeof metadata.responseId === "string" ? metadata.responseId : undefined,
     toolCalls,
     toolName: (metadata.toolName as string) ?? undefined,
     toolCallId: (metadata.toolCallId as string) ?? undefined,
@@ -724,6 +946,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       totalTokens: 0,
       compactionCount: 0,
       lastMessagePreview: "",
+      upstreamThreadId: null,
+      upstreamTransport: undefined,
+      upstreamProvider: null,
+      upstreamModel: null,
+      upstreamAssistantId: null,
     };
     set((s) => {
       const next: AgentChatState = {
@@ -732,9 +959,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         todos: { ...s.todos, [id]: [] },
         activeThreadId: id,
       };
-      persistDaemonThreadMap(next.threads);
-      scheduleJsonWrite(AGENT_ACTIVE_THREAD_FILE, { activeThreadId: id });
-      void getAgentDbApi()?.dbCreateThread?.(serializeThread(thread));
+      if (shouldPersistHistory(get().agentSettings.agentBackend)) {
+        persistDaemonThreadMap(next.threads);
+        scheduleJsonWrite(AGENT_ACTIVE_THREAD_FILE, { activeThreadId: id });
+        void getAgentDbApi()?.dbCreateThread?.(serializeThread(thread));
+      }
       return next;
     });
     return id;
@@ -750,15 +979,19 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         todos: todoRest,
         activeThreadId: s.activeThreadId === id ? null : s.activeThreadId,
       };
-      persistDaemonThreadMap(next.threads);
-      void getAgentDbApi()?.dbDeleteThread?.(id);
+      if (shouldPersistHistory(get().agentSettings.agentBackend)) {
+        persistDaemonThreadMap(next.threads);
+        void getAgentDbApi()?.dbDeleteThread?.(id);
+      }
       return next;
     });
   },
 
   setActiveThread: (id) => {
     set({ activeThreadId: id });
-    scheduleJsonWrite(AGENT_ACTIVE_THREAD_FILE, { activeThreadId: id });
+    if (shouldPersistHistory(get().agentSettings.agentBackend)) {
+      scheduleJsonWrite(AGENT_ACTIVE_THREAD_FILE, { activeThreadId: id });
+    }
   },
 
   searchThreads: (query) => {
@@ -801,11 +1034,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         activeThreadId: s.activeThreadId,
       };
       const updatedThread = next.threads.find((thread) => thread.id === threadId);
-      void (async () => {
-        const api = getAgentDbApi();
-        if (updatedThread) await api?.dbCreateThread?.(serializeThread(updatedThread));
-        await api?.dbAddMessage?.(serializeMessage(full));
-      })();
+      if (shouldPersistHistory(get().agentSettings.agentBackend)) {
+        void (async () => {
+          const api = getAgentDbApi();
+          if (updatedThread) await api?.dbCreateThread?.(serializeThread(updatedThread));
+          await api?.dbAddMessage?.(serializeMessage(full));
+        })();
+      }
       return next;
     });
   },
@@ -835,6 +1070,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         toolCalls: meta?.toolCalls ?? last.toolCalls,
         provider: meta?.provider ?? last.provider,
         model: meta?.model ?? last.model,
+        apiTransport: meta?.apiTransport ?? last.apiTransport,
+        responseId: meta?.responseId ?? last.responseId,
       };
       const updated = [...msgs.slice(0, -1), updatedLast];
       const tokenDeltaIn = nextInputTokens - last.inputTokens;
@@ -854,11 +1091,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       );
       const next = { messages: { ...s.messages, [threadId]: updated }, threads: nextThreads };
       const updatedThread = nextThreads.find((thread) => thread.id === threadId);
-      void (async () => {
-        const api = getAgentDbApi();
-        if (updatedThread) await api?.dbCreateThread?.(serializeThread(updatedThread));
-        await api?.dbAddMessage?.(serializeMessage(updatedLast));
-      })();
+      if (shouldPersistHistory(get().agentSettings.agentBackend)) {
+        void (async () => {
+          const api = getAgentDbApi();
+          if (updatedThread) await api?.dbCreateThread?.(serializeThread(updatedThread));
+          await api?.dbAddMessage?.(serializeMessage(updatedLast));
+        })();
+      }
       return next;
     });
   },
@@ -875,7 +1114,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       const threads = s.threads.map((thread) =>
         thread.id === threadId ? { ...thread, daemonThreadId } : thread,
       );
-      persistDaemonThreadMap(threads);
+      if (shouldPersistHistory(get().agentSettings.agentBackend)) {
+        persistDaemonThreadMap(threads);
+      }
       return { threads };
     });
   },
@@ -905,35 +1146,76 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
 export async function hydrateAgentStore(): Promise<void> {
   const diskState = await readPersistedJson<AgentSettings>(AGENT_SETTINGS_FILE);
+  const configuredBackend = normalizeAgentBackend(diskState?.agentBackend);
   if (diskState) {
     const merged: AgentSettings = {
       ...DEFAULT_AGENT_SETTINGS,
       ...diskState,
       activeProvider: normalizeAgentProviderId(diskState.activeProvider),
       agentBackend: normalizeAgentBackend(diskState.agentBackend),
-      featherless: { ...DEFAULT_AGENT_SETTINGS.featherless, ...(diskState.featherless ?? {}) },
-      openai: { ...DEFAULT_AGENT_SETTINGS.openai, ...(diskState.openai ?? {}) },
-      anthropic: { ...DEFAULT_AGENT_SETTINGS.anthropic, ...(diskState.anthropic ?? {}) },
-      qwen: { ...DEFAULT_AGENT_SETTINGS.qwen, ...(diskState.qwen ?? {}) },
-      "qwen-deepinfra": { ...DEFAULT_AGENT_SETTINGS["qwen-deepinfra"], ...(diskState["qwen-deepinfra"] ?? {}) },
-      kimi: { ...DEFAULT_AGENT_SETTINGS.kimi, ...(diskState.kimi ?? {}) },
-      "kimi-coding-plan": { ...DEFAULT_AGENT_SETTINGS["kimi-coding-plan"], ...(diskState["kimi-coding-plan"] ?? {}) },
-      "z.ai": { ...DEFAULT_AGENT_SETTINGS["z.ai"], ...(diskState["z.ai"] ?? {}) },
-      "z.ai-coding-plan": { ...DEFAULT_AGENT_SETTINGS["z.ai-coding-plan"], ...(diskState["z.ai-coding-plan"] ?? {}) },
-      openrouter: { ...DEFAULT_AGENT_SETTINGS.openrouter, ...(diskState.openrouter ?? {}) },
-      cerebras: { ...DEFAULT_AGENT_SETTINGS.cerebras, ...(diskState.cerebras ?? {}) },
-      together: { ...DEFAULT_AGENT_SETTINGS.together, ...(diskState.together ?? {}) },
-      groq: { ...DEFAULT_AGENT_SETTINGS.groq, ...(diskState.groq ?? {}) },
-      ollama: { ...DEFAULT_AGENT_SETTINGS.ollama, ...(diskState.ollama ?? {}) },
-      chutes: { ...DEFAULT_AGENT_SETTINGS.chutes, ...(diskState.chutes ?? {}) },
-      huggingface: { ...DEFAULT_AGENT_SETTINGS.huggingface, ...(diskState.huggingface ?? {}) },
-      minimax: { ...DEFAULT_AGENT_SETTINGS.minimax, ...(diskState.minimax ?? {}) },
-      "minimax-coding-plan": { ...DEFAULT_AGENT_SETTINGS["minimax-coding-plan"], ...(diskState["minimax-coding-plan"] ?? {}) },
-      "alibaba-coding-plan": { ...DEFAULT_AGENT_SETTINGS["alibaba-coding-plan"], ...(diskState["alibaba-coding-plan"] ?? {}) },
-      "opencode-zen": { ...DEFAULT_AGENT_SETTINGS["opencode-zen"], ...(diskState["opencode-zen"] ?? {}) },
-      custom: { ...DEFAULT_AGENT_SETTINGS.custom, ...(diskState.custom ?? {}) },
+      featherless: normalizeProviderConfig("featherless", DEFAULT_AGENT_SETTINGS.featherless, diskState.featherless),
+      openai: normalizeProviderConfig("openai", DEFAULT_AGENT_SETTINGS.openai, diskState.openai),
+      qwen: normalizeProviderConfig("qwen", DEFAULT_AGENT_SETTINGS.qwen, diskState.qwen),
+      "qwen-deepinfra": normalizeProviderConfig("qwen-deepinfra", DEFAULT_AGENT_SETTINGS["qwen-deepinfra"], diskState["qwen-deepinfra"]),
+      kimi: normalizeProviderConfig("kimi", DEFAULT_AGENT_SETTINGS.kimi, diskState.kimi),
+      "kimi-coding-plan": normalizeProviderConfig("kimi-coding-plan", DEFAULT_AGENT_SETTINGS["kimi-coding-plan"], diskState["kimi-coding-plan"]),
+      "z.ai": normalizeProviderConfig("z.ai", DEFAULT_AGENT_SETTINGS["z.ai"], diskState["z.ai"]),
+      "z.ai-coding-plan": normalizeProviderConfig("z.ai-coding-plan", DEFAULT_AGENT_SETTINGS["z.ai-coding-plan"], diskState["z.ai-coding-plan"]),
+      openrouter: normalizeProviderConfig("openrouter", DEFAULT_AGENT_SETTINGS.openrouter, diskState.openrouter),
+      cerebras: normalizeProviderConfig("cerebras", DEFAULT_AGENT_SETTINGS.cerebras, diskState.cerebras),
+      together: normalizeProviderConfig("together", DEFAULT_AGENT_SETTINGS.together, diskState.together),
+      groq: normalizeProviderConfig("groq", DEFAULT_AGENT_SETTINGS.groq, diskState.groq),
+      ollama: normalizeProviderConfig("ollama", DEFAULT_AGENT_SETTINGS.ollama, diskState.ollama),
+      chutes: normalizeProviderConfig("chutes", DEFAULT_AGENT_SETTINGS.chutes, diskState.chutes),
+      huggingface: normalizeProviderConfig("huggingface", DEFAULT_AGENT_SETTINGS.huggingface, diskState.huggingface),
+      minimax: normalizeProviderConfig("minimax", DEFAULT_AGENT_SETTINGS.minimax, diskState.minimax),
+      "minimax-coding-plan": normalizeProviderConfig("minimax-coding-plan", DEFAULT_AGENT_SETTINGS["minimax-coding-plan"], diskState["minimax-coding-plan"]),
+      "alibaba-coding-plan": normalizeProviderConfig("alibaba-coding-plan", DEFAULT_AGENT_SETTINGS["alibaba-coding-plan"], diskState["alibaba-coding-plan"]),
+      "opencode-zen": normalizeProviderConfig("opencode-zen", DEFAULT_AGENT_SETTINGS["opencode-zen"], diskState["opencode-zen"]),
+      custom: normalizeProviderConfig("custom", DEFAULT_AGENT_SETTINGS.custom, diskState.custom),
     };
     useAgentStore.setState({ agentSettings: merged });
+  }
+
+  if (!shouldPersistHistory(configuredBackend)) {
+    const amux = (window as any).tamux ?? (window as any).amux;
+    if (amux?.agentListThreads && amux?.agentGetThread) {
+      const remoteThreads = await amux.agentListThreads().catch(() => []);
+      if (Array.isArray(remoteThreads) && remoteThreads.length > 0) {
+        const detailedThreads = await Promise.all(
+          remoteThreads.map(async (entry: any) => {
+            const threadId = typeof entry?.id === "string" ? entry.id : null;
+            if (!threadId) return null;
+            return amux.agentGetThread(threadId).catch(() => null);
+          }),
+        );
+
+        const messages: Record<string, AgentMessage[]> = {};
+        const threads: AgentThread[] = [];
+        for (const remoteThread of detailedThreads) {
+          const hydrated = buildHydratedRemoteThread(
+            (remoteThread ?? {}) as RemoteAgentThreadRecord,
+            useAgentStore.getState().agentSettings.agentName,
+          );
+          if (!hydrated) continue;
+          threads.push(hydrated.thread);
+          messages[hydrated.thread.id] = hydrated.messages;
+        }
+
+        if (threads.length > 0) {
+          const sortedThreads = threads.sort((a, b) => b.updatedAt - a.updatedAt);
+          const hydrated: AgentChatState = {
+            threads: sortedThreads,
+            messages,
+            todos: {},
+            activeThreadId: sortedThreads[0]?.id ?? null,
+          };
+          syncChatCounters(hydrated);
+          useAgentStore.setState(hydrated);
+        }
+      }
+    }
+    return;
   }
 
   const api = getAgentDbApi();

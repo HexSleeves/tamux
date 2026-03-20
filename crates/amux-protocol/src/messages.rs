@@ -816,6 +816,7 @@ pub struct AgentDbThread {
     pub message_count: i64,
     pub total_tokens: i64,
     pub last_preview: String,
+    pub metadata_json: Option<String>,
 }
 
 /// SQLite-backed agent message record.

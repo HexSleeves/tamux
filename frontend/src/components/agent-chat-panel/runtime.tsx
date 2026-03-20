@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { abortThreadStream, clearThreadAbortController, setThreadAbortController, useAgentStore } from "../../lib/agentStore";
-import type { AgentMessage, AgentThread, AgentTodoItem } from "../../lib/agentStore";
-import { buildApiMessagesForRequest, sendChatCompletion } from "../../lib/agentClient";
+import type { AgentMessage, AgentThread, AgentTodoItem, AgentProviderConfig } from "../../lib/agentStore";
+import { prepareOpenAIRequest, sendChatCompletion } from "../../lib/agentClient";
 import type { AgentSettings } from "../../lib/agentStore";
 import { provisionAgentWorkspaceTerminals, provisionTerminalPaneInWorkspace, resolvePaneSessionId } from "../../lib/agentWorkspace";
 import { buildHonchoContext, syncMessagesToHoncho } from "../../lib/honchoClient";
@@ -64,7 +64,6 @@ type AgentChatPanelRuntimeValue = {
     historySummary: AgentMissionStoreState["historySummary"];
     historyHits: AgentMissionStoreState["historyHits"];
     symbolHits: AgentMissionStoreState["symbolHits"];
-    snapshots: AgentMissionStoreState["snapshots"];
     snippets: SnippetStoreState["snippets"];
     transcripts: TranscriptStoreState["transcripts"];
     scopePaneId: string | null;
@@ -128,8 +127,6 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
     const historySummary = useAgentMissionStore((s) => s.historySummary);
     const historyHits = useAgentMissionStore((s) => s.historyHits);
     const symbolHits = useAgentMissionStore((s) => s.symbolHits);
-    const snapshots = useAgentMissionStore((s) => s.snapshots);
-
     const snippets = useSnippetStore((s) => s.snippets);
     const transcripts = useTranscriptStore((s) => s.transcripts);
     const addNotification = useNotificationStore((s) => s.addNotification);
@@ -195,7 +192,7 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         if (!amux?.agentSetConfig) return;
 
         const providerKey = agentSettings.activeProvider;
-        const pc = agentSettings[providerKey] as { baseUrl: string; model: string; apiKey: string } | undefined;
+        const pc = agentSettings[providerKey] as AgentProviderConfig | undefined;
 
         // For external agents, provider config may not be needed (agent uses its own),
         // but we still sync agent_backend and gateway settings
@@ -211,6 +208,8 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
             base_url: pc?.baseUrl || "",
             model: pc?.model || "",
             api_key: pc?.apiKey || "",
+            assistant_id: pc?.assistantId || "",
+            api_transport: pc?.apiTransport || "chat_completions",
             reasoning_effort: agentSettings.reasoningEffort || "high",
             system_prompt: agentSettings.systemPrompt,
             auto_compact_context: agentSettings.autoCompactContext,
@@ -735,6 +734,29 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         const message = typeof event?.message === "string" ? event.message : null;
         const details = typeof event?.details === "string" ? event.details : null;
 
+        if (kind === "transport-fallback" && details) {
+            try {
+                const parsed = JSON.parse(details);
+                const provider = typeof parsed?.provider === "string" ? parsed.provider : null;
+                const toTransport = parsed?.to === "chat_completions" ? "chat_completions" : null;
+                if (provider && toTransport) {
+                    const currentSettings = useAgentStore.getState().agentSettings;
+                    const currentConfig = currentSettings[provider as keyof typeof currentSettings];
+                    if (currentConfig && typeof currentConfig === "object" && "baseUrl" in currentConfig) {
+                        useAgentStore.getState().updateAgentSetting(
+                            provider as keyof typeof currentSettings,
+                            {
+                                ...(currentConfig as AgentProviderConfig),
+                                apiTransport: toTransport,
+                            } as any,
+                        );
+                    }
+                }
+            } catch {
+                // leave notice recording best-effort
+            }
+        }
+
         useAgentMissionStore.getState().recordOperationalEvent({
             paneId,
             workspaceId,
@@ -940,7 +962,7 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
             isCompactionSummary: false,
         });
 
-        const providerConfig = agentSettings[agentSettings.activeProvider] as { baseUrl: string; model: string; apiKey: string };
+        const providerConfig = agentSettings[agentSettings.activeProvider] as AgentProviderConfig;
         const currentThreadId = threadId;
         const gatewayEnabled = useSettingsStore.getState().settings.gatewayEnabled;
         const tools = getAvailableTools({
@@ -959,6 +981,7 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
             content: "",
             provider: agentSettings.activeProvider,
             model: providerConfig.model,
+            apiTransport: providerConfig.apiTransport,
             inputTokens: 0,
             outputTokens: 0,
             totalTokens: 0,
@@ -970,16 +993,36 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         setThreadAbortController(currentThreadId, controller);
 
         (async () => {
-            const configuredToolLoops = Number(agentSettings.maxToolLoops ?? 0);
-            const maxToolLoops = Number.isFinite(configuredToolLoops) && configuredToolLoops > 0
+        const configuredToolLoops = Number(agentSettings.maxToolLoops ?? 0);
+        const maxToolLoops = Number.isFinite(configuredToolLoops) && configuredToolLoops > 0
                 ? Math.min(1000, configuredToolLoops)
                 : Infinity;
             let loopCount = 0;
             let allCurrentMessages = useAgentStore.getState().getThreadMessages(currentThreadId);
             await syncMessagesToHoncho(agentSettings, currentThreadId, allCurrentMessages);
-            let apiMessages = buildApiMessagesForRequest(
+            const getCurrentProviderConfig = () => (
+                useAgentStore.getState().agentSettings[agentSettings.activeProvider] as AgentProviderConfig
+            );
+            const updateThreadUpstreamState = (upstreamThreadId?: string) => {
+                useAgentStore.setState((state) => ({
+                    threads: state.threads.map((thread) => thread.id === currentThreadId ? {
+                        ...thread,
+                        upstreamThreadId: upstreamThreadId ?? null,
+                        upstreamTransport: preparedRequest.transport,
+                        upstreamProvider: agentSettings.activeProvider,
+                        upstreamModel: getCurrentProviderConfig().model,
+                        upstreamAssistantId: getCurrentProviderConfig().assistantId || null,
+                    } : thread),
+                }));
+            };
+            let preparedRequest = prepareOpenAIRequest(
                 allCurrentMessages.slice(0, -1),
                 agentSettings,
+                agentSettings.activeProvider,
+                getCurrentProviderConfig().model,
+                getCurrentProviderConfig().apiTransport,
+                getCurrentProviderConfig().assistantId,
+                useAgentStore.getState().threads.find((entry) => entry.id === currentThreadId),
             );
             let lastPersistedReasoning: string | null = null;
             const honchoContext = await buildHonchoContext(agentSettings, currentThreadId, text);
@@ -1018,13 +1061,18 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                 try {
                     for await (const chunk of sendChatCompletion({
                         provider: agentSettings.activeProvider,
-                        config: providerConfig,
+                        config: {
+                            ...providerConfig,
+                            apiTransport: preparedRequest.transport,
+                        },
                         systemPrompt: effectiveSystemPrompt,
-                        messages: apiMessages,
+                        messages: preparedRequest.messages,
                         streaming: agentSettings.enableStreaming,
                         signal: controller.signal,
                         tools: tools.length > 0 ? tools : undefined,
                         reasoningEffort: agentSettings.reasoningEffort,
+                        previousResponseId: preparedRequest.previousResponseId,
+                        upstreamThreadId: preparedRequest.upstreamThreadId,
                     })) {
                         if (chunk.type === "delta") {
                             accumulated += chunk.content;
@@ -1057,12 +1105,25 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                                 videoTokens: chunk.videoTokens,
                                 cost: chunk.cost,
                                 tps,
+                                apiTransport: preparedRequest.transport,
+                                responseId: chunk.responseId,
                             });
+                            updateThreadUpstreamState(chunk.upstreamThreadId);
                             continue;
                         }
 
                         if (chunk.type === "error") {
                             updateLastAssistantMessage(currentThreadId, `Error: ${chunk.content}`, false);
+                            continue;
+                        }
+
+                        if (chunk.type === "transport_fallback") {
+                            useAgentStore.getState().updateAgentSetting(agentSettings.activeProvider as keyof ReturnType<typeof useAgentStore.getState>["agentSettings"], {
+                                ...providerConfig,
+                                apiTransport: "chat_completions",
+                            } as any);
+                            preparedRequest = { ...preparedRequest, transport: "chat_completions", previousResponseId: undefined, upstreamThreadId: undefined };
+                            updateThreadUpstreamState(undefined);
                             continue;
                         }
 
@@ -1084,7 +1145,10 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                                 videoTokens: chunk.videoTokens,
                                 cost: chunk.cost,
                                 toolCalls: roundToolCalls,
+                                apiTransport: preparedRequest.transport,
+                                responseId: chunk.responseId,
                             });
+                            updateThreadUpstreamState(chunk.upstreamThreadId);
 
                             for (const toolCall of chunk.toolCalls) {
                                 addMessage(currentThreadId, {
@@ -1127,26 +1191,12 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
 
                             updateLastAssistantMessage(currentThreadId, accumulated || "Tools executed.", false);
 
-                            apiMessages = [
-                                ...apiMessages,
-                                {
-                                    role: "assistant",
-                                    content: accumulated || "",
-                                    tool_calls: roundToolCalls,
-                                },
-                                ...toolResults.map((result) => ({
-                                    role: "tool" as const,
-                                    content: result.content,
-                                    tool_call_id: result.toolCallId,
-                                    name: result.name,
-                                })),
-                            ];
-
                             addMessage(currentThreadId, {
                                 role: "assistant",
                                 content: "",
                                 provider: agentSettings.activeProvider,
                                 model: providerConfig.model,
+                                apiTransport: preparedRequest.transport,
                                 inputTokens: 0,
                                 outputTokens: 0,
                                 totalTokens: 0,
@@ -1164,9 +1214,14 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
 
                 if (!receivedToolCalls) break;
                 allCurrentMessages = useAgentStore.getState().getThreadMessages(currentThreadId);
-                apiMessages = buildApiMessagesForRequest(
-                    allCurrentMessages.slice(0, -1),
+                preparedRequest = prepareOpenAIRequest(
+                allCurrentMessages.slice(0, -1),
                     agentSettings,
+                    agentSettings.activeProvider,
+                    getCurrentProviderConfig().model,
+                    getCurrentProviderConfig().apiTransport,
+                    getCurrentProviderConfig().assistantId,
+                    useAgentStore.getState().threads.find((entry) => entry.id === currentThreadId),
                 );
             }
 
@@ -1328,7 +1383,6 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         historySummary,
         historyHits,
         symbolHits,
-        snapshots,
         snippets,
         transcripts,
         scopePaneId,
@@ -1381,7 +1435,6 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         historySummary,
         historyHits,
         symbolHits,
-        snapshots,
         snippets,
         transcripts,
         scopePaneId,
@@ -1485,7 +1538,7 @@ export function AgentChatPanelHeader() {
                     </span>
 
                     <span style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
-                        Reasoning, execution context, recall memory, symbols, and snapshots
+                        Reasoning, execution context, recall memory, and symbols
                     </span>
                 </div>
 
@@ -1645,9 +1698,7 @@ export function AgentChatPanelContextSurface() {
             symbolQuery={runtime.symbolQuery}
             setSymbolQuery={runtime.setSymbolQuery}
             symbolHits={runtime.symbolHits}
-            snapshots={runtime.snapshots}
             scopeController={runtime.scopeController}
-            activeWorkspace={runtime.activeWorkspace}
         />
     );
 }

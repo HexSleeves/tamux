@@ -15,6 +15,12 @@ fn render_streaming_markdown(content: &str, width: usize) -> Vec<Line<'static>> 
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectionPoint {
+    pub row: usize,
+    pub col: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RenderedLineKind {
     MessageBody,
     ReasoningToggle,
@@ -238,17 +244,26 @@ fn build_rendered_lines(
         });
 
         let dark_blue = Style::default().fg(Color::Indexed(24));
+        let wrap_width = inner_width.saturating_sub(9).max(1);
         for reasoning_line in chat.streaming_reasoning().lines() {
-            all_lines.push(RenderedChatLine {
-                line: Line::from(vec![
-                    Span::raw("       "),
-                    Span::styled("\u{2502}", dark_blue),
-                    Span::raw(" "),
-                    Span::styled(reasoning_line.to_string(), theme.fg_dim),
-                ]),
-                message_index: None,
-                kind: RenderedLineKind::Streaming,
-            });
+            let wrapped_lines = wrap_text(reasoning_line, wrap_width);
+            let wrapped_lines = if wrapped_lines.is_empty() {
+                vec![String::new()]
+            } else {
+                wrapped_lines
+            };
+            for wrapped in wrapped_lines {
+                all_lines.push(RenderedChatLine {
+                    line: Line::from(vec![
+                        Span::raw("       "),
+                        Span::styled("\u{2502}", dark_blue),
+                        Span::raw(" "),
+                        Span::styled(wrapped, theme.fg_dim),
+                    ]),
+                    message_index: None,
+                    kind: RenderedLineKind::Streaming,
+                });
+            }
         }
     }
 
@@ -345,6 +360,21 @@ fn visible_lines(
     let end = total.saturating_sub(scroll);
     let start = end.saturating_sub(inner_height);
     all_lines[start..end].to_vec()
+}
+
+fn visible_window_bounds(total: usize, inner_height: usize, scroll: usize) -> (usize, usize, usize) {
+    if total <= inner_height {
+        let padding = inner_height.saturating_sub(total);
+        return (padding, 0, total);
+    }
+
+    if scroll == 0 {
+        return (0, total - inner_height, total);
+    }
+
+    let end = total.saturating_sub(scroll);
+    let start = end.saturating_sub(inner_height);
+    (0, start, end)
 }
 
 fn visible_rendered_lines(
@@ -498,11 +528,34 @@ pub fn selected_text(
     area: Rect,
     chat: &ChatState,
     theme: &ThemeTokens,
-    start: Position,
-    end: Position,
+    start: SelectionPoint,
+    end: SelectionPoint,
 ) -> Option<String> {
-    let (inner, visible) = visible_rendered_lines(area, chat, theme)?;
-    let ((start_row, start_col), (end_row, end_col)) = normalize_selection(inner, start, end)?;
+    let inner = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .inner(area);
+    let (all_lines, message_line_ranges) = build_rendered_lines(chat, theme, inner.width as usize);
+    if all_lines.is_empty() {
+        return None;
+    }
+    let _scroll = resolved_scroll(
+        chat,
+        all_lines.len(),
+        inner.height as usize,
+        &message_line_ranges,
+    );
+
+    let (start_point, end_point) =
+        if start.row <= end.row || (start.row == end.row && start.col <= end.col) {
+            (start, end)
+        } else {
+            (end, start)
+        };
+    let start_row = start_point.row.min(all_lines.len().saturating_sub(1));
+    let end_row = end_point.row.min(all_lines.len().saturating_sub(1));
+    let start_col = start_point.col;
+    let end_col = end_point.col;
 
     if start_row == end_row && start_col == end_col {
         return None;
@@ -511,7 +564,7 @@ pub fn selected_text(
     let mut lines = Vec::new();
 
     for row in start_row..=end_row {
-        let rendered = visible.get(row)?;
+        let rendered = all_lines.get(row)?;
         let plain: String = rendered
             .line
             .spans
@@ -537,6 +590,52 @@ pub fn selected_text(
     }
 }
 
+pub fn selection_point_from_mouse(
+    area: Rect,
+    chat: &ChatState,
+    theme: &ThemeTokens,
+    mouse: Position,
+) -> Option<SelectionPoint> {
+    let inner = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .inner(area);
+    if inner.width == 0 || inner.height == 0 {
+        return None;
+    }
+
+    let (all_lines, message_line_ranges) = build_rendered_lines(chat, theme, inner.width as usize);
+    if all_lines.is_empty() {
+        return None;
+    }
+
+    let scroll = resolved_scroll(
+        chat,
+        all_lines.len(),
+        inner.height as usize,
+        &message_line_ranges,
+    );
+    let (padding, start_idx, end_idx) =
+        visible_window_bounds(all_lines.len(), inner.height as usize, scroll);
+
+    let clamped_x = mouse
+        .x
+        .clamp(inner.x, inner.x.saturating_add(inner.width).saturating_sub(1));
+    let clamped_y = mouse
+        .y
+        .clamp(inner.y, inner.y.saturating_add(inner.height).saturating_sub(1));
+    let rel_row = clamped_y.saturating_sub(inner.y) as usize;
+    let rel_col = clamped_x.saturating_sub(inner.x) as usize;
+
+    let row = if rel_row < padding {
+        start_idx
+    } else {
+        let visible_count = end_idx.saturating_sub(start_idx).max(1);
+        start_idx + rel_row.saturating_sub(padding).min(visible_count.saturating_sub(1))
+    };
+
+    Some(SelectionPoint { row, col: rel_col })
+}
 pub fn hit_test(
     area: Rect,
     chat: &ChatState,
@@ -574,7 +673,7 @@ pub fn render(
     chat: &ChatState,
     theme: &ThemeTokens,
     focused: bool,
-    mouse_selection: Option<(Position, Position)>,
+    mouse_selection: Option<(SelectionPoint, SelectionPoint)>,
 ) {
     let border_style = if focused {
         theme.accent_primary
@@ -644,16 +743,26 @@ pub fn render(
     // Apply scroll offset (0 = following tail = show last `height` lines)
     // Clamp scroll to prevent overscroll past the top of content
     let scroll = resolved_scroll(chat, all_lines.len(), inner_height, &message_line_ranges);
+    let (padding_rows, start_idx, end_idx) =
+        visible_window_bounds(all_lines.len(), inner_height, scroll);
     let mut visible_lines = visible_lines(&all_lines, inner_height, scroll);
 
     if let Some((start, end)) = mouse_selection {
-        if let Some(((start_row, start_col), (end_row, end_col))) =
-            normalize_selection(inner, start, end)
-        {
-            let highlight = Style::default().bg(Color::Indexed(31));
+        let (start_point, end_point) =
+            if start.row <= end.row || (start.row == end.row && start.col <= end.col) {
+                (start, end)
+            } else {
+                (end, start)
+            };
+        let highlight = Style::default().bg(Color::Indexed(31));
+        let visible_last = end_idx.saturating_sub(1);
+        let range_start = start_point.row.max(start_idx);
+        let range_end = end_point.row.min(visible_last);
 
-            for row in start_row..=end_row {
-                if let Some(line) = visible_lines.get_mut(row) {
+        if range_start <= range_end {
+            for absolute_row in range_start..=range_end {
+                let visible_row = padding_rows + absolute_row.saturating_sub(start_idx);
+                if let Some(line) = visible_lines.get_mut(visible_row) {
                     let plain: String = line
                         .line
                         .spans
@@ -661,9 +770,13 @@ pub fn render(
                         .map(|span| span.content.as_ref())
                         .collect();
                     let line_width = UnicodeWidthStr::width(plain.as_str());
-                    let from = if row == start_row { start_col } else { 0 };
-                    let to = if row == end_row {
-                        end_col.max(from)
+                    let from = if absolute_row == start_point.row {
+                        start_point.col
+                    } else {
+                        0
+                    };
+                    let to = if absolute_row == end_point.row {
+                        end_point.col.max(from)
                     } else {
                         line_width
                     };

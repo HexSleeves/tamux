@@ -36,6 +36,7 @@ export function TitleBar() {
   const toggleCommandLog = useWorkspaceStore((s) => s.toggleCommandLog);
   const toggleSnippets = useWorkspaceStore((s) => s.toggleSnippetPicker);
   const toggleAgentPanel = useWorkspaceStore((s) => s.toggleAgentPanel);
+  const toggleTimeTravel = useWorkspaceStore((s) => s.toggleTimeTravel);
   const toggleSystemMonitor = useWorkspaceStore((s) => s.toggleSystemMonitor);
   const toggleSearch = useWorkspaceStore((s) => s.toggleSearch);
   const toggleNotificationPanel = useWorkspaceStore((s) => s.toggleNotificationPanel);
@@ -111,6 +112,7 @@ export function TitleBar() {
         { id: "search", label: "Search", shortcut: shortcutFor("toggleSearch"), onSelect: toggleSearch },
         { id: "history", label: "Command History", shortcut: shortcutFor("toggleCommandHistory"), onSelect: toggleCommandHistory },
         { id: "logs", label: "Command Log", shortcut: shortcutFor("toggleCommandLog"), onSelect: toggleCommandLog },
+        { id: "time-travel", label: "Time Travel", shortcut: shortcutFor("toggleTimeTravel"), onSelect: toggleTimeTravel },
         { id: "snippets", label: "Snippets", shortcut: shortcutFor("toggleSnippets"), onSelect: toggleSnippets },
         { id: "runtime", label: "Runtime Settings", onSelect: openAbout },
       ],
@@ -126,6 +128,7 @@ export function TitleBar() {
     toggleCommandLog,
     toggleNotificationPanel,
     toggleSnippets,
+    toggleTimeTravel,
 
     toggleCommandPalette,
     toggleFileManager,

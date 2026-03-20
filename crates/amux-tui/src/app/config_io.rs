@@ -1,12 +1,52 @@
 use super::*;
 
 impl TuiModel {
+    fn refresh_snapshot_stats(&mut self) {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_default();
+        if home.is_empty() {
+            return;
+        }
+
+        let snapshot_dir = std::path::Path::new(&home).join(".tamux").join("snapshots");
+        let Ok(entries) = std::fs::read_dir(snapshot_dir) else {
+            self.config.snapshot_count = 0;
+            self.config.snapshot_total_size_bytes = 0;
+            return;
+        };
+
+        let mut count = 0usize;
+        let mut total_size_bytes = 0u64;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|v| v.to_str()) else {
+                continue;
+            };
+            if !name.starts_with("snap_") {
+                continue;
+            }
+            if let Ok(metadata) = entry.metadata() {
+                count += 1;
+                total_size_bytes = total_size_bytes.saturating_add(metadata.len());
+            }
+        }
+
+        self.config.snapshot_count = count;
+        self.config.snapshot_total_size_bytes = total_size_bytes;
+    }
+
     pub(super) fn sync_config_to_daemon(&self) {
         if let Ok(json) = serde_json::to_string(&serde_json::json!({
             "provider": &self.config.provider,
             "base_url": &self.config.base_url,
             "api_key": &self.config.api_key,
+            "assistant_id": &self.config.assistant_id,
             "model": &self.config.model,
+            "api_transport": &self.config.api_transport,
             "reasoning_effort": &self.config.reasoning_effort,
             "tools": {
                 "bash": self.config.tool_bash,
@@ -87,6 +127,14 @@ impl TuiModel {
                 .get("apiKey")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let assistant_id = provider_config
+                .get("assistantId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let api_transport = provider_config
+                .get("apiTransport")
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| providers::default_transport_for(provider_id));
 
             self.config.provider = provider_id.to_string();
             if !base_url.is_empty() {
@@ -100,6 +148,14 @@ impl TuiModel {
             if !api_key.is_empty() {
                 self.config.api_key = api_key.to_string();
             }
+            self.config.assistant_id = assistant_id.to_string();
+            self.config.api_transport = if providers::supported_transports_for(provider_id)
+                .contains(&api_transport)
+            {
+                api_transport.to_string()
+            } else {
+                providers::default_transport_for(provider_id).to_string()
+            };
         }
 
         let get_bool = |key: &str| json.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
@@ -196,7 +252,7 @@ impl TuiModel {
         self.config.snapshot_max_size_mb = json
             .get("snapshotMaxSizeMb")
             .and_then(|v| v.as_u64())
-            .unwrap_or(2048) as u32;
+            .unwrap_or(51_200) as u32;
         self.config.snapshot_auto_cleanup = json
             .get("snapshotAutoCleanup")
             .and_then(|v| v.as_bool())
@@ -271,6 +327,7 @@ impl TuiModel {
         }
 
         self.config.agent_config_raw = Some(json);
+        self.refresh_snapshot_stats();
         self.status_line = format!(
             "Loaded settings: {} / {}",
             self.config.provider, self.config.model
@@ -297,6 +354,7 @@ impl TuiModel {
 
         json["activeProvider"] = serde_json::Value::String(self.config.provider.clone());
         json["reasoningEffort"] = serde_json::Value::String(self.config.reasoning_effort.clone());
+        json["apiTransport"] = serde_json::Value::String(self.config.api_transport.clone());
         json["enableBashTool"] = serde_json::Value::Bool(self.config.tool_bash);
         json["enableWebSearchTool"] = serde_json::Value::Bool(self.config.tool_web_search);
         json["enableWebBrowsingTool"] = serde_json::Value::Bool(self.config.tool_web_browse);
@@ -339,6 +397,8 @@ impl TuiModel {
             "baseUrl": &self.config.base_url,
             "model": &self.config.model,
             "apiKey": &self.config.api_key,
+            "assistantId": &self.config.assistant_id,
+            "apiTransport": &self.config.api_transport,
         });
 
         if let Ok(data) = serde_json::to_string_pretty(&json) {

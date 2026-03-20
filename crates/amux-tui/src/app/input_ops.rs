@@ -2,34 +2,54 @@ use super::*;
 
 impl TuiModel {
     pub(super) fn input_height(&self) -> u16 {
-        use unicode_width::UnicodeWidthStr;
-
-        let inner_w = self.width.saturating_sub(2) as usize;
-        let prompt_w = 4;
-        let text_w = inner_w.saturating_sub(prompt_w);
-        if text_w <= 2 {
+        let inner_w = self.width.saturating_sub(4) as usize;
+        if inner_w <= 2 {
             return 3;
         }
 
-        let visual_lines: usize = self
-            .input
-            .buffer()
-            .split('\n')
-            .map(|line| {
-                let display_width = UnicodeWidthStr::width(line) + 1;
-                if text_w == 0 {
-                    1
-                } else {
-                    (display_width + text_w - 1) / text_w
-                }
-            })
-            .sum();
-
+        let wrapped = self.input.wrapped_display_buffer(inner_w);
         let attach_count = self.attachments.len();
-        (visual_lines + attach_count + 2).clamp(3, 12) as u16
+        let min_visual_lines = if wrapped.is_empty() {
+            1
+        } else {
+            wrapped.split('\n').count().max(1)
+        };
+        (min_visual_lines + attach_count + 2).clamp(3, 12) as u16
     }
 
     pub fn handle_paste(&mut self, text: String) {
+        if let Some(modal_kind) = self.modal.top() {
+            match modal_kind {
+                modal::ModalKind::Settings if self.settings.is_editing() => {
+                    let allow_newlines = self.settings.is_textarea();
+                    for ch in text.chars() {
+                        match ch {
+                            '\r' => {}
+                            '\n' if allow_newlines => {
+                                self.settings.reduce(SettingsAction::InsertChar('\n'));
+                            }
+                            '\n' => {}
+                            other => self.settings.reduce(SettingsAction::InsertChar(other)),
+                        }
+                    }
+                    return;
+                }
+                modal::ModalKind::CommandPalette | modal::ModalKind::ThreadPicker => {
+                    self.input.reduce(input::InputAction::Clear);
+                    for ch in text.chars() {
+                        match ch {
+                            '\r' | '\n' => {}
+                            other => self.input.reduce(input::InputAction::InsertChar(other)),
+                        }
+                    }
+                    self.modal
+                        .reduce(modal::ModalAction::SetQuery(self.input.buffer().to_string()));
+                    return;
+                }
+                _ => return,
+            }
+        }
+
         if self.focus != FocusArea::Input {
             self.focus = FocusArea::Input;
             self.input.set_mode(input::InputMode::Insert);

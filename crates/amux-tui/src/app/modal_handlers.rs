@@ -115,7 +115,7 @@ impl TuiModel {
                             }
                             "snapshot_max_size_mb" => {
                                 if let Ok(n) = value.parse::<u32>() {
-                                    self.config.snapshot_max_size_mb = n.clamp(100, 20000);
+                                    self.config.snapshot_max_size_mb = n.clamp(100, 500_000);
                                 }
                             }
                             "agent_name" => {
@@ -303,6 +303,8 @@ impl TuiModel {
                         self.config.base_url = def.default_base_url.to_string();
                     }
                     self.config.model = def.default_model.to_string();
+                    self.config.api_transport = def.default_transport.to_string();
+                    self.config.assistant_id.clear();
 
                     if let Some(raw) = &self.config.agent_config_raw {
                         if let Some(provider_config) = raw.get(def.id) {
@@ -321,6 +323,25 @@ impl TuiModel {
                                 if !saved_model.is_empty() {
                                     self.config.model = saved_model.to_string();
                                 }
+                            }
+                            if let Some(saved_transport) = provider_config
+                                .get("apiTransport")
+                                .and_then(|value| value.as_str())
+                            {
+                                self.config.api_transport = if def
+                                    .supported_transports
+                                    .contains(&saved_transport)
+                                {
+                                    saved_transport.to_string()
+                                } else {
+                                    def.default_transport.to_string()
+                                };
+                            }
+                            if let Some(saved_assistant_id) = provider_config
+                                .get("assistantId")
+                                .and_then(|value| value.as_str())
+                            {
+                                self.config.assistant_id = saved_assistant_id.to_string();
                             }
                         }
                     }

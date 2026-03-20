@@ -128,6 +128,8 @@ impl TuiModel {
                         base_url: cfg.base_url,
                         model: cfg.model,
                         api_key: cfg.api_key,
+                        assistant_id: cfg.assistant_id,
+                        api_transport: cfg.api_transport,
                         reasoning_effort: cfg.reasoning_effort,
                     },
                 ));
@@ -248,6 +250,27 @@ impl TuiModel {
                         ..Default::default()
                     });
                 }
+            }
+            ClientEvent::WorkflowNotice {
+                kind,
+                message,
+                details,
+            } => {
+                if kind == "transport-fallback" {
+                    if let Some(details) = details.as_deref() {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(details) {
+                            if let Some(to) = parsed.get("to").and_then(|value| value.as_str()) {
+                                self.config.api_transport = to.to_string();
+                                self.save_settings();
+                            }
+                        }
+                    }
+                }
+                self.status_line = if let Some(details) = details {
+                    format!("{message} ({details})")
+                } else {
+                    message
+                };
             }
         }
     }

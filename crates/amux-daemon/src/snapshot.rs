@@ -1,6 +1,7 @@
 use amux_protocol::{SessionId, SnapshotIndexEntry, SnapshotInfo, WorkspaceId};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -673,10 +674,73 @@ impl Default for SnapshotRetentionConfig {
     fn default() -> Self {
         Self {
             max_snapshots: 10,
-            max_total_size_mb: 2048,
+            max_total_size_mb: 51_200,
             auto_cleanup: true,
         }
     }
+}
+
+impl SnapshotRetentionConfig {
+    fn from_sources() -> Self {
+        let config = amux_protocol::AmuxConfig::load();
+        let mut retention = Self {
+            max_snapshots: config.snapshot_max_count.max(1),
+            max_total_size_mb: config.snapshot_max_total_size_mb.max(1024),
+            auto_cleanup: config.snapshot_auto_cleanup,
+        };
+
+        for path in [
+            amux_protocol::amux_data_dir().join("settings.json"),
+            amux_protocol::amux_data_dir().join("agent-settings.json"),
+        ] {
+            let Some(settings) = read_settings_root(&path) else {
+                continue;
+            };
+
+            if let Some(value) = settings.get("snapshotMaxCount").and_then(|v| v.as_u64()) {
+                retention.max_snapshots = value.max(1) as usize;
+            }
+            if let Some(value) = settings.get("snapshotMaxSizeMb").and_then(|v| v.as_u64()) {
+                retention.max_total_size_mb = value.max(1024);
+            }
+            if let Some(value) = settings
+                .get("snapshotAutoCleanup")
+                .and_then(|v| v.as_bool())
+            {
+                retention.auto_cleanup = value;
+            }
+        }
+
+        retention
+    }
+}
+
+fn read_settings_root(path: &Path) -> Option<Value> {
+    let data = std::fs::read_to_string(path).ok()?;
+    let parsed = serde_json::from_str::<Value>(&data).ok()?;
+    match parsed.get("settings") {
+        Some(settings) if settings.is_object() => Some(settings.clone()),
+        _ => Some(parsed),
+    }
+}
+
+fn effective_snapshot_backend() -> Option<String> {
+    let mut backend = amux_protocol::AmuxConfig::load().snapshot_backend;
+
+    for path in [
+        amux_protocol::amux_data_dir().join("settings.json"),
+        amux_protocol::amux_data_dir().join("agent-settings.json"),
+    ] {
+        let Some(settings) = read_settings_root(&path) else {
+            continue;
+        };
+
+        if let Some(value) = settings.get("snapshotBackend").and_then(|v| v.as_str()) {
+            backend = Some(value.to_string());
+        }
+    }
+
+    backend
 }
 
 /// Aggregate statistics about stored snapshots.
@@ -821,7 +885,7 @@ impl SnapshotStore {
         std::fs::create_dir_all(&root)?;
         Ok(Self {
             history: HistoryStore::new()?,
-            retention: SnapshotRetentionConfig::default(),
+            retention: SnapshotRetentionConfig::from_sources(),
         })
     }
 
@@ -851,8 +915,8 @@ impl SnapshotStore {
             return Ok(None);
         }
 
-        let config = amux_protocol::AmuxConfig::load();
-        let backend = detect_snapshot_backend(cwd, config.snapshot_backend.as_deref());
+        let backend = detect_snapshot_backend(cwd, effective_snapshot_backend().as_deref());
+        let retention = SnapshotRetentionConfig::from_sources();
 
         let snapshot = backend.create(
             cwd,
@@ -866,8 +930,8 @@ impl SnapshotStore {
             .upsert_snapshot_index(&encode_snapshot(&snapshot))?;
 
         // Enforce retention limits after creating a new snapshot
-        if self.retention.auto_cleanup {
-            if let Err(e) = enforce_retention(&self.history, &self.retention) {
+        if retention.auto_cleanup {
+            if let Err(e) = enforce_retention(&self.history, &retention) {
                 tracing::warn!(error = %e, "snapshot retention enforcement failed");
             }
         }

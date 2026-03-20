@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::pin::Pin;
 use std::task::Poll;
@@ -15,8 +15,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::types::{
-    get_provider_api_type, get_provider_definition, ApiType, AuthMethod, CompletionChunk,
-    ProviderConfig, ToolCall, ToolDefinition, ToolFunction,
+    get_provider_api_type, get_provider_definition, ApiTransport, ApiType, AuthMethod,
+    CompletionChunk, ProviderConfig, ToolCall, ToolDefinition, ToolFunction,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -87,6 +87,20 @@ impl fmt::Display for RateLimitError {
 
 impl std::error::Error for RateLimitError {}
 
+#[derive(Debug)]
+struct TransportCompatibilityError {
+    provider: String,
+    details: String,
+}
+
+impl fmt::Display for TransportCompatibilityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} transport incompatibility: {}", self.provider, self.details)
+    }
+}
+
+impl std::error::Error for TransportCompatibilityError {}
+
 /// Build an appropriate error for a non-success API response, distinguishing
 /// rate-limit (429) errors for retry handling.
 fn check_rate_limit_response(
@@ -120,14 +134,17 @@ impl Stream for CompletionStream {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Send a chat completion request. Returns a stream of `CompletionChunk`.
-pub fn send_chat_completion(
+/// Send a completion request. Returns a stream of `CompletionChunk`.
+pub fn send_completion_request(
     client: &reqwest::Client,
     provider: &str,
     config: &ProviderConfig,
     system_prompt: &str,
     messages: &[ApiMessage],
     tools: &[ToolDefinition],
+    transport: ApiTransport,
+    previous_response_id: Option<String>,
+    upstream_thread_id: Option<String>,
     retry_strategy: RetryStrategy,
 ) -> CompletionStream {
     let (tx, rx) = mpsc::channel(64);
@@ -137,6 +154,8 @@ pub fn send_chat_completion(
     let system_prompt = system_prompt.to_string();
     let messages = messages.to_vec();
     let tools = tools.to_vec();
+    let previous_response_id = previous_response_id.clone();
+    let upstream_thread_id = upstream_thread_id.clone();
 
     tokio::spawn(async move {
         let mut retry_attempt = 0u32;
@@ -146,16 +165,96 @@ pub fn send_chat_completion(
             let result = if api_type == ApiType::Anthropic {
                 run_anthropic(&client, &config, &system_prompt, &messages, &tools, &tx).await
             } else {
-                run_openai_compatible(
-                    &client,
-                    &provider,
-                    &config,
-                    &system_prompt,
-                    &messages,
-                    &tools,
-                    &tx,
-                )
-                .await
+                match transport {
+                    ApiTransport::NativeAssistant => {
+                        match run_native_assistant(
+                            &client,
+                            &provider,
+                            &config,
+                            &messages,
+                            upstream_thread_id.as_deref(),
+                            &tx,
+                        )
+                        .await
+                        {
+                            Ok(()) => Ok(()),
+                            Err(err)
+                                if err.downcast_ref::<TransportCompatibilityError>().is_some() =>
+                            {
+                                let reason = err.to_string();
+                                let _ = tx
+                                    .send(Ok(CompletionChunk::TransportFallback {
+                                        from: ApiTransport::NativeAssistant,
+                                        to: ApiTransport::ChatCompletions,
+                                        message: reason,
+                                    }))
+                                    .await;
+                                run_openai_chat_completions(
+                                    &client,
+                                    &provider,
+                                    &config,
+                                    &system_prompt,
+                                    &messages,
+                                    &tools,
+                                    &tx,
+                                )
+                                .await
+                            }
+                            Err(err) => Err(err),
+                        }
+                    }
+                    ApiTransport::ChatCompletions => {
+                        run_openai_chat_completions(
+                            &client,
+                            &provider,
+                            &config,
+                            &system_prompt,
+                            &messages,
+                            &tools,
+                            &tx,
+                        )
+                        .await
+                    }
+                    ApiTransport::Responses => {
+                        match run_openai_responses(
+                            &client,
+                            &provider,
+                            &config,
+                            &system_prompt,
+                            &messages,
+                            &tools,
+                            previous_response_id.as_deref(),
+                            &tx,
+                        )
+                        .await
+                        {
+                            Ok(()) => Ok(()),
+                            Err(err)
+                                if err.downcast_ref::<TransportCompatibilityError>().is_some() =>
+                            {
+                                let reason = err.to_string();
+                                let _ = tx
+                                    .send(Ok(CompletionChunk::TransportFallback {
+                                        from: ApiTransport::Responses,
+                                        to: ApiTransport::ChatCompletions,
+                                        message: reason,
+                                    }))
+                                    .await;
+                                run_openai_chat_completions(
+                                    &client,
+                                    &provider,
+                                    &config,
+                                    &system_prompt,
+                                    &messages,
+                                    &tools,
+                                    &tx,
+                                )
+                                .await
+                            }
+                            Err(err) => Err(err),
+                        }
+                    }
+                }
             };
 
             match result {
@@ -213,6 +312,9 @@ pub fn send_chat_completion(
 
 /// Convert `AgentMessage` history to API format.
 pub fn messages_to_api_format(messages: &[super::types::AgentMessage]) -> Vec<ApiMessage> {
+    let mut announced_tool_calls = HashSet::new();
+    let mut emitted_tool_results = HashSet::new();
+
     messages
         .iter()
         .filter(|m| {
@@ -223,7 +325,28 @@ pub fn messages_to_api_format(messages: &[super::types::AgentMessage]) -> Vec<Ap
                     | super::types::MessageRole::Tool
             )
         })
-        .map(|m| {
+        .filter_map(|m| {
+            if matches!(m.role, super::types::MessageRole::Assistant) {
+                if let Some(tool_calls) = &m.tool_calls {
+                    for tool_call in tool_calls {
+                        if !tool_call.id.trim().is_empty() {
+                            announced_tool_calls.insert(tool_call.id.clone());
+                        }
+                    }
+                }
+            }
+
+            if matches!(m.role, super::types::MessageRole::Tool) {
+                let Some(tool_call_id) = m.tool_call_id.as_ref() else {
+                    return None;
+                };
+                if !announced_tool_calls.contains(tool_call_id)
+                    || !emitted_tool_results.insert(tool_call_id.clone())
+                {
+                    return None;
+                }
+            }
+
             let tool_calls = m.tool_calls.as_ref().map(|tcs| {
                 tcs.iter()
                     .map(|tc| ApiToolCall {
@@ -237,7 +360,7 @@ pub fn messages_to_api_format(messages: &[super::types::AgentMessage]) -> Vec<Ap
                     .collect()
             });
 
-            ApiMessage {
+            Some(ApiMessage {
                 role: match m.role {
                     super::types::MessageRole::System => "system".into(),
                     super::types::MessageRole::User => "user".into(),
@@ -248,7 +371,7 @@ pub fn messages_to_api_format(messages: &[super::types::AgentMessage]) -> Vec<Ap
                 tool_call_id: m.tool_call_id.clone(),
                 name: m.tool_name.clone(),
                 tool_calls,
-            }
+            })
         })
         .collect()
 }
@@ -274,6 +397,24 @@ fn build_chat_completion_url(base_url: &str) -> String {
     }
 
     format!("{base}/v1/chat/completions")
+}
+
+fn build_responses_url(base_url: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    let lower = base.to_lowercase();
+
+    if lower.ends_with("/v1")
+        || lower.ends_with("/v2")
+        || lower.ends_with("/v3")
+        || lower.ends_with("/v4")
+        || lower.ends_with("/api/v1")
+        || lower.ends_with("/openai/v1")
+        || lower.ends_with("/compatible-mode/v1")
+    {
+        return format!("{base}/responses");
+    }
+
+    format!("{base}/v1/responses")
 }
 
 fn normalize_reasoning_effort(effort: &str) -> Option<String> {
@@ -315,7 +456,365 @@ fn anthropic_thinking_budget(effort: &str) -> Option<u32> {
     }
 }
 
-async fn run_openai_compatible(
+fn build_openai_auth_request<'a>(
+    client: &'a reqwest::Client,
+    url: &str,
+    provider: &str,
+    config: &ProviderConfig,
+) -> reqwest::RequestBuilder {
+    apply_openai_auth_headers(
+        client.post(url).header("Content-Type", "application/json"),
+        provider,
+        config,
+    )
+}
+
+fn apply_openai_auth_headers(
+    mut req: reqwest::RequestBuilder,
+    provider: &str,
+    config: &ProviderConfig,
+) -> reqwest::RequestBuilder {
+    if !config.api_key.is_empty() {
+        let auth_method = get_provider_definition(provider)
+            .map(|d| d.auth_method)
+            .unwrap_or(AuthMethod::Bearer);
+
+        match auth_method {
+            AuthMethod::Bearer => {
+                req = req.header("Authorization", format!("Bearer {}", config.api_key));
+            }
+            AuthMethod::XApiKey => {
+                req = req.header("x-api-key", &config.api_key);
+            }
+        }
+    }
+
+    req
+}
+
+fn build_native_assistant_base_url(provider: &str, config: &ProviderConfig) -> Option<String> {
+    let preferred = get_provider_definition(provider).and_then(|definition| definition.native_base_url);
+    preferred
+        .or_else(|| (!config.base_url.trim().is_empty()).then_some(config.base_url.as_str()))
+        .map(|url| url.trim_end_matches('/').to_string())
+}
+
+fn api_message_to_text(message: &ApiMessage) -> Option<String> {
+    match &message.content {
+        ApiContent::Text(text) => Some(text.clone()),
+        ApiContent::Blocks(blocks) => {
+            let combined = blocks
+                .iter()
+                .filter_map(|block| {
+                    block
+                        .get("text")
+                        .and_then(|value| value.as_str())
+                        .map(ToOwned::to_owned)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!combined.trim().is_empty()).then_some(combined)
+        }
+    }
+}
+
+async fn run_native_assistant(
+    client: &reqwest::Client,
+    provider: &str,
+    config: &ProviderConfig,
+    messages: &[ApiMessage],
+    upstream_thread_id: Option<&str>,
+    tx: &mpsc::Sender<Result<CompletionChunk>>,
+) -> Result<()> {
+    let definition = get_provider_definition(provider).ok_or_else(|| {
+        anyhow::anyhow!("native assistant transport is not defined for provider '{provider}'")
+    })?;
+    if definition.native_transport_kind.is_none() {
+        return Err(TransportCompatibilityError {
+            provider: provider.to_string(),
+            details: "provider does not expose a native assistant API".to_string(),
+        }
+        .into());
+    }
+    if config.assistant_id.trim().is_empty() {
+        return Err(TransportCompatibilityError {
+            provider: provider.to_string(),
+            details: "native assistant requires assistant_id".to_string(),
+        }
+        .into());
+    }
+    let base_url = build_native_assistant_base_url(provider, config).ok_or_else(|| {
+        anyhow::anyhow!("native assistant base URL is not configured for provider '{provider}'")
+    })?;
+    let user_text = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .and_then(api_message_to_text)
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("native assistant requires a user message"))?;
+
+    let thread_id = match upstream_thread_id.filter(|value| !value.trim().is_empty()) {
+        Some(existing) => existing.to_string(),
+        None => {
+            let url = format!("{base_url}/threads");
+            let response = build_openai_auth_request(client, &url, provider, config)
+                .body("{}".to_string())
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let text = response
+                    .text()
+                    .await
+                    .unwrap_or_default()
+                    .chars()
+                    .take(240)
+                    .collect::<String>();
+                let is_compatibility_error = matches!(
+                    status,
+                    reqwest::StatusCode::BAD_REQUEST
+                        | reqwest::StatusCode::NOT_FOUND
+                        | reqwest::StatusCode::METHOD_NOT_ALLOWED
+                        | reqwest::StatusCode::UNPROCESSABLE_ENTITY
+                );
+                if is_compatibility_error {
+                    return Err(TransportCompatibilityError {
+                        provider: provider.to_string(),
+                        details: format!("native assistant thread creation failed ({status}): {text}"),
+                    }
+                    .into());
+                }
+                return Err(check_rate_limit_response(status, provider, &text));
+            }
+            let payload: serde_json::Value = response.json().await?;
+            payload
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| anyhow::anyhow!("native assistant thread creation returned no thread id"))?
+        }
+    };
+
+    let message_url = format!("{base_url}/threads/{thread_id}/messages");
+    let add_message_body = serde_json::json!({
+        "role": "user",
+        "content": user_text,
+    });
+    let add_message_response = build_openai_auth_request(client, &message_url, provider, config)
+        .body(add_message_body.to_string())
+        .send()
+        .await?;
+    if !add_message_response.status().is_success() {
+        let status = add_message_response.status();
+        let text = add_message_response
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(240)
+            .collect::<String>();
+        let is_compatibility_error = matches!(
+            status,
+            reqwest::StatusCode::BAD_REQUEST
+                | reqwest::StatusCode::NOT_FOUND
+                | reqwest::StatusCode::METHOD_NOT_ALLOWED
+                | reqwest::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        if is_compatibility_error {
+            return Err(TransportCompatibilityError {
+                provider: provider.to_string(),
+                details: format!("native assistant message append failed ({status}): {text}"),
+            }
+            .into());
+        }
+        return Err(check_rate_limit_response(status, provider, &text));
+    }
+
+    let run_url = format!("{base_url}/threads/{thread_id}/runs");
+    let run_body = serde_json::json!({
+        "assistant_id": config.assistant_id,
+    });
+    let run_response = build_openai_auth_request(client, &run_url, provider, config)
+        .body(run_body.to_string())
+        .send()
+        .await?;
+    if !run_response.status().is_success() {
+        let status = run_response.status();
+        let text = run_response
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(240)
+            .collect::<String>();
+        let is_compatibility_error = matches!(
+            status,
+            reqwest::StatusCode::BAD_REQUEST
+                | reqwest::StatusCode::NOT_FOUND
+                | reqwest::StatusCode::METHOD_NOT_ALLOWED
+                | reqwest::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        if is_compatibility_error {
+            return Err(TransportCompatibilityError {
+                provider: provider.to_string(),
+                details: format!("native assistant run creation failed ({status}): {text}"),
+            }
+            .into());
+        }
+        return Err(check_rate_limit_response(status, provider, &text));
+    }
+    let run_payload: serde_json::Value = run_response.json().await?;
+    let run_id = run_payload
+        .get("id")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| anyhow::anyhow!("native assistant run creation returned no run id"))?
+        .to_string();
+
+    let mut input_tokens = 0u64;
+    let mut output_tokens = 0u64;
+    let run_status_url = format!("{base_url}/threads/{thread_id}/runs/{run_id}");
+    for _ in 0..180u32 {
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        let status_response = apply_openai_auth_headers(client.get(&run_status_url), provider, config)
+            .send()
+            .await?;
+        if !status_response.status().is_success() {
+            let status = status_response.status();
+            let text = status_response
+                .text()
+                .await
+                .unwrap_or_default()
+                .chars()
+                .take(240)
+                .collect::<String>();
+            return Err(check_rate_limit_response(status, provider, &text));
+        }
+        let run_status: serde_json::Value = status_response.json().await?;
+        if let Some(usage) = run_status.get("usage") {
+            input_tokens = usage
+                .get("prompt_tokens")
+                .or_else(|| usage.get("input_tokens"))
+                .and_then(|value| value.as_u64())
+                .unwrap_or(input_tokens);
+            output_tokens = usage
+                .get("completion_tokens")
+                .or_else(|| usage.get("output_tokens"))
+                .and_then(|value| value.as_u64())
+                .unwrap_or(output_tokens);
+        }
+        match run_status
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+        {
+            "queued" | "in_progress" => continue,
+            "completed" => {
+                let content = fetch_native_assistant_message(
+                    client,
+                    provider,
+                    config,
+                    &base_url,
+                    &thread_id,
+                )
+                .await?;
+                let _ = tx
+                    .send(Ok(CompletionChunk::Done {
+                        content,
+                        reasoning: None,
+                        input_tokens,
+                        output_tokens,
+                        response_id: None,
+                        upstream_thread_id: Some(thread_id),
+                    }))
+                    .await;
+                return Ok(());
+            }
+            "requires_action" => {
+                return Err(anyhow::anyhow!(
+                    "native assistant requires external tool action, which tamux does not proxy yet"
+                ));
+            }
+            "failed" | "cancelled" | "expired" => {
+                let details = run_status
+                    .get("last_error")
+                    .and_then(|value| value.get("message"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("native assistant run failed");
+                return Err(anyhow::anyhow!("{details}"));
+            }
+            other => {
+                return Err(anyhow::anyhow!(
+                    "native assistant run entered unexpected status '{other}'"
+                ));
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "native assistant run timed out while waiting for completion"
+    ))
+}
+
+async fn fetch_native_assistant_message(
+    client: &reqwest::Client,
+    provider: &str,
+    config: &ProviderConfig,
+    base_url: &str,
+    thread_id: &str,
+) -> Result<String> {
+    let url = format!("{base_url}/threads/{thread_id}/messages?order=desc&limit=20");
+    let response = apply_openai_auth_headers(client.get(&url), provider, config)
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(240)
+            .collect::<String>();
+        return Err(check_rate_limit_response(status, provider, &text));
+    }
+    let payload: serde_json::Value = response.json().await?;
+    let data = payload
+        .get("data")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| anyhow::anyhow!("native assistant message list returned no data array"))?;
+    for message in data {
+        if message.get("role").and_then(|value| value.as_str()) != Some("assistant") {
+            continue;
+        }
+        if let Some(content_blocks) = message.get("content").and_then(|value| value.as_array()) {
+            let text = content_blocks
+                .iter()
+                .filter_map(|block| {
+                    block
+                        .get("text")
+                        .and_then(|value| value.get("value").or(Some(value)))
+                        .and_then(|value| value.as_str())
+                        .map(ToOwned::to_owned)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !text.trim().is_empty() {
+                return Ok(text);
+            }
+        }
+        if let Some(text) = message.get("content").and_then(|value| value.as_str()) {
+            if !text.trim().is_empty() {
+                return Ok(text.to_string());
+            }
+        }
+    }
+    Err(anyhow::anyhow!(
+        "native assistant thread did not contain a completed assistant message"
+    ))
+}
+
+async fn run_openai_chat_completions(
     client: &reqwest::Client,
     provider: &str,
     config: &ProviderConfig,
@@ -376,22 +875,7 @@ async fn run_openai_compatible(
         body["reasoning"] = serde_json::json!({ "effort": effort });
     }
 
-    let mut req = client.post(&url).header("Content-Type", "application/json");
-
-    if !config.api_key.is_empty() {
-        let auth_method = get_provider_definition(provider)
-            .map(|d| d.auth_method)
-            .unwrap_or(AuthMethod::Bearer);
-
-        match auth_method {
-            AuthMethod::Bearer => {
-                req = req.header("Authorization", format!("Bearer {}", config.api_key));
-            }
-            AuthMethod::XApiKey => {
-                req = req.header("x-api-key", &config.api_key);
-            }
-        }
-    }
+    let req = build_openai_auth_request(client, &url, provider, config);
 
     let response = req.body(body.to_string()).send().await?;
 
@@ -408,6 +892,120 @@ async fn run_openai_compatible(
     }
 
     parse_openai_sse(response, tx).await
+}
+
+fn messages_to_responses_input(messages: &[ApiMessage]) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .filter_map(|message| match message.role.as_str() {
+            "user" | "assistant" => Some(serde_json::json!({
+                "role": message.role,
+                "content": match &message.content {
+                    ApiContent::Text(text) => serde_json::Value::String(text.clone()),
+                    ApiContent::Blocks(blocks) => serde_json::Value::Array(blocks.clone()),
+                }
+            })),
+            "tool" => message.tool_call_id.as_ref().map(|call_id| {
+                serde_json::json!({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": match &message.content {
+                        ApiContent::Text(text) => serde_json::Value::String(text.clone()),
+                        ApiContent::Blocks(blocks) => serde_json::Value::Array(blocks.clone()),
+                    }
+                })
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn run_openai_responses(
+    client: &reqwest::Client,
+    provider: &str,
+    config: &ProviderConfig,
+    system_prompt: &str,
+    messages: &[ApiMessage],
+    tools: &[ToolDefinition],
+    previous_response_id: Option<&str>,
+    tx: &mpsc::Sender<Result<CompletionChunk>>,
+) -> Result<()> {
+    let url = build_responses_url(&config.base_url);
+    let mut body = serde_json::json!({
+        "model": config.model,
+        "instructions": system_prompt,
+        "input": messages_to_responses_input(messages),
+        "stream": true,
+    });
+
+    if let Some(previous_response_id) = previous_response_id.filter(|value| !value.trim().is_empty())
+    {
+        body["previous_response_id"] =
+            serde_json::Value::String(previous_response_id.to_string());
+    }
+
+    if !tools.is_empty() {
+        body["tools"] = serde_json::Value::Array(
+            tools
+                .iter()
+                .map(|tool| {
+                    serde_json::json!({
+                        "type": tool.tool_type,
+                        "name": tool.function.name,
+                        "description": tool.function.description,
+                        "parameters": tool.function.parameters,
+                    })
+                })
+                .collect(),
+        );
+    }
+
+    if let Some(ref schema) = config.response_schema {
+        body["text"] = serde_json::json!({
+            "format": {
+                "type": "json_schema",
+                "name": "structured_output",
+                "strict": true,
+                "schema": schema,
+            }
+        });
+    }
+
+    if let Some(effort) = normalize_reasoning_effort(&config.reasoning_effort) {
+        body["reasoning"] = serde_json::json!({ "effort": effort });
+    }
+
+    let req = build_openai_auth_request(client, &url, provider, config);
+    let response = req.body(body.to_string()).send().await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(240)
+            .collect::<String>();
+        let is_compatibility_error = matches!(
+            status,
+            reqwest::StatusCode::BAD_REQUEST
+                | reqwest::StatusCode::NOT_FOUND
+                | reqwest::StatusCode::METHOD_NOT_ALLOWED
+                | reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
+                | reqwest::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        if is_compatibility_error {
+            return Err(TransportCompatibilityError {
+                provider: provider.to_string(),
+                details: format!("Responses API rejected the request ({status}): {text}"),
+            }
+            .into());
+        }
+        return Err(check_rate_limit_response(status, provider, &text));
+    }
+
+    parse_openai_responses_sse(response, provider, tx).await
 }
 
 async fn parse_openai_sse(
@@ -459,6 +1057,8 @@ async fn parse_openai_sse(
                             },
                             input_tokens: Some(input_tokens),
                             output_tokens: Some(output_tokens),
+                            response_id: None,
+                            upstream_thread_id: None,
                         }))
                         .await;
                 } else {
@@ -472,6 +1072,8 @@ async fn parse_openai_sse(
                             },
                             input_tokens,
                             output_tokens,
+                            response_id: None,
+                            upstream_thread_id: None,
                         }))
                         .await;
                 }
@@ -571,6 +1173,8 @@ async fn parse_openai_sse(
                 },
                 input_tokens: Some(input_tokens),
                 output_tokens: Some(output_tokens),
+                response_id: None,
+                upstream_thread_id: None,
             }))
             .await;
     } else {
@@ -584,6 +1188,260 @@ async fn parse_openai_sse(
                 },
                 input_tokens,
                 output_tokens,
+                response_id: None,
+                upstream_thread_id: None,
+            }))
+            .await;
+    }
+
+    Ok(())
+}
+
+async fn parse_openai_responses_sse(
+    response: reqwest::Response,
+    provider: &str,
+    tx: &mpsc::Sender<Result<CompletionChunk>>,
+) -> Result<()> {
+    use futures::StreamExt;
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+    let mut total_content = String::new();
+    let mut total_reasoning = String::new();
+    let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
+    let mut input_tokens: u64 = 0;
+    let mut output_tokens: u64 = 0;
+    let mut response_id: Option<String> = None;
+    let mut saw_any_json = false;
+    let mut saw_responses_event = false;
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.context("failed to read Responses SSE chunk")?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        let mut remaining = String::new();
+        for line in buffer.split('\n') {
+            if !line.starts_with("data: ") {
+                if !line.is_empty() && !line.starts_with(':') && !line.starts_with("event:") {
+                    remaining.push_str(line);
+                    remaining.push('\n');
+                }
+                continue;
+            }
+
+            let data = line[6..].trim();
+            if data.is_empty() || data == "[DONE]" {
+                continue;
+            }
+
+            let parsed: serde_json::Value = match serde_json::from_str(data) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            saw_any_json = true;
+
+            if parsed.get("choices").is_some() {
+                return Err(TransportCompatibilityError {
+                    provider: provider.to_string(),
+                    details: "endpoint returned Chat Completions events for a Responses request"
+                        .to_string(),
+                }
+                .into());
+            }
+
+            let event_type = parsed
+                .get("type")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            if event_type.starts_with("response.") || event_type == "error" {
+                saw_responses_event = true;
+            }
+
+            match event_type {
+                "response.created" => {
+                    response_id = parsed
+                        .pointer("/response/id")
+                        .and_then(|value| value.as_str())
+                        .map(ToOwned::to_owned);
+                }
+                "response.output_text.delta" => {
+                    if let Some(delta) = parsed.get("delta").and_then(|value| value.as_str()) {
+                        total_content.push_str(delta);
+                        let _ = tx
+                            .send(Ok(CompletionChunk::Delta {
+                                content: delta.to_string(),
+                                reasoning: None,
+                            }))
+                            .await;
+                    }
+                }
+                "response.reasoning_summary_text.delta" => {
+                    if let Some(delta) = parsed.get("delta").and_then(|value| value.as_str()) {
+                        total_reasoning.push_str(delta);
+                        let _ = tx
+                            .send(Ok(CompletionChunk::Delta {
+                                content: String::new(),
+                                reasoning: Some(delta.to_string()),
+                            }))
+                            .await;
+                    }
+                }
+                "response.output_item.added" | "response.output_item.done" => {
+                    let output_index = parsed
+                        .get("output_index")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0) as u32;
+                    if let Some(item) = parsed.get("item") {
+                        if item.get("type").and_then(|value| value.as_str())
+                            == Some("function_call")
+                        {
+                            let entry = pending_tool_calls
+                                .entry(output_index)
+                                .or_insert_with(|| PendingToolCall {
+                                    id: String::new(),
+                                    name: String::new(),
+                                    arguments: String::new(),
+                                });
+                            if let Some(call_id) =
+                                item.get("call_id").and_then(|value| value.as_str())
+                            {
+                                entry.id = call_id.to_string();
+                            }
+                            if let Some(name) = item.get("name").and_then(|value| value.as_str()) {
+                                entry.name = name.to_string();
+                            }
+                            if let Some(arguments) =
+                                item.get("arguments").and_then(|value| value.as_str())
+                            {
+                                entry.arguments = arguments.to_string();
+                            }
+                        }
+                    }
+                }
+                "response.function_call_arguments.delta" => {
+                    let output_index = parsed
+                        .get("output_index")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0) as u32;
+                    if let Some(delta) = parsed.get("delta").and_then(|value| value.as_str()) {
+                        let entry = pending_tool_calls
+                            .entry(output_index)
+                            .or_insert_with(|| PendingToolCall {
+                                id: String::new(),
+                                name: String::new(),
+                                arguments: String::new(),
+                            });
+                        entry.arguments.push_str(delta);
+                    }
+                }
+                "response.completed" | "response.incomplete" => {
+                    if let Some(usage) = parsed.pointer("/response/usage") {
+                        input_tokens = usage
+                            .get("input_tokens")
+                            .and_then(|value| value.as_u64())
+                            .unwrap_or(input_tokens);
+                        output_tokens = usage
+                            .get("output_tokens")
+                            .and_then(|value| value.as_u64())
+                            .unwrap_or(output_tokens);
+                    }
+
+                    if !pending_tool_calls.is_empty() {
+                        let tool_calls = drain_tool_calls(&mut pending_tool_calls);
+                        let _ = tx
+                            .send(Ok(CompletionChunk::ToolCalls {
+                                tool_calls,
+                                content: if total_content.is_empty() {
+                                    None
+                                } else {
+                                    Some(total_content.clone())
+                                },
+                                reasoning: if total_reasoning.is_empty() {
+                                    None
+                                } else {
+                                    Some(total_reasoning.clone())
+                                },
+                                input_tokens: Some(input_tokens),
+                                output_tokens: Some(output_tokens),
+                                response_id: response_id.clone(),
+                                upstream_thread_id: None,
+                            }))
+                            .await;
+                    } else {
+                        let _ = tx
+                            .send(Ok(CompletionChunk::Done {
+                                content: total_content.clone(),
+                                reasoning: if total_reasoning.is_empty() {
+                                    None
+                                } else {
+                                    Some(total_reasoning.clone())
+                                },
+                                input_tokens,
+                                output_tokens,
+                                response_id: response_id.clone(),
+                                upstream_thread_id: None,
+                            }))
+                            .await;
+                    }
+                    return Ok(());
+                }
+                "error" => {
+                    let message = parsed
+                        .get("message")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("Responses API error")
+                        .to_string();
+                    let _ = tx.send(Ok(CompletionChunk::Error { message })).await;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+        buffer = remaining;
+    }
+
+    if saw_any_json && !saw_responses_event {
+        return Err(TransportCompatibilityError {
+            provider: provider.to_string(),
+            details: "stream did not contain recognizable Responses API events".to_string(),
+        }
+        .into());
+    }
+
+    if !pending_tool_calls.is_empty() {
+        let tool_calls = drain_tool_calls(&mut pending_tool_calls);
+        let _ = tx
+            .send(Ok(CompletionChunk::ToolCalls {
+                tool_calls,
+                content: if total_content.is_empty() {
+                    None
+                } else {
+                    Some(total_content)
+                },
+                reasoning: if total_reasoning.is_empty() {
+                    None
+                } else {
+                    Some(total_reasoning)
+                },
+                input_tokens: Some(input_tokens),
+                output_tokens: Some(output_tokens),
+                response_id,
+                upstream_thread_id: None,
+            }))
+            .await;
+    } else {
+        let _ = tx
+            .send(Ok(CompletionChunk::Done {
+                content: total_content,
+                reasoning: if total_reasoning.is_empty() {
+                    None
+                } else {
+                    Some(total_reasoning)
+                },
+                input_tokens,
+                output_tokens,
+                response_id,
+                upstream_thread_id: None,
             }))
             .await;
     }
@@ -623,6 +1481,35 @@ async fn run_anthropic(
                         _ => "",
                     }
                 }])
+            } else if m.role == "assistant" && m.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty()) {
+                let mut blocks = Vec::new();
+                if let ApiContent::Text(text) = &m.content {
+                    if !text.is_empty() {
+                        blocks.push(serde_json::json!({
+                            "type": "text",
+                            "text": text,
+                        }));
+                    }
+                }
+                if let Some(tool_calls) = &m.tool_calls {
+                    for tool_call in tool_calls {
+                        let input = serde_json::from_str::<serde_json::Value>(
+                            &tool_call.function.arguments,
+                        )
+                        .unwrap_or_else(|_| {
+                            serde_json::json!({
+                                "_raw_arguments": tool_call.function.arguments,
+                            })
+                        });
+                        blocks.push(serde_json::json!({
+                            "type": "tool_use",
+                            "id": tool_call.id,
+                            "name": tool_call.function.name,
+                            "input": input,
+                        }));
+                    }
+                }
+                serde_json::Value::Array(blocks)
             } else {
                 match &m.content {
                     ApiContent::Text(t) => serde_json::json!(t),
@@ -876,6 +1763,8 @@ async fn parse_anthropic_sse(
                                 reasoning: final_reasoning,
                                 input_tokens: Some(input_tokens),
                                 output_tokens: Some(output_tokens),
+                                response_id: None,
+                                upstream_thread_id: None,
                             }))
                             .await;
                     } else {
@@ -885,6 +1774,8 @@ async fn parse_anthropic_sse(
                                 reasoning: final_reasoning,
                                 input_tokens,
                                 output_tokens,
+                                response_id: None,
+                                upstream_thread_id: None,
                             }))
                             .await;
                     }
@@ -907,6 +1798,8 @@ async fn parse_anthropic_sse(
             },
             input_tokens,
             output_tokens,
+            response_id: None,
+            upstream_thread_id: None,
         }))
         .await;
 

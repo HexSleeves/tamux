@@ -32,6 +32,12 @@ impl TuiModel {
         } else {
             self.width
         };
+        let chat_area = Rect::new(
+            0,
+            body_start_row,
+            sidebar_start_col,
+            input_start_row.saturating_sub(body_start_row),
+        );
 
         let cursor_in_body = mouse.row >= body_start_row && mouse.row < input_start_row;
         let cursor_in_sidebar = show_sidebar && cursor_in_body && mouse.column >= sidebar_start_col;
@@ -43,6 +49,14 @@ impl TuiModel {
             MouseEventKind::ScrollUp => {
                 if cursor_in_chat {
                     self.chat.reduce(chat::ChatAction::ScrollChat(3));
+                    if self.chat_drag_anchor.is_some() {
+                        self.chat_drag_current = widgets::chat::selection_point_from_mouse(
+                            chat_area,
+                            &self.chat,
+                            &self.theme,
+                            Position::new(mouse.column, mouse.row),
+                        );
+                    }
                 } else if cursor_in_sidebar {
                     self.sidebar.reduce(sidebar::SidebarAction::Scroll(3));
                 } else if cursor_in_input {
@@ -54,6 +68,14 @@ impl TuiModel {
             MouseEventKind::ScrollDown => {
                 if cursor_in_chat {
                     self.chat.reduce(chat::ChatAction::ScrollChat(-3));
+                    if self.chat_drag_anchor.is_some() {
+                        self.chat_drag_current = widgets::chat::selection_point_from_mouse(
+                            chat_area,
+                            &self.chat,
+                            &self.theme,
+                            Position::new(mouse.column, mouse.row),
+                        );
+                    }
                 } else if cursor_in_sidebar {
                     self.sidebar.reduce(sidebar::SidebarAction::Scroll(-3));
                 } else if cursor_in_input {
@@ -65,9 +87,14 @@ impl TuiModel {
             MouseEventKind::Down(MouseButton::Left) => {
                 if cursor_in_chat {
                     self.focus = FocusArea::Chat;
-                    let pos = Position::new(mouse.column, mouse.row);
-                    self.chat_drag_anchor = Some(pos);
-                    self.chat_drag_current = Some(pos);
+                    let pos = widgets::chat::selection_point_from_mouse(
+                        chat_area,
+                        &self.chat,
+                        &self.theme,
+                        Position::new(mouse.column, mouse.row),
+                    );
+                    self.chat_drag_anchor = pos;
+                    self.chat_drag_current = pos;
                 } else if cursor_in_sidebar {
                     self.clear_chat_drag_selection();
                     self.focus = FocusArea::Sidebar;
@@ -89,22 +116,38 @@ impl TuiModel {
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if self.chat_drag_anchor.is_some() {
-                    self.chat_drag_current = Some(Position::new(mouse.column, mouse.row));
+                    if mouse.row <= chat_area.y.saturating_add(1) {
+                        self.chat.reduce(chat::ChatAction::ScrollChat(1));
+                    } else if mouse.row
+                        >= chat_area
+                            .y
+                            .saturating_add(chat_area.height)
+                            .saturating_sub(2)
+                    {
+                        self.chat.reduce(chat::ChatAction::ScrollChat(-1));
+                    }
+                    self.chat_drag_current = widgets::chat::selection_point_from_mouse(
+                        chat_area,
+                        &self.chat,
+                        &self.theme,
+                        Position::new(mouse.column, mouse.row),
+                    );
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                let chat_area = Rect::new(
-                    0,
-                    body_start_row,
-                    sidebar_start_col,
-                    input_start_row.saturating_sub(body_start_row),
-                );
-
                 if let Some(anchor) = self.chat_drag_anchor.take() {
                     let current = self
                         .chat_drag_current
                         .take()
-                        .unwrap_or(Position::new(mouse.column, mouse.row));
+                        .or_else(|| {
+                            widgets::chat::selection_point_from_mouse(
+                                chat_area,
+                                &self.chat,
+                                &self.theme,
+                                Position::new(mouse.column, mouse.row),
+                            )
+                        })
+                        .unwrap_or(anchor);
 
                     if anchor != current {
                         if let Some(text) = widgets::chat::selected_text(
@@ -138,26 +181,6 @@ impl TuiModel {
         self.chat_drag_current = None;
     }
 
-    fn byte_len_for_display_width(text: &str, max_width: usize) -> usize {
-        use unicode_width::UnicodeWidthChar;
-
-        if max_width == 0 {
-            return 0;
-        }
-
-        let mut used = 0usize;
-        let mut end = 0usize;
-        for (idx, ch) in text.char_indices() {
-            let width = UnicodeWidthChar::width(ch).unwrap_or(0);
-            if used + width > max_width {
-                return if end == 0 { idx + ch.len_utf8() } else { end };
-            }
-            used += width;
-            end = idx + ch.len_utf8();
-        }
-        text.len()
-    }
-
     fn byte_offset_for_display_col(text: &str, target_col: usize) -> usize {
         use unicode_width::UnicodeWidthChar;
 
@@ -173,62 +196,43 @@ impl TuiModel {
     }
 
     fn input_offset_from_mouse(&self, input_start_row: u16, mouse: MouseEvent) -> Option<usize> {
-        let inner_width = self.width.saturating_sub(2) as usize;
+        let inner_width = self.width.saturating_sub(4) as usize;
         if inner_width == 0 {
             return Some(0);
         }
 
         let inner_row = mouse.row.saturating_sub(input_start_row + 1) as usize;
-        let inner_col = mouse.column.saturating_sub(1) as usize;
+        let inner_col = mouse.column.saturating_sub(2) as usize;
         let attachment_rows = self.attachments.len();
         if inner_row < attachment_rows {
             return None;
         }
 
         let target_visual_row = inner_row - attachment_rows;
-        let buffer = self.input.buffer();
-        if buffer.is_empty() {
+        let wrapped = self.input.wrapped_display_buffer(inner_width);
+        if wrapped.is_empty() {
             return Some(0);
         }
 
-        let mut visual_row = 0usize;
-        let mut buffer_offset = 0usize;
-        for (line_idx, line) in buffer.split('\n').enumerate() {
-            let mut remaining = line;
-            let mut line_offset = 0usize;
-            let mut prefix_width = if line_idx == 0 { 4 } else { 3 };
-
-            loop {
-                let available_width = inner_width.saturating_sub(prefix_width).max(1);
-                let segment_len = Self::byte_len_for_display_width(remaining, available_width);
-                let segment = &remaining[..segment_len];
-
-                if visual_row == target_visual_row {
-                    let content_col = inner_col.saturating_sub(prefix_width);
-                    let capped_col = content_col.min(available_width);
-                    let byte_in_segment = Self::byte_offset_for_display_col(segment, capped_col);
-                    return Some(buffer_offset + line_offset + byte_in_segment);
-                }
-
-                visual_row += 1;
-                if segment_len >= remaining.len() {
-                    break;
-                }
-
-                line_offset += segment_len;
-                remaining = &remaining[segment_len..];
-                prefix_width = 0;
+        let mut wrapped_offset = 0usize;
+        for (row_idx, line) in wrapped.split('\n').enumerate() {
+            if row_idx == target_visual_row {
+                let capped_col = inner_col.min(inner_width);
+                let byte_in_line = Self::byte_offset_for_display_col(line, capped_col);
+                return Some(
+                    self.input
+                        .wrapped_display_offset_to_buffer_offset(wrapped_offset + byte_in_line, inner_width),
+                );
             }
-
-            buffer_offset += line.len() + 1;
+            wrapped_offset += line.len() + 1;
         }
 
-        Some(buffer.len())
+        Some(self.input.buffer().len())
     }
 
     fn handle_chat_click(&mut self, chat_area: Rect, mouse: Position) {
         match widgets::chat::hit_test(chat_area, &self.chat, &self.theme, mouse) {
-            Some(chat::ChatHitTarget::Message(idx)) => self.chat.select_message(Some(idx)),
+            Some(chat::ChatHitTarget::Message(idx)) => self.chat.toggle_message_selection(idx),
             Some(chat::ChatHitTarget::ReasoningToggle(idx)) => {
                 self.chat.select_message(Some(idx));
                 self.chat.toggle_reasoning(idx);
@@ -276,6 +280,13 @@ impl TuiModel {
                         | modal::ModalKind::EffortPicker
                 ) {
                     self.modal.reduce(modal::ModalAction::Pop);
+                }
+            }
+            MouseEventKind::Down(MouseButton::Right) if inside => {
+                if let Ok(text) = arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
+                    if !text.is_empty() {
+                        self.handle_paste(text);
+                    }
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => match kind {

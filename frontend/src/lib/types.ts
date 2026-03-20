@@ -208,6 +208,9 @@ export interface AmuxSettings {
   sandboxEnabled: boolean;
   sandboxNetworkEnabled: boolean;
   snapshotBackend: "tar" | "zfs" | "btrfs";
+  snapshotMaxCount: number;
+  snapshotMaxSizeMb: number;
+  snapshotAutoCleanup: boolean;
   wormIntegrityEnabled: boolean;
   cerbosEndpoint: string;
   mcpServersJson: string;
@@ -262,6 +265,9 @@ export const DEFAULT_SETTINGS: AmuxSettings = {
   sandboxEnabled: false,
   sandboxNetworkEnabled: true,
   snapshotBackend: "tar",
+  snapshotMaxCount: 10,
+  snapshotMaxSizeMb: 51200,
+  snapshotAutoCleanup: true,
   wormIntegrityEnabled: true,
   cerbosEndpoint: "",
   mcpServersJson: "{\n  \"tamux\": {\n    \"command\": \"tamux-mcp\"\n  }\n}",

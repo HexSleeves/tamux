@@ -191,6 +191,18 @@ export function BehaviorTab({
                         options={["tar", "zfs", "btrfs"]}
                         onChange={(value) => updateSetting("snapshotBackend", value as "tar" | "zfs" | "btrfs")} />
                 </SettingRow>
+                <SettingRow label="Snapshot Max Count">
+                    <NumberInput value={settings.snapshotMaxCount} min={1} max={1000}
+                        onChange={(value) => updateSetting("snapshotMaxCount", Math.max(1, Math.floor(value)))} />
+                </SettingRow>
+                <SettingRow label="Snapshot Max Size (MB)">
+                    <NumberInput value={settings.snapshotMaxSizeMb} min={1024} max={500000} step={1024}
+                        onChange={(value) => updateSetting("snapshotMaxSizeMb", Math.max(1024, Math.floor(value)))} />
+                </SettingRow>
+                <SettingRow label="Snapshot Auto Cleanup">
+                    <Toggle value={settings.snapshotAutoCleanup}
+                        onChange={(value) => updateSetting("snapshotAutoCleanup", value)} />
+                </SettingRow>
                 <SettingRow label="WORM Integrity Checks">
                     <Toggle value={settings.wormIntegrityEnabled}
                         onChange={(value) => updateSetting("wormIntegrityEnabled", value)} />

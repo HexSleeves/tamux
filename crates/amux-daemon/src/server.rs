@@ -991,7 +991,6 @@ where
                     context_messages_json,
                 } => {
                     let agent = agent.clone();
-                    let event_tx = agent.event_sender();
                     tokio::spawn(async move {
                         // If thread_id is None but we have context, generate a stable
                         // thread ID so seeding and sending use the same thread.
@@ -1030,10 +1029,7 @@ where
                             )
                             .await
                         {
-                            let _ = event_tx.send(crate::agent::types::AgentEvent::Error {
-                                thread_id: thread_id.unwrap_or_default(),
-                                message: e.to_string(),
-                            });
+                            tracing::warn!(error = %e, "agent send_message_with_session failed");
                         }
                     });
                 }

@@ -309,8 +309,8 @@ impl HistoryStore {
         let connection = self.open_connection()?;
         connection.execute(
             "INSERT OR REPLACE INTO agent_threads \
-             (id, workspace_id, surface_id, pane_id, agent_name, title, created_at, updated_at, message_count, total_tokens, last_preview) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             (id, workspace_id, surface_id, pane_id, agent_name, title, created_at, updated_at, message_count, total_tokens, last_preview, metadata_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 thread.id,
                 thread.workspace_id,
@@ -323,6 +323,7 @@ impl HistoryStore {
                 thread.message_count,
                 thread.total_tokens,
                 thread.last_preview,
+                thread.metadata_json,
             ],
         )?;
         Ok(())
@@ -337,7 +338,7 @@ impl HistoryStore {
     pub fn list_threads(&self) -> Result<Vec<AgentDbThread>> {
         let connection = self.open_connection()?;
         let mut stmt = connection.prepare(
-            "SELECT id, workspace_id, surface_id, pane_id, agent_name, title, created_at, updated_at, message_count, total_tokens, last_preview \
+            "SELECT id, workspace_id, surface_id, pane_id, agent_name, title, created_at, updated_at, message_count, total_tokens, last_preview, metadata_json \
              FROM agent_threads ORDER BY updated_at DESC",
         )?;
         let rows = stmt.query_map([], map_agent_thread)?;
@@ -348,7 +349,7 @@ impl HistoryStore {
         let connection = self.open_connection()?;
         connection
             .query_row(
-                "SELECT id, workspace_id, surface_id, pane_id, agent_name, title, created_at, updated_at, message_count, total_tokens, last_preview \
+                "SELECT id, workspace_id, surface_id, pane_id, agent_name, title, created_at, updated_at, message_count, total_tokens, last_preview, metadata_json \
                  FROM agent_threads WHERE id = ?1",
                 params![id],
                 map_agent_thread,
@@ -541,7 +542,7 @@ impl HistoryStore {
         let connection = self.open_connection()?;
         let sql = if workspace_id.is_some() {
             "SELECT snapshot_id, workspace_id, session_id, kind, label, path, created_at, details_json \
-             FROM snapshot_index WHERE workspace_id = ?1 ORDER BY created_at DESC"
+             FROM snapshot_index WHERE workspace_id = ?1 OR workspace_id IS NULL ORDER BY created_at DESC"
         } else {
             "SELECT snapshot_id, workspace_id, session_id, kind, label, path, created_at, details_json \
              FROM snapshot_index ORDER BY created_at DESC"
@@ -1084,7 +1085,8 @@ impl HistoryStore {
                 updated_at     INTEGER NOT NULL,
                 message_count  INTEGER NOT NULL DEFAULT 0,
                 total_tokens   INTEGER NOT NULL DEFAULT 0,
-                last_preview   TEXT NOT NULL DEFAULT ''
+                last_preview   TEXT NOT NULL DEFAULT '',
+                metadata_json  TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_threads_updated ON agent_threads(updated_at DESC);
             CREATE TABLE IF NOT EXISTS agent_messages (
@@ -1252,6 +1254,7 @@ impl HistoryStore {
             ",
         )?;
         ensure_column(&connection, "agent_tasks", "session_id", "TEXT")?;
+        ensure_column(&connection, "agent_threads", "metadata_json", "TEXT")?;
         ensure_column(&connection, "agent_tasks", "scheduled_at", "INTEGER")?;
         ensure_column(&connection, "agent_tasks", "goal_run_id", "TEXT")?;
         ensure_column(&connection, "agent_tasks", "goal_run_title", "TEXT")?;
@@ -1424,6 +1427,7 @@ fn map_agent_thread(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentDbThread> 
         message_count: row.get(8)?,
         total_tokens: row.get(9)?,
         last_preview: row.get(10)?,
+        metadata_json: row.get(11)?,
     })
 }
 

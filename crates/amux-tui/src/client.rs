@@ -76,6 +76,11 @@ pub enum ClientEvent {
         tps: Option<f64>,
         generation_ms: Option<u64>,
     },
+    WorkflowNotice {
+        kind: String,
+        message: String,
+        details: Option<String>,
+    },
 
     Error(String),
 }
@@ -463,6 +468,15 @@ impl DaemonClient {
                         get_string(&event, "message")
                             .unwrap_or_else(|| "Unknown agent error".to_string()),
                     ))
+                    .await;
+            }
+            "workflow_notice" => {
+                let _ = event_tx
+                    .send(ClientEvent::WorkflowNotice {
+                        kind: get_string(&event, "kind").unwrap_or_default(),
+                        message: get_string(&event, "message").unwrap_or_default(),
+                        details: get_string(&event, "details"),
+                    })
                     .await;
             }
             "task_update" => {

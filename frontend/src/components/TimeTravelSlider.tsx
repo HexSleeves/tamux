@@ -6,6 +6,17 @@ import { TimeTravelContent } from "./time-travel-slider/TimeTravelContent";
 import { TimeTravelHeader } from "./time-travel-slider/TimeTravelHeader";
 import type { SnapshotEntry, TimeTravelSliderProps } from "./time-travel-slider/shared";
 
+function toSnapshotEntry(snapshot: any): SnapshotEntry {
+  return {
+    snapshot_id: snapshot.snapshotId ?? snapshot.snapshot_id,
+    label: snapshot.label ?? `Snapshot ${String(snapshot.snapshotId ?? snapshot.snapshot_id ?? "").slice(0, 8)}`,
+    command: snapshot.command ?? null,
+    created_at: snapshot.createdAt ?? snapshot.created_at ?? Date.now(),
+    status: snapshot.status ?? "ready",
+    workspace_id: snapshot.workspaceId ?? snapshot.workspace_id ?? null,
+  };
+}
+
 /**
  * Time-Travel Scrubbing Slider — floating toolbar for browsing
  * and restoring daemon-side workspace snapshots.
@@ -14,13 +25,30 @@ export function TimeTravelSlider({ style, className }: TimeTravelSliderProps = {
   const open = useWorkspaceStore((s) => s.timeTravelOpen);
   const toggle = useWorkspaceStore((s) => s.toggleTimeTravel);
   const activePaneId = useWorkspaceStore((s) => s.activePaneId());
-  const activeWorkspace = useWorkspaceStore((s) => s.activeWorkspace());
   const missionSnapshots = useAgentMissionStore((s) => s.snapshots);
 
   const [snapshots, setSnapshots] = useState<SnapshotEntry[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isRestoring, setIsRestoring] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState(false);
+
+  const refreshSnapshots = useCallback(async () => {
+    const controller = getTerminalController(activePaneId);
+    try {
+      if (controller) {
+        const ok = await controller.listSnapshots(null);
+        if (ok) return;
+      }
+    } catch {
+      // Fall back to the persisted snapshot index when no live pane bridge exists.
+    }
+
+    const amux = (window as any).tamux ?? (window as any).amux;
+    const rows = await amux?.dbListSnapshotIndex?.(null);
+    if (Array.isArray(rows)) {
+      setSnapshots(rows.map((snapshot: any) => toSnapshotEntry(snapshot)));
+    }
+  }, [activePaneId]);
 
   // Fetch snapshots from daemon when panel opens
   useEffect(() => {
@@ -29,25 +57,13 @@ export function TimeTravelSlider({ style, className }: TimeTravelSliderProps = {
     // Use mission store snapshots if available
     if (missionSnapshots.length > 0) {
       setSnapshots(
-        missionSnapshots.map((s) => ({
-          snapshot_id: s.snapshotId,
-          label: s.label ?? `Snapshot ${s.snapshotId.slice(0, 8)}`,
-          command: s.command ?? null,
-          created_at: s.createdAt,
-          status: s.status ?? "ready",
-          workspace_id: s.workspaceId ?? null,
-        }))
+        missionSnapshots.map((s) => toSnapshotEntry(s))
       );
       setSelectedIndex(0);
-      return;
+    } else {
+      void refreshSnapshots();
     }
-
-    // Otherwise request from daemon
-    const controller = getTerminalController(activePaneId);
-    if (controller) {
-      controller.listSnapshots(activeWorkspace?.id ?? null);
-    }
-  }, [open, activePaneId, activeWorkspace?.id, missionSnapshots]);
+  }, [open, missionSnapshots, refreshSnapshots]);
 
   const handleRestore = useCallback(async () => {
     const target = snapshots[selectedIndex];
@@ -80,9 +96,10 @@ export function TimeTravelSlider({ style, className }: TimeTravelSliderProps = {
   return (
     <div
       style={{
-        position: "absolute",
+        position: "fixed",
         bottom: 12,
         left: "50%",
+        transform: "translateX(-50%)",
         zIndex: 200,
         minWidth: 520,
         maxWidth: 720,
@@ -96,7 +113,13 @@ export function TimeTravelSlider({ style, className }: TimeTravelSliderProps = {
       }}
       className={className ? `amux-shell-card ${className}` : "amux-shell-card"}
     >
-      <TimeTravelHeader snapshotCount={snapshots.length} toggle={toggle} />
+      <TimeTravelHeader
+        snapshotCount={snapshots.length}
+        onRefresh={() => {
+          void refreshSnapshots();
+        }}
+        toggle={toggle}
+      />
       <TimeTravelContent
         snapshots={snapshots}
         selectedIndex={selectedIndex}

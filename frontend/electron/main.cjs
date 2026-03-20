@@ -1379,6 +1379,21 @@ function getBridgeForPane(paneId) {
     return bridge;
 }
 
+function getBridgeForSnapshotAction(paneId) {
+    const requested = paneId ? terminalBridges.get(paneId) : null;
+    if (requested && !requested.process.killed && requested.process.stdin.writable) {
+        return requested;
+    }
+
+    for (const bridge of terminalBridges.values()) {
+        if (bridge && !bridge.process.killed && bridge.process.stdin.writable) {
+            return bridge;
+        }
+    }
+
+    throw new Error(`terminal bridge not found for pane ${paneId}`);
+}
+
 function closeBridgeStdin(bridge) {
     if (!bridge || bridge.process.killed || bridge.process.stdin.destroyed) return;
     if (bridge.process.stdin.writableEnded) return;
@@ -2579,13 +2594,13 @@ function findManagedSymbol(_event, paneId, workspaceRoot, symbol, limit) {
 }
 
 function listSnapshots(_event, paneId, workspaceId) {
-    const bridge = getBridgeForPane(paneId);
+    const bridge = getBridgeForSnapshotAction(paneId);
     sendBridgeCommand(bridge, { type: 'list-snapshots', workspace_id: workspaceId ?? null });
     return true;
 }
 
 function restoreSnapshot(_event, paneId, snapshotId) {
-    const bridge = getBridgeForPane(paneId);
+    const bridge = getBridgeForSnapshotAction(paneId);
     sendBridgeCommand(bridge, { type: 'restore-snapshot', snapshot_id: snapshotId });
     return true;
 }

@@ -30,7 +30,7 @@ use crate::history::HistoryStore;
 use crate::session_manager::SessionManager;
 
 use self::llm_client::{
-    messages_to_api_format, send_chat_completion, ApiContent, ApiMessage, RetryStrategy,
+    messages_to_api_format, send_completion_request, ApiContent, ApiMessage, RetryStrategy,
 };
 use self::tool_executor::{execute_tool, get_available_tools};
 use self::types::*;
@@ -50,6 +50,105 @@ const ONECONTEXT_BOOTSTRAP_QUERY_MAX_CHARS: usize = 180;
 const ONECONTEXT_BOOTSTRAP_OUTPUT_MAX_CHARS: usize = 5000;
 const MIN_CONTEXT_TARGET_TOKENS: usize = 1024;
 const APPROX_CHARS_PER_TOKEN: usize = 4;
+
+struct ParsedMessageMetadata {
+    tool_call_id: Option<String>,
+    tool_name: Option<String>,
+    tool_arguments: Option<String>,
+    tool_status: Option<String>,
+    api_transport: Option<ApiTransport>,
+    response_id: Option<String>,
+}
+
+struct ParsedThreadMetadata {
+    upstream_thread_id: Option<String>,
+    upstream_transport: Option<ApiTransport>,
+    upstream_provider: Option<String>,
+    upstream_model: Option<String>,
+    upstream_assistant_id: Option<String>,
+}
+
+fn parse_message_metadata(metadata_json: Option<&str>) -> ParsedMessageMetadata {
+    let metadata = metadata_json.and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok());
+    let get_str = |keys: &[&str]| -> Option<String> {
+        metadata.as_ref().and_then(|value| {
+            keys.iter()
+                .find_map(|key| value.get(*key).and_then(|entry| entry.as_str()))
+                .map(ToOwned::to_owned)
+        })
+    };
+    let api_transport = metadata
+        .as_ref()
+        .and_then(|value| value.get("api_transport").or_else(|| value.get("apiTransport")))
+        .and_then(|value| serde_json::from_value::<ApiTransport>(value.clone()).ok());
+
+    ParsedMessageMetadata {
+        tool_call_id: get_str(&["tool_call_id", "toolCallId"]),
+        tool_name: get_str(&["tool_name", "toolName"]),
+        tool_arguments: get_str(&["tool_arguments", "toolArguments"]),
+        tool_status: get_str(&["tool_status", "toolStatus"]),
+        api_transport,
+        response_id: get_str(&["response_id", "responseId"]),
+    }
+}
+
+fn parse_thread_metadata(metadata_json: Option<&str>) -> ParsedThreadMetadata {
+    let metadata =
+        metadata_json.and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok());
+    let get_str = |keys: &[&str]| -> Option<String> {
+        metadata.as_ref().and_then(|value| {
+            keys.iter()
+                .find_map(|key| value.get(*key).and_then(|entry| entry.as_str()))
+                .map(ToOwned::to_owned)
+        })
+    };
+    let upstream_transport = metadata
+        .as_ref()
+        .and_then(|value| {
+            value
+                .get("upstream_transport")
+                .or_else(|| value.get("upstreamTransport"))
+        })
+        .and_then(|value| serde_json::from_value::<ApiTransport>(value.clone()).ok());
+
+    ParsedThreadMetadata {
+        upstream_thread_id: get_str(&["upstream_thread_id", "upstreamThreadId"]),
+        upstream_transport,
+        upstream_provider: get_str(&["upstream_provider", "upstreamProvider"]),
+        upstream_model: get_str(&["upstream_model", "upstreamModel"]),
+        upstream_assistant_id: get_str(&["upstream_assistant_id", "upstreamAssistantId"]),
+    }
+}
+
+fn build_message_metadata_json(message: &AgentMessage) -> Option<String> {
+    serde_json::to_string(&serde_json::json!({
+        "tool_call_id": message.tool_call_id,
+        "tool_name": message.tool_name,
+        "toolName": message.tool_name,
+        "toolCallId": message.tool_call_id,
+        "toolArguments": message.tool_arguments,
+        "toolStatus": message.tool_status,
+        "api_transport": message.api_transport,
+        "response_id": message.response_id,
+    }))
+    .ok()
+}
+
+fn build_thread_metadata_json(thread: &AgentThread) -> Option<String> {
+    serde_json::to_string(&serde_json::json!({
+        "upstream_thread_id": thread.upstream_thread_id,
+        "upstreamThreadId": thread.upstream_thread_id,
+        "upstream_transport": thread.upstream_transport,
+        "upstreamTransport": thread.upstream_transport,
+        "upstream_provider": thread.upstream_provider,
+        "upstreamProvider": thread.upstream_provider,
+        "upstream_model": thread.upstream_model,
+        "upstreamModel": thread.upstream_model,
+        "upstream_assistant_id": thread.upstream_assistant_id,
+        "upstreamAssistantId": thread.upstream_assistant_id,
+    }))
+    .ok()
+}
 
 /// Cached check for `aline` CLI availability (checked once per process).
 pub(crate) fn aline_available() -> bool {
@@ -270,22 +369,14 @@ impl AgentEngine {
             Ok(thread_rows) if !thread_rows.is_empty() => {
                 let mut threads = HashMap::new();
                 for thread_row in thread_rows {
+                    let thread_metadata = parse_thread_metadata(thread_row.metadata_json.as_deref());
                     let messages = self
                         .history
                         .list_messages(&thread_row.id, None)
                         .unwrap_or_default()
                         .into_iter()
                         .map(|message| {
-                            let metadata = message.metadata_json.as_deref().and_then(|json| {
-                                serde_json::from_str::<serde_json::Value>(json).ok()
-                            });
-                            let get_str = |keys: &[&str]| -> Option<String> {
-                                metadata.as_ref().and_then(|v| {
-                                    keys.iter()
-                                        .find_map(|k| v.get(*k).and_then(|val| val.as_str()))
-                                        .map(ToOwned::to_owned)
-                                })
-                            };
+                            let metadata = parse_message_metadata(message.metadata_json.as_deref());
                             AgentMessage {
                                 role: match message.role.as_str() {
                                     "system" => MessageRole::System,
@@ -298,12 +389,16 @@ impl AgentEngine {
                                     .tool_calls_json
                                     .as_deref()
                                     .and_then(|json| serde_json::from_str(json).ok()),
-                                tool_call_id: get_str(&["tool_call_id", "toolCallId"]),
-                                tool_name: get_str(&["tool_name", "toolName"]),
-                                tool_arguments: get_str(&["tool_arguments", "toolArguments"]),
-                                tool_status: get_str(&["tool_status", "toolStatus"]),
+                                tool_call_id: metadata.tool_call_id,
+                                tool_name: metadata.tool_name,
+                                tool_arguments: metadata.tool_arguments,
+                                tool_status: metadata.tool_status,
                                 input_tokens: message.input_tokens.unwrap_or(0) as u64,
                                 output_tokens: message.output_tokens.unwrap_or(0) as u64,
+                                provider: message.provider,
+                                model: message.model,
+                                api_transport: metadata.api_transport,
+                                response_id: metadata.response_id,
                                 reasoning: message.reasoning,
                                 timestamp: message.created_at as u64,
                             }
@@ -316,6 +411,11 @@ impl AgentEngine {
                             id: thread_row.id,
                             title: thread_row.title,
                             messages,
+                            upstream_thread_id: thread_metadata.upstream_thread_id,
+                            upstream_transport: thread_metadata.upstream_transport,
+                            upstream_provider: thread_metadata.upstream_provider,
+                            upstream_model: thread_metadata.upstream_model,
+                            upstream_assistant_id: thread_metadata.upstream_assistant_id,
                             created_at: thread_row.created_at as u64,
                             updated_at: thread_row.updated_at as u64,
                             total_input_tokens: 0,
@@ -974,40 +1074,21 @@ impl AgentEngine {
                     .tool_calls_json
                     .as_deref()
                     .and_then(|json| serde_json::from_str(json).ok());
-                let metadata: Option<serde_json::Value> = msg
-                    .metadata_json
-                    .as_deref()
-                    .and_then(|json| serde_json::from_str(json).ok());
-                let tool_call_id = metadata
-                    .as_ref()
-                    .and_then(|m| m.get("toolCallId").or_else(|| m.get("tool_call_id")))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let tool_name = metadata
-                    .as_ref()
-                    .and_then(|m| m.get("toolName").or_else(|| m.get("tool_name")))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let tool_arguments = metadata
-                    .as_ref()
-                    .and_then(|m| m.get("toolArguments"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let tool_status = metadata
-                    .as_ref()
-                    .and_then(|m| m.get("toolStatus"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
+                let metadata = parse_message_metadata(msg.metadata_json.as_deref());
                 Some(AgentMessage {
                     role,
                     content: msg.content.clone(),
                     tool_calls,
-                    tool_call_id,
-                    tool_name,
-                    tool_arguments,
-                    tool_status,
+                    tool_call_id: metadata.tool_call_id,
+                    tool_name: metadata.tool_name,
+                    tool_arguments: metadata.tool_arguments,
+                    tool_status: metadata.tool_status,
                     input_tokens: msg.input_tokens.unwrap_or(0) as u64,
                     output_tokens: msg.output_tokens.unwrap_or(0) as u64,
+                    provider: msg.provider.clone(),
+                    model: msg.model.clone(),
+                    api_transport: metadata.api_transport,
+                    response_id: metadata.response_id,
                     reasoning: msg.reasoning.clone(),
                     timestamp: msg.created_at as u64,
                 })
@@ -1034,6 +1115,11 @@ impl AgentEngine {
                 id: tid,
                 title,
                 messages,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
                 created_at: now_millis(),
                 updated_at: now_millis(),
                 total_input_tokens: total_in,
@@ -1063,6 +1149,11 @@ impl AgentEngine {
                         id: id.clone(),
                         title: title.clone(),
                         messages: Vec::new(),
+                        upstream_thread_id: None,
+                        upstream_transport: None,
+                        upstream_provider: None,
+                        upstream_model: None,
+                        upstream_assistant_id: None,
                         created_at: now_millis(),
                         updated_at: now_millis(),
                         total_input_tokens: 0,
@@ -1083,6 +1174,7 @@ impl AgentEngine {
     fn restore_thread_from_db(&self, thread_id: &str) -> Option<AgentThread> {
         let db_thread = self.history.get_thread(thread_id).ok().flatten()?;
         let db_messages = self.history.list_messages(thread_id, Some(500)).ok()?;
+        let thread_metadata = parse_thread_metadata(db_thread.metadata_json.as_deref());
 
         let messages: Vec<AgentMessage> = db_messages
             .into_iter()
@@ -1100,43 +1192,22 @@ impl AgentEngine {
                     .as_deref()
                     .and_then(|json| serde_json::from_str(json).ok());
 
-                // Extract tool metadata from metadata_json
-                let metadata: Option<serde_json::Value> = msg
-                    .metadata_json
-                    .as_deref()
-                    .and_then(|json| serde_json::from_str(json).ok());
-
-                let tool_call_id = metadata
-                    .as_ref()
-                    .and_then(|m| m.get("toolCallId").or_else(|| m.get("tool_call_id")))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let tool_name = metadata
-                    .as_ref()
-                    .and_then(|m| m.get("toolName").or_else(|| m.get("tool_name")))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let tool_arguments = metadata
-                    .as_ref()
-                    .and_then(|m| m.get("toolArguments"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let tool_status = metadata
-                    .as_ref()
-                    .and_then(|m| m.get("toolStatus"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
+                let metadata = parse_message_metadata(msg.metadata_json.as_deref());
 
                 Some(AgentMessage {
                     role,
                     content: msg.content,
                     tool_calls,
-                    tool_call_id,
-                    tool_name,
-                    tool_arguments,
-                    tool_status,
+                    tool_call_id: metadata.tool_call_id,
+                    tool_name: metadata.tool_name,
+                    tool_arguments: metadata.tool_arguments,
+                    tool_status: metadata.tool_status,
                     input_tokens: msg.input_tokens.unwrap_or(0) as u64,
                     output_tokens: msg.output_tokens.unwrap_or(0) as u64,
+                    provider: msg.provider,
+                    model: msg.model,
+                    api_transport: metadata.api_transport,
+                    response_id: metadata.response_id,
                     reasoning: msg.reasoning,
                     timestamp: msg.created_at as u64,
                 })
@@ -1150,6 +1221,11 @@ impl AgentEngine {
             id: thread_id.to_string(),
             title: db_thread.title,
             messages,
+            upstream_thread_id: thread_metadata.upstream_thread_id,
+            upstream_transport: thread_metadata.upstream_transport,
+            upstream_provider: thread_metadata.upstream_provider,
+            upstream_model: thread_metadata.upstream_model,
+            upstream_assistant_id: thread_metadata.upstream_assistant_id,
             created_at: db_thread.created_at as u64,
             updated_at: db_thread.updated_at as u64,
             total_input_tokens: total_input,
@@ -1247,6 +1323,10 @@ impl AgentEngine {
                     tool_status: None,
                     input_tokens: 0,
                     output_tokens: 0,
+                    provider: None,
+                    model: None,
+                    api_transport: None,
+                    response_id: None,
                     reasoning: None,
                     timestamp: now_millis(),
                 });
@@ -1259,9 +1339,22 @@ impl AgentEngine {
         let provider_config = match self.resolve_provider_config(&config) {
             Ok(provider_config) => provider_config,
             Err(error) => {
-                self.add_assistant_message(&tid, &format!("Error: {error}"), 0, 0, None)
+                let error_text = error.to_string();
+                self.add_assistant_message(
+                    &tid,
+                    &format!("Error: {error_text}"),
+                    0,
+                    0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                     .await;
                 self.persist_threads().await;
+                self.emit_turn_error_completion(&tid, &error_text, None, None)
+                    .await;
                 return Err(error);
             }
         };
@@ -1337,8 +1430,8 @@ impl AgentEngine {
             }
             loop_count += 1;
 
-            // Build API messages from thread history
-            let api_messages = {
+            // Build request payload from thread history.
+            let prepared_request = {
                 let threads = self.threads.read().await;
                 let thread = match threads.get(&tid) {
                     Some(thread) => thread,
@@ -1348,27 +1441,32 @@ impl AgentEngine {
                         anyhow::bail!("thread not found");
                     }
                 };
-                let api = build_api_messages_for_request(&thread.messages, &config);
+                let prepared = prepare_llm_request(thread, &config, &provider_config);
                 tracing::info!(
                     thread_id = %tid,
                     thread_messages = thread.messages.len(),
-                    api_messages = api.len(),
+                    api_messages = prepared.messages.len(),
+                    transport = ?prepared.transport,
                     loop_count,
                     "building LLM request"
                 );
-                api
+                prepared
             };
 
             // Call LLM
             let llm_started_at = Instant::now();
             let mut first_token_at: Option<Instant> = None;
-            let mut stream = send_chat_completion(
+            let mut effective_transport_for_turn = prepared_request.transport;
+            let mut stream = send_completion_request(
                 &self.http_client,
                 &config.provider,
                 &provider_config,
                 &system_prompt,
-                &api_messages,
+                &prepared_request.messages,
                 &tools,
+                prepared_request.transport,
+                prepared_request.previous_response_id.clone(),
+                prepared_request.upstream_thread_id.clone(),
                 retry_strategy,
             );
 
@@ -1438,6 +1536,33 @@ impl AgentEngine {
                                     ),
                                 });
                             }
+                            CompletionChunk::TransportFallback { from, to, message } => {
+                                effective_transport_for_turn = to;
+                                {
+                                    let mut stored_config = self.config.write().await;
+                                    stored_config.api_transport = to;
+                                    if let Some(provider_entry) =
+                                        stored_config.providers.get_mut(&config.provider)
+                                    {
+                                        provider_entry.api_transport = to;
+                                    }
+                                }
+                                self.persist_config().await;
+                                self.emit_workflow_notice(
+                                    &tid,
+                                    "transport-fallback",
+                                    "Responses API was incompatible for this provider. Switched to legacy chat completions.",
+                                    Some(
+                                        serde_json::json!({
+                                            "provider": config.provider,
+                                            "from": from,
+                                            "to": to,
+                                            "reason": message,
+                                        })
+                                        .to_string(),
+                                    ),
+                                );
+                            }
                             chunk @ CompletionChunk::Done { .. } => {
                                 final_chunk = Some(chunk);
                                 break;
@@ -1447,14 +1572,27 @@ impl AgentEngine {
                                 break;
                             }
                             CompletionChunk::Error { message } => {
-                                let _ = self.event_tx.send(AgentEvent::Error {
-                                    thread_id: tid.clone(),
-                                    message: message.clone(),
-                                });
                                 // Add error as assistant message
-                                self.add_assistant_message(&tid, &format!("Error: {message}"), 0, 0, None)
+                                self.add_assistant_message(
+                                    &tid,
+                                    &format!("Error: {message}"),
+                                    0,
+                                    0,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                )
                                     .await;
                                 self.persist_threads().await;
+                                self.emit_turn_error_completion(
+                                    &tid,
+                                    &message,
+                                    Some(config.provider.clone()),
+                                    Some(provider_config.model.clone()),
+                                )
+                                .await;
                                 self.finish_stream_cancellation(&tid, stream_generation).await;
                                 return Err(anyhow::anyhow!("LLM error: {message}"));
                             }
@@ -1473,6 +1611,8 @@ impl AgentEngine {
                     reasoning,
                     input_tokens,
                     output_tokens,
+                    response_id,
+                    upstream_thread_id,
                 }) => {
                     let final_content = if content.is_empty() {
                         accumulated_content
@@ -1491,8 +1631,22 @@ impl AgentEngine {
                         input_tokens,
                         output_tokens,
                         final_reasoning.clone(),
+                        Some(config.provider.clone()),
+                        Some(provider_config.model.clone()),
+                        Some(effective_transport_for_turn),
+                        response_id,
                     )
                     .await;
+                    self
+                        .update_thread_upstream_state(
+                            &tid,
+                            &config.provider,
+                            &provider_config.model,
+                            effective_transport_for_turn,
+                            Some(provider_config.assistant_id.as_str()),
+                            upstream_thread_id,
+                        )
+                        .await;
 
                     let generation_secs = first_token_at
                         .unwrap_or(llm_started_at)
@@ -1520,6 +1674,8 @@ impl AgentEngine {
                     reasoning,
                     input_tokens,
                     output_tokens,
+                    response_id,
+                    upstream_thread_id,
                 }) => {
                     // Add assistant message with tool calls
                     let msg_content = content.unwrap_or(accumulated_content.clone());
@@ -1542,6 +1698,10 @@ impl AgentEngine {
                                 tool_status: None,
                                 input_tokens: input_tokens.unwrap_or(0),
                                 output_tokens: output_tokens.unwrap_or(0),
+                                provider: Some(config.provider.clone()),
+                                model: Some(provider_config.model.clone()),
+                                api_transport: Some(effective_transport_for_turn),
+                                response_id,
                                 reasoning: msg_reasoning,
                                 timestamp: now_millis(),
                             });
@@ -1549,6 +1709,16 @@ impl AgentEngine {
                             thread.total_output_tokens += output_tokens.unwrap_or(0);
                         }
                     }
+                    self
+                        .update_thread_upstream_state(
+                            &tid,
+                            &config.provider,
+                            &provider_config.model,
+                            effective_transport_for_turn,
+                            Some(provider_config.assistant_id.as_str()),
+                            upstream_thread_id,
+                        )
+                        .await;
 
                     // Execute each tool call
                     for tc in &tool_calls {
@@ -1646,6 +1816,10 @@ impl AgentEngine {
                                     tool_status: Some(tool_status.to_string()),
                                     input_tokens: 0,
                                     output_tokens: 0,
+                                    provider: None,
+                                    model: None,
+                                    api_transport: None,
+                                    response_id: None,
                                     reasoning: None,
                                     timestamp: now_millis(),
                                 });
@@ -1675,7 +1849,17 @@ impl AgentEngine {
                 }
                 _ => {
                     // Stream ended unexpectedly
-                    self.add_assistant_message(&tid, &accumulated_content, 0, 0, None)
+                    self.add_assistant_message(
+                        &tid,
+                        &accumulated_content,
+                        0,
+                        0,
+                        None,
+                        Some(config.provider.clone()),
+                        Some(provider_config.model.clone()),
+                        Some(provider_config.api_transport),
+                        None,
+                    )
                         .await;
                     break;
                 }
@@ -3414,6 +3598,10 @@ impl AgentEngine {
                     tool_status: None,
                     input_tokens: 0,
                     output_tokens: 0,
+                    provider: None,
+                    model: None,
+                    api_transport: None,
+                    response_id: None,
                     reasoning: None,
                     timestamp: now_millis(),
                 });
@@ -3481,9 +3669,21 @@ impl AgentEngine {
                     "No external agent runner for backend '{}'",
                     config.agent_backend
                 );
-                self.add_assistant_message(&tid, &format!("Error: {message}"), 0, 0, None)
+                self.add_assistant_message(
+                    &tid,
+                    &format!("Error: {message}"),
+                    0,
+                    0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                     .await;
                 self.persist_threads().await;
+                self.emit_turn_error_completion(&tid, &message, None, None)
+                    .await;
                 self.finish_stream_cancellation(&tid, stream_generation)
                     .await;
                 anyhow::bail!(message);
@@ -3497,9 +3697,27 @@ impl AgentEngine {
             Ok(response) => Some(response),
             Err(e) if external_runner::is_stream_cancelled(&e) => None,
             Err(e) => {
-                self.add_assistant_message(&tid, &format!("Error: {e}"), 0, 0, None)
+                let error_text = e.to_string();
+                self.add_assistant_message(
+                    &tid,
+                    &format!("Error: {error_text}"),
+                    0,
+                    0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                     .await;
                 self.persist_threads().await;
+                self.emit_turn_error_completion(
+                    &tid,
+                    &error_text,
+                    Some(config.agent_backend.clone()),
+                    Some(config.agent_backend.clone()),
+                )
+                .await;
                 self.finish_stream_cancellation(&tid, stream_generation)
                     .await;
                 return Err(e);
@@ -3508,7 +3726,17 @@ impl AgentEngine {
 
         // Store assistant response in thread
         if let Some(response) = response {
-            self.add_assistant_message(&tid, &response, 0, 0, None)
+            self.add_assistant_message(
+                &tid,
+                &response,
+                0,
+                0,
+                None,
+                Some(config.agent_backend.clone()),
+                Some(config.agent_backend.clone()),
+                None,
+                None,
+            )
                 .await;
         }
         self.persist_threads().await;
@@ -3784,13 +4012,16 @@ impl AgentEngine {
             name: None,
             tool_calls: None,
         }];
-        let mut stream = send_chat_completion(
+        let mut stream = send_completion_request(
             &self.http_client,
             &config.provider,
             &provider_config,
             "Return structured data only. No markdown fences. No explanation.",
             &messages,
             &[],
+            provider_config.api_transport,
+            None,
+            None,
             RetryStrategy::DurableRateLimited,
         );
         let mut content = String::new();
@@ -3824,6 +4055,7 @@ impl AgentEngine {
                     anyhow::bail!("goal LLM returned empty output");
                 }
                 CompletionChunk::Error { message } => anyhow::bail!(message),
+                CompletionChunk::TransportFallback { .. } => {}
                 CompletionChunk::Retry { .. } => {}
                 CompletionChunk::ToolCalls { .. } => {
                     anyhow::bail!("goal planning unexpectedly returned tool calls")
@@ -3855,13 +4087,16 @@ impl AgentEngine {
             name: None,
             tool_calls: None,
         }];
-        let mut stream = send_chat_completion(
+        let mut stream = send_completion_request(
             &self.http_client,
             &config.provider,
             &provider_config,
             "Return strict JSON only. Do not call tools. Do not wrap the answer in markdown.",
             &messages,
             &[],
+            provider_config.api_transport,
+            None,
+            None,
             RetryStrategy::DurableRateLimited,
         );
         let mut content = String::new();
@@ -3904,6 +4139,7 @@ impl AgentEngine {
                     anyhow::bail!("goal planning returned empty output");
                 }
                 CompletionChunk::Error { message } => anyhow::bail!(message),
+                CompletionChunk::TransportFallback { .. } => {}
                 CompletionChunk::Retry { .. } => {}
                 CompletionChunk::ToolCalls { .. } => {
                     anyhow::bail!("goal planning unexpectedly returned tool calls")
@@ -3977,6 +4213,12 @@ impl AgentEngine {
             if resolved.reasoning_effort.trim().is_empty() {
                 resolved.reasoning_effort = config.reasoning_effort.clone();
             }
+            if resolved.assistant_id.trim().is_empty() {
+                resolved.assistant_id = config.assistant_id.clone();
+            }
+            if !provider_supports_transport(&config.provider, resolved.api_transport) {
+                resolved.api_transport = default_api_transport_for_provider(&config.provider);
+            }
             return Ok(resolved);
         }
 
@@ -3988,10 +4230,18 @@ impl AgentEngine {
             );
         }
 
+        let api_transport = if provider_supports_transport(&config.provider, config.api_transport) {
+            config.api_transport
+        } else {
+            default_api_transport_for_provider(&config.provider)
+        };
+
         Ok(ProviderConfig {
             base_url: config.base_url.clone(),
             model: config.model.clone(),
             api_key: config.api_key.clone(),
+            assistant_id: config.assistant_id.clone(),
+            api_transport,
             reasoning_effort: config.reasoning_effort.clone(),
             response_schema: None,
         })
@@ -4004,6 +4254,10 @@ impl AgentEngine {
         input_tokens: u64,
         output_tokens: u64,
         reasoning: Option<String>,
+        provider: Option<String>,
+        model: Option<String>,
+        api_transport: Option<ApiTransport>,
+        response_id: Option<String>,
     ) {
         let mut threads = self.threads.write().await;
         if let Some(thread) = threads.get_mut(thread_id) {
@@ -4017,11 +4271,61 @@ impl AgentEngine {
                 tool_status: None,
                 input_tokens,
                 output_tokens,
+                provider,
+                model,
+                api_transport,
+                response_id,
                 reasoning,
                 timestamp: now_millis(),
             });
             thread.total_input_tokens += input_tokens;
             thread.total_output_tokens += output_tokens;
+            thread.updated_at = now_millis();
+        }
+    }
+
+    async fn emit_turn_error_completion(
+        &self,
+        thread_id: &str,
+        message: &str,
+        provider: Option<String>,
+        model: Option<String>,
+    ) {
+        let _ = self.event_tx.send(AgentEvent::Delta {
+            thread_id: thread_id.to_string(),
+            content: format!("Error: {message}"),
+        });
+        let _ = self.event_tx.send(AgentEvent::Done {
+            thread_id: thread_id.to_string(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cost: None,
+            provider,
+            model,
+            tps: None,
+            generation_ms: None,
+            reasoning: None,
+        });
+    }
+
+    async fn update_thread_upstream_state(
+        &self,
+        thread_id: &str,
+        provider: &str,
+        model: &str,
+        transport: ApiTransport,
+        assistant_id: Option<&str>,
+        upstream_thread_id: Option<String>,
+    ) {
+        let mut threads = self.threads.write().await;
+        if let Some(thread) = threads.get_mut(thread_id) {
+            thread.upstream_transport = Some(transport);
+            thread.upstream_provider = Some(provider.to_string());
+            thread.upstream_model = Some(model.to_string());
+            thread.upstream_assistant_id = assistant_id
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| value.to_string());
+            thread.upstream_thread_id = upstream_thread_id;
             thread.updated_at = now_millis();
         }
     }
@@ -4045,6 +4349,7 @@ impl AgentEngine {
                     .last()
                     .map(|message| message.content.chars().take(100).collect())
                     .unwrap_or_default(),
+                metadata_json: build_thread_metadata_json(thread),
             };
 
             if let Err(e) = self.history.delete_thread(&thread.id) {
@@ -4057,15 +4362,7 @@ impl AgentEngine {
             }
 
             for (index, message) in thread.messages.iter().enumerate() {
-                let metadata_json = serde_json::to_string(&serde_json::json!({
-                    "tool_call_id": message.tool_call_id,
-                    "tool_name": message.tool_name,
-                    "toolName": message.tool_name,
-                    "toolCallId": message.tool_call_id,
-                    "toolArguments": message.tool_arguments,
-                    "toolStatus": message.tool_status,
-                }))
-                .ok();
+                let metadata_json = build_message_metadata_json(message);
                 let row = amux_protocol::AgentDbMessage {
                     id: format!("{}:{}", thread.id, index),
                     thread_id: thread.id.clone(),
@@ -4078,8 +4375,8 @@ impl AgentEngine {
                     }
                     .to_string(),
                     content: message.content.clone(),
-                    provider: None,
-                    model: None,
+                    provider: message.provider.clone(),
+                    model: message.model.clone(),
                     input_tokens: Some(message.input_tokens as i64),
                     output_tokens: Some(message.output_tokens as i64),
                     total_tokens: Some((message.input_tokens + message.output_tokens) as i64),
@@ -4143,6 +4440,111 @@ impl AgentEngine {
     }
 }
 
+struct PreparedLlmRequest {
+    messages: Vec<ApiMessage>,
+    transport: ApiTransport,
+    previous_response_id: Option<String>,
+    upstream_thread_id: Option<String>,
+}
+
+fn message_is_compaction_summary(message: &AgentMessage) -> bool {
+    message.content.starts_with("[Compacted earlier context]")
+}
+
+fn prepare_llm_request(
+    thread: &AgentThread,
+    config: &AgentConfig,
+    provider_config: &ProviderConfig,
+) -> PreparedLlmRequest {
+    let selected_transport = if provider_supports_transport(&config.provider, provider_config.api_transport)
+    {
+        provider_config.api_transport
+    } else {
+        default_api_transport_for_provider(&config.provider)
+    };
+    let messages = &thread.messages;
+    let compacted = compact_messages_for_request(messages, config);
+    let compaction_active =
+        compacted.len() != messages.len() || compacted.iter().any(message_is_compaction_summary);
+
+    if selected_transport == ApiTransport::NativeAssistant && !provider_config.assistant_id.trim().is_empty()
+    {
+        let latest_user_message = messages
+            .iter()
+            .rev()
+            .find(|message| message.role == MessageRole::User)
+            .cloned();
+        if let Some(user_message) = latest_user_message {
+            return PreparedLlmRequest {
+                messages: messages_to_api_format(&[user_message]),
+                transport: ApiTransport::NativeAssistant,
+                previous_response_id: None,
+                upstream_thread_id: if thread.upstream_transport == Some(ApiTransport::NativeAssistant)
+                    && thread.upstream_provider.as_deref() == Some(config.provider.as_str())
+                    && thread.upstream_model.as_deref() == Some(provider_config.model.as_str())
+                    && thread.upstream_assistant_id.as_deref()
+                        == Some(provider_config.assistant_id.as_str())
+                {
+                    thread.upstream_thread_id.clone()
+                } else {
+                    None
+                },
+            };
+        }
+    }
+
+    if selected_transport == ApiTransport::Responses {
+        let previous_response_id = if !compaction_active
+            && supports_response_continuity(&config.provider)
+        {
+            messages
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, message)| {
+                    message.role == MessageRole::Assistant
+                        && message.response_id.is_some()
+                        && message.provider.as_deref() == Some(config.provider.as_str())
+                        && message.model.as_deref() == Some(provider_config.model.as_str())
+                        && message.api_transport == Some(ApiTransport::Responses)
+                })
+                .and_then(|(anchor_index, anchor_message)| {
+                    let trailing_messages = messages_to_api_format(&messages[anchor_index + 1..]);
+                    if trailing_messages.is_empty() {
+                        None
+                    } else {
+                        Some((trailing_messages, anchor_message.response_id.clone()))
+                    }
+                })
+        } else {
+            None
+        };
+
+        if let Some((messages, previous_response_id)) = previous_response_id {
+            return PreparedLlmRequest {
+                messages,
+                transport: ApiTransport::Responses,
+                previous_response_id,
+                upstream_thread_id: None,
+            };
+        }
+
+        return PreparedLlmRequest {
+            messages: messages_to_api_format(&compacted),
+            transport: ApiTransport::Responses,
+            previous_response_id: None,
+            upstream_thread_id: None,
+        };
+    }
+
+    PreparedLlmRequest {
+        messages: messages_to_api_format(&compacted),
+        transport: ApiTransport::ChatCompletions,
+        previous_response_id: None,
+        upstream_thread_id: None,
+    }
+}
+
 fn build_api_messages_for_request(
     messages: &[AgentMessage],
     config: &AgentConfig,
@@ -4187,6 +4589,10 @@ fn compact_messages_for_request(
                 tool_status: None,
                 input_tokens: 0,
                 output_tokens: 0,
+                provider: None,
+                model: None,
+                api_transport: None,
+                response_id: None,
                 reasoning: None,
                 timestamp: messages[split_at - 1].timestamp,
             });

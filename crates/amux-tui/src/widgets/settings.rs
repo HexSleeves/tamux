@@ -2,6 +2,7 @@ use ratatui::prelude::*;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Tabs};
 
+use crate::providers;
 use crate::state::config::ConfigState;
 use crate::state::settings::{SettingsState, SettingsTab};
 use crate::theme::ThemeTokens;
@@ -12,6 +13,9 @@ pub enum SettingsHitTarget {
     Field(usize),
     EditCursor { line: usize, col: usize },
 }
+
+const TAB_LABELS: [&str; 7] = ["Prov", "Tools", "Search", "Chat", "GW", "Agent", "Adv"];
+const TAB_DIVIDER: &str = " | ";
 
 fn render_edit_buffer_with_cursor(text: &str, cursor: usize) -> String {
     let cursor = cursor.min(text.len());
@@ -71,7 +75,6 @@ pub fn render(
 
     // Tab bar
     let active = settings.active_tab();
-    let tab_labels = vec!["Prov", "Tools", "Search", "Chat", "GW", "Agent", "Adv"];
     let tab_index = match active {
         SettingsTab::Provider => 0,
         SettingsTab::Tools => 1,
@@ -81,11 +84,11 @@ pub fn render(
         SettingsTab::Agent => 5,
         SettingsTab::Advanced => 6,
     };
-    let tabs = Tabs::new(tab_labels)
+    let tabs = Tabs::new(TAB_LABELS)
         .select(tab_index)
         .style(theme.fg_dim)
         .highlight_style(theme.fg_active)
-        .divider(Span::styled(" | ", theme.fg_dim));
+        .divider(Span::styled(TAB_DIVIDER, theme.fg_dim));
     frame.render_widget(tabs, chunks[0]);
 
     // Separator
@@ -158,11 +161,10 @@ pub fn hit_test(
         .split(inner);
 
     if mouse.y == chunks[0].y {
-        let tabs = SettingsTab::all();
-        let rel_x = mouse.x.saturating_sub(chunks[0].x) as usize;
-        let width = chunks[0].width.max(1) as usize;
-        let idx = (rel_x * tabs.len() / width).min(tabs.len().saturating_sub(1));
-        return Some(SettingsHitTarget::Tab(tabs[idx]));
+        if let Some(tab) = tab_hit_test(chunks[0], mouse.x) {
+            return Some(SettingsHitTarget::Tab(tab));
+        }
+        return None;
     }
 
     if mouse.y < chunks[2].y || mouse.y >= chunks[2].y.saturating_add(chunks[2].height) {
@@ -175,6 +177,25 @@ pub fn hit_test(
 
     let row = mouse.y.saturating_sub(chunks[2].y) as usize;
     settings_field_at_row(settings, row).map(SettingsHitTarget::Field)
+}
+
+fn tab_hit_test(tab_area: Rect, mouse_x: u16) -> Option<SettingsTab> {
+    let tabs = SettingsTab::all();
+    let divider_width = TAB_DIVIDER.chars().count() as u16;
+    let mut x = tab_area.x;
+
+    for (idx, label) in TAB_LABELS.iter().enumerate() {
+        let label_width = label.chars().count() as u16;
+        if mouse_x >= x && mouse_x < x.saturating_add(label_width) {
+            return tabs.get(idx).copied();
+        }
+        x = x.saturating_add(label_width);
+        if idx + 1 < TAB_LABELS.len() {
+            x = x.saturating_add(divider_width);
+        }
+    }
+
+    None
 }
 
 fn editing_cursor_hit_test(
@@ -211,6 +232,7 @@ fn single_line_edit_layout(settings: &SettingsState, field: &str) -> Option<(usi
         SettingsTab::Provider => match field {
             "base_url" => Some((5, 19)),
             "api_key" => Some((6, 19)),
+            "assistant_id" => Some((9, 19)),
             _ => None,
         },
         SettingsTab::WebSearch => match field {
@@ -264,7 +286,7 @@ fn single_line_edit_layout(settings: &SettingsState, field: &str) -> Option<(usi
 
 fn settings_field_at_row(settings: &SettingsState, row: usize) -> Option<usize> {
     match settings.active_tab() {
-        SettingsTab::Provider => row.checked_sub(4).filter(|idx| *idx < 5),
+        SettingsTab::Provider => row.checked_sub(4).filter(|idx| *idx < 8),
         SettingsTab::Tools => row.checked_sub(4).filter(|idx| *idx < 7),
         SettingsTab::WebSearch => row.checked_sub(4).filter(|idx| *idx < 7),
         SettingsTab::Chat => row.checked_sub(4).filter(|idx| *idx < 6),
@@ -356,6 +378,20 @@ fn render_provider_tab<'a>(
         config.model().to_string()
     };
     let api_key_val = mask_api_key(config.api_key());
+    let transport_val = if config.api_transport().is_empty() {
+        providers::default_transport_for(&config.provider).to_string()
+    } else {
+        match config.api_transport() {
+            "native_assistant" => "native assistant".to_string(),
+            "responses" => "responses".to_string(),
+            _ => "chat completions".to_string(),
+        }
+    };
+    let assistant_id_val = if config.assistant_id.is_empty() {
+        "(not set)".to_string()
+    } else {
+        config.assistant_id.clone()
+    };
     let effort_val = if config.reasoning_effort().is_empty() {
         "off".to_string()
     } else {
@@ -364,20 +400,28 @@ fn render_provider_tab<'a>(
     let context_window_val = format!("{} tok", config.context_window_tokens);
 
     // Field definitions: (index, label, value, field_name, hint)
-    let fields: [(usize, &str, String, &str, &str); 6] = [
+    let fields: [(usize, &str, String, &str, &str); 8] = [
         (0, "Provider", provider_val, "provider", " [Enter: pick]"),
         (1, "Base URL", base_url_val, "base_url", " [Enter: edit]"),
         (2, "API Key", api_key_val, "api_key", " [Enter: edit]"),
         (3, "Model", model_val, "model", " [Enter: pick]"),
         (
             4,
+            "Transport",
+            transport_val,
+            "api_transport",
+            " [Enter: cycle]",
+        ),
+        (5, "Assistant ID", assistant_id_val, "assistant_id", " [Enter: edit]"),
+        (
+            6,
             "Effort",
             effort_val,
             "reasoning_effort",
             " [Enter: pick]",
         ),
         (
-            5,
+            7,
             "Ctx Length",
             context_window_val,
             "context_window_tokens",
@@ -1541,5 +1585,32 @@ mod tests {
     #[test]
     fn mask_api_key_empty_returns_not_set() {
         assert_eq!(mask_api_key(""), "(not set)");
+    }
+
+    #[test]
+    fn tab_hit_test_uses_rendered_label_positions() {
+        let area = Rect::new(10, 3, 60, 1);
+
+        assert_eq!(
+            tab_hit_test(area, 10),
+            Some(SettingsTab::Provider),
+            "expected click on 'P' in Prov to select Provider"
+        );
+        assert_eq!(
+            tab_hit_test(area, 17),
+            Some(SettingsTab::Tools),
+            "expected click on 'T' in Tools to select Tools"
+        );
+        assert_eq!(
+            tab_hit_test(area, 34),
+            Some(SettingsTab::Chat),
+            "expected click on 'C' in Chat to select Chat"
+        );
+        assert_eq!(
+            tab_hit_test(area, 54),
+            Some(SettingsTab::Advanced),
+            "expected click on 'A' in Adv to select Advanced"
+        );
+        assert_eq!(tab_hit_test(area, 15), None, "divider gap should not hit a tab");
     }
 }

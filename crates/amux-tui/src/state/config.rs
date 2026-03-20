@@ -14,6 +14,8 @@ pub struct AgentConfigSnapshot {
     pub base_url: String,
     pub model: String,
     pub api_key: String,
+    pub assistant_id: String,
+    pub api_transport: String,
     pub reasoning_effort: String,
 }
 
@@ -37,6 +39,8 @@ pub struct ConfigState {
     pub base_url: String,
     pub model: String,
     pub api_key: String,
+    pub assistant_id: String,
+    pub api_transport: String,
     pub reasoning_effort: String,
     pub fetched_models: Vec<FetchedModel>,
     pub agent_config_raw: Option<serde_json::Value>,
@@ -109,6 +113,8 @@ impl ConfigState {
             base_url: "https://api.openai.com/v1".to_string(),
             model: "gpt-5.4".to_string(),
             api_key: String::new(),
+            assistant_id: String::new(),
+            api_transport: "responses".to_string(),
             reasoning_effort: String::new(),
             fetched_models: Vec::new(),
             agent_config_raw: None,
@@ -154,7 +160,7 @@ impl ConfigState {
             keep_recent_on_compact: 10,
             bash_timeout_secs: 30,
             snapshot_max_count: 10,
-            snapshot_max_size_mb: 2048,
+            snapshot_max_size_mb: 51_200,
             snapshot_auto_cleanup: true,
             snapshot_count: 0,
             snapshot_total_size_bytes: 0,
@@ -181,6 +187,10 @@ impl ConfigState {
         &self.reasoning_effort
     }
 
+    pub fn api_transport(&self) -> &str {
+        &self.api_transport
+    }
+
     pub fn fetched_models(&self) -> &[FetchedModel] {
         &self.fetched_models
     }
@@ -196,6 +206,8 @@ impl ConfigState {
                 self.base_url = snapshot.base_url;
                 self.model = snapshot.model;
                 self.api_key = snapshot.api_key;
+                self.assistant_id = snapshot.assistant_id;
+                self.api_transport = snapshot.api_transport;
                 self.reasoning_effort = snapshot.reasoning_effort;
             }
 
@@ -250,7 +262,9 @@ mod tests {
             model: model.into(),
             base_url: "https://api.example.com".into(),
             api_key: "sk-test".into(),
+            assistant_id: "asst_test".into(),
             reasoning_effort: "high".into(),
+            api_transport: "responses".into(),
         }
     }
 

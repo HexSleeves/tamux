@@ -8,12 +8,13 @@ import { AgentApprovalOverlay } from "./components/AgentApprovalOverlay";
 import { SetupOnboardingPanel } from "./components/SetupOnboardingPanel";
 import { useAgentMissionStore } from "./lib/agentMissionStore";
 import { clearThreadAbortController, setThreadAbortController, useAgentStore } from "./lib/agentStore";
+import type { AgentProviderConfig } from "./lib/agentStore";
 import { applyAppShellTheme, getAppShellTheme } from "./lib/themes";
 import { useSettingsStore } from "./lib/settingsStore";
 import { useWorkspaceStore } from "./lib/workspaceStore";
 import { useHotkeys } from "./hooks/useHotkeys";
 import { saveSession, startAutoSave } from "./lib/sessionPersistence";
-import { buildApiMessagesForRequest, sendChatCompletion } from "./lib/agentClient";
+import { prepareOpenAIRequest, sendChatCompletion } from "./lib/agentClient";
 import { executeTool, getAvailableTools, getToolCapabilityDescription } from "./lib/agentTools";
 import { readPersistedJson, scheduleJsonWrite } from "./lib/persistence";
 
@@ -379,7 +380,7 @@ export default function App() {
       });
 
       const activeProvider = agentState.agentSettings.activeProvider;
-      const providerConfig = agentState.agentSettings[activeProvider] as { baseUrl: string; model: string; apiKey: string };
+      const providerConfig = agentState.agentSettings[activeProvider] as AgentProviderConfig;
       const tools = getAvailableTools({
         enableBashTool: agentState.agentSettings.enableBashTool,
         gatewayEnabled: settingsState.gatewayEnabled,
@@ -404,6 +405,7 @@ export default function App() {
         content: "",
         provider: activeProvider,
         model: providerConfig.model,
+        apiTransport: providerConfig.apiTransport,
         inputTokens: 0,
         outputTokens: 0,
         totalTokens: 0,
@@ -417,9 +419,29 @@ export default function App() {
         : Infinity;
       let loopCount = 0;
       let finalReply = "";
-      let apiMessages = buildApiMessagesForRequest(
+      const getCurrentProviderConfig = () => (
+        useAgentStore.getState().agentSettings[activeProvider] as AgentProviderConfig
+      );
+      const updateThreadUpstreamState = (upstreamThreadId?: string) => {
+        useAgentStore.setState((state) => ({
+          threads: state.threads.map((thread) => thread.id === threadId ? {
+            ...thread,
+            upstreamThreadId: upstreamThreadId ?? null,
+            upstreamTransport: preparedRequest.transport,
+            upstreamProvider: activeProvider,
+            upstreamModel: getCurrentProviderConfig().model,
+            upstreamAssistantId: getCurrentProviderConfig().assistantId || null,
+          } : thread),
+        }));
+      };
+      let preparedRequest = prepareOpenAIRequest(
         useAgentStore.getState().getThreadMessages(threadId).slice(0, -1),
         agentState.agentSettings,
+        activeProvider,
+        getCurrentProviderConfig().model,
+        getCurrentProviderConfig().apiTransport,
+        getCurrentProviderConfig().assistantId,
+        useAgentStore.getState().threads.find((entry) => entry.id === threadId),
       );
       const controller = new AbortController();
       setThreadAbortController(threadId, controller);
@@ -448,15 +470,21 @@ export default function App() {
           let accumulatedReasoning = "";
           const responseStartedAt = Date.now();
           let receivedToolCalls = false;
+          let roundToolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> = [];
 
           for await (const chunk of sendChatCompletion({
             provider: activeProvider,
-            config: providerConfig,
+            config: {
+              ...providerConfig,
+              apiTransport: preparedRequest.transport,
+            },
             systemPrompt,
-            messages: apiMessages,
+            messages: preparedRequest.messages,
             streaming: true,
             signal: controller.signal,
             tools: tools.length > 0 ? tools : undefined,
+            previousResponseId: preparedRequest.previousResponseId,
+            upstreamThreadId: preparedRequest.upstreamThreadId,
           })) {
             if (chunk.type === "delta") {
               accumulated += chunk.content;
@@ -492,12 +520,23 @@ export default function App() {
                 videoTokens: chunk.videoTokens,
                 cost: chunk.cost,
                 tps,
+                apiTransport: preparedRequest.transport,
+                responseId: chunk.responseId,
               });
+              updateThreadUpstreamState(chunk.upstreamThreadId);
             } else if (chunk.type === "error") {
               accumulated = `Error: ${chunk.content}`;
               agentState.updateLastAssistantMessage(threadId, accumulated, false);
+            } else if (chunk.type === "transport_fallback") {
+              agentState.updateAgentSetting(activeProvider as keyof ReturnType<typeof useAgentStore.getState>["agentSettings"], {
+                ...providerConfig,
+                apiTransport: "chat_completions",
+              } as any);
+              preparedRequest = { ...preparedRequest, transport: "chat_completions", previousResponseId: undefined, upstreamThreadId: undefined };
+              updateThreadUpstreamState(undefined);
             } else if (chunk.type === "tool_calls" && chunk.toolCalls) {
               receivedToolCalls = true;
+              roundToolCalls = chunk.toolCalls;
 
               if (chunk.reasoning) {
                 accumulatedReasoning = chunk.reasoning;
@@ -517,7 +556,11 @@ export default function App() {
                 audioTokens: chunk.audioTokens,
                 videoTokens: chunk.videoTokens,
                 cost: chunk.cost,
+                toolCalls: roundToolCalls,
+                apiTransport: preparedRequest.transport,
+                responseId: chunk.responseId,
               });
+              updateThreadUpstreamState(chunk.upstreamThreadId);
 
               const toolResults = [];
               for (const tc of chunk.toolCalls) {
@@ -552,9 +595,15 @@ export default function App() {
 
               agentState.updateLastAssistantMessage(threadId, accumulated || "Tools executed.", false);
 
-              apiMessages = buildApiMessagesForRequest(
+              const currentProviderConfig = getCurrentProviderConfig();
+              preparedRequest = prepareOpenAIRequest(
                 useAgentStore.getState().getThreadMessages(threadId),
                 agentState.agentSettings,
+                activeProvider,
+                currentProviderConfig.model,
+                currentProviderConfig.apiTransport,
+                currentProviderConfig.assistantId,
+                useAgentStore.getState().threads.find((entry) => entry.id === threadId),
               );
 
               agentState.addMessage(threadId, {
@@ -562,6 +611,7 @@ export default function App() {
                 content: "",
                 provider: activeProvider,
                 model: providerConfig.model,
+                apiTransport: preparedRequest.transport,
                 inputTokens: 0,
                 outputTokens: 0,
                 totalTokens: 0,

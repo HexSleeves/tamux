@@ -246,6 +246,10 @@ pub struct AgentConfigSnapshot {
     #[serde(default)]
     pub api_key: String,
     #[serde(default)]
+    pub assistant_id: String,
+    #[serde(default)]
+    pub api_transport: String,
+    #[serde(default)]
     pub reasoning_effort: String,
 }
 

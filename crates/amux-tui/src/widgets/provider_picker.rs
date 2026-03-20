@@ -89,8 +89,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_list_has_17_entries() {
-        assert_eq!(PROVIDERS.len(), 17);
+    fn provider_list_has_20_entries() {
+        assert_eq!(PROVIDERS.len(), 20);
     }
 
     #[test]

@@ -233,6 +233,14 @@ impl ChatState {
         self.selected_message = index;
     }
 
+    pub fn toggle_message_selection(&mut self, index: usize) {
+        if self.selected_message == Some(index) {
+            self.selected_message = None;
+        } else {
+            self.selected_message = Some(index);
+        }
+    }
+
     /// Move selection down (towards newer messages) or select the first if none.
     pub fn select_next_message(&mut self) {
         let count = self.active_thread().map(|t| t.messages.len()).unwrap_or(0);
@@ -840,6 +848,15 @@ mod tests {
         let mut state = state_with_messages(3);
         state.select_message(Some(1));
         state.select_message(None);
+        assert_eq!(state.selected_message(), None);
+    }
+
+    #[test]
+    fn toggle_message_selection_clears_when_same_message_clicked() {
+        let mut state = state_with_messages(3);
+        state.toggle_message_selection(1);
+        assert_eq!(state.selected_message(), Some(1));
+        state.toggle_message_selection(1);
         assert_eq!(state.selected_message(), None);
     }
 

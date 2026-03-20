@@ -120,6 +120,7 @@ type PersistedMissionState = {
     contextSnapshots?: ContextSnapshot[];
     approvals?: ApprovalRequest[];
     sessionAllowlist?: Record<string, string[]>;
+    snapshots?: SnapshotRecord[];
 };
 
 type AgentEventRow = {
@@ -137,6 +138,7 @@ type AgentEventRow = {
 type MissionDbApi = {
     dbUpsertAgentEvent?: (eventRow: AgentEventRow) => Promise<boolean>;
     dbListAgentEvents?: (opts?: { category?: string | null; paneId?: string | null; limit?: number | null }) => Promise<AgentEventRow[]>;
+    dbListSnapshotIndex?: (workspaceId?: string | null) => Promise<unknown[]>;
 };
 
 const MISSION_DIR = "agent-mission";
@@ -969,6 +971,9 @@ export const useAgentMissionStore = create<AgentMissionState>((set, get) => ({
             contextSnapshots: Array.isArray(payload.contextSnapshots) ? payload.contextSnapshots : [],
             approvals: Array.isArray(payload.approvals) ? payload.approvals : [],
             sessionAllowlist: payload.sessionAllowlist ?? {},
+            snapshots: Array.isArray(payload.snapshots)
+                ? payload.snapshots.slice().sort((a, b) => b.createdAt - a.createdAt)
+                : [],
             memory: {
                 frozenSnapshot: trimBoundedText(payload.memory?.frozenSnapshot ?? defaultFrozenSnapshot(), MEMORY_MAX_CHARS),
                 userProfile: trimBoundedText(payload.memory?.userProfile ?? defaultUserProfile(), USER_MAX_CHARS),
@@ -979,7 +984,8 @@ export const useAgentMissionStore = create<AgentMissionState>((set, get) => ({
 
 export async function hydrateAgentMissionStore(): Promise<void> {
     const dbState = await loadDbMissionState();
-    const [operationalEvents, cognitiveEvents, contextSnapshots, approvals, sessionAllowlist, frozenSnapshot, userProfile] = await Promise.all([
+    const api = getMissionDbApi();
+    const [operationalEvents, cognitiveEvents, contextSnapshots, approvals, sessionAllowlist, frozenSnapshot, userProfile, snapshotRows] = await Promise.all([
         readPersistedJson<OperationalEvent[]>(OPERATIONAL_FILE),
         readPersistedJson<CognitiveEvent[]>(COGNITIVE_FILE),
         readPersistedJson<ContextSnapshot[]>(CONTEXT_FILE),
@@ -987,7 +993,23 @@ export async function hydrateAgentMissionStore(): Promise<void> {
         readPersistedJson<Record<string, string[]>>(ALLOWLIST_FILE),
         readPersistedText(MEMORY_FILE),
         readPersistedText(USER_FILE),
+        api?.dbListSnapshotIndex?.(null) ?? Promise.resolve([]),
     ]);
+
+    const snapshots = Array.isArray(snapshotRows)
+        ? snapshotRows.map((snapshot: any) => ({
+            snapshotId: snapshot.snapshotId ?? snapshot.snapshot_id,
+            workspaceId: snapshot.workspaceId ?? snapshot.workspace_id ?? null,
+            sessionId: snapshot.sessionId ?? snapshot.session_id ?? null,
+            command: snapshot.command ?? null,
+            kind: snapshot.kind ?? "tar",
+            label: snapshot.label ?? "snapshot",
+            path: snapshot.path ?? "",
+            createdAt: snapshot.createdAt ?? snapshot.created_at ?? Date.now(),
+            status: snapshot.status ?? "ready",
+            details: snapshot.details ?? "",
+        })).sort((a, b) => b.createdAt - a.createdAt)
+        : [];
 
     useAgentMissionStore.getState().hydrate({
         operationalEvents: dbState?.operationalEvents ?? operationalEvents ?? [],
@@ -995,6 +1017,7 @@ export async function hydrateAgentMissionStore(): Promise<void> {
         contextSnapshots: dbState?.contextSnapshots ?? contextSnapshots ?? [],
         approvals: dbState?.approvals ?? approvals ?? [],
         sessionAllowlist: dbState?.sessionAllowlist ?? sessionAllowlist ?? {},
+        snapshots,
         memory: {
             frozenSnapshot: frozenSnapshot ?? defaultFrozenSnapshot(),
             userProfile: userProfile ?? defaultUserProfile(),

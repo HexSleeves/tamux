@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { AgentProviderId, AgentSettings } from "../../lib/agentStore";
-import { getProviderDefinition } from "../../lib/agentStore";
+import type { AgentProviderConfig, AgentProviderId, AgentSettings } from "../../lib/agentStore";
+import { getDefaultApiTransport, getProviderDefinition, getSupportedApiTransports } from "../../lib/agentStore";
 import { addBtnStyle, ModelSelector, NumberInput, PasswordInput, Section, SelectInput, SettingRow, TextInput, Toggle, inputStyle, smallBtnStyle } from "./shared";
 
 export function AgentTab({
@@ -11,11 +11,10 @@ export function AgentTab({
     resetSettings: () => void;
 }) {
     const [useCustomUrl, setUseCustomUrl] = useState(false);
-    
+
     const providerOptions: { id: AgentProviderId; label: string }[] = [
         { id: "featherless", label: "Featherless" },
         { id: "openai", label: "OpenAI" },
-        { id: "anthropic", label: "Anthropic" },
         { id: "qwen", label: "Qwen" },
         { id: "qwen-deepinfra", label: "Qwen (DeepInfra)" },
         { id: "kimi", label: "Kimi (Moonshot)" },
@@ -36,8 +35,9 @@ export function AgentTab({
         { id: "custom", label: "Custom" },
     ];
 
-    const providerConfig = settings[settings.activeProvider] as { baseUrl: string; model: string; apiKey: string };
+    const providerConfig = settings[settings.activeProvider] as AgentProviderConfig;
     const providerDef = getProviderDefinition(settings.activeProvider);
+    const supportedTransports = getSupportedApiTransports(settings.activeProvider);
     const isCustomProvider = settings.activeProvider === "custom";
     const showUrlEditor = isCustomProvider || useCustomUrl || Boolean(providerConfig.baseUrl && providerConfig.baseUrl !== providerDef?.defaultBaseUrl);
 
@@ -118,9 +118,9 @@ export function AgentTab({
                     ) : (
                         <SettingRow label="Base URL">
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                <span style={{ 
-                                    fontSize: 11, 
-                                    fontFamily: "var(--font-mono)", 
+                                <span style={{
+                                    fontSize: 11,
+                                    fontFamily: "var(--font-mono)",
                                     color: "var(--text-muted)",
                                     background: "var(--bg-surface)",
                                     padding: "3px 8px",
@@ -151,6 +151,42 @@ export function AgentTab({
                             onChange={(value) => updateSetting(settings.activeProvider, { ...providerConfig, apiKey: value })}
                             placeholder="Provider API key" />
                     </SettingRow>
+                    {providerDef?.apiType === "openai" ? (
+                        <SettingRow label="API Transport">
+                            <select
+                                value={providerConfig.apiTransport}
+                                onChange={(e) => updateSetting(settings.activeProvider, {
+                                    ...providerConfig,
+                                    apiTransport: supportedTransports.includes(e.target.value as any)
+                                      ? (e.target.value as AgentProviderConfig["apiTransport"])
+                                      : getDefaultApiTransport(settings.activeProvider),
+                                })}
+                                style={inputStyle}
+                            >
+                                {supportedTransports.map((transport) => (
+                                    <option key={transport} value={transport}>
+                                        {transport === "native_assistant"
+                                          ? "Native Assistant"
+                                          : transport === "responses"
+                                            ? "Responses"
+                                            : "Legacy Chat Completions"}
+                                    </option>
+                                ))}
+                            </select>
+                        </SettingRow>
+                    ) : null}
+                    {providerConfig.apiTransport === "native_assistant" ? (
+                        <SettingRow label="Assistant ID">
+                            <TextInput
+                                value={providerConfig.assistantId}
+                                onChange={(value) => updateSetting(settings.activeProvider, {
+                                    ...providerConfig,
+                                    assistantId: value,
+                                })}
+                                placeholder="asst_..."
+                            />
+                        </SettingRow>
+                    ) : null}
                     <SettingRow label="Reasoning Effort">
                         <select value={settings.reasoningEffort}
                             onChange={(e) => updateSetting("reasoningEffort", e.target.value as AgentSettings["reasoningEffort"])}
