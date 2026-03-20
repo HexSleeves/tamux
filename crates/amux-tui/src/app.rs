@@ -993,6 +993,34 @@ impl TuiModel {
 
             // Quit only via /quit command (no single-key quit to avoid accidents)
 
+            // ── Arrow keys when focus is Input — move cursor in textarea ─────
+            KeyCode::Left if self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::MoveCursorLeft);
+            }
+            KeyCode::Right if self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::MoveCursorRight);
+            }
+            KeyCode::Up if self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::MoveCursorUp);
+            }
+            KeyCode::Down if self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::MoveCursorDown);
+            }
+            KeyCode::Home if self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::MoveCursorHome);
+            }
+            KeyCode::End if self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::MoveCursorEnd);
+            }
+
+            // ── Undo / Redo ──────────────────────────────────────────────────
+            KeyCode::Char('z') if ctrl && self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::Undo);
+            }
+            KeyCode::Char('y') if ctrl && self.focus == FocusArea::Input => {
+                self.input.reduce(input::InputAction::Redo);
+            }
+
             // ── Scroll to top/bottom ─────────────────────────────────────────
             KeyCode::Home if self.focus == FocusArea::Chat => {
                 self.chat.reduce(chat::ChatAction::ScrollChat(i32::MAX / 2));
@@ -2057,6 +2085,11 @@ impl TuiModel {
                     ));
                 } else if cursor_in_input {
                     self.focus = FocusArea::Input;
+                    // Calculate buffer position from click coordinates
+                    let input_inner_x = mouse.column.saturating_sub(4) as usize; // border + prompt " ▶ "
+                    let input_inner_y = mouse.row.saturating_sub(input_start_row + 1) as usize; // border
+                    let offset = self.input.line_col_to_offset_public(input_inner_y, input_inner_x);
+                    self.input.reduce(input::InputAction::MoveCursorToPos(offset));
                 }
                 // Always keep Insert mode active
                 self.input.set_mode(input::InputMode::Insert);

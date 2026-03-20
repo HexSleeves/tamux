@@ -45,9 +45,9 @@ pub fn render_input(
         ]);
         frame.render_widget(Paragraph::new(vec![input_line]), inner);
     } else {
-        let cursor = "\u{2588}";
+        let cursor_char = "\u{2588}";
         let buf = input.buffer();
-        let raw_lines: Vec<&str> = buf.split('\n').collect();
+        let cursor_pos = input.cursor_pos();
         let mut lines: Vec<Line> = Vec::new();
 
         // Show attachments if any
@@ -65,9 +65,18 @@ pub fn render_input(
             ]));
         }
 
+        // Build display string with cursor inserted at the correct position
+        let before_cursor = &buf[..cursor_pos];
+        let after_cursor = &buf[cursor_pos..];
+        let mut display = String::with_capacity(buf.len() + cursor_char.len());
+        display.push_str(before_cursor);
+        display.push_str(cursor_char);
+        display.push_str(after_cursor);
+
+        let raw_lines: Vec<&str> = display.split('\n').collect();
+
         for (i, line_text) in raw_lines.iter().enumerate() {
             let is_first = i == 0;
-            let is_last = i == raw_lines.len() - 1;
 
             let mut spans = Vec::new();
             if is_first {
@@ -79,15 +88,18 @@ pub fn render_input(
                 spans.push(Span::raw("   "));
             }
             spans.push(Span::raw(line_text.to_string()));
-            if is_last {
-                spans.push(Span::raw(cursor));
-            }
             lines.push(Line::from(spans));
         }
 
-        // Scroll to show the last lines if content exceeds visible area
+        // Scroll to keep cursor line visible
+        let (cursor_line, _) = input.cursor_line_col_public();
+        let attachment_lines = attachments.len();
+        let cursor_display_line = attachment_lines + cursor_line;
         let visible_height = inner.height as usize;
-        let scroll_offset = if lines.len() > visible_height {
+        let scroll_offset = if cursor_display_line >= visible_height {
+            (cursor_display_line - visible_height + 1) as u16
+        } else if lines.len() > visible_height {
+            // Default: show last lines but prefer cursor visibility
             (lines.len() - visible_height) as u16
         } else {
             0
