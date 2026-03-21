@@ -34,7 +34,17 @@ impl TuiModel {
                     &self.chat,
                     &self.theme,
                     self.focus == FocusArea::Chat,
-                    self.chat_drag_anchor.zip(self.chat_drag_current),
+                    self.chat_drag_anchor.and_then(|anchor| {
+                        self.chat_drag_current.and_then(|current| {
+                            widgets::chat::selection_points_from_mouse(
+                                body_chunks[0],
+                                &self.chat,
+                                &self.theme,
+                                anchor,
+                                current,
+                            )
+                        })
+                    }),
                 ),
                 MainPaneView::Task(target) => widgets::task_view::render(
                     frame,
@@ -79,7 +89,17 @@ impl TuiModel {
                     &self.chat,
                     &self.theme,
                     self.focus == FocusArea::Chat,
-                    self.chat_drag_anchor.zip(self.chat_drag_current),
+                    self.chat_drag_anchor.and_then(|anchor| {
+                        self.chat_drag_current.and_then(|current| {
+                            widgets::chat::selection_points_from_mouse(
+                                chunks[1],
+                                &self.chat,
+                                &self.theme,
+                                anchor,
+                                current,
+                            )
+                        })
+                    }),
                 ),
                 MainPaneView::Task(target) => widgets::task_view::render(
                     frame,

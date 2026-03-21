@@ -28,6 +28,7 @@ enum RenderedLineKind {
     ReasoningContent,
     ToolToggle,
     ToolDetail,
+    ActionBar,
     Separator,
     Padding,
     Streaming,
@@ -38,6 +39,14 @@ struct RenderedChatLine {
     line: Line<'static>,
     message_index: Option<usize>,
     kind: RenderedLineKind,
+}
+
+struct SelectionSnapshot {
+    inner: Rect,
+    all_lines: Vec<RenderedChatLine>,
+    start_idx: usize,
+    end_idx: usize,
+    padding: usize,
 }
 
 impl RenderedChatLine {
@@ -115,6 +124,63 @@ fn message_block_style(msg: &AgentMessage, theme: &ThemeTokens) -> Style {
         MessageRole::User => theme.fg_active.bg(Color::Indexed(236)),
         _ => Style::default(),
     }
+}
+
+fn message_action_targets(
+    msg_index: usize,
+    msg: &AgentMessage,
+) -> Vec<(&'static str, ChatHitTarget)> {
+    let mut actions = vec![("[Copy]", ChatHitTarget::CopyMessage(msg_index))];
+    match msg.role {
+        MessageRole::User => {
+            actions.push(("[Resend]", ChatHitTarget::ResendMessage(msg_index)));
+        }
+        MessageRole::Assistant => {
+            actions.push(("[Regenerate]", ChatHitTarget::RegenerateMessage(msg_index)));
+        }
+        _ => {}
+    }
+    actions
+}
+
+fn message_action_line(
+    msg_index: usize,
+    msg: &AgentMessage,
+    theme: &ThemeTokens,
+) -> Option<Line<'static>> {
+    let actions = message_action_targets(msg_index, msg);
+    if actions.is_empty() {
+        return None;
+    }
+
+    let mut spans = Vec::new();
+    for (idx, (label, _)) in actions.into_iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(label, theme.accent_primary));
+    }
+
+    Some(Line::from(spans))
+}
+
+fn action_hit_target(
+    msg_index: usize,
+    msg: &AgentMessage,
+    content_col: usize,
+) -> Option<ChatHitTarget> {
+    let mut col = 0usize;
+    for (idx, (label, target)) in message_action_targets(msg_index, msg).into_iter().enumerate() {
+        let width = UnicodeWidthStr::width(label);
+        if content_col >= col && content_col < col.saturating_add(width) {
+            return Some(target);
+        }
+        col = col.saturating_add(width);
+        if idx + 1 < message_action_targets(msg_index, msg).len() {
+            col = col.saturating_add(1);
+        }
+    }
+    None
 }
 
 fn classify_message_lines(
@@ -286,6 +352,16 @@ fn build_rendered_lines(
                     message_index: Some(idx),
                     kind: RenderedLineKind::Padding,
                 });
+            }
+
+            if chat.selected_message() == Some(idx) {
+                if let Some(action_line) = message_action_line(idx, msg, theme) {
+                    all_lines.push(RenderedChatLine {
+                        line: pad_message_line(action_line, inner_width, block_style),
+                        message_index: Some(idx),
+                        kind: RenderedLineKind::ActionBar,
+                    });
+                }
             }
 
             let end = all_lines.len();
@@ -471,12 +547,69 @@ fn visible_rendered_lines(
     Some((inner, visible))
 }
 
+fn selection_snapshot(
+    area: Rect,
+    chat: &ChatState,
+    theme: &ThemeTokens,
+) -> Option<SelectionSnapshot> {
+    let inner = content_inner(area);
+    if inner.width == 0 || inner.height == 0 {
+        return None;
+    }
+
+    let (all_lines, message_line_ranges) = build_rendered_lines(chat, theme, inner.width as usize);
+    if all_lines.is_empty() {
+        return None;
+    }
+
+    let scroll = resolved_scroll(
+        chat,
+        all_lines.len(),
+        inner.height as usize,
+        &message_line_ranges,
+    );
+    let (padding, start_idx, end_idx) =
+        visible_window_bounds(all_lines.len(), inner.height as usize, scroll);
+
+    Some(SelectionSnapshot {
+        inner,
+        all_lines,
+        start_idx,
+        end_idx,
+        padding,
+    })
+}
+
 fn nearest_content_row(all_lines: &[RenderedChatLine], row: usize) -> Option<usize> {
     let current = all_lines.get(row)?;
     let current_has_content = !matches!(current.kind, RenderedLineKind::Padding)
         && rendered_line_content_bounds(current).2 > rendered_line_content_bounds(current).1;
     if current_has_content {
         return Some(row);
+    }
+
+    if let Some(message_index) = current.message_index {
+        for distance in 1..all_lines.len() {
+            if let Some(prev) = row.checked_sub(distance) {
+                let line = &all_lines[prev];
+                if line.message_index == Some(message_index)
+                    && !matches!(line.kind, RenderedLineKind::Padding)
+                    && rendered_line_content_bounds(line).2 > rendered_line_content_bounds(line).1
+                {
+                    return Some(prev);
+                }
+            }
+
+            let next = row.saturating_add(distance);
+            if let Some(line) = all_lines.get(next) {
+                if line.message_index == Some(message_index)
+                    && !matches!(line.kind, RenderedLineKind::Padding)
+                    && rendered_line_content_bounds(line).2 > rendered_line_content_bounds(line).1
+                {
+                    return Some(next);
+                }
+            }
+        }
     }
 
     for next in row + 1..all_lines.len() {
@@ -690,24 +823,29 @@ pub fn selection_point_from_mouse(
     theme: &ThemeTokens,
     mouse: Position,
 ) -> Option<SelectionPoint> {
-    let inner = content_inner(area);
-    if inner.width == 0 || inner.height == 0 {
-        return None;
-    }
+    let snapshot = selection_snapshot(area, chat, theme)?;
+    selection_point_from_snapshot(&snapshot, mouse)
+}
 
-    let (all_lines, message_line_ranges) = build_rendered_lines(chat, theme, inner.width as usize);
-    if all_lines.is_empty() {
-        return None;
-    }
+pub fn selection_points_from_mouse(
+    area: Rect,
+    chat: &ChatState,
+    theme: &ThemeTokens,
+    start: Position,
+    end: Position,
+) -> Option<(SelectionPoint, SelectionPoint)> {
+    let snapshot = selection_snapshot(area, chat, theme)?;
+    Some((
+        selection_point_from_snapshot(&snapshot, start)?,
+        selection_point_from_snapshot(&snapshot, end)?,
+    ))
+}
 
-    let scroll = resolved_scroll(
-        chat,
-        all_lines.len(),
-        inner.height as usize,
-        &message_line_ranges,
-    );
-    let (padding, start_idx, end_idx) =
-        visible_window_bounds(all_lines.len(), inner.height as usize, scroll);
+fn selection_point_from_snapshot(
+    snapshot: &SelectionSnapshot,
+    mouse: Position,
+) -> Option<SelectionPoint> {
+    let inner = snapshot.inner;
 
     let clamped_x = mouse.x.clamp(
         inner.x,
@@ -720,19 +858,19 @@ pub fn selection_point_from_mouse(
     let rel_row = clamped_y.saturating_sub(inner.y) as usize;
     let rel_col = clamped_x.saturating_sub(inner.x) as usize;
 
-    if rel_row < padding {
+    if rel_row < snapshot.padding {
         return None;
     }
 
     let row = {
-        let visible_count = end_idx.saturating_sub(start_idx).max(1);
-        start_idx
+        let visible_count = snapshot.end_idx.saturating_sub(snapshot.start_idx).max(1);
+        snapshot.start_idx
             + rel_row
-                .saturating_sub(padding)
+                .saturating_sub(snapshot.padding)
                 .min(visible_count.saturating_sub(1))
     };
-    let row = nearest_content_row(&all_lines, row)?;
-    let rendered = all_lines.get(row)?;
+    let row = nearest_content_row(&snapshot.all_lines, row)?;
+    let rendered = snapshot.all_lines.get(row)?;
     let (_, content_start, content_end) = rendered_line_content_bounds(rendered);
     let content_width = content_end.saturating_sub(content_start);
     let content_col = rel_col.saturating_sub(content_start).min(content_width);
@@ -781,6 +919,18 @@ pub fn hit_test(
     match hit.kind {
         RenderedLineKind::ReasoningToggle => Some(ChatHitTarget::ReasoningToggle(message_index)),
         RenderedLineKind::ToolToggle => Some(ChatHitTarget::ToolToggle(message_index)),
+        RenderedLineKind::ActionBar => {
+            let content_col = mouse.x.saturating_sub(inner.x) as usize;
+            let (_, content_start, _) = rendered_line_content_bounds(hit);
+            let message = chat
+                .active_thread()
+                .and_then(|thread| thread.messages.get(message_index))?;
+            action_hit_target(
+                message_index,
+                message,
+                content_col.saturating_sub(content_start),
+            )
+        }
         RenderedLineKind::MessageBody
         | RenderedLineKind::ReasoningContent
         | RenderedLineKind::ToolDetail => Some(ChatHitTarget::Message(message_index)),

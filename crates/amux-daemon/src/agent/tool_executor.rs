@@ -4,6 +4,8 @@
 //! state (workspace/pane/browser) are not available in daemon mode — only
 //! tools that can execute headlessly are included here.
 
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 
 use amux_protocol::{
@@ -1053,128 +1055,17 @@ async fn execute_write_file(
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing 'content' argument"))?;
 
-    let timeout_secs = args
-        .get("timeout_seconds")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(30)
-        .min(600);
-
-    let sessions = session_manager.list().await;
-    if sessions.is_empty() {
-        anyhow::bail!("No active terminal sessions are available for write_file");
+    let base_dir = resolve_tool_cwd(args, session_manager, preferred_session_id).await?;
+    let target = resolve_tool_path(path, base_dir.as_deref());
+    if let Some(parent) = target.parent() {
+        tokio::fs::create_dir_all(parent).await?;
     }
-
-    let resolved_session_id =
-        if let Some(session_ref) = args.get("session").and_then(|v| v.as_str()) {
-            sessions
-                .iter()
-                .find(|session| {
-                    session.id.to_string() == session_ref
-                        || session.id.to_string().contains(session_ref)
-                })
-                .map(|session| session.id)
-                .ok_or_else(|| anyhow::anyhow!("session not found: {session_ref}"))?
-        } else {
-            preferred_session_id.unwrap_or(sessions[0].id)
-        };
-
-    let (mut rx, _) = session_manager.subscribe(resolved_session_id).await?;
-    let command = build_write_file_command(path, content);
-    let request = ManagedCommandRequest {
-        command,
-        rationale: format!(
-            "Write {} bytes to file path requested by agent tool call",
-            content.len()
-        ),
-        allow_network: false,
-        sandbox_enabled: false,
-        security_level: SecurityLevel::Lowest,
-        cwd: None,
-        language_hint: Some("shell".to_string()),
-        source: ManagedCommandSource::Agent,
-    };
-
-    let queued = session_manager
-        .execute_managed_command(resolved_session_id, request)
-        .await?;
-
-    let execution_id = match queued {
-        DaemonMessage::ManagedCommandQueued { execution_id, .. } => execution_id,
-        DaemonMessage::ApprovalRequired { approval, .. } => {
-            return Err(anyhow::anyhow!(
-                "write_file requires approval before execution (approval_id: {})",
-                approval.approval_id
-            ));
-        }
-        DaemonMessage::ManagedCommandRejected { message, .. } => {
-            return Err(anyhow::anyhow!("write_file command rejected: {message}"));
-        }
-        other => {
-            return Err(anyhow::anyhow!(
-                "unexpected managed command response for write_file: {}",
-                daemon_message_kind(&other)
-            ));
-        }
-    };
-
-    let wait_deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    loop {
-        let remaining = wait_deadline.saturating_duration_since(std::time::Instant::now());
-        if remaining.is_zero() {
-            return Err(anyhow::anyhow!(
-                "write_file timed out waiting for terminal command completion (execution_id: {execution_id})"
-            ));
-        }
-
-        let event = tokio::time::timeout(remaining, rx.recv())
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "write_file timed out waiting for terminal command completion (execution_id: {execution_id})"
-                )
-            })?;
-
-        let msg = match event {
-            Ok(message) => message,
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                return Err(anyhow::anyhow!(
-                    "terminal session event stream closed while waiting for write_file result"
-                ));
-            }
-        };
-
-        match msg {
-            DaemonMessage::ManagedCommandFinished {
-                execution_id: finished_id,
-                exit_code,
-                ..
-            } if finished_id == execution_id => {
-                if exit_code == Some(0) {
-                    return Ok(format!(
-                        "Written {} bytes to {path} via session {resolved_session_id} (execution_id: {execution_id})",
-                        content.len()
-                    ));
-                }
-                return Err(anyhow::anyhow!(
-                    "write_file terminal command failed (execution_id: {execution_id}, exit_code: {:?})",
-                    exit_code
-                ));
-            }
-            DaemonMessage::ManagedCommandRejected {
-                execution_id: rejected_id,
-                message,
-                ..
-            } => {
-                if rejected_id.as_deref() == Some(execution_id.as_str()) || rejected_id.is_none() {
-                    return Err(anyhow::anyhow!(
-                        "write_file terminal command rejected (execution_id: {execution_id}): {message}"
-                    ));
-                }
-            }
-            _ => {}
-        }
-    }
+    tokio::fs::write(&target, content).await?;
+    Ok(format!(
+        "Written {} bytes to {}",
+        content.len(),
+        target.display()
+    ))
 }
 
 fn validate_write_path(path: &str) -> Result<()> {
@@ -1217,6 +1108,56 @@ fn validate_read_path(path: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn resolve_tool_cwd(
+    args: &serde_json::Value,
+    session_manager: &Arc<SessionManager>,
+    preferred_session_id: Option<SessionId>,
+) -> Result<Option<PathBuf>> {
+    if let Some(cwd) = args
+        .get("cwd")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(Some(PathBuf::from(cwd)));
+    }
+
+    let sessions = session_manager.list().await;
+    if sessions.is_empty() {
+        return Ok(None);
+    }
+
+    let resolved = if let Some(session_ref) = args.get("session").and_then(|value| value.as_str()) {
+        sessions
+            .iter()
+            .find(|session| {
+                session.id.to_string() == session_ref
+                    || session.id.to_string().contains(session_ref)
+            })
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("session not found: {session_ref}"))?
+    } else {
+        let resolved_id = preferred_session_id.unwrap_or(sessions[0].id);
+        sessions
+            .into_iter()
+            .find(|session| session.id == resolved_id)
+            .ok_or_else(|| anyhow::anyhow!("session not found: {resolved_id}"))?
+    };
+
+    Ok(resolved.cwd.map(PathBuf::from))
+}
+
+fn resolve_tool_path(path: &str, base_dir: Option<&Path>) -> PathBuf {
+    let path = PathBuf::from(path);
+    if path.is_absolute() {
+        path
+    } else if let Some(base_dir) = base_dir {
+        base_dir.join(path)
+    } else {
+        path
+    }
 }
 
 fn build_write_file_command(path: &str, content: &str) -> String {
@@ -2365,38 +2306,90 @@ async fn execute_run_terminal_command(
     args: &serde_json::Value,
     session_manager: &Arc<SessionManager>,
     session_id: Option<SessionId>,
-    event_tx: &broadcast::Sender<AgentEvent>,
-    thread_id: &str,
+    _event_tx: &broadcast::Sender<AgentEvent>,
+    _thread_id: &str,
 ) -> Result<(String, Option<ToolPendingApproval>)> {
-    let managed_args =
-        managed_alias_args(args, "Run a shell command in a managed terminal session");
-    execute_managed_command(
-        &managed_args,
-        session_manager,
-        session_id,
-        event_tx,
-        thread_id,
-    )
-    .await
+    execute_headless_shell_command(args, session_manager, session_id, "run_terminal_command").await
 }
 
 async fn execute_bash_command(
     args: &serde_json::Value,
     session_manager: &Arc<SessionManager>,
     session_id: Option<SessionId>,
-    event_tx: &broadcast::Sender<AgentEvent>,
-    thread_id: &str,
+    _event_tx: &broadcast::Sender<AgentEvent>,
+    _thread_id: &str,
 ) -> Result<(String, Option<ToolPendingApproval>)> {
-    let managed_args =
-        managed_alias_args(args, "Run a shell command in a managed terminal session");
-    execute_managed_command(
-        &managed_args,
-        session_manager,
-        session_id,
-        event_tx,
-        thread_id,
+    execute_headless_shell_command(args, session_manager, session_id, "bash_command").await
+}
+
+async fn execute_headless_shell_command(
+    args: &serde_json::Value,
+    session_manager: &Arc<SessionManager>,
+    session_id: Option<SessionId>,
+    tool_name: &str,
+) -> Result<(String, Option<ToolPendingApproval>)> {
+    let command = args
+        .get("command")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'command' argument"))?;
+    let timeout_secs = args
+        .get("timeout_seconds")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(30)
+        .min(600);
+    let cwd = resolve_tool_cwd(args, session_manager, session_id).await?;
+
+    let mut process = tokio::process::Command::new("bash");
+    process
+        .arg("-lc")
+        .arg(command)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(cwd) = cwd.as_deref() {
+        process.current_dir(cwd);
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        process.output(),
     )
     .await
+    .map_err(|_| anyhow::anyhow!("{tool_name} timed out after {timeout_secs}s"))??;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let cwd_suffix = cwd
+        .as_ref()
+        .map(|path| format!(" in {}", path.display()))
+        .unwrap_or_default();
+
+    if output.status.success() {
+        let mut result = format!("Command finished successfully{cwd_suffix} (exit_code: 0).");
+        if !stdout.is_empty() {
+            result.push_str(&format!("\n\nStdout:\n{stdout}"));
+        }
+        if !stderr.is_empty() {
+            result.push_str(&format!("\n\nStderr:\n{stderr}"));
+        }
+        Ok((result, None))
+    } else {
+        let mut details = String::new();
+        if !stdout.is_empty() {
+            details.push_str(&format!("\n\nStdout:\n{stdout}"));
+        }
+        if !stderr.is_empty() {
+            details.push_str(&format!("\n\nStderr:\n{stderr}"));
+        }
+        Err(anyhow::anyhow!(
+            "Command failed{cwd_suffix} (exit_code: {:?}).{}",
+            output.status.code(),
+            details
+        ))
+    }
 }
 
 fn managed_alias_args(args: &serde_json::Value, fallback_rationale: &str) -> serde_json::Value {

@@ -55,6 +55,9 @@ pub enum ChatHitTarget {
     Message(usize),
     ReasoningToggle(usize),
     ToolToggle(usize),
+    CopyMessage(usize),
+    ResendMessage(usize),
+    RegenerateMessage(usize),
 }
 
 // ── ToolCallStatus ────────────────────────────────────────────────────────────

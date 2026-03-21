@@ -1,7 +1,8 @@
 use ratatui::prelude::*;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Tabs};
+use ratatui::widgets::Paragraph;
+use unicode_width::UnicodeWidthStr;
 
 use crate::state::sidebar::{SidebarState, SidebarTab};
 use crate::state::task::TaskState;
@@ -9,6 +10,13 @@ use crate::theme::ThemeTokens;
 
 const TAB_LABELS: [&str; 2] = ["Files", "Todos"];
 const TAB_DIVIDER: &str = " | ";
+
+#[derive(Debug, Clone, Copy)]
+struct SidebarTabLayout {
+    tab: SidebarTab,
+    start_x: u16,
+    end_x: u16,
+}
 
 #[derive(Debug, Clone)]
 struct SidebarRow {
@@ -23,22 +31,65 @@ pub enum SidebarHitTarget {
 }
 
 fn tab_hit_test(tab_area: Rect, mouse_x: u16) -> Option<SidebarTab> {
-    let tabs = [SidebarTab::Files, SidebarTab::Todos];
-    let divider_width = TAB_DIVIDER.chars().count() as u16;
-    let mut x = tab_area.x;
+    tab_layouts(tab_area)
+        .into_iter()
+        .find(|layout| mouse_x >= layout.start_x && mouse_x < layout.end_x)
+        .map(|layout| layout.tab)
+}
 
-    for (idx, label) in TAB_LABELS.iter().enumerate() {
-        let label_width = label.chars().count() as u16;
-        if mouse_x >= x && mouse_x < x.saturating_add(label_width) {
-            return tabs.get(idx).copied();
-        }
-        x = x.saturating_add(label_width);
-        if idx + 1 < TAB_LABELS.len() {
+fn tab_layouts(tab_area: Rect) -> Vec<SidebarTabLayout> {
+    let tabs = [SidebarTab::Files, SidebarTab::Todos];
+    let divider_width = UnicodeWidthStr::width(TAB_DIVIDER) as u16;
+    let padded_labels = TAB_LABELS
+        .iter()
+        .map(|label| format!(" {label} "))
+        .collect::<Vec<_>>();
+    let total_width = padded_labels
+        .iter()
+        .map(|label| UnicodeWidthStr::width(label.as_str()) as u16)
+        .sum::<u16>()
+        .saturating_add(divider_width);
+    let mut x = tab_area
+        .x
+        .saturating_add(tab_area.width.saturating_sub(total_width) / 2);
+    let mut layouts = Vec::with_capacity(tabs.len());
+
+    for (idx, tab) in tabs.into_iter().enumerate() {
+        let width = UnicodeWidthStr::width(padded_labels[idx].as_str()) as u16;
+        layouts.push(SidebarTabLayout {
+            tab,
+            start_x: x,
+            end_x: x.saturating_add(width),
+        });
+        x = x.saturating_add(width);
+        if idx + 1 < padded_labels.len() {
             x = x.saturating_add(divider_width);
         }
     }
 
-    None
+    layouts
+}
+
+fn tab_line(sidebar: &SidebarState, theme: &ThemeTokens) -> Line<'static> {
+    let mut spans = Vec::new();
+    let layouts = [
+        (SidebarTab::Files, " Files "),
+        (SidebarTab::Todos, " Todos "),
+    ];
+
+    for (idx, (tab, label)) in layouts.into_iter().enumerate() {
+        let style = if sidebar.active_tab() == tab {
+            theme.fg_active.bg(Color::Indexed(236))
+        } else {
+            theme.fg_dim
+        };
+        spans.push(Span::styled(label, style));
+        if idx + 1 < layouts.len() {
+            spans.push(Span::styled(TAB_DIVIDER, theme.fg_dim));
+        }
+    }
+
+    Line::from(spans).alignment(Alignment::Center)
 }
 
 fn rows_for_thread(
@@ -190,20 +241,11 @@ pub fn render(
         return;
     }
 
-    let tabs = Tabs::new(TAB_LABELS)
-        .select(match sidebar.active_tab() {
-            SidebarTab::Files => 0,
-            SidebarTab::Todos => 1,
-        })
-        .style(theme.fg_dim)
-        .highlight_style(theme.fg_active)
-        .divider(Span::styled(TAB_DIVIDER, theme.fg_dim));
-
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(area);
-    frame.render_widget(tabs, chunks[0]);
+    frame.render_widget(Paragraph::new(tab_line(sidebar, theme)), chunks[0]);
 
     let rows = rows_for_thread(tasks, sidebar, thread_id, theme, chunks[1].width as usize);
     let scroll = resolved_scroll(&rows, sidebar, chunks[1].height as usize);
@@ -277,8 +319,17 @@ mod tests {
     #[test]
     fn tab_hit_test_uses_rendered_label_positions() {
         let area = Rect::new(10, 3, 30, 1);
-        assert_eq!(tab_hit_test(area, 10), Some(SidebarTab::Files));
-        assert_eq!(tab_hit_test(area, 18), Some(SidebarTab::Todos));
-        assert_eq!(tab_hit_test(area, 15), None);
+        let layouts = tab_layouts(area);
+        assert_eq!(layouts.len(), 2);
+        assert_eq!(
+            tab_hit_test(area, layouts[0].start_x + 1),
+            Some(SidebarTab::Files)
+        );
+        assert_eq!(
+            tab_hit_test(area, layouts[1].start_x + 1),
+            Some(SidebarTab::Todos)
+        );
+        let divider_x = layouts[0].end_x;
+        assert_eq!(tab_hit_test(area, divider_x + 1), None);
     }
 }

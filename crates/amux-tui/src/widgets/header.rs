@@ -72,7 +72,12 @@ pub fn render(
     let header_text = Line::from(spans).alignment(Alignment::Center);
     frame.render_widget(block, area);
     let text_area = if area.height >= 2 {
-        Rect::new(area.x, area.y + area.height.saturating_sub(2), area.width, 1)
+        Rect::new(
+            area.x,
+            area.y + area.height.saturating_sub(1) / 2,
+            area.width,
+            1,
+        )
     } else {
         area
     };

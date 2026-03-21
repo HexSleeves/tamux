@@ -426,4 +426,54 @@ impl TuiModel {
             }
         }
     }
+
+    pub(super) fn copy_message(&mut self, index: usize) {
+        let Some(thread) = self.chat.active_thread() else {
+            return;
+        };
+        let Some(message) = thread.messages.get(index) else {
+            return;
+        };
+        let mut text = String::new();
+        if let Some(reasoning) = message.reasoning.as_deref().filter(|value| !value.is_empty()) {
+            text.push_str(reasoning);
+            if !message.content.is_empty() {
+                text.push_str("\n\n");
+            }
+        }
+        text.push_str(&message.content);
+        if text.trim().is_empty() {
+            return;
+        }
+        conversion::copy_to_clipboard(&text);
+        self.status_line = "Copied to clipboard".to_string();
+    }
+
+    pub(super) fn resend_message(&mut self, index: usize) {
+        let content = self
+            .chat
+            .active_thread()
+            .and_then(|thread| thread.messages.get(index))
+            .map(|message| message.content.clone());
+        if let Some(content) = content.filter(|value| !value.trim().is_empty()) {
+            self.submit_prompt(content);
+        }
+    }
+
+    pub(super) fn regenerate_from_message(&mut self, index: usize) {
+        let prompt = self.chat.active_thread().and_then(|thread| {
+            thread
+                .messages
+                .iter()
+                .take(index)
+                .rev()
+                .find(|message| {
+                    message.role == chat::MessageRole::User && !message.content.trim().is_empty()
+                })
+                .map(|message| message.content.clone())
+        });
+        if let Some(prompt) = prompt {
+            self.submit_prompt(prompt);
+        }
+    }
 }

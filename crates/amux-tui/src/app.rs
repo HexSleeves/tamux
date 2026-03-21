@@ -136,8 +136,8 @@ pub struct TuiModel {
     cancelled_thread_id: Option<String>,
 
     // Active mouse drag selection in the chat pane
-    chat_drag_anchor: Option<widgets::chat::SelectionPoint>,
-    chat_drag_current: Option<widgets::chat::SelectionPoint>,
+    chat_drag_anchor: Option<Position>,
+    chat_drag_current: Option<Position>,
 }
 
 impl TuiModel {

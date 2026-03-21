@@ -65,12 +65,7 @@ impl TuiModel {
                     } else {
                         self.chat.reduce(chat::ChatAction::ScrollChat(3));
                         if self.chat_drag_anchor.is_some() {
-                            self.chat_drag_current = widgets::chat::selection_point_from_mouse(
-                                chat_area,
-                                &self.chat,
-                                &self.theme,
-                                Position::new(mouse.column, mouse.row),
-                            );
+                            self.chat_drag_current = Some(Position::new(mouse.column, mouse.row));
                         }
                     }
                 } else if cursor_in_sidebar {
@@ -91,12 +86,7 @@ impl TuiModel {
                     } else {
                         self.chat.reduce(chat::ChatAction::ScrollChat(-3));
                         if self.chat_drag_anchor.is_some() {
-                            self.chat_drag_current = widgets::chat::selection_point_from_mouse(
-                                chat_area,
-                                &self.chat,
-                                &self.theme,
-                                Position::new(mouse.column, mouse.row),
-                            );
+                            self.chat_drag_current = Some(Position::new(mouse.column, mouse.row));
                         }
                     }
                 } else if cursor_in_sidebar {
@@ -111,14 +101,9 @@ impl TuiModel {
                 if cursor_in_chat {
                     self.focus = FocusArea::Chat;
                     if matches!(self.main_pane_view, MainPaneView::Conversation) {
-                        let pos = widgets::chat::selection_point_from_mouse(
-                            chat_area,
-                            &self.chat,
-                            &self.theme,
-                            Position::new(mouse.column, mouse.row),
-                        );
-                        self.chat_drag_anchor = pos;
-                        self.chat_drag_current = pos;
+                        let pos = Position::new(mouse.column, mouse.row);
+                        self.chat_drag_anchor = Some(pos);
+                        self.chat_drag_current = Some(pos);
                     } else if let MainPaneView::Task(target) = &self.main_pane_view {
                         if let Some(hit) = widgets::task_view::hit_test(
                             chat_area,
@@ -213,12 +198,7 @@ impl TuiModel {
                     {
                         self.chat.reduce(chat::ChatAction::ScrollChat(-1));
                     }
-                    self.chat_drag_current = widgets::chat::selection_point_from_mouse(
-                        chat_area,
-                        &self.chat,
-                        &self.theme,
-                        Position::new(mouse.column, mouse.row),
-                    );
+                    self.chat_drag_current = Some(Position::new(mouse.column, mouse.row));
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
@@ -226,23 +206,32 @@ impl TuiModel {
                     let current = self
                         .chat_drag_current
                         .take()
-                        .or_else(|| {
-                            widgets::chat::selection_point_from_mouse(
-                                chat_area,
-                                &self.chat,
-                                &self.theme,
-                                Position::new(mouse.column, mouse.row),
-                            )
-                        })
-                        .unwrap_or(anchor);
-
-                    if anchor != current {
-                        if let Some(text) = widgets::chat::selected_text(
+                        .unwrap_or(Position::new(mouse.column, mouse.row));
+                    let Some((anchor_point, current_point)) =
+                        widgets::chat::selection_points_from_mouse(
                             chat_area,
                             &self.chat,
                             &self.theme,
                             anchor,
                             current,
+                        )
+                    else {
+                        if cursor_in_chat {
+                            self.handle_chat_click(
+                                chat_area,
+                                Position::new(mouse.column, mouse.row),
+                            );
+                        }
+                        return;
+                    };
+
+                    if anchor_point != current_point {
+                        if let Some(text) = widgets::chat::selected_text(
+                            chat_area,
+                            &self.chat,
+                            &self.theme,
+                            anchor_point,
+                            current_point,
                         ) {
                             conversion::copy_to_clipboard(&text);
                             self.status_line = "Copied selection to clipboard".to_string();
@@ -327,6 +316,18 @@ impl TuiModel {
             Some(chat::ChatHitTarget::ToolToggle(idx)) => {
                 self.chat.select_message(Some(idx));
                 self.chat.toggle_tool_expansion(idx);
+            }
+            Some(chat::ChatHitTarget::CopyMessage(idx)) => {
+                self.chat.select_message(Some(idx));
+                self.copy_message(idx);
+            }
+            Some(chat::ChatHitTarget::ResendMessage(idx)) => {
+                self.chat.select_message(Some(idx));
+                self.resend_message(idx);
+            }
+            Some(chat::ChatHitTarget::RegenerateMessage(idx)) => {
+                self.chat.select_message(Some(idx));
+                self.regenerate_from_message(idx);
             }
             None => {}
         }

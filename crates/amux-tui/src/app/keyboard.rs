@@ -36,6 +36,19 @@ impl TuiModel {
             }
             return false;
         }
+        if code == KeyCode::Char('c') && ctrl {
+            if self.assistant_busy() {
+                self.cancelled_thread_id = self.chat.active_thread_id().map(String::from);
+                self.chat.reduce(chat::ChatAction::ForceStopStreaming);
+                self.agent_activity = None;
+                self.show_input_notice("Stopped stream", InputNoticeKind::Success, 100, false);
+            } else if self.focus == FocusArea::Chat {
+                if let Some(sel) = self.chat.selected_message() {
+                    self.copy_message(sel);
+                }
+            }
+            return false;
+        }
         if let Some(modal_kind) = self.modal.top() {
             return self.handle_key_modal(code, modifiers, modal_kind);
         }
