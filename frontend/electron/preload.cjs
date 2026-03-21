@@ -275,6 +275,9 @@ const bridgeApi = {
     agentSetSubAgent: (subAgentJson) => ipcRenderer.invoke('agent-set-sub-agent', subAgentJson),
     agentRemoveSubAgent: (subAgentId) => ipcRenderer.invoke('agent-remove-sub-agent', subAgentId),
     agentListSubAgents: () => ipcRenderer.invoke('agent-list-sub-agents'),
+    agentGetConciergeConfig: () => ipcRenderer.invoke('agent-get-concierge-config'),
+    agentSetConciergeConfig: (config) => ipcRenderer.invoke('agent-set-concierge-config', config),
+    agentDismissConciergeWelcome: () => ipcRenderer.invoke('agent-dismiss-concierge-welcome'),
     onAgentEvent: (cb) => {
         const listener = (_event, data) => cb(data);
         ipcRenderer.on('agent-event', listener);

@@ -181,6 +181,11 @@ enum AgentBridgeCommand {
         sub_agent_id: String,
     },
     ListSubAgents,
+    GetConciergeConfig,
+    SetConciergeConfig {
+        config_json: String,
+    },
+    DismissConciergeWelcome,
     Shutdown,
 }
 
@@ -1087,6 +1092,15 @@ pub async fn run_agent_bridge() -> Result<()> {
                             AgentBridgeCommand::ListSubAgents => {
                                 framed.send(ClientMessage::AgentListSubAgents).await?;
                             }
+                            AgentBridgeCommand::GetConciergeConfig => {
+                                framed.send(ClientMessage::AgentGetConciergeConfig).await?;
+                            }
+                            AgentBridgeCommand::SetConciergeConfig { config_json } => {
+                                framed.send(ClientMessage::AgentSetConciergeConfig { config_json }).await?;
+                            }
+                            AgentBridgeCommand::DismissConciergeWelcome => {
+                                framed.send(ClientMessage::AgentDismissConciergeWelcome).await?;
+                            }
                             AgentBridgeCommand::Shutdown => {
                                 framed.send(ClientMessage::AgentUnsubscribe).await?;
                                 break;
@@ -1199,6 +1213,14 @@ pub async fn run_agent_bridge() -> Result<()> {
                     }
                     Some(Ok(DaemonMessage::AgentSubAgentRemoved { sub_agent_id })) => {
                         let msg = serde_json::json!({"type":"sub-agent-removed","data":{"sub_agent_id":sub_agent_id}});
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentConciergeConfig { config_json })) => {
+                        let msg = serde_json::json!({"type":"concierge-config","data":serde_json::from_str::<serde_json::Value>(&config_json).unwrap_or_default()});
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentConciergeWelcomeDismissed)) => {
+                        let msg = serde_json::json!({"type":"concierge-welcome-dismissed"});
                         emit_agent_event(&msg.to_string())?;
                     }
                     Some(Ok(DaemonMessage::Error { message })) => {

@@ -8,6 +8,7 @@ pub mod settings;
 pub mod sidebar;
 pub mod task;
 pub mod auth;
+pub mod concierge;
 pub mod subagents;
 
 // ── Focus ────────────────────────────────────────────────────────────────────
@@ -100,6 +101,8 @@ pub use sidebar::{SidebarAction, SidebarItemTarget, SidebarState, SidebarTab};
 pub use task::{TaskAction, TaskState};
 #[allow(unused_imports)]
 pub use auth::{AuthAction, AuthState, ProviderAuthEntry};
+#[allow(unused_imports)]
+pub use concierge::{ConciergeAction, ConciergeActionVm, ConciergeState};
 #[allow(unused_imports)]
 pub use subagents::{SubAgentEntry, SubAgentsAction, SubAgentsState};
 

@@ -87,4 +87,15 @@ impl AgentEngine {
     pub async fn list_sub_agents(&self) -> Vec<SubAgentDefinition> {
         self.config.read().await.sub_agents.clone()
     }
+
+    /// Get the concierge configuration.
+    pub async fn get_concierge_config(&self) -> ConciergeConfig {
+        self.config.read().await.concierge.clone()
+    }
+
+    /// Update the concierge configuration and persist.
+    pub async fn set_concierge_config(&self, concierge: ConciergeConfig) {
+        self.config.write().await.concierge = concierge;
+        self.persist_config().await;
+    }
 }

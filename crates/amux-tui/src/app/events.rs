@@ -302,6 +302,28 @@ impl TuiModel {
             ClientEvent::SubAgentRemoved { sub_agent_id } => {
                 self.subagents.reduce(crate::state::subagents::SubAgentsAction::Removed(sub_agent_id));
             }
+            ClientEvent::ConciergeWelcome { content, actions } => {
+                self.concierge
+                    .reduce(crate::state::ConciergeAction::WelcomeReceived { content, actions });
+            }
+            ClientEvent::ConciergeConfigReceived {
+                enabled,
+                detail_level,
+                provider,
+                model,
+            } => {
+                self.concierge
+                    .reduce(crate::state::ConciergeAction::ConfigReceived {
+                        enabled,
+                        detail_level,
+                        provider,
+                        model,
+                    });
+            }
+            ClientEvent::ConciergeWelcomeDismissed => {
+                self.concierge
+                    .reduce(crate::state::ConciergeAction::WelcomeDismissed);
+            }
             ClientEvent::Error(message) => {
                 if self.assistant_busy() {
                     self.chat.reduce(chat::ChatAction::ForceStopStreaming);

@@ -12,6 +12,7 @@ import { KeyboardTab } from "./settings-panel/KeyboardTab";
 import { TerminalTab } from "./settings-panel/TerminalTab";
 import { ProviderAuthTab } from "./settings-panel/ProviderAuthTab";
 import { SubAgentsTab } from "./settings-panel/SubAgentsTab";
+import { ConciergeSection } from "./settings-panel/ConciergeSection";
 import {
   headerBtnStyle,
 } from "./settings-panel/shared";
@@ -212,7 +213,10 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
           )}
           {tab === "auth" && <ProviderAuthTab />}
           {tab === "agent" && (
-            <AgentTab settings={agentSettings} updateSetting={updateAgentSetting} resetSettings={resetAgentSettings} />
+            <>
+              <AgentTab settings={agentSettings} updateSetting={updateAgentSetting} resetSettings={resetAgentSettings} />
+              <ConciergeSection />
+            </>
           )}
           {tab === "subagents" && <SubAgentsTab />}
           {tab === "gateway" && (

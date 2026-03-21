@@ -12,6 +12,7 @@ pub enum SettingsTab {
     Auth,
     Agent,
     SubAgents,
+    Concierge,
     Advanced,
 }
 
@@ -25,6 +26,7 @@ impl SettingsTab {
         SettingsTab::Auth,
         SettingsTab::Agent,
         SettingsTab::SubAgents,
+        SettingsTab::Concierge,
         SettingsTab::Advanced,
     ];
 
@@ -296,6 +298,13 @@ impl SettingsState {
                 4 => "subagent_toggle",
                 _ => "",
             },
+            SettingsTab::Concierge => match self.field_cursor {
+                0 => "concierge_enabled",
+                1 => "concierge_detail_level",
+                2 => "concierge_provider",
+                3 => "concierge_model",
+                _ => "",
+            },
             SettingsTab::Advanced => match self.field_cursor {
                 0 => "auto_compact_context",
                 1 => "max_context_messages",
@@ -327,6 +336,7 @@ impl SettingsState {
             SettingsTab::Auth => 3,
             SettingsTab::Agent => 3,
             SettingsTab::SubAgents => 5,
+            SettingsTab::Concierge => 4,
             SettingsTab::Advanced => 14,
         }
     }
@@ -624,8 +634,8 @@ mod tests {
     }
 
     #[test]
-    fn all_tabs_covers_nine_variants() {
-        assert_eq!(SettingsTab::all().len(), 9);
+    fn all_tabs_covers_ten_variants() {
+        assert_eq!(SettingsTab::all().len(), 10);
     }
 
     #[test]
@@ -846,6 +856,8 @@ mod tests {
         assert_eq!(state.field_count(), 3); // name, prompt, backend
         state.reduce(SettingsAction::SwitchTab(SettingsTab::SubAgents));
         assert_eq!(state.field_count(), 5); // list, add, edit, delete, toggle
+        state.reduce(SettingsAction::SwitchTab(SettingsTab::Concierge));
+        assert_eq!(state.field_count(), 4); // enabled, detail_level, provider, model
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Advanced));
         assert_eq!(state.field_count(), 14); // 10 advanced + 4 snapshot fields
     }

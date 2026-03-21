@@ -449,6 +449,28 @@ impl HistoryStore {
         Ok(())
     }
 
+    /// Delete specific messages from a thread by their IDs.
+    pub fn delete_messages(&self, thread_id: &str, message_ids: &[&str]) -> Result<usize> {
+        if message_ids.is_empty() {
+            return Ok(0);
+        }
+        let connection = self.open_connection()?;
+        let placeholders: Vec<String> = message_ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "DELETE FROM agent_messages WHERE thread_id = ? AND id IN ({})",
+            placeholders.join(", ")
+        );
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        params.push(Box::new(thread_id.to_string()));
+        for id in message_ids {
+            params.push(Box::new(id.to_string()));
+        }
+        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let count = connection.execute(&sql, refs.as_slice())?;
+        self.refresh_thread_stats(&connection, thread_id)?;
+        Ok(count)
+    }
+
     pub fn list_messages(
         &self,
         thread_id: &str,

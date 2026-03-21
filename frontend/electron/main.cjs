@@ -3713,6 +3713,8 @@ function registerIpcHandlers() {
                     'sub-agent-list',
                     'sub-agent-updated',
                     'sub-agent-removed',
+                    'concierge-config',
+                    'concierge-welcome-dismissed',
                 ].includes(event.type)) {
                     let oldest = null;
                     for (const [reqId, handler] of agentBridge.pending.entries()) {
@@ -4163,6 +4165,32 @@ function registerIpcHandlers() {
                 action,
                 step_index: Number.isFinite(stepIndex) ? Math.trunc(stepIndex) : null,
             }, 'goal-run-controlled');
+        } catch {
+            return { ok: false };
+        }
+    });
+
+    ipcMain.handle('agent-get-concierge-config', async () => {
+        try {
+            return await sendAgentQuery({ type: 'get-concierge-config' }, 'concierge-config');
+        } catch {
+            return {};
+        }
+    });
+
+    ipcMain.handle('agent-set-concierge-config', async (_event, config) => {
+        try {
+            sendAgentCommand({ type: 'set-concierge-config', config_json: JSON.stringify(config) });
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('agent-dismiss-concierge-welcome', async () => {
+        try {
+            sendAgentCommand({ type: 'dismiss-concierge-welcome' });
+            return { ok: true };
         } catch {
             return { ok: false };
         }

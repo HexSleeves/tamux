@@ -656,6 +656,22 @@ export interface AgentState {
   updateSubAgent: (def: SubAgentDefinition) => Promise<void>;
   refreshSubAgents: () => Promise<void>;
 
+  // Concierge
+  conciergeConfig: {
+    enabled: boolean;
+    detail_level: string;
+    provider?: string;
+    model?: string;
+    auto_cleanup_on_navigate: boolean;
+  };
+  conciergeWelcome: {
+    content: string;
+    actions: Array<{ label: string; action_type: string; thread_id?: string }>;
+  } | null;
+  refreshConciergeConfig: () => Promise<void>;
+  updateConciergeConfig: (config: Record<string, unknown>) => Promise<void>;
+  dismissConciergeWelcome: () => Promise<void>;
+
   // Derived
   getThreadsForPane: (paneId: PaneId) => AgentThread[];
 }
@@ -1394,6 +1410,38 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     set({ agentSettings: def });
   },
 
+  conciergeConfig: {
+    enabled: true,
+    detail_level: "proactive_triage",
+    auto_cleanup_on_navigate: true,
+  },
+  conciergeWelcome: null,
+  refreshConciergeConfig: async () => {
+    const bridge = getBridge();
+    if (!bridge?.agentGetConciergeConfig) return;
+    try {
+      const config = await bridge.agentGetConciergeConfig();
+      if (config && typeof config === "object") {
+        set({ conciergeConfig: config as any });
+      }
+    } catch { /* ignore */ }
+  },
+  updateConciergeConfig: async (config) => {
+    const bridge = getBridge();
+    if (!bridge?.agentSetConciergeConfig) return;
+    try {
+      await bridge.agentSetConciergeConfig(config);
+      set({ conciergeConfig: config as any });
+    } catch { /* ignore */ }
+  },
+  dismissConciergeWelcome: async () => {
+    const bridge = getBridge();
+    if (!bridge?.agentDismissConciergeWelcome) return;
+    try {
+      await bridge.agentDismissConciergeWelcome();
+      set({ conciergeWelcome: null });
+    } catch { /* ignore */ }
+  },
   getThreadsForPane: (paneId) => get().threads.filter((t) => t.paneId === paneId),
 }));
 

@@ -369,6 +369,15 @@ pub enum ClientMessage {
 
     /// List all sub-agent definitions.
     AgentListSubAgents,
+
+    /// Get concierge configuration.
+    AgentGetConciergeConfig,
+
+    /// Update concierge configuration.
+    AgentSetConciergeConfig { config_json: String },
+
+    /// Dismiss/prune the current welcome message.
+    AgentDismissConciergeWelcome,
 }
 
 // ---------------------------------------------------------------------------
@@ -674,6 +683,12 @@ pub enum DaemonMessage {
 
     /// Confirmation of AgentRemoveSubAgent.
     AgentSubAgentRemoved { sub_agent_id: String },
+
+    /// Response to AgentGetConciergeConfig.
+    AgentConciergeConfig { config_json: String },
+
+    /// Confirmation that welcome was dismissed.
+    AgentConciergeWelcomeDismissed,
 }
 
 // ---------------------------------------------------------------------------

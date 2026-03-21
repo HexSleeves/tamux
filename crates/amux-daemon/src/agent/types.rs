@@ -1005,6 +1005,9 @@ pub struct AgentConfig {
     /// Registry of named sub-agents for orchestration dispatch.
     #[serde(default)]
     pub sub_agents: Vec<SubAgentDefinition>,
+    /// Concierge agent configuration.
+    #[serde(default)]
+    pub concierge: ConciergeConfig,
     /// Additional persisted agent settings used by richer frontends and the TUI.
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -1101,6 +1104,7 @@ impl Default for AgentConfig {
             gateway: GatewayConfig::default(),
             agent_backend: AgentBackend::default(),
             sub_agents: Vec::new(),
+            concierge: ConciergeConfig::default(),
             extra: HashMap::new(),
         }
     }
@@ -1162,6 +1166,67 @@ pub struct ProviderAuthState {
     pub auth_source: AuthSource,
     pub model: String,
     pub base_url: String,
+}
+
+// ---------------------------------------------------------------------------
+// Concierge
+// ---------------------------------------------------------------------------
+
+/// How much context the concierge gathers for its welcome greeting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConciergeDetailLevel {
+    Minimal,
+    ContextSummary,
+    #[default]
+    ProactiveTriage,
+    DailyBriefing,
+}
+
+/// The type of quick-action a concierge welcome button triggers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConciergeActionType {
+    ContinueSession,
+    StartNew,
+    Search,
+    Dismiss,
+}
+
+/// A structured quick-action button in the concierge welcome message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConciergeAction {
+    pub label: String,
+    pub action_type: ConciergeActionType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+}
+
+/// Configuration for the concierge agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConciergeConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub detail_level: ConciergeDetailLevel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default = "default_true")]
+    pub auto_cleanup_on_navigate: bool,
+}
+
+impl Default for ConciergeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            detail_level: ConciergeDetailLevel::default(),
+            provider: None,
+            model: None,
+            auto_cleanup_on_navigate: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1390,6 +1455,12 @@ pub enum AgentEvent {
         checkpoint_type: String,
         step_index: Option<usize>,
     },
+    ConciergeWelcome {
+        thread_id: String,
+        content: String,
+        detail_level: String,
+        actions_json: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1401,6 +1472,8 @@ pub struct AgentThread {
     pub id: String,
     pub title: String,
     pub messages: Vec<AgentMessage>,
+    #[serde(default)]
+    pub pinned: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_thread_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

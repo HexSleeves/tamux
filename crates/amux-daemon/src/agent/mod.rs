@@ -38,6 +38,7 @@ mod task_scheduler;
 mod thread_crud;
 mod work_context;
 
+pub mod concierge;
 pub mod context;
 pub mod learning;
 pub mod liveness;

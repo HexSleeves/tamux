@@ -14,7 +14,7 @@ pub enum SettingsHitTarget {
     EditCursor { line: usize, col: usize },
 }
 
-const TAB_LABELS: [&str; 9] = ["Prov", "Tools", "Search", "Chat", "GW", "Auth", "Agent", "Sub", "Adv"];
+const TAB_LABELS: [&str; 10] = ["Prov", "Tools", "Search", "Chat", "GW", "Auth", "Agent", "Sub", "Con", "Adv"];
 const TAB_DIVIDER: &str = " | ";
 
 fn render_edit_buffer_with_cursor(text: &str, cursor: usize) -> String {
@@ -95,7 +95,8 @@ pub fn render(
         SettingsTab::Auth => 5,
         SettingsTab::Agent => 6,
         SettingsTab::SubAgents => 7,
-        SettingsTab::Advanced => 8,
+        SettingsTab::Concierge => 8,
+        SettingsTab::Advanced => 9,
     };
     let tabs = Tabs::new(TAB_LABELS)
         .select(tab_index)
@@ -283,6 +284,7 @@ fn single_line_edit_layout(settings: &SettingsState, field: &str) -> Option<(usi
             _ => None,
         },
         SettingsTab::SubAgents => None,
+        SettingsTab::Concierge => None,
         SettingsTab::Advanced => match field {
             "max_context_messages" => Some((5, 20)),
             "max_tool_loops" => Some((6, 20)),
@@ -346,6 +348,7 @@ fn settings_field_at_row(settings: &SettingsState, row: usize) -> Option<usize> 
             }
         }
         SettingsTab::SubAgents => row.checked_sub(4).filter(|idx| *idx < 5),
+        SettingsTab::Concierge => row.checked_sub(4).filter(|idx| *idx < 4),
     }
 }
 
@@ -365,6 +368,7 @@ fn render_tab_content<'a>(
         SettingsTab::Auth => render_auth_tab(settings, auth, theme),
         SettingsTab::Agent => render_agent_tab(settings, config, theme),
         SettingsTab::SubAgents => render_subagents_tab(settings, subagents, theme),
+        SettingsTab::Concierge => render_concierge_tab(settings, theme),
         SettingsTab::Advanced => render_advanced_tab(settings, config, theme),
     }
 }
@@ -1003,6 +1007,75 @@ fn render_subagents_tab<'a>(
         lines.push(Line::from(Span::styled(
             format!("{}[Toggle Enabled]", marker),
             if is_selected { theme.fg_active } else { theme.fg_dim },
+        )));
+    }
+
+    lines
+}
+
+fn render_concierge_tab<'a>(settings: &'a SettingsState, theme: &ThemeTokens) -> Vec<Line<'a>> {
+    let mut lines = Vec::new();
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled("  Concierge", theme.fg_active)));
+    lines.push(Line::from(Span::styled(
+        "  Welcome agent and operational assistant",
+        theme.fg_dim,
+    )));
+    lines.push(Line::raw(""));
+
+    // Field 0: concierge_enabled
+    {
+        let is_selected = settings.field_cursor() == 0;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}Enabled: (toggle)", marker),
+            if is_selected {
+                theme.fg_active
+            } else {
+                theme.fg_dim
+            },
+        )));
+    }
+
+    // Field 1: concierge_detail_level
+    {
+        let is_selected = settings.field_cursor() == 1;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}Detail Level: (select)", marker),
+            if is_selected {
+                theme.fg_active
+            } else {
+                theme.fg_dim
+            },
+        )));
+    }
+
+    // Field 2: concierge_provider
+    {
+        let is_selected = settings.field_cursor() == 2;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}Provider: (edit)", marker),
+            if is_selected {
+                theme.fg_active
+            } else {
+                theme.fg_dim
+            },
+        )));
+    }
+
+    // Field 3: concierge_model
+    {
+        let is_selected = settings.field_cursor() == 3;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}Model: (edit)", marker),
+            if is_selected {
+                theme.fg_active
+            } else {
+                theme.fg_dim
+            },
         )));
     }
 
@@ -1842,10 +1915,9 @@ mod tests {
 
     #[test]
     fn tab_hit_test_uses_rendered_label_positions() {
-        // Tab bar: Prov | Tools | Search | Chat | GW | Auth | Agent | Sub | Adv
-        // Widths:  4  3  5   3  6    3  4  3  2  3  4  3  5   3  3  3  3
+        // Tab bar: Prov | Tools | Search | Chat | GW | Auth | Agent | Sub | Con | Adv
         // Positions (relative to area.x=10):
-        //   Prov=10, Tools=17, Search=25, Chat=34, GW=41, Auth=46, Agent=53, Sub=61, Adv=67
+        //   Prov=10, Tools=17, Search=25, Chat=34, GW=41, Auth=46, Agent=53, Sub=61, Con=67, Adv=73
         let area = Rect::new(10, 3, 80, 1);
 
         assert_eq!(
@@ -1865,6 +1937,11 @@ mod tests {
         );
         assert_eq!(
             tab_hit_test(area, 67),
+            Some(SettingsTab::Concierge),
+            "expected click on 'C' in Con to select Concierge"
+        );
+        assert_eq!(
+            tab_hit_test(area, 73),
             Some(SettingsTab::Advanced),
             "expected click on 'A' in Adv to select Advanced"
         );

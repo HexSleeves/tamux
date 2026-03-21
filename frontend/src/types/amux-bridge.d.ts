@@ -309,6 +309,9 @@ declare global {
         agentSetSubAgent?: (subAgentJson: string) => Promise<{ ok?: boolean; error?: string }>;
         agentRemoveSubAgent?: (subAgentId: string) => Promise<{ ok?: boolean }>;
         agentListSubAgents?: () => Promise<unknown[]>;
+        agentGetConciergeConfig?: () => Promise<unknown>;
+        agentSetConciergeConfig?: (config: unknown) => Promise<unknown>;
+        agentDismissConciergeWelcome?: () => Promise<{ ok?: boolean }>;
         listInstalledPlugins?: () => Promise<AmuxInstalledPluginRecord[]>;
         loadInstalledPlugins?: () => Promise<AmuxInstalledPluginLoadResult[]>;
     };
