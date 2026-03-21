@@ -1301,6 +1301,13 @@ pub enum AgentEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         intervention: Option<InterventionAction>,
     },
+    /// A checkpoint was created for a goal run.
+    CheckpointCreated {
+        checkpoint_id: String,
+        goal_run_id: String,
+        checkpoint_type: String,
+        step_index: Option<usize>,
+    },
 }
 
 // ---------------------------------------------------------------------------

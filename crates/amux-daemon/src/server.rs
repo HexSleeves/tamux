@@ -1420,6 +1420,105 @@ where
                         .await
                         .ok();
                 }
+
+                ClientMessage::AgentListCheckpoints { goal_run_id } => {
+                    let checkpoints_json = match agent.history.list_checkpoints_for_goal_run(&goal_run_id) {
+                        Ok(jsons) => {
+                            let summaries = crate::agent::liveness::checkpoint::checkpoint_list(&jsons);
+                            serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".into())
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!("failed to list checkpoints: {e}"),
+                                })
+                                .await
+                                .ok();
+                            continue;
+                        }
+                    };
+                    framed
+                        .send(DaemonMessage::AgentCheckpointList { checkpoints_json })
+                        .await
+                        .ok();
+                }
+
+                ClientMessage::AgentRestoreCheckpoint { checkpoint_id } => {
+                    // Checkpoint restoration requires agent engine integration
+                    // which will be wired in a future phase. For now, return the
+                    // checkpoint data so the caller knows it exists.
+                    let outcome_json = match agent.history.get_checkpoint(&checkpoint_id) {
+                        Ok(Some(json)) => {
+                            match crate::agent::liveness::checkpoint::checkpoint_load(&json) {
+                                Ok(cp) => serde_json::to_string(&serde_json::json!({
+                                    "checkpoint_id": cp.id,
+                                    "goal_run_id": cp.goal_run_id,
+                                    "step_index": cp.goal_run.current_step_index,
+                                    "status": "loaded",
+                                }))
+                                .unwrap_or_else(|_| "null".into()),
+                                Err(e) => {
+                                    framed
+                                        .send(DaemonMessage::AgentError {
+                                            message: format!("failed to load checkpoint: {e}"),
+                                        })
+                                        .await
+                                        .ok();
+                                    continue;
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: "checkpoint not found".into(),
+                                })
+                                .await
+                                .ok();
+                            continue;
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!("failed to get checkpoint: {e}"),
+                                })
+                                .await
+                                .ok();
+                            continue;
+                        }
+                    };
+                    framed
+                        .send(DaemonMessage::AgentCheckpointRestored { outcome_json })
+                        .await
+                        .ok();
+                }
+
+                ClientMessage::AgentGetHealthStatus => {
+                    // Health monitoring is available but not yet wired to a
+                    // persistent health monitor instance. Return basic status.
+                    let status_json = serde_json::json!({
+                        "state": "healthy",
+                        "uptime_secs": 0,
+                        "active_goal_runs": 0,
+                        "active_tasks": 0,
+                    })
+                    .to_string();
+                    framed
+                        .send(DaemonMessage::AgentHealthStatus { status_json })
+                        .await
+                        .ok();
+                }
+
+                ClientMessage::AgentListHealthLog { limit: _ } => {
+                    // Health log entries will be persisted once the health
+                    // monitor is integrated into the heartbeat loop.
+                    framed
+                        .send(DaemonMessage::AgentHealthLog {
+                            entries_json: "[]".into(),
+                        })
+                        .await
+                        .ok();
+                }
             }
         }
     }

@@ -35,6 +35,7 @@ mod task_scheduler;
 mod thread_crud;
 mod work_context;
 
+pub mod liveness;
 pub mod subagent;
 
 // Re-exports from extracted modules — keeps everything accessible across

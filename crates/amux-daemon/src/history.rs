@@ -1,3 +1,4 @@
+use crate::agent::liveness::state_layers::CheckpointType;
 use crate::agent::types::{
     AgentTask, AgentTaskLogEntry, GoalRun, GoalRunEvent, GoalRunStatus, GoalRunStep,
     GoalRunStepKind, GoalRunStepStatus, TaskLogLevel, TaskPriority, TaskStatus,
@@ -1295,6 +1296,17 @@ impl HistoryStore {
                 created_at           INTEGER NOT NULL,
                 updated_at           INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS agent_checkpoints (
+                id                TEXT PRIMARY KEY,
+                goal_run_id       TEXT NOT NULL,
+                thread_id         TEXT,
+                task_id           TEXT,
+                checkpoint_type   TEXT NOT NULL,
+                state_json        TEXT NOT NULL,
+                context_summary   TEXT,
+                created_at        INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_goal_run ON agent_checkpoints(goal_run_id, created_at DESC);
             ",
         )?;
         ensure_column(&connection, "agent_tasks", "session_id", "TEXT")?;
@@ -1512,6 +1524,88 @@ impl HistoryStore {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    /// Insert or replace a checkpoint row in the `agent_checkpoints` table.
+    pub fn upsert_checkpoint(
+        &self,
+        id: &str,
+        goal_run_id: &str,
+        thread_id: Option<&str>,
+        task_id: Option<&str>,
+        checkpoint_type: CheckpointType,
+        state_json: &str,
+        context_summary: Option<&str>,
+        created_at: u64,
+    ) -> Result<()> {
+        let connection = self.open_connection()?;
+        let type_str = match checkpoint_type {
+            CheckpointType::PreStep => "pre_step",
+            CheckpointType::PostStep => "post_step",
+            CheckpointType::Manual => "manual",
+            CheckpointType::PreRecovery => "pre_recovery",
+            CheckpointType::Periodic => "periodic",
+        };
+        connection.execute(
+            "INSERT OR REPLACE INTO agent_checkpoints \
+             (id, goal_run_id, thread_id, task_id, checkpoint_type, state_json, context_summary, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                id,
+                goal_run_id,
+                thread_id,
+                task_id,
+                type_str,
+                state_json,
+                context_summary,
+                created_at as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Load all checkpoint JSON blobs for a given goal run, ordered by
+    /// `created_at` descending.
+    pub fn list_checkpoints_for_goal_run(&self, goal_run_id: &str) -> Result<Vec<String>> {
+        let connection = self.open_connection()?;
+        let mut stmt = connection.prepare(
+            "SELECT state_json FROM agent_checkpoints WHERE goal_run_id = ?1 ORDER BY created_at DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![goal_run_id], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Load a single checkpoint by ID.
+    pub fn get_checkpoint(&self, id: &str) -> Result<Option<String>> {
+        let connection = self.open_connection()?;
+        connection
+            .query_row(
+                "SELECT state_json FROM agent_checkpoints WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// Delete checkpoints by their IDs.
+    pub fn delete_checkpoints(&self, ids: &[&str]) -> Result<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let connection = self.open_connection()?;
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "DELETE FROM agent_checkpoints WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let deleted = connection.execute(&sql, params.as_slice())?;
+        Ok(deleted)
     }
 }
 

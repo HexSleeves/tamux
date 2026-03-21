@@ -330,6 +330,25 @@ pub enum ClientMessage {
     AgentGetSubagentMetrics {
         task_id: String,
     },
+
+    /// List checkpoints for a goal run.
+    AgentListCheckpoints {
+        goal_run_id: String,
+    },
+
+    /// Restore a goal run from a checkpoint.
+    AgentRestoreCheckpoint {
+        checkpoint_id: String,
+    },
+
+    /// Get health status for the agent system.
+    AgentGetHealthStatus,
+
+    /// List health log entries.
+    AgentListHealthLog {
+        #[serde(default)]
+        limit: Option<u32>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -601,6 +620,18 @@ pub enum DaemonMessage {
 
     /// Response to AgentGetSubagentMetrics.
     AgentSubagentMetrics { metrics_json: String },
+
+    /// Response to AgentListCheckpoints.
+    AgentCheckpointList { checkpoints_json: String },
+
+    /// Response to AgentRestoreCheckpoint.
+    AgentCheckpointRestored { outcome_json: String },
+
+    /// Response to AgentGetHealthStatus.
+    AgentHealthStatus { status_json: String },
+
+    /// Response to AgentListHealthLog.
+    AgentHealthLog { entries_json: String },
 }
 
 // ---------------------------------------------------------------------------
