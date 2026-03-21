@@ -325,6 +325,11 @@ pub enum ClientMessage {
 
     /// Unsubscribe from agent event broadcasts.
     AgentUnsubscribe,
+
+    /// Get sub-agent health metrics for a specific task.
+    AgentGetSubagentMetrics {
+        task_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -593,6 +598,9 @@ pub enum DaemonMessage {
 
     /// Response to AgentHeartbeatGetItems.
     AgentHeartbeatItems { items_json: String },
+
+    /// Response to AgentGetSubagentMetrics.
+    AgentSubagentMetrics { metrics_json: String },
 }
 
 // ---------------------------------------------------------------------------

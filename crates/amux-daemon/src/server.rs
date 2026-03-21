@@ -1382,6 +1382,44 @@ where
                     agent_event_rx = None;
                     tracing::info!("client unsubscribed from agent events");
                 }
+
+                ClientMessage::AgentGetSubagentMetrics { task_id } => {
+                    let metrics_json = match agent.history.get_subagent_metrics(&task_id) {
+                        Ok(Some(metrics)) => {
+                            serde_json::to_string(&serde_json::json!({
+                                "task_id": metrics.task_id,
+                                "parent_task_id": metrics.parent_task_id,
+                                "thread_id": metrics.thread_id,
+                                "tool_calls_total": metrics.tool_calls_total,
+                                "tool_calls_succeeded": metrics.tool_calls_succeeded,
+                                "tool_calls_failed": metrics.tool_calls_failed,
+                                "tokens_consumed": metrics.tokens_consumed,
+                                "context_budget_tokens": metrics.context_budget_tokens,
+                                "progress_rate": metrics.progress_rate,
+                                "last_progress_at": metrics.last_progress_at,
+                                "stuck_score": metrics.stuck_score,
+                                "health_state": metrics.health_state,
+                                "created_at": metrics.created_at,
+                                "updated_at": metrics.updated_at,
+                            }))
+                            .unwrap_or_else(|_| "null".to_string())
+                        }
+                        Ok(None) => "null".to_string(),
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!("failed to fetch subagent metrics: {e}"),
+                                })
+                                .await
+                                .ok();
+                            continue;
+                        }
+                    };
+                    framed
+                        .send(DaemonMessage::AgentSubagentMetrics { metrics_json })
+                        .await
+                        .ok();
+                }
             }
         }
     }

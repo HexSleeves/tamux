@@ -1291,6 +1291,16 @@ pub enum AgentEvent {
         content: String,
         channel: String,
     },
+    /// Sub-agent health state change detected by the supervisor.
+    SubagentHealthChange {
+        task_id: String,
+        previous_state: SubagentHealthState,
+        new_state: SubagentHealthState,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<StuckReason>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        intervention: Option<InterventionAction>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1415,6 +1425,127 @@ pub struct ToolFunctionDef {
 // Task queue
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Sub-agent management
+// ---------------------------------------------------------------------------
+
+/// Configuration for sub-agent supervision — how often to check, when to
+/// consider a sub-agent stuck, and what intervention level to apply.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SupervisorConfig {
+    /// How often to check sub-agent health (seconds). Default: 30.
+    #[serde(default = "default_supervisor_check_interval")]
+    pub check_interval_secs: u64,
+    /// Seconds of no progress before flagging as stuck. Default: 300 (5 min).
+    #[serde(default = "default_stuck_timeout")]
+    pub stuck_timeout_secs: u64,
+    /// Maximum retries before escalating. Default: 2.
+    #[serde(default = "default_supervisor_max_retries")]
+    pub max_retries: u32,
+    /// How aggressively to intervene. Default: Normal.
+    #[serde(default)]
+    pub intervention_level: InterventionLevel,
+}
+
+impl Default for SupervisorConfig {
+    fn default() -> Self {
+        Self {
+            check_interval_secs: default_supervisor_check_interval(),
+            stuck_timeout_secs: default_stuck_timeout(),
+            max_retries: default_supervisor_max_retries(),
+            intervention_level: InterventionLevel::default(),
+        }
+    }
+}
+
+fn default_supervisor_check_interval() -> u64 {
+    30
+}
+fn default_stuck_timeout() -> u64 {
+    300
+}
+fn default_supervisor_max_retries() -> u32 {
+    2
+}
+
+/// How aggressively the supervisor should intervene when issues are detected.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InterventionLevel {
+    /// Only log, never intervene automatically.
+    Passive,
+    /// Self-correct where safe (compress context, inject reflection).
+    #[default]
+    Normal,
+    /// Aggressively intervene (terminate stuck agents, retry from checkpoint).
+    Aggressive,
+}
+
+/// Overall health state of a sub-agent as determined by the supervisor.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentHealthState {
+    Healthy,
+    Degraded,
+    Stuck,
+    Crashed,
+}
+
+impl Default for SubagentHealthState {
+    fn default() -> Self {
+        Self::Healthy
+    }
+}
+
+/// Why a sub-agent is considered stuck.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StuckReason {
+    /// No tool calls or progress for configured timeout.
+    NoProgress,
+    /// Same error repeated 3+ times in a row.
+    ErrorLoop,
+    /// Cycling tool calls (A→B→A→B pattern).
+    ToolCallLoop,
+    /// Context budget > 90% consumed.
+    ResourceExhaustion,
+    /// Exceeded max_duration_secs.
+    Timeout,
+}
+
+/// What the supervisor should do when a problem is detected.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InterventionAction {
+    /// Inject a self-assessment prompt asking the agent to reflect.
+    SelfAssess,
+    /// Compress context to free up budget.
+    CompressContext,
+    /// Retry from the last successful checkpoint.
+    RetryFromCheckpoint,
+    /// Escalate to the parent task/agent.
+    EscalateToParent,
+    /// Escalate to the user for manual intervention.
+    EscalateToUser,
+}
+
+/// What to do when a context budget is exceeded.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextOverflowAction {
+    /// Compress older context to free space.
+    #[default]
+    Compress,
+    /// Truncate oldest messages.
+    Truncate,
+    /// Return an error and stop execution.
+    Error,
+}
+
+// ---------------------------------------------------------------------------
+// Task queue
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
@@ -1530,6 +1661,33 @@ pub struct AgentTask {
     pub last_error: Option<String>,
     #[serde(default)]
     pub logs: Vec<AgentTaskLogEntry>,
+
+    // -- Sub-agent management extensions (Phase 1) --
+
+    /// Restrict which tools this sub-agent may call. `None` = all tools allowed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_whitelist: Option<Vec<String>>,
+    /// Tools this sub-agent must NOT call. Applied after whitelist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_blacklist: Option<Vec<String>>,
+    /// Maximum tokens this sub-agent may consume for its context window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_budget_tokens: Option<u32>,
+    /// What to do when the context budget is exceeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_overflow_action: Option<ContextOverflowAction>,
+    /// DSL expression for automatic termination (e.g. "timeout(300) OR error_count(3)").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub termination_conditions: Option<String>,
+    /// Criteria the sub-agent must satisfy for the step to be considered successful.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success_criteria: Option<String>,
+    /// Hard time limit in seconds (fallback: 1800 = 30 min).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_duration_secs: Option<u64>,
+    /// Supervision configuration for this sub-agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisor_config: Option<SupervisorConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

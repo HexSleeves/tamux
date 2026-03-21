@@ -1,0 +1,183 @@
+//! System prompt construction and external agent prompt building.
+
+use super::types::*;
+
+pub(super) fn build_system_prompt(base: &str, memory: &AgentMemory, data_dir: &std::path::Path) -> String {
+    let mut prompt = String::new();
+    let memory_path = data_dir.join("MEMORY.md");
+    let soul_path = data_dir.join("SOUL.md");
+    let user_path = data_dir.join("USER.md");
+    let skills_root = super::skills_dir(data_dir);
+    let generated_skills_root = skills_root.join("generated");
+
+    if !memory.soul.is_empty() {
+        prompt.push_str(&memory.soul);
+        prompt.push_str("\n\n");
+    }
+
+    prompt.push_str(base);
+
+    if !memory.memory.is_empty() {
+        prompt.push_str("\n\n## Persistent Memory\n");
+        prompt.push_str(&memory.memory);
+    }
+
+    if !memory.user_profile.is_empty() {
+        prompt.push_str("\n\n## Operator Profile\n");
+        prompt.push_str(&memory.user_profile);
+    }
+
+    prompt.push_str(
+        &format!(
+            "\n\n## Persistent Memory File Paths\n\
+             - MEMORY.md: {}\n\
+             - SOUL.md: {}\n\
+             - USER.md: {}\n\
+             - Use these exact paths when reading or explaining where tamux agent memory lives on this platform.\n",
+            memory_path.display(),
+            soul_path.display(),
+            user_path.display(),
+        ),
+    );
+
+    prompt.push_str(
+        &format!(
+            "\n\n## Local Skills\n\
+             - Skills root: {}\n\
+             - Generated skills: {}\n\
+             - Built-in skills: {}/builtin/ (tamux reference docs for terminals, browser, tasks, goals, memory, safety, etc.)\n\
+             - Before non-trivial work, consult MEMORY.md and USER.md, then call `list_skills` to inspect reusable local skills.\n\
+             - If a relevant skill exists, call `read_skill` before executing commands or spawning tasks.\n\
+             - The `builtin/cheatsheet` skill provides a quick reference for all available MCP tools.\n\
+             - Prefer reusing an existing skill over inventing a brand-new workflow.\n",
+            skills_root.display(),
+            generated_skills_root.display(),
+            skills_root.display(),
+        ),
+    );
+
+    prompt.push_str(
+        "\n\n## Recall and Memory Maintenance\n\
+         - Use `onecontext_search` when the user asks about prior decisions, existing implementations, or historical debugging context.\n\
+         - For any non-trivial or multi-step task, call `update_todo` early to enter plan mode, then keep that todo list current as work progresses.\n\
+         - When you learn durable operator preferences or stable project facts, call `update_memory` with a concise update so future sessions start with that context.\n",
+    );
+
+    prompt.push_str(
+        "\n\n## Terminal Session Discipline\n\
+         - Before running file or command actions, call `list_sessions` (or `list_terminals`) to discover current session IDs and CWD.\n\
+         - Pick a target session and reuse that `session` value across related tool calls so all actions stay in one terminal context.\n\
+         - If a command is still running, timed out while still active, or is waiting for interactive completion, treat that terminal as occupied and switch to another terminal/session before continuing other work.\n\
+         - If you need another terminal in the same agent workspace, call `allocate_terminal`, then continue with the returned session ID.\n\
+         - If the operator asks to use another terminal, call `list_sessions` again and switch explicitly.\n",
+    );
+
+    prompt.push_str(
+        "\n\n## Subagent Supervision\n\
+         - For large tasks with clearly separable work, call `spawn_subagent` to create bounded child tasks instead of trying to do everything in one loop.\n\
+         - Keep each subagent narrow in scope and avoid creating duplicate child assignments.\n\
+         - Monitor child progress with `list_subagents` and integrate their results before declaring the parent task complete.\n\
+         - tamux caps active subagents per parent, so queue additional children only when they materially advance the task.\n",
+    );
+
+    prompt
+}
+
+pub(super) fn build_external_agent_prompt(
+    config: &AgentConfig,
+    memory: &AgentMemory,
+    user_message: &str,
+    memory_dir: &std::path::Path,
+) -> String {
+    let mut context_parts = Vec::new();
+    let memory_root = memory_dir;
+    let skills_root = super::skills_dir(&super::agent_data_dir());
+    let generated_skills_root = skills_root.join("generated");
+
+    // Environment context — do NOT override the agent's own identity
+    context_parts.push(
+        "[ENVIRONMENT: tamux]\n\
+         You are being invoked through tamux — an agentic terminal multiplexer app.\n\
+         Keep your own identity and personality. Do NOT call yourself tamux.\n\
+         \n\
+         About tamux:\n\
+         - tamux is a desktop app with workspaces, surfaces (tab groups), and panes (terminals)\n\
+         - The user sees your response in tamux's agent chat panel (a sidebar)\n\
+         - The user has terminal panes open next to this chat\n\
+         - tamux's daemon manages your process lifecycle and relays your responses to the UI\n\
+         \n\
+         tamux tools via MCP:\n\
+         tamux-mcp has been configured in your MCP servers. You should have access to \
+         these tools — use them when the user asks about terminals, sessions, or history:\n\
+         - list_sessions: list active terminal sessions (IDs, CWD, dimensions)\n\
+         - get_terminal_content: read what's displayed in a terminal pane (scrollback)\n\
+         - type_in_terminal: send keystrokes/input to a terminal session\n\
+         - execute_command: run managed commands inside tamux terminal sessions\n\
+         - search_history: full-text search of command/transcript history\n\
+         - find_symbol: semantic code symbol search using tree-sitter\n\
+         - get_git_status: git status for a working directory\n\
+         - list_snapshots / restore_snapshot: workspace checkpoint management\n\
+         - scrub_sensitive: redact secrets from text\n"
+            .to_string(),
+    );
+
+    // Operator's instructions for this session
+    if !config.system_prompt.is_empty() {
+        context_parts.push(format!("Operator instructions: {}\n", config.system_prompt));
+    }
+
+    // Gateway info — the agent can use its own gateway tools if it has them
+    let gw = &config.gateway;
+    if gw.enabled {
+        let mut platforms = Vec::new();
+        if !gw.slack_token.is_empty() {
+            platforms.push("Slack");
+        }
+        if !gw.discord_token.is_empty() {
+            platforms.push("Discord");
+        }
+        if !gw.telegram_token.is_empty() {
+            platforms.push("Telegram");
+        }
+        if !platforms.is_empty() {
+            context_parts.push(format!(
+                "Connected chat platforms: {}. Use your own messaging tools to reach them.\n",
+                platforms.join(", ")
+            ));
+        }
+    }
+
+    // Memory context from tamux's persistent files
+    if !memory.soul.is_empty() {
+        context_parts.push(format!("Operator identity notes:\n{}\n", memory.soul));
+    }
+    if !memory.memory.is_empty() {
+        context_parts.push(format!("Session memory:\n{}\n", memory.memory));
+    }
+    if !memory.user_profile.is_empty() {
+        context_parts.push(format!("Operator profile:\n{}\n", memory.user_profile));
+    }
+
+    context_parts.push(format!(
+        "tamux persistent memory files on this machine:\n- MEMORY.md: {}\n- SOUL.md: {}\n- USER.md: {}\n",
+        memory_root.join("MEMORY.md").display(),
+        memory_root.join("SOUL.md").display(),
+        memory_root.join("USER.md").display(),
+    ));
+    context_parts.push(format!(
+        "tamux local skills on this machine:\n- Skills root: {}\n- Generated skills: {}\n\
+         Before non-trivial work, review relevant skills in that directory and reuse them when possible.\n",
+        skills_root.display(),
+        generated_skills_root.display(),
+    ));
+
+    if context_parts.is_empty() {
+        return user_message.to_string();
+    }
+
+    format!(
+        "{}\n[USER MESSAGE]\n{}",
+        context_parts.join(""),
+        user_message
+    )
+}

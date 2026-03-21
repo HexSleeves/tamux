@@ -44,6 +44,24 @@ pub struct ManagedHistoryRecord {
     pub snapshot_path: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SubagentMetrics {
+    pub task_id: String,
+    pub parent_task_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub tool_calls_total: i64,
+    pub tool_calls_succeeded: i64,
+    pub tool_calls_failed: i64,
+    pub tokens_consumed: i64,
+    pub context_budget_tokens: Option<i64>,
+    pub progress_rate: f64,
+    pub last_progress_at: Option<u64>,
+    pub stuck_score: f64,
+    pub health_state: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct AgentMessagePatch {
     pub content: Option<String>,
@@ -823,6 +841,14 @@ impl HistoryStore {
                 lane_id: row.get(30)?,
                 last_error: row.get(31)?,
                 logs: Vec::new(),
+                tool_whitelist: None,
+                tool_blacklist: None,
+                context_budget_tokens: None,
+                context_overflow_action: None,
+                termination_conditions: None,
+                success_criteria: None,
+                max_duration_secs: None,
+                supervisor_config: None,
             })
         })?;
 
@@ -1253,6 +1279,22 @@ impl HistoryStore {
                 todo_snapshot_json TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_goal_run_events_goal_run_ts ON goal_run_events(goal_run_id, timestamp ASC);
+            CREATE TABLE IF NOT EXISTS subagent_metrics (
+                task_id              TEXT PRIMARY KEY,
+                parent_task_id       TEXT,
+                thread_id            TEXT,
+                tool_calls_total     INTEGER DEFAULT 0,
+                tool_calls_succeeded INTEGER DEFAULT 0,
+                tool_calls_failed    INTEGER DEFAULT 0,
+                tokens_consumed      INTEGER DEFAULT 0,
+                context_budget_tokens INTEGER,
+                progress_rate        REAL DEFAULT 0.0,
+                last_progress_at     INTEGER,
+                stuck_score          REAL DEFAULT 0.0,
+                health_state         TEXT DEFAULT 'healthy',
+                created_at           INTEGER NOT NULL,
+                updated_at           INTEGER NOT NULL
+            );
             ",
         )?;
         ensure_column(&connection, "agent_tasks", "session_id", "TEXT")?;
@@ -1398,6 +1440,78 @@ impl HistoryStore {
             params![thread_id, message_count, total_tokens, last_preview, updated_at],
         )?;
         Ok(())
+    }
+
+    pub fn upsert_subagent_metrics(
+        &self,
+        task_id: &str,
+        parent_task_id: Option<&str>,
+        thread_id: Option<&str>,
+        tool_calls_total: i64,
+        tool_calls_succeeded: i64,
+        tool_calls_failed: i64,
+        tokens_consumed: i64,
+        context_budget_tokens: Option<i64>,
+        progress_rate: f64,
+        last_progress_at: Option<u64>,
+        stuck_score: f64,
+        health_state: &str,
+        created_at: u64,
+        updated_at: u64,
+    ) -> Result<()> {
+        let connection = self.open_connection()?;
+        connection.execute(
+            "INSERT OR REPLACE INTO subagent_metrics \
+             (task_id, parent_task_id, thread_id, tool_calls_total, tool_calls_succeeded, tool_calls_failed, tokens_consumed, context_budget_tokens, progress_rate, last_progress_at, stuck_score, health_state, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                task_id,
+                parent_task_id,
+                thread_id,
+                tool_calls_total,
+                tool_calls_succeeded,
+                tool_calls_failed,
+                tokens_consumed,
+                context_budget_tokens,
+                progress_rate,
+                last_progress_at.map(|v| v as i64),
+                stuck_score,
+                health_state,
+                created_at as i64,
+                updated_at as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_subagent_metrics(&self, task_id: &str) -> Result<Option<SubagentMetrics>> {
+        let connection = self.open_connection()?;
+        connection
+            .query_row(
+                "SELECT task_id, parent_task_id, thread_id, tool_calls_total, tool_calls_succeeded, tool_calls_failed, tokens_consumed, context_budget_tokens, progress_rate, last_progress_at, stuck_score, health_state, created_at, updated_at \
+                 FROM subagent_metrics WHERE task_id = ?1",
+                params![task_id],
+                |row| {
+                    Ok(SubagentMetrics {
+                        task_id: row.get(0)?,
+                        parent_task_id: row.get(1)?,
+                        thread_id: row.get(2)?,
+                        tool_calls_total: row.get(3)?,
+                        tool_calls_succeeded: row.get(4)?,
+                        tool_calls_failed: row.get(5)?,
+                        tokens_consumed: row.get(6)?,
+                        context_budget_tokens: row.get(7)?,
+                        progress_rate: row.get(8)?,
+                        last_progress_at: row.get::<_, Option<i64>>(9)?.map(|v| v as u64),
+                        stuck_score: row.get(10)?,
+                        health_state: row.get(11)?,
+                        created_at: row.get::<_, i64>(12)? as u64,
+                        updated_at: row.get::<_, i64>(13)? as u64,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
     }
 }
 
