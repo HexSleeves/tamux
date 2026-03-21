@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useAgentStore, PROVIDER_DEFINITIONS } from "../../lib/agentStore";
+import { useAgentStore } from "../../lib/agentStore";
 import { Section, inputStyle, smallBtnStyle } from "./shared";
 
 export function ProviderAuthTab() {
@@ -15,18 +15,33 @@ export function ProviderAuthTab() {
     const [validating, setValidating] = useState<string | null>(null);
     const [validationResult, setValidationResult] = useState<Record<string, { valid: boolean; error?: string }>>({});
 
+    // ChatGPT subscription auth state
+    const [chatgptAuthStatus, setChatgptAuthStatus] = useState<any>(null);
+    const [chatgptAuthUrl, setChatgptAuthUrl] = useState<string | null>(null);
+    const [chatgptAuthBusy, setChatgptAuthBusy] = useState(false);
+
     useEffect(() => {
         refreshProviderAuthStates();
     }, []);
 
-    const filtered = (providerAuthStates.length > 0 ? providerAuthStates : PROVIDER_DEFINITIONS.map((d) => ({
-        provider_id: d.id,
-        provider_name: d.name,
-        authenticated: false,
-        auth_source: "api_key" as const,
-        model: d.defaultModel,
-        base_url: d.defaultBaseUrl,
-    }))).filter((s) =>
+    // Poll ChatGPT auth status when auth URL is active
+    useEffect(() => {
+        if (!chatgptAuthUrl) return;
+        const timer = window.setInterval(() => {
+            const amux = (window as any).amux || (window as any).tamux;
+            if (!amux?.openAICodexAuthStatus) return;
+            void amux.openAICodexAuthStatus({ refresh: true }).then((status: any) => {
+                if (status?.available) {
+                    setChatgptAuthStatus(status);
+                    setChatgptAuthUrl(null);
+                    refreshProviderAuthStates();
+                }
+            }).catch(() => {});
+        }, 2000);
+        return () => window.clearInterval(timer);
+    }, [chatgptAuthUrl]);
+
+    const filtered = providerAuthStates.filter((s) =>
         !filter || s.provider_name.toLowerCase().includes(filter.toLowerCase()) || s.provider_id.toLowerCase().includes(filter.toLowerCase())
     );
 
@@ -40,6 +55,38 @@ export function ProviderAuthTab() {
 
     const handleLogout = async (providerId: string) => {
         await logoutProvider(providerId);
+    };
+
+    const handleChatgptLogin = async () => {
+        const amux = (window as any).amux || (window as any).tamux;
+        if (!amux?.openAICodexAuthLogin) return;
+        setChatgptAuthBusy(true);
+        try {
+            const result = await amux.openAICodexAuthLogin();
+            setChatgptAuthStatus(result);
+            setChatgptAuthUrl(typeof result?.authUrl === "string" ? result.authUrl : null);
+            if (result?.available) {
+                refreshProviderAuthStates();
+            }
+        } catch (error: any) {
+            setChatgptAuthStatus({ available: false, error: error?.message || "ChatGPT auth failed" });
+        } finally {
+            setChatgptAuthBusy(false);
+        }
+    };
+
+    const handleChatgptLogout = async () => {
+        const amux = (window as any).amux || (window as any).tamux;
+        if (!amux?.openAICodexAuthLogout) return;
+        setChatgptAuthBusy(true);
+        try {
+            await amux.openAICodexAuthLogout();
+            setChatgptAuthStatus(null);
+            setChatgptAuthUrl(null);
+            refreshProviderAuthStates();
+        } catch { /* ignore */ } finally {
+            setChatgptAuthBusy(false);
+        }
     };
 
     const handleTest = async (providerId: string) => {
@@ -67,10 +114,16 @@ export function ProviderAuthTab() {
                         style={{ ...inputStyle, width: "100%" }}
                     />
                 </div>
+                {providerAuthStates.length === 0 && (
+                    <div style={{ fontSize: 12, color: "var(--text-secondary)", padding: "8px 0" }}>
+                        Loading providers from daemon...
+                    </div>
+                )}
                 <div style={{ display: "grid", gap: 2 }}>
                     {filtered.map((state) => {
                         const isExpanded = loginTarget === state.provider_id;
                         const vr = validationResult[state.provider_id];
+                        const isOpenAI = state.provider_id === "openai";
                         return (
                             <div key={state.provider_id} style={{
                                 border: "1px solid rgba(255,255,255,0.06)",
@@ -115,22 +168,33 @@ export function ProviderAuthTab() {
                                                     {validating === state.provider_id ? "Testing..." : "Test"}
                                                 </button>
                                                 <button
-                                                    onClick={() => handleLogout(state.provider_id)}
+                                                    onClick={() => isOpenAI ? handleChatgptLogout() : handleLogout(state.provider_id)}
                                                     style={{ ...smallBtnStyle, fontSize: 10, color: "#ef4444" }}
                                                 >
                                                     Logout
                                                 </button>
                                             </>
                                         ) : (
-                                            <button
-                                                onClick={() => {
-                                                    setLoginTarget(isExpanded ? null : state.provider_id);
-                                                    setLoginKey("");
-                                                }}
-                                                style={{ ...smallBtnStyle, fontSize: 10 }}
-                                            >
-                                                {isExpanded ? "Cancel" : "Login"}
-                                            </button>
+                                            <>
+                                                <button
+                                                    onClick={() => {
+                                                        setLoginTarget(isExpanded ? null : state.provider_id);
+                                                        setLoginKey("");
+                                                    }}
+                                                    style={{ ...smallBtnStyle, fontSize: 10 }}
+                                                >
+                                                    {isExpanded ? "Cancel" : "API Key"}
+                                                </button>
+                                                {isOpenAI && (
+                                                    <button
+                                                        onClick={handleChatgptLogin}
+                                                        disabled={chatgptAuthBusy}
+                                                        style={{ ...smallBtnStyle, fontSize: 10, color: "var(--accent)" }}
+                                                    >
+                                                        {chatgptAuthBusy ? "..." : "ChatGPT Login"}
+                                                    </button>
+                                                )}
+                                            </>
                                         )}
                                     </div>
                                 </div>
@@ -143,7 +207,16 @@ export function ProviderAuthTab() {
                                         {vr.valid ? "Connection OK" : `Error: ${vr.error || "unknown"}`}
                                     </div>
                                 )}
-                                {isExpanded && (
+                                {isOpenAI && chatgptAuthUrl && (
+                                    <div style={{ fontSize: 10, marginTop: 4, color: "var(--accent)" }}>
+                                        <span>Auth URL: </span>
+                                        <a href={chatgptAuthUrl} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", textDecoration: "underline" }}>
+                                            Open in browser
+                                        </a>
+                                        <span style={{ marginLeft: 8, color: "var(--text-secondary)" }}>Waiting for confirmation...</span>
+                                    </div>
+                                )}
+                                {isExpanded && !isOpenAI && (
                                     <div style={{
                                         display: "flex",
                                         gap: 6,
@@ -153,6 +226,33 @@ export function ProviderAuthTab() {
                                         <input
                                             type="password"
                                             placeholder="API Key"
+                                            value={loginKey}
+                                            onChange={(e) => setLoginKey(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter") handleLogin(state.provider_id);
+                                            }}
+                                            style={{ ...inputStyle, flex: 1 }}
+                                            autoFocus
+                                        />
+                                        <button
+                                            onClick={() => handleLogin(state.provider_id)}
+                                            disabled={!loginKey.trim()}
+                                            style={smallBtnStyle}
+                                        >
+                                            Save
+                                        </button>
+                                    </div>
+                                )}
+                                {isExpanded && isOpenAI && (
+                                    <div style={{
+                                        display: "flex",
+                                        gap: 6,
+                                        marginTop: 8,
+                                        alignItems: "center",
+                                    }}>
+                                        <input
+                                            type="password"
+                                            placeholder="OpenAI API Key"
                                             value={loginKey}
                                             onChange={(e) => setLoginKey(e.target.value)}
                                             onKeyDown={(e) => {

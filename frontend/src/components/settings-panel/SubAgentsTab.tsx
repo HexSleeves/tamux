@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { useAgentStore, PROVIDER_DEFINITIONS } from "../../lib/agentStore";
-import type { SubAgentDefinition } from "../../lib/agentStore";
-import { Section, SettingRow, inputStyle, smallBtnStyle, addBtnStyle } from "./shared";
+import { useAgentStore } from "../../lib/agentStore";
+import type { SubAgentDefinition, AgentProviderId } from "../../lib/agentStore";
+import { Section, SettingRow, ModelSelector, inputStyle, smallBtnStyle, addBtnStyle } from "./shared";
 
 type SubAgentForm = {
     name: string;
@@ -48,8 +48,6 @@ export function SubAgentsTab() {
         refreshSubAgents();
         refreshProviderAuthStates();
     }, []);
-
-    const authenticatedProviders = providerAuthStates.filter((p) => p.authenticated);
 
     const handleSave = async () => {
         const def: Omit<SubAgentDefinition, "id" | "created_at"> = {
@@ -108,8 +106,8 @@ export function SubAgentsTab() {
     };
 
     const providerName = (id: string) => {
-        const def = PROVIDER_DEFINITIONS.find((d) => d.id === id);
-        return def?.name || id;
+        const state = providerAuthStates.find((p) => p.provider_id === id);
+        return state?.provider_name || id;
     };
 
     return (
@@ -202,23 +200,23 @@ export function SubAgentsTab() {
                                 style={{ ...inputStyle, width: 220 }}
                             >
                                 <option value="">Select provider...</option>
-                                {PROVIDER_DEFINITIONS.map((d) => {
-                                    const isAuth = authenticatedProviders.some((p) => p.provider_id === d.id);
-                                    return (
-                                        <option key={d.id} value={d.id} disabled={!isAuth}>
-                                            {d.name}{!isAuth ? " (not authenticated)" : ""}
-                                        </option>
-                                    );
-                                })}
+                                {providerAuthStates.map((p) => (
+                                    <option key={p.provider_id} value={p.provider_id} disabled={!p.authenticated}>
+                                        {p.provider_name}{!p.authenticated ? " (no key)" : ""}
+                                    </option>
+                                ))}
                             </select>
                         </SettingRow>
                         <SettingRow label="Model">
-                            <input
-                                value={form.model}
-                                onChange={(e) => setForm({ ...form, model: e.target.value })}
-                                placeholder="Model ID"
-                                style={{ ...inputStyle, width: 220 }}
-                            />
+                            {form.provider ? (
+                                <ModelSelector
+                                    providerId={form.provider as AgentProviderId}
+                                    value={form.model}
+                                    onChange={(model) => setForm({ ...form, model })}
+                                />
+                            ) : (
+                                <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>Select a provider first</span>
+                            )}
                         </SettingRow>
                         <SettingRow label="Role">
                             <select

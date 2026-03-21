@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useAgentStore } from "../../lib/agentStore";
-import { Section, SettingRow, inputStyle, smallBtnStyle } from "./shared";
+import type { AgentProviderId } from "../../lib/agentStore";
+import { Section, SettingRow, ModelSelector, inputStyle, smallBtnStyle } from "./shared";
 
 const DETAIL_LEVELS = [
     { value: "minimal", label: "Quick Hello", desc: "Session title and date with action buttons. No AI call — instant." },
@@ -13,8 +14,13 @@ export function ConciergeSection() {
     const config = useAgentStore((s) => s.conciergeConfig);
     const refresh = useAgentStore((s) => s.refreshConciergeConfig);
     const update = useAgentStore((s) => s.updateConciergeConfig);
+    const providerAuthStates = useAgentStore((s) => s.providerAuthStates);
+    const refreshProviderAuthStates = useAgentStore((s) => s.refreshProviderAuthStates);
 
-    useEffect(() => { refresh(); }, []);
+    useEffect(() => {
+        refresh();
+        refreshProviderAuthStates();
+    }, []);
 
     const selectedLevel = DETAIL_LEVELS.find((l) => l.value === config.detail_level) || DETAIL_LEVELS[2];
 
@@ -43,23 +49,33 @@ export function ConciergeSection() {
                 {selectedLevel.desc}
             </div>
             <SettingRow label="Provider">
-                <input
-                    type="text"
+                <select
                     value={config.provider || ""}
-                    onChange={(e) => update({ ...config, provider: e.target.value || undefined })}
-                    placeholder="Use main agent"
+                    onChange={(e) => update({ ...config, provider: e.target.value || undefined, model: undefined })}
                     style={{ ...inputStyle, width: 180 }}
-                />
+                >
+                    <option value="">Use main agent</option>
+                    {providerAuthStates.map((p) => (
+                        <option key={p.provider_id} value={p.provider_id}>
+                            {p.provider_name}{p.authenticated ? "" : " (no key)"}
+                        </option>
+                    ))}
+                </select>
             </SettingRow>
-            <SettingRow label="Model">
-                <input
-                    type="text"
-                    value={config.model || ""}
-                    onChange={(e) => update({ ...config, model: e.target.value || undefined })}
-                    placeholder="Use main agent"
-                    style={{ ...inputStyle, width: 180 }}
-                />
-            </SettingRow>
+            {config.provider && (
+                <SettingRow label="Model">
+                    <ModelSelector
+                        providerId={config.provider as AgentProviderId}
+                        value={config.model || ""}
+                        onChange={(model) => update({ ...config, model: model || undefined })}
+                    />
+                </SettingRow>
+            )}
+            {!config.provider && (
+                <div style={{ fontSize: 11, color: "var(--text-secondary)", padding: "2px 0 4px" }}>
+                    Model inherited from main agent when no provider is selected.
+                </div>
+            )}
         </Section>
     );
 }
