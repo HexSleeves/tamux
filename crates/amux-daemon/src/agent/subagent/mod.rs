@@ -6,3 +6,4 @@ pub mod lifecycle;
 pub mod supervisor;
 pub mod termination;
 pub mod tool_filter;
+pub mod tool_graph;

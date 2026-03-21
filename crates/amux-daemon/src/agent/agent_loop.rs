@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// Compute success rate from a finalized execution trace.
+fn trace_collector_success_rate(trace: &crate::agent::learning::traces::ExecutionTrace) -> f64 {
+    if trace.steps.is_empty() {
+        return 0.0;
+    }
+    let succeeded = trace.steps.iter().filter(|s| s.succeeded).count();
+    succeeded as f64 / trace.steps.len() as f64
+}
+
 impl AgentEngine {
     pub(super) async fn send_message_inner(
         &self,
@@ -120,7 +129,7 @@ impl AgentEngine {
 
         // Get tools, applying per-task tool filters if configured
         let mut tools = get_available_tools(&config);
-        let (is_durable_goal_task, task_tool_filter) = {
+        let (is_durable_goal_task, task_tool_filter, mut task_context_budget, task_termination_eval, task_type_for_trace) = {
             let tasks = self.tasks.lock().await;
             let current_task = task_id
                 .and_then(|current_task_id| tasks.iter().find(|task| task.id == current_task_id));
@@ -138,7 +147,22 @@ impl AgentEngine {
                     None
                 }
             });
-            (is_goal, filter)
+            let budget = current_task.and_then(|task| {
+                task.context_budget_tokens.map(|max_tokens| {
+                    crate::agent::subagent::context_budget::ContextBudget::new(
+                        max_tokens,
+                        task.context_overflow_action
+                            .unwrap_or(crate::agent::types::ContextOverflowAction::Compress),
+                    )
+                })
+            });
+            let termination = current_task
+                .and_then(|task| task.termination_conditions.as_deref())
+                .and_then(|dsl| {
+                    crate::agent::subagent::termination::TerminationEvaluator::parse(dsl).ok()
+                });
+            let task_type = current_task.map(|task| classify_task(task).to_string()).unwrap_or_default();
+            (is_goal, filter, budget, termination, task_type)
         };
         if let Some(filter) = &task_tool_filter {
             tools = filter.filtered_tools(tools);
@@ -167,6 +191,18 @@ impl AgentEngine {
         let mut interrupted_for_approval = false;
         let mut previous_tool_signature: Option<String> = None;
         let mut consecutive_same_tool_calls = 0u32;
+
+        // Trace collection for learning
+        let mut trace_collector = crate::agent::learning::traces::TraceCollector::new(
+            &task_type_for_trace,
+            now_millis(),
+        );
+        // Termination metrics tracked per-loop
+        let mut termination_tool_calls: u32 = 0;
+        let mut termination_tool_successes: u32 = 0;
+        let mut termination_consecutive_errors: u32 = 0;
+        let mut termination_total_errors: u32 = 0;
+        let loop_started_at = now_millis();
 
         'agent_loop: while max_loops == 0 || loop_count < max_loops {
             if stream_cancel_token.is_cancelled() {
@@ -571,6 +607,25 @@ impl AgentEngine {
                         };
                         previous_tool_signature = Some(current_tool_signature);
 
+                        // Record step for trace collection and update termination metrics
+                        termination_tool_calls += 1;
+                        if result.is_error {
+                            termination_consecutive_errors += 1;
+                            termination_total_errors += 1;
+                        } else {
+                            termination_consecutive_errors = 0;
+                            termination_tool_successes += 1;
+                        }
+                        trace_collector.record_step(
+                            &tc.function.name,
+                            &crate::agent::learning::traces::hash_arguments(&tc.function.arguments),
+                            !result.is_error,
+                            0, // duration not tracked at this level
+                            0, // tokens tracked at message level
+                            if result.is_error { Some(result.content.clone()) } else { None },
+                            now_millis(),
+                        );
+
                         if tc.function.name == "update_memory" && !result.is_error {
                             self.refresh_memory_cache().await;
                         }
@@ -638,6 +693,64 @@ impl AgentEngine {
                         break 'agent_loop;
                     }
 
+                    // Check termination conditions (DSL-based)
+                    if let Some(ref evaluator) = task_termination_eval {
+                        let elapsed = now_millis().saturating_sub(loop_started_at) / 1000;
+                        let metrics = crate::agent::subagent::termination::TerminationMetrics {
+                            elapsed_secs: elapsed,
+                            tool_calls_total: termination_tool_calls,
+                            tool_calls_succeeded: termination_tool_successes,
+                            consecutive_errors: termination_consecutive_errors,
+                            total_errors: termination_total_errors,
+                        };
+                        let (should_stop, reason) = evaluator.should_terminate(&metrics);
+                        if should_stop {
+                            tracing::info!(
+                                thread_id = %tid,
+                                reason = ?reason,
+                                "sub-agent terminated by condition"
+                            );
+                            self.emit_workflow_notice(
+                                &tid,
+                                "termination-triggered",
+                                &format!("Sub-agent terminated: {}", reason.as_deref().unwrap_or("condition met")),
+                                None,
+                            );
+                            break 'agent_loop;
+                        }
+                    }
+
+                    // Check context budget
+                    if let Some(ref mut budget) = task_context_budget {
+                        let current_tokens = {
+                            let threads = self.threads.read().await;
+                            threads
+                                .get(&tid)
+                                .map(|t| estimate_message_tokens(&t.messages))
+                                .unwrap_or(0) as u32
+                        };
+                        budget.set_consumed(current_tokens);
+                        match budget.check() {
+                            crate::agent::subagent::context_budget::BudgetStatus::Exceeded { overflow_action, .. } => {
+                                match overflow_action {
+                                    crate::agent::types::ContextOverflowAction::Error => {
+                                        tracing::warn!(thread_id = %tid, "context budget exceeded — stopping");
+                                        self.emit_workflow_notice(&tid, "budget-exceeded", "Context budget exceeded, execution stopped.", None);
+                                        break 'agent_loop;
+                                    }
+                                    _ => {
+                                        // Compress/Truncate: the existing compaction in prepare_llm_request handles this
+                                        tracing::info!(thread_id = %tid, "context budget exceeded — relying on compaction");
+                                    }
+                                }
+                            }
+                            crate::agent::subagent::context_budget::BudgetStatus::Warning { consumed, max } => {
+                                tracing::debug!(thread_id = %tid, consumed, max, "context budget warning");
+                            }
+                            _ => {}
+                        }
+                    }
+
                     // Loop continues — next iteration will include tool results in context
                 }
                 _ => {
@@ -664,6 +777,52 @@ impl AgentEngine {
                 thread_id: tid.clone(),
                 message: "Tool execution limit reached".into(),
             });
+        }
+
+        // Finalize execution trace and persist
+        let trace_outcome = if interrupted_for_approval {
+            crate::agent::learning::traces::TraceOutcome::Partial { completed_pct: 50.0 }
+        } else if was_cancelled {
+            crate::agent::learning::traces::TraceOutcome::Cancelled
+        } else {
+            crate::agent::learning::traces::TraceOutcome::Success
+        };
+        let trace = trace_collector.finalize(
+            trace_outcome,
+            None,
+            task_id.map(str::to_string),
+            None,
+            now_millis(),
+        );
+        if trace.steps.len() > 0 {
+            let tool_seq = crate::agent::learning::traces::extract_tool_sequence(&trace);
+            let tool_seq_json = serde_json::to_string(&tool_seq).unwrap_or_default();
+            let metrics_json = serde_json::to_string(&serde_json::json!({
+                "total_duration_ms": trace.total_duration_ms,
+                "total_tokens_used": trace.total_tokens_used,
+                "step_count": trace.steps.len(),
+                "success_rate": trace_collector_success_rate(&trace),
+            }))
+            .unwrap_or_default();
+            let outcome_str = match &trace.outcome {
+                crate::agent::learning::traces::TraceOutcome::Success => "success",
+                crate::agent::learning::traces::TraceOutcome::Failure { .. } => "failure",
+                crate::agent::learning::traces::TraceOutcome::Partial { .. } => "partial",
+                crate::agent::learning::traces::TraceOutcome::Cancelled => "cancelled",
+            };
+            let _ = self.history.insert_execution_trace(
+                &trace.trace_id,
+                None,
+                task_id,
+                &trace.task_type,
+                outcome_str,
+                trace.quality_score,
+                &tool_seq_json,
+                &metrics_json,
+                trace.total_duration_ms,
+                trace.total_tokens_used,
+                trace.created_at,
+            );
         }
 
         self.persist_threads().await;

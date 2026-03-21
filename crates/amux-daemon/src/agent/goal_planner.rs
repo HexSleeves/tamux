@@ -93,6 +93,54 @@ impl AgentEngine {
             return Ok(());
         }
 
+        // Auto-checkpoint before step (PreStep)
+        {
+            let goal_run = {
+                let goal_runs = self.goal_runs.lock().await;
+                goal_runs
+                    .iter()
+                    .find(|gr| gr.id == goal_run_id)
+                    .cloned()
+            };
+            if let Some(goal_run) = goal_run {
+                let tasks_snapshot: Vec<_> = self
+                    .tasks
+                    .lock()
+                    .await
+                    .iter()
+                    .filter(|t| t.goal_run_id.as_deref() == Some(goal_run_id))
+                    .cloned()
+                    .collect();
+                let todos = self
+                    .thread_todos
+                    .read()
+                    .await
+                    .get(goal_run.thread_id.as_deref().unwrap_or(""))
+                    .cloned()
+                    .unwrap_or_default();
+                let now = crate::agent::task_prompt::now_millis();
+                let checkpoint = crate::agent::liveness::checkpoint::checkpoint_save(
+                    crate::agent::liveness::state_layers::CheckpointType::PreStep,
+                    &goal_run,
+                    &tasks_snapshot,
+                    goal_run.thread_id.as_deref(),
+                    None,
+                    None,
+                    None,
+                    &todos,
+                    now,
+                );
+                let _ =
+                    crate::agent::liveness::checkpoint::checkpoint_store(&self.history, &checkpoint);
+                let _ = self.event_tx.send(AgentEvent::CheckpointCreated {
+                    checkpoint_id: checkpoint.id.clone(),
+                    goal_run_id: goal_run_id.to_string(),
+                    checkpoint_type: "pre_step".into(),
+                    step_index: Some(goal_run.current_step_index),
+                });
+            }
+        }
+
         let step = snapshot.steps[snapshot.current_step_index].clone();
         let task = self
             .enqueue_task(
@@ -243,6 +291,45 @@ impl AgentEngine {
 
         self.persist_goal_runs().await;
         self.emit_goal_run_update(&updated, Some("Goal step completed".into()));
+
+        // Auto-checkpoint after step completion (PostStep)
+        {
+            let tasks_snapshot: Vec<_> = self
+                .tasks
+                .lock()
+                .await
+                .iter()
+                .filter(|t| t.goal_run_id.as_deref() == Some(goal_run_id))
+                .cloned()
+                .collect();
+            let todos = self
+                .thread_todos
+                .read()
+                .await
+                .get(updated.thread_id.as_deref().unwrap_or(""))
+                .cloned()
+                .unwrap_or_default();
+            let cp_now = crate::agent::task_prompt::now_millis();
+            let checkpoint = crate::agent::liveness::checkpoint::checkpoint_save(
+                crate::agent::liveness::state_layers::CheckpointType::PostStep,
+                &updated,
+                &tasks_snapshot,
+                updated.thread_id.as_deref(),
+                None,
+                None,
+                None,
+                &todos,
+                cp_now,
+            );
+            let _ =
+                crate::agent::liveness::checkpoint::checkpoint_store(&self.history, &checkpoint);
+            let _ = self.event_tx.send(AgentEvent::CheckpointCreated {
+                checkpoint_id: checkpoint.id.clone(),
+                goal_run_id: goal_run_id.to_string(),
+                checkpoint_type: "post_step".into(),
+                step_index: Some(updated.current_step_index.saturating_sub(1)),
+            });
+        }
 
         if updated.current_step_index >= updated.steps.len() {
             self.complete_goal_run(goal_run_id).await?;

@@ -233,6 +233,8 @@ impl AgentEngine {
         let mut gateway_tick = tokio::time::interval(gateway_poll_interval);
         let mut watcher_tick =
             tokio::time::interval(std::time::Duration::from_millis(FILE_WATCH_TICK_MS));
+        let mut supervisor_tick =
+            tokio::time::interval(std::time::Duration::from_secs(30));
         let mut pending_watcher_refreshes: HashMap<String, Instant> = HashMap::new();
 
         tracing::info!(
@@ -295,6 +297,43 @@ impl AgentEngine {
                     for thread_id in due_threads {
                         pending_watcher_refreshes.remove(&thread_id);
                         self.refresh_thread_repo_context(&thread_id).await;
+                    }
+                }
+                _ = supervisor_tick.tick() => {
+                    let tasks = self.tasks.lock().await;
+                    let now_secs = now_millis() / 1000;
+                    for task in tasks.iter() {
+                        if task.status != TaskStatus::InProgress {
+                            continue;
+                        }
+                        let supervisor_config = match &task.supervisor_config {
+                            Some(cfg) => cfg,
+                            None => continue,
+                        };
+                        let snapshot = crate::agent::subagent::supervisor::SubagentSnapshot {
+                            task_id: task.id.clone(),
+                            last_tool_call_at: None,
+                            tool_calls_total: 0,
+                            tool_calls_failed: 0,
+                            consecutive_errors: 0,
+                            recent_tool_names: Vec::new(),
+                            context_utilization_pct: 0,
+                            started_at: task.started_at.unwrap_or(task.created_at),
+                            max_duration_secs: task.max_duration_secs,
+                        };
+                        if let Some(action) = crate::agent::subagent::supervisor::check_health(
+                            &snapshot,
+                            supervisor_config,
+                            now_secs,
+                        ) {
+                            let _ = self.event_tx.send(AgentEvent::SubagentHealthChange {
+                                task_id: task.id.clone(),
+                                previous_state: SubagentHealthState::Healthy,
+                                new_state: action.health_state,
+                                reason: action.reason,
+                                intervention: Some(action.action),
+                            });
+                        }
                     }
                 }
                 _ = shutdown.changed() => {

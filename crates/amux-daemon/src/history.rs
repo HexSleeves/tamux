@@ -1307,8 +1307,56 @@ impl HistoryStore {
                 created_at        INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_agent_checkpoints_goal_run ON agent_checkpoints(goal_run_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS agent_health_log (
+                id            TEXT PRIMARY KEY,
+                entity_type   TEXT NOT NULL,
+                entity_id     TEXT NOT NULL,
+                health_state  TEXT NOT NULL,
+                indicators_json TEXT,
+                intervention  TEXT,
+                created_at    INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_health_log_entity ON agent_health_log(entity_type, entity_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS context_archive (
+                id                     TEXT PRIMARY KEY,
+                thread_id              TEXT NOT NULL,
+                original_role          TEXT,
+                compressed_content     TEXT NOT NULL,
+                summary                TEXT,
+                relevance_score        REAL DEFAULT 0.0,
+                token_count_original   INTEGER,
+                token_count_compressed INTEGER,
+                metadata_json          TEXT,
+                archived_at            INTEGER NOT NULL,
+                last_accessed_at       INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_context_archive_thread ON context_archive(thread_id, archived_at DESC);
+
+            CREATE TABLE IF NOT EXISTS execution_traces (
+                id               TEXT PRIMARY KEY,
+                goal_run_id      TEXT,
+                task_id          TEXT,
+                task_type        TEXT,
+                outcome          TEXT,
+                quality_score    REAL,
+                tool_sequence_json TEXT,
+                metrics_json     TEXT,
+                duration_ms      INTEGER,
+                tokens_used      INTEGER,
+                created_at       INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_execution_traces_task_type ON execution_traces(task_type, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_execution_traces_goal_run ON execution_traces(goal_run_id, created_at DESC);
             ",
         )?;
+        // FTS5 virtual table for context archive full-text search.
+        // Created separately since virtual tables need individual statements.
+        connection.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS context_archive_fts USING fts5(summary, compressed_content, content=context_archive, content_rowid=rowid);",
+        ).ok(); // .ok() — ignore if FTS5 not available in this SQLite build
+
         ensure_column(&connection, "agent_tasks", "session_id", "TEXT")?;
         ensure_column(&connection, "agent_threads", "metadata_json", "TEXT")?;
         ensure_column(&connection, "agent_tasks", "scheduled_at", "INTEGER")?;
@@ -1606,6 +1654,134 @@ impl HistoryStore {
             ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
         let deleted = connection.execute(&sql, params.as_slice())?;
         Ok(deleted)
+    }
+
+    // -- Health log --
+
+    pub fn insert_health_log(
+        &self,
+        id: &str,
+        entity_type: &str,
+        entity_id: &str,
+        health_state: &str,
+        indicators_json: Option<&str>,
+        intervention: Option<&str>,
+        created_at: u64,
+    ) -> Result<()> {
+        let connection = self.open_connection()?;
+        connection.execute(
+            "INSERT INTO agent_health_log (id, entity_type, entity_id, health_state, indicators_json, intervention, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, entity_type, entity_id, health_state, indicators_json, intervention, created_at as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_health_log(&self, limit: u32) -> Result<Vec<(String, String, String, String, Option<String>, Option<String>, u64)>> {
+        let connection = self.open_connection()?;
+        let mut stmt = connection.prepare(
+            "SELECT id, entity_type, entity_id, health_state, indicators_json, intervention, created_at FROM agent_health_log ORDER BY created_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, i64>(6)? as u64,
+            ))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    // -- Context archive --
+
+    pub fn insert_context_archive(
+        &self,
+        id: &str,
+        thread_id: &str,
+        original_role: Option<&str>,
+        compressed_content: &str,
+        summary: Option<&str>,
+        relevance_score: f64,
+        token_count_original: u32,
+        token_count_compressed: u32,
+        metadata_json: Option<&str>,
+        archived_at: u64,
+    ) -> Result<()> {
+        let connection = self.open_connection()?;
+        connection.execute(
+            "INSERT OR REPLACE INTO context_archive (id, thread_id, original_role, compressed_content, summary, relevance_score, token_count_original, token_count_compressed, metadata_json, archived_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![id, thread_id, original_role, compressed_content, summary, relevance_score, token_count_original as i64, token_count_compressed as i64, metadata_json, archived_at as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn search_context_archive(&self, thread_id: &str, query: &str, limit: u32) -> Result<Vec<String>> {
+        let connection = self.open_connection()?;
+        // Try FTS5 first, fall back to LIKE search
+        let fts_result: Result<Vec<String>> = (|| {
+            let mut stmt = connection.prepare(
+                "SELECT ca.id FROM context_archive ca JOIN context_archive_fts fts ON ca.rowid = fts.rowid WHERE ca.thread_id = ?1 AND context_archive_fts MATCH ?2 ORDER BY rank LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(params![thread_id, query, limit], |row| row.get(0))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+        })();
+
+        match fts_result {
+            Ok(ids) => Ok(ids),
+            Err(_) => {
+                // Fallback: simple LIKE search
+                let like_pattern = format!("%{query}%");
+                let mut stmt = connection.prepare(
+                    "SELECT id FROM context_archive WHERE thread_id = ?1 AND (compressed_content LIKE ?2 OR summary LIKE ?2) ORDER BY archived_at DESC LIMIT ?3",
+                )?;
+                let rows = stmt.query_map(params![thread_id, like_pattern, limit], |row| row.get(0))?;
+                rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+            }
+        }
+    }
+
+    // -- Execution traces --
+
+    pub fn insert_execution_trace(
+        &self,
+        id: &str,
+        goal_run_id: Option<&str>,
+        task_id: Option<&str>,
+        task_type: &str,
+        outcome: &str,
+        quality_score: Option<f64>,
+        tool_sequence_json: &str,
+        metrics_json: &str,
+        duration_ms: u64,
+        tokens_used: u32,
+        created_at: u64,
+    ) -> Result<()> {
+        let connection = self.open_connection()?;
+        connection.execute(
+            "INSERT OR REPLACE INTO execution_traces (id, goal_run_id, task_id, task_type, outcome, quality_score, tool_sequence_json, metrics_json, duration_ms, tokens_used, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![id, goal_run_id, task_id, task_type, outcome, quality_score, tool_sequence_json, metrics_json, duration_ms as i64, tokens_used as i64, created_at as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_execution_traces(&self, task_type: Option<&str>, limit: u32) -> Result<Vec<String>> {
+        let connection = self.open_connection()?;
+        if let Some(task_type) = task_type {
+            let mut stmt = connection.prepare(
+                "SELECT metrics_json FROM execution_traces WHERE task_type = ?1 ORDER BY created_at DESC LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![task_type, limit], |row| row.get(0))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+        } else {
+            let mut stmt = connection.prepare(
+                "SELECT metrics_json FROM execution_traces ORDER BY created_at DESC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(params![limit], |row| row.get(0))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+        }
     }
 }
 
