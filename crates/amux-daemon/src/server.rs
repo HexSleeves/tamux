@@ -1384,7 +1384,7 @@ where
                     // Trigger concierge welcome for the newly connected client.
                     let agent_ref = agent.clone();
                     tokio::spawn(async move {
-                        agent_ref.concierge.on_client_connected(&agent_ref.threads).await;
+                        agent_ref.concierge.on_client_connected(&agent_ref.threads, &agent_ref.tasks).await;
                     });
                 }
 
