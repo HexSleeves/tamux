@@ -640,6 +640,15 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                     }
                     break;
                 }
+                case "concierge_welcome": {
+                    useAgentStore.setState({
+                        conciergeWelcome: {
+                            content: event.content ?? "",
+                            actions: event.actions ?? [],
+                        }
+                    });
+                    break;
+                }
                 case "gateway_incoming": {
                     const gwMsg = {
                         role: "user" as const,

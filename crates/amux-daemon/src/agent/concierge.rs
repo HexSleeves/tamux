@@ -1,7 +1,6 @@
 //! Concierge agent — proactive welcome greetings and lightweight ops assistant.
 
 use super::types::*;
-use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
@@ -11,21 +10,18 @@ pub const CONCIERGE_THREAD_ID: &str = "concierge";
 pub struct ConciergeEngine {
     config: Arc<RwLock<AgentConfig>>,
     event_tx: broadcast::Sender<AgentEvent>,
-    http_client: reqwest::Client,
-    pending_welcome_ids: RwLock<Vec<String>>,
+    pending_welcome_count: RwLock<usize>,
 }
 
 impl ConciergeEngine {
     pub fn new(
         config: Arc<RwLock<AgentConfig>>,
         event_tx: broadcast::Sender<AgentEvent>,
-        http_client: reqwest::Client,
     ) -> Self {
         Self {
             config,
             event_tx,
-            http_client,
-            pending_welcome_ids: RwLock::new(Vec::new()),
+            pending_welcome_count: RwLock::new(0),
         }
     }
 
@@ -82,7 +78,6 @@ impl ConciergeEngine {
         }
 
         // Add welcome message to the concierge thread.
-        let msg_id = format!("welcome_{}", super::now_millis());
         {
             let mut threads_guard = threads.write().await;
             if let Some(thread) = threads_guard.get_mut(CONCIERGE_THREAD_ID) {
@@ -108,15 +103,14 @@ impl ConciergeEngine {
         }
 
         // Track for later pruning.
-        self.pending_welcome_ids.write().await.push(msg_id);
+        *self.pending_welcome_count.write().await += 1;
 
         // Emit the welcome event.
-        let actions_json = serde_json::to_string(&actions).unwrap_or_else(|_| "[]".into());
         let _ = self.event_tx.send(AgentEvent::ConciergeWelcome {
             thread_id: CONCIERGE_THREAD_ID.to_string(),
             content,
-            detail_level: format!("{:?}", detail_level).to_lowercase(),
-            actions_json,
+            detail_level,
+            actions,
         });
     }
 
@@ -125,17 +119,18 @@ impl ConciergeEngine {
         &self,
         threads: &RwLock<std::collections::HashMap<String, AgentThread>>,
     ) {
-        let ids = {
-            let mut guard = self.pending_welcome_ids.write().await;
-            std::mem::take(&mut *guard)
+        let count = {
+            let mut guard = self.pending_welcome_count.write().await;
+            let c = *guard;
+            *guard = 0;
+            c
         };
-        if ids.is_empty() {
+        if count == 0 {
             return;
         }
         // Remove from in-memory thread (remove last N assistant messages matching welcome pattern).
         let mut threads_guard = threads.write().await;
         if let Some(thread) = threads_guard.get_mut(CONCIERGE_THREAD_ID) {
-            let count = ids.len();
             // Remove the last `count` assistant messages (the welcome batch).
             let mut removed = 0;
             thread.messages.retain(|msg| {

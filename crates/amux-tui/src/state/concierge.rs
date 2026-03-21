@@ -34,12 +34,6 @@ impl ConciergeState {
 
 #[derive(Debug, Clone)]
 pub enum ConciergeAction {
-    ConfigReceived {
-        enabled: bool,
-        detail_level: String,
-        provider: Option<String>,
-        model: Option<String>,
-    },
     WelcomeReceived {
         content: String,
         actions: Vec<ConciergeActionVm>,
@@ -50,17 +44,6 @@ pub enum ConciergeAction {
 impl ConciergeState {
     pub fn reduce(&mut self, action: ConciergeAction) {
         match action {
-            ConciergeAction::ConfigReceived {
-                enabled,
-                detail_level,
-                provider,
-                model,
-            } => {
-                self.enabled = enabled;
-                self.detail_level = detail_level;
-                self.provider = provider;
-                self.model = model;
-            }
             ConciergeAction::WelcomeReceived { content, actions } => {
                 self.welcome_content = Some(content);
                 self.welcome_actions = actions;

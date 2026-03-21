@@ -17,7 +17,7 @@ import {
   headerBtnStyle,
 } from "./settings-panel/shared";
 
-type SettingsTab = "appearance" | "terminal" | "behavior" | "auth" | "agent" | "subagents" | "gateway" | "keyboard" | "about";
+type SettingsTab = "appearance" | "terminal" | "behavior" | "auth" | "agent" | "concierge" | "subagents" | "gateway" | "keyboard" | "about";
 
 type SettingsPanelProps = {
   style?: CSSProperties;
@@ -77,7 +77,7 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
       const requestedTab = customEvent.detail?.tab;
       if (!requestedTab) return;
 
-      if (["appearance", "terminal", "behavior", "auth", "agent", "subagents", "gateway", "keyboard", "about"].includes(requestedTab)) {
+      if (["appearance", "terminal", "behavior", "auth", "agent", "concierge", "subagents", "gateway", "keyboard", "about"].includes(requestedTab)) {
         setTab(requestedTab);
       }
     };
@@ -98,6 +98,7 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
     { id: "behavior", label: "Operator" },
     { id: "auth", label: "Auth" },
     { id: "agent", label: "Agent" },
+    { id: "concierge", label: "Concierge" },
     { id: "subagents", label: "Sub-Agents" },
     { id: "gateway", label: "Gateway" },
     { id: "keyboard", label: "Bindings" },
@@ -213,11 +214,9 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
           )}
           {tab === "auth" && <ProviderAuthTab />}
           {tab === "agent" && (
-            <>
-              <AgentTab settings={agentSettings} updateSetting={updateAgentSetting} resetSettings={resetAgentSettings} />
-              <ConciergeSection />
-            </>
+            <AgentTab settings={agentSettings} updateSetting={updateAgentSetting} resetSettings={resetAgentSettings} />
           )}
+          {tab === "concierge" && <ConciergeSection />}
           {tab === "subagents" && <SubAgentsTab />}
           {tab === "gateway" && (
             <GatewayTab settings={settings} updateSetting={updateSetting} />

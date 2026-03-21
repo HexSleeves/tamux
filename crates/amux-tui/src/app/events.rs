@@ -306,20 +306,6 @@ impl TuiModel {
                 self.concierge
                     .reduce(crate::state::ConciergeAction::WelcomeReceived { content, actions });
             }
-            ClientEvent::ConciergeConfigReceived {
-                enabled,
-                detail_level,
-                provider,
-                model,
-            } => {
-                self.concierge
-                    .reduce(crate::state::ConciergeAction::ConfigReceived {
-                        enabled,
-                        detail_level,
-                        provider,
-                        model,
-                    });
-            }
             ClientEvent::ConciergeWelcomeDismissed => {
                 self.concierge
                     .reduce(crate::state::ConciergeAction::WelcomeDismissed);

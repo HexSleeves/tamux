@@ -1458,8 +1458,8 @@ pub enum AgentEvent {
     ConciergeWelcome {
         thread_id: String,
         content: String,
-        detail_level: String,
-        actions_json: String,
+        detail_level: ConciergeDetailLevel,
+        actions: Vec<ConciergeAction>,
     },
 }
 

@@ -113,12 +113,6 @@ pub enum ClientEvent {
         content: String,
         actions: Vec<crate::state::ConciergeActionVm>,
     },
-    ConciergeConfigReceived {
-        enabled: bool,
-        detail_level: String,
-        provider: Option<String>,
-        model: Option<String>,
-    },
     ConciergeWelcomeDismissed,
 
     Error(String),
@@ -693,29 +687,28 @@ impl DaemonClient {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let actions_json = event
-                    .get("actions_json")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("[]");
-                let actions: Vec<serde_json::Value> =
-                    serde_json::from_str(actions_json).unwrap_or_default();
-                let action_vms = actions
-                    .iter()
-                    .filter_map(|a| {
-                        Some(crate::state::ConciergeActionVm {
-                            label: a.get("label")?.as_str()?.to_string(),
-                            action_type: a.get("action_type")?.as_str()?.to_string(),
-                            thread_id: a
-                                .get("thread_id")
-                                .and_then(|v| v.as_str())
-                                .map(String::from),
-                        })
+                let actions = event
+                    .get("actions")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|a| {
+                                Some(crate::state::ConciergeActionVm {
+                                    label: a.get("label")?.as_str()?.to_string(),
+                                    action_type: a.get("action_type")?.as_str()?.to_string(),
+                                    thread_id: a
+                                        .get("thread_id")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from),
+                                })
+                            })
+                            .collect()
                     })
-                    .collect();
+                    .unwrap_or_default();
                 let _ = event_tx
                     .send(ClientEvent::ConciergeWelcome {
                         content,
-                        actions: action_vms,
+                        actions,
                     })
                     .await;
             }

@@ -97,7 +97,6 @@ impl AgentEngine {
         let concierge = Arc::new(ConciergeEngine::new(
             config.clone(),
             event_tx.clone(),
-            http_client.clone(),
         ));
 
         Arc::new(Self {
