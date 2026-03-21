@@ -2984,9 +2984,9 @@ async fn execute_spawn_subagent(
         }
     }
 
-    let subagent = agent
+    let mut subagent = agent
         .enqueue_task(
-            title,
+            title.clone(),
             description,
             priority,
             command,
@@ -3003,11 +3003,55 @@ async fn execute_spawn_subagent(
         )
         .await;
 
+    // Look up a matching SubAgentDefinition by title/name and apply overrides.
+    {
+        let config = agent.config.read().await;
+        let title_lower = title.to_lowercase();
+        let matched_def = config.sub_agents.iter().find(|sa| {
+            sa.enabled
+                && (sa.name.to_lowercase() == title_lower
+                    || sa.role.as_deref().map(|r| r.to_lowercase()) == Some(title_lower.clone()))
+        });
+        if let Some(def) = matched_def {
+            subagent.override_provider = Some(def.provider.clone());
+            subagent.override_model = Some(def.model.clone());
+            subagent.override_system_prompt = def.system_prompt.clone();
+            subagent.sub_agent_def_id = Some(def.id.clone());
+            if def.tool_whitelist.is_some() {
+                subagent.tool_whitelist = def.tool_whitelist.clone();
+            }
+            if def.tool_blacklist.is_some() {
+                subagent.tool_blacklist = def.tool_blacklist.clone();
+            }
+            if def.context_budget_tokens.is_some() {
+                subagent.context_budget_tokens = def.context_budget_tokens;
+            }
+            if def.max_duration_secs.is_some() {
+                subagent.max_duration_secs = def.max_duration_secs;
+            }
+            if def.supervisor_config.is_some() {
+                subagent.supervisor_config = def.supervisor_config.clone();
+            }
+            // Persist the updated task fields.
+            let mut tasks = agent.tasks.lock().await;
+            if let Some(existing) = tasks.iter_mut().find(|t| t.id == subagent.id) {
+                *existing = subagent.clone();
+            }
+            drop(tasks);
+            agent.persist_tasks().await;
+        }
+    }
+
     let lane_suffix = allocated_lane_summary
         .map(|value| format!("\nDedicated lane: {value}"))
         .unwrap_or_default();
+    let def_suffix = subagent
+        .sub_agent_def_id
+        .as_ref()
+        .map(|id| format!("\nMatched sub-agent definition: {id}"))
+        .unwrap_or_default();
     Ok(format!(
-        "Spawned subagent {} with runtime {}.{}",
+        "Spawned subagent {} with runtime {}.{}{def_suffix}",
         subagent.id, runtime, lane_suffix
     ))
 }

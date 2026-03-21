@@ -1789,6 +1789,21 @@ pub struct AgentTask {
     /// Supervision configuration for this sub-agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supervisor_config: Option<SupervisorConfig>,
+
+    // -- Provider/model override for sub-agent dispatch --
+
+    /// Override provider for this task (from SubAgentDefinition).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_provider: Option<String>,
+    /// Override model for this task (from SubAgentDefinition).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_model: Option<String>,
+    /// Override system prompt for this task (from SubAgentDefinition).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_system_prompt: Option<String>,
+    /// The SubAgentDefinition ID this task was spawned from, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_agent_def_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

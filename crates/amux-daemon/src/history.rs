@@ -850,6 +850,10 @@ impl HistoryStore {
                 success_criteria: None,
                 max_duration_secs: None,
                 supervisor_config: None,
+                override_provider: None,
+                override_model: None,
+                override_system_prompt: None,
+                sub_agent_def_id: None,
             })
         })?;
 
