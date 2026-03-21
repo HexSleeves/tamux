@@ -84,7 +84,7 @@ impl AgentEngine {
         // Build system prompt with memory
         let memory = self.memory.read().await;
         let memory_dir = active_memory_dir(&self.data_dir);
-        let mut system_prompt = build_system_prompt(&config.system_prompt, &memory, &memory_dir);
+        let mut system_prompt = build_system_prompt(&config.system_prompt, &memory, &memory_dir, &config.sub_agents);
         drop(memory);
         if let Some(recall) = onecontext_bootstrap {
             system_prompt.push_str("\n\n## OneContext Recall\n");
@@ -867,7 +867,41 @@ impl AgentEngine {
             reasoning_effort: config.reasoning_effort.clone(),
             context_window_tokens: config.context_window_tokens,
             response_schema: None,
+            authenticated: !config.api_key.is_empty(),
         })
+    }
+
+    /// Resolve provider config for a named sub-agent's provider.
+    /// Falls back to the normal resolve_provider_config if the sub-agent's
+    /// provider matches the current top-level provider.
+    pub(super) fn resolve_sub_agent_provider_config(
+        &self,
+        config: &AgentConfig,
+        sub_agent_provider: &str,
+    ) -> Result<ProviderConfig> {
+        if let Some(pc) = config.providers.get(sub_agent_provider) {
+            let mut resolved = pc.clone();
+            if resolved.reasoning_effort.trim().is_empty() {
+                resolved.reasoning_effort = config.reasoning_effort.clone();
+            }
+            if resolved.context_window_tokens == 0 {
+                resolved.context_window_tokens = config.context_window_tokens;
+            }
+            if !provider_supports_transport(sub_agent_provider, resolved.api_transport) {
+                resolved.api_transport = default_api_transport_for_provider(sub_agent_provider);
+            }
+            return Ok(resolved);
+        }
+
+        // If the sub-agent provider matches the top-level, use normal resolution
+        if sub_agent_provider == config.provider {
+            return self.resolve_provider_config(config);
+        }
+
+        anyhow::bail!(
+            "No credentials configured for sub-agent provider '{}'. Log in via Auth settings.",
+            sub_agent_provider
+        )
     }
 
     pub(super) async fn add_assistant_message(

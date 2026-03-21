@@ -1002,6 +1002,9 @@ pub struct AgentConfig {
     /// Agent backend: daemon (built-in LLM), openclaw, hermes, or legacy.
     #[serde(default)]
     pub agent_backend: AgentBackend,
+    /// Registry of named sub-agents for orchestration dispatch.
+    #[serde(default)]
+    pub sub_agents: Vec<SubAgentDefinition>,
     /// Additional persisted agent settings used by richer frontends and the TUI.
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -1097,6 +1100,7 @@ impl Default for AgentConfig {
             providers: HashMap::new(),
             gateway: GatewayConfig::default(),
             agent_backend: AgentBackend::default(),
+            sub_agents: Vec::new(),
             extra: HashMap::new(),
         }
     }
@@ -1120,6 +1124,48 @@ pub struct ProviderConfig {
     /// When set, request structured output with this JSON schema from the API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<serde_json::Value>,
+    /// Derived from non-empty `api_key` — whether this provider is considered authenticated.
+    #[serde(default)]
+    pub authenticated: bool,
+}
+
+/// A named sub-agent definition that the orchestration engine can dispatch work to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentDefinition {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_whitelist: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_blacklist: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_budget_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_duration_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisor_config: Option<SupervisorConfig>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub created_at: u64,
+}
+
+/// Snapshot of a provider's authentication status for UI display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderAuthState {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub authenticated: bool,
+    pub auth_source: AuthSource,
+    pub has_api_key: bool,
+    pub model: String,
+    pub base_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

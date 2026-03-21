@@ -77,6 +77,8 @@ pub struct TuiModel {
     config: config::ConfigState,
     approval: approval::ApprovalState,
     settings: settings::SettingsState,
+    pub auth: AuthState,
+    pub subagents: SubAgentsState,
 
     // UI chrome
     focus: FocusArea,
@@ -154,6 +156,8 @@ impl TuiModel {
             config: config::ConfigState::new(),
             approval: approval::ApprovalState::new(),
             settings: settings::SettingsState::new(),
+            auth: AuthState::new(),
+            subagents: SubAgentsState::new(),
             focus: FocusArea::Input,
             theme: ThemeTokens::default(),
             width: 120,

@@ -287,6 +287,21 @@ impl TuiModel {
                     self.submit_prompt(next_prompt);
                 }
             }
+            ClientEvent::ProviderAuthStates(entries) => {
+                self.auth.reduce(crate::state::auth::AuthAction::Received(entries));
+            }
+            ClientEvent::ProviderValidation { provider_id, valid, error } => {
+                self.auth.reduce(crate::state::auth::AuthAction::ValidationResult { provider_id, valid, error });
+            }
+            ClientEvent::SubAgentList(entries) => {
+                self.subagents.reduce(crate::state::subagents::SubAgentsAction::ListReceived(entries));
+            }
+            ClientEvent::SubAgentUpdated(entry) => {
+                self.subagents.reduce(crate::state::subagents::SubAgentsAction::Updated(entry));
+            }
+            ClientEvent::SubAgentRemoved { sub_agent_id } => {
+                self.subagents.reduce(crate::state::subagents::SubAgentsAction::Removed(sub_agent_id));
+            }
             ClientEvent::Error(message) => {
                 if self.assistant_busy() {
                     self.chat.reduce(chat::ChatAction::ForceStopStreaming);

@@ -245,6 +245,21 @@ fn start_daemon_bridge(
                             DaemonCommand::SpawnSession { shell, cwd, cols, rows } => {
                                 let _ = client.spawn_session(shell, cwd, cols, rows);
                             }
+                            DaemonCommand::GetProviderAuthStates => {
+                                let _ = client.get_provider_auth_states();
+                            }
+                            DaemonCommand::ValidateProvider { provider_id, base_url, api_key } => {
+                                let _ = client.validate_provider(provider_id, base_url, api_key);
+                            }
+                            DaemonCommand::SetSubAgent(sub_agent_json) => {
+                                let _ = client.set_sub_agent(sub_agent_json);
+                            }
+                            DaemonCommand::RemoveSubAgent(sub_agent_id) => {
+                                let _ = client.remove_sub_agent(sub_agent_id);
+                            }
+                            DaemonCommand::ListSubAgents => {
+                                let _ = client.list_sub_agents();
+                            }
                         }
                     }
                 }

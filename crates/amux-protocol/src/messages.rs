@@ -349,6 +349,26 @@ pub enum ClientMessage {
         #[serde(default)]
         limit: Option<u32>,
     },
+
+    /// Validate provider credentials by testing connectivity.
+    AgentValidateProvider {
+        provider_id: String,
+        base_url: String,
+        api_key: String,
+        auth_source: String,
+    },
+
+    /// Get authentication states for all configured providers.
+    AgentGetProviderAuthStates,
+
+    /// Create or update a sub-agent definition.
+    AgentSetSubAgent { sub_agent_json: String },
+
+    /// Remove a sub-agent definition by ID.
+    AgentRemoveSubAgent { sub_agent_id: String },
+
+    /// List all sub-agent definitions.
+    AgentListSubAgents,
 }
 
 // ---------------------------------------------------------------------------
@@ -632,6 +652,28 @@ pub enum DaemonMessage {
 
     /// Response to AgentListHealthLog.
     AgentHealthLog { entries_json: String },
+
+    /// Response to AgentValidateProvider.
+    AgentProviderValidation {
+        provider_id: String,
+        valid: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        models_json: Option<String>,
+    },
+
+    /// Response to AgentGetProviderAuthStates.
+    AgentProviderAuthStates { states_json: String },
+
+    /// Response to AgentListSubAgents.
+    AgentSubAgentList { sub_agents_json: String },
+
+    /// Confirmation of AgentSetSubAgent.
+    AgentSubAgentUpdated { sub_agent_json: String },
+
+    /// Confirmation of AgentRemoveSubAgent.
+    AgentSubAgentRemoved { sub_agent_id: String },
 }
 
 // ---------------------------------------------------------------------------

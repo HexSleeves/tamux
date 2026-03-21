@@ -7,6 +7,8 @@ pub mod modal;
 pub mod settings;
 pub mod sidebar;
 pub mod task;
+pub mod auth;
+pub mod subagents;
 
 // ── Focus ────────────────────────────────────────────────────────────────────
 
@@ -66,6 +68,15 @@ pub enum DaemonCommand {
         cols: u16,
         rows: u16,
     },
+    GetProviderAuthStates,
+    ValidateProvider {
+        provider_id: String,
+        base_url: String,
+        api_key: String,
+    },
+    SetSubAgent(String),     // sub_agent_json
+    RemoveSubAgent(String),  // sub_agent_id
+    ListSubAgents,
 }
 
 // ── Placeholder sub-action enums ──────────────────────────────────────────────
@@ -87,6 +98,10 @@ pub use settings::{SettingsAction, SettingsState, SettingsTab};
 pub use sidebar::{SidebarAction, SidebarItemTarget, SidebarState, SidebarTab};
 #[allow(unused_imports)]
 pub use task::{TaskAction, TaskState};
+#[allow(unused_imports)]
+pub use auth::{AuthAction, AuthState, ProviderAuthEntry};
+#[allow(unused_imports)]
+pub use subagents::{SubAgentEntry, SubAgentsAction, SubAgentsState};
 
 // ── Top-level app action ──────────────────────────────────────────────────────
 

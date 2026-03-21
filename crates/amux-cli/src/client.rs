@@ -167,6 +167,20 @@ enum AgentBridgeCommand {
         approval_id: String,
         decision: String,
     },
+    ValidateProvider {
+        provider_id: String,
+        base_url: String,
+        api_key: String,
+        auth_source: String,
+    },
+    GetProviderAuthStates,
+    SetSubAgent {
+        sub_agent_json: String,
+    },
+    RemoveSubAgent {
+        sub_agent_id: String,
+    },
+    ListSubAgents,
     Shutdown,
 }
 
@@ -1053,6 +1067,26 @@ pub async fn run_agent_bridge() -> Result<()> {
                                     decision,
                                 }).await?;
                             }
+                            AgentBridgeCommand::ValidateProvider { provider_id, base_url, api_key, auth_source } => {
+                                framed.send(ClientMessage::AgentValidateProvider {
+                                    provider_id,
+                                    base_url,
+                                    api_key,
+                                    auth_source,
+                                }).await?;
+                            }
+                            AgentBridgeCommand::GetProviderAuthStates => {
+                                framed.send(ClientMessage::AgentGetProviderAuthStates).await?;
+                            }
+                            AgentBridgeCommand::SetSubAgent { sub_agent_json } => {
+                                framed.send(ClientMessage::AgentSetSubAgent { sub_agent_json }).await?;
+                            }
+                            AgentBridgeCommand::RemoveSubAgent { sub_agent_id } => {
+                                framed.send(ClientMessage::AgentRemoveSubAgent { sub_agent_id }).await?;
+                            }
+                            AgentBridgeCommand::ListSubAgents => {
+                                framed.send(ClientMessage::AgentListSubAgents).await?;
+                            }
                             AgentBridgeCommand::Shutdown => {
                                 framed.send(ClientMessage::AgentUnsubscribe).await?;
                                 break;
@@ -1137,6 +1171,34 @@ pub async fn run_agent_bridge() -> Result<()> {
                     }
                     Some(Ok(DaemonMessage::AgentHeartbeatItems { items_json })) => {
                         let msg = serde_json::json!({"type":"heartbeat-items","data":serde_json::from_str::<serde_json::Value>(&items_json).unwrap_or_default()});
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentProviderValidation { provider_id, valid, error, models_json })) => {
+                        let msg = serde_json::json!({
+                            "type": "provider-validation",
+                            "data": {
+                                "provider_id": provider_id,
+                                "valid": valid,
+                                "error": error,
+                                "models": models_json.and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok()),
+                            }
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentProviderAuthStates { states_json })) => {
+                        let msg = serde_json::json!({"type":"provider-auth-states","data":serde_json::from_str::<serde_json::Value>(&states_json).unwrap_or_default()});
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentSubAgentList { sub_agents_json })) => {
+                        let msg = serde_json::json!({"type":"sub-agent-list","data":serde_json::from_str::<serde_json::Value>(&sub_agents_json).unwrap_or_default()});
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentSubAgentUpdated { sub_agent_json })) => {
+                        let msg = serde_json::json!({"type":"sub-agent-updated","data":serde_json::from_str::<serde_json::Value>(&sub_agent_json).unwrap_or_default()});
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentSubAgentRemoved { sub_agent_id })) => {
+                        let msg = serde_json::json!({"type":"sub-agent-removed","data":{"sub_agent_id":sub_agent_id}});
                         emit_agent_event(&msg.to_string())?;
                     }
                     Some(Ok(DaemonMessage::Error { message })) => {

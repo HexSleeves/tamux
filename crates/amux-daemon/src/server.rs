@@ -1519,6 +1519,80 @@ where
                         .await
                         .ok();
                 }
+
+                ClientMessage::AgentGetProviderAuthStates => {
+                    let states = agent.get_provider_auth_states().await;
+                    let json = serde_json::to_string(&states).unwrap_or_default();
+                    framed
+                        .send(DaemonMessage::AgentProviderAuthStates { states_json: json })
+                        .await?;
+                }
+
+                ClientMessage::AgentValidateProvider {
+                    provider_id,
+                    base_url,
+                    api_key,
+                    auth_source: _,
+                } => {
+                    match crate::agent::llm_client::fetch_models(&provider_id, &base_url, &api_key)
+                        .await
+                    {
+                        Ok(models) => {
+                            let json = serde_json::to_string(&models).unwrap_or_default();
+                            framed
+                                .send(DaemonMessage::AgentProviderValidation {
+                                    provider_id,
+                                    valid: true,
+                                    error: None,
+                                    models_json: Some(json),
+                                })
+                                .await?;
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::AgentProviderValidation {
+                                    provider_id,
+                                    valid: false,
+                                    error: Some(e.to_string()),
+                                    models_json: None,
+                                })
+                                .await?;
+                        }
+                    }
+                }
+
+                ClientMessage::AgentSetSubAgent { sub_agent_json } => {
+                    match serde_json::from_str(&sub_agent_json) {
+                        Ok(def) => {
+                            agent.set_sub_agent(def).await;
+                            framed
+                                .send(DaemonMessage::AgentSubAgentUpdated { sub_agent_json })
+                                .await?;
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!("Invalid sub-agent: {e}"),
+                                })
+                                .await?;
+                        }
+                    }
+                }
+
+                ClientMessage::AgentRemoveSubAgent { sub_agent_id } => {
+                    agent.remove_sub_agent(&sub_agent_id).await;
+                    framed
+                        .send(DaemonMessage::AgentSubAgentRemoved { sub_agent_id })
+                        .await?;
+                }
+
+                ClientMessage::AgentListSubAgents => {
+                    let list = agent.list_sub_agents().await;
+                    let json = serde_json::to_string(&list).unwrap_or_default();
+                    framed
+                        .send(DaemonMessage::AgentSubAgentList { sub_agents_json: json })
+                        .await?;
+                }
             }
         }
     }

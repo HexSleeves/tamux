@@ -3708,6 +3708,11 @@ function registerIpcHandlers() {
                     'goal-run-controlled',
                     'config',
                     'heartbeat-items',
+                    'provider-auth-states',
+                    'provider-validation',
+                    'sub-agent-list',
+                    'sub-agent-updated',
+                    'sub-agent-removed',
                 ].includes(event.type)) {
                     let oldest = null;
                     for (const [reqId, handler] of agentBridge.pending.entries()) {
@@ -4177,6 +4182,51 @@ function registerIpcHandlers() {
             return { ok: true };
         } catch (err) {
             return { ok: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('agent-get-provider-auth-states', async () => {
+        try {
+            return await sendAgentQuery({ type: 'get-provider-auth-states' }, 'provider-auth-states');
+        } catch {
+            return [];
+        }
+    });
+
+    ipcMain.handle('agent-validate-provider', async (_event, providerId, baseUrl, apiKey, authSource) => {
+        try {
+            return await sendAgentQuery(
+                { type: 'validate-provider', provider_id: providerId, base_url: baseUrl, api_key: apiKey, auth_source: authSource },
+                'provider-validation'
+            );
+        } catch (err) {
+            return { valid: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('agent-set-sub-agent', async (_event, subAgentJson) => {
+        try {
+            sendAgentCommand({ type: 'set-sub-agent', sub_agent_json: subAgentJson });
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('agent-remove-sub-agent', async (_event, subAgentId) => {
+        try {
+            sendAgentCommand({ type: 'remove-sub-agent', sub_agent_id: subAgentId });
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('agent-list-sub-agents', async () => {
+        try {
+            return await sendAgentQuery({ type: 'list-sub-agents' }, 'sub-agent-list');
+        } catch {
+            return [];
         }
     });
 

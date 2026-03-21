@@ -10,11 +10,13 @@ import { BehaviorTab } from "./settings-panel/BehaviorTab";
 import { GatewayTab } from "./settings-panel/GatewayTab";
 import { KeyboardTab } from "./settings-panel/KeyboardTab";
 import { TerminalTab } from "./settings-panel/TerminalTab";
+import { ProviderAuthTab } from "./settings-panel/ProviderAuthTab";
+import { SubAgentsTab } from "./settings-panel/SubAgentsTab";
 import {
   headerBtnStyle,
 } from "./settings-panel/shared";
 
-type SettingsTab = "appearance" | "terminal" | "behavior" | "agent" | "gateway" | "keyboard" | "about";
+type SettingsTab = "appearance" | "terminal" | "behavior" | "auth" | "agent" | "subagents" | "gateway" | "keyboard" | "about";
 
 type SettingsPanelProps = {
   style?: CSSProperties;
@@ -74,7 +76,7 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
       const requestedTab = customEvent.detail?.tab;
       if (!requestedTab) return;
 
-      if (["appearance", "terminal", "behavior", "agent", "gateway", "keyboard", "about"].includes(requestedTab)) {
+      if (["appearance", "terminal", "behavior", "auth", "agent", "subagents", "gateway", "keyboard", "about"].includes(requestedTab)) {
         setTab(requestedTab);
       }
     };
@@ -93,7 +95,9 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
     { id: "appearance", label: "Interface" },
     { id: "terminal", label: "Execution" },
     { id: "behavior", label: "Operator" },
+    { id: "auth", label: "Auth" },
     { id: "agent", label: "Agent" },
+    { id: "subagents", label: "Sub-Agents" },
     { id: "gateway", label: "Gateway" },
     { id: "keyboard", label: "Bindings" },
     { id: "about", label: "Runtime" },
@@ -206,9 +210,11 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
           {tab === "behavior" && (
             <BehaviorTab settings={settings} updateSetting={updateSetting} />
           )}
+          {tab === "auth" && <ProviderAuthTab />}
           {tab === "agent" && (
             <AgentTab settings={agentSettings} updateSetting={updateAgentSetting} resetSettings={resetAgentSettings} />
           )}
+          {tab === "subagents" && <SubAgentsTab />}
           {tab === "gateway" && (
             <GatewayTab settings={settings} updateSetting={updateSetting} />
           )}
