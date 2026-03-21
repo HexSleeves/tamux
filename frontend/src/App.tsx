@@ -5,6 +5,7 @@ import { StatusBar } from "./components/StatusBar";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { AgentApprovalOverlay } from "./components/AgentApprovalOverlay";
+import { ConciergeToast } from "./components/ConciergeToast";
 import { SetupOnboardingPanel } from "./components/SetupOnboardingPanel";
 import { useAgentMissionStore } from "./lib/agentMissionStore";
 import { clearThreadAbortController, setThreadAbortController, useAgentStore } from "./lib/agentStore";
@@ -110,6 +111,16 @@ export default function App() {
         gatewayThreadMapRef.current = persisted;
       }
     });
+  }, []);
+
+  // Request concierge welcome on app mount.
+  useEffect(() => {
+    const amux = (window as any).tamux ?? (window as any).amux;
+    if (!amux?.agentRequestConciergeWelcome) return;
+    const timer = setTimeout(() => {
+      amux.agentRequestConciergeWelcome().catch(() => {});
+    }, 1500);
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -856,6 +867,7 @@ export default function App() {
 
       <SetupOnboardingPanel />
       <AgentApprovalOverlay />
+      <ConciergeToast />
     </div>
   );
 }
