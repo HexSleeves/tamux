@@ -230,7 +230,7 @@ impl AgentEngine {
     /// Raw LLM call without json_mode/schema — used for YAML attempts.
     pub(super) async fn run_goal_llm_raw(&self, prompt: &str) -> Result<String> {
         let config = self.config.read().await.clone();
-        if config.agent_backend != "daemon" {
+        if config.agent_backend != AgentBackend::Daemon {
             anyhow::bail!("goal runs currently require the built-in daemon agent backend");
         }
         let provider_config = self.resolve_provider_config(&config)?;
@@ -299,7 +299,7 @@ impl AgentEngine {
 
     pub(super) async fn run_goal_llm_json(&self, prompt: &str) -> Result<String> {
         let config = self.config.read().await.clone();
-        if config.agent_backend != "daemon" {
+        if config.agent_backend != AgentBackend::Daemon {
             anyhow::bail!("goal runs currently require the built-in daemon agent backend");
         }
         let mut provider_config = self.resolve_provider_config(&config)?;

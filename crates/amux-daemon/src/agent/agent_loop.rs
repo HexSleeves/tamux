@@ -16,14 +16,14 @@ impl AgentEngine {
         let selected_backend = backend_override
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .unwrap_or(config.agent_backend.as_str())
-            .to_string();
+            .map(AgentBackend::parse)
+            .unwrap_or(config.agent_backend.clone());
 
         // Route through external agent if backend is "openclaw" or "hermes"
-        match selected_backend.as_str() {
-            "openclaw" | "hermes" => {
+        match selected_backend {
+            AgentBackend::Openclaw | AgentBackend::Hermes => {
                 let mut runtime_config = config.clone();
-                runtime_config.agent_backend = selected_backend.clone();
+                runtime_config.agent_backend = selected_backend;
                 return self
                     .send_message_external(&runtime_config, thread_id, content)
                     .await

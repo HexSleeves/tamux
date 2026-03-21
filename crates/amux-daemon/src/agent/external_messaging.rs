@@ -33,9 +33,9 @@ impl AgentEngine {
         // Ensure tamux-mcp is configured in the external agent's MCP settings
         {
             let runners = self.external_runners.read().await;
-            if let Some(runner) = runners.get(&config.agent_backend) {
+            if let Some(runner) = runners.get(config.agent_backend.as_str()) {
                 if !runner.has_tamux_mcp() {
-                    external_runner::ensure_tamux_mcp_configured(&config.agent_backend);
+                    external_runner::ensure_tamux_mcp_configured(config.agent_backend.as_str());
                 }
             }
         }
@@ -75,7 +75,7 @@ impl AgentEngine {
 
         // Run through external agent
         let runners = self.external_runners.read().await;
-        let runner = match runners.get(&config.agent_backend) {
+        let runner = match runners.get(config.agent_backend.as_str()) {
             Some(runner) => runner,
             None => {
                 let message = format!(
@@ -127,8 +127,8 @@ impl AgentEngine {
                 self.emit_turn_error_completion(
                     &tid,
                     &error_text,
-                    Some(config.agent_backend.clone()),
-                    Some(config.agent_backend.clone()),
+                    Some(config.agent_backend.to_string()),
+                    Some(config.agent_backend.to_string()),
                 )
                 .await;
                 self.finish_stream_cancellation(&tid, stream_generation)
@@ -145,8 +145,8 @@ impl AgentEngine {
                 0,
                 0,
                 None,
-                Some(config.agent_backend.clone()),
-                Some(config.agent_backend.clone()),
+                Some(config.agent_backend.to_string()),
+                Some(config.agent_backend.to_string()),
                 None,
                 None,
             )
@@ -172,7 +172,7 @@ impl AgentEngine {
     pub async fn start_external_gateway(&self) -> Result<()> {
         let config = self.config.read().await.clone();
         let runners = self.external_runners.read().await;
-        if let Some(runner) = runners.get(&config.agent_backend) {
+        if let Some(runner) = runners.get(config.agent_backend.as_str()) {
             runner.start_gateway().await
         } else {
             Ok(())

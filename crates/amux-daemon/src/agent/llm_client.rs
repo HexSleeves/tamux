@@ -15,6 +15,7 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+use super::task_prompt::now_millis;
 use super::types::{
     get_provider_api_type, get_provider_definition, ApiTransport, ApiType, AuthMethod, AuthSource,
     CompletionChunk, ProviderConfig, ToolCall, ToolDefinition, ToolFunction,
@@ -269,7 +270,7 @@ fn import_codex_cli_auth_if_present() -> Option<StoredOpenAICodexAuth> {
     let refresh_token = tokens.refresh_token?;
     let account_id = extract_openai_codex_account_id(&access_token)?;
     let expires_at = extract_jwt_expiry(&access_token)?;
-    let now = chrono_like_now_millis();
+    let now = now_millis() as i64;
     let imported = StoredOpenAICodexAuth {
         provider: Some("openai-codex".to_string()),
         auth_mode: Some("chatgpt_subscription".to_string()),
@@ -283,13 +284,6 @@ fn import_codex_cli_auth_if_present() -> Option<StoredOpenAICodexAuth> {
     };
     let _ = write_stored_openai_codex_auth(&imported);
     read_stored_openai_codex_auth().or(Some(imported))
-}
-
-fn chrono_like_now_millis() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 async fn refresh_openai_codex_auth(
@@ -330,7 +324,7 @@ async fn refresh_openai_codex_auth(
         .and_then(|value| value.as_i64())
         .unwrap_or(3600)
         .saturating_mul(1000);
-    let now = chrono_like_now_millis();
+    let now = now_millis() as i64;
     let refreshed = StoredOpenAICodexAuth {
         provider: Some("openai-codex".to_string()),
         auth_mode: Some("chatgpt_subscription".to_string()),
@@ -359,7 +353,7 @@ async fn resolve_openai_codex_request_auth(
     let mut auth = auth.context(
         "No ChatGPT subscription auth found. Authenticate in the frontend or import ~/.codex/auth.json.",
     )?;
-    let now = chrono_like_now_millis();
+    let now = now_millis() as i64;
     if auth.expires_at.unwrap_or(0) <= now.saturating_add(60_000) {
         auth = refresh_openai_codex_auth(client, &auth).await?;
     }

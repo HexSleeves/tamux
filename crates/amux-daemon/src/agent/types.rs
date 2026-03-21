@@ -903,6 +903,50 @@ pub fn get_provider_base_url(provider_id: &str, model: &str, configured_url: &st
 // Agent configuration (persisted to ~/.tamux/agent/config.json)
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentBackend {
+    #[default]
+    Daemon,
+    Openclaw,
+    Hermes,
+    Legacy,
+}
+
+impl std::fmt::Display for AgentBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Daemon => f.write_str("daemon"),
+            Self::Openclaw => f.write_str("openclaw"),
+            Self::Hermes => f.write_str("hermes"),
+            Self::Legacy => f.write_str("legacy"),
+        }
+    }
+}
+
+impl AgentBackend {
+    /// Return the variant as a static string slice matching the serde representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Daemon => "daemon",
+            Self::Openclaw => "openclaw",
+            Self::Hermes => "hermes",
+            Self::Legacy => "legacy",
+        }
+    }
+
+    /// Parse a backend name, falling back to [`AgentBackend::Daemon`] for
+    /// unrecognised values.
+    pub fn parse(s: &str) -> Self {
+        match s.trim() {
+            "openclaw" => Self::Openclaw,
+            "hermes" => Self::Hermes,
+            "legacy" => Self::Legacy,
+            _ => Self::Daemon,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     #[serde(default)]
@@ -955,9 +999,9 @@ pub struct AgentConfig {
     /// Gateway configuration for chat platform connections.
     #[serde(default)]
     pub gateway: GatewayConfig,
-    /// Agent backend: "daemon" (built-in LLM), "openclaw", "hermes", or "legacy".
-    #[serde(default = "default_agent_backend")]
-    pub agent_backend: String,
+    /// Agent backend: daemon (built-in LLM), openclaw, hermes, or legacy.
+    #[serde(default)]
+    pub agent_backend: AgentBackend,
     /// Additional persisted agent settings used by richer frontends and the TUI.
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -1025,10 +1069,6 @@ fn default_task_poll_secs() -> u64 {
 fn default_heartbeat_mins() -> u64 {
     30
 }
-fn default_agent_backend() -> String {
-    "daemon".into()
-}
-
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -1056,7 +1096,7 @@ impl Default for AgentConfig {
             tools: ToolsConfig::default(),
             providers: HashMap::new(),
             gateway: GatewayConfig::default(),
-            agent_backend: default_agent_backend(),
+            agent_backend: AgentBackend::default(),
             extra: HashMap::new(),
         }
     }

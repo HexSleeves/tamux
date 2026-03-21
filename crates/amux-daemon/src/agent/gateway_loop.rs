@@ -221,7 +221,7 @@ impl AgentEngine {
     /// Main background loop — processes tasks, runs heartbeats, polls gateway.
     pub async fn run_loop(self: Arc<Self>, mut shutdown: tokio::sync::watch::Receiver<bool>) {
         let config = self.config.read().await.clone();
-        let agent_backend = config.agent_backend.clone();
+        let agent_backend = config.agent_backend;
 
         let task_interval = std::time::Duration::from_secs(config.task_poll_interval_secs);
         let heartbeat_interval =
@@ -260,7 +260,7 @@ impl AgentEngine {
                 _ = gateway_tick.tick() => {
                     // Skip built-in gateway polling when using an external agent
                     // — the external agent handles its own gateway connections
-                    if agent_backend != "openclaw" && agent_backend != "hermes" {
+                    if !matches!(agent_backend, AgentBackend::Openclaw | AgentBackend::Hermes) {
                         self.poll_gateway_messages().await;
                     }
                 }
