@@ -110,6 +110,21 @@ Expected flow:
 - **Procedural skills ecosystem** -- the daemon can generate reusable SKILL.md documents from successful execution trajectories, including completed goal runs.
 - **Semantic symbol search** powered by tree-sitter AST indexing.
 
+### Self-Orchestrating Agent
+
+The daemon agent is a **self-orchestrating system** that goes beyond simple prompt-response turns. It can autonomously manage its own execution with production-grade reliability. Key capabilities:
+
+- **Sub-agent management** -- spawn bounded child tasks with per-agent tool filtering (whitelist/blacklist), context token budgets, a composable termination DSL (`timeout(300) OR error_count(3)`), and configurable supervision.
+- **Automatic checkpointing** -- goal run state is snapshotted before and after each step. Checkpoints capture 4 layers (goal state, execution state, context, runtime) for crash recovery.
+- **Health monitoring with hysteresis** -- a 30-second supervisor tick detects stuck agents (no-progress, error loops, tool-call cycling, resource exhaustion, timeout) and selects interventions based on severity.
+- **4-level escalation** -- self-correction → sub-agent delegation → user escalation → external notification (Slack/Discord), with automatic level progression on repeated failures.
+- **Dynamic re-planning** -- 6 strategies (compress-retry, spawn expert, user guidance, alternative tools, parallelize, goal revision) selected based on the stuck reason and attempt history.
+- **Context self-management** -- audit, compress, archive, and restore context items. Three compression strategies auto-selected by ratio. FTS5-indexed archive for retrieval.
+- **Execution learning** -- traces record every tool call. Pattern mining builds confidence-scored tool sequences. Heuristics optimize context allocation and tool selection per task type.
+- **Production hardening** -- circuit breaker for LLM API protection, per-tool token-bucket rate limiting, bounded data structures with retention policies.
+
+> **Full architecture documentation:** [docs/self-orchestrating-agent.md](docs/self-orchestrating-agent.md)
+
 ### Infrastructure
 
 - **Sandbox isolation** using Linux namespaces / macOS Seatbelt to constrain managed command execution to the workspace boundary.
