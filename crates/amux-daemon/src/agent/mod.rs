@@ -14,6 +14,7 @@ pub mod tool_executor;
 pub mod types;
 
 mod agent_loop;
+mod circuit_breaker;
 mod compaction;
 mod config;
 mod dispatcher;
@@ -28,6 +29,7 @@ mod heartbeat;
 mod messaging;
 mod metadata;
 mod persistence;
+pub mod rate_limiter;
 mod system_prompt;
 mod task_crud;
 mod task_prompt;
