@@ -1544,8 +1544,53 @@ where
                     api_key,
                     auth_source: _,
                 } => {
-                    match crate::agent::llm_client::fetch_models(&provider_id, &base_url, &api_key)
-                        .await
+                    // Resolve credentials: if the client didn't provide them,
+                    // look up stored credentials from the agent config.
+                    let (resolved_url, resolved_key) = {
+                        let config = agent.config.read().await;
+                        let url = if base_url.is_empty() {
+                            config
+                                .providers
+                                .get(&provider_id)
+                                .map(|pc| pc.base_url.clone())
+                                .filter(|u| !u.is_empty())
+                                .or_else(|| {
+                                    if config.provider == provider_id {
+                                        Some(config.base_url.clone())
+                                    } else {
+                                        crate::agent::types::get_provider_definition(&provider_id)
+                                            .map(|d| d.default_base_url.to_string())
+                                    }
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            base_url
+                        };
+                        let key = if api_key.is_empty() {
+                            config
+                                .providers
+                                .get(&provider_id)
+                                .map(|pc| pc.api_key.clone())
+                                .filter(|k| !k.is_empty())
+                                .or_else(|| {
+                                    if config.provider == provider_id {
+                                        Some(config.api_key.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            api_key
+                        };
+                        (url, key)
+                    };
+                    match crate::agent::llm_client::fetch_models(
+                        &provider_id,
+                        &resolved_url,
+                        &resolved_key,
+                    )
+                    .await
                     {
                         Ok(models) => {
                             let json = serde_json::to_string(&models).unwrap_or_default();
