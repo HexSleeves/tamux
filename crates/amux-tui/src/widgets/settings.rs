@@ -14,7 +14,7 @@ pub enum SettingsHitTarget {
     EditCursor { line: usize, col: usize },
 }
 
-const TAB_LABELS: [&str; 7] = ["Prov", "Tools", "Search", "Chat", "GW", "Agent", "Adv"];
+const TAB_LABELS: [&str; 10] = ["Prov", "Tools", "Search", "Chat", "GW", "Auth", "Agent", "Sub", "Con", "Adv"];
 const TAB_DIVIDER: &str = " | ";
 
 fn render_edit_buffer_with_cursor(text: &str, cursor: usize) -> String {
@@ -56,6 +56,8 @@ pub fn render(
     area: Rect,
     settings: &SettingsState,
     config: &ConfigState,
+    auth: &crate::state::auth::AuthState,
+    subagents: &crate::state::subagents::SubAgentsState,
     theme: &ThemeTokens,
 ) {
     let block = Block::default()
@@ -90,8 +92,11 @@ pub fn render(
         SettingsTab::WebSearch => 2,
         SettingsTab::Chat => 3,
         SettingsTab::Gateway => 4,
-        SettingsTab::Agent => 5,
-        SettingsTab::Advanced => 6,
+        SettingsTab::Auth => 5,
+        SettingsTab::Agent => 6,
+        SettingsTab::SubAgents => 7,
+        SettingsTab::Concierge => 8,
+        SettingsTab::Advanced => 9,
     };
     let tabs = Tabs::new(TAB_LABELS)
         .select(tab_index)
@@ -108,7 +113,7 @@ pub fn render(
     frame.render_widget(Paragraph::new(sep), chunks[1]);
 
     // Content
-    let content_lines = render_tab_content(settings, config, theme);
+    let content_lines = render_tab_content(settings, config, auth, subagents, theme);
     let paragraph = Paragraph::new(content_lines);
     frame.render_widget(paragraph, chunks[2]);
 
@@ -273,10 +278,13 @@ fn single_line_edit_layout(settings: &SettingsState, field: &str) -> Option<(usi
             "whatsapp_phone_id" => Some((23, 19)),
             _ => None,
         },
+        SettingsTab::Auth => None,
         SettingsTab::Agent => match field {
             "agent_name" => Some((4, 19)),
             _ => None,
         },
+        SettingsTab::SubAgents => None,
+        SettingsTab::Concierge => None,
         SettingsTab::Advanced => match field {
             "max_context_messages" => Some((5, 20)),
             "max_tool_loops" => Some((6, 20)),
@@ -316,6 +324,7 @@ fn settings_field_at_row(settings: &SettingsState, row: usize) -> Option<usize> 
             23 => Some(11),
             _ => None,
         },
+        SettingsTab::Auth => row.checked_sub(4).filter(|idx| *idx < 3),
         SettingsTab::Agent => {
             if settings.is_editing()
                 && settings.is_textarea()
@@ -338,12 +347,16 @@ fn settings_field_at_row(settings: &SettingsState, row: usize) -> Option<usize> 
                 }
             }
         }
+        SettingsTab::SubAgents => row.checked_sub(4).filter(|idx| *idx < 5),
+        SettingsTab::Concierge => row.checked_sub(4).filter(|idx| *idx < 4),
     }
 }
 
 fn render_tab_content<'a>(
     settings: &'a SettingsState,
     config: &'a ConfigState,
+    auth: &'a crate::state::auth::AuthState,
+    subagents: &'a crate::state::subagents::SubAgentsState,
     theme: &ThemeTokens,
 ) -> Vec<Line<'a>> {
     match settings.active_tab() {
@@ -352,7 +365,10 @@ fn render_tab_content<'a>(
         SettingsTab::WebSearch => render_websearch_tab(settings, config, theme),
         SettingsTab::Chat => render_chat_tab(settings, config, theme),
         SettingsTab::Gateway => render_gateway_tab(settings, config, theme),
+        SettingsTab::Auth => render_auth_tab(settings, auth, theme),
         SettingsTab::Agent => render_agent_tab(settings, config, theme),
+        SettingsTab::SubAgents => render_subagents_tab(settings, subagents, theme),
+        SettingsTab::Concierge => render_concierge_tab(settings, theme),
         SettingsTab::Advanced => render_advanced_tab(settings, config, theme),
     }
 }
@@ -902,6 +918,170 @@ fn render_chat_tab<'a>(
     lines
 }
 
+fn render_subagents_tab<'a>(
+    settings: &'a SettingsState,
+    subagents: &'a crate::state::subagents::SubAgentsState,
+    theme: &ThemeTokens,
+) -> Vec<Line<'a>> {
+    let mut lines = Vec::new();
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled("  Sub-Agents", theme.fg_active)));
+    lines.push(Line::from(Span::styled(
+        "  Manage orchestration sub-agent definitions",
+        theme.fg_dim,
+    )));
+    lines.push(Line::raw(""));
+
+    if subagents.entries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No sub-agents configured.",
+            theme.fg_dim,
+        )));
+    } else {
+        // Field 0: subagent_list
+        for (i, entry) in subagents.entries.iter().enumerate() {
+            let is_selected = settings.field_cursor() == 0 && subagents.selected == i;
+            let marker = if is_selected { "> " } else { "  " };
+            let dot = if entry.enabled { "● " } else { "○ " };
+            let dot_style = if entry.enabled {
+                Style::default().fg(Color::Green)
+            } else {
+                theme.fg_dim
+            };
+            let role_str = entry.role.as_deref().map(|r| format!(" [{}]", r)).unwrap_or_default();
+
+            let line = Line::from(vec![
+                Span::styled(marker, if is_selected { theme.fg_active } else { theme.fg_dim }),
+                Span::styled(dot, dot_style),
+                Span::styled(
+                    entry.name.clone(),
+                    if is_selected { theme.fg_active } else { Style::default().fg(Color::White) },
+                ),
+                Span::styled(
+                    format!(" ({}/{})", entry.provider, entry.model),
+                    theme.fg_dim,
+                ),
+                Span::styled(role_str, Style::default().fg(Color::Cyan)),
+            ]);
+            lines.push(line);
+        }
+    }
+
+    lines.push(Line::raw(""));
+
+    // Field 1: subagent_add
+    {
+        let is_selected = settings.field_cursor() == 1;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}[Add Sub-Agent]", marker),
+            if is_selected { theme.fg_active } else { theme.fg_dim },
+        )));
+    }
+
+    // Field 2: subagent_edit
+    {
+        let is_selected = settings.field_cursor() == 2;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}[Edit]", marker),
+            if is_selected { theme.fg_active } else { theme.fg_dim },
+        )));
+    }
+
+    // Field 3: subagent_delete
+    {
+        let is_selected = settings.field_cursor() == 3;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}[Delete]", marker),
+            if is_selected { theme.fg_active } else { theme.fg_dim },
+        )));
+    }
+
+    // Field 4: subagent_toggle
+    {
+        let is_selected = settings.field_cursor() == 4;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}[Toggle Enabled]", marker),
+            if is_selected { theme.fg_active } else { theme.fg_dim },
+        )));
+    }
+
+    lines
+}
+
+fn render_concierge_tab<'a>(settings: &'a SettingsState, theme: &ThemeTokens) -> Vec<Line<'a>> {
+    let mut lines = Vec::new();
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled("  Concierge", theme.fg_active)));
+    lines.push(Line::from(Span::styled(
+        "  Welcome agent and operational assistant",
+        theme.fg_dim,
+    )));
+    lines.push(Line::raw(""));
+
+    // Field 0: concierge_enabled
+    {
+        let is_selected = settings.field_cursor() == 0;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}Enabled: (toggle)", marker),
+            if is_selected {
+                theme.fg_active
+            } else {
+                theme.fg_dim
+            },
+        )));
+    }
+
+    // Field 1: concierge_detail_level
+    {
+        let is_selected = settings.field_cursor() == 1;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}Detail Level: (select)", marker),
+            if is_selected {
+                theme.fg_active
+            } else {
+                theme.fg_dim
+            },
+        )));
+    }
+
+    // Field 2: concierge_provider
+    {
+        let is_selected = settings.field_cursor() == 2;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}Provider: (edit)", marker),
+            if is_selected {
+                theme.fg_active
+            } else {
+                theme.fg_dim
+            },
+        )));
+    }
+
+    // Field 3: concierge_model
+    {
+        let is_selected = settings.field_cursor() == 3;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}Model: (edit)", marker),
+            if is_selected {
+                theme.fg_active
+            } else {
+                theme.fg_dim
+            },
+        )));
+    }
+
+    lines
+}
+
 fn render_advanced_tab<'a>(
     settings: &'a SettingsState,
     config: &'a ConfigState,
@@ -1409,6 +1589,97 @@ fn render_gateway_text_field<'a>(
     lines.push(Line::from(spans));
 }
 
+fn render_auth_tab<'a>(
+    settings: &'a SettingsState,
+    auth: &'a crate::state::auth::AuthState,
+    theme: &ThemeTokens,
+) -> Vec<Line<'a>> {
+    let mut lines = Vec::new();
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled("  Authentication", theme.fg_active)));
+    lines.push(Line::from(Span::styled(
+        "  Provider authentication status",
+        theme.fg_dim,
+    )));
+    lines.push(Line::raw(""));
+
+    if auth.entries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No providers loaded. Connect to daemon to see status.",
+            theme.fg_dim,
+        )));
+        return lines;
+    }
+
+    // Field 0: auth_provider_list
+    for (i, entry) in auth.entries.iter().enumerate() {
+        let is_selected = settings.field_cursor() == 0 && auth.selected == i;
+        let marker = if is_selected { "> " } else { "  " };
+        let dot = if entry.authenticated { "● " } else { "○ " };
+        let dot_style = if entry.authenticated {
+            Style::default().fg(Color::Green)
+        } else {
+            theme.fg_dim
+        };
+        let model_info = if entry.authenticated && !entry.model.is_empty() {
+            format!(" ({})", entry.model)
+        } else {
+            String::new()
+        };
+
+        let line = Line::from(vec![
+            Span::styled(marker, if is_selected { theme.fg_active } else { theme.fg_dim }),
+            Span::styled(dot, dot_style),
+            Span::styled(
+                entry.provider_name.clone(),
+                if is_selected { theme.fg_active } else { Style::default().fg(Color::White) },
+            ),
+            Span::styled(model_info, theme.fg_dim),
+        ]);
+        lines.push(line);
+    }
+
+    lines.push(Line::raw(""));
+
+    // Login target display
+    if let Some(ref target) = auth.login_target {
+        lines.push(Line::from(vec![
+            Span::styled("  API Key for ", theme.fg_dim),
+            Span::styled(target.clone(), theme.fg_active),
+            Span::styled(": ", theme.fg_dim),
+        ]));
+        let masked: String = std::iter::repeat('*').take(auth.login_buffer.len()).collect();
+        lines.push(Line::from(Span::styled(
+            format!("  {}", masked),
+            Style::default().fg(Color::Yellow),
+        )));
+        lines.push(Line::raw(""));
+    }
+
+    // Field 1: auth_login
+    {
+        let is_selected = settings.field_cursor() == 1;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}[Login]", marker),
+            if is_selected { theme.fg_active } else { theme.fg_dim },
+        )));
+    }
+
+    // Field 2: auth_test
+    {
+        let is_selected = settings.field_cursor() == 2;
+        let marker = if is_selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{}[Test Connection]", marker),
+            if is_selected { theme.fg_active } else { theme.fg_dim },
+        )));
+    }
+
+    lines
+}
+
 fn render_agent_tab<'a>(
     settings: &'a SettingsState,
     config: &'a ConfigState,
@@ -1644,7 +1915,10 @@ mod tests {
 
     #[test]
     fn tab_hit_test_uses_rendered_label_positions() {
-        let area = Rect::new(10, 3, 60, 1);
+        // Tab bar: Prov | Tools | Search | Chat | GW | Auth | Agent | Sub | Con | Adv
+        // Positions (relative to area.x=10):
+        //   Prov=10, Tools=17, Search=25, Chat=34, GW=41, Auth=46, Agent=53, Sub=61, Con=67, Adv=73
+        let area = Rect::new(10, 3, 80, 1);
 
         assert_eq!(
             tab_hit_test(area, 10),
@@ -1662,7 +1936,12 @@ mod tests {
             "expected click on 'C' in Chat to select Chat"
         );
         assert_eq!(
-            tab_hit_test(area, 54),
+            tab_hit_test(area, 67),
+            Some(SettingsTab::Concierge),
+            "expected click on 'C' in Con to select Concierge"
+        );
+        assert_eq!(
+            tab_hit_test(area, 73),
             Some(SettingsTab::Advanced),
             "expected click on 'A' in Adv to select Advanced"
         );

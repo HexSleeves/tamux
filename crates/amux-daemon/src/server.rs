@@ -50,6 +50,7 @@ fn should_forward_agent_event(
             event,
             crate::agent::types::AgentEvent::HeartbeatResult { .. }
                 | crate::agent::types::AgentEvent::Notification { .. }
+                | crate::agent::types::AgentEvent::ConciergeWelcome { .. }
         ),
     }
 }
@@ -82,6 +83,9 @@ pub async fn run() -> Result<()> {
     if let Err(e) = agent.hydrate().await {
         tracing::warn!("failed to hydrate agent engine: {e}");
     }
+
+    // Initialize the concierge (ensures pinned thread exists after hydration).
+    agent.concierge.initialize(&agent.threads).await;
 
     // Start background loop (tasks + heartbeat)
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -1376,6 +1380,12 @@ where
                 ClientMessage::AgentSubscribe => {
                     agent_event_rx = Some(agent.subscribe());
                     tracing::info!("client subscribed to agent events");
+
+                    // Trigger concierge welcome for the newly connected client.
+                    let agent_ref = agent.clone();
+                    tokio::spawn(async move {
+                        agent_ref.concierge.on_client_connected(&agent_ref.threads).await;
+                    });
                 }
 
                 ClientMessage::AgentUnsubscribe => {
@@ -1518,6 +1528,110 @@ where
                         })
                         .await
                         .ok();
+                }
+
+                ClientMessage::AgentGetProviderAuthStates => {
+                    let states = agent.get_provider_auth_states().await;
+                    let json = serde_json::to_string(&states).unwrap_or_default();
+                    framed
+                        .send(DaemonMessage::AgentProviderAuthStates { states_json: json })
+                        .await?;
+                }
+
+                ClientMessage::AgentValidateProvider {
+                    provider_id,
+                    base_url,
+                    api_key,
+                    auth_source: _,
+                } => {
+                    match crate::agent::llm_client::fetch_models(&provider_id, &base_url, &api_key)
+                        .await
+                    {
+                        Ok(models) => {
+                            let json = serde_json::to_string(&models).unwrap_or_default();
+                            framed
+                                .send(DaemonMessage::AgentProviderValidation {
+                                    provider_id,
+                                    valid: true,
+                                    error: None,
+                                    models_json: Some(json),
+                                })
+                                .await?;
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::AgentProviderValidation {
+                                    provider_id,
+                                    valid: false,
+                                    error: Some(e.to_string()),
+                                    models_json: None,
+                                })
+                                .await?;
+                        }
+                    }
+                }
+
+                ClientMessage::AgentSetSubAgent { sub_agent_json } => {
+                    match serde_json::from_str(&sub_agent_json) {
+                        Ok(def) => {
+                            agent.set_sub_agent(def).await;
+                            framed
+                                .send(DaemonMessage::AgentSubAgentUpdated { sub_agent_json })
+                                .await?;
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!("Invalid sub-agent: {e}"),
+                                })
+                                .await?;
+                        }
+                    }
+                }
+
+                ClientMessage::AgentRemoveSubAgent { sub_agent_id } => {
+                    agent.remove_sub_agent(&sub_agent_id).await;
+                    framed
+                        .send(DaemonMessage::AgentSubAgentRemoved { sub_agent_id })
+                        .await?;
+                }
+
+                ClientMessage::AgentListSubAgents => {
+                    let list = agent.list_sub_agents().await;
+                    let json = serde_json::to_string(&list).unwrap_or_default();
+                    framed
+                        .send(DaemonMessage::AgentSubAgentList { sub_agents_json: json })
+                        .await?;
+                }
+
+                ClientMessage::AgentGetConciergeConfig => {
+                    let concierge = agent.get_concierge_config().await;
+                    let json = serde_json::to_string(&concierge).unwrap_or_default();
+                    framed
+                        .send(DaemonMessage::AgentConciergeConfig { config_json: json })
+                        .await?;
+                }
+
+                ClientMessage::AgentSetConciergeConfig { config_json } => {
+                    match serde_json::from_str::<crate::agent::types::ConciergeConfig>(&config_json) {
+                        Ok(concierge_config) => {
+                            agent.set_concierge_config(concierge_config).await;
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!("Invalid concierge config: {e}"),
+                                })
+                                .await?;
+                        }
+                    }
+                }
+
+                ClientMessage::AgentDismissConciergeWelcome => {
+                    agent.concierge.prune_welcome_messages(&agent.threads).await;
+                    framed
+                        .send(DaemonMessage::AgentConciergeWelcomeDismissed)
+                        .await?;
                 }
             }
         }

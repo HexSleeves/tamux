@@ -136,6 +136,41 @@ export function AgentTab({
 
     return (
         <>
+            <div style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: 14,
+                padding: "8px 12px",
+                border: "1px solid rgba(255,255,255,0.06)",
+                background: "rgba(18, 33, 47, 0.5)",
+            }}>
+                <span style={{
+                    width: 8, height: 8, borderRadius: "50%",
+                    background: providerConfig.apiKey ? "#4ade80" : "#6b7280",
+                }} />
+                <span style={{ fontSize: 12, fontWeight: 600 }}>
+                    Active: {providerOptions.find((p) => p.id === settings.activeProvider)?.label || settings.activeProvider}
+                </span>
+                <span style={{
+                    fontSize: 10,
+                    color: "var(--text-secondary)",
+                    background: "rgba(255,255,255,0.05)",
+                    padding: "1px 6px",
+                    borderRadius: 3,
+                }}>
+                    {providerConfig.model || "No model"}
+                </span>
+                <button
+                    onClick={() => {
+                        window.dispatchEvent(new CustomEvent("tamux-open-settings-tab", { detail: { tab: "auth" } }));
+                        window.dispatchEvent(new CustomEvent("amux-open-settings-tab", { detail: { tab: "auth" } }));
+                    }}
+                    style={{ ...smallBtnStyle, fontSize: 10, marginLeft: "auto" }}
+                >
+                    Manage Auth
+                </button>
+            </div>
             <Section title="General">
                 <SettingRow label="Enable Agent">
                     <Toggle value={settings.enabled} onChange={(value) => updateSetting("enabled", value)} />

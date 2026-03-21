@@ -282,6 +282,60 @@ impl TuiModel {
                     .to_string();
                 self.settings.start_editing("system_prompt", &current);
             }
+            // ── Auth tab ──
+            "auth_provider_list" => {
+                // Navigate to selected provider — handled by field cursor in auth state
+            }
+            "auth_login" => {
+                // Start login for the currently selected provider
+                if let Some(entry) = self.auth.entries.get(self.auth.selected) {
+                    let provider_id = entry.provider_id.clone();
+                    self.auth.reduce(crate::state::auth::AuthAction::StartLogin(provider_id));
+                }
+            }
+            "auth_test" => {
+                // Validate the selected provider
+                if let Some(entry) = self.auth.entries.get(self.auth.selected) {
+                    let provider_id = entry.provider_id.clone();
+                    self.auth.validating = Some(provider_id.clone());
+                    self.send_daemon_command(crate::state::DaemonCommand::ValidateProvider {
+                        provider_id,
+                        base_url: entry.model.clone(), // pass model as placeholder
+                        api_key: String::new(),
+                    });
+                }
+            }
+            // ── Sub-Agents tab ──
+            "subagent_list" => {
+                // Navigate sub-agent list — handled by field cursor
+            }
+            "subagent_add" => {
+                // TODO: Open add sub-agent form (requires modal support)
+                self.status_line = "Sub-agent add: use frontend for now".to_string();
+            }
+            "subagent_edit" => {
+                if let Some(entry) = self.subagents.entries.get(self.subagents.selected) {
+                    self.subagents.reduce(crate::state::subagents::SubAgentsAction::StartEdit(entry.id.clone()));
+                    self.status_line = "Sub-agent edit: use frontend for full editing".to_string();
+                }
+            }
+            "subagent_delete" => {
+                if let Some(entry) = self.subagents.entries.get(self.subagents.selected) {
+                    let id = entry.id.clone();
+                    self.send_daemon_command(crate::state::DaemonCommand::RemoveSubAgent(id));
+                }
+            }
+            "subagent_toggle" => {
+                if let Some(entry) = self.subagents.entries.get(self.subagents.selected) {
+                    if let Some(ref raw) = entry.raw_json {
+                        let mut updated = raw.clone();
+                        if let Some(obj) = updated.as_object_mut() {
+                            obj.insert("enabled".to_string(), serde_json::Value::Bool(!entry.enabled));
+                        }
+                        self.send_daemon_command(crate::state::DaemonCommand::SetSubAgent(updated.to_string()));
+                    }
+                }
+            }
             _ => {}
         }
     }

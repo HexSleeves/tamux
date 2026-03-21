@@ -103,6 +103,18 @@ pub enum ClientEvent {
         details: Option<String>,
     },
 
+    ProviderAuthStates(Vec<crate::state::ProviderAuthEntry>),
+    ProviderValidation { provider_id: String, valid: bool, error: Option<String> },
+    SubAgentList(Vec<crate::state::SubAgentEntry>),
+    SubAgentUpdated(crate::state::SubAgentEntry),
+    SubAgentRemoved { sub_agent_id: String },
+
+    ConciergeWelcome {
+        content: String,
+        actions: Vec<crate::state::ConciergeActionVm>,
+    },
+    ConciergeWelcomeDismissed,
+
     Error(String),
 }
 
@@ -456,6 +468,53 @@ impl DaemonClient {
                     })
                     .await;
             }
+            DaemonMessage::AgentProviderAuthStates { states_json } => {
+                let states: Vec<serde_json::Value> = serde_json::from_str(&states_json).unwrap_or_default();
+                let entries = states.iter().filter_map(|v| {
+                    Some(crate::state::ProviderAuthEntry {
+                        provider_id: v.get("provider_id")?.as_str()?.to_string(),
+                        provider_name: v.get("provider_name")?.as_str()?.to_string(),
+                        authenticated: v.get("authenticated")?.as_bool()?,
+                        auth_source: v.get("auth_source").and_then(|s| s.as_str()).unwrap_or("api_key").to_string(),
+                        model: v.get("model").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                    })
+                }).collect();
+                let _ = event_tx.send(ClientEvent::ProviderAuthStates(entries)).await;
+            }
+            DaemonMessage::AgentProviderValidation { provider_id, valid, error, .. } => {
+                let _ = event_tx.send(ClientEvent::ProviderValidation { provider_id, valid, error }).await;
+            }
+            DaemonMessage::AgentSubAgentList { sub_agents_json } => {
+                let items: Vec<serde_json::Value> = serde_json::from_str(&sub_agents_json).unwrap_or_default();
+                let entries = items.iter().filter_map(|v| {
+                    Some(crate::state::SubAgentEntry {
+                        id: v.get("id")?.as_str()?.to_string(),
+                        name: v.get("name")?.as_str()?.to_string(),
+                        provider: v.get("provider")?.as_str()?.to_string(),
+                        model: v.get("model")?.as_str()?.to_string(),
+                        role: v.get("role").and_then(|s| s.as_str()).map(String::from),
+                        enabled: v.get("enabled").and_then(|b| b.as_bool()).unwrap_or(true),
+                        raw_json: Some(v.clone()),
+                    })
+                }).collect();
+                let _ = event_tx.send(ClientEvent::SubAgentList(entries)).await;
+            }
+            DaemonMessage::AgentSubAgentUpdated { sub_agent_json } => {
+                let v: serde_json::Value = serde_json::from_str(&sub_agent_json).unwrap_or_default();
+                let entry = crate::state::SubAgentEntry {
+                    id: v.get("id").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                    name: v.get("name").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                    provider: v.get("provider").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                    model: v.get("model").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                    role: v.get("role").and_then(|s| s.as_str()).map(String::from),
+                    enabled: v.get("enabled").and_then(|b| b.as_bool()).unwrap_or(true),
+                    raw_json: Some(v),
+                };
+                let _ = event_tx.send(ClientEvent::SubAgentUpdated(entry)).await;
+            }
+            DaemonMessage::AgentSubAgentRemoved { sub_agent_id } => {
+                let _ = event_tx.send(ClientEvent::SubAgentRemoved { sub_agent_id }).await;
+            }
             DaemonMessage::Error { message } => {
                 let _ = event_tx.send(ClientEvent::Error(message)).await;
             }
@@ -622,6 +681,37 @@ impl DaemonClient {
                     let _ = event_tx.send(ClientEvent::WorkContext(context)).await;
                 }
             }
+            "concierge_welcome" => {
+                let content = event
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let actions = event
+                    .get("actions")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|a| {
+                                Some(crate::state::ConciergeActionVm {
+                                    label: a.get("label")?.as_str()?.to_string(),
+                                    action_type: a.get("action_type")?.as_str()?.to_string(),
+                                    thread_id: a
+                                        .get("thread_id")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let _ = event_tx
+                    .send(ClientEvent::ConciergeWelcome {
+                        content,
+                        actions,
+                    })
+                    .await;
+            }
             _ => {}
         }
     }
@@ -761,6 +851,36 @@ impl DaemonClient {
 
     pub fn set_config_json(&self, config_json: String) -> Result<()> {
         self.send(ClientMessage::AgentSetConfig { config_json })
+    }
+
+    pub fn get_provider_auth_states(&self) -> Result<()> {
+        self.send(ClientMessage::AgentGetProviderAuthStates)
+    }
+
+    pub fn validate_provider(
+        &self,
+        provider_id: String,
+        base_url: String,
+        api_key: String,
+    ) -> Result<()> {
+        self.send(ClientMessage::AgentValidateProvider {
+            provider_id,
+            base_url,
+            api_key,
+            auth_source: "api_key".to_string(),
+        })
+    }
+
+    pub fn set_sub_agent(&self, sub_agent_json: String) -> Result<()> {
+        self.send(ClientMessage::AgentSetSubAgent { sub_agent_json })
+    }
+
+    pub fn remove_sub_agent(&self, sub_agent_id: String) -> Result<()> {
+        self.send(ClientMessage::AgentRemoveSubAgent { sub_agent_id })
+    }
+
+    pub fn list_sub_agents(&self) -> Result<()> {
+        self.send(ClientMessage::AgentListSubAgents)
     }
 
     pub fn resolve_task_approval(&self, approval_id: String, decision: String) -> Result<()> {

@@ -38,6 +38,7 @@ mod task_scheduler;
 mod thread_crud;
 mod work_context;
 
+pub mod concierge;
 pub mod context;
 pub mod learning;
 pub mod liveness;
@@ -204,6 +205,10 @@ mod tests {
             success_criteria: None,
             max_duration_secs: None,
             supervisor_config: None,
+            override_provider: None,
+            override_model: None,
+            override_system_prompt: None,
+            sub_agent_def_id: None,
         }
     }
 
@@ -251,6 +256,10 @@ mod tests {
             success_criteria: None,
             max_duration_secs: None,
             supervisor_config: None,
+            override_provider: None,
+            override_model: None,
+            override_system_prompt: None,
+            sub_agent_def_id: None,
         }
     }
 
@@ -465,6 +474,10 @@ mod tests {
                 success_criteria: None,
                 max_duration_secs: None,
                 supervisor_config: None,
+                override_provider: None,
+                override_model: None,
+                override_system_prompt: None,
+                sub_agent_def_id: None,
             },
             sample_subagent("sub-1", "parent", TaskStatus::InProgress),
         ]);
@@ -527,6 +540,10 @@ mod tests {
                 success_criteria: None,
                 max_duration_secs: None,
                 supervisor_config: None,
+                override_provider: None,
+                override_model: None,
+                override_system_prompt: None,
+                sub_agent_def_id: None,
             },
             sample_subagent("sub-1", "parent", TaskStatus::Completed),
         ]);

@@ -70,6 +70,7 @@ impl AgentEngine {
                             id: thread_row.id,
                             title: thread_row.title,
                             messages,
+                            pinned: false,
                             upstream_thread_id: thread_metadata.upstream_thread_id,
                             upstream_transport: thread_metadata.upstream_transport,
                             upstream_provider: thread_metadata.upstream_provider,

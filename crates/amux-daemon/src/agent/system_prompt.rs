@@ -2,7 +2,7 @@
 
 use super::types::*;
 
-pub(super) fn build_system_prompt(base: &str, memory: &AgentMemory, data_dir: &std::path::Path) -> String {
+pub(super) fn build_system_prompt(base: &str, memory: &AgentMemory, data_dir: &std::path::Path, sub_agents: &[SubAgentDefinition]) -> String {
     let mut prompt = String::new();
     let memory_path = data_dir.join("MEMORY.md");
     let soul_path = data_dir.join("SOUL.md");
@@ -79,6 +79,8 @@ pub(super) fn build_system_prompt(base: &str, memory: &AgentMemory, data_dir: &s
          - Monitor child progress with `list_subagents` and integrate their results before declaring the parent task complete.\n\
          - tamux caps active subagents per parent, so queue additional children only when they materially advance the task.\n",
     );
+
+    super::task_prompt::append_sub_agent_registry(&mut prompt, sub_agents);
 
     prompt
 }

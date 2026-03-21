@@ -270,6 +270,14 @@ const bridgeApi = {
     agentHeartbeatGetItems: () => ipcRenderer.invoke('agent-heartbeat-get-items'),
     agentHeartbeatSetItems: (items) => ipcRenderer.invoke('agent-heartbeat-set-items', items),
     agentResolveTaskApproval: (approvalId, decision) => ipcRenderer.invoke('agent-resolve-task-approval', approvalId, decision),
+    agentGetProviderAuthStates: () => ipcRenderer.invoke('agent-get-provider-auth-states'),
+    agentValidateProvider: (providerId, baseUrl, apiKey, authSource) => ipcRenderer.invoke('agent-validate-provider', providerId, baseUrl, apiKey, authSource),
+    agentSetSubAgent: (subAgentJson) => ipcRenderer.invoke('agent-set-sub-agent', subAgentJson),
+    agentRemoveSubAgent: (subAgentId) => ipcRenderer.invoke('agent-remove-sub-agent', subAgentId),
+    agentListSubAgents: () => ipcRenderer.invoke('agent-list-sub-agents'),
+    agentGetConciergeConfig: () => ipcRenderer.invoke('agent-get-concierge-config'),
+    agentSetConciergeConfig: (config) => ipcRenderer.invoke('agent-set-concierge-config', config),
+    agentDismissConciergeWelcome: () => ipcRenderer.invoke('agent-dismiss-concierge-welcome'),
     onAgentEvent: (cb) => {
         const listener = (_event, data) => cb(data);
         ipcRenderer.on('agent-event', listener);

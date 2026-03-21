@@ -50,7 +50,24 @@ impl AgentEngine {
 
         // Resolve provider config after the user message is attached so
         // startup/config failures still persist a complete thread history.
-        let provider_config = match self.resolve_provider_config(&config) {
+        // If the current task has a sub-agent provider override, use that instead.
+        let task_provider_override = {
+            let tasks = self.tasks.lock().await;
+            task_id.and_then(|tid| {
+                tasks.iter().find(|t| t.id == tid).and_then(|t| {
+                    t.override_provider.as_ref().map(|p| (p.clone(), t.override_model.clone(), t.override_system_prompt.clone()))
+                })
+            })
+        };
+        let provider_config = match if let Some((ref sub_provider, ref sub_model, _)) = task_provider_override {
+            let mut pc = self.resolve_sub_agent_provider_config(&config, sub_provider)?;
+            if let Some(model) = sub_model {
+                pc.model = model.clone();
+            }
+            Ok(pc)
+        } else {
+            self.resolve_provider_config(&config)
+        } {
             Ok(provider_config) => provider_config,
             Err(error) => {
                 let error_text = error.to_string();
@@ -81,10 +98,16 @@ impl AgentEngine {
             None
         };
 
-        // Build system prompt with memory
+        // Build system prompt with memory.
+        // If this task has a sub-agent system prompt override, prepend it.
         let memory = self.memory.read().await;
         let memory_dir = active_memory_dir(&self.data_dir);
-        let mut system_prompt = build_system_prompt(&config.system_prompt, &memory, &memory_dir);
+        let base_prompt = if let Some((_, _, Some(ref override_prompt))) = task_provider_override {
+            format!("{}\n\n{}", override_prompt, config.system_prompt)
+        } else {
+            config.system_prompt.clone()
+        };
+        let mut system_prompt = build_system_prompt(&base_prompt, &memory, &memory_dir, &config.sub_agents);
         drop(memory);
         if let Some(recall) = onecontext_bootstrap {
             system_prompt.push_str("\n\n## OneContext Recall\n");
@@ -868,6 +891,39 @@ impl AgentEngine {
             context_window_tokens: config.context_window_tokens,
             response_schema: None,
         })
+    }
+
+    /// Resolve provider config for a named sub-agent's provider.
+    /// Falls back to the normal resolve_provider_config if the sub-agent's
+    /// provider matches the current top-level provider.
+    pub(super) fn resolve_sub_agent_provider_config(
+        &self,
+        config: &AgentConfig,
+        sub_agent_provider: &str,
+    ) -> Result<ProviderConfig> {
+        if let Some(pc) = config.providers.get(sub_agent_provider) {
+            let mut resolved = pc.clone();
+            if resolved.reasoning_effort.trim().is_empty() {
+                resolved.reasoning_effort = config.reasoning_effort.clone();
+            }
+            if resolved.context_window_tokens == 0 {
+                resolved.context_window_tokens = config.context_window_tokens;
+            }
+            if !provider_supports_transport(sub_agent_provider, resolved.api_transport) {
+                resolved.api_transport = default_api_transport_for_provider(sub_agent_provider);
+            }
+            return Ok(resolved);
+        }
+
+        // If the sub-agent provider matches the top-level, use normal resolution
+        if sub_agent_provider == config.provider {
+            return self.resolve_provider_config(config);
+        }
+
+        anyhow::bail!(
+            "No credentials configured for sub-agent provider '{}'. Log in via Auth settings.",
+            sub_agent_provider
+        )
     }
 
     pub(super) async fn add_assistant_message(

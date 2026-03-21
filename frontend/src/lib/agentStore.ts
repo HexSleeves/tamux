@@ -103,6 +103,36 @@ export interface AgentProviderConfig {
   customContextWindowTokens: number | null;
 }
 
+export interface ProviderAuthState {
+  provider_id: string;
+  provider_name: string;
+  authenticated: boolean;
+  auth_source: AuthSource;
+  model: string;
+  base_url: string;
+}
+
+export interface SubAgentDefinition {
+  id: string;
+  name: string;
+  provider: string;
+  model: string;
+  role?: string;
+  system_prompt?: string;
+  tool_whitelist?: string[];
+  tool_blacklist?: string[];
+  context_budget_tokens?: number;
+  max_duration_secs?: number;
+  supervisor_config?: {
+    check_interval_secs?: number;
+    stuck_timeout_secs?: number;
+    max_retries?: number;
+    intervention_level?: string;
+  };
+  enabled: boolean;
+  created_at: number;
+}
+
 export type ApiType = "openai" | "anthropic";
 export type AuthMethod = "bearer" | "x-api-key";
 export type AuthSource = "api_key" | "chatgpt_subscription";
@@ -614,6 +644,34 @@ export interface AgentState {
   updateAgentSetting: <K extends keyof AgentSettings>(key: K, value: AgentSettings[K]) => void;
   resetAgentSettings: () => void;
 
+  // Provider auth
+  providerAuthStates: ProviderAuthState[];
+  subAgents: SubAgentDefinition[];
+  refreshProviderAuthStates: () => Promise<void>;
+  validateProvider: (providerId: string, baseUrl: string, apiKey: string, authSource: string) => Promise<{ valid: boolean; error?: string; models?: unknown[] }>;
+  loginProvider: (providerId: string, apiKey: string, baseUrl?: string) => Promise<void>;
+  logoutProvider: (providerId: string) => Promise<void>;
+  addSubAgent: (def: Omit<SubAgentDefinition, "id" | "created_at">) => Promise<void>;
+  removeSubAgent: (id: string) => Promise<void>;
+  updateSubAgent: (def: SubAgentDefinition) => Promise<void>;
+  refreshSubAgents: () => Promise<void>;
+
+  // Concierge
+  conciergeConfig: {
+    enabled: boolean;
+    detail_level: string;
+    provider?: string;
+    model?: string;
+    auto_cleanup_on_navigate: boolean;
+  };
+  conciergeWelcome: {
+    content: string;
+    actions: Array<{ label: string; action_type: string; thread_id?: string }>;
+  } | null;
+  refreshConciergeConfig: () => Promise<void>;
+  updateConciergeConfig: (config: Record<string, unknown>) => Promise<void>;
+  dismissConciergeWelcome: () => Promise<void>;
+
   // Derived
   getThreadsForPane: (paneId: PaneId) => AgentThread[];
 }
@@ -636,6 +694,10 @@ export function clearThreadAbortController(threadId: string, controller?: AbortC
   if (!current) return;
   if (controller && current !== controller) return;
   threadAbortControllers.delete(threadId);
+}
+
+function getBridge(): AmuxBridge | null {
+  return (window as any).tamux ?? (window as any).amux ?? null;
 }
 
 let _threadId = 0;
@@ -1032,6 +1094,107 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   agentPanelOpen: false,
   agentSettings: loadAgentSettings(),
   searchQuery: "",
+  providerAuthStates: [],
+  subAgents: [],
+  refreshProviderAuthStates: async () => {
+    const bridge = getBridge();
+    if (!bridge?.agentGetProviderAuthStates) return;
+    try {
+      const states = await bridge.agentGetProviderAuthStates();
+      if (Array.isArray(states)) {
+        set({ providerAuthStates: states });
+      }
+    } catch { /* ignore */ }
+  },
+  validateProvider: async (providerId, baseUrl, apiKey, authSource) => {
+    const bridge = getBridge();
+    if (!bridge?.agentValidateProvider) return { valid: false, error: "Bridge not available" };
+    try {
+      return await bridge.agentValidateProvider(providerId, baseUrl, apiKey, authSource);
+    } catch (e) {
+      return { valid: false, error: String(e) };
+    }
+  },
+  loginProvider: async (providerId, apiKey, baseUrl) => {
+    const bridge = getBridge();
+    if (!bridge?.agentGetConfig || !bridge?.agentSetConfig) return;
+    try {
+      const config = await bridge.agentGetConfig();
+      if (!config) return;
+      const providers = (config as Record<string, unknown>).providers as Record<string, Record<string, unknown>> || {};
+      const existing = providers[providerId] || {};
+      providers[providerId] = { ...existing, api_key: apiKey, ...(baseUrl ? { base_url: baseUrl } : {}) };
+      (config as Record<string, unknown>).providers = providers;
+      await bridge.agentSetConfig(config);
+      set({
+        providerAuthStates: get().providerAuthStates.map((s) =>
+          s.provider_id === providerId
+            ? { ...s, authenticated: true }
+            : s
+        ),
+      });
+    } catch { /* ignore */ }
+  },
+  logoutProvider: async (providerId) => {
+    const bridge = getBridge();
+    if (!bridge?.agentGetConfig || !bridge?.agentSetConfig) return;
+    try {
+      const config = await bridge.agentGetConfig();
+      if (!config) return;
+      const providers = (config as Record<string, unknown>).providers as Record<string, Record<string, unknown>> || {};
+      if (providers[providerId]) {
+        providers[providerId] = { ...providers[providerId], api_key: "" };
+      }
+      (config as Record<string, unknown>).providers = providers;
+      await bridge.agentSetConfig(config);
+      set({
+        providerAuthStates: get().providerAuthStates.map((s) =>
+          s.provider_id === providerId
+            ? { ...s, authenticated: false }
+            : s
+        ),
+      });
+    } catch { /* ignore */ }
+  },
+  addSubAgent: async (def) => {
+    const bridge = getBridge();
+    if (!bridge?.agentSetSubAgent) return;
+    const full: SubAgentDefinition = {
+      ...def,
+      id: `subagent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      created_at: Math.floor(Date.now() / 1000),
+    };
+    try {
+      await bridge.agentSetSubAgent(JSON.stringify(full));
+      await get().refreshSubAgents();
+    } catch { /* ignore */ }
+  },
+  removeSubAgent: async (id) => {
+    const bridge = getBridge();
+    if (!bridge?.agentRemoveSubAgent) return;
+    try {
+      await bridge.agentRemoveSubAgent(id);
+      await get().refreshSubAgents();
+    } catch { /* ignore */ }
+  },
+  updateSubAgent: async (def) => {
+    const bridge = getBridge();
+    if (!bridge?.agentSetSubAgent) return;
+    try {
+      await bridge.agentSetSubAgent(JSON.stringify(def));
+      await get().refreshSubAgents();
+    } catch { /* ignore */ }
+  },
+  refreshSubAgents: async () => {
+    const bridge = getBridge();
+    if (!bridge?.agentListSubAgents) return;
+    try {
+      const list = await bridge.agentListSubAgents();
+      if (Array.isArray(list)) {
+        set({ subAgents: list });
+      }
+    } catch { /* ignore */ }
+  },
 
   createThread: (opts) => {
     const id = `thread_${++_threadId}`;
@@ -1247,6 +1410,38 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     set({ agentSettings: def });
   },
 
+  conciergeConfig: {
+    enabled: true,
+    detail_level: "proactive_triage",
+    auto_cleanup_on_navigate: true,
+  },
+  conciergeWelcome: null,
+  refreshConciergeConfig: async () => {
+    const bridge = getBridge();
+    if (!bridge?.agentGetConciergeConfig) return;
+    try {
+      const config = await bridge.agentGetConciergeConfig();
+      if (config && typeof config === "object") {
+        set({ conciergeConfig: config as any });
+      }
+    } catch { /* ignore */ }
+  },
+  updateConciergeConfig: async (config) => {
+    const bridge = getBridge();
+    if (!bridge?.agentSetConciergeConfig) return;
+    try {
+      await bridge.agentSetConciergeConfig(config);
+      set({ conciergeConfig: config as any });
+    } catch { /* ignore */ }
+  },
+  dismissConciergeWelcome: async () => {
+    const bridge = getBridge();
+    if (!bridge?.agentDismissConciergeWelcome) return;
+    try {
+      await bridge.agentDismissConciergeWelcome();
+      set({ conciergeWelcome: null });
+    } catch { /* ignore */ }
+  },
   getThreadsForPane: (paneId) => get().threads.filter((t) => t.paneId === paneId),
 }));
 

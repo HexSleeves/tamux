@@ -9,7 +9,10 @@ pub enum SettingsTab {
     WebSearch,
     Chat,
     Gateway,
+    Auth,
     Agent,
+    SubAgents,
+    Concierge,
     Advanced,
 }
 
@@ -20,7 +23,10 @@ impl SettingsTab {
         SettingsTab::WebSearch,
         SettingsTab::Chat,
         SettingsTab::Gateway,
+        SettingsTab::Auth,
         SettingsTab::Agent,
+        SettingsTab::SubAgents,
+        SettingsTab::Concierge,
         SettingsTab::Advanced,
     ];
 
@@ -272,10 +278,31 @@ impl SettingsState {
                 11 => "whatsapp_phone_id",
                 _ => "",
             },
+            SettingsTab::Auth => match self.field_cursor {
+                0 => "auth_provider_list",
+                1 => "auth_login",
+                2 => "auth_test",
+                _ => "",
+            },
             SettingsTab::Agent => match self.field_cursor {
                 0 => "agent_name",
                 1 => "system_prompt",
                 2 => "backend",
+                _ => "",
+            },
+            SettingsTab::SubAgents => match self.field_cursor {
+                0 => "subagent_list",
+                1 => "subagent_add",
+                2 => "subagent_edit",
+                3 => "subagent_delete",
+                4 => "subagent_toggle",
+                _ => "",
+            },
+            SettingsTab::Concierge => match self.field_cursor {
+                0 => "concierge_enabled",
+                1 => "concierge_detail_level",
+                2 => "concierge_provider",
+                3 => "concierge_model",
                 _ => "",
             },
             SettingsTab::Advanced => match self.field_cursor {
@@ -306,7 +333,10 @@ impl SettingsState {
             SettingsTab::WebSearch => 7,
             SettingsTab::Chat => 6,
             SettingsTab::Gateway => 12,
+            SettingsTab::Auth => 3,
             SettingsTab::Agent => 3,
+            SettingsTab::SubAgents => 5,
+            SettingsTab::Concierge => 4,
             SettingsTab::Advanced => 14,
         }
     }
@@ -604,8 +634,8 @@ mod tests {
     }
 
     #[test]
-    fn all_tabs_covers_seven_variants() {
-        assert_eq!(SettingsTab::all().len(), 7);
+    fn all_tabs_covers_ten_variants() {
+        assert_eq!(SettingsTab::all().len(), 10);
     }
 
     #[test]
@@ -820,8 +850,14 @@ mod tests {
         assert_eq!(state.field_count(), 6); // streaming, conv memory, honcho toggle, key, url, workspace
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Gateway));
         assert_eq!(state.field_count(), 12); // enabled, prefix, slack×2, telegram×2, discord×3, whatsapp×3
+        state.reduce(SettingsAction::SwitchTab(SettingsTab::Auth));
+        assert_eq!(state.field_count(), 3); // provider_list, login, test
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Agent));
         assert_eq!(state.field_count(), 3); // name, prompt, backend
+        state.reduce(SettingsAction::SwitchTab(SettingsTab::SubAgents));
+        assert_eq!(state.field_count(), 5); // list, add, edit, delete, toggle
+        state.reduce(SettingsAction::SwitchTab(SettingsTab::Concierge));
+        assert_eq!(state.field_count(), 4); // enabled, detail_level, provider, model
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Advanced));
         assert_eq!(state.field_count(), 14); // 10 advanced + 4 snapshot fields
     }

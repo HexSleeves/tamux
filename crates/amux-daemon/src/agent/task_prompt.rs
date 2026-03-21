@@ -116,6 +116,30 @@ pub(super) fn build_task_prompt(task: &AgentTask) -> String {
     prompt
 }
 
+/// Append available sub-agent registry to a task prompt so the LLM
+/// knows what specialist sub-agents it can delegate work to.
+pub(super) fn append_sub_agent_registry(prompt: &mut String, sub_agents: &[SubAgentDefinition]) {
+    let enabled: Vec<&SubAgentDefinition> = sub_agents.iter().filter(|sa| sa.enabled).collect();
+    if enabled.is_empty() {
+        return;
+    }
+
+    prompt.push_str("\n\n## Available Sub-Agents\n");
+    prompt.push_str("You can delegate work to these specialist sub-agents via `spawn_subagent`:\n\n");
+    for sa in &enabled {
+        prompt.push_str(&format!("- **{}**", sa.name));
+        if let Some(ref role) = sa.role {
+            prompt.push_str(&format!(" (role: {role})"));
+        }
+        prompt.push_str(&format!(" — provider: {}, model: {}", sa.provider, sa.model));
+        if let Some(ref sp) = sa.system_prompt {
+            let snippet: String = sp.chars().take(80).collect();
+            prompt.push_str(&format!(" — \"{snippet}...\""));
+        }
+        prompt.push('\n');
+    }
+}
+
 pub(super) async fn resolve_preferred_session_id(
     session_manager: &Arc<crate::session_manager::SessionManager>,
     session_hint: Option<&str>,

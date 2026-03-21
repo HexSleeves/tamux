@@ -167,13 +167,16 @@ impl AgentEngine {
     }
 
     async fn execute_dispatched_task(&self, task: AgentTask) -> Result<()> {
+        let sub_agents = self.config.read().await.sub_agents.clone();
+        let mut prompt = build_task_prompt(&task);
+        task_prompt::append_sub_agent_registry(&mut prompt, &sub_agents);
         match self
             .send_task_message(
                 &task.id,
                 task.thread_id.as_deref(),
                 task.session_id.as_deref(),
                 Some(task.runtime.as_str()),
-                &build_task_prompt(&task),
+                &prompt,
             )
             .await
         {

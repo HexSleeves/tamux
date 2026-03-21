@@ -1,6 +1,7 @@
 //! AgentEngine struct definition and constructor.
 
 use super::*;
+use super::concierge::ConciergeEngine;
 
 pub(super) struct SendMessageOutcome {
     pub thread_id: String,
@@ -43,8 +44,9 @@ pub(crate) fn aline_available() -> bool {
 // ---------------------------------------------------------------------------
 
 pub struct AgentEngine {
-    pub config: RwLock<AgentConfig>,
+    pub config: Arc<RwLock<AgentConfig>>,
     pub http_client: reqwest::Client,
+    pub concierge: Arc<ConciergeEngine>,
     pub session_manager: Arc<SessionManager>,
     pub history: HistoryStore,
     pub threads: RwLock<HashMap<String, AgentThread>>,
@@ -90,9 +92,17 @@ impl AgentEngine {
             );
         }
 
+        let http_client = reqwest::Client::new();
+        let config = Arc::new(RwLock::new(config));
+        let concierge = Arc::new(ConciergeEngine::new(
+            config.clone(),
+            event_tx.clone(),
+        ));
+
         Arc::new(Self {
-            config: RwLock::new(config),
-            http_client: reqwest::Client::new(),
+            config,
+            http_client,
+            concierge,
             session_manager,
             history: HistoryStore::new().expect("history store initialization failed"),
             threads: RwLock::new(HashMap::new()),

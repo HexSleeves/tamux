@@ -1002,6 +1002,12 @@ pub struct AgentConfig {
     /// Agent backend: daemon (built-in LLM), openclaw, hermes, or legacy.
     #[serde(default)]
     pub agent_backend: AgentBackend,
+    /// Registry of named sub-agents for orchestration dispatch.
+    #[serde(default)]
+    pub sub_agents: Vec<SubAgentDefinition>,
+    /// Concierge agent configuration.
+    #[serde(default)]
+    pub concierge: ConciergeConfig,
     /// Additional persisted agent settings used by richer frontends and the TUI.
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -1097,6 +1103,8 @@ impl Default for AgentConfig {
             providers: HashMap::new(),
             gateway: GatewayConfig::default(),
             agent_backend: AgentBackend::default(),
+            sub_agents: Vec::new(),
+            concierge: ConciergeConfig::default(),
             extra: HashMap::new(),
         }
     }
@@ -1120,6 +1128,105 @@ pub struct ProviderConfig {
     /// When set, request structured output with this JSON schema from the API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<serde_json::Value>,
+}
+
+/// A named sub-agent definition that the orchestration engine can dispatch work to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentDefinition {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_whitelist: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_blacklist: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_budget_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_duration_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisor_config: Option<SupervisorConfig>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub created_at: u64,
+}
+
+/// Snapshot of a provider's authentication status for UI display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderAuthState {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub authenticated: bool,
+    pub auth_source: AuthSource,
+    pub model: String,
+    pub base_url: String,
+}
+
+// ---------------------------------------------------------------------------
+// Concierge
+// ---------------------------------------------------------------------------
+
+/// How much context the concierge gathers for its welcome greeting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConciergeDetailLevel {
+    Minimal,
+    ContextSummary,
+    #[default]
+    ProactiveTriage,
+    DailyBriefing,
+}
+
+/// The type of quick-action a concierge welcome button triggers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConciergeActionType {
+    ContinueSession,
+    StartNew,
+    Search,
+    Dismiss,
+}
+
+/// A structured quick-action button in the concierge welcome message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConciergeAction {
+    pub label: String,
+    pub action_type: ConciergeActionType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+}
+
+/// Configuration for the concierge agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConciergeConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub detail_level: ConciergeDetailLevel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default = "default_true")]
+    pub auto_cleanup_on_navigate: bool,
+}
+
+impl Default for ConciergeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            detail_level: ConciergeDetailLevel::default(),
+            provider: None,
+            model: None,
+            auto_cleanup_on_navigate: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1348,6 +1455,12 @@ pub enum AgentEvent {
         checkpoint_type: String,
         step_index: Option<usize>,
     },
+    ConciergeWelcome {
+        thread_id: String,
+        content: String,
+        detail_level: ConciergeDetailLevel,
+        actions: Vec<ConciergeAction>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1359,6 +1472,8 @@ pub struct AgentThread {
     pub id: String,
     pub title: String,
     pub messages: Vec<AgentMessage>,
+    #[serde(default)]
+    pub pinned: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_thread_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1747,6 +1862,21 @@ pub struct AgentTask {
     /// Supervision configuration for this sub-agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supervisor_config: Option<SupervisorConfig>,
+
+    // -- Provider/model override for sub-agent dispatch --
+
+    /// Override provider for this task (from SubAgentDefinition).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_provider: Option<String>,
+    /// Override model for this task (from SubAgentDefinition).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_model: Option<String>,
+    /// Override system prompt for this task (from SubAgentDefinition).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_system_prompt: Option<String>,
+    /// The SubAgentDefinition ID this task was spawned from, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_agent_def_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

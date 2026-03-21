@@ -204,6 +204,8 @@ impl TuiModel {
                         overlay_area,
                         &self.settings,
                         &self.config,
+                        &self.auth,
+                        &self.subagents,
                         &self.theme,
                     );
                 }
