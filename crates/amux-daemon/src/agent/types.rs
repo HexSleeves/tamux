@@ -1551,19 +1551,14 @@ pub enum InterventionLevel {
 }
 
 /// Overall health state of a sub-agent as determined by the supervisor.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentHealthState {
+    #[default]
     Healthy,
     Degraded,
     Stuck,
     Crashed,
-}
-
-impl Default for SubagentHealthState {
-    fn default() -> Self {
-        Self::Healthy
-    }
 }
 
 /// Why a sub-agent is considered stuck.
@@ -1629,19 +1624,14 @@ pub enum TaskStatus {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskPriority {
     Low,
+    #[default]
     Normal,
     High,
     Urgent,
-}
-
-impl Default for TaskPriority {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

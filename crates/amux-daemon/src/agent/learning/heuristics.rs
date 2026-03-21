@@ -35,21 +35,11 @@ pub struct ReplanHeuristic {
 }
 
 /// Aggregated store of all learned heuristics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HeuristicStore {
     pub context_heuristics: Vec<ContextHeuristic>,
     pub tool_heuristics: Vec<ToolHeuristic>,
     pub replan_heuristics: Vec<ReplanHeuristic>,
-}
-
-impl Default for HeuristicStore {
-    fn default() -> Self {
-        Self {
-            context_heuristics: Vec::new(),
-            tool_heuristics: Vec::new(),
-            replan_heuristics: Vec::new(),
-        }
-    }
 }
 
 impl HeuristicStore {

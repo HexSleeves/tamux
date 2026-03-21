@@ -308,7 +308,7 @@ impl AgentEngine {
                                 "retry {} of {} scheduled in {}s",
                                 current.retry_count,
                                 current.max_retries,
-                                ((retry_delay_ms + 999) / 1000).max(1),
+                                retry_delay_ms.div_ceil(1000).max(1),
                             ));
                             current.logs.push(make_task_log_entry(
                                 current.retry_count,

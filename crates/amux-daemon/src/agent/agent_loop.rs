@@ -699,7 +699,7 @@ impl AgentEngine {
 
                     // Check context budget
                     // Check budget every 5 tool calls to avoid full-message scan on each iteration
-                    if termination_tool_calls % 5 == 0 {
+                    if termination_tool_calls.is_multiple_of(5) {
                     if let Some(ref mut budget) = task_context_budget {
                         let current_tokens = {
                             let threads = self.threads.read().await;
