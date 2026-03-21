@@ -792,7 +792,7 @@ impl AgentEngine {
                     crate::agent::learning::traces::TraceOutcome::Partial { .. } => "partial",
                     crate::agent::learning::traces::TraceOutcome::Cancelled => "cancelled",
                 };
-                let _ = self.history.insert_execution_trace(
+                if let Err(e) = self.history.insert_execution_trace(
                     &trace.trace_id,
                     None,
                     task_id,
@@ -804,7 +804,9 @@ impl AgentEngine {
                     trace.total_duration_ms,
                     trace.total_tokens_used,
                     trace.created_at,
-                );
+                ) {
+                    tracing::warn!(task_id, "failed to persist execution trace: {e}");
+                }
             }
         }
 

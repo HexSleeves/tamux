@@ -509,7 +509,9 @@ impl AgentEngine {
             &todos,
             now,
         );
-        let _ = crate::agent::liveness::checkpoint::checkpoint_store(&self.history, &checkpoint);
+        if let Err(e) = crate::agent::liveness::checkpoint::checkpoint_store(&self.history, &checkpoint) {
+            tracing::warn!(goal_run_id, "failed to store checkpoint: {e}");
+        }
         let _ = self.event_tx.send(AgentEvent::CheckpointCreated {
             checkpoint_id: checkpoint.id,
             goal_run_id: goal_run_id.clone(),
