@@ -38,9 +38,10 @@ pub struct ConciergeConfig {
     pub provider: Option<String>,                // None = use main agent's provider
     pub model: Option<String>,                   // None = use main agent's model
     pub auto_cleanup_on_navigate: bool,          // default: true
-    pub thread_id: Option<String>,               // auto-assigned, persisted
 }
 ```
+
+**Thread discovery:** The concierge thread uses a well-known fixed ID: `"concierge"`. On `initialize()`, query `history.list_threads()` for this ID — if not found, create it. This avoids storing runtime state in user config and survives config resets.
 
 ### ConciergeDetailLevel
 
@@ -57,26 +58,40 @@ pub enum ConciergeDetailLevel {
 
 Add `pinned: bool` to `AgentThread`. Pinned threads sort first in the sidebar and are excluded from bulk cleanup.
 
+**Persistence:** Store `pinned` in the existing `metadata_json: Option<String>` field on `AgentDbThread` as `{"pinned": true}`. On hydration, deserialize the metadata and set `pinned` accordingly. This avoids a SQLite schema migration.
+
 ### New AgentEvent Variant
 
 ```rust
 AgentEvent::ConciergeWelcome {
     thread_id: String,
     content: String,
-    detail_level: String,
+    detail_level: ConciergeDetailLevel,
     actions: Vec<ConciergeAction>,
 }
 ```
+
+**Event forwarding:** Add `ConciergeWelcome` to the broadcast-always list in `server.rs::should_forward_agent_event()` alongside `HeartbeatResult` and `Notification`. The welcome must reach clients that haven't yet subscribed to the concierge thread.
 
 ### ConciergeAction
 
 Structured quick-action buttons rendered alongside the greeting text:
 
 ```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConciergeActionType {
+    ContinueSession,
+    StartNew,
+    Search,
+    Dismiss,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConciergeAction {
-    pub label: String,              // "Continue: auth middleware refactor"
-    pub action_type: String,        // "continue_session" | "start_new" | "search" | "dismiss"
-    pub thread_id: Option<String>,  // for continue_session
+    pub label: String,                       // "Continue: auth middleware refactor"
+    pub action_type: ConciergeActionType,
+    pub thread_id: Option<String>,           // for ContinueSession
 }
 ```
 
@@ -96,15 +111,16 @@ pub struct ConciergeEngine {
     history: HistoryStore,
     event_tx: broadcast::Sender<AgentEvent>,
     http_client: reqwest::Client,
-    thread_id: RwLock<Option<String>>,
     pending_welcome_ids: RwLock<Vec<String>>,
 }
 ```
 
+The concierge thread always uses the well-known ID `"concierge"` — no runtime state needed.
+
 ### Lifecycle
 
 1. **Daemon starts** — `ConciergeEngine::new()` alongside `AgentEngine::new()`
-2. **`concierge.initialize()`** — Load or create pinned concierge thread, persist `thread_id` in config
+2. **`concierge.initialize()`** — Load or create pinned concierge thread (well-known ID `"concierge"`)
 3. **Client connects** (`AgentSubscribe` received) — `concierge.on_client_connected()`
 4. **Context gathering** — Based on `detail_level`, query history/tasks/health
 5. **Compose and emit** — Welcome message + actions via `AgentEvent::ConciergeWelcome`
@@ -112,7 +128,17 @@ pub struct ConciergeEngine {
 
 ### LLM Calls
 
-The concierge makes its own LLM calls directly via `http_client` — it does not go through `AgentEngine.send_message_inner()`. This avoids competing with the main agent, keeps the concierge system prompt separate, and allows a different provider/model without per-task override machinery.
+The concierge makes its own LLM calls via the existing `crate::agent::llm_client::stream_completion()` function — it does not go through `AgentEngine.send_message_inner()`. This avoids competing with the main agent, keeps the concierge system prompt separate, and allows a different provider/model.
+
+To make the call, `ConciergeEngine` must resolve a `ProviderConfig` (base_url, api_key, auth_method, transport, model) from either the concierge-specific provider or the main agent config. Extract a shared helper:
+
+```rust
+fn resolve_concierge_provider(config: &AgentConfig) -> Result<ProviderConfig>
+```
+
+This checks `config.concierge.provider` first, falls back to `config.provider`, and resolves credentials via `config.providers[provider_id]` — the same logic as `resolve_provider_config` but without task-specific overrides.
+
+Then call `llm_client::stream_completion(http_client, &provider_config, messages, tools)` directly.
 
 For `Minimal` level, no LLM call is made — pure Rust template from query results.
 
@@ -130,8 +156,8 @@ For `Minimal` level, no LLM call is made — pure Rust template from query resul
 |-------|-------------|------|
 | **Minimal** | `history.list_threads(limit=1)` | No — template: "Last session: {title} ({date}). Continue, start new, or search?" |
 | **ContextSummary** | + `history.list_messages(last_thread, limit=10)` | Yes — summarize last session in 1-2 sentences |
-| **ProactiveTriage** | + `engine.list_tasks()` + heartbeat items + pending approvals | Yes — summary + actionable triage |
-| **DailyBriefing** | + health status + gateway connectivity + snapshot stats + time since last activity | Yes — full operational briefing |
+| **ProactiveTriage** | + `engine.list_tasks()` (queued/in-progress) + recent `HeartbeatResult` events with alert outcomes from last 24h + pending approvals | Yes — summary + actionable triage |
+| **DailyBriefing** | + system health status + gateway connectivity (Slack/Discord/Telegram online?) + snapshot stats (count, total size) + time since last activity | Yes — full operational briefing |
 
 ---
 
@@ -214,11 +240,13 @@ status summaries. Always offer 2-3 actionable next steps.
 | Click "Search history" | ACTIVE mode — concierge runs search, shows clickable results. |
 | Click "Dismiss" | Prune welcome message. Thread stays idle. |
 | Open different thread from sidebar | Auto-cleanup — prune welcome message. |
-| Disconnect without interaction | Pruned on next connect before generating new welcome. |
+| Disconnect without interaction | Stale welcome pruned on next `on_client_connected()` before generating new welcome. No disconnect hook needed. |
 
 ### Message Pruning (Not Thread Deletion)
 
 The concierge thread is permanent. Only transient welcome messages are pruned. Track IDs in `ConciergeEngine.pending_welcome_ids`. On any cleanup trigger, remove those messages and clear the vec.
+
+**Implementation:** Add `HistoryStore::delete_messages(thread_id: &str, message_ids: &[&str]) -> Result<()>` that deletes from both the in-memory `AgentThread.messages` vec and the SQLite `messages` table. Also remove from the thread's in-memory messages vec via `AgentEngine.threads` write lock.
 
 ### Reconnection
 
@@ -228,6 +256,10 @@ On connect with stale welcome from previous session:
 3. Emit new welcome
 
 The concierge thread never accumulates ignored greetings.
+
+### Multi-Client Behavior
+
+The daemon may have multiple simultaneous clients (TUI + Electron, or multiple TUI instances). The concierge treats welcome messages as **idempotent per session**: `on_client_connected()` generates one welcome batch and stores its message IDs. If a second client connects while the welcome is pending, it receives the existing `ConciergeWelcome` event (replayed from state) rather than generating a duplicate. Any client's cleanup action (navigate, dismiss) prunes for all clients since the messages are shared in the same thread.
 
 ### Main Agent Handoff
 
@@ -242,7 +274,7 @@ When user asks something beyond concierge capability:
 
 ### TUI
 
-- **Sidebar:** Concierge thread pinned at top with distinct label (e.g., `◆ Concierge`)
+- **Thread list:** Concierge thread pinned at top of the chat thread list with distinct label (e.g., `◆ Concierge`). The thread list is rendered in the chat panel's thread picker widget (`widgets/thread_picker.rs`), not the sidebar file tree (`widgets/sidebar.rs`).
 - **Welcome message:** System-styled message with different accent color and `CONCIERGE` badge
 - **Action buttons:** Clickable chips below the greeting text
 - **Auto-cleanup:** Welcome pruned when user clicks another thread
@@ -279,15 +311,17 @@ Shown beneath the selector when each option is active:
 - `frontend/src/components/ConciergeToast.tsx` — toast notification component
 
 ### Modified Files
-- `crates/amux-daemon/src/agent/types.rs` — ConciergeConfig, ConciergeDetailLevel, ConciergeAction, AgentEvent variant, pinned flag
+- `crates/amux-daemon/src/agent/types.rs` — ConciergeConfig, ConciergeDetailLevel, ConciergeActionType, ConciergeAction, AgentEvent variant, pinned flag on AgentThread
 - `crates/amux-daemon/src/agent/engine.rs` — Initialize ConciergeEngine
-- `crates/amux-daemon/src/server.rs` — Trigger on_client_connected, handle concierge messages
-- `crates/amux-protocol/src/messages.rs` — New message variants for concierge config
+- `crates/amux-daemon/src/agent/llm_client.rs` — Ensure `stream_completion` is pub(crate) accessible
+- `crates/amux-daemon/src/server.rs` — Trigger on_client_connected, add ConciergeWelcome to broadcast-always list, handle concierge messages
+- `crates/amux-daemon/src/history.rs` — Add `delete_messages(thread_id, message_ids)` method
+- `crates/amux-protocol/src/messages.rs` — New message variants for concierge config, AgentDbThread pinned metadata
 - `crates/amux-tui/src/client.rs` — Handle ConciergeWelcome events
 - `crates/amux-tui/src/app/events.rs` — Route concierge events
-- `crates/amux-tui/src/widgets/sidebar.rs` — Pin concierge thread at top
+- `crates/amux-tui/src/widgets/thread_picker.rs` — Pin concierge thread at top of thread list
 - `crates/amux-tui/src/state/settings.rs` — Concierge settings tab/fields
-- `frontend/src/lib/agentStore.ts` — Concierge state and actions
+- `frontend/src/lib/agentStore.ts` — Concierge state, actions, ConciergeActionType type
 - `frontend/src/components/SettingsPanel.tsx` — Concierge settings section
 - `frontend/electron/main.cjs` — IPC handlers for concierge
 - `frontend/electron/preload.cjs` — Bridge methods
