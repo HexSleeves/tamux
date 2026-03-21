@@ -36,6 +36,7 @@ mod thread_crud;
 mod work_context;
 
 pub mod context;
+pub mod learning;
 pub mod liveness;
 pub mod metacognitive;
 pub mod subagent;
