@@ -5,7 +5,7 @@ import { StatusBar } from "./components/StatusBar";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { AgentApprovalOverlay } from "./components/AgentApprovalOverlay";
-import { ConciergeToast } from "./components/ConciergeToast";
+// ConciergeToast is rendered inline below — no separate import needed.
 import { SetupOnboardingPanel } from "./components/SetupOnboardingPanel";
 import { useAgentMissionStore } from "./lib/agentMissionStore";
 import { clearThreadAbortController, setThreadAbortController, useAgentStore } from "./lib/agentStore";
@@ -901,7 +901,69 @@ export default function App() {
 
       <SetupOnboardingPanel />
       <AgentApprovalOverlay />
-      <ConciergeToast />
+      <InlineConciergeToast />
+    </div>
+  );
+}
+
+function InlineConciergeToast() {
+  const welcome = useAgentStore((s) => s.conciergeWelcome);
+  const conciergeConfig = useAgentStore((s) => s.conciergeConfig);
+
+  console.log("[InlineConciergeToast] mounted. welcome:", welcome, "config:", conciergeConfig);
+
+  if (!welcome) {
+    return <div id="concierge-toast-debug" style={{ display: "none" }} data-status="no-welcome" />;
+  }
+  if (!conciergeConfig?.enabled) {
+    return <div id="concierge-toast-debug" style={{ display: "none" }} data-status="disabled" />;
+  }
+
+  console.log("[InlineConciergeToast] VISIBLE! content:", welcome.content?.substring(0, 50));
+
+  return (
+    <div style={{
+      position: "fixed",
+      bottom: 20,
+      right: 20,
+      zIndex: 99999,
+      maxWidth: 420,
+      background: "rgba(18, 33, 47, 0.97)",
+      border: "2px solid var(--accent, #61c5ff)",
+      borderRadius: 8,
+      padding: 16,
+      boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+      color: "#fff",
+      fontSize: 13,
+    }}>
+      <div style={{ fontSize: 10, color: "#61c5ff", fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        Concierge
+      </div>
+      <div style={{ lineHeight: 1.5, whiteSpace: "pre-wrap", marginBottom: 10 }}>
+        {welcome.content}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {(welcome.actions || []).map((action: any, i: number) => (
+          <button
+            key={i}
+            onClick={() => {
+              useAgentStore.setState({ conciergeWelcome: null });
+            }}
+            style={{
+              background: "rgba(97, 197, 255, 0.15)",
+              border: "1px solid rgba(97, 197, 255, 0.4)",
+              color: "#61c5ff",
+              borderRadius: 4,
+              padding: "5px 12px",
+              fontSize: 11,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            {action.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
