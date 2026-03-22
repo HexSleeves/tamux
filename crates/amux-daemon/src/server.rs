@@ -1736,6 +1736,7 @@ where
                 }
 
                 ClientMessage::AgentRequestConciergeWelcome => {
+                    tracing::info!("server: received AgentRequestConciergeWelcome");
                     let agent_ref = agent.clone();
                     tokio::spawn(async move {
                         agent_ref

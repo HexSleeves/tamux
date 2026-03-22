@@ -65,22 +65,28 @@ impl ConciergeEngine {
         threads: &RwLock<std::collections::HashMap<String, AgentThread>>,
         tasks: &tokio::sync::Mutex<std::collections::VecDeque<AgentTask>>,
     ) {
+        tracing::info!("concierge: on_client_connected called");
         let config = self.config.read().await;
         if !config.concierge.enabled {
+            tracing::info!("concierge: disabled in config, skipping");
             return;
         }
 
         self.prune_welcome_messages(threads).await;
 
         let detail_level = config.concierge.detail_level;
+        tracing::info!("concierge: gathering context at level {:?}", detail_level);
         drop(config);
 
         let context = self.gather_context(threads, tasks, detail_level).await;
+        tracing::info!("concierge: gathered {} threads, {} tasks", context.recent_threads.len(), context.pending_tasks.len());
         let (content, actions) = self.compose_welcome(detail_level, &context).await;
 
         if content.is_empty() {
+            tracing::warn!("concierge: empty welcome content, skipping emit");
             return;
         }
+        tracing::info!("concierge: welcome composed, {} chars, {} actions", content.len(), actions.len());
 
         // Add welcome message to the concierge thread.
         {
@@ -109,12 +115,13 @@ impl ConciergeEngine {
 
         *self.pending_welcome_count.write().await += 1;
 
-        let _ = self.event_tx.send(AgentEvent::ConciergeWelcome {
+        let send_result = self.event_tx.send(AgentEvent::ConciergeWelcome {
             thread_id: CONCIERGE_THREAD_ID.to_string(),
             content,
             detail_level,
             actions,
         });
+        tracing::info!("concierge: ConciergeWelcome event emitted, receivers={}", send_result.unwrap_or(0));
     }
 
     /// Prune pending welcome messages from the concierge thread.

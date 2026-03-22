@@ -118,11 +118,18 @@ export default function App() {
   // may not be open when the app loads.
   useEffect(() => {
     const amux = (window as any).tamux ?? (window as any).amux;
-    if (!amux?.onAgentEvent) return;
+    if (!amux?.onAgentEvent) {
+      console.warn("[concierge] no onAgentEvent bridge available");
+      return;
+    }
+
+    console.log("[concierge] setting up agent event listener in App.tsx");
 
     // Listen for the concierge_welcome event from the daemon.
     const unsubscribe = amux.onAgentEvent((event: any) => {
+      console.log("[concierge] agent event received:", event?.type, event);
       if (event?.type === "concierge_welcome") {
+        console.log("[concierge] ConciergeWelcome event! content length:", event.content?.length, "actions:", event.actions?.length);
         useAgentStore.setState({
           conciergeWelcome: {
             content: event.content ?? "",
@@ -135,7 +142,12 @@ export default function App() {
     // Request welcome after a short delay for bridge readiness.
     const timer = setTimeout(() => {
       if (amux.agentRequestConciergeWelcome) {
-        amux.agentRequestConciergeWelcome().catch(() => {});
+        console.log("[concierge] sending agentRequestConciergeWelcome");
+        amux.agentRequestConciergeWelcome().catch((e: any) => {
+          console.error("[concierge] request failed:", e);
+        });
+      } else {
+        console.warn("[concierge] agentRequestConciergeWelcome not available on bridge");
       }
     }, 1500);
 

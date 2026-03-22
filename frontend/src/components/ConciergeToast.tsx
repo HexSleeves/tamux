@@ -5,7 +5,9 @@ export function ConciergeToast() {
     const dismiss = useAgentStore((s) => s.dismissConciergeWelcome);
     const config = useAgentStore((s) => s.conciergeConfig);
 
+    console.log("[ConciergeToast] render check — welcome:", !!welcome, "enabled:", config.enabled);
     if (!welcome || !config.enabled) return null;
+    console.log("[ConciergeToast] RENDERING toast with", welcome.content.length, "chars,", welcome.actions.length, "actions");
 
     return (
         <div style={{
