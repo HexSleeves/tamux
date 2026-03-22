@@ -11,6 +11,21 @@ use std::collections::HashMap;
 
 use super::types::GatewayConfig;
 
+fn discord_authorization_header(token: &str) -> String {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let normalized = trimmed
+        .strip_prefix("Bot ")
+        .or_else(|| trimmed.strip_prefix("bot "))
+        .or_else(|| trimmed.strip_prefix("Bearer "))
+        .or_else(|| trimmed.strip_prefix("bearer "))
+        .unwrap_or(trimmed)
+        .trim();
+    format!("Bot {normalized}")
+}
+
 /// State for tracking already-seen messages per platform.
 pub struct GatewayState {
     pub config: GatewayConfig,
@@ -247,6 +262,11 @@ pub async fn poll_discord(
         return vec![];
     }
 
+    let auth_header = discord_authorization_header(token);
+    if auth_header.is_empty() {
+        return vec![];
+    }
+
     let mut messages = Vec::new();
 
     for channel_id in channel_ids {
@@ -261,7 +281,7 @@ pub async fn poll_discord(
         let resp = match state
             .http_client
             .get(&url)
-            .header("Authorization", format!("Bot {token}"))
+            .header("Authorization", &auth_header)
             .timeout(std::time::Duration::from_secs(5))
             .send()
             .await
@@ -274,6 +294,14 @@ pub async fn poll_discord(
         };
 
         if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            tracing::warn!(
+                channel = %channel_id,
+                status = %status,
+                body = %body,
+                "discord poll rejected"
+            );
             continue;
         }
 

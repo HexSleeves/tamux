@@ -19,6 +19,16 @@ export function ProviderAuthTab() {
     const [chatgptAuthUrl, setChatgptAuthUrl] = useState<string | null>(null);
     const [chatgptAuthBusy, setChatgptAuthBusy] = useState(false);
 
+    const openChatgptAuthUrl = (url: string) => {
+        if (!url) return;
+        const opened = typeof window !== "undefined"
+            ? window.open(url, "_blank", "noopener,noreferrer")
+            : null;
+        if (opened) {
+            opened.opener = null;
+        }
+    };
+
     useEffect(() => {
         refreshProviderAuthStates();
     }, []);
@@ -61,7 +71,11 @@ export function ProviderAuthTab() {
         setChatgptAuthBusy(true);
         try {
             const result = await amux.openAICodexAuthLogin();
-            setChatgptAuthUrl(typeof result?.authUrl === "string" ? result.authUrl : null);
+            const authUrl = typeof result?.authUrl === "string" ? result.authUrl : null;
+            setChatgptAuthUrl(authUrl);
+            if (authUrl) {
+                openChatgptAuthUrl(authUrl);
+            }
             if (result?.available) {
                 refreshProviderAuthStates();
             }
@@ -88,14 +102,36 @@ export function ProviderAuthTab() {
     const handleTest = async (providerId: string) => {
         setValidating(providerId);
         const state = filtered.find((s) => s.provider_id === providerId);
-        const result = await validateProvider(
-            providerId,
-            state?.base_url || "",
-            "",
-            state?.auth_source || "api_key"
-        );
-        setValidationResult((prev) => ({ ...prev, [providerId]: result }));
-        setValidating(null);
+        try {
+            if (providerId === "openai" && state?.auth_source === "chatgpt_subscription") {
+                const amux = (window as any).amux || (window as any).tamux;
+                if (!amux?.openAICodexAuthStatus) {
+                    setValidationResult((prev) => ({
+                        ...prev,
+                        [providerId]: { valid: false, error: "ChatGPT auth bridge unavailable" },
+                    }));
+                    return;
+                }
+                const status = await amux.openAICodexAuthStatus({ refresh: true });
+                setValidationResult((prev) => ({
+                    ...prev,
+                    [providerId]: status?.available
+                        ? { valid: true }
+                        : { valid: false, error: status?.error || "ChatGPT subscription auth not available" },
+                }));
+                return;
+            }
+
+            const result = await validateProvider(
+                providerId,
+                state?.base_url || "",
+                "",
+                state?.auth_source || "api_key"
+            );
+            setValidationResult((prev) => ({ ...prev, [providerId]: result }));
+        } finally {
+            setValidating(null);
+        }
     };
 
     return (
@@ -206,7 +242,16 @@ export function ProviderAuthTab() {
                                 {isOpenAI && chatgptAuthUrl && (
                                     <div style={{ fontSize: 10, marginTop: 4, color: "var(--accent)" }}>
                                         <span>Auth URL: </span>
-                                        <a href={chatgptAuthUrl} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", textDecoration: "underline" }}>
+                                        <a
+                                            href={chatgptAuthUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            onClick={(event) => {
+                                                event.preventDefault();
+                                                openChatgptAuthUrl(chatgptAuthUrl);
+                                            }}
+                                            style={{ color: "var(--accent)", textDecoration: "underline" }}
+                                        >
                                             Open in browser
                                         </a>
                                         <span style={{ marginLeft: 8, color: "var(--text-secondary)" }}>Waiting for confirmation...</span>

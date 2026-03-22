@@ -26,6 +26,16 @@ impl TuiModel {
         kind: modal::ModalKind,
     ) -> bool {
         if kind == modal::ModalKind::Settings {
+            if matches!(
+                code,
+                KeyCode::Char('v' | 'V') if modifiers.contains(KeyModifiers::CONTROL)
+            ) || code == KeyCode::Char('\u{16}')
+                || (code == KeyCode::Insert && modifiers.contains(KeyModifiers::SHIFT))
+            {
+                self.paste_from_clipboard();
+                return false;
+            }
+
             if self.settings.is_editing() {
                 if self.settings.is_textarea() {
                     match code {
@@ -104,6 +114,17 @@ impl TuiModel {
                             "honcho_api_key" => self.config.honcho_api_key = value,
                             "honcho_base_url" => self.config.honcho_base_url = value,
                             "honcho_workspace_id" => self.config.honcho_workspace_id = value,
+                            "compliance_retention_days" => {
+                                if let Ok(n) = value.parse::<u32>() {
+                                    self.config.compliance_retention_days = n.clamp(1, 3650);
+                                }
+                            }
+                            "tool_synthesis_max_generated_tools" => {
+                                if let Ok(n) = value.parse::<u32>() {
+                                    self.config.tool_synthesis_max_generated_tools =
+                                        n.clamp(1, 200);
+                                }
+                            }
                             "max_context_messages" => {
                                 if let Ok(n) = value.parse::<u32>() {
                                     self.config.max_context_messages = n.clamp(10, 500);
@@ -295,8 +316,13 @@ impl TuiModel {
             match code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     if let Some(ap) = self.approval.current_approval() {
+                        let approval_id = ap.approval_id.clone();
+                        self.approval.reduce(crate::state::ApprovalAction::Resolve {
+                            approval_id: approval_id.clone(),
+                            decision: "allow_once".to_string(),
+                        });
                         self.send_daemon_command(DaemonCommand::ResolveTaskApproval {
-                            approval_id: ap.approval_id.clone(),
+                            approval_id,
                             decision: "allow_once".to_string(),
                         });
                     }
@@ -304,8 +330,13 @@ impl TuiModel {
                 }
                 KeyCode::Char('a') | KeyCode::Char('A') => {
                     if let Some(ap) = self.approval.current_approval() {
+                        let approval_id = ap.approval_id.clone();
+                        self.approval.reduce(crate::state::ApprovalAction::Resolve {
+                            approval_id: approval_id.clone(),
+                            decision: "allow_session".to_string(),
+                        });
                         self.send_daemon_command(DaemonCommand::ResolveTaskApproval {
-                            approval_id: ap.approval_id.clone(),
+                            approval_id,
                             decision: "allow_session".to_string(),
                         });
                     }
@@ -313,8 +344,13 @@ impl TuiModel {
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') => {
                     if let Some(ap) = self.approval.current_approval() {
+                        let approval_id = ap.approval_id.clone();
+                        self.approval.reduce(crate::state::ApprovalAction::Resolve {
+                            approval_id: approval_id.clone(),
+                            decision: "reject".to_string(),
+                        });
                         self.send_daemon_command(DaemonCommand::ResolveTaskApproval {
-                            approval_id: ap.approval_id.clone(),
+                            approval_id,
                             decision: "reject".to_string(),
                         });
                     }
@@ -532,10 +568,24 @@ impl TuiModel {
                                         model_context_window.unwrap_or(128_000);
                                 }
                                 self.status_line = format!("Model: {}", model_id);
-                                if let Ok(json) = serde_json::to_string(&serde_json::json!({
-                                    "model": model_id,
-                                })) {
-                                    self.send_daemon_command(DaemonCommand::SetConfigJson(json));
+                                if let Ok(value_json) = serde_json::to_string(
+                                    &serde_json::Value::String(model_id.clone()),
+                                ) {
+                                    self.send_daemon_command(DaemonCommand::SetConfigItem {
+                                        key_path: "/model".to_string(),
+                                        value_json: value_json.clone(),
+                                    });
+                                    self.send_daemon_command(DaemonCommand::SetConfigItem {
+                                        key_path: format!(
+                                            "/providers/{}/model",
+                                            self.config.provider
+                                        ),
+                                        value_json: value_json.clone(),
+                                    });
+                                    self.send_daemon_command(DaemonCommand::SetConfigItem {
+                                        key_path: format!("/{}/model", self.config.provider),
+                                        value_json,
+                                    });
                                 }
                                 self.save_settings();
                             }
@@ -575,10 +625,24 @@ impl TuiModel {
                 if let Some(&effort) = efforts.get(cursor) {
                     self.config
                         .reduce(config::ConfigAction::SetReasoningEffort(effort.to_string()));
-                    if let Ok(json) = serde_json::to_string(&serde_json::json!({
-                        "reasoning_effort": effort,
-                    })) {
-                        self.send_daemon_command(DaemonCommand::SetConfigJson(json));
+                    if let Ok(value_json) =
+                        serde_json::to_string(&serde_json::Value::String(effort.to_string()))
+                    {
+                        self.send_daemon_command(DaemonCommand::SetConfigItem {
+                            key_path: "/reasoning_effort".to_string(),
+                            value_json: value_json.clone(),
+                        });
+                        self.send_daemon_command(DaemonCommand::SetConfigItem {
+                            key_path: format!(
+                                "/providers/{}/reasoning_effort",
+                                self.config.provider
+                            ),
+                            value_json: value_json.clone(),
+                        });
+                        self.send_daemon_command(DaemonCommand::SetConfigItem {
+                            key_path: format!("/{}/reasoning_effort", self.config.provider),
+                            value_json,
+                        });
                     }
                     self.status_line = if effort.is_empty() {
                         "Effort: off".to_string()

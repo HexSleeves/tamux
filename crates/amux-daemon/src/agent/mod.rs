@@ -44,6 +44,7 @@ pub mod rate_limiter;
 mod semantic_env;
 mod session_recall;
 mod skill_evolution;
+mod skill_preflight;
 mod system_prompt;
 mod task_crud;
 mod task_prompt;

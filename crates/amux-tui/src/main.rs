@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 mod app;
 mod auth;
 mod client;
@@ -221,6 +223,9 @@ fn start_daemon_bridge(
                             DaemonCommand::SendMessage { thread_id, content, session_id } => {
                                 let _ = client.send_message(thread_id, content, session_id);
                             }
+                            DaemonCommand::DeleteMessages { thread_id, message_ids } => {
+                                let _ = client.delete_messages(thread_id, message_ids);
+                            }
                             DaemonCommand::FetchModels { provider_id: _, base_url, api_key } => {
                                 // Fetch models directly from provider API
                                 let tx = daemon_event_tx.clone();
@@ -236,8 +241,8 @@ fn start_daemon_bridge(
                                     }
                                 });
                             }
-                            DaemonCommand::SetConfigJson(config_json) => {
-                                let _ = client.set_config_json(config_json);
+                            DaemonCommand::SetConfigItem { key_path, value_json } => {
+                                let _ = client.set_config_item_json(key_path, value_json);
                             }
                             DaemonCommand::ControlGoalRun { goal_run_id, action } => {
                                 let _ = client.control_goal_run(goal_run_id, action);

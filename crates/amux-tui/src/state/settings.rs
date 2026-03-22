@@ -4,12 +4,12 @@
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
+    Auth,
     Provider,
     Tools,
     WebSearch,
     Chat,
     Gateway,
-    Auth,
     Agent,
     SubAgents,
     Concierge,
@@ -18,12 +18,12 @@ pub enum SettingsTab {
 
 impl SettingsTab {
     const ALL: &'static [SettingsTab] = &[
+        SettingsTab::Auth,
         SettingsTab::Provider,
         SettingsTab::Tools,
         SettingsTab::WebSearch,
         SettingsTab::Chat,
         SettingsTab::Gateway,
-        SettingsTab::Auth,
         SettingsTab::Agent,
         SettingsTab::SubAgents,
         SettingsTab::Concierge,
@@ -81,7 +81,7 @@ pub struct SettingsState {
 impl SettingsState {
     pub fn new() -> Self {
         Self {
-            active_tab: SettingsTab::Provider,
+            active_tab: SettingsTab::Auth,
             field_cursor: 0,
             editing_field: None,
             edit_buffer: String::new(),
@@ -225,13 +225,12 @@ impl SettingsState {
             SettingsTab::Provider => match self.field_cursor {
                 0 => "provider",
                 1 => "base_url",
-                2 => "api_key",
-                3 => "auth_source",
-                4 => "model",
-                5 => "api_transport",
-                6 => "assistant_id",
-                7 => "reasoning_effort",
-                8 => "context_window_tokens",
+                2 => "auth_source",
+                3 => "model",
+                4 => "api_transport",
+                5 => "assistant_id",
+                6 => "reasoning_effort",
+                7 => "context_window_tokens",
                 _ => "",
             },
             SettingsTab::Tools => match self.field_cursor {
@@ -261,6 +260,22 @@ impl SettingsState {
                 3 => "honcho_api_key",
                 4 => "honcho_base_url",
                 5 => "honcho_workspace_id",
+                6 => "anticipatory_enabled",
+                7 => "anticipatory_morning_brief",
+                8 => "anticipatory_predictive_hydration",
+                9 => "anticipatory_stuck_detection",
+                10 => "operator_model_enabled",
+                11 => "operator_model_allow_message_statistics",
+                12 => "operator_model_allow_approval_learning",
+                13 => "operator_model_allow_attention_tracking",
+                14 => "operator_model_allow_implicit_feedback",
+                15 => "collaboration_enabled",
+                16 => "compliance_mode",
+                17 => "compliance_retention_days",
+                18 => "compliance_sign_all_events",
+                19 => "tool_synthesis_enabled",
+                20 => "tool_synthesis_require_activation",
+                21 => "tool_synthesis_max_generated_tools",
                 _ => "",
             },
             SettingsTab::Gateway => match self.field_cursor {
@@ -300,20 +315,22 @@ impl SettingsState {
                 _ => "",
             },
             SettingsTab::Advanced => match self.field_cursor {
-                0 => "auto_compact_context",
-                1 => "max_context_messages",
-                2 => "max_tool_loops",
-                3 => "max_retries",
-                4 => "retry_delay_ms",
-                5 => "context_window_tokens",
-                6 => "context_budget_tokens",
-                7 => "compact_threshold_pct",
-                8 => "keep_recent_on_compact",
-                9 => "bash_timeout_secs",
-                10 => "snapshot_auto_cleanup",
-                11 => "snapshot_max_count",
-                12 => "snapshot_max_size_mb",
-                13 => "snapshot_stats",
+                0 => "managed_sandbox_enabled",
+                1 => "managed_security_level",
+                2 => "auto_compact_context",
+                3 => "max_context_messages",
+                4 => "max_tool_loops",
+                5 => "max_retries",
+                6 => "retry_delay_ms",
+                7 => "context_window_tokens",
+                8 => "context_budget_tokens",
+                9 => "compact_threshold_pct",
+                10 => "keep_recent_on_compact",
+                11 => "bash_timeout_secs",
+                12 => "snapshot_auto_cleanup",
+                13 => "snapshot_max_count",
+                14 => "snapshot_max_size_mb",
+                15 => "snapshot_stats",
                 _ => "",
             },
         }
@@ -322,16 +339,16 @@ impl SettingsState {
     /// Number of navigable fields in the current tab (for cursor clamping).
     pub fn field_count(&self) -> usize {
         match self.active_tab {
-            SettingsTab::Provider => 9,
+            SettingsTab::Provider => 8,
             SettingsTab::Tools => 7,
             SettingsTab::WebSearch => 7,
-            SettingsTab::Chat => 6,
+            SettingsTab::Chat => 22,
             SettingsTab::Gateway => 12,
             SettingsTab::Auth => 1,
             SettingsTab::Agent => 3,
             SettingsTab::SubAgents => 1,
             SettingsTab::Concierge => 4,
-            SettingsTab::Advanced => 14,
+            SettingsTab::Advanced => 16,
         }
     }
 
@@ -352,7 +369,7 @@ impl SettingsState {
     pub fn reduce(&mut self, action: SettingsAction) {
         match action {
             SettingsAction::Open => {
-                self.active_tab = SettingsTab::Provider;
+                self.active_tab = SettingsTab::Auth;
                 self.field_cursor = 0;
                 self.editing_field = None;
                 self.edit_buffer.clear();
@@ -507,7 +524,7 @@ mod tests {
         assert!(state.is_dirty());
 
         state.reduce(SettingsAction::Open);
-        assert_eq!(state.active_tab(), SettingsTab::Provider);
+        assert_eq!(state.active_tab(), SettingsTab::Auth);
         assert_eq!(state.field_cursor(), 0);
         assert!(state.editing_field().is_none());
         assert!(!state.is_dirty());
@@ -529,6 +546,7 @@ mod tests {
     #[test]
     fn navigate_field_increases_cursor() {
         let mut state = SettingsState::new();
+        state.reduce(SettingsAction::SwitchTab(SettingsTab::Provider));
         state.reduce(SettingsAction::NavigateField(2));
         assert_eq!(state.field_cursor(), 2);
         state.reduce(SettingsAction::NavigateField(1));
@@ -545,9 +563,9 @@ mod tests {
     #[test]
     fn navigate_field_clamps_at_max() {
         let mut state = SettingsState::new();
-        // Provider tab has 9 fields (0..8)
+        // Auth tab has a single field, so the cursor clamps immediately.
         state.reduce(SettingsAction::NavigateField(100));
-        assert_eq!(state.field_cursor(), 8);
+        assert_eq!(state.field_cursor(), 0);
     }
 
     #[test]
@@ -696,11 +714,10 @@ mod tests {
     #[test]
     fn current_field_name_provider_tab() {
         let mut state = SettingsState::new();
+        state.reduce(SettingsAction::SwitchTab(SettingsTab::Provider));
         assert_eq!(state.current_field_name(), "provider");
         state.reduce(SettingsAction::NavigateField(1));
         assert_eq!(state.current_field_name(), "base_url");
-        state.reduce(SettingsAction::NavigateField(1));
-        assert_eq!(state.current_field_name(), "api_key");
         state.reduce(SettingsAction::NavigateField(1));
         assert_eq!(state.current_field_name(), "auth_source");
         state.reduce(SettingsAction::NavigateField(1));
@@ -789,16 +806,31 @@ mod tests {
         assert_eq!(state.current_field_name(), "honcho_base_url");
         state.reduce(SettingsAction::NavigateField(1));
         assert_eq!(state.current_field_name(), "honcho_workspace_id");
-        // Only 6 fields, can't navigate past it
+        state.reduce(SettingsAction::NavigateField(1));
+        assert_eq!(state.current_field_name(), "anticipatory_enabled");
+        state.reduce(SettingsAction::NavigateField(4));
+        assert_eq!(state.current_field_name(), "operator_model_enabled");
+        state.reduce(SettingsAction::NavigateField(11));
+        assert_eq!(
+            state.current_field_name(),
+            "tool_synthesis_max_generated_tools"
+        );
         state.reduce(SettingsAction::NavigateField(5));
-        assert_eq!(state.current_field_name(), "honcho_workspace_id");
-        assert_eq!(state.field_cursor(), 5);
+        assert_eq!(
+            state.current_field_name(),
+            "tool_synthesis_max_generated_tools"
+        );
+        assert_eq!(state.field_cursor(), 21);
     }
 
     #[test]
     fn current_field_name_advanced_tab() {
         let mut state = SettingsState::new();
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Advanced));
+        assert_eq!(state.current_field_name(), "managed_sandbox_enabled");
+        state.reduce(SettingsAction::NavigateField(1));
+        assert_eq!(state.current_field_name(), "managed_security_level");
+        state.reduce(SettingsAction::NavigateField(1));
         assert_eq!(state.current_field_name(), "auto_compact_context");
         state.reduce(SettingsAction::NavigateField(1));
         assert_eq!(state.current_field_name(), "max_context_messages");
@@ -826,22 +858,24 @@ mod tests {
         assert_eq!(state.current_field_name(), "snapshot_max_size_mb");
         state.reduce(SettingsAction::NavigateField(1));
         assert_eq!(state.current_field_name(), "snapshot_stats");
-        // 14 fields total, can't navigate past it
+        // 16 fields total, can't navigate past it
         state.reduce(SettingsAction::NavigateField(5));
         assert_eq!(state.current_field_name(), "snapshot_stats");
-        assert_eq!(state.field_cursor(), 13);
+        assert_eq!(state.field_cursor(), 15);
     }
 
     #[test]
     fn field_count_per_tab() {
         let mut state = SettingsState::new();
-        assert_eq!(state.field_count(), 9); // Provider + auth + transport + assistant id + context window
+        assert_eq!(state.field_count(), 1); // Auth tab provider list
+        state.reduce(SettingsAction::SwitchTab(SettingsTab::Provider));
+        assert_eq!(state.field_count(), 8); // Provider, base URL, auth, model, transport, assistant id, effort, context window
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Tools));
         assert_eq!(state.field_count(), 7); // 7 tool checkboxes
         state.reduce(SettingsAction::SwitchTab(SettingsTab::WebSearch));
         assert_eq!(state.field_count(), 7); // enabled, provider, 3 keys, max_results, timeout
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Chat));
-        assert_eq!(state.field_count(), 6); // streaming, conv memory, honcho toggle, key, url, workspace
+        assert_eq!(state.field_count(), 22); // streaming, memory, Honcho, and capability controls
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Gateway));
         assert_eq!(state.field_count(), 12); // enabled, prefix, slack×2, telegram×2, discord×3, whatsapp×3
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Auth));
@@ -853,7 +887,7 @@ mod tests {
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Concierge));
         assert_eq!(state.field_count(), 4); // enabled, detail_level, provider, model
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Advanced));
-        assert_eq!(state.field_count(), 14); // 10 advanced + 4 snapshot fields
+        assert_eq!(state.field_count(), 16); // managed execution + advanced + snapshot fields
     }
 
     #[test]

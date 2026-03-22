@@ -6,7 +6,6 @@
  * calling schema.
  */
 
-import { useSettingsStore } from "./settingsStore";
 import { useWorkspaceStore } from "./workspaceStore";
 import { allLeafIds, findLeaf } from "./bspTree";
 import { getTerminalController, getTerminalSnapshot } from "./terminalRegistry";
@@ -680,44 +679,44 @@ const WORKSPACE_TOOLS: ToolDefinition[] = [
  * Returns the tools available to the agent based on current settings and gateway configuration.
  */
 export function getAvailableTools(options: {
-  enableBashTool: boolean;
-  gatewayEnabled: boolean;
-  enableWebBrowsingTool?: boolean;
-  enableVisionTool?: boolean;
+  enable_bash_tool: boolean;
+  gateway_enabled: boolean;
+  enable_web_browsing_tool?: boolean;
+  enable_vision_tool?: boolean;
 }): ToolDefinition[] {
   const tools: ToolDefinition[] = [...SYSTEM_TOOLS, ...WORKSPACE_TOOLS];
 
-  if (options.enableBashTool) {
+  if (options.enable_bash_tool) {
     tools.push(...TERMINAL_TOOLS);
   }
 
-  if (options.enableWebBrowsingTool) {
+  if (options.enable_web_browsing_tool) {
     tools.push(...WEB_BROWSING_TOOLS);
     tools.push(...BROWSER_USE_TOOLS);
   }
 
-  if (options.enableVisionTool) {
+  if (options.enable_vision_tool) {
     tools.push(...VISION_TOOLS);
   }
 
-  if (options.gatewayEnabled) {
-    const settings = useSettingsStore.getState().settings;
+  if (options.gateway_enabled) {
+    const settings = useAgentStore.getState().agentSettings;
     // Only include tools for configured gateways
-    if (settings.slackToken) {
+    if (settings.slack_token) {
       tools.push(GATEWAY_TOOLS[0]); // send_slack_message
     }
-    if (settings.discordToken) {
+    if (settings.discord_token) {
       tools.push(GATEWAY_TOOLS[1]); // send_discord_message
     }
-    if (settings.telegramToken) {
+    if (settings.telegram_token) {
       tools.push(GATEWAY_TOOLS[2]); // send_telegram_message
     }
-    if (settings.whatsappToken || settings.whatsappAllowedContacts) {
+    if (settings.whatsapp_token || settings.whatsapp_allowed_contacts) {
       tools.push(GATEWAY_TOOLS[3]); // send_whatsapp_message
     }
   }
 
-  if (useAgentStore.getState().agentSettings.enableHonchoMemory) {
+  if (useAgentStore.getState().agentSettings.enable_honcho_memory) {
     const honchoTool = SYSTEM_TOOLS.find(t => t.function.name === 'agent_query_memory');
     if (honchoTool) tools.push(honchoTool);
   }
@@ -881,8 +880,8 @@ async function executeGatewayMessage(
 async function executeDiscordMessage(
   callId: string, name: string, channelId: string | undefined, userId: string | undefined, message: string,
 ): Promise<ToolResult> {
-  const settings = useSettingsStore.getState().settings;
-  const token = settings.discordToken;
+  const settings = useAgentStore.getState().agentSettings;
+  const token = settings.discord_token;
   const amux = (window as any).tamux ?? (window as any).amux;
 
   if (!token) {
@@ -908,8 +907,8 @@ async function executeDiscordMessage(
       return match?.[0] ?? trimmed;
     };
 
-    const configuredChannels = settings.discordChannelFilter.split(",").map((s) => s.trim()).filter(Boolean);
-    const configuredUsers = settings.discordAllowedUsers.split(",").map((s) => s.trim()).filter(Boolean);
+    const configuredChannels = settings.discord_channel_filter.split(",").map((s) => s.trim()).filter(Boolean);
+    const configuredUsers = settings.discord_allowed_users.split(",").map((s) => s.trim()).filter(Boolean);
 
     const requestedChannelId = normalizeDiscordId(channelId);
     const requestedUserId = normalizeDiscordId(userId);

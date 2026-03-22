@@ -44,7 +44,7 @@ export function TitleBar() {
   const approvals = useAgentMissionStore((s) => s.approvals);
   const cognitiveEvents = useAgentMissionStore((s) => s.cognitiveEvents);
   const notifications = useNotificationStore((s) => s.notifications);
-  const activeProvider = useAgentStore((s) => s.agentSettings.activeProvider);
+  const active_provider = useAgentStore((s) => s.agentSettings.active_provider);
   const bindings = useKeybindStore((s) => s.bindings);
   const [platform, setPlatform] = useState<string | null>(null);
   const [maximized, setMaximized] = useState(false);
@@ -225,7 +225,7 @@ export function TitleBar() {
               {surface && <span style={{ color: "var(--text-muted)" }}>/{surface.name}</span>}
             </span>
 
-            <span className="amux-chip">provider {activeProvider}</span>
+            <span className="amux-chip">provider {active_provider}</span>
 
             <span
               className="amux-chip"

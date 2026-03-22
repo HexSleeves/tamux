@@ -19,6 +19,7 @@ export function ChatView({
     messagesEndRef,
     onSendMessage,
     onStopStreaming,
+    onDeleteMessage,
     onUpdateReasoningEffort,
     canStartGoalRun,
     onStartGoalRun,
@@ -29,12 +30,13 @@ export function ChatView({
     setInput: (v: string) => void;
     inputRef: React.RefObject<HTMLTextAreaElement | null>;
     onKeyDown: (e: React.KeyboardEvent) => void;
-    agentSettings: { enabled: boolean; chatFontFamily: string; reasoningEffort: string };
+    agentSettings: { enabled: boolean; chatFontFamily: string; reasoning_effort: string };
     isStreamingResponse: boolean;
     activeThread: AgentThread | undefined;
     messagesEndRef: React.RefObject<HTMLDivElement | null>;
     onSendMessage: (text: string) => void;
     onStopStreaming: () => void;
+    onDeleteMessage?: (messageId: string) => void;
     onUpdateReasoningEffort: (value: string) => void;
     canStartGoalRun: boolean;
     onStartGoalRun: (text: string) => Promise<boolean>;
@@ -228,6 +230,7 @@ export function ChatView({
                                     }
                                 }
                             } : undefined}
+                            onDelete={onDeleteMessage ? () => onDeleteMessage(msg.id) : undefined}
                         />
                     );
                 })}
@@ -398,7 +401,7 @@ export function ChatView({
                             Reasoning effort
                         </span>
                         <select
-                            value={agentSettings.reasoningEffort}
+                            value={agentSettings.reasoning_effort}
                             onChange={(e) => onUpdateReasoningEffort(e.target.value)}
                             title="Reasoning effort"
                             style={{
@@ -725,11 +728,13 @@ function MessageBubble({
     onCopy,
     onRerun,
     onRegenerate,
+    onDelete,
 }: {
     message: AgentMessage;
     onCopy?: () => void;
     onRerun?: () => void;
     onRegenerate?: () => void;
+    onDelete?: () => void;
 }) {
     const isUser = message.role === "user";
     const isSystem = message.role === "system";
@@ -916,6 +921,7 @@ function MessageBubble({
                         <ActionBtn label={copied ? "Copied!" : "Copy"} onClick={handleCopy} />
                         {isUser && onRerun && <ActionBtn label="Rerun" onClick={onRerun} />}
                         {isAssistant && onRegenerate && <ActionBtn label="Regen" onClick={onRegenerate} />}
+                        {onDelete && <ActionBtn label="Delete" onClick={onDelete} />}
                     </div>
                 )}
             </div>

@@ -38,12 +38,12 @@ export interface ApiChatMessage {
 export interface ChatRequest {
   provider: AgentProviderId;
   config: AgentProviderConfig;
-  systemPrompt: string;
+  system_prompt: string;
   messages: ApiChatMessage[];
   streaming: boolean;
   signal?: AbortSignal;
   tools?: ToolDefinition[];
-  reasoningEffort?: string;
+  reasoning_effort?: string;
   previousResponseId?: string;
   upstreamThreadId?: string;
 }
@@ -79,12 +79,12 @@ type OpenAICodexAuthStatus = {
   accountId?: string;
   expiresAt?: number;
   source?: string;
-  apiKey?: string;
+  api_key?: string;
   error?: string;
 };
 
 type ResolvedProviderAuth = {
-  apiKey: string;
+  api_key: string;
   accountId?: string;
 };
 
@@ -95,13 +95,37 @@ class TransportCompatibilityError extends Error {
   }
 }
 
+function isDashScopeCodingPlanAnthropicBaseUrl(baseUrl: string): boolean {
+  const lower = (baseUrl || "").trim().toLowerCase();
+  return lower.includes("dashscope.aliyuncs.com") && lower.includes("/apps/anthropic");
+}
+
+function usesDashScopeEnableThinking(provider: AgentProviderId, model: string): boolean {
+  return (provider === "qwen" || provider === "alibaba-coding-plan")
+    && ["qwen3.5-plus", "qwen3-max-2026-01-23", "glm-4.7", "glm-5"].includes(model);
+}
+
+function applyDashScopeCodingPlanHeaders(
+  provider: AgentProviderId,
+  baseUrl: string,
+  apiType: "openai" | "anthropic",
+  headers: Record<string, string>,
+): void {
+  if (provider !== "alibaba-coding-plan") return;
+  headers["User-Agent"] = apiType === "anthropic" ? "Anthropic/JS tamux" : "OpenAI/JS tamux";
+  if (apiType === "openai" && !isDashScopeCodingPlanAnthropicBaseUrl(baseUrl)) {
+    headers["x-stainless-lang"] = "js";
+    headers["x-stainless-package-version"] = "tamux";
+  }
+}
+
 export interface ContextCompactionSettings {
-  autoCompactContext: boolean;
-  maxContextMessages: number;
-  contextWindowTokens: number;
-  contextBudgetTokens: number;
-  compactThresholdPercent: number;
-  keepRecentOnCompaction: number;
+  auto_compact_context: boolean;
+  max_context_messages: number;
+  context_window_tokens: number;
+  context_budget_tokens: number;
+  compact_threshold_pct: number;
+  keep_recent_on_compact: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,33 +144,33 @@ export async function* sendChatCompletion(
     ...req,
     config: {
       ...req.config,
-      apiKey: resolvedAuth.apiKey,
+      api_key: resolvedAuth.api_key,
     },
   };
 
-  if (!resolvedRequest.config.apiKey && resolvedRequest.provider !== "ollama") {
+  if (!resolvedRequest.config.api_key && resolvedRequest.provider !== "ollama") {
     yield { type: "error", content: `No API key configured for ${req.provider}. Open Settings > Agent to add your key.` };
     return;
   }
 
-  if (!resolvedRequest.config.baseUrl) {
+  if (!resolvedRequest.config.base_url) {
     yield { type: "error", content: `No base URL configured for ${req.provider}.` };
     return;
   }
 
   try {
     const supportedTransports = getSupportedApiTransports(resolvedRequest.provider);
-    const selectedTransport = supportedTransports.includes(resolvedRequest.config.apiTransport)
-      ? resolvedRequest.config.apiTransport
+    const selectedTransport = supportedTransports.includes(resolvedRequest.config.api_transport)
+      ? resolvedRequest.config.api_transport
       : getDefaultApiTransport(resolvedRequest.provider);
 
-    if (getProviderApiType(resolvedRequest.provider, resolvedRequest.config.model) === "anthropic") {
+    if (getProviderApiType(resolvedRequest.provider, resolvedRequest.config.model, resolvedRequest.config.base_url) === "anthropic") {
       yield* sendAnthropic(resolvedRequest);
     } else if (selectedTransport === "native_assistant") {
       try {
         yield* sendNativeAssistant({
           ...resolvedRequest,
-          config: { ...resolvedRequest.config, apiTransport: "native_assistant" },
+          config: { ...resolvedRequest.config, api_transport: "native_assistant" },
         });
       } catch (err: any) {
         if (err instanceof TransportCompatibilityError) {
@@ -158,7 +182,7 @@ export async function* sendChatCompletion(
           };
           yield* sendOpenAICompatible({
             ...resolvedRequest,
-            config: { ...resolvedRequest.config, apiTransport: "chat_completions" },
+            config: { ...resolvedRequest.config, api_transport: "chat_completions" },
             previousResponseId: undefined,
             upstreamThreadId: undefined,
           });
@@ -170,7 +194,7 @@ export async function* sendChatCompletion(
       try {
         yield* sendOpenAIResponses({
           ...resolvedRequest,
-          config: { ...resolvedRequest.config, apiTransport: "responses" },
+          config: { ...resolvedRequest.config, api_transport: "responses" },
           _chatgptAccountId: resolvedAuth.accountId,
         });
       } catch (err: any) {
@@ -183,7 +207,7 @@ export async function* sendChatCompletion(
           };
           yield* sendOpenAICompatible({
             ...resolvedRequest,
-            config: { ...resolvedRequest.config, apiTransport: "chat_completions" },
+            config: { ...resolvedRequest.config, api_transport: "chat_completions" },
             previousResponseId: undefined,
             upstreamThreadId: undefined,
           });
@@ -204,8 +228,8 @@ export async function* sendChatCompletion(
 }
 
 async function resolveProviderAuth(req: ChatRequest): Promise<ResolvedProviderAuth> {
-  if (req.provider !== "openai" || req.config.authSource !== "chatgpt_subscription") {
-    return { apiKey: req.config.apiKey };
+  if (req.provider !== "openai" || req.config.auth_source !== "chatgpt_subscription") {
+    return { api_key: req.config.api_key };
   }
 
   const amux = (window as any).amux || (window as any).tamux;
@@ -214,9 +238,9 @@ async function resolveProviderAuth(req: ChatRequest): Promise<ResolvedProviderAu
   }
 
   const status = await amux.openAICodexAuthStatus({ refresh: true }) as OpenAICodexAuthStatus;
-  if (status?.available && typeof status.apiKey === "string" && status.apiKey.trim()) {
+  if (status?.available && typeof status.api_key === "string" && status.api_key.trim()) {
     return {
-      apiKey: status.apiKey.trim(),
+      api_key: status.api_key.trim(),
       accountId: typeof status.accountId === "string" ? status.accountId.trim() : undefined,
     };
   }
@@ -228,8 +252,8 @@ async function resolveProviderAuth(req: ChatRequest): Promise<ResolvedProviderAu
 // OpenAI-compatible API (covers 15 of 16 providers)
 // ---------------------------------------------------------------------------
 
-function buildChatCompletionUrl(provider: AgentProviderId, baseUrl: string): string {
-  const base = baseUrl.replace(/\/$/, "");
+function buildChatCompletionUrl(provider: AgentProviderId, base_url: string): string {
+  const base = base_url.replace(/\/$/, "");
   const lowerBase = base.toLowerCase();
 
   // OpenRouter/Groq defaults already include /api/v1 or /openai/v1.
@@ -246,8 +270,8 @@ function buildChatCompletionUrl(provider: AgentProviderId, baseUrl: string): str
   return `${base}/v1/chat/completions`;
 }
 
-function buildResponsesUrl(baseUrl: string): string {
-  const base = baseUrl.replace(/\/$/, "");
+function buildResponsesUrl(base_url: string): string {
+  const base = base_url.replace(/\/$/, "");
   const lowerBase = base.toLowerCase();
 
   if (/(^|\/)api\/v1$/.test(lowerBase) || /(^|\/)v[1-4]$/.test(lowerBase) || /(^|\/)openai\/v1$/.test(lowerBase) || /(^|\/)compatible-mode\/v1$/.test(lowerBase)) {
@@ -257,9 +281,9 @@ function buildResponsesUrl(baseUrl: string): string {
   return `${base}/v1/responses`;
 }
 
-function buildNativeAssistantBaseUrl(provider: AgentProviderId, baseUrl: string): string {
+function buildNativeAssistantBaseUrl(provider: AgentProviderId, base_url: string): string {
   const providerBase = getProviderDefinition(provider)?.nativeBaseUrl;
-  return (providerBase || baseUrl).replace(/\/$/, "");
+  return (providerBase || base_url).replace(/\/$/, "");
 }
 
 function messageContentToText(message: ApiChatMessage): string {
@@ -273,13 +297,13 @@ async function* sendNativeAssistant(req: ChatRequest): AsyncGenerator<ChatChunk>
       `${req.provider} does not expose a native assistant API`,
     );
   }
-  if (!req.config.assistantId.trim()) {
+  if (!req.config.assistant_id.trim()) {
     throw new TransportCompatibilityError(
       `${req.provider} native assistant requires Assistant ID`,
     );
   }
 
-  const baseUrl = buildNativeAssistantBaseUrl(req.provider, req.config.baseUrl);
+  const base_url = buildNativeAssistantBaseUrl(req.provider, req.config.base_url);
   const latestUserMessage = [...req.messages]
     .reverse()
     .find((message) => message.role === "user");
@@ -290,13 +314,13 @@ async function* sendNativeAssistant(req: ChatRequest): AsyncGenerator<ChatChunk>
 
   const authHeaders: HeadersInit = {
     "Content-Type": "application/json",
-    ...(req.config.apiKey ? { Authorization: `Bearer ${req.config.apiKey}` } : {}),
+    ...(req.config.api_key ? { Authorization: `Bearer ${req.config.api_key}` } : {}),
   };
   const compatibilityStatuses = new Set([400, 404, 405, 422]);
 
   let threadId = req.upstreamThreadId?.trim();
   if (!threadId) {
-    const threadResponse = await fetch(`${baseUrl}/threads`, {
+    const threadResponse = await fetch(`${base_url}/threads`, {
       method: "POST",
       headers: authHeaders,
       body: "{}",
@@ -320,7 +344,7 @@ async function* sendNativeAssistant(req: ChatRequest): AsyncGenerator<ChatChunk>
     }
   }
 
-  const messageResponse = await fetch(`${baseUrl}/threads/${threadId}/messages`, {
+  const messageResponse = await fetch(`${base_url}/threads/${threadId}/messages`, {
     method: "POST",
     headers: authHeaders,
     body: JSON.stringify({ role: "user", content: userText }),
@@ -337,10 +361,10 @@ async function* sendNativeAssistant(req: ChatRequest): AsyncGenerator<ChatChunk>
     return;
   }
 
-  const runResponse = await fetch(`${baseUrl}/threads/${threadId}/runs`, {
+  const runResponse = await fetch(`${base_url}/threads/${threadId}/runs`, {
     method: "POST",
     headers: authHeaders,
-    body: JSON.stringify({ assistant_id: req.config.assistantId }),
+    body: JSON.stringify({ assistant_id: req.config.assistant_id }),
     signal: req.signal,
   });
   if (!runResponse.ok) {
@@ -367,7 +391,7 @@ async function* sendNativeAssistant(req: ChatRequest): AsyncGenerator<ChatChunk>
       return;
     }
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
-    const statusResponse = await fetch(`${baseUrl}/threads/${threadId}/runs/${runId}`, {
+    const statusResponse = await fetch(`${base_url}/threads/${threadId}/runs/${runId}`, {
       method: "GET",
       headers: authHeaders,
       signal: req.signal,
@@ -385,7 +409,7 @@ async function* sendNativeAssistant(req: ChatRequest): AsyncGenerator<ChatChunk>
       case "in_progress":
         continue;
       case "completed": {
-        const messagesResponse = await fetch(`${baseUrl}/threads/${threadId}/messages?order=desc&limit=20`, {
+        const messagesResponse = await fetch(`${base_url}/threads/${threadId}/messages?order=desc&limit=20`, {
           method: "GET",
           headers: authHeaders,
           signal: req.signal,
@@ -440,17 +464,17 @@ async function* sendNativeAssistant(req: ChatRequest): AsyncGenerator<ChatChunk>
 }
 
 function isChatGptSubscriptionRequest(req: ChatRequest): boolean {
-  return req.provider === "openai" && req.config.authSource === "chatgpt_subscription";
+  return req.provider === "openai" && req.config.auth_source === "chatgpt_subscription";
 }
 
 function buildChatGptCodexResponsesUrl(): string {
   return "https://chatgpt.com/backend-api/codex/responses";
 }
 
-function buildChatGptCodexHeaders(apiKey: string, accountId?: string): Record<string, string> {
+function buildChatGptCodexHeaders(api_key: string, accountId?: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "Authorization": `Bearer ${apiKey}`,
+    "Authorization": `Bearer ${api_key}`,
     "OpenAI-Beta": "responses=experimental",
     "originator": "tamux",
   };
@@ -469,19 +493,19 @@ async function* sendOpenAICompatible(
       ...req,
       config: {
         ...req.config,
-        apiTransport: "responses",
+        api_transport: "responses",
       },
       _chatgptAccountId: chatgptAccountId,
     });
     return;
   }
 
-  const url = buildChatCompletionUrl(req.provider, req.config.baseUrl);
+  const url = buildChatCompletionUrl(req.provider, req.config.base_url);
 
   const body: Record<string, unknown> = {
     model: req.config.model,
     messages: [
-      { role: "system", content: req.systemPrompt },
+      { role: "system", content: req.system_prompt },
       ...req.messages,
     ],
     stream: req.streaming,
@@ -493,10 +517,11 @@ async function* sendOpenAICompatible(
     body.tool_choice = "auto";
   }
 
-  // Add reasoning_effort for OpenAI-compatible reasoning models
-  if (req.reasoningEffort && req.reasoningEffort !== "none") {
-    body.reasoning_effort = req.reasoningEffort === "xhigh" ? "high" : req.reasoningEffort;
-    body.reasoning = { effort: req.reasoningEffort };
+  if (usesDashScopeEnableThinking(req.provider, req.config.model)) {
+    body.enable_thinking = Boolean(req.reasoning_effort && req.reasoning_effort !== "none");
+  } else if (req.reasoning_effort && req.reasoning_effort !== "none") {
+    body.reasoning_effort = req.reasoning_effort === "xhigh" ? "high" : req.reasoning_effort;
+    body.reasoning = { effort: req.reasoning_effort };
   }
 
   // Request usage details including reasoning tokens
@@ -508,9 +533,10 @@ async function* sendOpenAICompatible(
     "Content-Type": "application/json",
   };
 
-  if (req.config.apiKey) {
-    headers["Authorization"] = `Bearer ${req.config.apiKey}`;
+  if (req.config.api_key) {
+    headers["Authorization"] = `Bearer ${req.config.api_key}`;
   }
+  applyDashScopeCodingPlanHeaders(req.provider, req.config.base_url, "openai", headers);
 
   const response = await fetch(url, {
     method: "POST",
@@ -565,10 +591,10 @@ async function* sendOpenAIResponses(
   const isSubscription = isChatGptSubscriptionRequest(req);
   const url = isSubscription
     ? buildChatGptCodexResponsesUrl()
-    : buildResponsesUrl(req.config.baseUrl);
+    : buildResponsesUrl(req.config.base_url);
   const body: Record<string, unknown> = {
     model: req.config.model,
-    instructions: req.systemPrompt,
+    instructions: req.system_prompt,
     input: req.messages.map((message) => {
       if (message.role === "tool") {
         return {
@@ -599,9 +625,9 @@ async function* sendOpenAIResponses(
     }));
   }
 
-  if (req.reasoningEffort && req.reasoningEffort !== "none") {
+  if (req.reasoning_effort && req.reasoning_effort !== "none") {
     body.reasoning = {
-      effort: req.reasoningEffort === "xhigh" ? "high" : req.reasoningEffort,
+      effort: req.reasoning_effort === "xhigh" ? "high" : req.reasoning_effort,
     };
   }
 
@@ -616,10 +642,10 @@ async function* sendOpenAIResponses(
   const response = await fetch(url, {
     method: "POST",
     headers: isSubscription
-      ? buildChatGptCodexHeaders(req.config.apiKey, req._chatgptAccountId)
+      ? buildChatGptCodexHeaders(req.config.api_key, req._chatgptAccountId)
       : {
           "Content-Type": "application/json",
-          ...(req.config.apiKey ? { Authorization: `Bearer ${req.config.apiKey}` } : {}),
+          ...(req.config.api_key ? { Authorization: `Bearer ${req.config.api_key}` } : {}),
         },
     body: JSON.stringify(body),
     signal: req.signal,
@@ -686,7 +712,7 @@ async function* sendOpenAIResponses(
 // ---------------------------------------------------------------------------
 
 async function* sendAnthropic(req: ChatRequest): AsyncGenerator<ChatChunk> {
-  const url = `${req.config.baseUrl.replace(/\/$/, "")}/v1/messages`;
+  const url = `${req.config.base_url.replace(/\/$/, "")}/v1/messages`;
 
   const anthropicMessages = req.messages.map((m) => {
     const role = m.role === "system" ? "user" : (m.role === "tool" ? "user" : m.role);
@@ -726,7 +752,7 @@ async function* sendAnthropic(req: ChatRequest): AsyncGenerator<ChatChunk> {
   const body: Record<string, unknown> = {
     model: req.config.model,
     max_tokens: 4096,
-    system: req.systemPrompt,
+    system: req.system_prompt,
     messages: anthropicMessages,
     stream: req.streaming,
   };
@@ -741,9 +767,9 @@ async function* sendAnthropic(req: ChatRequest): AsyncGenerator<ChatChunk> {
   }
 
   // Add extended thinking for Anthropic models
-  if (req.reasoningEffort && req.reasoningEffort !== "none") {
+  if (req.reasoning_effort && req.reasoning_effort !== "none") {
     const budgetMap: Record<string, number> = { minimal: 512, low: 1024, medium: 4096, high: 8192, xhigh: 16384 };
-    const budgetTokens = budgetMap[req.reasoningEffort] ?? 4096;
+    const budgetTokens = budgetMap[req.reasoning_effort] ?? 4096;
     body.thinking = { type: "enabled", budget_tokens: budgetTokens };
     // Increase max_tokens when thinking is enabled
     body.max_tokens = Math.max(4096, budgetTokens + 4096);
@@ -751,10 +777,13 @@ async function* sendAnthropic(req: ChatRequest): AsyncGenerator<ChatChunk> {
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "x-api-key": req.config.apiKey,
-    "anthropic-version": "2023-06-01",
+    "x-api-key": req.config.api_key,
     "anthropic-dangerous-direct-browser-access": "true",
   };
+  if (!isDashScopeCodingPlanAnthropicBaseUrl(req.config.base_url)) {
+    headers["anthropic-version"] = "2023-06-01";
+  }
+  applyDashScopeCodingPlanHeaders(req.provider, req.config.base_url, "anthropic", headers);
 
   const response = await fetch(url, {
     method: "POST",
@@ -1300,21 +1329,21 @@ export function prepareOpenAIRequest(
   provider: AgentProviderId,
   model: string,
   requestedTransport: ApiTransportMode,
-  authSource?: "api_key" | "chatgpt_subscription",
-  assistantId?: string,
+  auth_source?: "api_key" | "chatgpt_subscription",
+  assistant_id?: string,
   thread?: Pick<AgentThread, "upstreamThreadId" | "upstreamTransport" | "upstreamProvider" | "upstreamModel" | "upstreamAssistantId">,
 ): PreparedOpenAIRequest {
   let selectedTransport = getSupportedApiTransports(provider).includes(requestedTransport)
     ? requestedTransport
     : getDefaultApiTransport(provider);
-  if (provider === "openai" && authSource === "chatgpt_subscription") {
+  if (provider === "openai" && auth_source === "chatgpt_subscription") {
     selectedTransport = "responses";
   }
   const compacted = compactMessagesForRequest(messages, settings);
   const compactionActive =
     compacted.length !== messages.length || compacted.some((message) => message.content.startsWith("[Compacted earlier context]"));
 
-  if (selectedTransport === "native_assistant" && assistantId?.trim()) {
+  if (selectedTransport === "native_assistant" && assistant_id?.trim()) {
     const latestUserMessage = [...messages]
       .reverse()
       .find((message) => message.role === "user" && !message.isCompactionSummary);
@@ -1326,7 +1355,7 @@ export function prepareOpenAIRequest(
           thread?.upstreamTransport === "native_assistant"
             && thread.upstreamProvider === provider
             && thread.upstreamModel === model
-            && thread.upstreamAssistantId === assistantId
+            && thread.upstreamAssistantId === assistant_id
             ? thread.upstreamThreadId ?? undefined
             : undefined,
       };
@@ -1341,7 +1370,7 @@ export function prepareOpenAIRequest(
           && typeof message.responseId === "string"
           && message.provider === provider
           && message.model === model
-          && message.apiTransport === "responses";
+          && message.api_transport === "responses";
       });
 
       if (responseAnchorIndex !== undefined) {
@@ -1372,19 +1401,19 @@ function compactMessagesForRequest(
   messages: AgentMessage[],
   settings: ContextCompactionSettings,
 ): AgentMessage[] {
-  if (messages.length === 0 || !settings.autoCompactContext) {
+  if (messages.length === 0 || !settings.auto_compact_context) {
     return messages;
   }
 
   const targetTokens = effectiveContextTargetTokens(settings);
-  const maxMessages = Math.max(1, Number(settings.maxContextMessages || 100));
+  const maxMessages = Math.max(1, Number(settings.max_context_messages || 100));
   if (estimateMessageTokens(messages) <= targetTokens && messages.length <= maxMessages) {
     return messages;
   }
 
   const keepRecent = Math.min(
     Math.max(messages.length - 1, 0),
-    Math.max(1, Number(settings.keepRecentOnCompaction || 10)),
+    Math.max(1, Number(settings.keep_recent_on_compact || 10)),
   );
   const splitAt = Math.max(messages.length - keepRecent, 0);
   const olderMessages = messages.slice(0, splitAt);
@@ -1422,14 +1451,14 @@ function trimCompactedMessages(messages: AgentMessage[], targetTokens: number): 
 }
 
 function effectiveContextTargetTokens(settings: ContextCompactionSettings): number {
-  const contextWindow = Math.max(1, Number(settings.contextWindowTokens || 128000));
+  const contextWindow = Math.max(1, Number(settings.context_window_tokens || 128000));
   const budgetTokens = Math.max(
     MIN_CONTEXT_TARGET_TOKENS,
-    Number(settings.contextBudgetTokens || 100000),
+    Number(settings.context_budget_tokens || 100000),
   );
   const thresholdPercent = Math.min(
     100,
-    Math.max(1, Number(settings.compactThresholdPercent || 80)),
+    Math.max(1, Number(settings.compact_threshold_pct || 80)),
   );
   return Math.max(
     MIN_CONTEXT_TARGET_TOKENS,

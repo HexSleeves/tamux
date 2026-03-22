@@ -16,6 +16,8 @@ pub enum MessageRole {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentMessage {
     #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
     pub role: MessageRole,
     #[serde(default)]
     pub content: String,

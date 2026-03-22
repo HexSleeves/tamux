@@ -269,7 +269,7 @@ impl TuiModel {
                 self.main_pane_view = MainPaneView::Conversation;
             }
             "settings" => {
-                self.open_settings_tab(SettingsTab::Provider);
+                self.open_settings_tab(SettingsTab::Auth);
             }
             "view" => {
                 let next = match self.chat.transcript_mode() {
@@ -504,6 +504,30 @@ impl TuiModel {
             .map(|message| message.content.clone());
         if let Some(content) = content.filter(|value| !value.trim().is_empty()) {
             self.submit_prompt(content);
+        }
+    }
+
+    pub(super) fn delete_message(&mut self, index: usize) {
+        let Some(thread) = self.chat.active_thread_mut() else {
+            return;
+        };
+        if index >= thread.messages.len() {
+            return;
+        }
+        let thread_id = thread.id.clone();
+        let msg_id = thread.messages[index].id.clone();
+        thread.messages.remove(index);
+
+        // Deselect after removal
+        self.chat.select_message(None);
+        self.status_line = format!("Deleted message {}", index + 1);
+
+        // Persist to daemon
+        if let Some(id) = msg_id {
+            self.send_daemon_command(DaemonCommand::DeleteMessages {
+                thread_id,
+                message_ids: vec![id],
+            });
         }
     }
 

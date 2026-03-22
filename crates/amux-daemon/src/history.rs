@@ -271,6 +271,69 @@ impl HistoryStore {
         Ok(store)
     }
 
+    pub fn list_agent_config_items(&self) -> Result<Vec<(String, serde_json::Value)>> {
+        let connection = self.open_connection()?;
+        let mut stmt = connection.prepare(
+            "SELECT key_path, value_json FROM agent_config_items ORDER BY length(key_path) ASC, key_path ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let key_path = row.get::<_, String>(0)?;
+            let value_json = row.get::<_, String>(1)?;
+            Ok((key_path, value_json))
+        })?;
+        let mut items = Vec::new();
+        for row in rows {
+            let (key_path, value_json) = row?;
+            let value = serde_json::from_str::<serde_json::Value>(&value_json)
+                .with_context(|| format!("invalid config value for {key_path}"))?;
+            items.push((key_path, value));
+        }
+        Ok(items)
+    }
+
+    pub fn replace_agent_config_items(&self, items: &[(String, serde_json::Value)]) -> Result<()> {
+        let connection = self.open_connection()?;
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute("DELETE FROM agent_config_items", [])?;
+        let now = now_ts() as i64;
+        for (key_path, value) in items {
+            let value_json = serde_json::to_string(value)?;
+            transaction.execute(
+                "INSERT OR REPLACE INTO agent_config_items (key_path, value_json, updated_at) VALUES (?1, ?2, ?3)",
+                params![key_path, value_json, now],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn upsert_agent_config_item(
+        &self,
+        key_path: &str,
+        value: &serde_json::Value,
+    ) -> Result<()> {
+        let connection = self.open_connection()?;
+        let transaction = connection.unchecked_transaction()?;
+        let prefix = format!("{key_path}/%");
+        let value_json = serde_json::to_string(value)?;
+        let now = now_ts() as i64;
+        transaction.execute(
+            "DELETE FROM agent_config_items \
+             WHERE key_path = ?1 OR key_path LIKE ?2 OR ?1 LIKE key_path || '/%'",
+            params![key_path, prefix],
+        )?;
+        transaction.execute(
+            "INSERT OR REPLACE INTO agent_config_items (key_path, value_json, updated_at) VALUES (?1, ?2, ?3)",
+            params![key_path, value_json.clone(), now],
+        )?;
+        transaction.execute(
+            "INSERT INTO agent_config_updates (id, key_path, value_json, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params![uuid::Uuid::new_v4().to_string(), key_path, value_json, now],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) fn new_test_store(root: &Path) -> Result<Self> {
         let history_dir = root.join("history");
@@ -2313,6 +2376,21 @@ impl HistoryStore {
                 updated_at     INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_collaboration_sessions_updated ON collaboration_sessions(updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS agent_config_items (
+                key_path   TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_config_items_updated ON agent_config_items(updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS agent_config_updates (
+                id         TEXT PRIMARY KEY,
+                key_path   TEXT NOT NULL,
+                value_json TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_config_updates_key_ts ON agent_config_updates(key_path, updated_at DESC);
             ",
         )?;
         // FTS5 virtual table for context archive full-text search.
@@ -3815,7 +3893,7 @@ fn derive_skill_metadata(relative_path: &str, content: &str) -> DerivedSkillMeta
 }
 
 fn infer_skill_tags(path: &str, content: &str, out: &mut BTreeSet<String>) {
-    let haystack = format!("{path}\n{}", &content[..content.len().min(4000)]);
+    let haystack = format!("{path}\n{}", excerpt_on_char_boundary(content, 4000));
     for (needle, tag) in [
         ("rust", "rust"),
         ("cargo", "rust"),
@@ -3852,6 +3930,18 @@ fn infer_skill_tags(path: &str, content: &str, out: &mut BTreeSet<String>) {
             out.insert(tag.to_string());
         }
     }
+}
+
+fn excerpt_on_char_boundary(input: &str, max_bytes: usize) -> &str {
+    if input.len() <= max_bytes {
+        return input;
+    }
+
+    let mut end = max_bytes;
+    while end > 0 && !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    &input[..end]
 }
 
 fn extract_markdown_title(content: &str) -> Option<String> {
@@ -4767,5 +4857,19 @@ mod tests {
 
         fs::remove_dir_all(root)?;
         Ok(())
+    }
+
+    #[test]
+    fn skill_tag_excerpt_respects_utf8_boundaries() {
+        let content = format!("{}\n{}", "a".repeat(3998), "│architecture");
+        let excerpt = excerpt_on_char_boundary(&content, 4000);
+
+        assert!(excerpt.is_char_boundary(excerpt.len()));
+        assert!(excerpt.len() <= 4000);
+        assert!(!excerpt.ends_with('\u{FFFD}'));
+
+        let mut tags = BTreeSet::new();
+        infer_skill_tags("skills/terminal-architecture.md", &content, &mut tags);
+        assert!(tags.contains("terminal"));
     }
 }

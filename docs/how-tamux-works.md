@@ -1,6 +1,6 @@
 # How tamux Works
 
-This document describes the current system as it exists in the repository now: the daemon, UI clients, agent runtime, memory model, persistence model, and the self-orchestrating moat features layered on top.
+This document describes the current system as it exists in the repository now: the daemon, UI clients, agent runtime, memory model, persistence model, and the self-orchestrating capabilities layered on top.
 
 For implementation detail on the deeper agent internals, see [self-orchestrating-agent.md](./self-orchestrating-agent.md). For onboarding and local setup, see [getting-started.md](./getting-started.md).
 
@@ -297,7 +297,7 @@ The daemon records several types of telemetry:
 - contextual telemetry
 - provenance telemetry
 
-The newer moat features also use:
+The newer self-orchestrating capabilities also use:
 
 - behavioral mission events in SQLite
 - hash-linked WORM ledgers for provenance/integrity
@@ -310,9 +310,9 @@ This supports:
 - provenance exports
 - explanation surfaces such as "why did the agent do that?"
 
-## Self-Orchestrating Moat Features
+## Self-Orchestrating Capabilities
 
-The current codebase contains a set of optional moat features layered over the baseline agent.
+The current codebase contains a set of optional higher-level capabilities layered over the baseline agent.
 
 ### M1: Operator Model
 

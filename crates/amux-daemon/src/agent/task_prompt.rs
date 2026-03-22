@@ -293,8 +293,8 @@ pub(super) fn active_memory_dir(agent_data_dir: &std::path::Path) -> std::path::
         .unwrap_or_else(|| agent_data_dir.to_path_buf())
 }
 
-/// Read a setting from a settings.json `Value` using the nested `/settings/<key>`
-/// path or a top-level `<key>` fallback.
+/// Read a string from a legacy frontend settings payload using either the nested
+/// `/settings/<key>` path or a top-level `<key>` fallback.
 pub(super) fn read_setting_str(v: &serde_json::Value, key: &str) -> String {
     let pointer = format!("/settings/{key}");
     v.pointer(&pointer)
@@ -325,11 +325,7 @@ pub(super) async fn persist_json<T: serde::Serialize>(
 
 /// Load agent config from disk, returning defaults if not found.
 pub fn load_config() -> anyhow::Result<AgentConfig> {
-    let path = agent_data_dir().join("config.json");
-    if path.exists() {
-        let raw = std::fs::read_to_string(&path)?;
-        Ok(serde_json::from_str(&raw).unwrap_or_default())
-    } else {
-        Ok(AgentConfig::default())
-    }
+    let history = crate::history::HistoryStore::new()?;
+    let items = history.list_agent_config_items()?;
+    super::config::load_config_from_items(items)
 }

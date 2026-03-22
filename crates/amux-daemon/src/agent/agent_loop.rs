@@ -110,6 +110,11 @@ impl AgentEngine {
         } else {
             None
         };
+        let preferred_session_id =
+            resolve_preferred_session_id(&self.session_manager, preferred_session_hint).await;
+        let skill_preflight = self
+            .build_skill_preflight_context(content, preferred_session_id.clone())
+            .await?;
 
         // Build system prompt with memory.
         // If this task has a sub-agent system prompt override, prepend it.
@@ -140,6 +145,10 @@ impl AgentEngine {
                 .push_str("Use this as historical context from prior sessions when relevant:\n");
             system_prompt.push_str(recall);
         }
+        if let Some(skill_preflight) = skill_preflight.as_deref() {
+            system_prompt.push_str("\n\n## Preloaded Skills\n");
+            system_prompt.push_str(skill_preflight);
+        }
         match self.maybe_build_honcho_context(&tid, content).await {
             Ok(Some(honcho_context)) => {
                 system_prompt.push_str("\n\n## Cross-Session Memory\n");
@@ -160,6 +169,14 @@ impl AgentEngine {
                 skills_dir(&self.data_dir).display()
             )),
         );
+        if skill_preflight.is_some() {
+            self.emit_workflow_notice(
+                &tid,
+                "skill-preflight",
+                "Preloaded relevant local skills for this turn before tool execution.",
+                None,
+            );
+        }
 
         // Get tools, applying per-task tool filters if configured
         let mut tools = get_available_tools(&config, &self.data_dir);
@@ -224,8 +241,6 @@ impl AgentEngine {
         if let Some(task) = current_task_snapshot.as_ref() {
             self.ensure_subagent_runtime(task, Some(&tid)).await;
         }
-        let preferred_session_id =
-            resolve_preferred_session_id(&self.session_manager, preferred_session_hint).await;
         let retry_strategy = if is_durable_goal_task {
             RetryStrategy::DurableRateLimited
         } else {
@@ -248,6 +263,7 @@ impl AgentEngine {
         let mut interrupted_for_approval = false;
         let mut previous_tool_signature: Option<String> = None;
         let mut previous_tool_outcome: Option<(String, bool)> = None;
+        let mut last_tool_error: Option<(String, String)> = None;
         let mut consecutive_same_tool_calls = 0u32;
         let mut last_pre_compaction_flush_signature: Option<u64> = None;
         let mut recorded_compaction_provenance = false;
@@ -301,6 +317,10 @@ impl AgentEngine {
                         "Use this as historical context from prior sessions when relevant:\n",
                     );
                     system_prompt.push_str(recall);
+                }
+                if let Some(skill_preflight) = skill_preflight.as_deref() {
+                    system_prompt.push_str("\n\n## Preloaded Skills\n");
+                    system_prompt.push_str(skill_preflight);
                 }
             }
 
@@ -511,11 +531,23 @@ impl AgentEngine {
                     response_id,
                     upstream_thread_id,
                 }) => {
-                    let final_content = if content.is_empty() {
+                    let mut final_content = if content.is_empty() {
                         accumulated_content
                     } else {
                         content
                     };
+                    if let Some((tool_name, error_message)) = last_tool_error.as_ref() {
+                        let lower = final_content.to_ascii_lowercase();
+                        if !lower.contains("failed")
+                            && !lower.contains("error")
+                            && !lower.contains("could not")
+                            && !lower.contains("unable")
+                        {
+                            final_content = format!(
+                                "The last tool call failed (`{tool_name}`): {error_message}\n\n{final_content}"
+                            );
+                        }
+                    }
                     let final_reasoning = reasoning.or(if accumulated_reasoning.is_empty() {
                         None
                     } else {
@@ -710,6 +742,7 @@ impl AgentEngine {
                                     &self.event_tx,
                                     &self.data_dir,
                                     &self.http_client,
+                                    Some(stream_cancel_token.clone()),
                                 )
                                 .await
                             }
@@ -725,6 +758,7 @@ impl AgentEngine {
                                 &self.event_tx,
                                 &self.data_dir,
                                 &self.http_client,
+                                Some(stream_cancel_token.clone()),
                             )
                             .await
                         };
@@ -777,6 +811,12 @@ impl AgentEngine {
                             }
                         }
                         previous_tool_outcome = Some((tc.function.name.clone(), result.is_error));
+                        if result.is_error {
+                            last_tool_error =
+                                Some((tc.function.name.clone(), result.content.clone()));
+                        } else {
+                            last_tool_error = None;
+                        }
 
                         if !result.is_error {
                             self.capture_tool_work_context(
@@ -1073,6 +1113,18 @@ impl AgentEngine {
         // Check named providers first
         if let Some(pc) = config.providers.get(&config.provider) {
             let mut resolved = pc.clone();
+            // Fall back to provider definition defaults for base_url and model
+            if resolved.base_url.is_empty() {
+                resolved.base_url =
+                    get_provider_base_url(&config.provider, &resolved.model, &config.base_url);
+            }
+            if resolved.model.is_empty() {
+                if !config.model.is_empty() {
+                    resolved.model = config.model.clone();
+                } else if let Some(def) = get_provider_definition(&config.provider) {
+                    resolved.model = def.default_model.to_string();
+                }
+            }
             if resolved.reasoning_effort.trim().is_empty() {
                 resolved.reasoning_effort = config.reasoning_effort.clone();
             }
@@ -1093,13 +1145,22 @@ impl AgentEngine {
             return Ok(resolved);
         }
 
-        // Fall back to top-level config
-        if config.base_url.is_empty() {
+        // Fall back to top-level config, filling in provider definition defaults
+        let base_url = get_provider_base_url(&config.provider, &config.model, &config.base_url);
+        if base_url.is_empty() {
             anyhow::bail!(
                 "No base URL configured for provider '{}'. Configure in agent settings.",
                 config.provider
             );
         }
+
+        let model = if config.model.is_empty() {
+            get_provider_definition(&config.provider)
+                .map(|d| d.default_model.to_string())
+                .unwrap_or_default()
+        } else {
+            config.model.clone()
+        };
 
         let api_transport = if provider_supports_transport(&config.provider, config.api_transport) {
             config.api_transport
@@ -1108,8 +1169,8 @@ impl AgentEngine {
         };
 
         Ok(ProviderConfig {
-            base_url: config.base_url.clone(),
-            model: config.model.clone(),
+            base_url,
+            model,
             api_key: config.api_key.clone(),
             assistant_id: config.assistant_id.clone(),
             auth_source: config.auth_source,
@@ -1130,6 +1191,15 @@ impl AgentEngine {
     ) -> Result<ProviderConfig> {
         if let Some(pc) = config.providers.get(sub_agent_provider) {
             let mut resolved = pc.clone();
+            // Fall back to provider definition defaults for base_url and model
+            if resolved.base_url.is_empty() {
+                resolved.base_url = get_provider_base_url(sub_agent_provider, &resolved.model, "");
+            }
+            if resolved.model.is_empty() {
+                if let Some(def) = get_provider_definition(sub_agent_provider) {
+                    resolved.model = def.default_model.to_string();
+                }
+            }
             if resolved.reasoning_effort.trim().is_empty() {
                 resolved.reasoning_effort = config.reasoning_effort.clone();
             }

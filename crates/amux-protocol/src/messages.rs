@@ -137,6 +137,12 @@ pub enum ClientMessage {
     /// Append a persisted agent message record.
     AddAgentMessage { message_json: String },
 
+    /// Delete specific agent messages from a thread by their IDs.
+    DeleteAgentMessages {
+        thread_id: String,
+        message_ids: Vec<String>,
+    },
+
     /// List persisted agent messages for a thread.
     ListAgentMessages {
         thread_id: String,
@@ -298,8 +304,11 @@ pub enum ClientMessage {
     /// Get current agent configuration.
     AgentGetConfig,
 
-    /// Update agent configuration.
-    AgentSetConfig { config_json: String },
+    /// Update a single agent configuration item identified by JSON pointer.
+    AgentSetConfigItem {
+        key_path: String,
+        value_json: String,
+    },
 
     /// Fetch available models from a provider.
     AgentFetchModels {

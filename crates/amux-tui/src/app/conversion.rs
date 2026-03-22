@@ -14,6 +14,7 @@ pub(super) fn convert_thread(t: crate::wire::AgentThread) -> chat::AgentThread {
 
 pub(super) fn convert_message(m: crate::wire::AgentMessage) -> chat::AgentMessage {
     chat::AgentMessage {
+        id: m.id,
         role: match m.role {
             crate::wire::MessageRole::System => chat::MessageRole::System,
             crate::wire::MessageRole::User => chat::MessageRole::User,

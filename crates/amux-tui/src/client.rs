@@ -107,6 +107,16 @@ pub enum ClientEvent {
         message: String,
         details: Option<String>,
     },
+    ApprovalRequired {
+        approval_id: String,
+        command: String,
+        risk_level: String,
+        blast_radius: String,
+    },
+    ApprovalResolved {
+        approval_id: String,
+        decision: String,
+    },
 
     ProviderAuthStates(Vec<crate::state::ProviderAuthEntry>),
     ProviderValidation {
@@ -525,6 +535,28 @@ impl DaemonClient {
                     })
                     .await;
             }
+            DaemonMessage::ApprovalRequired { approval, .. } => {
+                let _ = event_tx
+                    .send(ClientEvent::ApprovalRequired {
+                        approval_id: approval.approval_id,
+                        command: approval.command,
+                        risk_level: approval.risk_level,
+                        blast_radius: approval.blast_radius,
+                    })
+                    .await;
+            }
+            DaemonMessage::ApprovalResolved {
+                approval_id,
+                decision,
+                ..
+            } => {
+                let _ = event_tx
+                    .send(ClientEvent::ApprovalResolved {
+                        approval_id,
+                        decision: format!("{decision:?}").to_lowercase(),
+                    })
+                    .await;
+            }
             DaemonMessage::AgentProviderAuthStates { states_json } => {
                 let states: Vec<serde_json::Value> =
                     serde_json::from_str(&states_json).unwrap_or_default();
@@ -931,6 +963,13 @@ impl DaemonClient {
         })
     }
 
+    pub fn delete_messages(&self, thread_id: String, message_ids: Vec<String>) -> Result<()> {
+        self.send(ClientMessage::DeleteAgentMessages {
+            thread_id,
+            message_ids,
+        })
+    }
+
     pub fn spawn_session(
         &self,
         shell: Option<String>,
@@ -969,8 +1008,11 @@ impl DaemonClient {
         })
     }
 
-    pub fn set_config_json(&self, config_json: String) -> Result<()> {
-        self.send(ClientMessage::AgentSetConfig { config_json })
+    pub fn set_config_item_json(&self, key_path: String, value_json: String) -> Result<()> {
+        self.send(ClientMessage::AgentSetConfigItem {
+            key_path,
+            value_json,
+        })
     }
 
     pub fn get_provider_auth_states(&self) -> Result<()> {

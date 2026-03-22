@@ -87,18 +87,32 @@ impl AuthState {
                 self.login_cursor = 0;
             }
             AuthAction::LoginKeyChar(c) => {
-                self.login_buffer.insert(self.login_cursor, c);
-                self.login_cursor += c.len_utf8();
+                let byte_idx = self
+                    .login_buffer
+                    .char_indices()
+                    .nth(self.login_cursor)
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(self.login_buffer.len());
+                self.login_buffer.insert(byte_idx, c);
+                self.login_cursor += 1;
             }
             AuthAction::LoginKeyBackspace => {
                 if self.login_cursor > 0 {
-                    let prev = self.login_buffer[..self.login_cursor]
+                    let start_char = self.login_cursor.saturating_sub(1);
+                    let start_byte = self
+                        .login_buffer
                         .char_indices()
-                        .last()
-                        .map(|(i, _)| i)
+                        .nth(start_char)
+                        .map(|(idx, _)| idx)
                         .unwrap_or(0);
-                    self.login_buffer.drain(prev..self.login_cursor);
-                    self.login_cursor = prev;
+                    let end_byte = self
+                        .login_buffer
+                        .char_indices()
+                        .nth(self.login_cursor)
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(self.login_buffer.len());
+                    self.login_buffer.drain(start_byte..end_byte);
+                    self.login_cursor = start_char;
                 }
             }
             AuthAction::ConfirmLogin => {

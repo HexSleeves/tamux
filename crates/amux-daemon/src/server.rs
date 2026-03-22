@@ -802,6 +802,30 @@ where
                     }
                 }
 
+                ClientMessage::DeleteAgentMessages {
+                    thread_id,
+                    message_ids,
+                } => {
+                    let id_refs: Vec<&str> = message_ids.iter().map(String::as_str).collect();
+                    match agent.history.delete_messages(&thread_id, &id_refs) {
+                        Ok(deleted) => {
+                            tracing::info!(
+                                thread_id = %thread_id,
+                                deleted,
+                                "deleted agent messages"
+                            );
+                            framed.send(DaemonMessage::AgentDbMessageAck).await?;
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::Error {
+                                    message: e.to_string(),
+                                })
+                                .await?;
+                        }
+                    }
+                }
+
                 ClientMessage::ListAgentMessages { thread_id, limit } => {
                     match manager.list_agent_messages(&thread_id, limit) {
                         Ok(messages) => {
@@ -1391,18 +1415,20 @@ where
                         .await?;
                 }
 
-                ClientMessage::AgentSetConfig { config_json } => {
-                    match serde_json::from_str(&config_json) {
-                        Ok(config) => agent.set_config(config).await,
-                        Err(e) => {
-                            framed
-                                .send(DaemonMessage::Error {
-                                    message: format!("Invalid config: {e}"),
-                                })
-                                .await?;
-                        }
+                ClientMessage::AgentSetConfigItem {
+                    key_path,
+                    value_json,
+                } => match agent.set_config_item_json(&key_path, &value_json).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(error = %e, key_path, "server: AgentSetConfigItem rejected");
+                        framed
+                            .send(DaemonMessage::Error {
+                                message: format!("Invalid config item: {e}"),
+                            })
+                            .await?;
                     }
-                }
+                },
 
                 ClientMessage::AgentFetchModels {
                     provider_id,
@@ -1473,15 +1499,6 @@ where
                     agent.mark_operator_present("client_subscribe").await;
                     agent.run_anticipatory_tick().await;
                     agent.emit_anticipatory_snapshot().await;
-
-                    // Trigger concierge welcome for the newly connected client.
-                    let agent_ref = agent.clone();
-                    tokio::spawn(async move {
-                        agent_ref
-                            .concierge
-                            .on_client_connected(&agent_ref.threads, &agent_ref.tasks)
-                            .await;
-                    });
                 }
 
                 ClientMessage::AgentUnsubscribe => {

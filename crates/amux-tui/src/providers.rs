@@ -171,7 +171,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         id: "alibaba-coding-plan",
         name: "Alibaba Coding Plan",
         default_base_url: "https://coding-intl.dashscope.aliyuncs.com/v1",
-        default_model: "qwen3-coder",
+        default_model: "qwen3.5-plus",
         supported_transports: CHAT_ONLY_TRANSPORTS,
         default_transport: "chat_completions",
         supported_auth_sources: API_KEY_ONLY_AUTH_SOURCES,
@@ -272,6 +272,11 @@ pub fn default_transport_for(provider: &str) -> &'static str {
     find_by_id(provider)
         .map(|def| def.default_transport)
         .unwrap_or("chat_completions")
+}
+
+pub fn uses_fixed_anthropic_messages(provider: &str, model: &str) -> bool {
+    matches!(provider, "minimax" | "minimax-coding-plan")
+        || (provider == "opencode-zen" && model.starts_with("claude"))
 }
 
 pub fn supported_auth_sources_for(provider: &str) -> &'static [&'static str] {
@@ -408,10 +413,10 @@ pub fn known_models_for_provider_auth(provider: &str, auth_source: &str) -> Vec<
             ("MiniMax-M2.5", "MiniMax M2.5", 205_000),
         ],
         "alibaba-coding-plan" => &[
-            ("qwen3-coder", "Qwen3 Coder", 128_000),
-            ("qwen3-coder-next", "Qwen3 Coder Next", 128_000),
-            ("qwen3.5-plus", "Qwen3.5 Plus", 128_000),
-            ("glm-5", "GLM-5", 128_000),
+            ("qwen3-coder-plus", "Qwen3 Coder Plus", 997_952),
+            ("qwen3-coder-next", "Qwen3 Coder Next", 204_800),
+            ("qwen3.5-plus", "Qwen3.5 Plus", 983_616),
+            ("glm-5", "GLM-5", 202_752),
             ("kimi-k2.5", "Kimi K2.5", 262_144),
             ("MiniMax-M2.5", "MiniMax M2.5", 205_000),
         ],
@@ -457,6 +462,26 @@ mod tests {
             p.default_base_url,
             "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
         );
+    }
+
+    #[test]
+    fn alibaba_coding_plan_uses_openai_compatible_base_url() {
+        let p = find_by_id("alibaba-coding-plan").unwrap();
+        assert_eq!(
+            p.default_base_url,
+            "https://coding-intl.dashscope.aliyuncs.com/v1"
+        );
+        assert_eq!(p.default_model, "qwen3.5-plus");
+    }
+
+    #[test]
+    fn anthropic_message_providers_are_detected() {
+        assert!(uses_fixed_anthropic_messages("minimax", "MiniMax-M2.7"));
+        assert!(!uses_fixed_anthropic_messages("qwen", "qwen-max"));
+        assert!(!uses_fixed_anthropic_messages(
+            "alibaba-coding-plan",
+            "qwen3.5-plus"
+        ));
     }
 
     #[test]

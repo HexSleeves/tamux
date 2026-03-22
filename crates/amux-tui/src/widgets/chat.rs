@@ -140,6 +140,7 @@ fn message_action_targets(
         }
         _ => {}
     }
+    actions.push(("[Delete]", ChatHitTarget::DeleteMessage(msg_index)));
     actions
 }
 

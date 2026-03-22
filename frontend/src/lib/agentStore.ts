@@ -12,7 +12,7 @@ export interface AgentThread {
   workspaceId: WorkspaceId | null;
   surfaceId: SurfaceId | null;
   paneId: PaneId | null;
-  agentName: string;
+  agent_name: string;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -86,22 +86,22 @@ function normalizeAgentProviderId(value: unknown): AgentProviderId {
 
 const VALID_AGENT_BACKENDS = ["daemon", "openclaw", "hermes", "legacy"] as const;
 
-function normalizeAgentBackend(value: unknown): AgentSettings["agentBackend"] {
+function normalizeAgentBackend(value: unknown): AgentSettings["agent_backend"] {
   if (typeof value === "string" && (VALID_AGENT_BACKENDS as readonly string[]).includes(value)) {
-    return value as AgentSettings["agentBackend"];
+    return value as AgentSettings["agent_backend"];
   }
   return "daemon";
 }
 
 export interface AgentProviderConfig {
-  baseUrl: string;
+  base_url: string;
   model: string;
-  customModelName: string;
-  apiKey: string;
-  assistantId: string;
-  apiTransport: ApiTransportMode;
-  authSource: AuthSource;
-  customContextWindowTokens: number | null;
+  custom_model_name: string;
+  api_key: string;
+  assistant_id: string;
+  api_transport: ApiTransportMode;
+  auth_source: AuthSource;
+  context_window_tokens: number | null;
 }
 
 export interface ProviderAuthState {
@@ -174,27 +174,27 @@ function normalizeProviderConfig(
   fallback: AgentProviderConfig,
   value: Partial<AgentProviderConfig> | undefined,
 ): AgentProviderConfig {
-  const authSource = normalizeAuthSource(providerId, value?.authSource ?? fallback.authSource);
+  const auth_source = normalizeAuthSource(providerId, value?.auth_source ?? fallback.auth_source);
   const requestedModel = typeof value?.model === "string" ? value.model.trim() : fallback.model.trim();
-  const supportedModels = getProviderModels(providerId, authSource);
+  const supportedModels = getProviderModels(providerId, auth_source);
   const matchesKnownModel = requestedModel && supportedModels.some((entry) => entry.id === requestedModel);
   const model = requestedModel
     ? requestedModel
-    : getDefaultModelForProvider(providerId, authSource);
-  const customModelName = typeof value?.customModelName === "string"
-    ? value.customModelName.trim()
+    : getDefaultModelForProvider(providerId, auth_source);
+  const custom_model_name = typeof value?.custom_model_name === "string"
+    ? value.custom_model_name.trim()
     : "";
   return {
     ...fallback,
     ...(value ?? {}),
     model,
-    customModelName: matchesKnownModel ? "" : (customModelName || (requestedModel && !matchesKnownModel ? requestedModel : "")),
-    assistantId: typeof value?.assistantId === "string" ? value.assistantId : fallback.assistantId,
-    apiTransport: normalizeApiTransport(providerId, value?.apiTransport ?? fallback.apiTransport),
-    authSource,
-    customContextWindowTokens:
-      typeof value?.customContextWindowTokens === "number" && Number.isFinite(value.customContextWindowTokens)
-        ? Math.max(1000, Math.trunc(value.customContextWindowTokens))
+    custom_model_name: matchesKnownModel ? "" : (custom_model_name || (requestedModel && !matchesKnownModel ? requestedModel : "")),
+    assistant_id: typeof value?.assistant_id === "string" ? value.assistant_id : fallback.assistant_id,
+    api_transport: normalizeApiTransport(providerId, value?.api_transport ?? fallback.api_transport),
+    auth_source,
+    context_window_tokens:
+      typeof value?.context_window_tokens === "number" && Number.isFinite(value.context_window_tokens)
+        ? Math.max(1000, Math.trunc(value.context_window_tokens))
         : null,
   };
 }
@@ -276,10 +276,10 @@ const MINIMAX_MODELS: ModelDefinition[] = [
 ];
 
 const ALIBABA_CODING_MODELS: ModelDefinition[] = [
-  { id: "qwen3-coder", name: "Qwen3 Coder", contextWindow: 128000 },
-  { id: "qwen3-coder-next", name: "Qwen3 Coder Next", contextWindow: 128000 },
-  { id: "qwen3.5-plus", name: "Qwen3.5 Plus", contextWindow: 128000 },
-  { id: "glm-5", name: "GLM-5", contextWindow: 128000 },
+  { id: "qwen3-coder-plus", name: "Qwen3 Coder Plus", contextWindow: 997952 },
+  { id: "qwen3-coder-next", name: "Qwen3 Coder Next", contextWindow: 204800 },
+  { id: "qwen3.5-plus", name: "Qwen3.5 Plus", contextWindow: 983616 },
+  { id: "glm-5", name: "GLM-5", contextWindow: 202752 },
   { id: "kimi-k2.5", name: "Kimi K2.5", contextWindow: 262144 },
   { id: "MiniMax-M2.5", name: "MiniMax M2.5", contextWindow: 205000 },
 ];
@@ -330,7 +330,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
   { id: "huggingface", name: "Hugging Face", defaultBaseUrl: "https://api-inference.huggingface.co/v1", defaultModel: "meta-llama/Llama-3.3-70B-Instruct", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "minimax", name: "MiniMax", defaultBaseUrl: "https://api.minimax.io/anthropic", defaultModel: "MiniMax-M1-80k", apiType: "anthropic", authMethod: "bearer", models: MINIMAX_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "minimax-coding-plan", name: "MiniMax Coding Plan", defaultBaseUrl: "https://api.minimax.io/anthropic", defaultModel: "MiniMax-M2.7", apiType: "anthropic", authMethod: "bearer", models: MINIMAX_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
-  { id: "alibaba-coding-plan", name: "Alibaba Coding Plan", defaultBaseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1", defaultModel: "qwen3-coder", apiType: "openai", authMethod: "bearer", models: ALIBABA_CODING_MODELS, supportsModelFetch: true, anthropicBaseUrl: "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic", supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
+  { id: "alibaba-coding-plan", name: "Alibaba Coding Plan", defaultBaseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1", defaultModel: "qwen3.5-plus", apiType: "openai", authMethod: "bearer", models: ALIBABA_CODING_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "opencode-zen", name: "OpenCode Zen", defaultBaseUrl: "https://opencode.ai/zen/v1", defaultModel: "claude-sonnet-4-5", apiType: "anthropic", authMethod: "bearer", models: OPENCODE_ZEN_MODELS, supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "custom", name: "Custom", defaultBaseUrl: "", defaultModel: "", apiType: "openai", authMethod: "bearer", models: EMPTY_MODELS, supportsModelFetch: false, supportedTransports: RESPONSES_AND_CHAT_TRANSPORTS, defaultTransport: "responses", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: true },
 ];
@@ -357,9 +357,9 @@ export function getDefaultAuthSource(providerId: AgentProviderId): AuthSource {
 
 export function getProviderModels(
   providerId: AgentProviderId,
-  authSource?: AuthSource,
+  auth_source?: AuthSource,
 ): ModelDefinition[] {
-  if (providerId === "openai" && authSource === "chatgpt_subscription") {
+  if (providerId === "openai" && auth_source === "chatgpt_subscription") {
     return OPENAI_CHATGPT_SUBSCRIPTION_MODELS;
   }
   return getProviderDefinition(providerId)?.models ?? [];
@@ -367,9 +367,9 @@ export function getProviderModels(
 
 export function getDefaultModelForProvider(
   providerId: AgentProviderId,
-  authSource?: AuthSource,
+  auth_source?: AuthSource,
 ): string {
-  const models = getProviderModels(providerId, authSource);
+  const models = getProviderModels(providerId, auth_source);
   if (models.length > 0) {
     return models[0].id;
   }
@@ -379,34 +379,43 @@ export function getDefaultModelForProvider(
 export function getModelDefinition(
   providerId: AgentProviderId,
   modelId: string,
-  authSource?: AuthSource,
+  auth_source?: AuthSource,
 ): ModelDefinition | undefined {
   const trimmed = modelId.trim();
   if (!trimmed) return undefined;
-  return getProviderModels(providerId, authSource).find((model) => model.id === trimmed);
+  return getProviderModels(providerId, auth_source).find((model) => model.id === trimmed);
 }
 
 export function getEffectiveContextWindow(
   providerId: AgentProviderId,
-  config: Pick<AgentProviderConfig, "model" | "customContextWindowTokens" | "authSource">,
+  config: Pick<AgentProviderConfig, "model" | "context_window_tokens" | "auth_source">,
 ): number {
   if (providerId === "custom") {
-    if (typeof config.customContextWindowTokens === "number" && config.customContextWindowTokens > 0) {
-      return Math.max(1000, Math.trunc(config.customContextWindowTokens));
+    if (typeof config.context_window_tokens === "number" && config.context_window_tokens > 0) {
+      return Math.max(1000, Math.trunc(config.context_window_tokens));
     }
     return 128_000;
   }
 
-  return getModelDefinition(providerId, config.model, config.authSource)?.contextWindow ?? 128_000;
+  return getModelDefinition(providerId, config.model, config.auth_source)?.contextWindow ?? 128_000;
 }
 
 export function providerSupportsResponseContinuity(providerId: AgentProviderId): boolean {
   return Boolean(getProviderDefinition(providerId)?.supportsResponseContinuity);
 }
 
-export function getProviderApiType(providerId: AgentProviderId, model: string): ApiType {
+function isAlibabaCodingPlanAnthropicBaseUrl(baseUrl: string): boolean {
+  const lower = (baseUrl || "").trim().toLowerCase();
+  return lower.includes("dashscope.aliyuncs.com") && lower.includes("/apps/anthropic");
+}
+
+export function getProviderApiType(providerId: AgentProviderId, model: string, configuredUrl: string = ""): ApiType {
   const def = getProviderDefinition(providerId);
   if (!def) return "openai";
+
+  if (providerId === "alibaba-coding-plan" && isAlibabaCodingPlanAnthropicBaseUrl(configuredUrl)) {
+    return "anthropic";
+  }
 
   if (def.anthropicBaseUrl && model.startsWith("claude")) {
     return "anthropic";
@@ -437,7 +446,7 @@ export interface AgentMessage {
   content: string;
   provider?: string;
   model?: string;
-  apiTransport?: ApiTransportMode;
+  api_transport?: ApiTransportMode;
   responseId?: string;
   toolCalls?: ToolCall[];
   toolName?: string;
@@ -474,12 +483,12 @@ export interface AgentTodoItem {
 // ---------------------------------------------------------------------------
 export interface AgentSettings {
   enabled: boolean;
-  agentName: string;
+  agent_name: string;
   handler: string;
   additionalHandlers: string[];
-  systemPrompt: string;
+  system_prompt: string;
 
-  activeProvider: AgentProviderId;
+  active_provider: AgentProviderId;
   featherless: AgentProviderConfig;
   openai: AgentProviderConfig;
   qwen: AgentProviderConfig;
@@ -501,109 +510,165 @@ export interface AgentSettings {
   "opencode-zen": AgentProviderConfig;
   custom: AgentProviderConfig;
 
-  enableBashTool: boolean;
-  enableVisionTool: boolean;
-  enableWebBrowsingTool: boolean;
-  bashTimeoutSeconds: number;
-  enableWebSearchTool: boolean;
-  searchToolProvider: "none" | "firecrawl" | "exa" | "tavily";
-  firecrawlApiKey: string;
-  exaApiKey: string;
-  tavilyApiKey: string;
-  searchMaxResults: number;
-  searchTimeoutSeconds: number;
+  enable_bash_tool: boolean;
+  enable_vision_tool: boolean;
+  enable_web_browsing_tool: boolean;
+  bash_timeout_seconds: number;
+  enable_web_search_tool: boolean;
+  search_provider: "none" | "firecrawl" | "exa" | "tavily";
+  firecrawl_api_key: string;
+  exa_api_key: string;
+  tavily_api_key: string;
+  search_max_results: number;
+  search_timeout_secs: number;
 
-  enableStreaming: boolean;
-  enableConversationMemory: boolean;
-  enableHonchoMemory: boolean;
-  honchoApiKey: string;
-  honchoBaseUrl: string;
-  honchoWorkspaceId: string;
+  enable_streaming: boolean;
+  enable_conversation_memory: boolean;
+  enable_honcho_memory: boolean;
+  honcho_api_key: string;
+  honcho_base_url: string;
+  honcho_workspace_id: string;
+  anticipatory_enabled: boolean;
+  anticipatory_morning_brief: boolean;
+  anticipatory_predictive_hydration: boolean;
+  anticipatory_stuck_detection: boolean;
+  operator_model_enabled: boolean;
+  operator_model_allow_message_statistics: boolean;
+  operator_model_allow_approval_learning: boolean;
+  operator_model_allow_attention_tracking: boolean;
+  operator_model_allow_implicit_feedback: boolean;
+  collaboration_enabled: boolean;
+  compliance_mode: "standard" | "soc2" | "hipaa" | "fedramp";
+  compliance_retention_days: number;
+  compliance_sign_all_events: boolean;
+  tool_synthesis_enabled: boolean;
+  tool_synthesis_require_activation: boolean;
+  tool_synthesis_max_generated_tools: number;
+  gateway_enabled: boolean;
+  slack_token: string;
+  slack_channel_filter: string;
+  telegram_token: string;
+  telegram_allowed_chats: string;
+  discord_token: string;
+  discord_channel_filter: string;
+  discord_allowed_users: string;
+  whatsapp_token: string;
+  whatsapp_phone_id: string;
+  whatsapp_allowed_contacts: string;
+  gateway_command_prefix: string;
 
   chatFontFamily: string;
   chatFontSize: number;
 
-  reasoningEffort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  reasoning_effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
-  autoCompactContext: boolean;
-  maxContextMessages: number;
-  maxToolLoops: number;
-  maxRetries: number;
-  retryDelayMs: number;
-  contextWindowTokens: number;
-  contextBudgetTokens: number;
-  compactThresholdPercent: number;
-  keepRecentOnCompaction: number;
+  auto_compact_context: boolean;
+  max_context_messages: number;
+  max_tool_loops: number;
+  max_retries: number;
+  retry_delay_ms: number;
+  context_window_tokens: number;
+  context_budget_tokens: number;
+  compact_threshold_pct: number;
+  keep_recent_on_compact: number;
 
   // Agent backend: "daemon" runs LLM in tamux-daemon, "openclaw"/"hermes" route
   // through external agent processes, "legacy" uses frontend
-  agentBackend: "daemon" | "openclaw" | "hermes" | "legacy";
+  agent_backend: "daemon" | "openclaw" | "hermes" | "legacy";
 }
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   enabled: false,
-  agentName: "assistant",
+  agent_name: "assistant",
   handler: "/agent",
   additionalHandlers: [],
-  systemPrompt: "You are tamux, an agentic terminal multiplexer assistant. You can execute terminal commands, check system resources, and send messages to connected chat platforms (Slack, Discord, Telegram, WhatsApp) via the gateway. Use your tools proactively when the user asks you to perform actions. Be concise and direct.",
+  system_prompt: "You are tamux, an agentic terminal multiplexer assistant. You can execute terminal commands, check system resources, and send messages to connected chat platforms (Slack, Discord, Telegram, WhatsApp) via the gateway. Use your tools proactively when the user asks you to perform actions. Be concise and direct.",
 
-  activeProvider: "openai",
-  featherless: { baseUrl: "https://api.featherless.ai/v1", model: "meta-llama/Llama-3.3-70B-Instruct", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-5.4", customModelName: "", apiKey: "", assistantId: "", apiTransport: "responses", authSource: "api_key", customContextWindowTokens: null },
-  qwen: { baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", model: "qwen-max", customModelName: "", apiKey: "", assistantId: "", apiTransport: "native_assistant", authSource: "api_key", customContextWindowTokens: null },
-  "qwen-deepinfra": { baseUrl: "https://api.deepinfra.com/v1/openai", model: "Qwen/Qwen2.5-72B-Instruct", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  kimi: { baseUrl: "https://api.moonshot.ai/v1", model: "moonshot-v1-32k", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  "kimi-coding-plan": { baseUrl: "https://api.kimi.com/coding/v1", model: "kimi-for-coding", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  "z.ai": { baseUrl: "https://api.z.ai/api/paas/v4", model: "glm-4-plus", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  "z.ai-coding-plan": { baseUrl: "https://api.z.ai/api/coding/paas/v4", model: "glm-5", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  openrouter: { baseUrl: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  cerebras: { baseUrl: "https://api.cerebras.ai/v1", model: "llama-3.3-70b", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  together: { baseUrl: "https://api.together.xyz/v1", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", customModelName: "", apiKey: "", assistantId: "", apiTransport: "responses", authSource: "api_key", customContextWindowTokens: null },
-  ollama: { baseUrl: "http://localhost:11434/v1", model: "llama3.1", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  chutes: { baseUrl: "https://llm.chutes.ai/v1", model: "deepseek-ai/DeepSeek-V3", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  huggingface: { baseUrl: "https://api-inference.huggingface.co/v1", model: "meta-llama/Llama-3.3-70B-Instruct", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  minimax: { baseUrl: "https://api.minimax.io/anthropic", model: "MiniMax-M1-80k", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  "minimax-coding-plan": { baseUrl: "https://api.minimax.io/anthropic", model: "MiniMax-M2.7", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  "alibaba-coding-plan": { baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1", model: "qwen3-coder", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  "opencode-zen": { baseUrl: "https://opencode.ai/zen/v1", model: "claude-sonnet-4-5", customModelName: "", apiKey: "", assistantId: "", apiTransport: "chat_completions", authSource: "api_key", customContextWindowTokens: null },
-  custom: { baseUrl: "", model: "", customModelName: "", apiKey: "", assistantId: "", apiTransport: "responses", authSource: "api_key", customContextWindowTokens: 128_000 },
+  active_provider: "openai",
+  featherless: { base_url: "https://api.featherless.ai/v1", model: "meta-llama/Llama-3.3-70B-Instruct", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  openai: { base_url: "https://api.openai.com/v1", model: "gpt-5.4", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "responses", auth_source: "api_key", context_window_tokens: null },
+  qwen: { base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", model: "qwen-max", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "native_assistant", auth_source: "api_key", context_window_tokens: null },
+  "qwen-deepinfra": { base_url: "https://api.deepinfra.com/v1/openai", model: "Qwen/Qwen2.5-72B-Instruct", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  kimi: { base_url: "https://api.moonshot.ai/v1", model: "moonshot-v1-32k", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  "kimi-coding-plan": { base_url: "https://api.kimi.com/coding/v1", model: "kimi-for-coding", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  "z.ai": { base_url: "https://api.z.ai/api/paas/v4", model: "glm-4-plus", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  "z.ai-coding-plan": { base_url: "https://api.z.ai/api/coding/paas/v4", model: "glm-5", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  openrouter: { base_url: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  cerebras: { base_url: "https://api.cerebras.ai/v1", model: "llama-3.3-70b", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  together: { base_url: "https://api.together.xyz/v1", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  groq: { base_url: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "responses", auth_source: "api_key", context_window_tokens: null },
+  ollama: { base_url: "http://localhost:11434/v1", model: "llama3.1", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  chutes: { base_url: "https://llm.chutes.ai/v1", model: "deepseek-ai/DeepSeek-V3", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  huggingface: { base_url: "https://api-inference.huggingface.co/v1", model: "meta-llama/Llama-3.3-70B-Instruct", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  minimax: { base_url: "https://api.minimax.io/anthropic", model: "MiniMax-M1-80k", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  "minimax-coding-plan": { base_url: "https://api.minimax.io/anthropic", model: "MiniMax-M2.7", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  "alibaba-coding-plan": { base_url: "https://coding-intl.dashscope.aliyuncs.com/v1", model: "qwen3.5-plus", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  "opencode-zen": { base_url: "https://opencode.ai/zen/v1", model: "claude-sonnet-4-5", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  custom: { base_url: "", model: "", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "responses", auth_source: "api_key", context_window_tokens: 128_000 },
 
-  enableBashTool: true,
-  enableVisionTool: false,
-  enableWebBrowsingTool: false,
-  bashTimeoutSeconds: 30,
-  enableWebSearchTool: false,
-  searchToolProvider: "none",
-  firecrawlApiKey: "",
-  exaApiKey: "",
-  tavilyApiKey: "",
-  searchMaxResults: 8,
-  searchTimeoutSeconds: 20,
+  enable_bash_tool: true,
+  enable_vision_tool: false,
+  enable_web_browsing_tool: false,
+  bash_timeout_seconds: 30,
+  enable_web_search_tool: false,
+  search_provider: "none",
+  firecrawl_api_key: "",
+  exa_api_key: "",
+  tavily_api_key: "",
+  search_max_results: 8,
+  search_timeout_secs: 20,
 
-  enableStreaming: true,
-  enableConversationMemory: true,
-  enableHonchoMemory: false,
-  honchoApiKey: "",
-  honchoBaseUrl: "",
-  honchoWorkspaceId: "tamux",
+  enable_streaming: true,
+  enable_conversation_memory: true,
+  enable_honcho_memory: false,
+  honcho_api_key: "",
+  honcho_base_url: "",
+  honcho_workspace_id: "tamux",
+  anticipatory_enabled: false,
+  anticipatory_morning_brief: false,
+  anticipatory_predictive_hydration: false,
+  anticipatory_stuck_detection: false,
+  operator_model_enabled: false,
+  operator_model_allow_message_statistics: false,
+  operator_model_allow_approval_learning: false,
+  operator_model_allow_attention_tracking: false,
+  operator_model_allow_implicit_feedback: false,
+  collaboration_enabled: false,
+  compliance_mode: "standard",
+  compliance_retention_days: 30,
+  compliance_sign_all_events: false,
+  tool_synthesis_enabled: false,
+  tool_synthesis_require_activation: true,
+  tool_synthesis_max_generated_tools: 24,
+  gateway_enabled: false,
+  slack_token: "",
+  slack_channel_filter: "",
+  telegram_token: "",
+  telegram_allowed_chats: "",
+  discord_token: "",
+  discord_channel_filter: "",
+  discord_allowed_users: "",
+  whatsapp_token: "",
+  whatsapp_phone_id: "",
+  whatsapp_allowed_contacts: "",
+  gateway_command_prefix: "!tamux",
 
   chatFontFamily: "Cascadia Code",
   chatFontSize: 13,
 
-  reasoningEffort: "high",
+  reasoning_effort: "high",
 
-  autoCompactContext: true,
-  maxContextMessages: 100,
-  maxToolLoops: 0,
-  maxRetries: 3,
-  retryDelayMs: 2000,
-  contextWindowTokens: 128000,
-  contextBudgetTokens: 100000,
-  compactThresholdPercent: 80,
-  keepRecentOnCompaction: 10,
+  auto_compact_context: true,
+  max_context_messages: 100,
+  max_tool_loops: 0,
+  max_retries: 3,
+  retry_delay_ms: 2000,
+  context_window_tokens: 128000,
+  context_budget_tokens: 100000,
+  compact_threshold_pct: 80,
+  keep_recent_on_compact: 10,
 
-  agentBackend: "daemon",
+  agent_backend: "daemon",
 };
 
 // ---------------------------------------------------------------------------
@@ -616,6 +681,8 @@ export interface AgentState {
   activeThreadId: string | null;
   agentPanelOpen: boolean;
   agentSettings: AgentSettings;
+  agentSettingsHydrated: boolean;
+  agentSettingsDirty: boolean;
   searchQuery: string;
 
   // Thread actions
@@ -635,9 +702,10 @@ export interface AgentState {
     threadId: string,
     content: string,
     streaming?: boolean,
-    meta?: Partial<Pick<AgentMessage, "inputTokens" | "outputTokens" | "totalTokens" | "reasoning" | "reasoningTokens" | "audioTokens" | "videoTokens" | "cost" | "tps" | "toolCalls" | "provider" | "model" | "apiTransport" | "responseId">>
+    meta?: Partial<Pick<AgentMessage, "inputTokens" | "outputTokens" | "totalTokens" | "reasoning" | "reasoningTokens" | "audioTokens" | "videoTokens" | "cost" | "tps" | "toolCalls" | "provider" | "model" | "api_transport" | "responseId">>
   ) => void;
   getThreadMessages: (threadId: string) => AgentMessage[];
+  deleteMessage: (threadId: string, messageId: string) => void;
   setThreadTodos: (threadId: string, todos: AgentTodoItem[]) => void;
   getThreadTodos: (threadId: string) => AgentTodoItem[];
   setThreadDaemonId: (threadId: string, daemonThreadId: string | null) => void;
@@ -649,13 +717,15 @@ export interface AgentState {
   // Settings
   updateAgentSetting: <K extends keyof AgentSettings>(key: K, value: AgentSettings[K]) => void;
   resetAgentSettings: () => void;
+  refreshAgentSettingsFromDaemon: () => Promise<boolean>;
+  markAgentSettingsSynced: () => void;
 
   // Provider auth
   providerAuthStates: ProviderAuthState[];
   subAgents: SubAgentDefinition[];
   refreshProviderAuthStates: () => Promise<void>;
-  validateProvider: (providerId: string, baseUrl: string, apiKey: string, authSource: string) => Promise<{ valid: boolean; error?: string; models?: unknown[] }>;
-  loginProvider: (providerId: string, apiKey: string, baseUrl?: string) => Promise<void>;
+  validateProvider: (providerId: string, base_url: string, api_key: string, auth_source: string) => Promise<{ valid: boolean; error?: string; models?: unknown[] }>;
+  loginProvider: (providerId: string, api_key: string, base_url?: string) => Promise<void>;
   logoutProvider: (providerId: string) => Promise<void>;
   addSubAgent: (def: Omit<SubAgentDefinition, "id" | "created_at">) => Promise<void>;
   removeSubAgent: (id: string) => Promise<void>;
@@ -713,7 +783,6 @@ function loadAgentSettings(): AgentSettings {
   return { ...DEFAULT_AGENT_SETTINGS };
 }
 
-const AGENT_SETTINGS_FILE = "agent-settings.json";
 const AGENT_CHAT_FILE = "agent-chat.json";
 const AGENT_DAEMON_THREAD_MAP_FILE = "agent-daemon-thread-map.json";
 const AGENT_ACTIVE_THREAD_FILE = "agent-active-thread.json";
@@ -723,6 +792,87 @@ type AgentChatState = {
   messages: Record<string, AgentMessage[]>;
   todos: Record<string, AgentTodoItem[]>;
   activeThreadId: string | null;
+};
+
+type DiskAgentSettings = Partial<AgentSettings> & {
+  provider?: string;
+  base_url?: string;
+  model?: string;
+  api_key?: string;
+  assistant_id?: string;
+  auth_source?: string;
+  api_transport?: string;
+  reasoning_effort?: AgentSettings["reasoning_effort"] | string;
+  system_prompt?: string;
+  auto_compact_context?: boolean;
+  max_context_messages?: number;
+  max_tool_loops?: number;
+  max_retries?: number;
+  retry_delay_ms?: number;
+  context_window_tokens?: number;
+  context_budget_tokens?: number;
+  compact_threshold_pct?: number;
+  keep_recent_on_compact?: number;
+  agent_backend?: AgentSettings["agent_backend"] | string;
+  enable_honcho_memory?: boolean;
+  honcho_api_key?: string;
+  honcho_base_url?: string;
+  honcho_workspace_id?: string;
+  providers?: Record<string, Partial<AgentProviderConfig> & {
+    base_url?: string;
+    custom_model_name?: string;
+    api_key?: string;
+    assistant_id?: string;
+    auth_source?: string;
+    api_transport?: string;
+    context_window_tokens?: number;
+  }>;
+  tools?: {
+    bash?: boolean;
+    vision?: boolean;
+    web_browse?: boolean;
+    web_search?: boolean;
+  };
+  anticipatory?: {
+    enabled?: boolean;
+    morning_brief?: boolean;
+    predictive_hydration?: boolean;
+    stuck_detection?: boolean;
+  };
+  operator_model?: {
+    enabled?: boolean;
+    allow_message_statistics?: boolean;
+    allow_approval_learning?: boolean;
+    allow_attention_tracking?: boolean;
+    allow_implicit_feedback?: boolean;
+  };
+  collaboration?: {
+    enabled?: boolean;
+  };
+  compliance?: {
+    mode?: AgentSettings["compliance_mode"];
+    retention_days?: number;
+    sign_all_events?: boolean;
+  };
+  tool_synthesis?: {
+    enabled?: boolean;
+    require_activation?: boolean;
+    max_generated_tools?: number;
+  };
+  gateway?: {
+    enabled?: boolean;
+    slack_token?: string;
+    slack_channel_filter?: string;
+    telegram_token?: string;
+    telegram_allowed_chats?: string;
+    discord_token?: string;
+    discord_channel_filter?: string;
+    discord_allowed_users?: string;
+    whatsapp_token?: string;
+    whatsapp_phone_id?: string;
+    whatsapp_allowed_contacts?: string;
+    command_prefix?: string;
+  };
 };
 
 type AgentDbThreadRecord = {
@@ -762,6 +912,7 @@ type AgentDbApi = {
   dbListThreads?: () => Promise<AgentDbThreadRecord[]>;
   dbGetThread?: (id: string) => Promise<{ thread: AgentDbThreadRecord | null; messages: AgentDbMessageRecord[] }>;
   dbAddMessage?: (message: AgentDbMessageRecord) => Promise<boolean>;
+  dbDeleteMessage?: (threadId: string, messageId: string) => Promise<boolean>;
   dbListMessages?: (threadId: string, limit?: number | null) => Promise<AgentDbMessageRecord[]>;
 };
 
@@ -804,8 +955,9 @@ function getAgentDbApi(): AgentDbApi | null {
   return api as AgentDbApi;
 }
 
-function shouldPersistHistory(backend: AgentSettings["agentBackend"]): boolean {
-  return backend === "legacy";
+function shouldPersistHistory(backend: AgentSettings["agent_backend"]): boolean {
+  const bridge = getBridge();
+  return backend === "legacy" && !bridge?.agentSendMessage;
 }
 
 function buildHydratedRemoteMessage(
@@ -821,7 +973,7 @@ function buildHydratedRemoteMessage(
     content: typeof message.content === "string" ? message.content : "",
     provider,
     model: typeof message.model === "string" ? message.model : undefined,
-    apiTransport: typeof message.api_transport === "string"
+    api_transport: typeof message.api_transport === "string"
       ? normalizeApiTransport(
         typeof provider === "string" ? normalizeAgentProviderId(provider) : "openai",
         message.api_transport,
@@ -848,7 +1000,7 @@ function buildHydratedRemoteMessage(
   };
 }
 
-function buildHydratedRemoteThread(thread: RemoteAgentThreadRecord, agentName: string): {
+function buildHydratedRemoteThread(thread: RemoteAgentThreadRecord, agent_name: string): {
   thread: AgentThread;
   messages: AgentMessage[];
 } | null {
@@ -870,7 +1022,7 @@ function buildHydratedRemoteThread(thread: RemoteAgentThreadRecord, agentName: s
       workspaceId: null,
       surfaceId: null,
       paneId: null,
-      agentName,
+      agent_name,
       title: typeof thread.title === "string" && thread.title.trim()
         ? thread.title
         : "Conversation",
@@ -905,8 +1057,170 @@ function buildHydratedRemoteThread(thread: RemoteAgentThreadRecord, agentName: s
   };
 }
 
-function saveAgentSettings(s: AgentSettings) {
-  scheduleJsonWrite(AGENT_SETTINGS_FILE, s);
+function providerConfigFromRaw(
+  providerId: AgentProviderId,
+  source: DiskAgentSettings | null | undefined,
+): AgentProviderConfig {
+  const providerMapValue = source?.providers?.[providerId];
+  const flatValue = source?.[providerId] as Partial<AgentProviderConfig> | undefined;
+  const mergedValue: Partial<AgentProviderConfig> = {
+    ...(flatValue ?? {}),
+    base_url:
+      providerMapValue?.base_url
+      ?? providerMapValue?.base_url
+      ?? flatValue?.base_url,
+    custom_model_name:
+      providerMapValue?.custom_model_name
+      ?? providerMapValue?.custom_model_name
+      ?? flatValue?.custom_model_name,
+    api_key:
+      providerMapValue?.api_key
+      ?? providerMapValue?.api_key
+      ?? flatValue?.api_key,
+    assistant_id:
+      providerMapValue?.assistant_id
+      ?? providerMapValue?.assistant_id
+      ?? flatValue?.assistant_id,
+    auth_source: (
+      providerMapValue?.auth_source
+      ?? providerMapValue?.auth_source
+      ?? flatValue?.auth_source
+    ) as AuthSource | undefined,
+    api_transport: (
+      providerMapValue?.api_transport
+      ?? providerMapValue?.api_transport
+      ?? flatValue?.api_transport
+    ) as ApiTransportMode | undefined,
+    context_window_tokens:
+      typeof providerMapValue?.context_window_tokens === "number"
+        ? providerMapValue.context_window_tokens
+        : flatValue?.context_window_tokens,
+  };
+  return normalizeProviderConfig(providerId, DEFAULT_AGENT_SETTINGS[providerId], mergedValue);
+}
+
+function normalizeAgentSettingsFromSource(source: DiskAgentSettings): AgentSettings {
+  const active_provider = normalizeAgentProviderId(
+    source.active_provider ?? source.provider,
+  );
+  const active_providerConfig = providerConfigFromRaw(active_provider, source);
+  return {
+    ...DEFAULT_AGENT_SETTINGS,
+    ...source,
+    active_provider,
+    agent_backend: normalizeAgentBackend(source.agent_backend ?? source.agent_backend),
+    featherless: providerConfigFromRaw("featherless", source),
+    openai: providerConfigFromRaw("openai", source),
+    qwen: providerConfigFromRaw("qwen", source),
+    "qwen-deepinfra": providerConfigFromRaw("qwen-deepinfra", source),
+    kimi: providerConfigFromRaw("kimi", source),
+    "kimi-coding-plan": providerConfigFromRaw("kimi-coding-plan", source),
+    "z.ai": providerConfigFromRaw("z.ai", source),
+    "z.ai-coding-plan": providerConfigFromRaw("z.ai-coding-plan", source),
+    openrouter: providerConfigFromRaw("openrouter", source),
+    cerebras: providerConfigFromRaw("cerebras", source),
+    together: providerConfigFromRaw("together", source),
+    groq: providerConfigFromRaw("groq", source),
+    ollama: providerConfigFromRaw("ollama", source),
+    chutes: providerConfigFromRaw("chutes", source),
+    huggingface: providerConfigFromRaw("huggingface", source),
+    minimax: providerConfigFromRaw("minimax", source),
+    "minimax-coding-plan": providerConfigFromRaw("minimax-coding-plan", source),
+    "alibaba-coding-plan": providerConfigFromRaw("alibaba-coding-plan", source),
+    "opencode-zen": providerConfigFromRaw("opencode-zen", source),
+    custom: providerConfigFromRaw("custom", source),
+    system_prompt: source.system_prompt ?? source.system_prompt ?? DEFAULT_AGENT_SETTINGS.system_prompt,
+    reasoning_effort: (source.reasoning_effort ?? source.reasoning_effort ?? DEFAULT_AGENT_SETTINGS.reasoning_effort) as AgentSettings["reasoning_effort"],
+    auto_compact_context: source.auto_compact_context ?? source.auto_compact_context ?? DEFAULT_AGENT_SETTINGS.auto_compact_context,
+    max_context_messages: source.max_context_messages ?? source.max_context_messages ?? DEFAULT_AGENT_SETTINGS.max_context_messages,
+    max_tool_loops: source.max_tool_loops ?? source.max_tool_loops ?? DEFAULT_AGENT_SETTINGS.max_tool_loops,
+    max_retries: source.max_retries ?? source.max_retries ?? DEFAULT_AGENT_SETTINGS.max_retries,
+    retry_delay_ms: source.retry_delay_ms ?? source.retry_delay_ms ?? DEFAULT_AGENT_SETTINGS.retry_delay_ms,
+    context_window_tokens: source.context_window_tokens ?? source.context_window_tokens ?? DEFAULT_AGENT_SETTINGS.context_window_tokens,
+    context_budget_tokens: source.context_budget_tokens ?? source.context_budget_tokens ?? DEFAULT_AGENT_SETTINGS.context_budget_tokens,
+    compact_threshold_pct: source.compact_threshold_pct ?? source.compact_threshold_pct ?? DEFAULT_AGENT_SETTINGS.compact_threshold_pct,
+    keep_recent_on_compact: source.keep_recent_on_compact ?? source.keep_recent_on_compact ?? DEFAULT_AGENT_SETTINGS.keep_recent_on_compact,
+    enable_honcho_memory: source.enable_honcho_memory ?? source.enable_honcho_memory ?? DEFAULT_AGENT_SETTINGS.enable_honcho_memory,
+    honcho_api_key: source.honcho_api_key ?? source.honcho_api_key ?? DEFAULT_AGENT_SETTINGS.honcho_api_key,
+    honcho_base_url: source.honcho_base_url ?? source.honcho_base_url ?? DEFAULT_AGENT_SETTINGS.honcho_base_url,
+    honcho_workspace_id: source.honcho_workspace_id ?? source.honcho_workspace_id ?? DEFAULT_AGENT_SETTINGS.honcho_workspace_id,
+    enable_bash_tool: source.enable_bash_tool ?? source.tools?.bash ?? DEFAULT_AGENT_SETTINGS.enable_bash_tool,
+    enable_vision_tool: source.enable_vision_tool ?? source.tools?.vision ?? DEFAULT_AGENT_SETTINGS.enable_vision_tool,
+    enable_web_browsing_tool: source.enable_web_browsing_tool ?? source.tools?.web_browse ?? DEFAULT_AGENT_SETTINGS.enable_web_browsing_tool,
+    enable_web_search_tool: source.enable_web_search_tool ?? source.tools?.web_search ?? DEFAULT_AGENT_SETTINGS.enable_web_search_tool,
+    anticipatory_enabled: source.anticipatory?.enabled ?? source.anticipatory_enabled ?? DEFAULT_AGENT_SETTINGS.anticipatory_enabled,
+    anticipatory_morning_brief: source.anticipatory?.morning_brief ?? source.anticipatory_morning_brief ?? DEFAULT_AGENT_SETTINGS.anticipatory_morning_brief,
+    anticipatory_predictive_hydration: source.anticipatory?.predictive_hydration ?? source.anticipatory_predictive_hydration ?? DEFAULT_AGENT_SETTINGS.anticipatory_predictive_hydration,
+    anticipatory_stuck_detection: source.anticipatory?.stuck_detection ?? source.anticipatory_stuck_detection ?? DEFAULT_AGENT_SETTINGS.anticipatory_stuck_detection,
+    operator_model_enabled: source.operator_model?.enabled ?? source.operator_model_enabled ?? DEFAULT_AGENT_SETTINGS.operator_model_enabled,
+    operator_model_allow_message_statistics: source.operator_model?.allow_message_statistics ?? source.operator_model_allow_message_statistics ?? DEFAULT_AGENT_SETTINGS.operator_model_allow_message_statistics,
+    operator_model_allow_approval_learning: source.operator_model?.allow_approval_learning ?? source.operator_model_allow_approval_learning ?? DEFAULT_AGENT_SETTINGS.operator_model_allow_approval_learning,
+    operator_model_allow_attention_tracking: source.operator_model?.allow_attention_tracking ?? source.operator_model_allow_attention_tracking ?? DEFAULT_AGENT_SETTINGS.operator_model_allow_attention_tracking,
+    operator_model_allow_implicit_feedback: source.operator_model?.allow_implicit_feedback ?? source.operator_model_allow_implicit_feedback ?? DEFAULT_AGENT_SETTINGS.operator_model_allow_implicit_feedback,
+    collaboration_enabled: source.collaboration?.enabled ?? source.collaboration_enabled ?? DEFAULT_AGENT_SETTINGS.collaboration_enabled,
+    compliance_mode: source.compliance?.mode ?? source.compliance_mode ?? DEFAULT_AGENT_SETTINGS.compliance_mode,
+    compliance_retention_days: source.compliance?.retention_days ?? source.compliance_retention_days ?? DEFAULT_AGENT_SETTINGS.compliance_retention_days,
+    compliance_sign_all_events: source.compliance?.sign_all_events ?? source.compliance_sign_all_events ?? DEFAULT_AGENT_SETTINGS.compliance_sign_all_events,
+    tool_synthesis_enabled: source.tool_synthesis?.enabled ?? source.tool_synthesis_enabled ?? DEFAULT_AGENT_SETTINGS.tool_synthesis_enabled,
+    tool_synthesis_require_activation: source.tool_synthesis?.require_activation ?? source.tool_synthesis_require_activation ?? DEFAULT_AGENT_SETTINGS.tool_synthesis_require_activation,
+    tool_synthesis_max_generated_tools: source.tool_synthesis?.max_generated_tools ?? source.tool_synthesis_max_generated_tools ?? DEFAULT_AGENT_SETTINGS.tool_synthesis_max_generated_tools,
+    gateway_enabled: source.gateway?.enabled ?? DEFAULT_AGENT_SETTINGS.gateway_enabled,
+    slack_token: source.gateway?.slack_token ?? DEFAULT_AGENT_SETTINGS.slack_token,
+    slack_channel_filter: source.gateway?.slack_channel_filter ?? DEFAULT_AGENT_SETTINGS.slack_channel_filter,
+    telegram_token: source.gateway?.telegram_token ?? DEFAULT_AGENT_SETTINGS.telegram_token,
+    telegram_allowed_chats: source.gateway?.telegram_allowed_chats ?? DEFAULT_AGENT_SETTINGS.telegram_allowed_chats,
+    discord_token: source.gateway?.discord_token ?? DEFAULT_AGENT_SETTINGS.discord_token,
+    discord_channel_filter: source.gateway?.discord_channel_filter ?? DEFAULT_AGENT_SETTINGS.discord_channel_filter,
+    discord_allowed_users: source.gateway?.discord_allowed_users ?? DEFAULT_AGENT_SETTINGS.discord_allowed_users,
+    whatsapp_token: source.gateway?.whatsapp_token ?? DEFAULT_AGENT_SETTINGS.whatsapp_token,
+    whatsapp_phone_id: source.gateway?.whatsapp_phone_id ?? DEFAULT_AGENT_SETTINGS.whatsapp_phone_id,
+    whatsapp_allowed_contacts: source.gateway?.whatsapp_allowed_contacts ?? DEFAULT_AGENT_SETTINGS.whatsapp_allowed_contacts,
+    gateway_command_prefix: source.gateway?.command_prefix ?? DEFAULT_AGENT_SETTINGS.gateway_command_prefix,
+    [active_provider]: {
+      ...active_providerConfig,
+      base_url: source.base_url ?? active_providerConfig.base_url,
+      model: source.model ?? active_providerConfig.model,
+      api_key: source.api_key ?? active_providerConfig.api_key,
+      assistant_id: source.assistant_id ?? active_providerConfig.assistant_id,
+      auth_source: normalizeAuthSource(active_provider, source.auth_source ?? active_providerConfig.auth_source),
+      api_transport: normalizeApiTransport(active_provider, source.api_transport ?? active_providerConfig.api_transport),
+    },
+  };
+}
+
+function looksLikeDaemonAgentConfig(value: unknown): value is DiskAgentSettings {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return Boolean(
+    typeof record.provider === "string"
+    || typeof record.active_provider === "string"
+    || (record.providers && typeof record.providers === "object" && !Array.isArray(record.providers))
+    || typeof record.agent_backend === "string",
+  );
+}
+
+function isValidConciergeConfig(value: unknown): value is AgentState["conciergeConfig"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.enabled === "boolean"
+    || typeof record.detail_level === "string"
+    || typeof record.auto_cleanup_on_navigate === "boolean"
+  );
+}
+
+function isValidProviderAuthStates(value: unknown): value is ProviderAuthState[] {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every((entry) =>
+      entry
+      && typeof entry === "object"
+      && typeof (entry as ProviderAuthState).provider_id === "string"
+      && typeof (entry as ProviderAuthState).provider_name === "string");
 }
 
 function syncChatCounters(chat: AgentChatState) {
@@ -948,7 +1262,7 @@ function serializeThread(thread: AgentThread): AgentDbThreadRecord {
     workspace_id: thread.workspaceId ?? null,
     surface_id: thread.surfaceId ?? null,
     pane_id: thread.paneId ?? null,
-    agent_name: thread.agentName ?? null,
+    agent_name: thread.agent_name ?? null,
     title: thread.title,
     created_at: thread.createdAt,
     updated_at: thread.updatedAt,
@@ -984,7 +1298,7 @@ function serializeMessage(message: AgentMessage): AgentDbMessageRecord {
       toolCallId: message.toolCallId ?? null,
       toolArguments: message.toolArguments ?? null,
       toolStatus: message.toolStatus ?? null,
-      apiTransport: message.apiTransport ?? null,
+      api_transport: message.api_transport ?? null,
       responseId: message.responseId ?? null,
       reasoningTokens: message.reasoningTokens ?? null,
       audioTokens: message.audioTokens ?? null,
@@ -1012,7 +1326,7 @@ function deserializeThread(thread: AgentDbThreadRecord): AgentThread {
     workspaceId: thread.workspace_id,
     surfaceId: thread.surface_id,
     paneId: thread.pane_id,
-    agentName: thread.agent_name ?? "assistant",
+    agent_name: thread.agent_name ?? "assistant",
     title: thread.title,
     createdAt: thread.created_at,
     updatedAt: thread.updated_at,
@@ -1064,12 +1378,12 @@ function deserializeMessage(message: AgentDbMessageRecord): AgentMessage {
     content: message.content,
     provider: message.provider ?? undefined,
     model: message.model ?? undefined,
-    apiTransport: typeof metadata.apiTransport === "string"
+    api_transport: typeof metadata.api_transport === "string"
       ? normalizeApiTransport(
         typeof message.provider === "string"
           ? normalizeAgentProviderId(message.provider)
           : "openai",
-        metadata.apiTransport,
+        metadata.api_transport,
       )
       : undefined,
     responseId: typeof metadata.responseId === "string" ? metadata.responseId : undefined,
@@ -1099,6 +1413,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   activeThreadId: null,
   agentPanelOpen: false,
   agentSettings: loadAgentSettings(),
+  agentSettingsHydrated: false,
+  agentSettingsDirty: false,
   searchQuery: "",
   providerAuthStates: [],
   subAgents: [],
@@ -1107,27 +1423,27 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     if (!bridge?.agentGetProviderAuthStates) return;
     try {
       const states = await bridge.agentGetProviderAuthStates();
-      if (Array.isArray(states)) {
+      if (isValidProviderAuthStates(states)) {
         set({ providerAuthStates: states as ProviderAuthState[] });
       }
     } catch { /* ignore */ }
   },
-  validateProvider: async (providerId, baseUrl, apiKey, authSource) => {
+  validateProvider: async (providerId, base_url, api_key, auth_source) => {
     const bridge = getBridge();
     if (!bridge?.agentValidateProvider) return { valid: false, error: "Bridge not available" };
     try {
-      return await bridge.agentValidateProvider(providerId, baseUrl, apiKey, authSource);
+      return await bridge.agentValidateProvider(providerId, base_url, api_key, auth_source);
     } catch (e) {
       return { valid: false, error: String(e) };
     }
   },
-  loginProvider: async (providerId, apiKey, baseUrl) => {
+  loginProvider: async (providerId, api_key, base_url) => {
     const bridge = getBridge();
     if (!bridge?.agentLoginProvider) return;
     try {
-      const result = await bridge.agentLoginProvider(providerId, apiKey, baseUrl);
+      const result = await bridge.agentLoginProvider(providerId, api_key, base_url);
       // The daemon returns updated auth states directly.
-      if (Array.isArray(result)) {
+      if (isValidProviderAuthStates(result)) {
         set({ providerAuthStates: result as ProviderAuthState[] });
       }
     } catch { /* ignore */ }
@@ -1137,7 +1453,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     if (!bridge?.agentLogoutProvider) return;
     try {
       const result = await bridge.agentLogoutProvider(providerId);
-      if (Array.isArray(result)) {
+      if (isValidProviderAuthStates(result)) {
         set({ providerAuthStates: result as ProviderAuthState[] });
       }
     } catch { /* ignore */ }
@@ -1191,7 +1507,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       workspaceId: opts.workspaceId ?? null,
       surfaceId: opts.surfaceId ?? null,
       paneId: opts.paneId ?? null,
-      agentName: get().agentSettings.agentName,
+      agent_name: get().agentSettings.agent_name,
       title: opts.title ?? "New Conversation",
       createdAt: now,
       updatedAt: now,
@@ -1214,7 +1530,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         todos: { ...s.todos, [id]: [] },
         activeThreadId: id,
       };
-      if (shouldPersistHistory(get().agentSettings.agentBackend)) {
+      if (shouldPersistHistory(get().agentSettings.agent_backend)) {
         persistDaemonThreadMap(next.threads);
         scheduleJsonWrite(AGENT_ACTIVE_THREAD_FILE, { activeThreadId: id });
         void getAgentDbApi()?.dbCreateThread?.(serializeThread(thread));
@@ -1234,7 +1550,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         todos: todoRest,
         activeThreadId: s.activeThreadId === id ? null : s.activeThreadId,
       };
-      if (shouldPersistHistory(get().agentSettings.agentBackend)) {
+      if (shouldPersistHistory(get().agentSettings.agent_backend)) {
         persistDaemonThreadMap(next.threads);
         void getAgentDbApi()?.dbDeleteThread?.(id);
       }
@@ -1244,7 +1560,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   setActiveThread: (id) => {
     set({ activeThreadId: id });
-    if (shouldPersistHistory(get().agentSettings.agentBackend)) {
+    if (shouldPersistHistory(get().agentSettings.agent_backend)) {
       scheduleJsonWrite(AGENT_ACTIVE_THREAD_FILE, { activeThreadId: id });
     }
   },
@@ -1255,7 +1571,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       (t) =>
         t.title.toLowerCase().includes(lower) ||
         t.lastMessagePreview.toLowerCase().includes(lower) ||
-        t.agentName.toLowerCase().includes(lower)
+        t.agent_name.toLowerCase().includes(lower)
     );
   },
 
@@ -1289,7 +1605,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         activeThreadId: s.activeThreadId,
       };
       const updatedThread = next.threads.find((thread) => thread.id === threadId);
-      if (shouldPersistHistory(get().agentSettings.agentBackend)) {
+      if (shouldPersistHistory(get().agentSettings.agent_backend)) {
         void (async () => {
           const api = getAgentDbApi();
           if (updatedThread) await api?.dbCreateThread?.(serializeThread(updatedThread));
@@ -1325,7 +1641,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         toolCalls: meta?.toolCalls ?? last.toolCalls,
         provider: meta?.provider ?? last.provider,
         model: meta?.model ?? last.model,
-        apiTransport: meta?.apiTransport ?? last.apiTransport,
+        api_transport: meta?.api_transport ?? last.api_transport,
         responseId: meta?.responseId ?? last.responseId,
       };
       const updated = [...msgs.slice(0, -1), updatedLast];
@@ -1346,7 +1662,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       );
       const next = { messages: { ...s.messages, [threadId]: updated }, threads: nextThreads };
       const updatedThread = nextThreads.find((thread) => thread.id === threadId);
-      if (shouldPersistHistory(get().agentSettings.agentBackend)) {
+      if (shouldPersistHistory(get().agentSettings.agent_backend)) {
         void (async () => {
           const api = getAgentDbApi();
           if (updatedThread) await api?.dbCreateThread?.(serializeThread(updatedThread));
@@ -1358,6 +1674,27 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   },
 
   getThreadMessages: (threadId) => get().messages[threadId] ?? [],
+
+  deleteMessage: (threadId, messageId) => {
+    set((s) => {
+      const msgs = s.messages[threadId];
+      if (!msgs) return s;
+      const filtered = msgs.filter((m) => m.id !== messageId);
+      if (filtered.length === msgs.length) return s; // not found
+      return {
+        messages: { ...s.messages, [threadId]: filtered },
+        threads: s.threads.map((t) =>
+          t.id === threadId
+            ? { ...t, messageCount: Math.max(0, t.messageCount - 1), updatedAt: Date.now() }
+            : t
+        ),
+      };
+    });
+    // Persist deletion to daemon
+    const api = getAgentDbApi();
+    api?.dbDeleteMessage?.(threadId, messageId);
+  },
+
   setThreadTodos: (threadId, todos) => {
     set((s) => ({
       todos: { ...s.todos, [threadId]: [...todos].sort((a, b) => a.position - b.position) },
@@ -1369,7 +1706,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       const threads = s.threads.map((thread) =>
         thread.id === threadId ? { ...thread, daemonThreadId } : thread,
       );
-      if (shouldPersistHistory(get().agentSettings.agentBackend)) {
+      if (shouldPersistHistory(get().agentSettings.agent_backend)) {
         persistDaemonThreadMap(threads);
       }
       return { threads };
@@ -1381,20 +1718,52 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   updateAgentSetting: (key, value) => {
     set((s) => {
-      const nextValue = key === "activeProvider"
+      const nextValue = key === "active_provider"
         ? normalizeAgentProviderId(value)
         : value;
       const updated = { ...s.agentSettings, [key]: nextValue };
-      saveAgentSettings(updated);
-      return { agentSettings: updated };
+      return {
+        agentSettings: updated,
+        agentSettingsDirty: s.agentSettingsHydrated,
+      };
     });
   },
 
   resetAgentSettings: () => {
     const def = { ...DEFAULT_AGENT_SETTINGS };
-    saveAgentSettings(def);
-    set({ agentSettings: def });
+    set((s) => ({
+      agentSettings: def,
+      agentSettingsDirty: s.agentSettingsHydrated,
+    }));
   },
+
+  refreshAgentSettingsFromDaemon: async () => {
+    const bridge = getBridge();
+    if (!bridge?.agentGetConfig) {
+      set({ agentSettingsHydrated: true, agentSettingsDirty: false });
+      return true;
+    }
+
+    try {
+      const daemonState = await bridge.agentGetConfig();
+      if (!looksLikeDaemonAgentConfig(daemonState)) {
+        set({ agentSettingsHydrated: false });
+        return false;
+      }
+      const merged = normalizeAgentSettingsFromSource(daemonState as DiskAgentSettings);
+      set({
+        agentSettings: merged,
+        agentSettingsHydrated: true,
+        agentSettingsDirty: false,
+      });
+      return true;
+    } catch {
+      set({ agentSettingsHydrated: false });
+      return false;
+    }
+  },
+
+  markAgentSettingsSynced: () => set({ agentSettingsDirty: false }),
 
   conciergeConfig: {
     enabled: true,
@@ -1407,7 +1776,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     if (!bridge?.agentGetConciergeConfig) return;
     try {
       const config = await bridge.agentGetConciergeConfig();
-      if (config && typeof config === "object") {
+      if (isValidConciergeConfig(config)) {
         set({ conciergeConfig: config as any });
       }
     } catch { /* ignore */ }
@@ -1419,12 +1788,14 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       await bridge.agentSetConciergeConfig(config);
       if (bridge.agentGetConciergeConfig) {
         const refreshed = await bridge.agentGetConciergeConfig();
-        if (refreshed && typeof refreshed === "object") {
+        if (isValidConciergeConfig(refreshed)) {
           set({ conciergeConfig: refreshed as any });
           return;
         }
       }
-      set({ conciergeConfig: config as any });
+      if (isValidConciergeConfig(config)) {
+        set({ conciergeConfig: config as any });
+      }
     } catch { /* ignore */ }
   },
   dismissConciergeWelcome: async () => {
@@ -1433,43 +1804,60 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     try {
       await bridge.agentDismissConciergeWelcome();
       set({ conciergeWelcome: null });
+      if (bridge.agentGetThread) {
+        const remoteThread = await bridge.agentGetThread("concierge").catch(() => null);
+        const hydrated = buildHydratedRemoteThread(
+          (remoteThread ?? {}) as RemoteAgentThreadRecord,
+          get().agentSettings.agent_name,
+        );
+        if (hydrated) {
+          set((state) => {
+            const existing = state.threads.find((thread) => thread.daemonThreadId === "concierge");
+            if (!existing) {
+              return state;
+            }
+            return {
+              threads: state.threads.map((thread) => thread.id === existing.id ? {
+                ...hydrated.thread,
+                id: existing.id,
+              } : thread),
+              messages: {
+                ...state.messages,
+                [existing.id]: hydrated.messages.map((message) => ({
+                  ...message,
+                  threadId: existing.id,
+                })),
+              },
+            };
+          });
+        }
+      }
     } catch { /* ignore */ }
   },
   getThreadsForPane: (paneId) => get().threads.filter((t) => t.paneId === paneId),
 }));
 
 export async function hydrateAgentStore(): Promise<void> {
-  const diskState = await readPersistedJson<AgentSettings>(AGENT_SETTINGS_FILE);
-  const configuredBackend = normalizeAgentBackend(diskState?.agentBackend);
-  if (diskState) {
-    const merged: AgentSettings = {
-      ...DEFAULT_AGENT_SETTINGS,
-      ...diskState,
-      activeProvider: normalizeAgentProviderId(diskState.activeProvider),
-      agentBackend: normalizeAgentBackend(diskState.agentBackend),
-      featherless: normalizeProviderConfig("featherless", DEFAULT_AGENT_SETTINGS.featherless, diskState.featherless),
-      openai: normalizeProviderConfig("openai", DEFAULT_AGENT_SETTINGS.openai, diskState.openai),
-      qwen: normalizeProviderConfig("qwen", DEFAULT_AGENT_SETTINGS.qwen, diskState.qwen),
-      "qwen-deepinfra": normalizeProviderConfig("qwen-deepinfra", DEFAULT_AGENT_SETTINGS["qwen-deepinfra"], diskState["qwen-deepinfra"]),
-      kimi: normalizeProviderConfig("kimi", DEFAULT_AGENT_SETTINGS.kimi, diskState.kimi),
-      "kimi-coding-plan": normalizeProviderConfig("kimi-coding-plan", DEFAULT_AGENT_SETTINGS["kimi-coding-plan"], diskState["kimi-coding-plan"]),
-      "z.ai": normalizeProviderConfig("z.ai", DEFAULT_AGENT_SETTINGS["z.ai"], diskState["z.ai"]),
-      "z.ai-coding-plan": normalizeProviderConfig("z.ai-coding-plan", DEFAULT_AGENT_SETTINGS["z.ai-coding-plan"], diskState["z.ai-coding-plan"]),
-      openrouter: normalizeProviderConfig("openrouter", DEFAULT_AGENT_SETTINGS.openrouter, diskState.openrouter),
-      cerebras: normalizeProviderConfig("cerebras", DEFAULT_AGENT_SETTINGS.cerebras, diskState.cerebras),
-      together: normalizeProviderConfig("together", DEFAULT_AGENT_SETTINGS.together, diskState.together),
-      groq: normalizeProviderConfig("groq", DEFAULT_AGENT_SETTINGS.groq, diskState.groq),
-      ollama: normalizeProviderConfig("ollama", DEFAULT_AGENT_SETTINGS.ollama, diskState.ollama),
-      chutes: normalizeProviderConfig("chutes", DEFAULT_AGENT_SETTINGS.chutes, diskState.chutes),
-      huggingface: normalizeProviderConfig("huggingface", DEFAULT_AGENT_SETTINGS.huggingface, diskState.huggingface),
-      minimax: normalizeProviderConfig("minimax", DEFAULT_AGENT_SETTINGS.minimax, diskState.minimax),
-      "minimax-coding-plan": normalizeProviderConfig("minimax-coding-plan", DEFAULT_AGENT_SETTINGS["minimax-coding-plan"], diskState["minimax-coding-plan"]),
-      "alibaba-coding-plan": normalizeProviderConfig("alibaba-coding-plan", DEFAULT_AGENT_SETTINGS["alibaba-coding-plan"], diskState["alibaba-coding-plan"]),
-      "opencode-zen": normalizeProviderConfig("opencode-zen", DEFAULT_AGENT_SETTINGS["opencode-zen"], diskState["opencode-zen"]),
-      custom: normalizeProviderConfig("custom", DEFAULT_AGENT_SETTINGS.custom, diskState.custom),
-    };
-    useAgentStore.setState({ agentSettings: merged });
+  const bridge = getBridge();
+  let configuredBackend = DEFAULT_AGENT_SETTINGS.agent_backend;
+  let agentSettingsHydrated = false;
+
+  if (bridge?.agentGetConfig) {
+    const daemonState = await bridge.agentGetConfig().catch(() => null);
+    if (looksLikeDaemonAgentConfig(daemonState)) {
+      const merged = normalizeAgentSettingsFromSource(daemonState as DiskAgentSettings);
+      configuredBackend = merged.agent_backend;
+      useAgentStore.setState({
+        agentSettings: merged,
+        agentSettingsDirty: false,
+      });
+      agentSettingsHydrated = true;
+    }
+  } else {
+    agentSettingsHydrated = true;
   }
+
+  useAgentStore.setState({ agentSettingsHydrated });
 
   if (!shouldPersistHistory(configuredBackend)) {
     const amux = (window as any).tamux ?? (window as any).amux;
@@ -1481,7 +1869,7 @@ export async function hydrateAgentStore(): Promise<void> {
         for (const remoteThread of remoteThreads) {
           const hydrated = buildHydratedRemoteThread(
             (remoteThread ?? {}) as RemoteAgentThreadRecord,
-            useAgentStore.getState().agentSettings.agentName,
+            useAgentStore.getState().agentSettings.agent_name,
           );
           if (!hydrated) continue;
           threads.push(hydrated.thread);

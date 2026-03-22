@@ -47,8 +47,8 @@ impl TuiModel {
         match event {
             ClientEvent::Connected => {
                 self.connected = true;
+                self.agent_config_loaded = false;
                 self.status_line = "Connected to daemon".to_string();
-                self.sync_config_to_daemon();
                 self.send_daemon_command(DaemonCommand::Refresh);
                 self.send_daemon_command(DaemonCommand::RefreshServices);
                 self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
@@ -56,6 +56,7 @@ impl TuiModel {
                 self.send_daemon_command(DaemonCommand::GetConciergeConfig);
                 self.concierge
                     .reduce(crate::state::ConciergeAction::WelcomeLoading(true));
+                self.send_daemon_command(DaemonCommand::RequestConciergeWelcome);
                 let cwd = std::env::current_dir()
                     .ok()
                     .map(|p| p.to_string_lossy().to_string());
@@ -69,6 +70,7 @@ impl TuiModel {
             }
             ClientEvent::Disconnected => {
                 self.connected = false;
+                self.agent_config_loaded = false;
                 self.last_attention_surface = None;
                 self.default_session_id = None;
                 self.agent_activity = None;
@@ -92,6 +94,50 @@ impl TuiModel {
             ClientEvent::SessionSpawned { session_id } => {
                 self.default_session_id = Some(session_id.clone());
                 self.status_line = format!("Session: {}", session_id);
+            }
+            ClientEvent::ApprovalRequired {
+                approval_id,
+                command,
+                risk_level,
+                blast_radius,
+            } => {
+                let task_match = self.tasks.tasks().iter().find(|task| {
+                    task.awaiting_approval_id.as_deref() == Some(approval_id.as_str())
+                });
+                self.approval
+                    .reduce(crate::state::ApprovalAction::ApprovalRequired(
+                        crate::state::PendingApproval {
+                            approval_id: approval_id.clone(),
+                            task_id: task_match
+                                .map(|task| task.id.clone())
+                                .unwrap_or_else(|| approval_id.clone()),
+                            task_title: task_match.map(|task| task.title.clone()),
+                            command,
+                            risk_level: crate::state::RiskLevel::from_str_lossy(&risk_level),
+                            blast_radius,
+                        },
+                    ));
+                if self.modal.top() != Some(crate::state::modal::ModalKind::ApprovalOverlay) {
+                    self.modal.reduce(crate::state::modal::ModalAction::Push(
+                        crate::state::modal::ModalKind::ApprovalOverlay,
+                    ));
+                }
+                self.status_line = "Approval required".to_string();
+            }
+            ClientEvent::ApprovalResolved {
+                approval_id,
+                decision,
+            } => {
+                self.approval.reduce(crate::state::ApprovalAction::Resolve {
+                    approval_id: approval_id.clone(),
+                    decision,
+                });
+                if self.approval.current_approval().is_none()
+                    && self.modal.top() == Some(crate::state::modal::ModalKind::ApprovalOverlay)
+                {
+                    self.modal.reduce(crate::state::modal::ModalAction::Pop);
+                }
+                self.status_line = "Approval resolved".to_string();
             }
             ClientEvent::ThreadList(threads) => {
                 let threads = threads
@@ -215,8 +261,8 @@ impl TuiModel {
                 ));
             }
             ClientEvent::AgentConfigRaw(raw) => {
-                self.config
-                    .reduce(config::ConfigAction::ConfigRawReceived(raw));
+                self.apply_config_json(&raw);
+                self.agent_config_loaded = true;
             }
             ClientEvent::ModelsFetched(models) => {
                 let models = models
@@ -392,6 +438,7 @@ impl TuiModel {
             ClientEvent::ConciergeWelcomeDismissed => {
                 self.concierge
                     .reduce(crate::state::ConciergeAction::WelcomeDismissed);
+                self.send_daemon_command(DaemonCommand::RequestThread("concierge".to_string()));
             }
             ClientEvent::Error(message) => {
                 let busy = self.assistant_busy();
@@ -427,7 +474,6 @@ impl TuiModel {
                         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(details) {
                             if let Some(to) = parsed.get("to").and_then(|value| value.as_str()) {
                                 self.config.api_transport = to.to_string();
-                                self.save_settings();
                             }
                         }
                     }

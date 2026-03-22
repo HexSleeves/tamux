@@ -8,53 +8,20 @@ impl AgentEngine {
         let config = self.config.read().await.clone();
         let gw = &config.gateway;
 
-        // Read settings.json once and extract all gateway-related values
-        let (
-            slack_token,
-            telegram_token,
-            discord_token,
-            discord_channel_filter,
-            slack_channel_filter,
-        ) = if !gw.slack_token.is_empty()
-            || !gw.telegram_token.is_empty()
-            || !gw.discord_token.is_empty()
-        {
-            (
-                gw.slack_token.clone(),
-                gw.telegram_token.clone(),
-                gw.discord_token.clone(),
-                String::new(),
-                String::new(),
-            )
-        } else {
-            let settings_path = self
-                .data_dir
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .join("settings.json");
-            match tokio::fs::read_to_string(&settings_path).await {
-                Ok(raw) => {
-                    let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
-                    (
-                        read_setting_str(&v, "slackToken"),
-                        read_setting_str(&v, "telegramToken"),
-                        read_setting_str(&v, "discordToken"),
-                        read_setting_str(&v, "discordChannelFilter"),
-                        read_setting_str(&v, "slackChannelFilter"),
-                    )
-                }
-                Err(_) => (
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                ),
-            }
-        };
+        if !gw.enabled {
+            tracing::info!("gateway: disabled in config, skipping initialization");
+            return;
+        }
+        let slack_token = gw.slack_token.clone();
+        let telegram_token = gw.telegram_token.clone();
+        let discord_token = gw.discord_token.clone();
+        let discord_channel_filter = gw.discord_channel_filter.clone();
+        let slack_channel_filter = gw.slack_channel_filter.clone();
 
-        let has_any =
-            !slack_token.is_empty() || !telegram_token.is_empty() || !discord_token.is_empty();
+        let has_any = !slack_token.is_empty()
+            || !telegram_token.is_empty()
+            || !discord_token.is_empty()
+            || !gw.whatsapp_token.is_empty();
         if !has_any {
             tracing::info!("gateway: no platform tokens, polling disabled");
             return;
@@ -82,8 +49,15 @@ impl AgentEngine {
         let gw_config = GatewayConfig {
             enabled: true,
             slack_token,
+            slack_channel_filter,
             telegram_token,
+            telegram_allowed_chats: gw.telegram_allowed_chats.clone(),
             discord_token,
+            discord_channel_filter,
+            discord_allowed_users: gw.discord_allowed_users.clone(),
+            whatsapp_allowed_contacts: gw.whatsapp_allowed_contacts.clone(),
+            whatsapp_token: gw.whatsapp_token.clone(),
+            whatsapp_phone_id: gw.whatsapp_phone_id.clone(),
             command_prefix: gw.command_prefix.clone(),
         };
 
@@ -107,40 +81,35 @@ impl AgentEngine {
         tracing::info!("gateway: polling initialized in daemon");
     }
 
+    /// Reinitialize the gateway after a config change.
+    /// Clears existing state, then re-initializes from current config.
+    pub async fn reinit_gateway(&self) {
+        let config = self.config.read().await.clone();
+        let gw = &config.gateway;
+
+        if !gw.enabled {
+            tracing::info!("gateway: disabled by config, clearing state");
+            *self.gateway_state.lock().await = None;
+            *self.gateway_discord_channels.write().await = Vec::new();
+            *self.gateway_slack_channels.write().await = Vec::new();
+            return;
+        }
+
+        // Clear existing state before re-init so stale credentials don't persist
+        *self.gateway_state.lock().await = None;
+        *self.gateway_discord_channels.write().await = Vec::new();
+        *self.gateway_slack_channels.write().await = Vec::new();
+
+        self.init_gateway().await;
+    }
+
     /// Spawn the tamux-gateway process if gateway tokens are configured.
     pub async fn maybe_spawn_gateway(&self) {
         let config = self.config.read().await.clone();
         let gw = &config.gateway;
-
-        // Also try reading tokens from the frontend settings.json as fallback
-        let (slack_token, telegram_token, discord_token) = if !gw.slack_token.is_empty()
-            || !gw.telegram_token.is_empty()
-            || !gw.discord_token.is_empty()
-        {
-            (
-                gw.slack_token.clone(),
-                gw.telegram_token.clone(),
-                gw.discord_token.clone(),
-            )
-        } else {
-            // Read from ~/.tamux/settings.json (frontend persistence)
-            let settings_path = self
-                .data_dir
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .join("settings.json");
-            match tokio::fs::read_to_string(&settings_path).await {
-                Ok(raw) => {
-                    let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
-                    (
-                        read_setting_str(&v, "slackToken"),
-                        read_setting_str(&v, "telegramToken"),
-                        read_setting_str(&v, "discordToken"),
-                    )
-                }
-                Err(_) => (String::new(), String::new(), String::new()),
-            }
-        };
+        let slack_token = gw.slack_token.clone();
+        let telegram_token = gw.telegram_token.clone();
+        let discord_token = gw.discord_token.clone();
 
         if slack_token.is_empty() && telegram_token.is_empty() && discord_token.is_empty() {
             tracing::info!("gateway: no platform tokens configured, skipping");
@@ -413,7 +382,7 @@ impl AgentEngine {
         };
 
         // Use cached channel lists (populated by init_gateway) instead of
-        // re-reading settings.json from disk every poll cycle.
+        // repeatedly touching config storage every poll cycle.
         let discord_channels = self.gateway_discord_channels.read().await.clone();
         let slack_channels = self.gateway_slack_channels.read().await.clone();
 
@@ -520,7 +489,10 @@ impl AgentEngine {
                 if let Err(e) = self.send_message(None, &prompt).await {
                     tracing::error!(error = %e, "gateway: failed to send reset confirmation");
                 }
-                self.gateway_inflight_channels.lock().await.remove(&channel_key);
+                self.gateway_inflight_channels
+                    .lock()
+                    .await
+                    .remove(&channel_key);
                 continue;
             }
 
@@ -568,6 +540,72 @@ impl AgentEngine {
                 content: msg.content.clone(),
                 channel: msg.channel.clone(),
             });
+
+            // Triage via concierge — simple messages get a direct response,
+            // complex ones fall through to the full agent loop.
+            let triage = self
+                .concierge
+                .triage_gateway_message(
+                    &msg.platform,
+                    &msg.sender,
+                    &msg.content,
+                    &self.threads,
+                    &self.tasks,
+                )
+                .await;
+
+            match triage {
+                concierge::GatewayTriage::Simple(response_text) => {
+                    tracing::info!(
+                        platform = %msg.platform,
+                        sender = %msg.sender,
+                        "gateway: concierge handled simple message"
+                    );
+                    let auto_args = match msg.platform.as_str() {
+                        "Discord" => {
+                            serde_json::json!({"channel_id": msg.channel, "message": response_text})
+                        }
+                        "Slack" => {
+                            serde_json::json!({"channel": msg.channel, "message": response_text})
+                        }
+                        "Telegram" => {
+                            serde_json::json!({"chat_id": msg.channel, "message": response_text})
+                        }
+                        "WhatsApp" => {
+                            serde_json::json!({"phone": msg.channel, "message": response_text})
+                        }
+                        _ => serde_json::json!({"message": response_text}),
+                    };
+                    let auto_tool = ToolCall {
+                        id: format!("concierge_{}", uuid::Uuid::new_v4()),
+                        function: ToolFunction {
+                            name: reply_tool_name.to_string(),
+                            arguments: auto_args.to_string(),
+                        },
+                    };
+                    let _ = tool_executor::execute_tool(
+                        &auto_tool,
+                        self,
+                        "",
+                        None,
+                        &self.session_manager,
+                        None,
+                        &self.event_tx,
+                        &self.data_dir,
+                        &self.http_client,
+                        None,
+                    )
+                    .await;
+                    self.gateway_inflight_channels
+                        .lock()
+                        .await
+                        .remove(&channel_key);
+                    continue;
+                }
+                concierge::GatewayTriage::Complex => {
+                    // Fall through to full agent loop below
+                }
+            }
 
             // Use persistent thread per channel for conversation continuity
             let existing_thread = self.gateway_threads.read().await.get(&channel_key).cloned();
@@ -643,6 +681,7 @@ impl AgentEngine {
                                     &self.event_tx,
                                     &self.data_dir,
                                     &self.http_client,
+                                    None,
                                 )
                                 .await;
                             }
@@ -659,7 +698,10 @@ impl AgentEngine {
             }
 
             // Release per-channel processing lock
-            self.gateway_inflight_channels.lock().await.remove(&channel_key);
+            self.gateway_inflight_channels
+                .lock()
+                .await
+                .remove(&channel_key);
         }
     }
 }

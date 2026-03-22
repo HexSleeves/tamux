@@ -1,7 +1,7 @@
 use super::*;
 
 impl TuiModel {
-    fn paste_from_clipboard(&mut self) {
+    pub(super) fn paste_from_clipboard(&mut self) {
         if let Ok(text) = arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
             if !text.is_empty() {
                 self.handle_paste(text);
@@ -430,10 +430,24 @@ impl TuiModel {
                             self.config.api_key = args.to_string();
                             self.status_line =
                                 format!("API key set ({}...)", &args[..args.len().min(8)]);
-                            if let Ok(json) = serde_json::to_string(&serde_json::json!({
-                                "api_key": args,
-                            })) {
-                                self.send_daemon_command(DaemonCommand::SetConfigJson(json));
+                            if let Ok(value_json) =
+                                serde_json::to_string(&serde_json::Value::String(args.to_string()))
+                            {
+                                self.send_daemon_command(DaemonCommand::SetConfigItem {
+                                    key_path: "/api_key".to_string(),
+                                    value_json: value_json.clone(),
+                                });
+                                self.send_daemon_command(DaemonCommand::SetConfigItem {
+                                    key_path: format!(
+                                        "/providers/{}/api_key",
+                                        self.config.provider
+                                    ),
+                                    value_json: value_json.clone(),
+                                });
+                                self.send_daemon_command(DaemonCommand::SetConfigItem {
+                                    key_path: format!("/{}/api_key", self.config.provider),
+                                    value_json,
+                                });
                             }
                         } else if cmd == "attach" && !args.is_empty() {
                             self.attach_file(args);
@@ -464,6 +478,13 @@ impl TuiModel {
                         self.modal.reduce(modal::ModalAction::SetQuery(
                             self.input.buffer().to_string(),
                         ));
+                    }
+                }
+            }
+            KeyCode::Delete => {
+                if self.focus == FocusArea::Chat {
+                    if let Some(sel) = self.chat.selected_message() {
+                        self.delete_message(sel);
                     }
                 }
             }

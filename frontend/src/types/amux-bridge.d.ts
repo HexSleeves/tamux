@@ -239,6 +239,7 @@ declare global {
         dbListThreads?: () => Promise<unknown[]>;
         dbGetThread?: (id: string) => Promise<{ thread: unknown; messages: unknown[] }>;
         dbAddMessage?: (message: unknown) => Promise<boolean>;
+        dbDeleteMessage?: (threadId: string, messageId: string) => Promise<boolean>;
         dbListMessages?: (threadId: string, limit?: number | null) => Promise<unknown[]>;
         agentAddTask?: (payload: { title: string; description: string; priority?: string; command?: string | null; sessionId?: string | null; scheduledAt?: number | null; dependencies?: string[] }) => Promise<unknown>;
         agentListRuns?: () => Promise<AmuxAgentRun[] | unknown>;
@@ -288,7 +289,7 @@ declare global {
             accountId?: string;
             expiresAt?: number;
             source?: string;
-            apiKey?: string;
+            api_key?: string;
             error?: string;
         }>;
         openAICodexAuthLogin?: () => Promise<{
@@ -297,17 +298,17 @@ declare global {
             accountId?: string;
             expiresAt?: number;
             source?: string;
-            apiKey?: string;
+            api_key?: string;
             error?: string;
         }>;
         openAICodexAuthLogout?: () => Promise<{ ok: boolean }>;
-        agentFetchModels?: (providerId: string, baseUrl: string, apiKey: string) => Promise<{ models?: Array<{ id: string; name?: string; context_window?: number }>; error?: string } | unknown>;
+        agentFetchModels?: (providerId: string, base_url: string, api_key: string) => Promise<{ models?: Array<{ id: string; name?: string; context_window?: number }>; error?: string } | unknown>;
         agentGetProviderAuthStates?: () => Promise<unknown[]>;
-        agentLoginProvider?: (providerId: string, apiKey: string, baseUrl?: string) => Promise<unknown[] | { error?: string }>;
+        agentLoginProvider?: (providerId: string, api_key: string, base_url?: string) => Promise<unknown[] | { error?: string }>;
         agentLogoutProvider?: (providerId: string) => Promise<unknown[] | { error?: string }>;
-        agentValidateProvider?: (providerId: string, baseUrl: string, apiKey: string, authSource: string) => Promise<{ valid: boolean; error?: string; models?: unknown[] }>;
+        agentValidateProvider?: (providerId: string, base_url: string, api_key: string, auth_source: string) => Promise<{ valid: boolean; error?: string; models?: unknown[] }>;
         agentGetConfig?: () => Promise<unknown>;
-        agentSetConfig?: (config: unknown) => Promise<unknown>;
+        agentSetConfigItem?: (keyPath: string, value: unknown) => Promise<unknown>;
         agentSetSubAgent?: (subAgentJson: string) => Promise<{ ok?: boolean; error?: string }>;
         agentRemoveSubAgent?: (subAgentId: string) => Promise<{ ok?: boolean }>;
         agentListSubAgents?: () => Promise<unknown[]>;

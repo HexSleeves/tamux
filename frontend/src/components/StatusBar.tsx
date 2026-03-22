@@ -3,6 +3,7 @@ import { allLeafIds } from "../lib/bspTree";
 import { useWorkspaceStore } from "../lib/workspaceStore";
 import { useNotificationStore } from "../lib/notificationStore";
 import { useSettingsStore } from "../lib/settingsStore";
+import { useAgentStore } from "../lib/agentStore";
 import { useAgentMissionStore } from "../lib/agentMissionStore";
 import { InlineSystemMonitor } from "./status-bar/InlineSystemMonitor";
 import { StatusBarMissionStats } from "./status-bar/StatusBarMissionStats";
@@ -20,7 +21,7 @@ export function StatusBar() {
   const themeName = useSettingsStore((s) => s.settings.themeName);
   const sandboxEnabled = useSettingsStore((s) => s.settings.sandboxEnabled);
   const snapshotBackend = useSettingsStore((s) => s.settings.snapshotBackend);
-  const gatewayEnabled = useSettingsStore((s) => s.settings.gatewayEnabled);
+  const gatewayEnabled = useAgentStore((s) => s.agentSettings.gateway_enabled);
   const unreadCount = notifications.filter((n) => !n.isRead).length;
   const approvals = useAgentMissionStore((s) => s.approvals);
   const cognitiveEvents = useAgentMissionStore((s) => s.cognitiveEvents);

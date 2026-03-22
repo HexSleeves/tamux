@@ -24,6 +24,17 @@ impl TuiModel {
     pub fn handle_paste(&mut self, text: String) {
         if let Some(modal_kind) = self.modal.top() {
             match modal_kind {
+                modal::ModalKind::Settings if self.auth.login_target.is_some() => {
+                    for ch in text.chars() {
+                        match ch {
+                            '\r' | '\n' => {}
+                            other => self
+                                .auth
+                                .reduce(crate::state::auth::AuthAction::LoginKeyChar(other)),
+                        }
+                    }
+                    return;
+                }
                 modal::ModalKind::Settings if self.settings.is_editing() => {
                     let allow_newlines = self.settings.is_textarea();
                     for ch in text.chars() {

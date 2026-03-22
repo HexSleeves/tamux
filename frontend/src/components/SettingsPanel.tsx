@@ -1,8 +1,14 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useWorkspaceStore } from "../lib/workspaceStore";
 import { useSettingsStore } from "../lib/settingsStore";
 import { useAgentStore } from "../lib/agentStore";
 import { useAgentMissionStore } from "../lib/agentMissionStore";
+import {
+  buildDaemonAgentConfig,
+  diffDaemonConfigEntries,
+  getAgentBridge,
+  shouldUseDaemonRuntime,
+} from "../lib/agentDaemonConfig";
 import { AboutTab } from "./settings-panel/AboutTab";
 import { AppearanceTab } from "./settings-panel/AppearanceTab";
 import { AgentTab } from "./settings-panel/AgentTab";
@@ -40,8 +46,11 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
   const updateProfile = useSettingsStore((s) => s.updateProfile);
   const setDefaultProfile = useSettingsStore((s) => s.setDefaultProfile);
   const agentSettings = useAgentStore((s) => s.agentSettings);
+  const agentSettingsHydrated = useAgentStore((s) => s.agentSettingsHydrated);
   const updateAgentSetting = useAgentStore((s) => s.updateAgentSetting);
   const resetAgentSettings = useAgentStore((s) => s.resetAgentSettings);
+  const refreshAgentSettingsFromDaemon = useAgentStore((s) => s.refreshAgentSettingsFromDaemon);
+  const markAgentSettingsSynced = useAgentStore((s) => s.markAgentSettingsSynced);
   const approvals = useAgentMissionStore((s) => s.approvals);
   const snapshots = useAgentMissionStore((s) => s.snapshots);
 
@@ -49,6 +58,7 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [availableShells, setAvailableShells] = useState<{ name: string; path: string; args?: string }[]>([]);
   const [isFullscreen, setIsFullscreen] = useState(true);
+  const lastDaemonConfigJsonRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (open && systemFonts.length === 0) {
@@ -70,6 +80,49 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
       setIsFullscreen(true);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    void refreshAgentSettingsFromDaemon().then((ok) => {
+      if (!ok) return;
+      const latestAgentSettings = useAgentStore.getState().agentSettings;
+      lastDaemonConfigJsonRef.current = JSON.stringify(
+        buildDaemonAgentConfig(latestAgentSettings),
+      );
+    });
+  }, [open, refreshAgentSettingsFromDaemon]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (!agentSettingsHydrated) return;
+    if (!shouldUseDaemonRuntime(agentSettings.agent_backend)) return;
+    const bridge = getAgentBridge();
+    if (!bridge?.agentSetConfigItem) return;
+    const nextConfig = buildDaemonAgentConfig(agentSettings);
+    const nextConfigJson = JSON.stringify(nextConfig);
+    if (lastDaemonConfigJsonRef.current === null) return;
+    if (lastDaemonConfigJsonRef.current === nextConfigJson) return;
+    const previousConfig = JSON.parse(lastDaemonConfigJsonRef.current);
+    const changes = diffDaemonConfigEntries(previousConfig, nextConfig);
+    if (changes.length === 0) {
+      lastDaemonConfigJsonRef.current = nextConfigJson;
+      markAgentSettingsSynced();
+      return;
+    }
+    void Promise.all(
+      changes.map(({ keyPath, value }) => bridge.agentSetConfigItem?.(keyPath, value)),
+    ).then(() => {
+      lastDaemonConfigJsonRef.current = nextConfigJson;
+      markAgentSettingsSynced();
+    }).catch(() => {});
+  }, [
+    open,
+    settings,
+    agentSettings,
+    agentSettingsHydrated,
+    markAgentSettingsSynced,
+    settings,
+  ]);
 
   useEffect(() => {
     const handleOpenTab = (event: Event) => {
@@ -171,7 +224,7 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
             <SettingsMetric label="Theme" value={settings.themeName} />
-            <SettingsMetric label="Provider" value={agentSettings.activeProvider} />
+            <SettingsMetric label="Provider" value={agentSettings.active_provider} />
             <SettingsMetric label="Approvals" value={String(approvals.filter((entry) => entry.status === "pending").length)} />
             <SettingsMetric label="Snapshots" value={String(snapshots.length)} />
           </div>
@@ -219,7 +272,7 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
           {tab === "concierge" && <ConciergeSection />}
           {tab === "subagents" && <SubAgentsTab />}
           {tab === "gateway" && (
-            <GatewayTab settings={settings} updateSetting={updateSetting} />
+            <GatewayTab settings={agentSettings} updateSetting={updateAgentSetting} />
           )}
           {tab === "keyboard" && <KeyboardTab />}
           {tab === "about" && <AboutTab />}
@@ -237,4 +290,3 @@ function SettingsMetric({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-

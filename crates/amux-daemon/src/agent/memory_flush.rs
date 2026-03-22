@@ -134,6 +134,7 @@ impl AgentEngine {
                 &self.event_tx,
                 &self.data_dir,
                 &self.http_client,
+                None,
             )
             .await;
 

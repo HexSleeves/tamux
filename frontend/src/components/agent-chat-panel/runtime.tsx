@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { AGENT_PROVIDER_IDS, abortThreadStream, clearThreadAbortController, getEffectiveContextWindow, setThreadAbortController, useAgentStore } from "../../lib/agentStore";
+import { abortThreadStream, clearThreadAbortController, getEffectiveContextWindow, setThreadAbortController, useAgentStore } from "../../lib/agentStore";
 import type { AgentMessage, AgentThread, AgentTodoItem, AgentProviderConfig } from "../../lib/agentStore";
 import { prepareOpenAIRequest, sendChatCompletion } from "../../lib/agentClient";
 import type { AgentSettings } from "../../lib/agentStore";
@@ -8,13 +8,18 @@ import { buildHonchoContext, syncMessagesToHoncho } from "../../lib/honchoClient
 import { getAvailableTools, executeTool, getToolCapabilityDescription } from "../../lib/agentTools";
 import { useAgentMissionStore } from "../../lib/agentMissionStore";
 import { useNotificationStore } from "../../lib/notificationStore";
-import { useSettingsStore } from "../../lib/settingsStore";
 import { useSnippetStore } from "../../lib/snippetStore";
 import { getTerminalController } from "../../lib/terminalRegistry";
 import { useTranscriptStore } from "../../lib/transcriptStore";
 import { useWorkspaceStore } from "../../lib/workspaceStore";
 import { fetchAllThreadTodos, fetchThreadTodos } from "../../lib/agentTodos";
 import { fetchGoalRuns, goalRunSupportAvailable, normalizeGoalRun, startGoalRun, type GoalRun } from "../../lib/goalRuns";
+import {
+    buildDaemonAgentConfig,
+    diffDaemonConfigEntries,
+    getAgentBridge,
+    shouldUseDaemonRuntime,
+} from "../../lib/agentDaemonConfig";
 import { AgentExecutionGraph } from "../AgentExecutionGraph";
 import { AITrainingView } from "./AITrainingView";
 import { ChatView } from "./ChatView";
@@ -84,6 +89,7 @@ type AgentChatPanelRuntimeValue = {
     messagesEndRef: React.RefObject<HTMLDivElement | null>;
     inputRef: React.RefObject<HTMLTextAreaElement | null>;
     sendMessage: (text: string) => void;
+    deleteMessage: (threadId: string, messageId: string) => void;
     stopStreaming: (threadId?: string | null) => void;
     handleSend: () => void;
     handleKeyDown: (event: React.KeyboardEvent) => void;
@@ -106,10 +112,14 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
     const deleteThread = useAgentStore((s) => s.deleteThread);
     const setActiveThread = useAgentStore((s) => s.setActiveThread);
     const addMessage = useAgentStore((s) => s.addMessage);
+    const deleteMessage = useAgentStore((s) => s.deleteMessage);
     const updateLastAssistantMessage = useAgentStore((s) => s.updateLastAssistantMessage);
     const setThreadTodos = useAgentStore((s) => s.setThreadTodos);
     const setThreadDaemonId = useAgentStore((s) => s.setThreadDaemonId);
     const agentSettings = useAgentStore((s) => s.agentSettings);
+    const agentSettingsHydrated = useAgentStore((s) => s.agentSettingsHydrated);
+    const agentSettingsDirty = useAgentStore((s) => s.agentSettingsDirty);
+    const markAgentSettingsSynced = useAgentStore((s) => s.markAgentSettingsSynced);
     const updateAgentSetting = useAgentStore((s) => s.updateAgentSetting);
     const searchQuery = useAgentStore((s) => s.searchQuery);
     const setSearchQuery = useAgentStore((s) => s.setSearchQuery);
@@ -157,13 +167,13 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         setDaemonTodosByThread({});
         setGoalRunsForTrace([]);
         setChatBackView("threads");
-    }, [agentSettings.agentBackend]);
+    }, [agentSettings.agent_backend]);
 
     useEffect(() => {
-        if (agentSettings.agentBackend === "legacy") return;
+        if (!shouldUseDaemonRuntime(agentSettings.agent_backend)) return;
         void fetchAllThreadTodos().then(setDaemonTodosByThread);
         void fetchGoalRuns().then(setGoalRunsForTrace);
-    }, [agentSettings.agentBackend]);
+    }, [agentSettings.agent_backend]);
 
     useEffect(() => {
         if (!activeThread) {
@@ -186,83 +196,32 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
 
     // Sync provider config to daemon whenever settings change in daemon mode
     useEffect(() => {
-        // Sync config for daemon and external agent backends (not legacy)
-        if (agentSettings.agentBackend === "legacy") return;
-        const amux = (window as any).tamux ?? (window as any).amux;
-        if (!amux?.agentSetConfig) return;
+        if (!agentSettingsHydrated) return;
+        if (!agentSettingsDirty) return;
+        if (!shouldUseDaemonRuntime(agentSettings.agent_backend)) return;
+        const amux = getAgentBridge();
+        if (!amux?.agentGetConfig || !amux?.agentSetConfigItem) return;
 
-        const providerKey = agentSettings.activeProvider;
-        const pc = agentSettings[providerKey] as AgentProviderConfig | undefined;
-
-        // For external agents, provider config may not be needed (agent uses its own),
-        // but we still sync agent_backend and gateway settings
-        const isExternalAgent = agentSettings.agentBackend === "openclaw" || agentSettings.agentBackend === "hermes";
-
-        if (!isExternalAgent && !pc?.baseUrl) return;
-
-        const appSettings = useSettingsStore.getState().settings;
-        const providerConfigs = Object.fromEntries(
-            AGENT_PROVIDER_IDS.map((id) => {
-                const providerSettings = agentSettings[id] as AgentProviderConfig;
-                return [id, {
-                    base_url: providerSettings.baseUrl || "",
-                    model: providerSettings.model || "",
-                    api_key: providerSettings.apiKey || "",
-                    assistant_id: providerSettings.assistantId || "",
-                    api_transport: providerSettings.apiTransport || "chat_completions",
-                    auth_source: providerSettings.authSource || "api_key",
-                    context_window_tokens: getEffectiveContextWindow(id, providerSettings),
-                    reasoning_effort: agentSettings.reasoningEffort || "high",
-                }];
-            }),
-        );
-
-        void amux.agentSetConfig({
-            enabled: true,
-            agent_backend: agentSettings.agentBackend,
-            provider: providerKey,
-            base_url: pc?.baseUrl || "",
-            model: pc?.model || "",
-            api_key: pc?.apiKey || "",
-            assistant_id: pc?.assistantId || "",
-            api_transport: pc?.apiTransport || "chat_completions",
-            auth_source: pc?.authSource || "api_key",
-            reasoning_effort: agentSettings.reasoningEffort || "high",
-            system_prompt: agentSettings.systemPrompt,
-            auto_compact_context: agentSettings.autoCompactContext,
-            max_context_messages: agentSettings.maxContextMessages,
-            max_tool_loops: agentSettings.maxToolLoops,
-            max_retries: agentSettings.maxRetries,
-            retry_delay_ms: agentSettings.retryDelayMs,
-            context_window_tokens: pc ? getEffectiveContextWindow(providerKey, pc) : 128000,
-            context_budget_tokens: agentSettings.contextBudgetTokens,
-            compact_threshold_pct: agentSettings.compactThresholdPercent,
-            keep_recent_on_compact: agentSettings.keepRecentOnCompaction,
-            providers: providerConfigs,
-            tools: {
-                bash: agentSettings.enableBashTool,
-                web_search: agentSettings.enableWebSearchTool,
-                web_browse: agentSettings.enableWebBrowsingTool,
-                vision: agentSettings.enableVisionTool,
-                gateway_messaging: true,
-                file_operations: true,
-                system_info: true,
-            },
-            gateway: {
-                enabled: appSettings.gatewayEnabled,
-                slack_token: appSettings.slackToken || "",
-                telegram_token: appSettings.telegramToken || "",
-                discord_token: appSettings.discordToken || "",
-                command_prefix: appSettings.gatewayCommandPrefix || "!tamux",
-            },
-        });
-    }, [agentSettings]);
+        const nextConfig = buildDaemonAgentConfig(agentSettings);
+        void amux.agentGetConfig().then((current: any) => {
+            const changes = diffDaemonConfigEntries(current ?? {}, nextConfig);
+            if (changes.length === 0) {
+                markAgentSettingsSynced();
+                return;
+            }
+            return Promise.all(
+                changes.map(({ keyPath, value }) => amux.agentSetConfigItem?.(keyPath, value)),
+            ).then(() => {
+                markAgentSettingsSynced();
+            });
+        }).catch(() => {});
+    }, [agentSettings, agentSettingsHydrated, agentSettingsDirty, markAgentSettingsSynced]);
 
     // Subscribe to daemon agent events when in daemon or external agent mode
     useEffect(() => {
-        if (agentSettings.agentBackend === "legacy") return;
+        if (!shouldUseDaemonRuntime(agentSettings.agent_backend)) return;
 
-        const amux = (window as any).tamux ?? (window as any).amux;
+        const amux = getAgentBridge();
         if (!amux?.onAgentEvent) return;
 
         const unsubscribe = amux.onAgentEvent((event: any) => {
@@ -348,12 +307,12 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                         isCompactionSummary: false,
                     });
                     // Add new streaming assistant message for the next LLM turn
-                    const isExtAgent = agentSettings.agentBackend === "openclaw" || agentSettings.agentBackend === "hermes";
+                    const isExtAgent = agentSettings.agent_backend === "openclaw" || agentSettings.agent_backend === "hermes";
                     addMessage(tid, {
                         role: "assistant",
                         content: "",
-                        provider: isExtAgent ? agentSettings.agentBackend : agentSettings.activeProvider,
-                        model: isExtAgent ? agentSettings.agentBackend : ((agentSettings[agentSettings.activeProvider] as any)?.model || ""),
+                        provider: isExtAgent ? agentSettings.agent_backend : agentSettings.active_provider,
+                        model: isExtAgent ? agentSettings.agent_backend : ((agentSettings[agentSettings.active_provider] as any)?.model || ""),
                         inputTokens: 0,
                         outputTokens: 0,
                         totalTokens: 0,
@@ -684,7 +643,7 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         });
 
         return unsubscribe;
-    }, [agentSettings.agentBackend, addMessage, updateLastAssistantMessage, setActiveThread, setThreadDaemonId, setThreadTodos]);
+    }, [agentSettings.agent_backend, addMessage, updateLastAssistantMessage, setActiveThread, setThreadDaemonId, setThreadTodos]);
 
     const messages = storeMessages ?? EMPTY_MESSAGES;
     const todos = storeTodos ?? [];
@@ -769,12 +728,12 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                 if (provider && toTransport) {
                     const currentSettings = useAgentStore.getState().agentSettings;
                     const currentConfig = currentSettings[provider as keyof typeof currentSettings];
-                    if (currentConfig && typeof currentConfig === "object" && "baseUrl" in currentConfig) {
+                    if (currentConfig && typeof currentConfig === "object" && "base_url" in currentConfig) {
                         useAgentStore.getState().updateAgentSetting(
                             provider as keyof typeof currentSettings,
                             {
                                 ...(currentConfig as AgentProviderConfig),
-                                apiTransport: toTransport,
+                                api_transport: toTransport,
                             } as any,
                         );
                     }
@@ -799,8 +758,8 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         const targetThreadId = threadId ?? activeThreadId;
         if (!targetThreadId) return;
 
-        if (agentSettings.agentBackend !== "legacy") {
-            const amux = (window as any).tamux ?? (window as any).amux;
+        if (shouldUseDaemonRuntime(agentSettings.agent_backend)) {
+            const amux = getAgentBridge();
             const daemonTid = daemonThreadIdRef.current;
             if (daemonTid && amux?.agentStopStream) {
                 void amux.agentStopStream(daemonTid);
@@ -837,9 +796,8 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
     function sendMessage(text: string) {
         if (!text) return;
 
-        // Daemon mode (including external agents): send to daemon agent engine via IPC
-        if (agentSettings.agentBackend !== "legacy") {
-            const amux = (window as any).tamux ?? (window as any).amux;
+        if (shouldUseDaemonRuntime(agentSettings.agent_backend)) {
+            const amux = getAgentBridge();
             if (!amux?.agentSendMessage) {
                 sendMessageLegacy(text);
                 return;
@@ -911,12 +869,12 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                     isCompactionSummary: false,
                 });
 
-                const isExternalAgent = agentSettings.agentBackend === "openclaw" || agentSettings.agentBackend === "hermes";
+                const isExternalAgent = agentSettings.agent_backend === "openclaw" || agentSettings.agent_backend === "hermes";
                 addMessage(threadId, {
                     role: "assistant",
                     content: "",
-                    provider: isExternalAgent ? agentSettings.agentBackend : agentSettings.activeProvider,
-                    model: isExternalAgent ? agentSettings.agentBackend : ((agentSettings[agentSettings.activeProvider] as any)?.model || "unknown"),
+                    provider: isExternalAgent ? agentSettings.agent_backend : agentSettings.active_provider,
+                    model: isExternalAgent ? agentSettings.agent_backend : ((agentSettings[agentSettings.active_provider] as any)?.model || "unknown"),
                     inputTokens: 0,
                     outputTokens: 0,
                     totalTokens: 0,
@@ -1000,26 +958,25 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
             isCompactionSummary: false,
         });
 
-        const providerConfig = agentSettings[agentSettings.activeProvider] as AgentProviderConfig;
+        const providerConfig = agentSettings[agentSettings.active_provider] as AgentProviderConfig;
         const currentThreadId = threadId;
-        const gatewayEnabled = useSettingsStore.getState().settings.gatewayEnabled;
         const tools = getAvailableTools({
-            enableBashTool: agentSettings.enableBashTool,
-            gatewayEnabled,
-            enableVisionTool: agentSettings.enableVisionTool,
-            enableWebBrowsingTool: agentSettings.enableWebBrowsingTool,
+            enable_bash_tool: agentSettings.enable_bash_tool,
+            gateway_enabled: agentSettings.gateway_enabled,
+            enable_vision_tool: agentSettings.enable_vision_tool,
+            enable_web_browsing_tool: agentSettings.enable_web_browsing_tool,
         });
         const toolCapabilities = getToolCapabilityDescription(tools);
-        const systemPrompt = agentSettings.systemPrompt + toolCapabilities;
+        const system_prompt = agentSettings.system_prompt + toolCapabilities;
 
         stopStreaming(currentThreadId);
 
         addMessage(currentThreadId, {
             role: "assistant",
             content: "",
-            provider: agentSettings.activeProvider,
+            provider: agentSettings.active_provider,
             model: providerConfig.model,
-            apiTransport: providerConfig.apiTransport,
+            api_transport: providerConfig.api_transport,
             inputTokens: 0,
             outputTokens: 0,
             totalTokens: 0,
@@ -1031,15 +988,15 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         setThreadAbortController(currentThreadId, controller);
 
         (async () => {
-        const configuredToolLoops = Number(agentSettings.maxToolLoops ?? 0);
-        const maxToolLoops = Number.isFinite(configuredToolLoops) && configuredToolLoops > 0
+        const configuredToolLoops = Number(agentSettings.max_tool_loops ?? 0);
+        const max_tool_loops = Number.isFinite(configuredToolLoops) && configuredToolLoops > 0
                 ? Math.min(1000, configuredToolLoops)
                 : Infinity;
             let loopCount = 0;
             let allCurrentMessages = useAgentStore.getState().getThreadMessages(currentThreadId);
             await syncMessagesToHoncho(agentSettings, currentThreadId, allCurrentMessages);
             const getCurrentProviderConfig = () => (
-                useAgentStore.getState().agentSettings[agentSettings.activeProvider] as AgentProviderConfig
+                useAgentStore.getState().agentSettings[agentSettings.active_provider] as AgentProviderConfig
             );
             const updateThreadUpstreamState = (upstreamThreadId?: string) => {
                 useAgentStore.setState((state) => ({
@@ -1047,34 +1004,34 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                         ...thread,
                         upstreamThreadId: upstreamThreadId ?? null,
                         upstreamTransport: preparedRequest.transport,
-                        upstreamProvider: agentSettings.activeProvider,
+                        upstreamProvider: agentSettings.active_provider,
                         upstreamModel: getCurrentProviderConfig().model,
-                        upstreamAssistantId: getCurrentProviderConfig().assistantId || null,
+                        upstreamAssistantId: getCurrentProviderConfig().assistant_id || null,
                     } : thread),
                 }));
             };
             const getContextSettings = () => ({
                 ...useAgentStore.getState().agentSettings,
-                contextWindowTokens: getEffectiveContextWindow(
-                    agentSettings.activeProvider,
+                context_window_tokens: getEffectiveContextWindow(
+                    agentSettings.active_provider,
                     getCurrentProviderConfig(),
                 ),
             });
             let preparedRequest = prepareOpenAIRequest(
                 allCurrentMessages.slice(0, -1),
                 getContextSettings(),
-                agentSettings.activeProvider,
+                agentSettings.active_provider,
                 getCurrentProviderConfig().model,
-                getCurrentProviderConfig().apiTransport,
-                getCurrentProviderConfig().authSource,
-                getCurrentProviderConfig().assistantId,
+                getCurrentProviderConfig().api_transport,
+                getCurrentProviderConfig().auth_source,
+                getCurrentProviderConfig().assistant_id,
                 useAgentStore.getState().threads.find((entry) => entry.id === currentThreadId),
             );
             let lastPersistedReasoning: string | null = null;
             const honchoContext = await buildHonchoContext(agentSettings, currentThreadId, text);
             const effectiveSystemPrompt = honchoContext
-                ? `${systemPrompt}\n\nCross-session memory:\n${honchoContext}`
-                : systemPrompt;
+                ? `${system_prompt}\n\nCross-session memory:\n${honchoContext}`
+                : system_prompt;
 
             const persistReasoningTrace = (reasoning: string) => {
                 const normalized = reasoning.trim();
@@ -1096,7 +1053,7 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                 lastPersistedReasoning = normalized;
             };
 
-            while (loopCount < maxToolLoops) {
+            while (loopCount < max_tool_loops) {
                 loopCount += 1;
                 let accumulated = "";
                 let accumulatedReasoning = "";
@@ -1106,17 +1063,17 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
 
                 try {
                     for await (const chunk of sendChatCompletion({
-                        provider: agentSettings.activeProvider,
+                        provider: agentSettings.active_provider,
                         config: {
                             ...providerConfig,
-                            apiTransport: preparedRequest.transport,
+                            api_transport: preparedRequest.transport,
                         },
-                        systemPrompt: effectiveSystemPrompt,
+                        system_prompt: effectiveSystemPrompt,
                         messages: preparedRequest.messages,
-                        streaming: agentSettings.enableStreaming,
+                        streaming: agentSettings.enable_streaming,
                         signal: controller.signal,
                         tools: tools.length > 0 ? tools : undefined,
-                        reasoningEffort: agentSettings.reasoningEffort,
+                        reasoning_effort: agentSettings.reasoning_effort,
                         previousResponseId: preparedRequest.previousResponseId,
                         upstreamThreadId: preparedRequest.upstreamThreadId,
                     })) {
@@ -1151,7 +1108,7 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                                 videoTokens: chunk.videoTokens,
                                 cost: chunk.cost,
                                 tps,
-                                apiTransport: preparedRequest.transport,
+                                api_transport: preparedRequest.transport,
                                 responseId: chunk.responseId,
                             });
                             updateThreadUpstreamState(chunk.upstreamThreadId);
@@ -1164,9 +1121,9 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                         }
 
                         if (chunk.type === "transport_fallback") {
-                            useAgentStore.getState().updateAgentSetting(agentSettings.activeProvider as keyof ReturnType<typeof useAgentStore.getState>["agentSettings"], {
+                            useAgentStore.getState().updateAgentSetting(agentSettings.active_provider as keyof ReturnType<typeof useAgentStore.getState>["agentSettings"], {
                                 ...providerConfig,
-                                apiTransport: "chat_completions",
+                                api_transport: "chat_completions",
                             } as any);
                             preparedRequest = { ...preparedRequest, transport: "chat_completions", previousResponseId: undefined, upstreamThreadId: undefined };
                             updateThreadUpstreamState(undefined);
@@ -1191,7 +1148,7 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                                 videoTokens: chunk.videoTokens,
                                 cost: chunk.cost,
                                 toolCalls: roundToolCalls,
-                                apiTransport: preparedRequest.transport,
+                                api_transport: preparedRequest.transport,
                                 responseId: chunk.responseId,
                             });
                             updateThreadUpstreamState(chunk.upstreamThreadId);
@@ -1240,9 +1197,9 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                             addMessage(currentThreadId, {
                                 role: "assistant",
                                 content: "",
-                                provider: agentSettings.activeProvider,
+                                provider: agentSettings.active_provider,
                                 model: providerConfig.model,
-                                apiTransport: preparedRequest.transport,
+                                api_transport: preparedRequest.transport,
                                 inputTokens: 0,
                                 outputTokens: 0,
                                 totalTokens: 0,
@@ -1263,11 +1220,11 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                 preparedRequest = prepareOpenAIRequest(
                     allCurrentMessages.slice(0, -1),
                     getContextSettings(),
-                    agentSettings.activeProvider,
+                    agentSettings.active_provider,
                     getCurrentProviderConfig().model,
-                    getCurrentProviderConfig().apiTransport,
-                    getCurrentProviderConfig().authSource,
-                    getCurrentProviderConfig().assistantId,
+                    getCurrentProviderConfig().api_transport,
+                    getCurrentProviderConfig().auth_source,
+                    getCurrentProviderConfig().assistant_id,
                     useAgentStore.getState().threads.find((entry) => entry.id === currentThreadId),
                 );
             }
@@ -1278,7 +1235,7 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                 useAgentStore.getState().getThreadMessages(currentThreadId),
             );
 
-            if (Number.isFinite(maxToolLoops) && loopCount >= maxToolLoops) {
+            if (Number.isFinite(max_tool_loops) && loopCount >= max_tool_loops) {
                 updateLastAssistantMessage(currentThreadId, "(Tool execution limit reached)", false);
             }
 
@@ -1450,6 +1407,7 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         messagesEndRef,
         inputRef,
         sendMessage,
+        deleteMessage,
         stopStreaming,
         handleSend,
         handleKeyDown,
@@ -1494,6 +1452,7 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         usageMessageCount,
         filteredThreads,
         isStreamingResponse,
+        deleteMessage,
         startGoalRunFromPrompt,
         tabItems,
     ]);
@@ -1701,7 +1660,11 @@ export function AgentChatPanelChatSurface() {
             messagesEndRef={runtime.messagesEndRef}
             onSendMessage={runtime.sendMessage}
             onStopStreaming={() => runtime.stopStreaming(runtime.activeThreadId)}
-            onUpdateReasoningEffort={(v) => runtime.updateAgentSetting("reasoningEffort", v as AgentSettings["reasoningEffort"])}
+            onDeleteMessage={(messageId) => {
+                const tid = runtime.activeThreadId;
+                if (tid) runtime.deleteMessage(tid, messageId);
+            }}
+            onUpdateReasoningEffort={(v) => runtime.updateAgentSetting("reasoning_effort", v as AgentSettings["reasoning_effort"])}
             canStartGoalRun={runtime.canStartGoalRun}
             onStartGoalRun={runtime.startGoalRunFromPrompt}
         />

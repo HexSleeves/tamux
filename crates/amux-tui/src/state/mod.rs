@@ -56,7 +56,10 @@ pub enum DaemonCommand {
         base_url: String,
         api_key: String,
     },
-    SetConfigJson(String),
+    SetConfigItem {
+        key_path: String,
+        value_json: String,
+    },
     ControlGoalRun {
         goal_run_id: String,
         action: String,
@@ -85,6 +88,10 @@ pub enum DaemonCommand {
     SetConciergeConfig(String), // config_json
     RequestConciergeWelcome,
     DismissConciergeWelcome,
+    DeleteMessages {
+        thread_id: String,
+        message_ids: Vec<String>,
+    },
     RecordAttention {
         surface: String,
         thread_id: Option<String>,

@@ -20,59 +20,61 @@ pub(super) struct ParsedThreadMetadata {
 }
 
 pub(super) fn parse_message_metadata(metadata_json: Option<&str>) -> ParsedMessageMetadata {
-    let metadata =
-        metadata_json.and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok());
-    let get_str = |keys: &[&str]| -> Option<String> {
-        metadata.as_ref().and_then(|value| {
-            keys.iter()
-                .find_map(|key| value.get(*key).and_then(|entry| entry.as_str()))
-                .map(ToOwned::to_owned)
-        })
+    let metadata = metadata_json.and_then(|json| {
+        serde_json::from_str::<serde_json::Value>(json)
+            .ok()
+            .map(|mut value| {
+                super::config::normalize_config_keys_to_snake_case(&mut value);
+                value
+            })
+    });
+    let get_str = |key: &str| -> Option<String> {
+        metadata
+            .as_ref()
+            .and_then(|value| value.get(key).and_then(|entry| entry.as_str()))
+            .map(ToOwned::to_owned)
     };
     let api_transport = metadata
         .as_ref()
-        .and_then(|value| {
-            value
-                .get("api_transport")
-                .or_else(|| value.get("apiTransport"))
-        })
+        .and_then(|value| value.get("api_transport"))
         .and_then(|value| serde_json::from_value::<ApiTransport>(value.clone()).ok());
 
     ParsedMessageMetadata {
-        tool_call_id: get_str(&["tool_call_id", "toolCallId"]),
-        tool_name: get_str(&["tool_name", "toolName"]),
-        tool_arguments: get_str(&["tool_arguments", "toolArguments"]),
-        tool_status: get_str(&["tool_status", "toolStatus"]),
+        tool_call_id: get_str("tool_call_id"),
+        tool_name: get_str("tool_name"),
+        tool_arguments: get_str("tool_arguments"),
+        tool_status: get_str("tool_status"),
         api_transport,
-        response_id: get_str(&["response_id", "responseId"]),
+        response_id: get_str("response_id"),
     }
 }
 
 pub(super) fn parse_thread_metadata(metadata_json: Option<&str>) -> ParsedThreadMetadata {
-    let metadata =
-        metadata_json.and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok());
-    let get_str = |keys: &[&str]| -> Option<String> {
-        metadata.as_ref().and_then(|value| {
-            keys.iter()
-                .find_map(|key| value.get(*key).and_then(|entry| entry.as_str()))
-                .map(ToOwned::to_owned)
-        })
+    let metadata = metadata_json.and_then(|json| {
+        serde_json::from_str::<serde_json::Value>(json)
+            .ok()
+            .map(|mut value| {
+                super::config::normalize_config_keys_to_snake_case(&mut value);
+                value
+            })
+    });
+    let get_str = |key: &str| -> Option<String> {
+        metadata
+            .as_ref()
+            .and_then(|value| value.get(key).and_then(|entry| entry.as_str()))
+            .map(ToOwned::to_owned)
     };
     let upstream_transport = metadata
         .as_ref()
-        .and_then(|value| {
-            value
-                .get("upstream_transport")
-                .or_else(|| value.get("upstreamTransport"))
-        })
+        .and_then(|value| value.get("upstream_transport"))
         .and_then(|value| serde_json::from_value::<ApiTransport>(value.clone()).ok());
 
     ParsedThreadMetadata {
-        upstream_thread_id: get_str(&["upstream_thread_id", "upstreamThreadId"]),
+        upstream_thread_id: get_str("upstream_thread_id"),
         upstream_transport,
-        upstream_provider: get_str(&["upstream_provider", "upstreamProvider"]),
-        upstream_model: get_str(&["upstream_model", "upstreamModel"]),
-        upstream_assistant_id: get_str(&["upstream_assistant_id", "upstreamAssistantId"]),
+        upstream_provider: get_str("upstream_provider"),
+        upstream_model: get_str("upstream_model"),
+        upstream_assistant_id: get_str("upstream_assistant_id"),
     }
 }
 

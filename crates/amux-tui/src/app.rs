@@ -104,6 +104,7 @@ pub struct TuiModel {
 
     // Status
     connected: bool,
+    agent_config_loaded: bool,
     status_line: String,
     default_session_id: Option<String>,
     tick_counter: u64,
@@ -154,10 +155,14 @@ pub struct TuiModel {
     // Active mouse drag selection in the chat pane
     chat_drag_anchor: Option<Position>,
     chat_drag_current: Option<Position>,
+    chat_drag_anchor_point: Option<widgets::chat::SelectionPoint>,
+    chat_drag_current_point: Option<widgets::chat::SelectionPoint>,
 
     // Active mouse drag selection in the work-context preview pane
     work_context_drag_anchor: Option<Position>,
     work_context_drag_current: Option<Position>,
+    work_context_drag_anchor_point: Option<widgets::chat::SelectionPoint>,
+    work_context_drag_current_point: Option<widgets::chat::SelectionPoint>,
 }
 
 impl TuiModel {
@@ -185,6 +190,7 @@ impl TuiModel {
             daemon_cmd_tx,
             daemon_events_rx,
             connected: false,
+            agent_config_loaded: false,
             status_line: "Starting...".to_string(),
             default_session_id: None,
             tick_counter: 0,
@@ -213,8 +219,12 @@ impl TuiModel {
             cancelled_thread_id: None,
             chat_drag_anchor: None,
             chat_drag_current: None,
+            chat_drag_anchor_point: None,
+            chat_drag_current_point: None,
             work_context_drag_anchor: None,
             work_context_drag_current: None,
+            work_context_drag_anchor_point: None,
+            work_context_drag_current_point: None,
         }
     }
 
@@ -318,6 +328,8 @@ impl TuiModel {
         match action.action_type.as_str() {
             "continue_session" => {
                 if let Some(thread_id) = action.thread_id {
+                    self.concierge
+                        .reduce(crate::state::ConciergeAction::WelcomeDismissed);
                     self.send_daemon_command(DaemonCommand::DismissConciergeWelcome);
                     self.chat
                         .reduce(chat::ChatAction::SelectThread(thread_id.clone()));
@@ -327,6 +339,8 @@ impl TuiModel {
                 }
             }
             "start_new" => {
+                self.concierge
+                    .reduce(crate::state::ConciergeAction::WelcomeDismissed);
                 self.send_daemon_command(DaemonCommand::DismissConciergeWelcome);
                 self.chat.reduce(chat::ChatAction::NewThread);
                 self.main_pane_view = MainPaneView::Conversation;
@@ -339,6 +353,8 @@ impl TuiModel {
                     "Describe what you want to search in the concierge thread".to_string();
             }
             "dismiss" => {
+                self.concierge
+                    .reduce(crate::state::ConciergeAction::WelcomeDismissed);
                 self.send_daemon_command(DaemonCommand::DismissConciergeWelcome);
             }
             _ => {}

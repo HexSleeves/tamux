@@ -15,6 +15,7 @@ pub struct AgentThread {
 
 #[derive(Debug, Clone, Default)]
 pub struct AgentMessage {
+    pub id: Option<String>,
     pub role: MessageRole,
     pub content: String,
     pub reasoning: Option<String>,
@@ -58,6 +59,7 @@ pub enum ChatHitTarget {
     CopyMessage(usize),
     ResendMessage(usize),
     RegenerateMessage(usize),
+    DeleteMessage(usize),
 }
 
 // ── ToolCallStatus ────────────────────────────────────────────────────────────

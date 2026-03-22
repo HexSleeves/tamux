@@ -143,7 +143,7 @@ impl AgentEngine {
         confidence: f64,
     ) -> Result<serde_json::Value> {
         if !self.config.read().await.collaboration.enabled {
-            anyhow::bail!("collaboration moat is disabled in agent config");
+            anyhow::bail!("collaboration capability is disabled in agent config");
         }
         let mut collaboration = self.collaboration.write().await;
         let Some(session) = collaboration.get_mut(parent_task_id) else {
@@ -204,7 +204,7 @@ impl AgentEngine {
         task_id: &str,
     ) -> Result<serde_json::Value> {
         if !self.config.read().await.collaboration.enabled {
-            anyhow::bail!("collaboration moat is disabled in agent config");
+            anyhow::bail!("collaboration capability is disabled in agent config");
         }
         let collaboration = self.collaboration.read().await;
         let Some(session) = collaboration.get(parent_task_id) else {
@@ -229,7 +229,7 @@ impl AgentEngine {
         confidence: Option<f64>,
     ) -> Result<serde_json::Value> {
         if !self.config.read().await.collaboration.enabled {
-            anyhow::bail!("collaboration moat is disabled in agent config");
+            anyhow::bail!("collaboration capability is disabled in agent config");
         }
         let mut collaboration = self.collaboration.write().await;
         let Some(session) = collaboration.get_mut(parent_task_id) else {
@@ -270,7 +270,7 @@ impl AgentEngine {
         parent_task_id: Option<&str>,
     ) -> Result<serde_json::Value> {
         if !self.config.read().await.collaboration.enabled {
-            anyhow::bail!("collaboration moat is disabled in agent config");
+            anyhow::bail!("collaboration capability is disabled in agent config");
         }
         let collaboration = self.collaboration.read().await;
         if let Some(parent_task_id) = parent_task_id {

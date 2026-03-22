@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AgentProviderConfig, AgentProviderId, AgentSettings } from "../../lib/agentStore";
-import { getDefaultApiTransport, getDefaultAuthSource, getDefaultModelForProvider, getEffectiveContextWindow, getProviderDefinition, getProviderModels, getSupportedApiTransports, getSupportedAuthSources } from "../../lib/agentStore";
+import { getDefaultApiTransport, getDefaultAuthSource, getDefaultModelForProvider, getEffectiveContextWindow, getProviderApiType, getProviderDefinition, getProviderModels, getSupportedApiTransports, getSupportedAuthSources } from "../../lib/agentStore";
 import { addBtnStyle, ModelSelector, NumberInput, PasswordInput, Section, SelectInput, SettingRow, TextInput, Toggle, inputStyle, smallBtnStyle } from "./shared";
 
 export function AgentTab({
@@ -14,6 +14,16 @@ export function AgentTab({
     const [subscriptionAuthStatus, setSubscriptionAuthStatus] = useState<any>(null);
     const [subscriptionAuthBusy, setSubscriptionAuthBusy] = useState(false);
     const [subscriptionAuthUrl, setSubscriptionAuthUrl] = useState<string | null>(null);
+
+    const openSubscriptionAuthUrl = (url: string) => {
+        if (!url) return;
+        const opened = typeof window !== "undefined"
+            ? window.open(url, "_blank", "noopener,noreferrer")
+            : null;
+        if (opened) {
+            opened.opener = null;
+        }
+    };
 
     const providerOptions: { id: AgentProviderId; label: string }[] = [
         { id: "featherless", label: "Featherless" },
@@ -38,16 +48,24 @@ export function AgentTab({
         { id: "custom", label: "Custom" },
     ];
 
-    const providerConfig = settings[settings.activeProvider] as AgentProviderConfig;
-    const providerDef = getProviderDefinition(settings.activeProvider);
-    const supportedTransports = getSupportedApiTransports(settings.activeProvider);
-    const supportedAuthSources = getSupportedAuthSources(settings.activeProvider);
-    const isCustomProvider = settings.activeProvider === "custom";
-    const showUrlEditor = isCustomProvider || useCustomUrl || Boolean(providerConfig.baseUrl && providerConfig.baseUrl !== providerDef?.defaultBaseUrl);
-    const effectiveContextWindow = getEffectiveContextWindow(settings.activeProvider, providerConfig);
+    const providerConfig = settings[settings.active_provider] as AgentProviderConfig;
+    const providerDef = getProviderDefinition(settings.active_provider);
+    const providerApiType = getProviderApiType(
+        settings.active_provider,
+        providerConfig.model,
+        providerConfig.base_url,
+    );
+    const supportedTransports = getSupportedApiTransports(settings.active_provider);
+    const supportedAuthSources = getSupportedAuthSources(settings.active_provider);
+    const isCustomProvider = settings.active_provider === "custom";
+    const showUrlEditor = isCustomProvider || useCustomUrl || Boolean(providerConfig.base_url && providerConfig.base_url !== providerDef?.defaultBaseUrl);
+    const effectiveContextWindow = getEffectiveContextWindow(settings.active_provider, providerConfig);
+    const providerAuthenticated = providerConfig.auth_source === "chatgpt_subscription"
+        ? Boolean(subscriptionAuthStatus?.available)
+        : Boolean(providerConfig.api_key);
 
     useEffect(() => {
-        if (settings.activeProvider !== "openai" || providerConfig.authSource !== "chatgpt_subscription") {
+        if (settings.active_provider !== "openai" || providerConfig.auth_source !== "chatgpt_subscription") {
             setSubscriptionAuthStatus(null);
             setSubscriptionAuthUrl(null);
             return;
@@ -73,7 +91,7 @@ export function AgentTab({
         return () => {
             cancelled = true;
         };
-    }, [settings.activeProvider, providerConfig.authSource]);
+    }, [settings.active_provider, providerConfig.auth_source]);
 
     useEffect(() => {
         if (!subscriptionAuthUrl) {
@@ -107,7 +125,11 @@ export function AgentTab({
         try {
             const result = await amux.openAICodexAuthLogin();
             setSubscriptionAuthStatus(result);
-            setSubscriptionAuthUrl(typeof result?.authUrl === "string" ? result.authUrl : null);
+            const authUrl = typeof result?.authUrl === "string" ? result.authUrl : null;
+            setSubscriptionAuthUrl(authUrl);
+            if (authUrl) {
+                openSubscriptionAuthUrl(authUrl);
+            }
         } catch (error: any) {
             setSubscriptionAuthStatus({ ok: false, available: false, error: error?.message || "ChatGPT authentication failed" });
         } finally {
@@ -147,10 +169,10 @@ export function AgentTab({
             }}>
                 <span style={{
                     width: 8, height: 8, borderRadius: "50%",
-                    background: providerConfig.apiKey ? "#4ade80" : "#6b7280",
+                    background: providerAuthenticated ? "#4ade80" : "#6b7280",
                 }} />
                 <span style={{ fontSize: 12, fontWeight: 600 }}>
-                    Active: {providerOptions.find((p) => p.id === settings.activeProvider)?.label || settings.activeProvider}
+                    Active: {providerOptions.find((p) => p.id === settings.active_provider)?.label || settings.active_provider}
                 </span>
                 <span style={{
                     fontSize: 10,
@@ -176,25 +198,30 @@ export function AgentTab({
                     <Toggle value={settings.enabled} onChange={(value) => updateSetting("enabled", value)} />
                 </SettingRow>
                 <SettingRow label="Agent Backend">
-                    <select value={settings.agentBackend}
-                        onChange={(e) => updateSetting("agentBackend", e.target.value as "daemon" | "openclaw" | "hermes" | "legacy")}
+                    <select value={settings.agent_backend}
+                        onChange={(e) => updateSetting("agent_backend", e.target.value as "daemon" | "openclaw" | "hermes" | "legacy")}
                         style={inputStyle}>
                         <option value="daemon">tamux</option>
                         <option value="openclaw">OpenClaw</option>
                         <option value="hermes">Hermes</option>
-                        <option value="legacy">Legacy (frontend)</option>
+                        <option value="legacy">Legacy Fallback</option>
                     </select>
                 </SettingRow>
-                {(settings.agentBackend === "openclaw" || settings.agentBackend === "hermes") ? (
+                {settings.agent_backend === "legacy" ? (
                     <div style={{ marginTop: 4, marginBottom: 8, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
-                        <strong>{settings.agentBackend === "openclaw" ? "OpenClaw" : "Hermes"}</strong> will handle LLM inference, tools, memory, and gateway connections using its own infrastructure.
-                        {settings.agentBackend === "hermes" ? (
+                        Legacy now acts as a frontend-only fallback when the desktop daemon bridge is unavailable. When the bridge is present, chat and goal runs still use the daemon stack so memory, goals, and self-orchestrating capabilities stay consistent.
+                    </div>
+                ) : null}
+                {(settings.agent_backend === "openclaw" || settings.agent_backend === "hermes") ? (
+                    <div style={{ marginTop: 4, marginBottom: 8, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                        <strong>{settings.agent_backend === "openclaw" ? "OpenClaw" : "Hermes"}</strong> will handle LLM inference, tools, memory, and gateway connections using its own infrastructure.
+                        {settings.agent_backend === "hermes" ? (
                             <span> Config: <code>~/.hermes/config.yaml</code></span>
                         ) : (
                             <span> Config: <code>~/.openclaw/openclaw.json</code></span>
                         )}
                         <div style={{ marginTop: 6, padding: "4px 6px", background: "var(--bg-secondary)", borderRadius: 3 }}>
-                            <strong>tamux tools:</strong> Add <code>tamux-mcp</code> to {settings.agentBackend === "hermes" ? "Hermes" : "OpenClaw"}'s MCP config for terminal session access, command execution, history search, and more.
+                            <strong>tamux tools:</strong> Add <code>tamux-mcp</code> to {settings.agent_backend === "hermes" ? "Hermes" : "OpenClaw"}'s MCP config for terminal session access, command execution, history search, and more.
                             <div style={{ marginTop: 3, fontFamily: "monospace", fontSize: 10 }}>
                                 {`{"mcpServers": {"tamux": {"command": "tamux-mcp"}}}`}
                             </div>
@@ -202,40 +229,40 @@ export function AgentTab({
                     </div>
                 ) : null}
                 <SettingRow label="Agent Name">
-                    <TextInput value={settings.agentName} onChange={(value) => updateSetting("agentName", value)} />
+                    <TextInput value={settings.agent_name} onChange={(value) => updateSetting("agent_name", value)} />
                 </SettingRow>
                 <SettingRow label="Handler Prefix">
                     <TextInput value={settings.handler} onChange={(value) => updateSetting("handler", value)} />
                 </SettingRow>
                 <SettingRow label="System Prompt">
-                    <textarea value={settings.systemPrompt}
-                        onChange={(event) => updateSetting("systemPrompt", event.target.value)}
+                    <textarea value={settings.system_prompt}
+                        onChange={(event) => updateSetting("system_prompt", event.target.value)}
                         rows={4}
                         style={{ ...inputStyle, width: "100%", resize: "vertical", fontFamily: "inherit" }} />
                 </SettingRow>
             </Section>
 
-            {settings.agentBackend !== "openclaw" && settings.agentBackend !== "hermes" ? (
+            {settings.agent_backend !== "openclaw" && settings.agent_backend !== "hermes" ? (
                 <Section title="Provider">
                     <SettingRow label="Active Provider">
-                        <SelectInput value={settings.activeProvider}
+                        <SelectInput value={settings.active_provider}
                             options={providerOptions.map((provider) => provider.id)}
-                            onChange={(value) => updateSetting("activeProvider", value as AgentProviderId)} />
+                            onChange={(value) => updateSetting("active_provider", value as AgentProviderId)} />
                     </SettingRow>
 
                     <div style={{ marginTop: 6, marginBottom: 6, fontSize: 11, color: "var(--text-secondary)" }}>
-                        {providerOptions.find((provider) => provider.id === settings.activeProvider)?.label}
+                        {providerOptions.find((provider) => provider.id === settings.active_provider)?.label}
                     </div>
 
                     {showUrlEditor ? (
                         <SettingRow label="Base URL">
                             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                                <TextInput value={providerConfig.baseUrl}
-                                    onChange={(value) => updateSetting(settings.activeProvider, { ...providerConfig, baseUrl: value })}
+                                <TextInput value={providerConfig.base_url}
+                                    onChange={(value) => updateSetting(settings.active_provider, { ...providerConfig, base_url: value })}
                                     placeholder={providerDef?.defaultBaseUrl} />
                                 {!isCustomProvider && (
                                     <button type="button" onClick={() => {
-                                        updateSetting(settings.activeProvider, { ...providerConfig, baseUrl: "" });
+                                        updateSetting(settings.active_provider, { ...providerConfig, base_url: "" });
                                         setUseCustomUrl(false);
                                     }} style={smallBtnStyle} title="Reset to predefined default">
                                         Reset
@@ -267,36 +294,36 @@ export function AgentTab({
                     )}
                     <SettingRow label="Model">
                         <ModelSelector
-                            providerId={settings.activeProvider}
+                            providerId={settings.active_provider}
                             value={providerConfig.model}
-                            customName={providerConfig.customModelName}
-                            onChange={(value, customModelName) => updateSetting(settings.activeProvider, {
+                            customName={providerConfig.custom_model_name}
+                            onChange={(value, custom_model_name) => updateSetting(settings.active_provider, {
                                 ...providerConfig,
                                 model: value,
-                                customModelName: customModelName && customModelName !== value ? customModelName : "",
+                                custom_model_name: custom_model_name && custom_model_name !== value ? custom_model_name : "",
                             })}
-                            baseUrl={providerConfig.baseUrl || providerDef?.defaultBaseUrl}
-                            apiKey={providerConfig.apiKey}
-                            authSource={providerConfig.authSource}
+                            base_url={providerConfig.base_url || providerDef?.defaultBaseUrl}
+                            api_key={providerConfig.api_key}
+                            auth_source={providerConfig.auth_source}
                         />
                     </SettingRow>
-                    {providerDef?.apiType === "openai" ? (
+                    {providerApiType === "openai" ? (
                         <SettingRow label="Auth">
                             <select
-                                value={providerConfig.authSource}
-                                onChange={(e) => updateSetting(settings.activeProvider, {
+                                value={providerConfig.auth_source}
+                                onChange={(e) => updateSetting(settings.active_provider, {
                                     ...providerConfig,
-                                    authSource: supportedAuthSources.includes(e.target.value as any)
-                                      ? e.target.value as AgentProviderConfig["authSource"]
-                                      : getDefaultAuthSource(settings.activeProvider),
+                                    auth_source: supportedAuthSources.includes(e.target.value as any)
+                                      ? e.target.value as AgentProviderConfig["auth_source"]
+                                      : getDefaultAuthSource(settings.active_provider),
                                     model: (() => {
                                         const nextAuthSource = supportedAuthSources.includes(e.target.value as any)
-                                          ? e.target.value as AgentProviderConfig["authSource"]
-                                          : getDefaultAuthSource(settings.activeProvider);
-                                        const supportedModels = getProviderModels(settings.activeProvider, nextAuthSource);
+                                          ? e.target.value as AgentProviderConfig["auth_source"]
+                                          : getDefaultAuthSource(settings.active_provider);
+                                        const supportedModels = getProviderModels(settings.active_provider, nextAuthSource);
                                         return supportedModels.some((entry) => entry.id === providerConfig.model)
                                           ? providerConfig.model
-                                          : getDefaultModelForProvider(settings.activeProvider, nextAuthSource);
+                                          : getDefaultModelForProvider(settings.active_provider, nextAuthSource);
                                     })(),
                                 })}
                                 style={inputStyle}
@@ -309,14 +336,10 @@ export function AgentTab({
                             </select>
                         </SettingRow>
                     ) : null}
-                    {providerConfig.authSource === "api_key" ? (
-                        <SettingRow label="API Key">
-                            <PasswordInput value={providerConfig.apiKey}
-                                onChange={(value) => updateSetting(settings.activeProvider, { ...providerConfig, apiKey: value })}
-                                placeholder="Provider API key" />
-                        </SettingRow>
-                    ) : null}
-                    {settings.activeProvider === "openai" && providerConfig.authSource === "chatgpt_subscription" ? (
+                    <div style={{ marginTop: 2, marginBottom: 8, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                        Credentials are managed in the <strong>Auth</strong> tab. Keep provider selection, model, base URL, and transport here.
+                    </div>
+                    {settings.active_provider === "openai" && providerConfig.auth_source === "chatgpt_subscription" ? (
                         <SettingRow label="ChatGPT Auth">
                             <div style={{ display: "grid", gap: 6, width: "100%" }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
@@ -341,6 +364,10 @@ export function AgentTab({
                                             href={subscriptionAuthUrl}
                                             target="_blank"
                                             rel="noreferrer"
+                                            onClick={(event) => {
+                                                event.preventDefault();
+                                                openSubscriptionAuthUrl(subscriptionAuthUrl);
+                                            }}
                                             style={{ fontSize: 11, color: "var(--accent, #60a5fa)", wordBreak: "break-all", textAlign: "right" }}
                                         >
                                             {subscriptionAuthUrl}
@@ -348,7 +375,7 @@ export function AgentTab({
                                         <div style={{ display: "flex", gap: 6 }}>
                                             <button
                                                 type="button"
-                                                onClick={() => window.open(subscriptionAuthUrl, "_blank", "noopener,noreferrer")}
+                                                onClick={() => openSubscriptionAuthUrl(subscriptionAuthUrl)}
                                                 style={smallBtnStyle}
                                             >
                                                 Open Browser
@@ -378,15 +405,15 @@ export function AgentTab({
                             </div>
                         </SettingRow>
                     ) : null}
-                    {providerDef?.apiType === "openai" ? (
+                    {providerApiType === "openai" ? (
                         <SettingRow label="API Transport">
                             <select
-                                value={providerConfig.apiTransport}
-                                onChange={(e) => updateSetting(settings.activeProvider, {
+                                value={providerConfig.api_transport}
+                                onChange={(e) => updateSetting(settings.active_provider, {
                                     ...providerConfig,
-                                    apiTransport: supportedTransports.includes(e.target.value as any)
-                                      ? (e.target.value as AgentProviderConfig["apiTransport"])
-                                      : getDefaultApiTransport(settings.activeProvider),
+                                    api_transport: supportedTransports.includes(e.target.value as any)
+                                      ? (e.target.value as AgentProviderConfig["api_transport"])
+                                      : getDefaultApiTransport(settings.active_provider),
                                 })}
                                 style={inputStyle}
                             >
@@ -402,13 +429,13 @@ export function AgentTab({
                             </select>
                         </SettingRow>
                     ) : null}
-                    {providerConfig.apiTransport === "native_assistant" ? (
+                    {providerConfig.api_transport === "native_assistant" ? (
                         <SettingRow label="Assistant ID">
                             <TextInput
-                                value={providerConfig.assistantId}
-                                onChange={(value) => updateSetting(settings.activeProvider, {
+                                value={providerConfig.assistant_id}
+                                onChange={(value) => updateSetting(settings.active_provider, {
                                     ...providerConfig,
-                                    assistantId: value,
+                                    assistant_id: value,
                                 })}
                                 placeholder="asst_..."
                             />
@@ -417,13 +444,13 @@ export function AgentTab({
                     <SettingRow label="Context Length">
                         {isCustomProvider ? (
                             <NumberInput
-                                value={providerConfig.customContextWindowTokens ?? 128000}
+                                value={providerConfig.context_window_tokens ?? 128000}
                                 min={16000}
                                 max={2000000}
                                 step={1000}
-                                onChange={(value) => updateSetting(settings.activeProvider, {
+                                onChange={(value) => updateSetting(settings.active_provider, {
                                     ...providerConfig,
-                                    customContextWindowTokens: Math.max(1000, Math.trunc(value)),
+                                    context_window_tokens: Math.max(1000, Math.trunc(value)),
                                 })}
                             />
                         ) : (
@@ -442,8 +469,8 @@ export function AgentTab({
                         )}
                     </SettingRow>
                     <SettingRow label="Reasoning Effort">
-                        <select value={settings.reasoningEffort}
-                            onChange={(e) => updateSetting("reasoningEffort", e.target.value as AgentSettings["reasoningEffort"])}
+                        <select value={settings.reasoning_effort}
+                            onChange={(e) => updateSetting("reasoning_effort", e.target.value as AgentSettings["reasoning_effort"])}
                             style={inputStyle}>
                             <option value="none">None</option>
                             <option value="minimal">Minimal</option>
@@ -458,46 +485,46 @@ export function AgentTab({
 
             <Section title="Tools">
                 <SettingRow label="Bash Tool">
-                    <Toggle value={settings.enableBashTool} onChange={(value) => updateSetting("enableBashTool", value)} />
+                    <Toggle value={settings.enable_bash_tool} onChange={(value) => updateSetting("enable_bash_tool", value)} />
                 </SettingRow>
                 <SettingRow label="Vision Tool">
-                    <Toggle value={settings.enableVisionTool} onChange={(value) => updateSetting("enableVisionTool", value)} />
+                    <Toggle value={settings.enable_vision_tool} onChange={(value) => updateSetting("enable_vision_tool", value)} />
                 </SettingRow>
                 <SettingRow label="Web Browsing Tool">
-                    <Toggle value={settings.enableWebBrowsingTool} onChange={(value) => updateSetting("enableWebBrowsingTool", value)} />
+                    <Toggle value={settings.enable_web_browsing_tool} onChange={(value) => updateSetting("enable_web_browsing_tool", value)} />
                 </SettingRow>
                 <SettingRow label="Bash Timeout (s)">
-                    <NumberInput value={settings.bashTimeoutSeconds} min={5} max={300}
-                        onChange={(value) => updateSetting("bashTimeoutSeconds", value)} />
+                    <NumberInput value={settings.bash_timeout_seconds} min={5} max={300}
+                        onChange={(value) => updateSetting("bash_timeout_seconds", value)} />
                 </SettingRow>
                 <SettingRow label="Web Search Tool">
-                    <Toggle value={settings.enableWebSearchTool} onChange={(value) => updateSetting("enableWebSearchTool", value)} />
+                    <Toggle value={settings.enable_web_search_tool} onChange={(value) => updateSetting("enable_web_search_tool", value)} />
                 </SettingRow>
-                {settings.enableWebSearchTool ? (
+                {settings.enable_web_search_tool ? (
                     <>
                         <SettingRow label="Search Provider">
                             <SelectInput
-                                value={settings.searchToolProvider}
+                                value={settings.search_provider}
                                 options={["none", "firecrawl", "exa", "tavily"]}
-                                onChange={(value) => updateSetting("searchToolProvider", value as "none" | "firecrawl" | "exa" | "tavily")}
+                                onChange={(value) => updateSetting("search_provider", value as "none" | "firecrawl" | "exa" | "tavily")}
                             />
                         </SettingRow>
                         <SettingRow label="Firecrawl API Key">
-                            <PasswordInput value={settings.firecrawlApiKey} onChange={(value) => updateSetting("firecrawlApiKey", value)} placeholder="fc-..." />
+                            <PasswordInput value={settings.firecrawl_api_key} onChange={(value) => updateSetting("firecrawl_api_key", value)} placeholder="fc-..." />
                         </SettingRow>
                         <SettingRow label="Exa API Key">
-                            <PasswordInput value={settings.exaApiKey} onChange={(value) => updateSetting("exaApiKey", value)} placeholder="exa_..." />
+                            <PasswordInput value={settings.exa_api_key} onChange={(value) => updateSetting("exa_api_key", value)} placeholder="exa_..." />
                         </SettingRow>
                         <SettingRow label="Tavily API Key">
-                            <PasswordInput value={settings.tavilyApiKey} onChange={(value) => updateSetting("tavilyApiKey", value)} placeholder="tvly-..." />
+                            <PasswordInput value={settings.tavily_api_key} onChange={(value) => updateSetting("tavily_api_key", value)} placeholder="tvly-..." />
                         </SettingRow>
                         <SettingRow label="Search Max Results">
-                            <NumberInput value={settings.searchMaxResults} min={1} max={20}
-                                onChange={(value) => updateSetting("searchMaxResults", value)} />
+                            <NumberInput value={settings.search_max_results} min={1} max={20}
+                                onChange={(value) => updateSetting("search_max_results", value)} />
                         </SettingRow>
                         <SettingRow label="Search Timeout (s)">
-                            <NumberInput value={settings.searchTimeoutSeconds} min={3} max={120}
-                                onChange={(value) => updateSetting("searchTimeoutSeconds", value)} />
+                            <NumberInput value={settings.search_timeout_secs} min={3} max={120}
+                                onChange={(value) => updateSetting("search_timeout_secs", value)} />
                         </SettingRow>
                     </>
                 ) : null}
@@ -505,24 +532,24 @@ export function AgentTab({
 
             <Section title="Chat">
                 <SettingRow label="Streaming">
-                    <Toggle value={settings.enableStreaming} onChange={(value) => updateSetting("enableStreaming", value)} />
+                    <Toggle value={settings.enable_streaming} onChange={(value) => updateSetting("enable_streaming", value)} />
                 </SettingRow>
                 <SettingRow label="Conversation Memory">
-                    <Toggle value={settings.enableConversationMemory} onChange={(value) => updateSetting("enableConversationMemory", value)} />
+                    <Toggle value={settings.enable_conversation_memory} onChange={(value) => updateSetting("enable_conversation_memory", value)} />
                 </SettingRow>
                 <SettingRow label="Honcho Memory">
-                    <Toggle value={settings.enableHonchoMemory} onChange={(value) => updateSetting("enableHonchoMemory", value)} />
+                    <Toggle value={settings.enable_honcho_memory} onChange={(value) => updateSetting("enable_honcho_memory", value)} />
                 </SettingRow>
-                {settings.enableHonchoMemory ? (
+                {settings.enable_honcho_memory ? (
                     <>
                         <SettingRow label="Honcho API Key">
-                            <PasswordInput value={settings.honchoApiKey} onChange={(value) => updateSetting("honchoApiKey", value)} placeholder="hc_..." />
+                            <PasswordInput value={settings.honcho_api_key} onChange={(value) => updateSetting("honcho_api_key", value)} placeholder="hc_..." />
                         </SettingRow>
                         <SettingRow label="Honcho Base URL">
-                            <TextInput value={settings.honchoBaseUrl} onChange={(value) => updateSetting("honchoBaseUrl", value)} placeholder="Leave blank for managed cloud" />
+                            <TextInput value={settings.honcho_base_url} onChange={(value) => updateSetting("honcho_base_url", value)} placeholder="Leave blank for managed cloud" />
                         </SettingRow>
                         <SettingRow label="Honcho Workspace">
-                            <TextInput value={settings.honchoWorkspaceId} onChange={(value) => updateSetting("honchoWorkspaceId", value)} placeholder="tamux" />
+                            <TextInput value={settings.honcho_workspace_id} onChange={(value) => updateSetting("honcho_workspace_id", value)} placeholder="tamux" />
                         </SettingRow>
                     </>
                 ) : null}
@@ -535,37 +562,109 @@ export function AgentTab({
                 </SettingRow>
             </Section>
 
+            <Section title="Self-Orchestrating">
+                <SettingRow label="Anticipatory Support">
+                    <Toggle value={settings.anticipatory_enabled} onChange={(value) => updateSetting("anticipatory_enabled", value)} />
+                </SettingRow>
+                {settings.anticipatory_enabled ? (
+                    <>
+                        <SettingRow label="Morning Brief">
+                            <Toggle value={settings.anticipatory_morning_brief} onChange={(value) => updateSetting("anticipatory_morning_brief", value)} />
+                        </SettingRow>
+                        <SettingRow label="Predictive Hydration">
+                            <Toggle value={settings.anticipatory_predictive_hydration} onChange={(value) => updateSetting("anticipatory_predictive_hydration", value)} />
+                        </SettingRow>
+                        <SettingRow label="Stuck Detection">
+                            <Toggle value={settings.anticipatory_stuck_detection} onChange={(value) => updateSetting("anticipatory_stuck_detection", value)} />
+                        </SettingRow>
+                    </>
+                ) : null}
+                <SettingRow label="Operator Model">
+                    <Toggle value={settings.operator_model_enabled} onChange={(value) => updateSetting("operator_model_enabled", value)} />
+                </SettingRow>
+                {settings.operator_model_enabled ? (
+                    <>
+                        <SettingRow label="Message Statistics">
+                            <Toggle value={settings.operator_model_allow_message_statistics} onChange={(value) => updateSetting("operator_model_allow_message_statistics", value)} />
+                        </SettingRow>
+                        <SettingRow label="Approval Learning">
+                            <Toggle value={settings.operator_model_allow_approval_learning} onChange={(value) => updateSetting("operator_model_allow_approval_learning", value)} />
+                        </SettingRow>
+                        <SettingRow label="Attention Tracking">
+                            <Toggle value={settings.operator_model_allow_attention_tracking} onChange={(value) => updateSetting("operator_model_allow_attention_tracking", value)} />
+                        </SettingRow>
+                        <SettingRow label="Implicit Feedback">
+                            <Toggle value={settings.operator_model_allow_implicit_feedback} onChange={(value) => updateSetting("operator_model_allow_implicit_feedback", value)} />
+                        </SettingRow>
+                    </>
+                ) : null}
+                <SettingRow label="Collaboration">
+                    <Toggle value={settings.collaboration_enabled} onChange={(value) => updateSetting("collaboration_enabled", value)} />
+                </SettingRow>
+                <SettingRow label="Compliance Mode">
+                    <select value={settings.compliance_mode}
+                        onChange={(e) => updateSetting("compliance_mode", e.target.value as AgentSettings["compliance_mode"])}
+                        style={inputStyle}>
+                        <option value="standard">Standard</option>
+                        <option value="soc2">SOC 2</option>
+                        <option value="hipaa">HIPAA</option>
+                        <option value="fedramp">FedRAMP</option>
+                    </select>
+                </SettingRow>
+                <SettingRow label="Retention Days">
+                    <NumberInput value={settings.compliance_retention_days} min={1} max={3650}
+                        onChange={(value) => updateSetting("compliance_retention_days", value)} />
+                </SettingRow>
+                <SettingRow label="Sign All Events">
+                    <Toggle value={settings.compliance_sign_all_events} onChange={(value) => updateSetting("compliance_sign_all_events", value)} />
+                </SettingRow>
+                <SettingRow label="Tool Synthesis">
+                    <Toggle value={settings.tool_synthesis_enabled} onChange={(value) => updateSetting("tool_synthesis_enabled", value)} />
+                </SettingRow>
+                {settings.tool_synthesis_enabled ? (
+                    <>
+                        <SettingRow label="Require Activation">
+                            <Toggle value={settings.tool_synthesis_require_activation} onChange={(value) => updateSetting("tool_synthesis_require_activation", value)} />
+                        </SettingRow>
+                        <SettingRow label="Generated Tool Limit">
+                            <NumberInput value={settings.tool_synthesis_max_generated_tools} min={1} max={200}
+                                onChange={(value) => updateSetting("tool_synthesis_max_generated_tools", value)} />
+                        </SettingRow>
+                    </>
+                ) : null}
+            </Section>
+
             <Section title="Context Compaction">
                 <SettingRow label="Auto Compact">
-                    <Toggle value={settings.autoCompactContext} onChange={(value) => updateSetting("autoCompactContext", value)} />
+                    <Toggle value={settings.auto_compact_context} onChange={(value) => updateSetting("auto_compact_context", value)} />
                 </SettingRow>
                 <SettingRow label="Max Context Messages">
-                    <NumberInput value={settings.maxContextMessages} min={10} max={500}
-                        onChange={(value) => updateSetting("maxContextMessages", value)} />
+                    <NumberInput value={settings.max_context_messages} min={10} max={500}
+                        onChange={(value) => updateSetting("max_context_messages", value)} />
                 </SettingRow>
                 <SettingRow label="Max Tool Loops">
-                    <NumberInput value={settings.maxToolLoops} min={0} max={1000}
-                        onChange={(value) => updateSetting("maxToolLoops", value)} />
+                    <NumberInput value={settings.max_tool_loops} min={0} max={1000}
+                        onChange={(value) => updateSetting("max_tool_loops", value)} />
                 </SettingRow>
                 <SettingRow label="429 Max Retries">
-                    <NumberInput value={settings.maxRetries} min={0} max={10}
-                        onChange={(value) => updateSetting("maxRetries", value)} />
+                    <NumberInput value={settings.max_retries} min={0} max={10}
+                        onChange={(value) => updateSetting("max_retries", value)} />
                 </SettingRow>
                 <SettingRow label="429 Retry Delay (ms)">
-                    <NumberInput value={settings.retryDelayMs} min={100} max={60000} step={100}
-                        onChange={(value) => updateSetting("retryDelayMs", value)} />
+                    <NumberInput value={settings.retry_delay_ms} min={100} max={60000} step={100}
+                        onChange={(value) => updateSetting("retry_delay_ms", value)} />
                 </SettingRow>
                 <SettingRow label="Budget Tokens">
-                    <NumberInput value={settings.contextBudgetTokens} min={10000} max={500000} step={10000}
-                        onChange={(value) => updateSetting("contextBudgetTokens", value)} />
+                    <NumberInput value={settings.context_budget_tokens} min={10000} max={500000} step={10000}
+                        onChange={(value) => updateSetting("context_budget_tokens", value)} />
                 </SettingRow>
                 <SettingRow label="Compact Threshold %">
-                    <NumberInput value={settings.compactThresholdPercent} min={50} max={95}
-                        onChange={(value) => updateSetting("compactThresholdPercent", value)} />
+                    <NumberInput value={settings.compact_threshold_pct} min={50} max={95}
+                        onChange={(value) => updateSetting("compact_threshold_pct", value)} />
                 </SettingRow>
                 <SettingRow label="Keep Recent on Compact">
-                    <NumberInput value={settings.keepRecentOnCompaction} min={1} max={50}
-                        onChange={(value) => updateSetting("keepRecentOnCompaction", value)} />
+                    <NumberInput value={settings.keep_recent_on_compact} min={1} max={50}
+                        onChange={(value) => updateSetting("keep_recent_on_compact", value)} />
                 </SettingRow>
             </Section>
 

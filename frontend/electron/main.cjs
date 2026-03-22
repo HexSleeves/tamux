@@ -1010,6 +1010,7 @@ async function loginOpenAICodexInteractive() {
         error: null,
         startedAt: Date.now(),
     };
+    void shell.openExternal(authUrl.toString()).catch(() => {});
 
     void (async () => {
         try {
@@ -3311,6 +3312,24 @@ async function getSystemMonitorSnapshot(_event, options = {}) {
     };
 }
 
+function escapeJsonPointerSegment(segment) {
+    return String(segment).replace(/~/g, "~0").replace(/\//g, "~1");
+}
+
+function flattenConfigEntries(value, pointer = "", entries = []) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+        const keys = Object.keys(value);
+        if (keys.length > 0) {
+            for (const key of keys) {
+                flattenConfigEntries(value[key], `${pointer}/${escapeJsonPointerSegment(key)}`, entries);
+            }
+            return entries;
+        }
+    }
+    entries.push([pointer, value]);
+    return entries;
+}
+
 function createWindow() {
     const { width: screenW, height: screenH } = screen.getPrimaryDisplay().workAreaSize;
     const useNativeFrame = process.platform === 'win32';
@@ -3513,6 +3532,18 @@ function registerIpcHandlers() {
     ipcMain.handle('db-add-message', async (_event, message) => {
         try {
             await sendDbAckCommand({ type: 'add-agent-message', message_json: JSON.stringify(message ?? {}) });
+            return true;
+        } catch {
+            return false;
+        }
+    });
+    ipcMain.handle('db-delete-message', async (_event, threadId, messageId) => {
+        try {
+            await sendDbAckCommand({
+                type: 'delete-agent-messages',
+                thread_id: threadId,
+                message_ids: [messageId],
+            });
             return true;
         } catch {
             return false;
@@ -3866,14 +3897,14 @@ function registerIpcHandlers() {
     }
 
     async function handleAgentGatewaySend(event) {
-        // Read settings to get gateway tokens (settings are nested under "settings" key)
-        const settingsPath = path.join(getTamuxDataDir(), 'settings.json');
-        let settings = {};
+        let gateway = {};
         try {
-            const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-            settings = parsed.settings ?? parsed;
-        } catch {
-            logToFile('warn', 'agent gateway: cannot read settings for tokens');
+            const config = await sendAgentQuery({ type: 'get-config' }, 'config');
+            gateway = config?.gateway ?? {};
+        } catch (err) {
+            logToFile('warn', 'agent gateway: cannot load daemon gateway config', {
+                error: err?.message ?? String(err),
+            });
             return;
         }
 
@@ -3881,19 +3912,19 @@ function registerIpcHandlers() {
 
         switch (platform) {
             case 'slack': {
-                const token = settings.slackToken || '';
+                const token = gateway.slack_token || '';
                 if (!token) { logToFile('warn', 'agent gateway: no Slack token configured'); return; }
                 await sendSlackMessage(null, { token, channelId: target, message });
                 break;
             }
             case 'discord': {
-                const token = settings.discordToken || '';
+                const token = gateway.discord_token || '';
                 if (!token) { logToFile('warn', 'agent gateway: no Discord token configured'); return; }
                 await sendDiscordMessage(null, { token, channelId: target, message });
                 break;
             }
             case 'telegram': {
-                const token = settings.telegramToken || '';
+                const token = gateway.telegram_token || '';
                 if (!token) { logToFile('warn', 'agent gateway: no Telegram token configured'); return; }
                 await sendTelegramMessage(null, { token, chatId: target, message });
                 break;
@@ -4184,8 +4215,8 @@ function registerIpcHandlers() {
     ipcMain.handle('agent-get-concierge-config', async () => {
         try {
             return await sendAgentQuery({ type: 'get-concierge-config' }, 'concierge-config');
-        } catch {
-            return {};
+        } catch (err) {
+            throw err;
         }
     });
 
@@ -4219,14 +4250,18 @@ function registerIpcHandlers() {
     ipcMain.handle('agent-get-config', async () => {
         try {
             return await sendAgentQuery({ type: 'get-config' }, 'config');
-        } catch {
-            return {};
+        } catch (err) {
+            throw err;
         }
     });
 
-    ipcMain.handle('agent-set-config', async (_event, config) => {
+    ipcMain.handle('agent-set-config-item', async (_event, keyPath, value) => {
         try {
-            sendAgentCommand({ type: 'set-config', config_json: JSON.stringify(config) });
+            sendAgentCommand({
+                type: 'set-config-item',
+                key_path: keyPath,
+                value_json: JSON.stringify(value),
+            });
             return { ok: true };
         } catch (err) {
             return { ok: false, error: err.message };
@@ -4236,8 +4271,8 @@ function registerIpcHandlers() {
     ipcMain.handle('agent-get-provider-auth-states', async () => {
         try {
             return await sendAgentQuery({ type: 'get-provider-auth-states' }, 'provider-auth-states');
-        } catch {
-            return [];
+        } catch (err) {
+            throw err;
         }
     });
 
@@ -4424,38 +4459,31 @@ app.whenReady().then(async () => {
         };
     }
 
-    // Auto-connect gateway platforms when tokens are configured.
-    // In legacy mode, the renderer calls ensure*Connected. In daemon
-    // mode, nothing does — so we do it here on startup.
     try {
-        const settingsPath = path.join(getTamuxDataDir(), 'settings.json');
-        if (fs.existsSync(settingsPath)) {
-            const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-            const settings = parsed.settings ?? parsed;
-
-            if (settings.gatewayEnabled) {
-                if (settings.slackToken) {
-                    ensureSlackConnected(null, { token: settings.slackToken })
-                        .then((r) => logToFile('info', 'auto-connected Slack', r))
-                        .catch((e) => logToFile('warn', 'Slack auto-connect failed', { error: e.message }));
-                }
-                if (settings.discordToken) {
-                    ensureDiscordConnected(null, {
-                        token: settings.discordToken,
-                        channelFilter: settings.discordChannelFilter || '',
-                        allowedUsers: settings.discordAllowedUsers || '',
-                    })
-                        .then((r) => logToFile('info', 'auto-connected Discord', r))
-                        .catch((e) => logToFile('warn', 'Discord auto-connect failed', { error: e.message }));
-                }
-                if (settings.telegramToken) {
-                    ensureTelegramConnected(null, {
-                        token: settings.telegramToken,
-                        allowedChats: settings.telegramAllowedChats || '',
-                    })
-                        .then((r) => logToFile('info', 'auto-connected Telegram', r))
-                        .catch((e) => logToFile('warn', 'Telegram auto-connect failed', { error: e.message }));
-                }
+        const config = await sendAgentQuery({ type: 'get-config' }, 'config').catch(() => null);
+        const gateway = config?.gateway ?? null;
+        if (gateway?.enabled) {
+            if (gateway.slack_token) {
+                ensureSlackConnected(null, { token: gateway.slack_token })
+                    .then((r) => logToFile('info', 'auto-connected Slack', r))
+                    .catch((e) => logToFile('warn', 'Slack auto-connect failed', { error: e.message }));
+            }
+            if (gateway.discord_token) {
+                ensureDiscordConnected(null, {
+                    token: gateway.discord_token,
+                    channelFilter: gateway.discord_channel_filter || '',
+                    allowedUsers: gateway.discord_allowed_users || '',
+                })
+                    .then((r) => logToFile('info', 'auto-connected Discord', r))
+                    .catch((e) => logToFile('warn', 'Discord auto-connect failed', { error: e.message }));
+            }
+            if (gateway.telegram_token) {
+                ensureTelegramConnected(null, {
+                    token: gateway.telegram_token,
+                    allowedChats: gateway.telegram_allowed_chats || '',
+                })
+                    .then((r) => logToFile('info', 'auto-connected Telegram', r))
+                    .catch((e) => logToFile('warn', 'Telegram auto-connect failed', { error: e.message }));
             }
         }
     } catch (err) {

@@ -8,8 +8,6 @@
 
 use crate::state::{chat::ChatAction, config::ConfigAction, task::TaskAction, AppAction};
 
-// Forward reference — will be `use crate::client::ClientEvent` after Task 9
-// For now, re-export from here so app.rs can use it
 #[derive(Debug, Clone)]
 pub enum ClientEvent {
     Connected,
@@ -32,8 +30,13 @@ pub enum ClientEvent {
     TaskUpdate(crate::state::task::AgentTask),
 
     GoalRunList(Vec<crate::state::task::GoalRun>),
+    GoalRunStarted(crate::state::task::GoalRun),
     GoalRunDetail(Option<crate::state::task::GoalRun>),
     GoalRunUpdate(crate::state::task::GoalRun),
+    GoalRunCheckpoints {
+        goal_run_id: String,
+        checkpoints: Vec<crate::state::task::GoalRunCheckpointSummary>,
+    },
     ThreadTodos {
         thread_id: String,
         items: Vec<crate::state::task::TodoItem>,
@@ -51,6 +54,7 @@ pub enum ClientEvent {
     ModelsFetched(Vec<crate::state::config::FetchedModel>),
 
     HeartbeatItems(Vec<crate::state::task::HeartbeatItem>),
+    AnticipatoryItems(Vec<crate::state::task::HeartbeatItem>),
 
     Delta {
         thread_id: String,
@@ -83,6 +87,39 @@ pub enum ClientEvent {
         tps: Option<f64>,
         generation_ms: Option<u64>,
     },
+    WorkflowNotice {
+        kind: String,
+        message: String,
+        details: Option<String>,
+    },
+    ApprovalRequired {
+        approval_id: String,
+        command: String,
+        risk_level: String,
+        blast_radius: String,
+    },
+    ApprovalResolved {
+        approval_id: String,
+        decision: String,
+    },
+
+    ProviderAuthStates(Vec<crate::state::ProviderAuthEntry>),
+    ProviderValidation {
+        provider_id: String,
+        valid: bool,
+        error: Option<String>,
+    },
+    SubAgentList(Vec<crate::state::SubAgentEntry>),
+    SubAgentUpdated(crate::state::SubAgentEntry),
+    SubAgentRemoved {
+        sub_agent_id: String,
+    },
+    ConciergeConfig(serde_json::Value),
+    ConciergeWelcome {
+        content: String,
+        actions: Vec<crate::state::ConciergeActionVm>,
+    },
+    ConciergeWelcomeDismissed,
 
     Error(String),
 }
@@ -107,6 +144,12 @@ impl DaemonProjection {
             ))],
             ClientEvent::SessionSpawned { session_id } => {
                 vec![AppAction::Status(format!("Session bound: {}", session_id))]
+            }
+            ClientEvent::ApprovalRequired { .. } => {
+                vec![AppAction::Status("Approval required".into())]
+            }
+            ClientEvent::ApprovalResolved { .. } => {
+                vec![AppAction::Status("Approval resolved".into())]
             }
 
             // Thread events → ChatAction
@@ -178,6 +221,18 @@ impl DaemonProjection {
             ClientEvent::HeartbeatItems(items) => {
                 vec![AppAction::Task(TaskAction::HeartbeatItemsReceived(items))]
             }
+            ClientEvent::AnticipatoryItems(_) => vec![],
+            ClientEvent::WorkflowNotice { message, .. } => vec![AppAction::Status(message)],
+            ClientEvent::ProviderAuthStates(_) => vec![],
+            ClientEvent::ProviderValidation { .. } => vec![],
+            ClientEvent::SubAgentList(_) => vec![],
+            ClientEvent::SubAgentUpdated(_) => vec![],
+            ClientEvent::SubAgentRemoved { .. } => vec![],
+            ClientEvent::ConciergeConfig(_) => vec![],
+            ClientEvent::GoalRunStarted(_) => vec![],
+            ClientEvent::GoalRunCheckpoints { .. } => vec![],
+            ClientEvent::ConciergeWelcome { .. } => vec![],
+            ClientEvent::ConciergeWelcomeDismissed => vec![],
 
             // Streaming events → ChatAction
             ClientEvent::Delta { thread_id, content } => {

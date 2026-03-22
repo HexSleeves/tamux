@@ -400,10 +400,19 @@ pub fn send_completion_request(
     tokio::spawn(async move {
         let mut retry_attempt = 0u32;
         loop {
-            let api_type = get_provider_api_type(&provider, &config.model);
+            let api_type = get_provider_api_type(&provider, &config.model, &config.base_url);
 
             let result = if api_type == ApiType::Anthropic {
-                run_anthropic(&client, &config, &system_prompt, &messages, &tools, &tx).await
+                run_anthropic(
+                    &client,
+                    &provider,
+                    &config,
+                    &system_prompt,
+                    &messages,
+                    &tools,
+                    &tx,
+                )
+                .await
             } else {
                 match transport {
                     ApiTransport::NativeAssistant => {
@@ -677,12 +686,49 @@ fn openai_reasoning_supported(provider: &str, model: &str) -> bool {
             | "openrouter"
             | "qwen"
             | "qwen-deepinfra"
-            | "alibaba-coding-plan"
             | "opencode-zen"
             | "z.ai"
             | "z.ai-coding-plan"
     ) || model.starts_with('o')
         || model.starts_with("gpt-5")
+}
+
+fn dashscope_openai_uses_enable_thinking(provider: &str, model: &str) -> bool {
+    matches!(provider, "qwen" | "alibaba-coding-plan")
+        && matches!(
+            model,
+            "qwen3.5-plus" | "qwen3-max-2026-01-23" | "glm-4.7" | "glm-5"
+        )
+}
+
+fn is_dashscope_coding_plan_anthropic_base_url(base_url: &str) -> bool {
+    let lower = base_url.trim().to_ascii_lowercase();
+    lower.contains("dashscope.aliyuncs.com") && lower.contains("/apps/anthropic")
+}
+
+fn apply_dashscope_coding_plan_sdk_headers(
+    req: reqwest::RequestBuilder,
+    provider: &str,
+    base_url: &str,
+    api_type: ApiType,
+) -> reqwest::RequestBuilder {
+    if provider != "alibaba-coding-plan" {
+        return req;
+    }
+
+    let req = req.header(
+        "User-Agent",
+        match api_type {
+            ApiType::Anthropic => "Anthropic/JS tamux",
+            ApiType::OpenAI => "OpenAI/JS tamux",
+        },
+    );
+    if api_type == ApiType::OpenAI && !is_dashscope_coding_plan_anthropic_base_url(base_url) {
+        req.header("x-stainless-lang", "js")
+            .header("x-stainless-package-version", "tamux")
+    } else {
+        req
+    }
 }
 
 fn anthropic_thinking_budget(effort: &str) -> Option<u32> {
@@ -1110,14 +1156,22 @@ async fn run_openai_chat_completions(
         }
     }
 
-    if let Some(effort) = normalize_reasoning_effort(&config.reasoning_effort) {
-        // Always send reasoning_effort — the API ignores it for non-reasoning models
-        body["reasoning_effort"] = serde_json::Value::String(effort.clone());
-        // Also send the "reasoning" object for providers that use this format
-        body["reasoning"] = serde_json::json!({ "effort": effort });
+    if dashscope_openai_uses_enable_thinking(provider, &config.model) {
+        body["enable_thinking"] =
+            serde_json::Value::Bool(normalize_reasoning_effort(&config.reasoning_effort).is_some());
+    } else if openai_reasoning_supported(provider, &config.model) {
+        if let Some(effort) = normalize_reasoning_effort(&config.reasoning_effort) {
+            body["reasoning_effort"] = serde_json::Value::String(effort.clone());
+            body["reasoning"] = serde_json::json!({ "effort": effort });
+        }
     }
 
-    let req = build_openai_auth_request(client, &url, provider, config);
+    let req = apply_dashscope_coding_plan_sdk_headers(
+        build_openai_auth_request(client, &url, provider, config),
+        provider,
+        &config.base_url,
+        ApiType::OpenAI,
+    );
 
     let response = req.body(body.to_string()).send().await?;
 
@@ -1732,6 +1786,7 @@ async fn parse_openai_responses_sse(
 
 async fn run_anthropic(
     client: &reqwest::Client,
+    provider: &str,
     config: &ProviderConfig,
     system_prompt: &str,
     messages: &[ApiMessage],
@@ -1826,7 +1881,10 @@ async fn run_anthropic(
     }
 
     if let Some(budget_tokens) = anthropic_thinking_budget(&config.reasoning_effort) {
-        if config.model.starts_with("claude") {
+        if config.model.starts_with("claude")
+            || (provider == "alibaba-coding-plan"
+                && dashscope_openai_uses_enable_thinking(provider, &config.model))
+        {
             body["thinking"] = serde_json::json!({
                 "type": "enabled",
                 "budget_tokens": budget_tokens,
@@ -1834,14 +1892,22 @@ async fn run_anthropic(
         }
     }
 
-    let response = client
+    let mut request = client
         .post(&url)
         .header("Content-Type", "application/json")
-        .header("x-api-key", &config.api_key)
-        .header("anthropic-version", "2023-06-01")
-        .body(body.to_string())
-        .send()
-        .await?;
+        .header("x-api-key", &config.api_key);
+    if !is_dashscope_coding_plan_anthropic_base_url(&config.base_url) {
+        request = request.header("anthropic-version", "2023-06-01");
+    }
+    let response = apply_dashscope_coding_plan_sdk_headers(
+        request,
+        provider,
+        &config.base_url,
+        ApiType::Anthropic,
+    )
+    .body(body.to_string())
+    .send()
+    .await?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -2240,7 +2306,8 @@ pub async fn validate_provider_connection(
     }
 
     let client = reqwest::Client::new();
-    let request = match def.api_type {
+    let api_type = get_provider_api_type(provider_id, def.default_model, &resolved_base_url);
+    let request = match api_type {
         ApiType::OpenAI => {
             let url = build_chat_completion_url(&resolved_base_url);
             let body = serde_json::json!({
@@ -2260,7 +2327,8 @@ pub async fn validate_provider_connection(
                     }
                 }
             }
-            req.json(&body)
+            apply_dashscope_coding_plan_sdk_headers(req, provider_id, &resolved_base_url, api_type)
+                .json(&body)
         }
         ApiType::Anthropic => {
             let url = format!("{}/v1/messages", resolved_base_url.trim_end_matches('/'));
@@ -2269,10 +2337,10 @@ pub async fn validate_provider_connection(
                 "max_tokens": 1,
                 "messages": [{ "role": "user", "content": "ok" }],
             });
-            let mut req = client
-                .post(url)
-                .header("Content-Type", "application/json")
-                .header("anthropic-version", "2023-06-01");
+            let mut req = client.post(url).header("Content-Type", "application/json");
+            if !is_dashscope_coding_plan_anthropic_base_url(&resolved_base_url) {
+                req = req.header("anthropic-version", "2023-06-01");
+            }
             if !api_key.is_empty() {
                 match def.auth_method {
                     AuthMethod::Bearer => {
@@ -2283,7 +2351,8 @@ pub async fn validate_provider_connection(
                     }
                 }
             }
-            req.json(&body)
+            apply_dashscope_coding_plan_sdk_headers(req, provider_id, &resolved_base_url, api_type)
+                .json(&body)
         }
     };
 

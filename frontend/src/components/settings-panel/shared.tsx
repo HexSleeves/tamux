@@ -227,21 +227,21 @@ export const smallBtnStyle: CSSProperties = {
     padding: "4px 8px",
 };
 
-export function ModelSelector({ providerId, value, customName, onChange, disabled, baseUrl, apiKey, authSource }: {
+export function ModelSelector({ providerId, value, customName, onChange, disabled, base_url, api_key, auth_source }: {
     providerId: AgentProviderId;
     value: string;
     customName?: string;
     onChange: (value: string, name?: string) => void;
     disabled?: boolean;
-    baseUrl?: string;
-    apiKey?: string;
-    authSource?: AuthSource;
+    base_url?: string;
+    api_key?: string;
+    auth_source?: AuthSource;
 }) {
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState("");
     const [useCustom, setUseCustom] = useState(false);
     const [customModelId, setCustomModelId] = useState(value);
-    const [customModelName, setCustomModelName] = useState(customName || "");
+    const [custom_model_name, setCustomModelName] = useState(customName || "");
     const [fetchedModels, setFetchedModels] = useState<ModelDefinition[]>([]);
     const [isFetching, setIsFetching] = useState(false);
     const [fetchError, setFetchError] = useState<string | null>(null);
@@ -249,9 +249,9 @@ export function ModelSelector({ providerId, value, customName, onChange, disable
     const inputRef = useRef<HTMLInputElement>(null);
 
     const definition = getProviderDefinition(providerId);
-    const predefinedModels = getProviderModels(providerId, authSource);
+    const predefinedModels = getProviderModels(providerId, auth_source);
     const supportsFetch = (definition?.supportsModelFetch ?? false)
-        && !(providerId === "openai" && authSource === "chatgpt_subscription");
+        && !(providerId === "openai" && auth_source === "chatgpt_subscription");
     
     const allModels = useMemo(() => {
         const merged = [...predefinedModels];
@@ -296,8 +296,8 @@ export function ModelSelector({ providerId, value, customName, onChange, disable
         try {
             const result = await amux.agentFetchModels(
                 providerId,
-                baseUrl || definition?.defaultBaseUrl || "",
-                apiKey || ""
+                base_url || definition?.defaultBaseUrl || "",
+                api_key || ""
             );
 
             if (result && typeof result === "object") {
@@ -354,7 +354,7 @@ export function ModelSelector({ providerId, value, customName, onChange, disable
             <div style={{ display: "grid", gap: 4, width: "100%" }}>
                 <input
                     type="text"
-                    value={customModelName}
+                    value={custom_model_name}
                     onChange={(e) => setCustomModelName(e.target.value)}
                     placeholder="Display name (optional)"
                     disabled={disabled}
@@ -375,7 +375,7 @@ export function ModelSelector({ providerId, value, customName, onChange, disable
                         onClick={() => {
                             const nextId = customModelId.trim();
                             if (!nextId) return;
-                            onChange(nextId, customModelName.trim() || nextId);
+                            onChange(nextId, custom_model_name.trim() || nextId);
                             setUseCustom(false);
                             setIsOpen(false);
                             setSearch("");
@@ -417,11 +417,11 @@ export function ModelSelector({ providerId, value, customName, onChange, disable
                     disabled={disabled}
                     style={{ ...inputStyle, flex: 1 }}
                 />
-                {supportsFetch && apiKey && (
+                {supportsFetch && api_key && (
                     <button
                         type="button"
                         onClick={handleFetchModels}
-                        disabled={isFetching || !apiKey}
+                        disabled={isFetching || !api_key}
                         style={smallBtnStyle}
                         title="Fetch models from provider"
                     >

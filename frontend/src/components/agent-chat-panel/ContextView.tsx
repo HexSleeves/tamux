@@ -5,9 +5,9 @@ import { ActionButton, ContextCard, MetricRibbon, SectionTitle, inputStyle, memo
 
 type ContextViewProps = {
     agentSettings: {
-        activeProvider: string;
-        contextWindowTokens: number;
-        contextBudgetTokens: number;
+        active_provider: string;
+        context_window_tokens: number;
+        context_budget_tokens: number;
     };
     snippets: Array<unknown>;
     transcripts: Array<unknown>;
@@ -76,7 +76,7 @@ export function ContextView(props: ContextViewProps) {
         <div style={{ padding: "var(--space-4)", height: "100%", overflow: "auto" }}>
             <MetricRibbon
                 items={[
-                    { label: "Provider", value: props.agentSettings.activeProvider },
+                    { label: "Provider", value: props.agentSettings.active_provider },
                     { label: "Skills", value: String(props.snippets.length) },
                     { label: "Transcripts", value: String(props.transcripts.length) },
                     { label: "Changed", value: String(workMetrics.changed) },
@@ -88,8 +88,8 @@ export function ContextView(props: ContextViewProps) {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "var(--space-3)", marginBottom: "var(--space-4)" }}>
                 <ContextCard label="Pane" value={props.scopePaneId ?? "none"} />
                 <ContextCard label="Threads" value={String(props.threads.length)} />
-                <ContextCard label="Context Length" value={`${props.agentSettings.contextWindowTokens.toLocaleString()} tok`} />
-                <ContextCard label="Token Budget" value={`${props.agentSettings.contextBudgetTokens.toLocaleString()} tok`} />
+                <ContextCard label="Context Length" value={`${props.agentSettings.context_window_tokens.toLocaleString()} tok`} />
+                <ContextCard label="Token Budget" value={`${props.agentSettings.context_budget_tokens.toLocaleString()} tok`} />
                 <ContextCard label="Snapshot Age" value={props.latestContextSnapshot ? new Date(props.latestContextSnapshot.timestamp).toLocaleTimeString() : "n/a"} />
             </div>
 

@@ -197,7 +197,7 @@ fn recall_from_agent_events(
                 .get("correlation_id")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
-            summary: "Behavioral event captured by the moat event bus.".to_string(),
+            summary: "Behavioral event captured by the capability event bus.".to_string(),
             snippets: vec![build_snippet(&event.payload_json, tokens)],
         });
     }

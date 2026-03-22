@@ -10,11 +10,18 @@ use tokio::sync::{broadcast, RwLock};
 /// Well-known thread ID for the concierge.
 pub const CONCIERGE_THREAD_ID: &str = "concierge";
 
+/// Result of concierge triage on a gateway message.
+pub enum GatewayTriage {
+    /// Simple message — concierge handled it, here's the response text.
+    Simple(String),
+    /// Complex message — route to full agent loop.
+    Complex,
+}
+
 pub struct ConciergeEngine {
     config: Arc<RwLock<AgentConfig>>,
     event_tx: broadcast::Sender<AgentEvent>,
     http_client: reqwest::Client,
-    pending_welcome_count: RwLock<usize>,
 }
 
 impl ConciergeEngine {
@@ -27,7 +34,6 @@ impl ConciergeEngine {
             config,
             event_tx,
             http_client,
-            pending_welcome_count: RwLock::new(0),
         }
     }
 
@@ -72,8 +78,6 @@ impl ConciergeEngine {
             return;
         }
 
-        self.prune_welcome_messages(threads).await;
-
         let detail_level = config.concierge.detail_level;
         tracing::info!("concierge: gathering context at level {:?}", detail_level);
         drop(config);
@@ -96,32 +100,7 @@ impl ConciergeEngine {
             actions.len()
         );
 
-        // Add welcome message to the concierge thread.
-        {
-            let mut threads_guard = threads.write().await;
-            if let Some(thread) = threads_guard.get_mut(CONCIERGE_THREAD_ID) {
-                thread.messages.push(AgentMessage {
-                    role: MessageRole::Assistant,
-                    content: content.clone(),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    tool_name: None,
-                    tool_arguments: None,
-                    tool_status: None,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    provider: Some("concierge".into()),
-                    model: None,
-                    api_transport: None,
-                    response_id: None,
-                    reasoning: None,
-                    timestamp: super::now_millis(),
-                });
-                thread.updated_at = super::now_millis();
-            }
-        }
-
-        *self.pending_welcome_count.write().await += 1;
+        self.replace_welcome_message(threads, &content).await;
 
         let send_result = self.event_tx.send(AgentEvent::ConciergeWelcome {
             thread_id: CONCIERGE_THREAD_ID.to_string(),
@@ -150,8 +129,6 @@ impl ConciergeEngine {
         let detail_level = config.concierge.detail_level;
         drop(config);
 
-        self.prune_welcome_messages(threads).await;
-
         tracing::info!("concierge: generate_welcome at level {:?}", detail_level);
         let context = self.gather_context(threads, tasks, detail_level).await;
         let (content, actions) = self.compose_welcome(detail_level, &context).await;
@@ -160,31 +137,7 @@ impl ConciergeEngine {
             return None;
         }
 
-        // Add to concierge thread.
-        {
-            let mut threads_guard = threads.write().await;
-            if let Some(thread) = threads_guard.get_mut(CONCIERGE_THREAD_ID) {
-                thread.messages.push(AgentMessage {
-                    role: MessageRole::Assistant,
-                    content: content.clone(),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    tool_name: None,
-                    tool_arguments: None,
-                    tool_status: None,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    provider: Some("concierge".into()),
-                    model: None,
-                    api_transport: None,
-                    response_id: None,
-                    reasoning: None,
-                    timestamp: super::now_millis(),
-                });
-                thread.updated_at = super::now_millis();
-            }
-        }
-        *self.pending_welcome_count.write().await += 1;
+        self.replace_welcome_message(threads, &content).await;
 
         tracing::info!(
             "concierge: generate_welcome done, {} chars, {} actions",
@@ -194,34 +147,53 @@ impl ConciergeEngine {
         Some((content, detail_level, actions))
     }
 
-    /// Prune pending welcome messages from the concierge thread.
+    /// Prune concierge-generated welcome messages from the concierge thread.
     pub async fn prune_welcome_messages(
         &self,
         threads: &RwLock<std::collections::HashMap<String, AgentThread>>,
     ) {
-        let count = {
-            let mut guard = self.pending_welcome_count.write().await;
-            let c = *guard;
-            *guard = 0;
-            c
-        };
-        if count == 0 {
-            return;
-        }
         let mut threads_guard = threads.write().await;
         if let Some(thread) = threads_guard.get_mut(CONCIERGE_THREAD_ID) {
-            let mut removed = 0;
+            let before = thread.messages.len();
             thread.messages.retain(|msg| {
-                if removed < count
-                    && msg.role == MessageRole::Assistant
-                    && msg.provider.as_deref() == Some("concierge")
-                {
-                    removed += 1;
-                    false
-                } else {
-                    true
-                }
+                !(msg.role == MessageRole::Assistant
+                    && msg.provider.as_deref() == Some("concierge"))
             });
+            if thread.messages.len() != before {
+                thread.updated_at = super::now_millis();
+            }
+        }
+    }
+
+    async fn replace_welcome_message(
+        &self,
+        threads: &RwLock<std::collections::HashMap<String, AgentThread>>,
+        content: &str,
+    ) {
+        let mut threads_guard = threads.write().await;
+        if let Some(thread) = threads_guard.get_mut(CONCIERGE_THREAD_ID) {
+            thread.messages.retain(|msg| {
+                !(msg.role == MessageRole::Assistant
+                    && msg.provider.as_deref() == Some("concierge"))
+            });
+            thread.messages.push(AgentMessage {
+                role: MessageRole::Assistant,
+                content: content.to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+                tool_name: None,
+                tool_arguments: None,
+                tool_status: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                provider: Some("concierge".into()),
+                model: None,
+                api_transport: None,
+                response_id: None,
+                reasoning: None,
+                timestamp: super::now_millis(),
+            });
+            thread.updated_at = super::now_millis();
         }
     }
 
@@ -529,6 +501,149 @@ impl ConciergeEngine {
             "Welcome to tamux! Ready to start your first session.".into()
         }
     }
+
+    // ── Gateway Triage ────────────────────────────────────────────────────
+
+    /// Triage an incoming gateway message.
+    /// Returns `Simple(response)` for lightweight messages the concierge can
+    /// handle, or `Complex` to route to the full agent loop.
+    pub async fn triage_gateway_message(
+        &self,
+        platform: &str,
+        sender: &str,
+        content: &str,
+        threads: &RwLock<std::collections::HashMap<String, AgentThread>>,
+        tasks: &tokio::sync::Mutex<std::collections::VecDeque<AgentTask>>,
+    ) -> GatewayTriage {
+        let config = self.config.read().await;
+        if !config.concierge.enabled {
+            return GatewayTriage::Complex;
+        }
+        let provider_config = match resolve_concierge_provider(&config) {
+            Ok(pc) => pc,
+            Err(e) => {
+                tracing::warn!("concierge: triage provider resolution failed: {e}");
+                return GatewayTriage::Complex;
+            }
+        };
+        let provider_id = config
+            .concierge
+            .provider
+            .as_deref()
+            .unwrap_or(&config.provider)
+            .to_string();
+        drop(config);
+
+        let context = self
+            .gather_context(threads, tasks, ConciergeDetailLevel::ContextSummary)
+            .await;
+
+        let user_prompt = build_gateway_triage_prompt(platform, sender, content, &context);
+
+        let messages = vec![ApiMessage {
+            role: "user".into(),
+            content: ApiContent::Text(user_prompt),
+            tool_call_id: None,
+            name: None,
+            tool_calls: None,
+        }];
+
+        let stream = llm_client::send_completion_request(
+            &self.http_client,
+            &provider_id,
+            &provider_config,
+            GATEWAY_TRIAGE_SYSTEM_PROMPT,
+            &messages,
+            &[],
+            provider_config.api_transport,
+            None,
+            None,
+            RetryStrategy::Bounded {
+                max_retries: 1,
+                retry_delay_ms: 500,
+            },
+        );
+
+        let mut full_content = String::new();
+        let mut stream = std::pin::pin!(stream);
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(CompletionChunk::Delta { content, .. }) => full_content.push_str(&content),
+                Ok(CompletionChunk::Done { content, .. }) => {
+                    if !content.is_empty() {
+                        full_content = content;
+                    }
+                    break;
+                }
+                Ok(CompletionChunk::Error { message }) => {
+                    tracing::warn!("concierge: triage LLM error: {message}");
+                    return GatewayTriage::Complex;
+                }
+                Err(e) => {
+                    tracing::warn!("concierge: triage stream error: {e}");
+                    return GatewayTriage::Complex;
+                }
+                Ok(_) => {}
+            }
+        }
+
+        let trimmed = full_content.trim();
+        if trimmed.starts_with("[SIMPLE]") {
+            let response = trimmed.trim_start_matches("[SIMPLE]").trim().to_string();
+            if response.is_empty() {
+                tracing::info!(
+                    "concierge: triage returned empty SIMPLE response, routing to agent"
+                );
+                GatewayTriage::Complex
+            } else {
+                tracing::info!(
+                    platform = %platform,
+                    "concierge: triage classified as SIMPLE"
+                );
+                GatewayTriage::Simple(response)
+            }
+        } else {
+            tracing::info!(
+                platform = %platform,
+                "concierge: triage classified as COMPLEX"
+            );
+            GatewayTriage::Complex
+        }
+    }
+}
+
+// ── Gateway triage prompts ──────────────────────────────────────────────
+
+const GATEWAY_TRIAGE_SYSTEM_PROMPT: &str = "\
+You are the tamux concierge triage agent. You receive messages from external platforms \
+(Slack, Discord, Telegram, WhatsApp) and decide whether to handle them yourself or \
+route them to the full agent.\n\n\
+SIMPLE messages (handle yourself): greetings, casual chat, status inquiries, \
+quick factual lookups, acknowledgments, scheduling questions, thank-yous.\n\
+COMPLEX messages (route to agent): code requests, file operations, debugging, \
+multi-step tasks, anything requiring tools, technical analysis, project work.\n\n\
+If SIMPLE: respond with [SIMPLE] followed by your concise, friendly reply.\n\
+If COMPLEX: respond with just [COMPLEX].\n\
+Be fast. One sentence for simple replies. Never hallucinate tool usage.";
+
+fn build_gateway_triage_prompt(
+    platform: &str,
+    sender: &str,
+    content: &str,
+    context: &WelcomeContext,
+) -> String {
+    let mut prompt = format!("[{platform} message from {sender}]: {content}\n");
+    if let Some(last) = context.recent_threads.first() {
+        prompt.push_str(&format!(
+            "\nContext: Last session was \"{}\" ({}).",
+            last.title,
+            format_timestamp(last.updated_at),
+        ));
+    }
+    if !context.pending_tasks.is_empty() {
+        prompt.push_str(&format!(" {} pending tasks.", context.pending_tasks.len()));
+    }
+    prompt
 }
 
 // ── Supporting types ─────────────────────────────────────────────────────
@@ -630,5 +745,99 @@ fn format_timestamp(ts: u64) -> String {
         format!("{}h ago", secs / 3600)
     } else {
         format!("{}d ago", secs / 86400)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn concierge_thread(messages: Vec<AgentMessage>) -> AgentThread {
+        AgentThread {
+            id: CONCIERGE_THREAD_ID.to_string(),
+            title: "Concierge".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            messages,
+            pinned: true,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn prune_welcome_messages_removes_all_concierge_welcomes() {
+        let config = Arc::new(RwLock::new(AgentConfig::default()));
+        let (event_tx, _) = broadcast::channel(8);
+        let engine = ConciergeEngine::new(config, event_tx, reqwest::Client::new());
+        let threads = RwLock::new(HashMap::from([(
+            CONCIERGE_THREAD_ID.to_string(),
+            concierge_thread(vec![
+                AgentMessage {
+                    role: MessageRole::Assistant,
+                    content: "hello".to_string(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    tool_status: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    provider: None,
+                    model: None,
+                    api_transport: None,
+                    response_id: None,
+                    reasoning: None,
+                    timestamp: 1,
+                },
+                AgentMessage {
+                    role: MessageRole::Assistant,
+                    content: "welcome 1".to_string(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    tool_status: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    provider: Some("concierge".into()),
+                    model: None,
+                    api_transport: None,
+                    response_id: None,
+                    reasoning: None,
+                    timestamp: 2,
+                },
+                AgentMessage {
+                    role: MessageRole::Assistant,
+                    content: "welcome 2".to_string(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    tool_status: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    provider: Some("concierge".into()),
+                    model: None,
+                    api_transport: None,
+                    response_id: None,
+                    reasoning: None,
+                    timestamp: 3,
+                },
+            ]),
+        )]));
+
+        engine.prune_welcome_messages(&threads).await;
+
+        let guard = threads.read().await;
+        let thread = guard.get(CONCIERGE_THREAD_ID).unwrap();
+        assert_eq!(thread.messages.len(), 1);
+        assert_eq!(thread.messages[0].content, "hello");
     }
 }

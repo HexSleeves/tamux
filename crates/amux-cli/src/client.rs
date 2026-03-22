@@ -156,8 +156,9 @@ enum AgentBridgeCommand {
         max_bytes: Option<usize>,
     },
     GetConfig,
-    SetConfig {
-        config_json: String,
+    SetConfigItem {
+        key_path: String,
+        value_json: String,
     },
     HeartbeatGetItems,
     HeartbeatSetItems {
@@ -229,6 +230,10 @@ enum DbBridgeCommand {
     },
     AddAgentMessage {
         message_json: String,
+    },
+    DeleteAgentMessages {
+        thread_id: String,
+        message_ids: Vec<String>,
     },
     ListAgentMessages {
         thread_id: String,
@@ -1067,8 +1072,16 @@ pub async fn run_agent_bridge() -> Result<()> {
                             AgentBridgeCommand::GetConfig => {
                                 framed.send(ClientMessage::AgentGetConfig).await?;
                             }
-                            AgentBridgeCommand::SetConfig { config_json } => {
-                                framed.send(ClientMessage::AgentSetConfig { config_json }).await?;
+                            AgentBridgeCommand::SetConfigItem {
+                                key_path,
+                                value_json,
+                            } => {
+                                framed
+                                    .send(ClientMessage::AgentSetConfigItem {
+                                        key_path,
+                                        value_json,
+                                    })
+                                    .await?;
                             }
                             AgentBridgeCommand::HeartbeatGetItems => {
                                 framed.send(ClientMessage::AgentHeartbeatGetItems).await?;
@@ -1313,6 +1326,9 @@ pub async fn run_db_bridge() -> Result<()> {
                             }
                             DbBridgeCommand::AddAgentMessage { message_json } => {
                                 framed.send(ClientMessage::AddAgentMessage { message_json }).await?;
+                            }
+                            DbBridgeCommand::DeleteAgentMessages { thread_id, message_ids } => {
+                                framed.send(ClientMessage::DeleteAgentMessages { thread_id, message_ids }).await?;
                             }
                             DbBridgeCommand::ListAgentMessages { thread_id, limit } => {
                                 framed.send(ClientMessage::ListAgentMessages { thread_id, limit }).await?;

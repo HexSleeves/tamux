@@ -2949,6 +2949,7 @@ dependencies = [
  "strip-ansi-escapes",
  "sysinfo",
  "tamux-protocol",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",

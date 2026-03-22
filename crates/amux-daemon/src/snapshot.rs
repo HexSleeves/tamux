@@ -689,10 +689,7 @@ impl SnapshotRetentionConfig {
             auto_cleanup: config.snapshot_auto_cleanup,
         };
 
-        for path in [
-            amux_protocol::amux_data_dir().join("settings.json"),
-            amux_protocol::amux_data_dir().join("agent-settings.json"),
-        ] {
+        for path in [amux_protocol::amux_data_dir().join("settings.json")] {
             let Some(settings) = read_settings_root(&path) else {
                 continue;
             };
@@ -727,10 +724,7 @@ fn read_settings_root(path: &Path) -> Option<Value> {
 fn effective_snapshot_backend() -> Option<String> {
     let mut backend = amux_protocol::AmuxConfig::load().snapshot_backend;
 
-    for path in [
-        amux_protocol::amux_data_dir().join("settings.json"),
-        amux_protocol::amux_data_dir().join("agent-settings.json"),
-    ] {
+    for path in [amux_protocol::amux_data_dir().join("settings.json")] {
         let Some(settings) = read_settings_root(&path) else {
             continue;
         };

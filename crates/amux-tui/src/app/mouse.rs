@@ -412,6 +412,10 @@ impl TuiModel {
                 self.chat.select_message(Some(idx));
                 self.regenerate_from_message(idx);
             }
+            Some(chat::ChatHitTarget::DeleteMessage(idx)) => {
+                self.chat.select_message(Some(idx));
+                self.delete_message(idx);
+            }
             None => {}
         }
     }

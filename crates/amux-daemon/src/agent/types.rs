@@ -1,3 +1,4 @@
+use amux_protocol::SecurityLevel;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -263,24 +264,24 @@ pub const MINIMAX_MODELS: &[ModelDefinition] = &[
 
 pub const ALIBABA_CODING_MODELS: &[ModelDefinition] = &[
     ModelDefinition {
-        id: "qwen3-coder",
-        name: "Qwen3 Coder",
-        context_window: 128000,
+        id: "qwen3-coder-plus",
+        name: "Qwen3 Coder Plus",
+        context_window: 997952,
     },
     ModelDefinition {
         id: "qwen3-coder-next",
         name: "Qwen3 Coder Next",
-        context_window: 128000,
+        context_window: 204800,
     },
     ModelDefinition {
         id: "qwen3.5-plus",
         name: "Qwen3.5 Plus",
-        context_window: 128000,
+        context_window: 983616,
     },
     ModelDefinition {
         id: "glm-5",
         name: "GLM-5",
-        context_window: 128000,
+        context_window: 202752,
     },
     ModelDefinition {
         id: "kimi-k2.5",
@@ -547,7 +548,7 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
     ProviderDefinition {
         id: "qwen",
         name: "Qwen",
-        default_base_url: "https://api.qwen.com/v1",
+        default_base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         default_model: "qwen-max",
         api_type: ApiType::OpenAI,
         auth_method: AuthMethod::Bearer,
@@ -788,12 +789,12 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         id: "alibaba-coding-plan",
         name: "Alibaba Coding Plan",
         default_base_url: "https://coding-intl.dashscope.aliyuncs.com/v1",
-        default_model: "qwen3-coder",
+        default_model: "qwen3.5-plus",
         api_type: ApiType::OpenAI,
         auth_method: AuthMethod::Bearer,
         models: ALIBABA_CODING_MODELS,
-        supports_model_fetch: true,
-        anthropic_base_url: Some("https://coding-intl.dashscope.aliyuncs.com/apps/anthropic"),
+        supports_model_fetch: false,
+        anthropic_base_url: None,
         supported_transports: CHAT_ONLY_TRANSPORTS,
         default_transport: ApiTransport::ChatCompletions,
         native_transport_kind: None,
@@ -859,7 +860,17 @@ pub fn supports_response_continuity(provider_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub fn get_provider_api_type(provider_id: &str, model: &str) -> ApiType {
+fn is_alibaba_coding_plan_anthropic_url(base_url: &str) -> bool {
+    let lower = base_url.trim().to_ascii_lowercase();
+    lower.contains("dashscope.aliyuncs.com") && lower.contains("/apps/anthropic")
+}
+
+pub fn get_provider_api_type(provider_id: &str, model: &str, configured_url: &str) -> ApiType {
+    if provider_id == "alibaba-coding-plan" && is_alibaba_coding_plan_anthropic_url(configured_url)
+    {
+        return ApiType::Anthropic;
+    }
+
     let def = get_provider_definition(provider_id);
 
     match def {
@@ -900,7 +911,7 @@ pub fn get_provider_base_url(provider_id: &str, model: &str, configured_url: &st
 }
 
 // ---------------------------------------------------------------------------
-// Agent configuration (persisted to ~/.tamux/agent/config.json)
+// Agent configuration (persisted in the daemon SQLite config store)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -961,17 +972,13 @@ pub struct AgentConfig {
     pub api_key: String,
     #[serde(default)]
     pub assistant_id: String,
-    #[serde(default, rename = "enableHonchoMemory", alias = "enable_honcho_memory")]
+    #[serde(default)]
     pub enable_honcho_memory: bool,
-    #[serde(default, rename = "honchoApiKey", alias = "honcho_api_key")]
+    #[serde(default)]
     pub honcho_api_key: String,
-    #[serde(default, rename = "honchoBaseUrl", alias = "honcho_base_url")]
+    #[serde(default)]
     pub honcho_base_url: String,
-    #[serde(
-        default = "default_honcho_workspace_id",
-        rename = "honchoWorkspaceId",
-        alias = "honcho_workspace_id"
-    )]
+    #[serde(default = "default_honcho_workspace_id")]
     pub honcho_workspace_id: String,
     #[serde(default = "default_auth_source")]
     pub auth_source: AuthSource,
@@ -1035,6 +1042,9 @@ pub struct AgentConfig {
     /// Runtime tool synthesis controls.
     #[serde(default)]
     pub tool_synthesis: ToolSynthesisConfig,
+    /// Default managed-command policy applied when tools do not override it.
+    #[serde(default)]
+    pub managed_execution: ManagedExecutionConfig,
     /// Additional persisted agent settings used by richer frontends and the TUI.
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -1164,6 +1174,23 @@ impl Default for ToolSynthesisConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManagedExecutionConfig {
+    #[serde(default)]
+    pub sandbox_enabled: bool,
+    #[serde(default)]
+    pub security_level: SecurityLevel,
+}
+
+impl Default for ManagedExecutionConfig {
+    fn default() -> Self {
+        Self {
+            sandbox_enabled: false,
+            security_level: SecurityLevel::Lowest,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolSynthesisSandboxConfig {
     #[serde(default = "default_generated_tool_timeout_secs")]
     pub max_execution_time_secs: u64,
@@ -1193,9 +1220,23 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub slack_token: String,
     #[serde(default)]
+    pub slack_channel_filter: String,
+    #[serde(default)]
     pub telegram_token: String,
     #[serde(default)]
+    pub telegram_allowed_chats: String,
+    #[serde(default)]
     pub discord_token: String,
+    #[serde(default)]
+    pub discord_channel_filter: String,
+    #[serde(default)]
+    pub discord_allowed_users: String,
+    #[serde(default)]
+    pub whatsapp_allowed_contacts: String,
+    #[serde(default)]
+    pub whatsapp_token: String,
+    #[serde(default)]
+    pub whatsapp_phone_id: String,
     #[serde(default)]
     pub command_prefix: String,
 }
@@ -1317,6 +1358,7 @@ impl Default for AgentConfig {
             collaboration: CollaborationConfig::default(),
             compliance: ComplianceConfig::default(),
             tool_synthesis: ToolSynthesisConfig::default(),
+            managed_execution: ManagedExecutionConfig::default(),
             extra: HashMap::new(),
         }
     }
@@ -2438,4 +2480,33 @@ pub enum CompletionChunk {
     Error {
         message: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alibaba_coding_plan_uses_openai_by_default() {
+        assert_eq!(
+            get_provider_api_type(
+                "alibaba-coding-plan",
+                "qwen3.5-plus",
+                "https://coding-intl.dashscope.aliyuncs.com/v1"
+            ),
+            ApiType::OpenAI
+        );
+    }
+
+    #[test]
+    fn alibaba_coding_plan_switches_to_anthropic_for_anthropic_base_url() {
+        assert_eq!(
+            get_provider_api_type(
+                "alibaba-coding-plan",
+                "qwen3.5-plus",
+                "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic"
+            ),
+            ApiType::Anthropic
+        );
+    }
 }

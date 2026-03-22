@@ -113,9 +113,22 @@ pub struct AgentEngine {
 
 impl AgentEngine {
     pub fn new(session_manager: Arc<SessionManager>, config: AgentConfig) -> Arc<Self> {
+        Self::new_with_storage(
+            session_manager,
+            config,
+            HistoryStore::new().expect("history store initialization failed"),
+            agent_data_dir(),
+        )
+    }
+
+    fn new_with_storage(
+        session_manager: Arc<SessionManager>,
+        config: AgentConfig,
+        history: HistoryStore,
+        data_dir: PathBuf,
+    ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(256);
         let (watcher_refresh_tx, watcher_refresh_rx) = mpsc::unbounded_channel();
-        let data_dir = agent_data_dir();
 
         // Pre-initialize external agent runners for discovery
         let mut runners = HashMap::new();
@@ -140,7 +153,7 @@ impl AgentEngine {
             http_client,
             concierge,
             session_manager,
-            history: HistoryStore::new().expect("history store initialization failed"),
+            history,
             threads: RwLock::new(HashMap::new()),
             thread_todos: RwLock::new(HashMap::new()),
             thread_work_contexts: RwLock::new(HashMap::new()),
@@ -172,6 +185,19 @@ impl AgentEngine {
             watcher_refresh_tx,
             watcher_refresh_rx: Mutex::new(Some(watcher_refresh_rx)),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_test(
+        session_manager: Arc<SessionManager>,
+        config: AgentConfig,
+        root: &std::path::Path,
+    ) -> Arc<Self> {
+        let history =
+            HistoryStore::new_test_store(root).expect("test history store initialization failed");
+        let data_dir = root.join("agent");
+        std::fs::create_dir_all(&data_dir).expect("failed to create test agent data dir");
+        Self::new_with_storage(session_manager, config, history, data_dir)
     }
 
     /// Subscribe to agent events (for IPC forwarding to frontend).

@@ -9,17 +9,14 @@ impl AgentEngine {
 
     /// Load persisted state (threads, tasks, heartbeat, memory, config).
     pub async fn hydrate(&self) -> Result<()> {
-        // Load config
-        let config_path = self.data_dir.join("config.json");
-        if config_path.exists() {
-            match tokio::fs::read_to_string(&config_path).await {
-                Ok(raw) => {
-                    if let Ok(cfg) = serde_json::from_str::<AgentConfig>(&raw) {
-                        *self.config.write().await = cfg;
-                    }
-                }
-                Err(e) => tracing::warn!("failed to load agent config: {e}"),
-            }
+        // Load config from SQLite-backed config items.
+        match self.history.list_agent_config_items() {
+            Ok(items) if !items.is_empty() => match super::config::load_config_from_items(items) {
+                Ok(cfg) => *self.config.write().await = cfg,
+                Err(error) => tracing::warn!("failed to load agent config from sqlite: {error}"),
+            },
+            Ok(_) => {}
+            Err(error) => tracing::warn!("failed to read agent config items from sqlite: {error}"),
         }
 
         // Load threads
@@ -377,9 +374,15 @@ impl AgentEngine {
     }
 
     pub(super) async fn persist_config(&self) {
-        let config = self.config.read().await;
-        if let Err(e) = persist_json(&self.data_dir.join("config.json"), &*config).await {
-            tracing::warn!("failed to persist config: {e}");
+        let config = self.config.read().await.clone();
+        let mut value = serde_json::to_value(&config)
+            .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+        super::config::normalize_config_keys_to_snake_case(&mut value);
+        super::config::sanitize_config_value(&mut value);
+        let mut items = Vec::new();
+        super::config::flatten_config_value_to_items(&value, "", &mut items);
+        if let Err(error) = self.history.replace_agent_config_items(&items) {
+            tracing::warn!("failed to persist config to sqlite: {error}");
         }
     }
 }

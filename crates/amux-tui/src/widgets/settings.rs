@@ -46,7 +46,7 @@ pub enum SubAgentTabAction {
 }
 
 const TAB_LABELS: [&str; 10] = [
-    "Prov", "Tools", "Search", "Chat", "GW", "Auth", "Agent", "Sub", "Con", "Adv",
+    "Auth", "Prov", "Tools", "Search", "Chat", "GW", "Agent", "Sub", "Con", "Adv",
 ];
 const TAB_DIVIDER: &str = " | ";
 
@@ -59,11 +59,16 @@ struct VisibleTab {
 }
 
 fn render_edit_buffer_with_cursor(text: &str, cursor: usize) -> String {
-    let cursor = cursor.min(text.len());
+    let cursor = cursor.min(text.chars().count());
     let mut out = String::with_capacity(text.len() + 3);
-    out.push_str(&text[..cursor]);
+    let byte_cursor = text
+        .char_indices()
+        .nth(cursor)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len());
+    out.push_str(&text[..byte_cursor]);
     out.push('\u{2588}');
-    out.push_str(&text[cursor..]);
+    out.push_str(&text[byte_cursor..]);
     out
 }
 
@@ -131,12 +136,12 @@ pub fn render(
     // Tab bar
     let active = settings.active_tab();
     let tab_index = match active {
-        SettingsTab::Provider => 0,
-        SettingsTab::Tools => 1,
-        SettingsTab::WebSearch => 2,
-        SettingsTab::Chat => 3,
-        SettingsTab::Gateway => 4,
-        SettingsTab::Auth => 5,
+        SettingsTab::Auth => 0,
+        SettingsTab::Provider => 1,
+        SettingsTab::Tools => 2,
+        SettingsTab::WebSearch => 3,
+        SettingsTab::Chat => 4,
+        SettingsTab::Gateway => 5,
         SettingsTab::Agent => 6,
         SettingsTab::SubAgents => 7,
         SettingsTab::Concierge => 8,
@@ -269,12 +274,12 @@ fn tab_hit_test(tab_area: Rect, active_tab: SettingsTab, mouse_x: u16) -> Option
 
 fn active_tab_index(tab: SettingsTab) -> usize {
     match tab {
-        SettingsTab::Provider => 0,
-        SettingsTab::Tools => 1,
-        SettingsTab::WebSearch => 2,
-        SettingsTab::Chat => 3,
-        SettingsTab::Gateway => 4,
-        SettingsTab::Auth => 5,
+        SettingsTab::Auth => 0,
+        SettingsTab::Provider => 1,
+        SettingsTab::Tools => 2,
+        SettingsTab::WebSearch => 3,
+        SettingsTab::Chat => 4,
+        SettingsTab::Gateway => 5,
         SettingsTab::Agent => 6,
         SettingsTab::SubAgents => 7,
         SettingsTab::Concierge => 8,
@@ -400,9 +405,8 @@ fn single_line_edit_layout(settings: &SettingsState, field: &str) -> Option<(usi
     match settings.active_tab() {
         SettingsTab::Provider => match field {
             "base_url" => Some((5, 19)),
-            "api_key" => Some((6, 19)),
-            "assistant_id" => Some((10, 19)),
-            "context_window_tokens" => Some((12, 19)),
+            "assistant_id" => Some((9, 19)),
+            "context_window_tokens" => Some((11, 19)),
             _ => None,
         },
         SettingsTab::WebSearch => match field {
@@ -441,16 +445,16 @@ fn single_line_edit_layout(settings: &SettingsState, field: &str) -> Option<(usi
         SettingsTab::SubAgents => None,
         SettingsTab::Concierge => None,
         SettingsTab::Advanced => match field {
-            "max_context_messages" => Some((5, 20)),
-            "max_tool_loops" => Some((6, 20)),
-            "max_retries" => Some((7, 20)),
-            "retry_delay_ms" => Some((8, 20)),
-            "context_budget_tokens" => Some((9, 20)),
-            "compact_threshold_pct" => Some((10, 20)),
-            "keep_recent_on_compact" => Some((11, 20)),
-            "bash_timeout_secs" => Some((12, 20)),
-            "snapshot_max_count" => Some((15, 20)),
-            "snapshot_max_size_mb" => Some((16, 20)),
+            "max_context_messages" => Some((8, 20)),
+            "max_tool_loops" => Some((9, 20)),
+            "max_retries" => Some((10, 20)),
+            "retry_delay_ms" => Some((11, 20)),
+            "context_budget_tokens" => Some((13, 20)),
+            "compact_threshold_pct" => Some((14, 20)),
+            "keep_recent_on_compact" => Some((15, 20)),
+            "bash_timeout_secs" => Some((16, 20)),
+            "snapshot_max_count" => Some((20, 20)),
+            "snapshot_max_size_mb" => Some((21, 20)),
             _ => None,
         },
         SettingsTab::Tools => None,
@@ -479,10 +483,25 @@ fn settings_row_hit(
             .checked_sub(4)
             .filter(|idx| *idx < 6)
             .map(|idx| (idx, None)),
-        SettingsTab::Advanced => row
-            .checked_sub(4)
-            .filter(|idx| *idx < 13)
-            .map(|idx| (idx, None)),
+        SettingsTab::Advanced => match row {
+            4 => Some((0, None)),
+            5 => Some((1, None)),
+            7 => Some((2, None)),
+            8 => Some((3, None)),
+            9 => Some((4, None)),
+            10 => Some((5, None)),
+            11 => Some((6, None)),
+            12 => Some((7, None)),
+            13 => Some((8, None)),
+            14 => Some((9, None)),
+            15 => Some((10, None)),
+            16 => Some((11, None)),
+            19 => Some((12, None)),
+            20 => Some((13, None)),
+            21 => Some((14, None)),
+            22 => Some((15, None)),
+            _ => None,
+        },
         SettingsTab::Gateway => match row {
             4 => Some((0, None)),
             5 => Some((1, None)),
@@ -552,9 +571,13 @@ fn auth_row_action_offsets(
     let primary_label = if entry.authenticated {
         "[Logout]"
     } else {
-        "[Login]"
+        "[API Key]"
     };
-    let test_label = "[Test]";
+    let test_label = if !entry.authenticated && entry.provider_id == "openai" {
+        "[ChatGPT]"
+    } else {
+        "[Test]"
+    };
     let actions_width =
         primary_label.chars().count() as u16 + 1 + test_label.chars().count() as u16;
     let primary_start = content_area
@@ -691,7 +714,7 @@ fn render_provider_tab<'a>(
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled("  Provider", theme.fg_active)));
     lines.push(Line::from(Span::styled(
-        "  Select your LLM provider and credentials",
+        "  Select your LLM provider and runtime settings. Credentials are managed in Auth.",
         theme.fg_dim,
     )));
     lines.push(Line::raw(""));
@@ -711,32 +734,15 @@ fn render_provider_tab<'a>(
     } else {
         config.model().to_string()
     };
-    let api_key_label = if config.auth_source == "chatgpt_subscription" {
-        "ChatGPT Auth"
-    } else {
-        "API Key"
-    };
-    let api_key_val = if config.auth_source == "chatgpt_subscription" {
-        if config.chatgpt_auth_available {
-            format!(
-                "connected{}",
-                config
-                    .chatgpt_auth_source
-                    .as_deref()
-                    .map(|source| format!(" ({source})"))
-                    .unwrap_or_default()
-            )
-        } else {
-            "not authenticated".to_string()
-        }
-    } else {
-        mask_api_key(config.api_key())
-    };
     let auth_source_val = match config.auth_source.as_str() {
         "chatgpt_subscription" => "ChatGPT subscription".to_string(),
         _ => "API key".to_string(),
     };
-    let transport_val = if config.api_transport().is_empty() {
+    let uses_fixed_anthropic_messages =
+        providers::uses_fixed_anthropic_messages(&config.provider, &config.model);
+    let transport_val = if uses_fixed_anthropic_messages {
+        "anthropic messages".to_string()
+    } else if config.api_transport().is_empty() {
         providers::default_transport_for(&config.provider).to_string()
     } else {
         match config.api_transport() {
@@ -756,51 +762,46 @@ fn render_provider_tab<'a>(
         config.reasoning_effort().to_string()
     };
     let context_window_val = format!("{} tok", config.context_window_tokens);
-    let api_key_hint = if config.auth_source == "chatgpt_subscription" {
-        if config.chatgpt_auth_available {
-            " [Enter: logout]"
-        } else {
-            " [Enter: login]"
-        }
-    } else {
-        " [Enter: edit]"
-    };
     let context_hint = if config.provider == "custom" {
         " [Enter: edit]"
     } else {
         ""
     };
+    let transport_hint = if uses_fixed_anthropic_messages {
+        ""
+    } else {
+        " [Enter: cycle]"
+    };
 
     // Field definitions: (index, label, value, field_name, hint)
-    let fields: [(usize, &str, String, &str, &str); 9] = [
+    let fields: [(usize, &str, String, &str, &str); 8] = [
         (0, "Provider", provider_val, "provider", " [Enter: pick]"),
         (1, "Base URL", base_url_val, "base_url", " [Enter: edit]"),
-        (2, api_key_label, api_key_val, "api_key", api_key_hint),
-        (3, "Auth", auth_source_val, "auth_source", " [Enter: cycle]"),
-        (4, "Model", model_val, "model", " [Enter: pick]"),
+        (2, "Auth", auth_source_val, "auth_source", " [Enter: cycle]"),
+        (3, "Model", model_val, "model", " [Enter: pick]"),
         (
-            5,
+            4,
             "Transport",
             transport_val,
             "api_transport",
-            " [Enter: cycle]",
+            transport_hint,
         ),
         (
-            6,
+            5,
             "Assistant ID",
             assistant_id_val,
             "assistant_id",
             " [Enter: edit]",
         ),
         (
-            7,
+            6,
             "Effort",
             effort_val,
             "reasoning_effort",
             " [Enter: pick]",
         ),
         (
-            8,
+            7,
             "Ctx Length",
             context_window_val,
             "context_window_tokens",
@@ -816,12 +817,7 @@ fn render_provider_tab<'a>(
 
         let display_value: String = if is_editing {
             // Show edit buffer with cursor block
-            if *field_name == "api_key" {
-                // Show raw characters while editing API key
-                clip_inline_text(&format!("{}\u{2588}", settings.edit_buffer()), 52)
-            } else {
-                clip_inline_text(&format!("{}\u{2588}", settings.edit_buffer()), 52)
-            }
+            clip_inline_text(&format!("{}\u{2588}", settings.edit_buffer()), 52)
         } else {
             clip_inline_text(value, 52)
         };
@@ -1147,22 +1143,12 @@ fn render_chat_tab<'a>(
     lines.push(Line::raw(""));
 
     // Fields 0–2: toggles
-    let toggles: [(usize, bool, &str, &str); 3] = [
-        (0, config.enable_streaming, "Streaming", "enable_streaming"),
-        (
-            1,
-            config.enable_conversation_memory,
-            "Conversation Memory",
-            "enable_conversation_memory",
-        ),
-        (
-            2,
-            config.enable_honcho_memory,
-            "Honcho Memory",
-            "enable_honcho_memory",
-        ),
+    let toggles: [(usize, bool, &str); 3] = [
+        (0, config.enable_streaming, "Streaming"),
+        (1, config.enable_conversation_memory, "Conversation Memory"),
+        (2, config.enable_honcho_memory, "Honcho Memory"),
     ];
-    for (idx, enabled, name, _field_name) in &toggles {
+    for (idx, enabled, name) in &toggles {
         let is_selected = settings.field_cursor() == *idx;
         let check = if *enabled { "[x]" } else { "[ ]" };
         let marker = if is_selected { "> " } else { "  " };
@@ -1220,6 +1206,160 @@ fn render_chat_tab<'a>(
     for (idx, label, value, field_name, password) in &text_fields {
         render_gateway_text_field(
             settings, theme, &mut lines, *idx, label, value, field_name, *password,
+        );
+    }
+
+    let capability_toggles: [(usize, bool, &str); 10] = [
+        (6, config.anticipatory_enabled, "Anticipatory Support"),
+        (7, config.anticipatory_morning_brief, "Morning Brief"),
+        (
+            8,
+            config.anticipatory_predictive_hydration,
+            "Predictive Hydration",
+        ),
+        (9, config.anticipatory_stuck_detection, "Stuck Detection"),
+        (10, config.operator_model_enabled, "Operator Model"),
+        (
+            11,
+            config.operator_model_allow_message_statistics,
+            "Message Statistics",
+        ),
+        (
+            12,
+            config.operator_model_allow_approval_learning,
+            "Approval Learning",
+        ),
+        (
+            13,
+            config.operator_model_allow_attention_tracking,
+            "Attention Tracking",
+        ),
+        (
+            14,
+            config.operator_model_allow_implicit_feedback,
+            "Implicit Feedback",
+        ),
+        (15, config.collaboration_enabled, "Collaboration"),
+    ];
+    for (idx, enabled, name) in &capability_toggles {
+        let is_selected = settings.field_cursor() == *idx;
+        let check = if *enabled { "[x]" } else { "[ ]" };
+        let marker = if is_selected { "> " } else { "  " };
+        let marker_style = if is_selected {
+            theme.accent_primary
+        } else {
+            theme.fg_dim
+        };
+        let check_style = if *enabled {
+            theme.accent_success
+        } else {
+            theme.fg_dim
+        };
+        let label_style = if is_selected {
+            theme.accent_primary
+        } else {
+            theme.fg_active
+        };
+        let mut spans = vec![
+            Span::styled(marker, marker_style),
+            Span::styled(check, check_style),
+            Span::raw(" "),
+            Span::styled(*name, label_style),
+        ];
+        if is_selected {
+            spans.push(Span::styled("  [Space: toggle]", theme.fg_dim));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    let field_16_selected = settings.field_cursor() == 16;
+    lines.push(Line::from(vec![
+        Span::styled(
+            if field_16_selected { "> " } else { "  " },
+            if field_16_selected {
+                theme.accent_primary
+            } else {
+                theme.fg_dim
+            },
+        ),
+        Span::styled(format!("{:<16} ", "Compliance:"), theme.fg_dim),
+        Span::styled(
+            config.compliance_mode.as_str(),
+            if field_16_selected {
+                theme.accent_primary
+            } else {
+                theme.fg_active
+            },
+        ),
+        if field_16_selected {
+            Span::styled("  [Enter: cycle]", theme.fg_dim)
+        } else {
+            Span::raw("")
+        },
+    ]));
+
+    for (idx, label, value, field_name) in [(
+        17usize,
+        "Retention Days: ",
+        config.compliance_retention_days.to_string(),
+        "compliance_retention_days",
+    )] {
+        render_gateway_text_field(
+            settings, theme, &mut lines, idx, label, &value, field_name, false,
+        );
+    }
+
+    for (idx, enabled, name) in [
+        (
+            18usize,
+            config.compliance_sign_all_events,
+            "Sign All Events",
+        ),
+        (19usize, config.tool_synthesis_enabled, "Tool Synthesis"),
+        (
+            20usize,
+            config.tool_synthesis_require_activation,
+            "Require Activation",
+        ),
+    ] {
+        let is_selected = settings.field_cursor() == idx;
+        let check = if enabled { "[x]" } else { "[ ]" };
+        let marker = if is_selected { "> " } else { "  " };
+        let marker_style = if is_selected {
+            theme.accent_primary
+        } else {
+            theme.fg_dim
+        };
+        let check_style = if enabled {
+            theme.accent_success
+        } else {
+            theme.fg_dim
+        };
+        let label_style = if is_selected {
+            theme.accent_primary
+        } else {
+            theme.fg_active
+        };
+        let mut spans = vec![
+            Span::styled(marker, marker_style),
+            Span::styled(check, check_style),
+            Span::raw(" "),
+            Span::styled(name, label_style),
+        ];
+        if is_selected {
+            spans.push(Span::styled("  [Space: toggle]", theme.fg_dim));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    for (idx, label, value, field_name) in [(
+        21usize,
+        "Tool Limit:     ",
+        config.tool_synthesis_max_generated_tools.to_string(),
+        "tool_synthesis_max_generated_tools",
+    )] {
+        render_gateway_text_field(
+            settings, theme, &mut lines, idx, label, &value, field_name, false,
         );
     }
 
@@ -1699,9 +1839,72 @@ fn render_advanced_tab<'a>(
     )));
     lines.push(Line::raw(""));
 
-    // Field 0: auto_compact_context (toggle)
+    // Field 0: managed_sandbox_enabled (toggle)
     {
         let is_selected = settings.field_cursor() == 0;
+        let marker = if is_selected { "> " } else { "  " };
+        let marker_style = if is_selected {
+            theme.accent_primary
+        } else {
+            theme.fg_dim
+        };
+        let check = if config.managed_sandbox_enabled {
+            "[x]"
+        } else {
+            "[ ]"
+        };
+        let check_style = if config.managed_sandbox_enabled {
+            theme.accent_success
+        } else {
+            theme.fg_dim
+        };
+        let label_style = if is_selected {
+            theme.accent_primary
+        } else {
+            theme.fg_active
+        };
+        let mut spans = vec![
+            Span::styled(marker, marker_style),
+            Span::styled(check, check_style),
+            Span::raw(" "),
+            Span::styled("Sandbox Managed Cmds", label_style),
+        ];
+        if is_selected {
+            spans.push(Span::styled("  [Space: toggle]", theme.fg_dim));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    // Field 1: managed_security_level (cycle)
+    {
+        let is_selected = settings.field_cursor() == 1;
+        let marker = if is_selected { "> " } else { "  " };
+        let marker_style = if is_selected {
+            theme.accent_primary
+        } else {
+            theme.fg_dim
+        };
+        let value_style = if is_selected {
+            theme.accent_primary
+        } else {
+            theme.fg_active
+        };
+        let mut spans = vec![
+            Span::styled(marker, marker_style),
+            Span::styled("Managed Security: ", theme.fg_dim),
+            Span::styled(config.managed_security_level.clone(), value_style),
+        ];
+        if is_selected {
+            spans.push(Span::styled("  [Enter/Space: cycle]", theme.fg_dim));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    lines.push(Line::raw(""));
+
+    // Field 2: auto_compact_context (toggle)
+    {
+        let is_selected = settings.field_cursor() == 2;
         let marker = if is_selected { "> " } else { "  " };
         let marker_style = if is_selected {
             theme.accent_primary
@@ -1735,58 +1938,58 @@ fn render_advanced_tab<'a>(
         lines.push(Line::from(spans));
     }
 
-    // Fields 1–9: numeric inline-edit fields
+    // Fields 3–11: numeric inline-edit fields
     let numeric_fields: [(usize, &str, String, &str); 9] = [
         (
-            1,
+            3,
             "Max Context Msgs:",
             config.max_context_messages.to_string(),
             "max_context_messages",
         ),
         (
-            2,
+            4,
             "Max Tool Loops:  ",
             config.max_tool_loops.to_string(),
             "max_tool_loops",
         ),
         (
-            3,
+            5,
             "Max Retries:     ",
             config.max_retries.to_string(),
             "max_retries",
         ),
         (
-            4,
+            6,
             "Retry Delay (ms):",
             config.retry_delay_ms.to_string(),
             "retry_delay_ms",
         ),
         (
-            5,
+            7,
             "Context Len Tok: ",
             config.context_window_tokens.to_string(),
             "context_window_tokens",
         ),
         (
-            6,
+            8,
             "Budget Tokens:   ",
             config.context_budget_tokens.to_string(),
             "context_budget_tokens",
         ),
         (
-            7,
+            9,
             "Compact Thres %: ",
             config.compact_threshold_pct.to_string(),
             "compact_threshold_pct",
         ),
         (
-            8,
+            10,
             "Keep Recent:     ",
             config.keep_recent_on_compact.to_string(),
             "keep_recent_on_compact",
         ),
         (
-            9,
+            11,
             "Bash Timeout (s):",
             config.bash_timeout_secs.to_string(),
             "bash_timeout_secs",
@@ -1831,9 +2034,9 @@ fn render_advanced_tab<'a>(
         theme.fg_dim,
     )));
 
-    // Field 10: snapshot_auto_cleanup (toggle)
+    // Field 12: snapshot_auto_cleanup (toggle)
     {
-        let is_selected = settings.field_cursor() == 10;
+        let is_selected = settings.field_cursor() == 12;
         let marker = if is_selected { "> " } else { "  " };
         let marker_style = if is_selected {
             theme.accent_primary
@@ -1867,16 +2070,16 @@ fn render_advanced_tab<'a>(
         lines.push(Line::from(spans));
     }
 
-    // Fields 11-12: snapshot numeric fields
+    // Fields 13-14: snapshot numeric fields
     let snapshot_fields: [(usize, &str, String, &str); 2] = [
         (
-            11,
+            13,
             "Max Snapshots:   ",
             config.snapshot_max_count.to_string(),
             "snapshot_max_count",
         ),
         (
-            12,
+            14,
             "Max Size (MB):   ",
             config.snapshot_max_size_mb.to_string(),
             "snapshot_max_size_mb",
@@ -1914,9 +2117,9 @@ fn render_advanced_tab<'a>(
         lines.push(Line::from(spans));
     }
 
-    // Field 13: snapshot_stats (read-only info line)
+    // Field 15: snapshot_stats (read-only info line)
     {
-        let is_selected = settings.field_cursor() == 13;
+        let is_selected = settings.field_cursor() == 15;
         let marker = if is_selected { "> " } else { "  " };
         let marker_style = if is_selected {
             theme.accent_primary
@@ -2209,6 +2412,33 @@ fn render_auth_tab<'a>(
     )));
     lines.push(Line::raw(""));
 
+    if let Some(provider_id) = auth.login_target.as_deref() {
+        let provider_name = auth
+            .entries
+            .iter()
+            .find(|entry| entry.provider_id == provider_id)
+            .map(|entry| entry.provider_name.clone())
+            .or_else(|| providers::find_by_id(provider_id).map(|def| def.name.to_string()))
+            .unwrap_or_else(|| provider_id.to_string());
+        let masked = "•".repeat(auth.login_buffer.chars().count());
+        let display = render_edit_buffer_with_cursor(&masked, auth.login_cursor);
+
+        lines.push(Line::from(Span::styled(
+            format!("  Login to {provider_name}"),
+            theme.fg_active,
+        )));
+        lines.push(Line::from(Span::styled(
+            "  Enter API key below. Press Enter to save or Esc to cancel.",
+            theme.fg_dim,
+        )));
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            Span::styled("  API Key: ", theme.fg_dim),
+            Span::styled(display, theme.accent_primary),
+        ]));
+        return lines;
+    }
+
     if !auth.loaded {
         lines.push(Line::from(Span::styled(
             "  No providers loaded. Connect to daemon to see status.",
@@ -2242,9 +2472,13 @@ fn render_auth_tab<'a>(
         let primary_label = if entry.authenticated {
             "[Logout]"
         } else {
-            "[Login]"
+            "[API Key]"
         };
-        let test_label = "[Test]";
+        let test_label = if !entry.authenticated && entry.provider_id == "openai" {
+            "[ChatGPT]"
+        } else {
+            "[Test]"
+        };
         let left_width = marker.chars().count()
             + dot.chars().count()
             + entry.provider_name.chars().count()
@@ -2517,7 +2751,7 @@ mod tests {
         let settings = SettingsState::new();
         let config = ConfigState::new();
         let _theme = ThemeTokens::default();
-        assert_eq!(settings.active_tab(), SettingsTab::Provider);
+        assert_eq!(settings.active_tab(), SettingsTab::Auth);
         assert_eq!(config.model(), "gpt-5.4");
     }
 

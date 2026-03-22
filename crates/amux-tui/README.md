@@ -73,7 +73,7 @@ Requires a running amux daemon (connects via Unix socket or TCP).
 
 7 tabs: Provider, Tools, Web Search, Chat, Gateway, Agent, Advanced
 
-Settings load from `~/.amux/agent-settings.json` and persist on change.
+Agent settings load from the daemon and persist through daemon-side per-item updates.
 
 ## Architecture
 

@@ -55,7 +55,7 @@ export interface ContextSnapshot {
     workspaceId: string | null;
     surfaceId: string | null;
     sessionId: string | null;
-    activeProvider: string;
+    active_provider: string;
     model: string;
     threadCount: number;
     snippetCount: number;
@@ -467,7 +467,7 @@ function buildContextSnapshot(opts: {
 }): ContextSnapshot {
     const { agentSettings, threads } = useAgentStore.getState();
     const snippets = useSnippetStore.getState().snippets;
-    const activeProviderConfig = agentSettings[agentSettings.activeProvider] as { model: string };
+    const active_providerConfig = agentSettings[agentSettings.active_provider] as { model: string };
 
     return {
         id: nextId("ctx", "context"),
@@ -476,11 +476,11 @@ function buildContextSnapshot(opts: {
         workspaceId: opts.workspaceId ?? null,
         surfaceId: opts.surfaceId ?? null,
         sessionId: opts.sessionId ?? null,
-        activeProvider: agentSettings.activeProvider,
-        model: activeProviderConfig?.model ?? "",
+        active_provider: agentSettings.active_provider,
+        model: active_providerConfig?.model ?? "",
         threadCount: threads.length,
         snippetCount: snippets.length,
-        tokenBudget: agentSettings.contextBudgetTokens,
+        tokenBudget: agentSettings.context_budget_tokens,
         systemMemoryChars: opts.frozenSnapshot.length,
         userMemoryChars: opts.userProfile.length,
     };

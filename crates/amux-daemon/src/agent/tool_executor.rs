@@ -13,7 +13,9 @@ use amux_protocol::{
 };
 use anyhow::{Context, Result};
 use base64::Engine;
+use tokio::io::AsyncReadExt;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 use crate::history::{HistoryStore, SkillVariantRecord};
 use crate::session_manager::SessionManager;
@@ -397,7 +399,7 @@ pub fn get_available_tools(
 
     if config.tools.gateway_messaging {
         for (name, desc, params) in [
-            ("send_slack_message", "Send a message to a Slack channel. If channel is omitted, sends to the default channel from settings (slackChannelFilter).", serde_json::json!({
+            ("send_slack_message", "Send a message to a Slack channel. If channel is omitted, sends to the default channel from gateway settings (slack_channel_filter).", serde_json::json!({
                 "type": "object",
                 "properties": {
                     "channel": { "type": "string", "description": "Slack channel name or ID. Optional — uses default from config if omitted." },
@@ -405,7 +407,7 @@ pub fn get_available_tools(
                 },
                 "required": ["message"]
             })),
-            ("send_discord_message", "Send a message to a Discord channel or user. If channel_id and user_id are both omitted, sends to the default channel (discordChannelFilter) or default user DM (discordAllowedUsers) from settings.", serde_json::json!({
+            ("send_discord_message", "Send a message to a Discord channel or user. If channel_id and user_id are both omitted, sends to the default channel (discord_channel_filter) or default user DM (discord_allowed_users) from gateway settings.", serde_json::json!({
                 "type": "object",
                 "properties": {
                     "channel_id": { "type": "string", "description": "Discord channel ID. Optional — uses default from config if omitted." },
@@ -414,7 +416,7 @@ pub fn get_available_tools(
                 },
                 "required": ["message"]
             })),
-            ("send_telegram_message", "Send a message to a Telegram chat. If chat_id is omitted, sends to the default chat from settings (telegramAllowedChats).", serde_json::json!({
+            ("send_telegram_message", "Send a message to a Telegram chat. If chat_id is omitted, sends to the default chat from gateway settings (telegram_allowed_chats).", serde_json::json!({
                 "type": "object",
                 "properties": {
                     "chat_id": { "type": "string", "description": "Telegram chat ID. Optional — uses default from config if omitted." },
@@ -422,7 +424,7 @@ pub fn get_available_tools(
                 },
                 "required": ["message"]
             })),
-            ("send_whatsapp_message", "Send a message to a WhatsApp contact. If phone is omitted, sends to the default contact from settings (whatsappAllowedContacts).", serde_json::json!({
+            ("send_whatsapp_message", "Send a message to a WhatsApp contact. If phone is omitted, sends to the default contact from gateway settings (whatsapp_allowed_contacts).", serde_json::json!({
                 "type": "object",
                 "properties": {
                     "phone": { "type": "string", "description": "Phone in E.164 format or WhatsApp JID. Optional — uses default from config if omitted." },
@@ -786,6 +788,7 @@ pub async fn execute_tool(
     event_tx: &broadcast::Sender<AgentEvent>,
     agent_data_dir: &std::path::Path,
     http_client: &reqwest::Client,
+    cancel_token: Option<CancellationToken>,
 ) -> ToolResult {
     tracing::info!(
         tool = %tool_call.function.name,
@@ -845,6 +848,7 @@ pub async fn execute_tool(
                 session_id,
                 event_tx,
                 thread_id,
+                cancel_token.clone(),
             )
             .await
             {
@@ -863,6 +867,7 @@ pub async fn execute_tool(
                 session_id,
                 event_tx,
                 thread_id,
+                cancel_token.clone(),
             )
             .await
             {
@@ -908,13 +913,8 @@ pub async fn execute_tool(
         | "send_discord_message"
         | "send_telegram_message"
         | "send_whatsapp_message" => {
-            execute_gateway_message(
-                tool_call.function.name.as_str(),
-                &args,
-                http_client,
-                agent_data_dir,
-            )
-            .await
+            execute_gateway_message(tool_call.function.name.as_str(), &args, agent, http_client)
+                .await
         }
         // Workspace/snippet tools (read/write persistence files directly)
         "list_workspaces"
@@ -940,6 +940,7 @@ pub async fn execute_tool(
                 session_id,
                 event_tx,
                 thread_id,
+                cancel_token.clone(),
             )
             .await
             {
@@ -1524,11 +1525,27 @@ fn terminal_output_tail(raw: &[u8], max_lines: usize) -> String {
     result
 }
 
+fn discord_authorization_header(token: &str) -> String {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let normalized = trimmed
+        .strip_prefix("Bot ")
+        .or_else(|| trimmed.strip_prefix("bot "))
+        .or_else(|| trimmed.strip_prefix("Bearer "))
+        .or_else(|| trimmed.strip_prefix("bearer "))
+        .unwrap_or(trimmed)
+        .trim();
+    format!("Bot {normalized}")
+}
+
 async fn wait_for_managed_command_outcome(
     rx: &mut tokio::sync::broadcast::Receiver<DaemonMessage>,
     session_id: SessionId,
     execution_id: &str,
     timeout_secs: u64,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<ManagedCommandWaitOutcome> {
     const MAX_CAPTURE_BYTES: usize = 512_000;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
@@ -1542,9 +1559,22 @@ async fn wait_for_managed_command_outcome(
             });
         }
 
-        let event = tokio::time::timeout(remaining, rx.recv())
-            .await
-            .map_err(|_| anyhow::anyhow!("timed out waiting for managed command result"))?;
+        let event = if let Some(token) = cancel_token {
+            tokio::select! {
+                result = tokio::time::timeout(remaining, rx.recv()) => {
+                    result.map_err(|_| anyhow::anyhow!("timed out waiting for managed command result"))?
+                }
+                _ = token.cancelled() => {
+                    anyhow::bail!(
+                        "managed terminal command wait cancelled; the command may still be running in the session"
+                    );
+                }
+            }
+        } else {
+            tokio::time::timeout(remaining, rx.recv())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for managed command result"))?
+        };
 
         let msg = match event {
             Ok(message) => message,
@@ -2757,6 +2787,7 @@ async fn execute_run_terminal_command(
     session_id: Option<SessionId>,
     event_tx: &broadcast::Sender<AgentEvent>,
     thread_id: &str,
+    cancel_token: Option<CancellationToken>,
 ) -> Result<(String, Option<ToolPendingApproval>)> {
     if should_use_managed_execution(args) {
         let managed_args =
@@ -2768,11 +2799,18 @@ async fn execute_run_terminal_command(
             session_id,
             event_tx,
             thread_id,
+            cancel_token,
         )
         .await
     } else {
-        execute_headless_shell_command(args, session_manager, session_id, "run_terminal_command")
-            .await
+        execute_headless_shell_command(
+            args,
+            session_manager,
+            session_id,
+            "run_terminal_command",
+            cancel_token,
+        )
+        .await
     }
 }
 
@@ -2783,6 +2821,7 @@ async fn execute_bash_command(
     session_id: Option<SessionId>,
     event_tx: &broadcast::Sender<AgentEvent>,
     thread_id: &str,
+    cancel_token: Option<CancellationToken>,
 ) -> Result<(String, Option<ToolPendingApproval>)> {
     if should_use_managed_execution(args) {
         let managed_args =
@@ -2794,10 +2833,18 @@ async fn execute_bash_command(
             session_id,
             event_tx,
             thread_id,
+            cancel_token,
         )
         .await
     } else {
-        execute_headless_shell_command(args, session_manager, session_id, "bash_command").await
+        execute_headless_shell_command(
+            args,
+            session_manager,
+            session_id,
+            "bash_command",
+            cancel_token,
+        )
+        .await
     }
 }
 
@@ -2908,6 +2955,7 @@ async fn execute_headless_shell_command(
     session_manager: &Arc<SessionManager>,
     session_id: Option<SessionId>,
     tool_name: &str,
+    cancel_token: Option<CancellationToken>,
 ) -> Result<(String, Option<ToolPendingApproval>)> {
     let command = args
         .get("command")
@@ -2934,21 +2982,69 @@ async fn execute_headless_shell_command(
         process.current_dir(cwd);
     }
 
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(timeout_secs),
-        process.output(),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("{tool_name} timed out after {timeout_secs}s"))??;
+    let mut child = process
+        .spawn()
+        .with_context(|| format!("failed to spawn {tool_name} subprocess"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("{tool_name} stdout capture was unavailable"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("{tool_name} stderr capture was unavailable"))?;
+    let stdout_task = tokio::spawn(async move {
+        let mut reader = tokio::io::BufReader::new(stdout);
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await?;
+        Ok::<Vec<u8>, std::io::Error>(buf)
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut reader = tokio::io::BufReader::new(stderr);
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await?;
+        Ok::<Vec<u8>, std::io::Error>(buf)
+    });
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let wait_result = async {
+        tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), child.wait())
+            .await
+            .map_err(|_| anyhow::anyhow!("{tool_name} timed out after {timeout_secs}s"))?
+            .with_context(|| format!("{tool_name} process wait failed"))
+    };
+
+    let status = if let Some(token) = cancel_token.as_ref() {
+        tokio::select! {
+            result = wait_result => result?,
+            _ = token.cancelled() => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                let _ = stdout_task.await;
+                let _ = stderr_task.await;
+                anyhow::bail!("{tool_name} cancelled while waiting for command completion");
+            }
+        }
+    } else {
+        wait_result.await?
+    };
+
+    let stdout = stdout_task
+        .await
+        .context("stdout collection task panicked")?
+        .context("failed to read command stdout")?;
+    let stderr = stderr_task
+        .await
+        .context("stderr collection task panicked")?
+        .context("failed to read command stderr")?;
+
+    let stdout = String::from_utf8_lossy(&stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
     let cwd_suffix = cwd
         .as_ref()
         .map(|path| format!(" in {}", path.display()))
         .unwrap_or_default();
 
-    if output.status.success() {
+    if status.success() {
         let mut result = format!("Command finished successfully{cwd_suffix} (exit_code: 0).");
         if !stdout.is_empty() {
             result.push_str(&format!("\n\nStdout:\n{stdout}"));
@@ -2967,7 +3063,7 @@ async fn execute_headless_shell_command(
         }
         Err(anyhow::anyhow!(
             "Command failed{cwd_suffix} (exit_code: {:?}).{}",
-            output.status.code(),
+            status.code(),
             details
         ))
     }
@@ -3009,13 +3105,6 @@ fn managed_alias_args(args: &serde_json::Value, fallback_rationale: &str) -> ser
             mapped.insert(key.to_string(), value.clone());
         }
     }
-    if !mapped.contains_key("security_level") {
-        mapped.insert(
-            "security_level".to_string(),
-            serde_json::Value::String("lowest".to_string()),
-        );
-    }
-
     serde_json::Value::Object(mapped)
 }
 
@@ -3026,6 +3115,7 @@ async fn execute_managed_command(
     session_id: Option<SessionId>,
     event_tx: &broadcast::Sender<AgentEvent>,
     thread_id: &str,
+    cancel_token: Option<CancellationToken>,
 ) -> Result<(String, Option<ToolPendingApproval>)> {
     let command = args
         .get("command")
@@ -3059,11 +3149,16 @@ async fn execute_managed_command(
             session_id.unwrap_or(sessions[0].id)
         };
 
+    let default_managed_execution = agent.config.read().await.managed_execution.clone();
     let security_level = match args
         .get("security_level")
         .and_then(|value| value.as_str())
-        .unwrap_or("lowest")
-    {
+        .unwrap_or(match default_managed_execution.security_level {
+            SecurityLevel::Highest => "highest",
+            SecurityLevel::Moderate => "moderate",
+            SecurityLevel::Lowest => "lowest",
+            SecurityLevel::Yolo => "yolo",
+        }) {
         "highest" => SecurityLevel::Highest,
         "lowest" => SecurityLevel::Lowest,
         "yolo" => SecurityLevel::Yolo,
@@ -3099,7 +3194,7 @@ async fn execute_managed_command(
         sandbox_enabled: args
             .get("sandbox_enabled")
             .and_then(|value| value.as_bool())
-            .unwrap_or(false),
+            .unwrap_or(default_managed_execution.sandbox_enabled),
         security_level,
         cwd: args
             .get("cwd")
@@ -3148,6 +3243,7 @@ async fn execute_managed_command(
                                 sid,
                                 &eid,
                                 monitor_timeout,
+                                None,
                             )
                             .await
                             {
@@ -3220,6 +3316,7 @@ async fn execute_managed_command(
                 resolved_session_id,
                 &execution_id,
                 timeout_secs,
+                cancel_token.as_ref(),
             )
             .await?
             {
@@ -3730,7 +3827,7 @@ async fn execute_broadcast_contribution(
     task_id: Option<&str>,
 ) -> Result<String> {
     if !agent.config.read().await.collaboration.enabled {
-        anyhow::bail!("collaboration moat is disabled in agent config");
+        anyhow::bail!("collaboration capability is disabled in agent config");
     }
     let task_id =
         task_id.ok_or_else(|| anyhow::anyhow!("broadcast_contribution requires a current task"))?;
@@ -3809,7 +3906,7 @@ async fn execute_read_peer_memory(
     task_id: Option<&str>,
 ) -> Result<String> {
     if !agent.config.read().await.collaboration.enabled {
-        anyhow::bail!("collaboration moat is disabled in agent config");
+        anyhow::bail!("collaboration capability is disabled in agent config");
     }
     let task_id =
         task_id.ok_or_else(|| anyhow::anyhow!("read_peer_memory requires a current task"))?;
@@ -3840,7 +3937,7 @@ async fn execute_vote_on_disagreement(
     task_id: Option<&str>,
 ) -> Result<String> {
     if !agent.config.read().await.collaboration.enabled {
-        anyhow::bail!("collaboration moat is disabled in agent config");
+        anyhow::bail!("collaboration capability is disabled in agent config");
     }
     let task_id =
         task_id.ok_or_else(|| anyhow::anyhow!("vote_on_disagreement requires a current task"))?;
@@ -3902,7 +3999,7 @@ async fn execute_list_collaboration_sessions(
     task_id: Option<&str>,
 ) -> Result<String> {
     if !agent.config.read().await.collaboration.enabled {
-        anyhow::bail!("collaboration moat is disabled in agent config");
+        anyhow::bail!("collaboration capability is disabled in agent config");
     }
     let fallback_parent = if let Some(task_id) = task_id {
         agent
@@ -4208,93 +4305,17 @@ fn resolve_key_sequence(key: &str) -> Vec<u8> {
 async fn execute_gateway_message(
     tool_name: &str,
     args: &serde_json::Value,
+    agent: &AgentEngine,
     http_client: &reqwest::Client,
-    agent_data_dir: &std::path::Path,
 ) -> Result<String> {
     let message = args
         .get("message")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing 'message' argument"))?;
-
-    // Read gateway tokens from agent config or settings.json
-    let config_path = agent_data_dir.join("config.json");
-    let settings_path = agent_data_dir
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .join("settings.json");
-
-    let (slack_token, telegram_token, discord_token) = {
-        // Try agent config first
-        let mut st = String::new();
-        let mut tt = String::new();
-        let mut dt = String::new();
-
-        if let Ok(raw) = tokio::fs::read_to_string(&config_path).await {
-            if let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&raw) {
-                st = cfg
-                    .pointer("/gateway/slack_token")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                tt = cfg
-                    .pointer("/gateway/telegram_token")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                dt = cfg
-                    .pointer("/gateway/discord_token")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-            }
-        }
-
-        // Fall back to settings.json
-        if st.is_empty() && tt.is_empty() && dt.is_empty() {
-            if let Ok(raw) = tokio::fs::read_to_string(&settings_path).await {
-                if let Ok(s) = serde_json::from_str::<serde_json::Value>(&raw) {
-                    st = s
-                        .pointer("/settings/slackToken")
-                        .or_else(|| s.get("slackToken"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    tt = s
-                        .pointer("/settings/telegramToken")
-                        .or_else(|| s.get("telegramToken"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    dt = s
-                        .pointer("/settings/discordToken")
-                        .or_else(|| s.get("discordToken"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                }
-            }
-        }
-
-        (st, tt, dt)
-    };
-
-    // Read default targets from settings for when user doesn't specify
-    let settings: serde_json::Value =
-        if let Ok(raw) = tokio::fs::read_to_string(&settings_path).await {
-            serde_json::from_str(&raw).unwrap_or_default()
-        } else {
-            serde_json::Value::Null
-        };
-
-    let setting = |key: &str| -> String {
-        settings
-            .pointer(&format!("/settings/{key}"))
-            .or_else(|| settings.get(key))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
-    };
-
+    let gateway = agent.get_config().await.gateway;
+    let slack_token = gateway.slack_token.clone();
+    let telegram_token = gateway.telegram_token.clone();
+    let discord_token = gateway.discord_token.clone();
     let first_csv =
         |val: &str| -> String { val.split(',').next().unwrap_or("").trim().to_string() };
 
@@ -4304,15 +4325,17 @@ async fn execute_gateway_message(
                 .get("channel")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| first_csv(&setting("slackChannelFilter")));
+                .unwrap_or_else(|| first_csv(&gateway.slack_channel_filter));
             if channel.is_empty() {
                 return Err(anyhow::anyhow!(
-                    "No channel specified and no default slackChannelFilter in settings"
+                    "No channel specified and no default Slack channel filter in gateway settings"
                 ));
             }
             let channel = channel.as_str();
             if slack_token.is_empty() {
-                return Err(anyhow::anyhow!("Slack token not configured in settings"));
+                return Err(anyhow::anyhow!(
+                    "Slack token not configured in gateway settings"
+                ));
             }
             tracing::info!(platform = "slack", channel = %channel, message = %message, "gateway: sending message");
             let resp = http_client
@@ -4343,13 +4366,13 @@ async fn execute_gateway_message(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            // Fall back to defaults from settings
+            // Fall back to defaults from gateway settings
             if channel_id.is_empty() && user_id.is_empty() {
-                let default_channel = first_csv(&setting("discordChannelFilter"));
+                let default_channel = first_csv(&gateway.discord_channel_filter);
                 if !default_channel.is_empty() {
                     channel_id = default_channel;
                 } else {
-                    let default_user = first_csv(&setting("discordAllowedUsers"));
+                    let default_user = first_csv(&gateway.discord_allowed_users);
                     if !default_user.is_empty() {
                         user_id = default_user;
                     }
@@ -4358,16 +4381,24 @@ async fn execute_gateway_message(
             let channel_id = channel_id.as_str();
             let user_id = user_id.as_str();
             if discord_token.is_empty() {
-                return Err(anyhow::anyhow!("Discord token not configured in settings"));
+                return Err(anyhow::anyhow!(
+                    "Discord token not configured in gateway settings"
+                ));
             }
 
             let target_channel = if !channel_id.is_empty() {
                 channel_id.to_string()
             } else if !user_id.is_empty() {
+                let discord_auth = discord_authorization_header(&discord_token);
+                if discord_auth.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "Discord token not configured in gateway settings"
+                    ));
+                }
                 // Create DM channel first
                 let resp = http_client
                     .post("https://discord.com/api/v10/users/@me/channels")
-                    .header("Authorization", format!("Bot {discord_token}"))
+                    .header("Authorization", discord_auth)
                     .json(&serde_json::json!({ "recipient_id": user_id }))
                     .send()
                     .await?;
@@ -4381,11 +4412,17 @@ async fn execute_gateway_message(
             };
 
             tracing::info!(platform = "discord", channel = %target_channel, message = %message, "gateway: sending message");
+            let discord_auth = discord_authorization_header(&discord_token);
+            if discord_auth.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "Discord token not configured in gateway settings"
+                ));
+            }
             let resp = http_client
                 .post(format!(
                     "https://discord.com/api/v10/channels/{target_channel}/messages"
                 ))
-                .header("Authorization", format!("Bot {discord_token}"))
+                .header("Authorization", discord_auth)
                 .json(&serde_json::json!({ "content": message }))
                 .send()
                 .await?;
@@ -4393,8 +4430,11 @@ async fn execute_gateway_message(
             if resp.status().is_success() {
                 Ok(format!("Discord message sent to {target_channel}"))
             } else {
+                let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
-                Err(anyhow::anyhow!("Discord API error: {body}"))
+                Err(anyhow::anyhow!(
+                    "Discord API error (status {status}): {body}"
+                ))
             }
         }
         "send_telegram_message" => {
@@ -4402,15 +4442,17 @@ async fn execute_gateway_message(
                 .get("chat_id")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| first_csv(&setting("telegramAllowedChats")));
+                .unwrap_or_else(|| first_csv(&gateway.telegram_allowed_chats));
             if chat_id.is_empty() {
                 return Err(anyhow::anyhow!(
-                    "No chat_id specified and no default telegramAllowedChats in settings"
+                    "No chat_id specified and no default Telegram chat in gateway settings"
                 ));
             }
             let chat_id = chat_id.as_str();
             if telegram_token.is_empty() {
-                return Err(anyhow::anyhow!("Telegram token not configured in settings"));
+                return Err(anyhow::anyhow!(
+                    "Telegram token not configured in gateway settings"
+                ));
             }
             tracing::info!(platform = "telegram", chat_id = %chat_id, message = %message, "gateway: sending message");
             let url = format!("https://api.telegram.org/bot{telegram_token}/sendMessage");
@@ -4435,33 +4477,18 @@ async fn execute_gateway_message(
                 .get("phone")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| first_csv(&setting("whatsappAllowedContacts")));
+                .unwrap_or_else(|| first_csv(&gateway.whatsapp_allowed_contacts));
             if phone.is_empty() {
                 return Err(anyhow::anyhow!(
-                    "No phone specified and no default whatsappAllowedContacts in settings"
+                    "No phone specified and no default WhatsApp contact in gateway settings"
                 ));
             }
             let phone = phone.as_str();
-            // WhatsApp requires separate phone_number_id and token — read from settings
-            let settings: serde_json::Value =
-                if let Ok(raw) = tokio::fs::read_to_string(&settings_path).await {
-                    serde_json::from_str(&raw).unwrap_or_default()
-                } else {
-                    serde_json::Value::Null
-                };
-            let wa_token = settings
-                .pointer("/settings/whatsappToken")
-                .or_else(|| settings.get("whatsappToken"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let phone_id = settings
-                .pointer("/settings/whatsappPhoneNumberId")
-                .or_else(|| settings.get("whatsappPhoneNumberId"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let wa_token = gateway.whatsapp_token.as_str();
+            let phone_id = gateway.whatsapp_phone_id.as_str();
             if wa_token.is_empty() || phone_id.is_empty() {
                 return Err(anyhow::anyhow!(
-                    "WhatsApp token/phoneNumberId not configured"
+                    "WhatsApp token/phone number ID not configured in gateway settings"
                 ));
             }
             tracing::info!(platform = "whatsapp", phone = %phone, "gateway: sending message");
@@ -4680,13 +4707,18 @@ mod urlencoding {
 mod tests {
     use super::{
         build_list_files_script, build_write_file_command, build_write_file_script,
-        command_looks_interactive, command_requires_managed_state, managed_alias_args,
-        parse_capture_output, resolve_skill_path, should_use_managed_execution, validate_read_path,
-        validate_write_path,
+        command_looks_interactive, command_requires_managed_state, execute_headless_shell_command,
+        managed_alias_args, parse_capture_output, resolve_skill_path, should_use_managed_execution,
+        validate_read_path, validate_write_path, wait_for_managed_command_outcome,
     };
     use crate::history::SkillVariantRecord;
+    use crate::session_manager::SessionManager;
+    use amux_protocol::SessionId;
     use base64::Engine;
     use std::fs;
+    use std::sync::Arc;
+    use tokio::sync::broadcast;
+    use tokio_util::sync::CancellationToken;
 
     #[test]
     fn write_file_rejects_paths_with_trailing_whitespace() {
@@ -4747,16 +4779,15 @@ mod tests {
     }
 
     #[test]
-    fn managed_alias_defaults_security_level_to_lowest() {
+    fn managed_alias_leaves_security_level_for_runtime_defaults() {
         let args = serde_json::json!({
             "command": "echo hello"
         });
         let mapped = managed_alias_args(&args, "test rationale");
-        let level = mapped
-            .get("security_level")
-            .and_then(|value| value.as_str())
-            .expect("security_level should be set");
-        assert_eq!(level, "lowest");
+        assert!(
+            mapped.get("security_level").is_none(),
+            "alias expansion should not hardcode security defaults"
+        );
     }
 
     #[test]
@@ -4813,6 +4844,52 @@ mod tests {
         })));
         assert!(!command_requires_managed_state("grep foo Cargo.toml"));
         assert!(!command_requires_managed_state("ls -la"));
+    }
+
+    #[tokio::test]
+    async fn managed_command_wait_can_be_cancelled() {
+        let (_tx, mut rx) = broadcast::channel(4);
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let error =
+            wait_for_managed_command_outcome(&mut rx, SessionId::nil(), "exec-1", 30, Some(&token))
+                .await
+                .err()
+                .expect("managed wait should abort when cancellation is requested");
+
+        assert!(error.to_string().contains("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn headless_shell_command_can_be_cancelled() {
+        let session_manager = Arc::new(SessionManager::new());
+        let token = CancellationToken::new();
+        let cancel = token.clone();
+
+        let join = tokio::spawn(async move {
+            execute_headless_shell_command(
+                &serde_json::json!({
+                    "command": "sleep 30",
+                    "timeout_seconds": 30
+                }),
+                &session_manager,
+                None,
+                "bash_command",
+                Some(token),
+            )
+            .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        cancel.cancel();
+
+        let error = join
+            .await
+            .expect("headless shell join should complete")
+            .expect_err("headless shell should abort when cancellation is requested");
+
+        assert!(error.to_string().contains("cancelled"));
     }
 
     #[test]

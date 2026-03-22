@@ -132,12 +132,10 @@ const CDUIApp = () => {
       void amux.agentRequestConciergeWelcome().catch(() => {});
     };
 
-    const timerFast = window.setTimeout(requestWelcome, 200);
-    const timerRetry = window.setTimeout(requestWelcome, 1500);
+    const timer = window.setTimeout(requestWelcome, 250);
 
     return () => {
-      window.clearTimeout(timerFast);
-      window.clearTimeout(timerRetry);
+      window.clearTimeout(timer);
       if (typeof unsubscribe === "function") {
         unsubscribe();
       }

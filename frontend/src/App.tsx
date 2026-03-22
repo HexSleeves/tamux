@@ -70,7 +70,8 @@ export default function App() {
   const settings = useSettingsStore((s) => s.settings);
   const activeWorkspace = useWorkspaceStore((s) => s.activeWorkspace());
   const activeSurface = useWorkspaceStore((s) => s.activeSurface());
-  const activeProvider = useAgentStore((s) => s.agentSettings.activeProvider);
+  const agentSettings = useAgentStore((s) => s.agentSettings);
+  const active_provider = agentSettings.active_provider;
   const cognitiveEvents = useAgentMissionStore((s) => s.cognitiveEvents);
   const operationalEvents = useAgentMissionStore((s) => s.operationalEvents);
   const approvals = useAgentMissionStore((s) => s.approvals);
@@ -157,12 +158,10 @@ export default function App() {
       });
     };
 
-    const timerFast = setTimeout(requestWelcome, 200);
-    const timerRetry = setTimeout(requestWelcome, 1500);
+    const timer = setTimeout(requestWelcome, 250);
 
     return () => {
-      clearTimeout(timerFast);
-      clearTimeout(timerRetry);
+      clearTimeout(timer);
       if (typeof unsubscribe === "function") unsubscribe();
     };
   }, []);
@@ -300,10 +299,10 @@ export default function App() {
     replyTarget: string;
   }) => {
     const amux = (window as any).tamux ?? (window as any).amux;
-    const settingsState = useSettingsStore.getState().settings;
+    const gatewaySettings = useAgentStore.getState().agentSettings;
     const agentState = useAgentStore.getState();
 
-    if (!settingsState.gatewayEnabled) return;
+    if (!gatewaySettings.gateway_enabled) return;
 
     const provider = params.provider;
     const channelId = params.channelId.trim();
@@ -314,9 +313,9 @@ export default function App() {
     if (!channelId) return;
 
     if (provider === "discord") {
-      if (!settingsState.discordToken) return;
+      if (!gatewaySettings.discord_token) return;
 
-      const allowedChannels = settingsState.discordChannelFilter
+      const allowedChannels = gatewaySettings.discord_channel_filter
         .split(",")
         .map((entry) => entry.trim())
         .filter(Boolean)
@@ -326,7 +325,7 @@ export default function App() {
         return;
       }
 
-      const allowedUsers = settingsState.discordAllowedUsers
+      const allowedUsers = gatewaySettings.discord_allowed_users
         .split(",")
         .map((entry) => entry.trim())
         .filter(Boolean)
@@ -338,9 +337,9 @@ export default function App() {
     }
 
     if (provider === "slack") {
-      if (!settingsState.slackToken) return;
+      if (!gatewaySettings.slack_token) return;
 
-      const allowedChannels = settingsState.slackChannelFilter
+      const allowedChannels = gatewaySettings.slack_channel_filter
         .split(",")
         .map((entry) => entry.trim())
         .filter(Boolean)
@@ -357,9 +356,9 @@ export default function App() {
     }
 
     if (provider === "telegram") {
-      if (!settingsState.telegramToken) return;
+      if (!gatewaySettings.telegram_token) return;
 
-      const allowedChats = settingsState.telegramAllowedChats
+      const allowedChats = gatewaySettings.telegram_allowed_chats
         .split(",")
         .map((entry) => entry.trim())
         .filter(Boolean);
@@ -369,7 +368,7 @@ export default function App() {
     }
 
     if (provider === "whatsapp") {
-      const allowedContacts = settingsState.whatsappAllowedContacts
+      const allowedContacts = gatewaySettings.whatsapp_allowed_contacts
         .split(",")
         .map((entry) => entry.trim())
         .filter(Boolean);
@@ -434,13 +433,13 @@ export default function App() {
         isCompactionSummary: false,
       });
 
-      const activeProvider = agentState.agentSettings.activeProvider;
-      const providerConfig = agentState.agentSettings[activeProvider] as AgentProviderConfig;
+      const active_provider = agentState.agentSettings.active_provider;
+      const providerConfig = agentState.agentSettings[active_provider] as AgentProviderConfig;
       const tools = getAvailableTools({
-        enableBashTool: agentState.agentSettings.enableBashTool,
-        gatewayEnabled: settingsState.gatewayEnabled,
-        enableVisionTool: agentState.agentSettings.enableVisionTool,
-        enableWebBrowsingTool: agentState.agentSettings.enableWebBrowsingTool,
+        enable_bash_tool: agentState.agentSettings.enable_bash_tool,
+        gateway_enabled: gatewaySettings.gateway_enabled,
+        enable_vision_tool: agentState.agentSettings.enable_vision_tool,
+        enable_web_browsing_tool: agentState.agentSettings.enable_web_browsing_tool,
       });
       const toolCapabilities = getToolCapabilityDescription(tools);
       const hiddenGatewayContext = [
@@ -453,14 +452,14 @@ export default function App() {
         "Respond as the same assistant and keep continuity for this provider thread.",
       ].join("\n");
 
-      const systemPrompt = `${agentState.agentSettings.systemPrompt}${toolCapabilities}\n\n${hiddenGatewayContext}`;
+      const system_prompt = `${agentState.agentSettings.system_prompt}${toolCapabilities}\n\n${hiddenGatewayContext}`;
 
       agentState.addMessage(threadId, {
         role: "assistant",
         content: "",
-        provider: activeProvider,
+        provider: active_provider,
         model: providerConfig.model,
-        apiTransport: providerConfig.apiTransport,
+        api_transport: providerConfig.api_transport,
         inputTokens: 0,
         outputTokens: 0,
         totalTokens: 0,
@@ -468,14 +467,14 @@ export default function App() {
         isStreaming: true,
       });
 
-      const configuredToolLoops = Number(agentState.agentSettings.maxToolLoops ?? 0);
-      const maxToolLoops = Number.isFinite(configuredToolLoops) && configuredToolLoops > 0
+      const configuredToolLoops = Number(agentState.agentSettings.max_tool_loops ?? 0);
+      const max_tool_loops = Number.isFinite(configuredToolLoops) && configuredToolLoops > 0
         ? Math.min(1000, configuredToolLoops)
         : Infinity;
       let loopCount = 0;
       let finalReply = "";
       const getCurrentProviderConfig = () => (
-        useAgentStore.getState().agentSettings[activeProvider] as AgentProviderConfig
+        useAgentStore.getState().agentSettings[active_provider] as AgentProviderConfig
       );
       const updateThreadUpstreamState = (upstreamThreadId?: string) => {
         useAgentStore.setState((state) => ({
@@ -483,20 +482,20 @@ export default function App() {
             ...thread,
             upstreamThreadId: upstreamThreadId ?? null,
             upstreamTransport: preparedRequest.transport,
-            upstreamProvider: activeProvider,
+            upstreamProvider: active_provider,
             upstreamModel: getCurrentProviderConfig().model,
-            upstreamAssistantId: getCurrentProviderConfig().assistantId || null,
+            upstreamAssistantId: getCurrentProviderConfig().assistant_id || null,
           } : thread),
         }));
       };
       let preparedRequest = prepareOpenAIRequest(
         useAgentStore.getState().getThreadMessages(threadId).slice(0, -1),
         agentState.agentSettings,
-        activeProvider,
+        active_provider,
         getCurrentProviderConfig().model,
-        getCurrentProviderConfig().apiTransport,
-        getCurrentProviderConfig().authSource,
-        getCurrentProviderConfig().assistantId,
+        getCurrentProviderConfig().api_transport,
+        getCurrentProviderConfig().auth_source,
+        getCurrentProviderConfig().assistant_id,
         useAgentStore.getState().threads.find((entry) => entry.id === threadId),
       );
       const controller = new AbortController();
@@ -520,7 +519,7 @@ export default function App() {
       };
 
       try {
-        while (loopCount < maxToolLoops) {
+        while (loopCount < max_tool_loops) {
           loopCount += 1;
           let accumulated = "";
           let accumulatedReasoning = "";
@@ -529,12 +528,12 @@ export default function App() {
           let roundToolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> = [];
 
           for await (const chunk of sendChatCompletion({
-            provider: activeProvider,
+            provider: active_provider,
             config: {
               ...providerConfig,
-              apiTransport: preparedRequest.transport,
+              api_transport: preparedRequest.transport,
             },
-            systemPrompt,
+            system_prompt,
             messages: preparedRequest.messages,
             streaming: true,
             signal: controller.signal,
@@ -576,7 +575,7 @@ export default function App() {
                 videoTokens: chunk.videoTokens,
                 cost: chunk.cost,
                 tps,
-                apiTransport: preparedRequest.transport,
+                api_transport: preparedRequest.transport,
                 responseId: chunk.responseId,
               });
               updateThreadUpstreamState(chunk.upstreamThreadId);
@@ -584,9 +583,9 @@ export default function App() {
               accumulated = `Error: ${chunk.content}`;
               agentState.updateLastAssistantMessage(threadId, accumulated, false);
             } else if (chunk.type === "transport_fallback") {
-              agentState.updateAgentSetting(activeProvider as keyof ReturnType<typeof useAgentStore.getState>["agentSettings"], {
+              agentState.updateAgentSetting(active_provider as keyof ReturnType<typeof useAgentStore.getState>["agentSettings"], {
                 ...providerConfig,
-                apiTransport: "chat_completions",
+                api_transport: "chat_completions",
               } as any);
               preparedRequest = { ...preparedRequest, transport: "chat_completions", previousResponseId: undefined, upstreamThreadId: undefined };
               updateThreadUpstreamState(undefined);
@@ -613,7 +612,7 @@ export default function App() {
                 videoTokens: chunk.videoTokens,
                 cost: chunk.cost,
                 toolCalls: roundToolCalls,
-                apiTransport: preparedRequest.transport,
+                api_transport: preparedRequest.transport,
                 responseId: chunk.responseId,
               });
               updateThreadUpstreamState(chunk.upstreamThreadId);
@@ -655,20 +654,20 @@ export default function App() {
               preparedRequest = prepareOpenAIRequest(
                 useAgentStore.getState().getThreadMessages(threadId),
                 agentState.agentSettings,
-                activeProvider,
+                active_provider,
                 currentProviderConfig.model,
-                currentProviderConfig.apiTransport,
-                currentProviderConfig.authSource,
-                currentProviderConfig.assistantId,
+                currentProviderConfig.api_transport,
+                currentProviderConfig.auth_source,
+                currentProviderConfig.assistant_id,
                 useAgentStore.getState().threads.find((entry) => entry.id === threadId),
               );
 
               agentState.addMessage(threadId, {
                 role: "assistant",
                 content: "",
-                provider: activeProvider,
+                provider: active_provider,
                 model: providerConfig.model,
-                apiTransport: preparedRequest.transport,
+                api_transport: preparedRequest.transport,
                 inputTokens: 0,
                 outputTokens: 0,
                 totalTokens: 0,
@@ -687,7 +686,7 @@ export default function App() {
         clearThreadAbortController(threadId, controller);
       }
 
-      if (Number.isFinite(maxToolLoops) && loopCount >= maxToolLoops) {
+      if (Number.isFinite(max_tool_loops) && loopCount >= max_tool_loops) {
         agentState.updateLastAssistantMessage(threadId, "(Tool execution limit reached)", false);
         finalReply = "";
       }
@@ -698,19 +697,19 @@ export default function App() {
 
       if (provider === "discord") {
         await amux?.sendDiscordMessage?.({
-          token: settingsState.discordToken,
+          token: gatewaySettings.discord_token,
           channelId,
           message: finalReply,
         });
       } else if (provider === "slack") {
         await amux?.sendSlackMessage?.({
-          token: settingsState.slackToken,
+          token: gatewaySettings.slack_token,
           channelId,
           message: finalReply,
         });
       } else if (provider === "telegram") {
         await amux?.sendTelegramMessage?.({
-          token: settingsState.telegramToken,
+          token: gatewaySettings.telegram_token,
           chatId: channelId,
           message: finalReply,
         });
@@ -725,10 +724,10 @@ export default function App() {
   useEffect(() => {
     const amux = (window as any).tamux ?? (window as any).amux;
     if (!amux?.ensureSlackConnected || !amux?.onSlackMessage) return;
-    if (!settings.gatewayEnabled || !settings.slackToken) return;
+    if (!agentSettings.gateway_enabled || !agentSettings.slack_token) return;
 
     let disposed = false;
-    void amux.ensureSlackConnected({ token: settings.slackToken }).then((result: any) => {
+    void amux.ensureSlackConnected({ token: agentSettings.slack_token }).then((result: any) => {
       if (disposed || result?.ok) return;
       console.warn("Slack bridge connection failed:", result?.error ?? "unknown error");
     });
@@ -750,15 +749,15 @@ export default function App() {
       disposed = true;
       unsubscribe?.();
     };
-  }, [handleInboundGatewayMessage, settings.gatewayEnabled, settings.slackToken]);
+  }, [handleInboundGatewayMessage, agentSettings.gateway_enabled, agentSettings.slack_token]);
 
   useEffect(() => {
     const amux = (window as any).tamux ?? (window as any).amux;
     if (!amux?.ensureTelegramConnected || !amux?.onTelegramMessage) return;
-    if (!settings.gatewayEnabled || !settings.telegramToken) return;
+    if (!agentSettings.gateway_enabled || !agentSettings.telegram_token) return;
 
     let disposed = false;
-    void amux.ensureTelegramConnected({ token: settings.telegramToken }).then((result: any) => {
+    void amux.ensureTelegramConnected({ token: agentSettings.telegram_token }).then((result: any) => {
       if (disposed || result?.ok) return;
       console.warn("Telegram bridge connection failed:", result?.error ?? "unknown error");
     });
@@ -778,15 +777,15 @@ export default function App() {
       disposed = true;
       unsubscribe?.();
     };
-  }, [handleInboundGatewayMessage, settings.gatewayEnabled, settings.telegramToken]);
+  }, [handleInboundGatewayMessage, agentSettings.gateway_enabled, agentSettings.telegram_token]);
 
   useEffect(() => {
     const amux = (window as any).tamux ?? (window as any).amux;
     if (!amux?.ensureDiscordConnected || !amux?.onDiscordMessage) return;
-    if (!settings.gatewayEnabled || !settings.discordToken) return;
+    if (!agentSettings.gateway_enabled || !agentSettings.discord_token) return;
 
     let disposed = false;
-    void amux.ensureDiscordConnected({ token: settings.discordToken }).then((result: any) => {
+    void amux.ensureDiscordConnected({ token: agentSettings.discord_token }).then((result: any) => {
       if (disposed || result?.ok) return;
       console.warn("Discord bridge connection failed:", result?.error ?? "unknown error");
     });
@@ -806,12 +805,12 @@ export default function App() {
       disposed = true;
       unsubscribe?.();
     };
-  }, [handleInboundGatewayMessage, settings.discordToken, settings.gatewayEnabled]);
+  }, [handleInboundGatewayMessage, agentSettings.discord_token, agentSettings.gateway_enabled]);
 
   useEffect(() => {
     const amux = (window as any).tamux ?? (window as any).amux;
     if (!amux?.onWhatsAppMessage || !amux?.whatsappStatus) return;
-    if (!settings.gatewayEnabled) return;
+    if (!agentSettings.gateway_enabled) return;
 
     let disposed = false;
     void amux.whatsappStatus().then((status: any) => {
@@ -834,7 +833,7 @@ export default function App() {
       disposed = true;
       unsubscribe?.();
     };
-  }, [handleInboundGatewayMessage, settings.gatewayEnabled]);
+  }, [handleInboundGatewayMessage, agentSettings.gateway_enabled]);
 
   return (
     <div
@@ -853,7 +852,7 @@ export default function App() {
         <MissionDeck
           workspaceName={activeWorkspace?.name ?? "No workspace"}
           surfaceName={activeSurface?.name ?? "No surface"}
-          activeProvider={activeProvider}
+          active_provider={active_provider}
           traceCount={traceCount}
           opsCount={opsCount}
           approvalCount={approvalCount}
@@ -919,7 +918,7 @@ export default function App() {
 function MissionDeck({
   workspaceName,
   surfaceName,
-  activeProvider,
+  active_provider,
   traceCount,
   opsCount,
   approvalCount,
@@ -931,7 +930,7 @@ function MissionDeck({
 }: {
   workspaceName: string;
   surfaceName: string;
-  activeProvider: string;
+  active_provider: string;
   traceCount: number;
   opsCount: number;
   approvalCount: number;
@@ -941,8 +940,8 @@ function MissionDeck({
   onOpenMission: () => void;
   onOpenVault: () => void;
 }) {
-  const providerText = typeof activeProvider === "string" && activeProvider.trim().length > 0
-    ? activeProvider
+  const providerText = typeof active_provider === "string" && active_provider.trim().length > 0
+    ? active_provider
     : "unknown";
 
   return (

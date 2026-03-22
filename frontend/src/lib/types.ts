@@ -215,19 +215,6 @@ export interface AmuxSettings {
   cerbosEndpoint: string;
   mcpServersJson: string;
 
-  // Gateway
-  gatewayEnabled: boolean;
-  slackToken: string;
-  slackChannelFilter: string;
-  telegramToken: string;
-  telegramAllowedChats: string;
-  discordToken: string;
-  discordChannelFilter: string;
-  discordAllowedUsers: string;
-  whatsappToken: string;
-  whatsappPhoneNumberId: string;
-  whatsappAllowedContacts: string;
-  gatewayCommandPrefix: string;
 }
 
 export const DEFAULT_SETTINGS: AmuxSettings = {
@@ -271,18 +258,6 @@ export const DEFAULT_SETTINGS: AmuxSettings = {
   wormIntegrityEnabled: true,
   cerbosEndpoint: "",
   mcpServersJson: "{\n  \"tamux\": {\n    \"command\": \"tamux-mcp\"\n  }\n}",
-  gatewayEnabled: false,
-  slackToken: "",
-  slackChannelFilter: "",
-  telegramToken: "",
-  telegramAllowedChats: "",
-  discordToken: "",
-  discordChannelFilter: "",
-  discordAllowedUsers: "",
-  whatsappToken: "",
-  whatsappPhoneNumberId: "",
-  whatsappAllowedContacts: "",
-  gatewayCommandPrefix: "!tamux",
 };
 
 // ---------------------------------------------------------------------------
