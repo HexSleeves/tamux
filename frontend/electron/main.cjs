@@ -3689,6 +3689,10 @@ function registerIpcHandlers() {
                     continue;
                 }
 
+                if (event.type === 'concierge_welcome') {
+                    logToFile('info', '[concierge] received concierge_welcome from bridge', { hasContent: !!event.content, hasActions: !!event.actions });
+                }
+
                 // Response types from daemon queries — resolve oldest pending
                 // request of the matching type (FIFO order).
                 if ([
@@ -3745,8 +3749,15 @@ function registerIpcHandlers() {
                 }
 
                 // Agent events (delta, done, tool_call, etc.) — forward to renderer
+                if (event.type === 'concierge_welcome') {
+                    logToFile('info', '[concierge] forwarding concierge_welcome to renderer', { contentLen: event.content?.length, actionsLen: event.actions?.length });
+                }
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('agent-event', event);
+                } else {
+                    if (event.type === 'concierge_welcome') {
+                        logToFile('warn', '[concierge] mainWindow not available to forward event');
+                    }
                 }
             }
         });
