@@ -4872,4 +4872,35 @@ mod tests {
         infer_skill_tags("skills/terminal-architecture.md", &content, &mut tags);
         assert!(tags.contains("terminal"));
     }
+
+    /// FOUN-01: WAL journal mode is active after HistoryStore construction.
+    #[tokio::test]
+    async fn wal_mode_enabled() {
+        // After migration: create store, query pragma journal_mode, assert "wal"
+        todo!("Implement after tokio-rusqlite migration")
+    }
+
+    /// FOUN-06: All 5 WAL pragmas are applied on connection open.
+    #[tokio::test]
+    async fn wal_pragmas_applied() {
+        // After migration: create store, query each pragma, assert expected values
+        // journal_mode=wal, synchronous=1 (NORMAL), foreign_keys=1 (ON),
+        // wal_autocheckpoint=1000, busy_timeout=5000
+        todo!("Implement after tokio-rusqlite migration")
+    }
+
+    /// FOUN-02: HistoryStore can perform a basic async roundtrip through .call().
+    #[tokio::test]
+    async fn async_connection_roundtrip() {
+        // After migration: create store, insert a row via .call(), read it back, assert match
+        todo!("Implement after tokio-rusqlite migration")
+    }
+
+    /// FOUN-01 + FOUN-02: Concurrent reads and writes do not produce "database is locked" errors.
+    #[tokio::test]
+    async fn concurrent_read_write() {
+        // After migration: clone the HistoryStore, spawn multiple tokio tasks that
+        // read and write concurrently, assert no errors
+        todo!("Implement after tokio-rusqlite migration")
+    }
 }
