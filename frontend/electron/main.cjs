@@ -4499,27 +4499,35 @@ app.whenReady().then(async () => {
         const config = await sendAgentQuery({ type: 'get-config' }, 'config').catch(() => null);
         const gateway = config?.gateway ?? null;
         if (gateway?.enabled) {
-            if (gateway.slack_token) {
-                ensureSlackConnected(null, { token: gateway.slack_token })
-                    .then((r) => logToFile('info', 'auto-connected Slack', r))
-                    .catch((e) => logToFile('warn', 'Slack auto-connect failed', { error: e.message }));
-            }
-            if (gateway.discord_token) {
-                ensureDiscordConnected(null, {
-                    token: gateway.discord_token,
-                    channelFilter: gateway.discord_channel_filter || '',
-                    allowedUsers: gateway.discord_allowed_users || '',
-                })
-                    .then((r) => logToFile('info', 'auto-connected Discord', r))
-                    .catch((e) => logToFile('warn', 'Discord auto-connect failed', { error: e.message }));
-            }
-            if (gateway.telegram_token) {
-                ensureTelegramConnected(null, {
-                    token: gateway.telegram_token,
-                    allowedChats: gateway.telegram_allowed_chats || '',
-                })
-                    .then((r) => logToFile('info', 'auto-connected Telegram', r))
-                    .catch((e) => logToFile('warn', 'Telegram auto-connect failed', { error: e.message }));
+            // Check the feature flag — Electron bridges are disabled by default (D-06/D-07).
+            // When gateway_electron_bridges_enabled is false or missing, the daemon handles
+            // all Slack/Discord/Telegram connections. WhatsApp stays in Electron (unaffected).
+            if (gateway.gateway_electron_bridges_enabled !== true) {
+                logToFile('info', '[gateway] Electron bridges disabled — daemon handles all gateway connections');
+            } else {
+                logToFile('info', '[gateway] Starting Electron bridges (deprecated — daemon gateways preferred). Set gateway.gateway_electron_bridges_enabled=false to disable.');
+                if (gateway.slack_token) {
+                    ensureSlackConnected(null, { token: gateway.slack_token })
+                        .then((r) => logToFile('info', 'auto-connected Slack', r))
+                        .catch((e) => logToFile('warn', 'Slack auto-connect failed', { error: e.message }));
+                }
+                if (gateway.discord_token) {
+                    ensureDiscordConnected(null, {
+                        token: gateway.discord_token,
+                        channelFilter: gateway.discord_channel_filter || '',
+                        allowedUsers: gateway.discord_allowed_users || '',
+                    })
+                        .then((r) => logToFile('info', 'auto-connected Discord', r))
+                        .catch((e) => logToFile('warn', 'Discord auto-connect failed', { error: e.message }));
+                }
+                if (gateway.telegram_token) {
+                    ensureTelegramConnected(null, {
+                        token: gateway.telegram_token,
+                        allowedChats: gateway.telegram_allowed_chats || '',
+                    })
+                        .then((r) => logToFile('info', 'auto-connected Telegram', r))
+                        .catch((e) => logToFile('warn', 'Telegram auto-connect failed', { error: e.message }));
+                }
             }
         }
     } catch (err) {
