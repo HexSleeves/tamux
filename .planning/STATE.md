@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-03-23T14:32:17.445Z"
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-03-23T14:41:24.952Z"
 progress:
   total_phases: 10
   completed_phases: 3
   total_plans: 20
-  completed_plans: 16
+  completed_plans: 18
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-23)
 ## Current Position
 
 Phase: 05 (memory-consolidation) — EXECUTING
-Plan: 2 of 4
+Plan: 4 of 4
 
 ## Performance Metrics
 
@@ -62,6 +62,8 @@ Plan: 2 of 4
 | Phase 04 P02 | 8min | 2 tasks | 6 files |
 | Phase 04 P03 | 10min | 2 tasks | 15 files |
 | Phase 05 P01 | 12min | 2 tasks | 6 files |
+| Phase 05 P03 | 5min | 2 tasks | 2 files |
+| Phase 05 P02 | 5min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -102,6 +104,10 @@ Recent decisions affecting current work:
 - [Phase 04]: Morning brief flag cleared only after successful LLM synthesis to prevent data loss on failure
 - [Phase 04]: Learning transparency uses >2hr peak shift and <0.5 weight thresholds for pattern change detection
 - [Phase 05]: TaskStatus::InProgress for active task detection; tombstone replaced_at=created_at; ExecutionTraceRow Option<T> for nullable columns
+- [Phase 05]: ContextArchiveRow in history.rs follows Row pattern; conversion to ArchiveEntry in persistence.rs
+- [Phase 05]: Continuity flag stored as two consolidation_state keys (thread_id + topic) for one-shot clearing
+- [Phase 05]: HeuristicStore.update_tool uses succeeded:bool matching existing API (not effectiveness:f64 from plan)
+- [Phase 05]: Facts with no provenance record skipped during decay (no meaningful confidence without last_confirmed_at)
 
 ### Pending Todos
 
@@ -115,6 +121,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T14:32:17.444Z
-Stopped at: Completed 05-01-PLAN.md
+Last session: 2026-03-23T14:41:24.950Z
+Stopped at: Completed 05-02-PLAN.md
 Resume file: None

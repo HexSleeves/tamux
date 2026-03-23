@@ -38,7 +38,7 @@ Requirements for the "Living Agent" milestone. Each maps to roadmap phases.
 - [ ] **MEMO-06**: Successful tool sequences automatically promoted into learned heuristics during consolidation
 - [x] **MEMO-07**: Idle detection uses composite signal: no active tasks + no active goals + no active streams + operator inactive
 - [ ] **MEMO-08**: Proactive memory refinement: reorganize and compress memory blocks for higher signal density during idle time
-- [ ] **MEMO-09**: Cross-session context continuity: threads resume seamlessly after daemon restart with full context
+- [x] **MEMO-09**: Cross-session context continuity: threads resume seamlessly after daemon restart with full context
 
 ### Skill Ecosystem
 
@@ -164,7 +164,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MEMO-06 | Phase 5 | Pending |
 | MEMO-07 | Phase 5 | Complete |
 | MEMO-08 | Phase 5 | Pending |
-| MEMO-09 | Phase 5 | Pending |
+| MEMO-09 | Phase 5 | Complete |
 | SKIL-01 | Phase 6 | Pending |
 | SKIL-02 | Phase 6 | Pending |
 | SKIL-03 | Phase 6 | Pending |
