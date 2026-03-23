@@ -1749,6 +1749,15 @@ pub enum AgentEvent {
         detail_level: ConciergeDetailLevel,
         actions: Vec<ConciergeAction>,
     },
+    /// A provider's circuit breaker has tripped to Open state (per D-06).
+    ProviderCircuitOpen {
+        provider: String,
+        trip_count: u32,
+    },
+    /// A provider's circuit breaker has recovered to Closed state (per D-07).
+    ProviderCircuitRecovered {
+        provider: String,
+    },
 }
 
 // ---------------------------------------------------------------------------

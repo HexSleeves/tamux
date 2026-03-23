@@ -17,7 +17,6 @@ mod agent_loop;
 mod anticipatory;
 mod behavioral_events;
 mod causal_traces;
-#[allow(dead_code)]
 mod circuit_breaker;
 mod collaboration;
 mod compaction;

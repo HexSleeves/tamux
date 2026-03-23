@@ -1,5 +1,6 @@
 //! AgentEngine struct definition and constructor.
 
+use super::circuit_breaker::CircuitBreakerRegistry;
 use super::concierge::ConciergeEngine;
 use super::*;
 
@@ -109,6 +110,8 @@ pub struct AgentEngine {
     pub repo_watchers: Mutex<HashMap<String, ThreadRepoWatcher>>,
     pub watcher_refresh_tx: mpsc::UnboundedSender<String>,
     pub watcher_refresh_rx: Mutex<Option<mpsc::UnboundedReceiver<String>>>,
+    /// Per-provider circuit breakers for LLM call path gating.
+    pub circuit_breakers: CircuitBreakerRegistry,
 }
 
 impl AgentEngine {
@@ -144,6 +147,16 @@ impl AgentEngine {
         }
 
         let http_client = reqwest::Client::new();
+
+        // Pre-initialize per-provider circuit breakers from configured providers.
+        let circuit_breakers = CircuitBreakerRegistry::from_provider_keys(
+            config
+                .providers
+                .keys()
+                .cloned()
+                .chain(std::iter::once(config.provider.clone())),
+        );
+
         let config = Arc::new(RwLock::new(config));
         let concierge = Arc::new(ConciergeEngine::new(
             config.clone(),
@@ -188,6 +201,7 @@ impl AgentEngine {
             repo_watchers: Mutex::new(HashMap::new()),
             watcher_refresh_tx,
             watcher_refresh_rx: Mutex::new(Some(watcher_refresh_rx)),
+            circuit_breakers,
         })
     }
 

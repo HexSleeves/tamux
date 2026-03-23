@@ -1,6 +1,9 @@
 //! Circuit breaker — protect against cascading failures from LLM API outages.
 //!
-//! Not yet wired into the LLM call path — infrastructure ready for integration.
+//! Each LLM provider gets its own [`CircuitBreaker`] via [`CircuitBreakerRegistry`].
+//! When a provider accumulates too many consecutive failures the breaker trips to
+//! **Open** and rejects requests immediately, giving the downstream service time to
+//! recover without flooding it with doomed requests.
 
 /// The three states of a circuit breaker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +144,50 @@ impl CircuitBreaker {
 impl Default for CircuitBreaker {
     fn default() -> Self {
         Self::new(5, 2, 30_000)
+    }
+}
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
+
+/// Per-provider circuit breaker registry (per D-05).
+///
+/// NOTE: `Clone` is intentionally not derived. `tokio::sync::RwLock` does not
+/// implement `Clone`. The registry is designed to be shared via `Arc` on
+/// `AgentEngine`, not cloned directly.
+#[derive(Debug)]
+pub struct CircuitBreakerRegistry {
+    breakers: RwLock<HashMap<String, Arc<Mutex<CircuitBreaker>>>>,
+}
+
+impl CircuitBreakerRegistry {
+    /// Create a registry pre-populated with breakers for the given provider keys.
+    pub fn from_provider_keys(keys: impl Iterator<Item = String>) -> Self {
+        let breakers: HashMap<String, Arc<Mutex<CircuitBreaker>>> = keys
+            .map(|id| (id, Arc::new(Mutex::new(CircuitBreaker::default()))))
+            .collect();
+        Self {
+            breakers: RwLock::new(breakers),
+        }
+    }
+
+    /// Get the breaker for a provider, creating one with default thresholds if
+    /// it doesn't already exist.
+    pub async fn get(&self, provider: &str) -> Arc<Mutex<CircuitBreaker>> {
+        // Fast path: read lock
+        {
+            let read = self.breakers.read().await;
+            if let Some(breaker) = read.get(provider) {
+                return breaker.clone();
+            }
+        }
+        // Slow path: write lock, insert new breaker
+        let mut write = self.breakers.write().await;
+        write
+            .entry(provider.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(CircuitBreaker::default())))
+            .clone()
     }
 }
 
@@ -307,6 +354,40 @@ mod tests {
         // Single success closes (threshold = 1).
         cb.record_success(1004);
         assert_eq!(cb.state(), CircuitState::Closed);
+    }
+
+    /// FOUN-04: Per-provider circuit breaker isolation.
+    #[tokio::test]
+    async fn provider_circuit_breaker_isolation() {
+        let registry = CircuitBreakerRegistry::from_provider_keys(
+            vec!["openai".to_string(), "anthropic".to_string()].into_iter(),
+        );
+
+        // Trip OpenAI's breaker
+        let openai_breaker = registry.get("openai").await;
+        {
+            let mut b = openai_breaker.lock().await;
+            let now = 1000;
+            for _ in 0..5 {
+                b.record_failure(now);
+            }
+            assert_eq!(b.state(), CircuitState::Open);
+        }
+
+        // Anthropic's breaker should still be Closed
+        let anthropic_breaker = registry.get("anthropic").await;
+        {
+            let mut b = anthropic_breaker.lock().await;
+            assert_eq!(b.state(), CircuitState::Closed);
+            assert!(b.can_execute(1000));
+        }
+
+        // Dynamic provider creation
+        let new_breaker = registry.get("new_provider").await;
+        {
+            let b = new_breaker.lock().await;
+            assert_eq!(b.state(), CircuitState::Closed);
+        }
     }
 
     #[test]
