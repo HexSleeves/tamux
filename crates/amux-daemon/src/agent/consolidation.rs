@@ -56,7 +56,7 @@ pub(super) fn compute_decay_confidence(
 }
 
 // ---------------------------------------------------------------------------
-// Entry point (stub -- filled in Plan 02)
+// Consolidation entry point and sub-tasks
 // ---------------------------------------------------------------------------
 
 impl AgentEngine {
@@ -64,7 +64,7 @@ impl AgentEngine {
     /// from within run_structured_heartbeat_adaptive() as a sub-phase.
     pub(super) async fn maybe_run_consolidation_if_idle(
         &self,
-        _budget: std::time::Duration,
+        budget: std::time::Duration,
     ) -> Option<ConsolidationResult> {
         let config = self.config.read().await.clone();
         if !config.consolidation.enabled {
@@ -103,8 +103,324 @@ impl AgentEngine {
         }
 
         tracing::info!("idle conditions met -- starting consolidation tick");
-        // Consolidation sub-tasks will be added in Plan 02
-        Some(ConsolidationResult::default())
+
+        let deadline = std::time::Instant::now() + budget;
+        let mut result = ConsolidationResult::default();
+
+        // Sub-task 1: Review execution traces -> promote heuristics (MEMO-01, MEMO-06)
+        if std::time::Instant::now() < deadline {
+            result.traces_reviewed = self.review_execution_traces(&config, &deadline).await;
+        }
+
+        // Sub-task 2: Decay stale memory facts and tombstone low-confidence ones (MEMO-02)
+        if std::time::Instant::now() < deadline {
+            result.facts_decayed = self.apply_fact_decay(&config, &deadline).await;
+        }
+
+        // Sub-task 3: Cleanup expired tombstones - 7-day TTL (MEMO-05)
+        if std::time::Instant::now() < deadline {
+            result.tombstones_purged = self.cleanup_expired_tombstones(&config).await;
+        }
+
+        // Sub-task 4: Memory refinement reserved for Plan 04
+
+        // Log provenance for the consolidation tick (MEMO-04)
+        self.record_provenance_event(
+            "memory_consolidation",
+            &format!(
+                "Consolidation tick: {} traces reviewed, {} facts decayed, {} tombstones purged",
+                result.traces_reviewed, result.facts_decayed, result.tombstones_purged
+            ),
+            serde_json::json!({
+                "traces_reviewed": result.traces_reviewed,
+                "facts_decayed": result.facts_decayed,
+                "tombstones_purged": result.tombstones_purged
+            }),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        Some(result)
+    }
+
+    /// Review recent execution traces and promote successful tool sequences to
+    /// heuristics when they cross the promotion threshold (MEMO-01, MEMO-06).
+    ///
+    /// Uses a watermark to avoid re-reviewing traces across restarts (Pitfall 5).
+    async fn review_execution_traces(
+        &self,
+        config: &AgentConfig,
+        deadline: &std::time::Instant,
+    ) -> usize {
+        // Get watermark from consolidation state
+        let watermark: u64 = match self
+            .history
+            .get_consolidation_state("trace_review_watermark")
+            .await
+        {
+            Ok(Some(val)) => val.parse().unwrap_or(0),
+            _ => 0,
+        };
+
+        // Fetch a batch of successful traces since the watermark
+        let traces = match self
+            .history
+            .list_recent_successful_traces(watermark, 50)
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to list recent traces for consolidation");
+                return 0;
+            }
+        };
+
+        if traces.is_empty() {
+            return 0;
+        }
+
+        let promotion_threshold = config.consolidation.heuristic_promotion_threshold;
+        let now = now_millis();
+        let mut reviewed = 0;
+        let mut last_created_at: u64 = watermark;
+
+        for trace in &traces {
+            // Budget check at the start of each iteration
+            if std::time::Instant::now() >= *deadline {
+                break;
+            }
+
+            // Extract tool sequence from tool_sequence_json
+            let tool_names: Vec<String> = trace
+                .tool_sequence_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+                .unwrap_or_default();
+
+            if tool_names.is_empty() {
+                reviewed += 1;
+                last_created_at = last_created_at.max(trace.created_at as u64);
+                continue;
+            }
+
+            let task_type = trace
+                .task_type
+                .as_deref()
+                .unwrap_or("unknown");
+
+            let duration_ms = trace.duration_ms.unwrap_or(0) as u64;
+
+            // Record in PatternStore
+            {
+                let mut patterns = self.pattern_store.write().await;
+                patterns.record_sequence(&tool_names, task_type, true, now);
+            }
+
+            // Check if the pattern crosses the promotion threshold
+            let should_promote = {
+                let patterns = self.pattern_store.read().await;
+                let matching = patterns.find_patterns(
+                    task_type,
+                    super::learning::patterns::PatternType::SuccessSequence,
+                );
+                matching
+                    .iter()
+                    .any(|p| p.tool_sequence == tool_names && p.occurrences >= promotion_threshold)
+            };
+
+            if should_promote {
+                // Promote each tool in the sequence to HeuristicStore
+                {
+                    let mut heuristics = self.heuristic_store.write().await;
+                    let avg_duration = duration_ms / tool_names.len().max(1) as u64;
+                    for tool_name in &tool_names {
+                        heuristics.update_tool(tool_name, task_type, true, avg_duration);
+                    }
+                }
+
+                // Record provenance for the promotion
+                self.record_provenance_event(
+                    "heuristic_promotion",
+                    &format!(
+                        "Promoted tool sequence {:?} for task type '{}' (>= {} occurrences)",
+                        tool_names, task_type, promotion_threshold
+                    ),
+                    serde_json::json!({
+                        "tool_sequence": tool_names,
+                        "task_type": task_type,
+                        "threshold": promotion_threshold,
+                        "trace_id": trace.id,
+                    }),
+                    trace.goal_run_id.as_deref(),
+                    trace.task_id.as_deref(),
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+            }
+
+            reviewed += 1;
+            last_created_at = last_created_at.max(trace.created_at as u64);
+        }
+
+        // Update watermark for next run (Pitfall 5: watermark-based pagination)
+        if last_created_at > watermark {
+            if let Err(e) = self
+                .history
+                .set_consolidation_state(
+                    "trace_review_watermark",
+                    &last_created_at.to_string(),
+                    now,
+                )
+                .await
+            {
+                tracing::warn!(error = %e, "failed to update trace review watermark");
+            }
+        }
+
+        reviewed
+    }
+
+    /// Decay stale memory facts and tombstone those below the configurable threshold
+    /// (MEMO-02). Facts with confidence below `fact_decay_supersede_threshold` are
+    /// actually tombstoned via `supersede_memory_fact`, not just counted.
+    async fn apply_fact_decay(
+        &self,
+        config: &AgentConfig,
+        deadline: &std::time::Instant,
+    ) -> usize {
+        let half_life = config.consolidation.memory_decay_half_life_hours;
+        let threshold = config.consolidation.fact_decay_supersede_threshold;
+        let now = now_millis();
+
+        // Read MEMORY.md content
+        let memory_path = active_memory_dir(&self.data_dir)
+            .join(MemoryTarget::Memory.file_name());
+        let content = match tokio::fs::read_to_string(&memory_path).await {
+            Ok(c) => c,
+            Err(_) => return 0,
+        };
+
+        // Extract fact candidates from MEMORY.md
+        let facts = extract_memory_fact_candidates(&content);
+        if facts.is_empty() {
+            return 0;
+        }
+
+        // For each fact, look up its last provenance timestamp to approximate
+        // last_confirmed_at. Fall back to using the current time minus 30 days
+        // if no provenance record exists (treating it as very old).
+        let mut decayed_count = 0;
+
+        for fact in &facts {
+            if std::time::Instant::now() >= *deadline {
+                break;
+            }
+
+            // Skip facts that are already superseded
+            if fact.display.contains("[SUPERSEDED]") {
+                continue;
+            }
+
+            // Query provenance for this fact key to get last_confirmed_at
+            let last_confirmed_at = match self
+                .history
+                .memory_provenance_report(Some(MemoryTarget::Memory.label()), 50)
+                .await
+            {
+                Ok(report) => {
+                    // Find the most recent provenance entry mentioning this fact key
+                    report
+                        .entries
+                        .iter()
+                        .find(|e| e.fact_keys.contains(&fact.key))
+                        .map(|e| e.created_at as u64)
+                        .unwrap_or(0)
+                }
+                Err(_) => 0,
+            };
+
+            // If no provenance record, skip (we cannot compute meaningful decay)
+            if last_confirmed_at == 0 {
+                continue;
+            }
+
+            let confidence = compute_decay_confidence(last_confirmed_at, now, half_life);
+
+            if confidence < threshold {
+                // Actually tombstone the fact via supersede_memory_fact (MEMO-02)
+                if let Err(e) = self
+                    .supersede_memory_fact(
+                        MemoryTarget::Memory,
+                        &fact.display,
+                        &fact.key,
+                        "", // empty replacement -- fact is simply removed from active memory
+                        "fact_decay",
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        fact_key = %fact.key,
+                        error = %e,
+                        "failed to tombstone decayed fact"
+                    );
+                    continue;
+                }
+
+                // Record provenance for the decay action (MEMO-04)
+                self.record_provenance_event(
+                    "fact_decay",
+                    &format!(
+                        "Decayed fact '{}' (confidence {:.2} < threshold {:.2})",
+                        fact.key, confidence, threshold
+                    ),
+                    serde_json::json!({
+                        "fact_key": fact.key,
+                        "confidence": confidence,
+                        "threshold": threshold,
+                        "half_life_hours": half_life,
+                    }),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+
+                decayed_count += 1;
+            }
+        }
+
+        decayed_count
+    }
+
+    /// Cleanup expired tombstones older than the configured TTL (MEMO-05).
+    async fn cleanup_expired_tombstones(&self, config: &AgentConfig) -> usize {
+        let max_age_ms = config.consolidation.tombstone_ttl_days * 24 * 60 * 60 * 1000;
+        let now = now_millis();
+
+        match self.history.delete_expired_tombstones(max_age_ms, now).await {
+            Ok(count) => {
+                if count > 0 {
+                    tracing::debug!(
+                        purged = count,
+                        ttl_days = config.consolidation.tombstone_ttl_days,
+                        "purged expired memory tombstones"
+                    );
+                }
+                count
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to delete expired tombstones");
+                0
+            }
+        }
     }
 }
 
@@ -116,7 +432,7 @@ impl AgentEngine {
 mod tests {
     use super::*;
 
-    // ── is_idle_for_consolidation tests ──────────────────────────────────
+    // -- is_idle_for_consolidation tests --
 
     #[test]
     fn idle_returns_true_when_all_conditions_met() {
@@ -168,7 +484,7 @@ mod tests {
 
     #[test]
     fn idle_returns_false_with_recent_presence() {
-        // Presence was just 1ms ago — not idle yet
+        // Presence was just 1ms ago -- not idle yet
         assert!(!is_idle_for_consolidation(
             0,
             0,
@@ -181,7 +497,7 @@ mod tests {
 
     #[test]
     fn idle_returns_true_when_no_presence_recorded() {
-        // None means no operator has connected — safe to consolidate
+        // None means no operator has connected -- safe to consolidate
         assert!(is_idle_for_consolidation(
             0,
             0,
@@ -192,7 +508,7 @@ mod tests {
         ));
     }
 
-    // ── compute_decay_confidence tests ───────────────────────────────────
+    // -- compute_decay_confidence tests --
 
     #[test]
     fn decay_returns_half_at_half_life() {
@@ -245,7 +561,7 @@ mod tests {
     fn decay_handles_very_large_age_without_panic() {
         // ~5 billion milliseconds = ~58 days
         let confidence = compute_decay_confidence(0, 5_000_000_000, DEFAULT_HALF_LIFE_HOURS);
-        assert_eq!(confidence, 0.0); // last_confirmed_at=0 → always 0.0
+        assert_eq!(confidence, 0.0); // last_confirmed_at=0 -> always 0.0
 
         // Large but valid timestamps
         let confidence = compute_decay_confidence(1, 5_000_000_000, DEFAULT_HALF_LIFE_HOURS);

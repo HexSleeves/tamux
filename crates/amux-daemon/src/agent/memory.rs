@@ -46,10 +46,10 @@ pub(super) struct MemoryWriteContext<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct MemoryFactCandidate {
-    key: String,
-    normalized: String,
-    display: String,
+pub(super) struct MemoryFactCandidate {
+    pub(super) key: String,
+    pub(super) normalized: String,
+    pub(super) display: String,
 }
 
 impl MemoryTarget {
@@ -344,7 +344,7 @@ async fn record_memory_provenance(
     }).await
 }
 
-fn extract_memory_fact_candidates(content: &str) -> Vec<MemoryFactCandidate> {
+pub(super) fn extract_memory_fact_candidates(content: &str) -> Vec<MemoryFactCandidate> {
     let mut facts = Vec::new();
     for raw_line in content.lines() {
         let cleaned = strip_memory_markup(raw_line);
@@ -441,6 +441,91 @@ fn normalize_fact_text(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+// ---------------------------------------------------------------------------
+// Memory fact supersession (D-06, Pitfall 2)
+// ---------------------------------------------------------------------------
+
+impl super::engine::AgentEngine {
+    /// Supersede a memory fact with tombstone-before-update ordering per D-06.
+    ///
+    /// 1. Write tombstone to SQLite FIRST (durable, crash-safe per Pitfall 2)
+    /// 2. Mark the original fact with `## [SUPERSEDED]` prefix in the memory file
+    /// 3. Append replacement content if non-empty
+    /// 4. Record provenance event for audit trail (MEMO-04)
+    pub(super) async fn supersede_memory_fact(
+        &self,
+        target: MemoryTarget,
+        original_content: &str,
+        fact_key: &str,
+        replacement_content: &str,
+        source_kind: &str,
+    ) -> Result<()> {
+        let tombstone_id = format!("tomb_{}", Uuid::new_v4());
+        let now = now_millis();
+
+        // Step 1: Write tombstone FIRST (durable, per Pitfall 2)
+        self.history
+            .insert_memory_tombstone(
+                &tombstone_id,
+                target.label(),
+                original_content,
+                Some(fact_key),
+                if replacement_content.is_empty() {
+                    None
+                } else {
+                    Some(replacement_content)
+                },
+                source_kind,
+                None,
+                now,
+            )
+            .await?;
+
+        // Step 2: Mark the original fact with [SUPERSEDED] prefix in the memory file.
+        // D-06 says: "Superseded facts get a `## [SUPERSEDED]` prefix and are moved to
+        // the tombstone table." The file only grows or has lines replaced -- never shrinks.
+        let superseded_content = format!("## [SUPERSEDED]\n{}", original_content);
+
+        let memory_path = active_memory_dir(&self.data_dir).join(target.file_name());
+        let existing = tokio::fs::read_to_string(&memory_path)
+            .await
+            .unwrap_or_default();
+        let updated = existing.replace(original_content, &superseded_content);
+
+        // If replacement content is non-empty, append it as a new section
+        let final_content = if replacement_content.is_empty() {
+            updated
+        } else {
+            format!("{}\n\n{}", updated, replacement_content)
+        };
+
+        tokio::fs::write(&memory_path, &final_content).await?;
+
+        // Step 3: Record provenance (audit trail, MEMO-04)
+        self.record_provenance_event(
+            "memory_consolidation",
+            &format!(
+                "Superseded fact '{}' in {} with [SUPERSEDED] marker",
+                fact_key,
+                target.label()
+            ),
+            serde_json::json!({
+                "tombstone_id": tombstone_id,
+                "fact_key": fact_key,
+                "has_replacement": !replacement_content.is_empty()
+            }),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
