@@ -2915,6 +2915,47 @@ impl HistoryStore {
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
 
+    /// List consolidation_state entries whose key starts with `prefix`.
+    pub async fn list_consolidation_state_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let like = format!("{}%", prefix);
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT key, value FROM consolidation_state WHERE key LIKE ?1",
+                )?;
+                let rows = stmt.query_map(params![like], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                Ok(rows.filter_map(|r| r.ok()).collect())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// List skill variants matching a given status string, up to `limit` rows.
+    pub async fn list_skill_variants_by_status(
+        &self,
+        status: &str,
+        limit: usize,
+    ) -> Result<Vec<SkillVariantRecord>> {
+        let status = status.to_string();
+        let limit = limit.clamp(1, 200) as i64;
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                     FROM skill_variants WHERE status = ?1 ORDER BY updated_at ASC LIMIT ?2",
+                )?;
+                let rows = stmt.query_map(params![status, limit], map_skill_variant_row)?;
+                Ok(rows.filter_map(|r| r.ok()).collect())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     // ── Successful trace queries (Phase 5) ───────────────────────────────
 
     pub async fn list_recent_successful_traces(

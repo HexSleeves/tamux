@@ -114,4 +114,79 @@ impl AgentEngine {
             }
         }
     }
+
+    /// Eagerly check whether a skill variant qualifies for lifecycle promotion
+    /// after a successful settle (complementing the periodic consolidation check).
+    ///
+    /// Returns `Some(new_status)` if promoted, `None` otherwise.
+    pub(super) async fn check_lifecycle_promotion_after_settle(
+        &self,
+        variant_id: &str,
+    ) -> Option<String> {
+        let variant = match self.history.get_skill_variant(variant_id).await {
+            Ok(Some(v)) => v,
+            _ => return None,
+        };
+
+        let config = self.config.read().await.clone();
+        let thresholds = &config.skill_promotion;
+
+        let (current, next, threshold) = match variant.status.as_str() {
+            "testing" => ("testing", "active", thresholds.testing_to_active),
+            "active" => ("active", "proven", thresholds.active_to_proven),
+            "proven" => ("proven", "promoted_to_canonical", thresholds.proven_to_canonical),
+            _ => return None,
+        };
+
+        if variant.success_count < threshold {
+            return None;
+        }
+
+        if let Err(e) = self
+            .history
+            .update_skill_variant_status(variant_id, next)
+            .await
+        {
+            tracing::warn!(
+                error = %e,
+                variant_id,
+                "failed to promote skill variant at settle time"
+            );
+            return None;
+        }
+
+        // Record provenance for settle-time promotion (D-07)
+        self.record_provenance_event(
+            "skill_lifecycle_promotion",
+            &format!(
+                "Skill '{}' eagerly promoted {} -> {} at settle time (success_count {} >= {})",
+                variant.skill_name, current, next, variant.success_count, threshold
+            ),
+            serde_json::json!({
+                "variant_id": variant_id,
+                "skill_name": variant.skill_name,
+                "from_status": current,
+                "to_status": next,
+                "success_count": variant.success_count,
+                "threshold": threshold,
+                "trigger": "settle_time",
+            }),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        tracing::info!(
+            skill_name = %variant.skill_name,
+            variant_id,
+            from = current,
+            to = next,
+            "skill promoted at settle time"
+        );
+
+        Some(next.to_string())
+    }
 }

@@ -127,6 +127,28 @@ impl AgentEngine {
             result.facts_refined = self.refine_memory_facts(&deadline).await;
         }
 
+        // Sub-task 5: Flag skill draft candidates (SKIL-01, SKIL-02, per D-02)
+        if std::time::Instant::now() < deadline {
+            result.skill_candidates_flagged =
+                self.flag_skill_draft_candidates(&config, &deadline).await;
+        }
+
+        // Sub-task 6: Draft flagged candidates into SKILL.md (SKIL-01, per D-03)
+        if std::time::Instant::now() < deadline {
+            result.skills_drafted =
+                self.draft_flagged_skill_candidates(&config, &deadline).await;
+        }
+
+        // Sub-task 7: Run mental tests on Draft skills (SKIL-04, per D-05)
+        if std::time::Instant::now() < deadline {
+            result.skills_tested = self.run_skill_mental_tests(&config, &deadline).await;
+        }
+
+        // Sub-task 8: Check lifecycle promotions (SKIL-05, per D-06)
+        if std::time::Instant::now() < deadline {
+            result.skills_promoted = self.check_skill_promotions(&config, &deadline).await;
+        }
+
         // Persist learning stores after consolidation updates (D-10)
         if result.traces_reviewed > 0 {
             self.persist_learning_stores().await;
@@ -136,14 +158,19 @@ impl AgentEngine {
         self.record_provenance_event(
             "memory_consolidation",
             &format!(
-                "Consolidation tick: {} traces reviewed, {} facts decayed, {} tombstones purged, {} facts refined",
-                result.traces_reviewed, result.facts_decayed, result.tombstones_purged, result.facts_refined
+                "Consolidation tick: {} traces reviewed, {} facts decayed, {} tombstones purged, {} facts refined, {} skill candidates flagged, {} skills drafted, {} skills tested, {} skills promoted",
+                result.traces_reviewed, result.facts_decayed, result.tombstones_purged, result.facts_refined,
+                result.skill_candidates_flagged, result.skills_drafted, result.skills_tested, result.skills_promoted
             ),
             serde_json::json!({
                 "traces_reviewed": result.traces_reviewed,
                 "facts_decayed": result.facts_decayed,
                 "tombstones_purged": result.tombstones_purged,
-                "facts_refined": result.facts_refined
+                "facts_refined": result.facts_refined,
+                "skill_candidates_flagged": result.skill_candidates_flagged,
+                "skills_drafted": result.skills_drafted,
+                "skills_tested": result.skills_tested,
+                "skills_promoted": result.skills_promoted,
             }),
             None,
             None,
@@ -563,7 +590,7 @@ impl AgentEngine {
     /// 3. Call send_completion_request with empty tools, Chat transport
     /// 4. Collect text content from Delta/Done chunks in the stream
     /// 5. Return concatenated response text
-    async fn send_refinement_llm_call(
+    pub(super) async fn send_refinement_llm_call(
         &self,
         config: &AgentConfig,
         user_prompt: &str,
