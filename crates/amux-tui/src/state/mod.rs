@@ -1,6 +1,7 @@
 // Sub-module declarations — uncomment as modules are implemented
 pub mod anticipatory;
 pub mod approval;
+pub mod audit;
 pub mod auth;
 pub mod chat;
 pub mod concierge;
@@ -110,6 +111,8 @@ pub use anticipatory::{AnticipatoryAction, AnticipatoryState};
 #[allow(unused_imports)]
 pub use approval::{ApprovalAction, ApprovalState, PendingApproval, RiskLevel};
 #[allow(unused_imports)]
+pub use audit::{AuditAction, AuditEntryVm, AuditState, EscalationVm, TimeRange};
+#[allow(unused_imports)]
 pub use auth::{AuthAction, AuthState, ProviderAuthEntry};
 #[allow(unused_imports)]
 pub use chat::{ChatAction, ChatState, ToolCallStatus, ToolCallVm, TranscriptMode};
@@ -137,6 +140,7 @@ pub use task::{TaskAction, TaskState};
 pub enum AppAction {
     Chat(ChatAction),
     Task(TaskAction),
+    Audit(AuditAction),
     Sidebar(SidebarAction),
     Input(InputAction),
     Modal(ModalAction),
