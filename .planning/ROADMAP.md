@@ -87,7 +87,12 @@ Plans:
   1. Agent learns when the user is active and surfaces proactive items during those windows, staying quiet during off-hours
   2. Heartbeat checks evolve based on what the user actually cares about — frequently dismissed checks get deprioritized
   3. M2 Anticipatory Runtime outputs (morning brief, stuck hints, predictive hydration) are delivered through the heartbeat cycle
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 04-01-PLAN.md — Type contracts, config extensions, EMA pure functions, dismissal tracking schema, protocol messages
+- [ ] 04-02-PLAN.md — Activity-aware scheduling in gateway_loop, priority gating in heartbeat, AuditDismiss server handler
+- [ ] 04-03-PLAN.md — M2 anticipatory merge into heartbeat synthesis, learning transparency templates, client dismiss UX
 
 ### Phase 5: Memory Consolidation
 **Goal**: The agent gets smarter during idle time — reviewing traces, aging stale facts, promoting heuristics, and maintaining continuity across restarts
@@ -171,8 +176,8 @@ Note: Phases 8 and 9 can execute in parallel with phases 2-7 (they only depend o
 |-------|----------------|--------|-----------|
 | 1. Production Foundation | 3/3 | Complete | - |
 | 2. Core Heartbeat | 4/4 | Complete | |
-| 3. Transparent Autonomy | 3/5 | In Progress|  |
-| 4. Adaptive Heartbeat | 0/? | Not started | - |
+| 3. Transparent Autonomy | 5/5 | Complete |  |
+| 4. Adaptive Heartbeat | 0/3 | Not started | - |
 | 5. Memory Consolidation | 0/? | Not started | - |
 | 6. Skill Discovery | 0/? | Not started | - |
 | 7. Community Skills | 0/? | Not started | - |
