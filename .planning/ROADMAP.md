@@ -137,7 +137,12 @@ Plans:
   2. Imported community skills reset to Draft maturity and must prove themselves locally before promotion
   3. Every imported skill passes a mandatory static analysis security scan before it can execute
   4. Skill format is compatible with the agentskills.io standard (SKILL.md + metadata frontmatter)
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 07-01-PLAN.md — Security scanner, format conversion types, and protocol message extensions
+- [ ] 07-02-PLAN.md — Registry client, import/export/publish flows, and server IPC handlers
+- [ ] 07-03-PLAN.md — CLI subcommands for search, import, export, and publish
 
 ### Phase 8: Gateway Completion
 **Goal**: The agent communicates through Slack, Discord, and Telegram natively from the daemon, with unified config and health monitoring
@@ -191,7 +196,7 @@ Note: Phases 8 and 9 can execute in parallel with phases 2-7 (they only depend o
 | 4. Adaptive Heartbeat | 0/3 | Not started | - |
 | 5. Memory Consolidation | 0/4 | Not started | - |
 | 6. Skill Discovery | 0/3 | Not started | - |
-| 7. Community Skills | 0/? | Not started | - |
+| 7. Community Skills | 0/3 | Not started | - |
 | 8. Gateway Completion | 0/? | Not started | - |
 | 9. Distribution | 0/? | Not started | - |
 | 10. Progressive UX | 0/? | Not started | - |
