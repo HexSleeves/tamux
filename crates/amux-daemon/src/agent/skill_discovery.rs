@@ -436,6 +436,10 @@ impl AgentEngine {
             "drafted new skill from execution trace"
         );
 
+        // Announce via concierge (D-08: first drafts are milestones)
+        let description_excerpt: String = skill_content.chars().take(200).collect();
+        self.announce_skill_draft(&skill_name, &description_excerpt);
+
         1
     }
 
@@ -669,6 +673,14 @@ impl AgentEngine {
                         to = next_status,
                         success_count = variant.success_count,
                         "skill promoted through lifecycle"
+                    );
+
+                    // Announce promotion via HeartbeatDigest (and WorkflowNotice for canonical)
+                    self.announce_skill_promotion(
+                        &variant.skill_name,
+                        status,
+                        next_status,
+                        variant.success_count,
                     );
 
                     promoted += 1;

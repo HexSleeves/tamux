@@ -187,6 +187,14 @@ impl AgentEngine {
             "skill promoted at settle time"
         );
 
+        // Announce promotion via HeartbeatDigest (and WorkflowNotice for canonical)
+        self.announce_skill_promotion(
+            &variant.skill_name,
+            current,
+            next,
+            variant.success_count,
+        );
+
         Some(next.to_string())
     }
 }

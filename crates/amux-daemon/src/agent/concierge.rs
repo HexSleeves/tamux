@@ -779,6 +779,83 @@ fn format_timestamp(ts: u64) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Skill announcement helpers on AgentEngine (Phase 6 Plan 03)
+// ---------------------------------------------------------------------------
+
+use super::engine::AgentEngine;
+
+impl AgentEngine {
+    /// Announce a newly drafted skill via concierge workflow notice.
+    ///
+    /// Per D-08: first drafts are milestones that make the agent feel like it's growing.
+    pub(super) fn announce_skill_draft(&self, skill_name: &str, description: &str) {
+        self.emit_workflow_notice(
+            CONCIERGE_THREAD_ID,
+            "skill_discovery",
+            format!(
+                "I noticed a new pattern in your work -- drafted a skill: {}",
+                skill_name
+            ),
+            Some(description.to_string()),
+        );
+    }
+
+    /// Announce a skill lifecycle promotion via HeartbeatDigest (and WorkflowNotice
+    /// for canonical promotions).
+    ///
+    /// Minor promotions (testing->active, active->proven) use HeartbeatDigest only.
+    /// Major promotion (proven->canonical) uses BOTH HeartbeatDigest and WorkflowNotice
+    /// for prominent treatment per D-08.
+    pub(super) fn announce_skill_promotion(
+        &self,
+        skill_name: &str,
+        from_status: &str,
+        to_status: &str,
+        success_count: u32,
+    ) {
+        let cycle_id = uuid::Uuid::new_v4().to_string();
+        let now = super::now_millis();
+        let is_canonical = to_status == "promoted_to_canonical";
+
+        let _ = self.event_tx.send(AgentEvent::HeartbeatDigest {
+            cycle_id,
+            actionable: true,
+            digest: format!("Skill '{}' promoted to {}", skill_name, to_status),
+            items: vec![HeartbeatDigestItem {
+                priority: 2,
+                check_type: HeartbeatCheckType::SkillLifecycle,
+                title: format!("Skill promoted: {}", skill_name),
+                suggestion: format!(
+                    "Skill '{}' was promoted from {} to {} after {} successful uses.",
+                    skill_name, from_status, to_status, success_count
+                ),
+            }],
+            checked_at: now,
+            explanation: Some(
+                "This skill has been consistently helpful and earned a promotion.".to_string(),
+            ),
+            confidence: Some(0.9),
+        });
+
+        // Canonical promotions get prominent treatment: both HeartbeatDigest and WorkflowNotice
+        if is_canonical {
+            self.emit_workflow_notice(
+                CONCIERGE_THREAD_ID,
+                "skill_discovery",
+                format!(
+                    "Skill '{}' has been promoted to canonical after {} successful uses!",
+                    skill_name, success_count
+                ),
+                Some(format!(
+                    "Promoted from {} to {} -- this skill is now part of your permanent toolkit.",
+                    from_status, to_status
+                )),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
