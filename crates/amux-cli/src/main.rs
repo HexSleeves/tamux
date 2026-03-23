@@ -5,6 +5,15 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+fn truncate_for_display(value: &str, max_chars: usize) -> String {
+    let truncated: String = value.chars().take(max_chars).collect();
+    if value.chars().count() > max_chars {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "tamux", about = "tamux terminal multiplexer CLI")]
 struct Cli {
@@ -181,6 +190,35 @@ enum SkillAction {
         /// Target status to promote to.
         #[arg(long, default_value = "active")]
         to: String,
+    },
+    /// Search the community skill registry.
+    Search {
+        /// Search query (matches skill name, description, tags).
+        query: String,
+    },
+    /// Import a community skill by name or URL.
+    Import {
+        /// Skill name from registry or direct URL.
+        source: String,
+        /// Override security warnings.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Export a local skill to a directory.
+    Export {
+        /// Skill name or variant ID.
+        name: String,
+        /// Output format: "tamux" (default) or "agentskills".
+        #[arg(long, default_value = "tamux")]
+        format: String,
+        /// Output directory (default: current directory).
+        #[arg(long, default_value = ".")]
+        output: String,
+    },
+    /// Publish a proven skill to the community registry.
+    Publish {
+        /// Skill name or variant ID.
+        name: String,
     },
 }
 
@@ -378,6 +416,79 @@ async fn main() -> Result<()> {
                     println!("{}", message);
                 } else {
                     eprintln!("{}", message);
+                }
+            }
+            SkillAction::Search { query } => {
+                let entries = client::send_skill_search(&query).await?;
+                if entries.is_empty() {
+                    println!("No community skills found for '{}'.", query);
+                } else {
+                    println!(
+                        "{:<10} {:<24} {:>6} {:>8} {:<10} {}",
+                        "VERIFIED", "NAME", "USES", "SUCCESS", "PUBLISHER", "DESCRIPTION"
+                    );
+                    for entry in &entries {
+                        let verified = if entry.publisher_verified { "✓" } else { "-" };
+                        let success = format!("{:.0}%", entry.success_rate * 100.0);
+                        let publisher = truncate_for_display(&entry.publisher_id, 8);
+                        let description = truncate_for_display(&entry.description, 40);
+                        println!(
+                            "{:<10} {:<24} {:>6} {:>8} {:<10} {}",
+                            verified,
+                            truncate_for_display(&entry.name, 24),
+                            entry.use_count,
+                            success,
+                            publisher,
+                            description
+                        );
+                    }
+                    println!("\n{} skill(s) found.", entries.len());
+                }
+            }
+            SkillAction::Import { source, force } => {
+                let (success, message, variant_id, scan_verdict, findings_count) =
+                    client::send_skill_import(&source, force).await?;
+                if success {
+                    println!(
+                        "Imported skill as Draft (variant: {}).",
+                        variant_id.unwrap_or_default()
+                    );
+                    if scan_verdict.as_deref() == Some("warn") {
+                        println!(
+                            "Note: {} security warning(s) overridden with --force.",
+                            findings_count
+                        );
+                    }
+                } else {
+                    match scan_verdict.as_deref() {
+                        Some("block") => eprintln!("Import blocked: {}", message),
+                        Some("warn") => eprintln!("Import requires --force: {}", message),
+                        _ => eprintln!("{}", message),
+                    }
+                    std::process::exit(1);
+                }
+            }
+            SkillAction::Export {
+                name,
+                format,
+                output,
+            } => {
+                let (success, message, output_path) =
+                    client::send_skill_export(&name, &format, &output).await?;
+                if success {
+                    println!("Exported to: {}", output_path.unwrap_or_default());
+                } else {
+                    eprintln!("Export failed: {}", message);
+                    std::process::exit(1);
+                }
+            }
+            SkillAction::Publish { name } => {
+                let (success, message) = client::send_skill_publish(&name).await?;
+                if success {
+                    println!("{}", message);
+                } else {
+                    eprintln!("Publish failed: {}", message);
+                    std::process::exit(1);
                 }
             }
         },
