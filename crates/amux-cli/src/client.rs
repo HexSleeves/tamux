@@ -197,6 +197,7 @@ enum AgentBridgeCommand {
     },
     DismissConciergeWelcome,
     RequestConciergeWelcome,
+    AuditDismiss { entry_id: String },
     Shutdown,
 }
 
@@ -1158,6 +1159,9 @@ pub async fn run_agent_bridge() -> Result<()> {
                             }
                             AgentBridgeCommand::RequestConciergeWelcome => {
                                 framed.send(ClientMessage::AgentRequestConciergeWelcome).await?;
+                            }
+                            AgentBridgeCommand::AuditDismiss { entry_id } => {
+                                framed.send(ClientMessage::AuditDismiss { entry_id }).await?;
                             }
                             AgentBridgeCommand::Shutdown => {
                                 framed.send(ClientMessage::AgentUnsubscribe).await?;
