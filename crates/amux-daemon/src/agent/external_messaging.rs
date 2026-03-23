@@ -63,7 +63,7 @@ impl AgentEngine {
             let memory_dir = active_memory_dir(&self.data_dir);
             let operator_model_summary = self.build_operator_model_prompt_summary().await;
             let operational_context = self.build_operational_context_summary().await;
-            let causal_guidance = self.build_causal_guidance_summary();
+            let causal_guidance = self.build_causal_guidance_summary().await;
             build_external_agent_prompt(
                 config,
                 &memory,

@@ -49,7 +49,7 @@ impl AgentEngine {
                     },
                     sign: config.compliance.sign_all_events,
                     created_at: now_millis(),
-                })
+                }).await
         {
             tracing::warn!(event_type, error = %error, "failed to record provenance event");
         }

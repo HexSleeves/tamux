@@ -50,7 +50,7 @@ pub fn checkpoint_save(
 ///
 /// The checkpoint is written to the `agent_checkpoints` table.  The table is
 /// created on first use if it does not already exist.
-pub fn checkpoint_store(
+pub async fn checkpoint_store(
     history: &crate::history::HistoryStore,
     checkpoint: &CheckpointData,
 ) -> anyhow::Result<()> {
@@ -67,7 +67,7 @@ pub fn checkpoint_store(
         &state_json,
         checkpoint.context_summary.as_deref(),
         checkpoint.created_at,
-    )
+    ).await
 }
 
 /// Deserialise a [`CheckpointData`] from JSON, validating the schema version.

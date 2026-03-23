@@ -323,9 +323,10 @@ pub(super) async fn persist_json<T: serde::Serialize>(
     Ok(())
 }
 
-/// Load agent config from disk, returning defaults if not found.
-pub fn load_config() -> anyhow::Result<AgentConfig> {
-    let history = crate::history::HistoryStore::new()?;
-    let items = history.list_agent_config_items()?;
+/// Load agent config using a shared HistoryStore, returning defaults if not found.
+pub async fn load_config_from_history(
+    history: &crate::history::HistoryStore,
+) -> anyhow::Result<AgentConfig> {
+    let items = history.list_agent_config_items().await?;
     super::config::load_config_from_items(items)
 }

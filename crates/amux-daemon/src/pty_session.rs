@@ -77,6 +77,7 @@ impl PtySession {
         cols: u16,
         rows: u16,
         history: HistoryStore,
+        pty_channel_capacity: usize,
     ) -> Result<Self> {
         let pty_system = native_pty_system();
 
@@ -127,7 +128,7 @@ impl PtySession {
         let master_write = Arc::new(std::sync::Mutex::new(pair.master.take_writer()?));
 
         // Broadcast channel for output fanout to attached clients.
-        let (tx, _) = broadcast::channel(256);
+        let (tx, _) = broadcast::channel(pty_channel_capacity);
 
         let scrollback = Arc::new(std::sync::Mutex::new(Vec::with_capacity(
             SCROLLBACK_CAPACITY,
@@ -156,6 +157,7 @@ impl PtySession {
             let tracked_cwd = tracked_cwd.clone();
             let workspace_id = workspace_id.clone();
             let cwd = cwd.clone();
+            let rt_handle = tokio::runtime::Handle::current();
             std::thread::Builder::new()
                 .name(format!("pty-reader-{id}"))
                 .spawn(move || {
@@ -172,6 +174,7 @@ impl PtySession {
                         history,
                         workspace_id,
                         cwd,
+                        rt_handle,
                     );
                 })?;
         }
@@ -378,6 +381,7 @@ fn pty_reader_loop(
     history: HistoryStore,
     workspace_id: Option<String>,
     cwd: Option<String>,
+    rt_handle: tokio::runtime::Handle,
 ) {
     let mut buf = [0u8; 4096];
     let mut marker_tail = Vec::<u8>::new();
@@ -488,16 +492,16 @@ fn pty_reader_loop(
                                         .as_ref()
                                         .map(|snapshot| snapshot.path.clone()),
                                 };
-                                if let Err(error) = history.record_managed_finish(&record) {
+                                if let Err(error) = rt_handle.block_on(history.record_managed_finish(&record)) {
                                     tracing::error!(%id, error = %error, cwd = ?cwd, "failed to persist managed history");
                                 }
 
                                 // Auto-generate skill if a successful workflow pattern is detected
                                 if record.exit_code == Some(0) {
-                                    if let Ok(candidates) = history.detect_skill_candidates() {
+                                    if let Ok(candidates) = rt_handle.block_on(history.detect_skill_candidates()) {
                                         for (title, _hits) in candidates.iter().take(1) {
                                             if let Ok((_title, path)) =
-                                                history.generate_skill(Some(title), Some(title))
+                                                rt_handle.block_on(history.generate_skill(Some(title), Some(title)))
                                             {
                                                 tracing::info!(skill_path = %path, "auto-generated skill from workflow pattern");
                                             }

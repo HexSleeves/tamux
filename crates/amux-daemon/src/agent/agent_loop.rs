@@ -127,7 +127,7 @@ impl AgentEngine {
         };
         let operator_model_summary = self.build_operator_model_prompt_summary().await;
         let operational_context = self.build_operational_context_summary().await;
-        let causal_guidance = self.build_causal_guidance_summary();
+        let causal_guidance = self.build_causal_guidance_summary().await;
         let mut system_prompt = build_system_prompt(
             &config,
             &base_prompt,
@@ -300,7 +300,7 @@ impl AgentEngine {
                 .await?
             {
                 let memory = self.memory.read().await;
-                let causal_guidance = self.build_causal_guidance_summary();
+                let causal_guidance = self.build_causal_guidance_summary().await;
                 system_prompt = build_system_prompt(
                     &config,
                     &base_prompt,
@@ -1091,7 +1091,7 @@ impl AgentEngine {
                     trace.total_duration_ms,
                     trace.total_tokens_used,
                     trace.created_at,
-                ) {
+                ).await {
                     tracing::warn!(task_id, "failed to persist execution trace: {e}");
                 }
             }

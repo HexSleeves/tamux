@@ -88,8 +88,8 @@ pub(super) async fn execute_semantic_query(
         "service_dependents" => render_service_dependents(&root, &graph, target),
         "imports" => render_imports(&root, &graph, target, limit),
         "imported_by" => render_imported_by(&root, &graph, target, limit),
-        "conventions" => render_conventions(&root, &graph, history, agent_data_dir, target, limit),
-        "temporal" => render_temporal(&root, history, target, limit),
+        "conventions" => render_conventions(&root, &graph, history, agent_data_dir, target, limit).await,
+        "temporal" => render_temporal(&root, history, target, limit).await,
         other => Err(anyhow::anyhow!(
             "invalid semantic query kind `{other}`; expected summary, packages, dependencies, dependents, services, service_dependencies, service_dependents, imports, imported_by, conventions, or temporal"
         )),
@@ -810,7 +810,7 @@ fn render_imported_by(
     ))
 }
 
-fn render_conventions(
+async fn render_conventions(
     root: &Path,
     graph: &SemanticGraph,
     history: &HistoryStore,
@@ -819,7 +819,7 @@ fn render_conventions(
     limit: usize,
 ) -> Result<String> {
     let target_tokens = target.map(tokenize_convention_query).unwrap_or_default();
-    let report = history.memory_provenance_report(None, limit.saturating_mul(4).max(20))?;
+    let report = history.memory_provenance_report(None, limit.saturating_mul(4).max(20)).await?;
     let mut matching_entries = report
         .entries
         .into_iter()
@@ -893,7 +893,7 @@ fn render_conventions(
     Ok(lines.join("\n"))
 }
 
-fn render_temporal(
+async fn render_temporal(
     root: &Path,
     history: &HistoryStore,
     target: Option<&str>,
@@ -901,7 +901,7 @@ fn render_temporal(
 ) -> Result<String> {
     let normalized_target = target.map(normalize_convention_text);
     let commands = history
-        .query_command_log(None, None, Some(limit.saturating_mul(12).max(40)))?
+        .query_command_log(None, None, Some(limit.saturating_mul(12).max(40))).await?
         .into_iter()
         .filter(|entry| {
             entry
@@ -932,7 +932,7 @@ fn render_temporal(
 
     let transcripts = if normalized_target.is_some() {
         history
-            .list_transcript_index(None)?
+            .list_transcript_index(None).await?
             .into_iter()
             .filter(|entry| {
                 normalized_target.as_ref().is_some_and(|target| {
@@ -951,7 +951,7 @@ fn render_temporal(
 
     let memory_matches = if normalized_target.is_some() {
         history
-            .memory_provenance_report(target, limit.saturating_mul(2).max(12))?
+            .memory_provenance_report(target, limit.saturating_mul(2).max(12)).await?
             .entries
             .into_iter()
             .filter(|entry| entry.mode != "remove" && entry.status != "retracted")

@@ -13,7 +13,7 @@ pub(super) struct BehavioralEventContext<'a> {
 }
 
 impl AgentEngine {
-    pub(super) fn record_behavioral_event(
+    pub(super) async fn record_behavioral_event(
         &self,
         kind: &str,
         context: BehavioralEventContext<'_>,
@@ -42,7 +42,7 @@ impl AgentEngine {
             }))?,
             timestamp: timestamp as i64,
         };
-        self.history.upsert_agent_event(&row)
+        self.history.upsert_agent_event(&row).await
     }
 }
 

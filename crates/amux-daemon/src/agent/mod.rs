@@ -99,7 +99,7 @@ use self::types::*;
 
 // Public re-exports consumed outside the agent module.
 pub use engine::*;
-pub use task_prompt::load_config;
+pub use task_prompt::load_config_from_history;
 
 #[cfg(test)]
 mod tests {

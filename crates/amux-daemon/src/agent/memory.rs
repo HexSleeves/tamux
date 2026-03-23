@@ -163,7 +163,7 @@ pub(super) async fn apply_memory_update(
 
     validate_memory_size(target, &next)?;
     tokio::fs::write(&path, &next).await?;
-    record_memory_provenance(history, target, mode, trimmed, &context)?;
+    record_memory_provenance(history, target, mode, trimmed, &context).await?;
 
     Ok(format!(
         "Updated {} using {} mode ({} / {} chars).",
@@ -231,7 +231,7 @@ pub(super) async fn append_goal_memory_note(
             task_id: None,
             goal_run_id,
         },
-    )?;
+    ).await?;
     Ok(())
 }
 
@@ -315,7 +315,7 @@ fn validate_no_memory_contradictions(
     ))
 }
 
-fn record_memory_provenance(
+async fn record_memory_provenance(
     history: &HistoryStore,
     target: MemoryTarget,
     mode: MemoryUpdateMode,
@@ -341,7 +341,7 @@ fn record_memory_provenance(
         task_id: context.task_id,
         goal_run_id: context.goal_run_id,
         created_at: now_millis(),
-    })
+    }).await
 }
 
 fn extract_memory_fact_candidates(content: &str) -> Vec<MemoryFactCandidate> {

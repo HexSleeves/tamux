@@ -112,11 +112,15 @@ pub struct AgentEngine {
 }
 
 impl AgentEngine {
-    pub fn new(session_manager: Arc<SessionManager>, config: AgentConfig) -> Arc<Self> {
+    pub fn new_with_shared_history(
+        session_manager: Arc<SessionManager>,
+        config: AgentConfig,
+        history: Arc<HistoryStore>,
+    ) -> Arc<Self> {
         Self::new_with_storage(
             session_manager,
             config,
-            HistoryStore::new().expect("history store initialization failed"),
+            (*history).clone(),
             agent_data_dir(),
         )
     }
@@ -188,13 +192,14 @@ impl AgentEngine {
     }
 
     #[cfg(test)]
-    pub(crate) fn new_test(
+    pub(crate) async fn new_test(
         session_manager: Arc<SessionManager>,
         config: AgentConfig,
         root: &std::path::Path,
     ) -> Arc<Self> {
-        let history =
-            HistoryStore::new_test_store(root).expect("test history store initialization failed");
+        let history = HistoryStore::new_test_store(root)
+            .await
+            .expect("test history store initialization failed");
         let data_dir = root.join("agent");
         std::fs::create_dir_all(&data_dir).expect("failed to create test agent data dir");
         Self::new_with_storage(session_manager, config, history, data_dir)

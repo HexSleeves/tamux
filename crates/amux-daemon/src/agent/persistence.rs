@@ -10,7 +10,7 @@ impl AgentEngine {
     /// Load persisted state (threads, tasks, heartbeat, memory, config).
     pub async fn hydrate(&self) -> Result<()> {
         // Load config from SQLite-backed config items.
-        match self.history.list_agent_config_items() {
+        match self.history.list_agent_config_items().await {
             Ok(items) if !items.is_empty() => match super::config::load_config_from_items(items) {
                 Ok(cfg) => *self.config.write().await = cfg,
                 Err(error) => tracing::warn!("failed to load agent config from sqlite: {error}"),
@@ -20,7 +20,7 @@ impl AgentEngine {
         }
 
         // Load threads
-        match self.history.list_threads() {
+        match self.history.list_threads().await {
             Ok(thread_rows) if !thread_rows.is_empty() => {
                 let mut threads = HashMap::new();
                 for thread_row in thread_rows {
@@ -29,6 +29,7 @@ impl AgentEngine {
                     let messages = self
                         .history
                         .list_messages(&thread_row.id, None)
+                        .await
                         .unwrap_or_default()
                         .into_iter()
                         .map(|message| {
@@ -87,7 +88,7 @@ impl AgentEngine {
         }
 
         // Load AJQ tasks from SQLite first; fall back to legacy JSON migration.
-        match self.history.list_agent_tasks() {
+        match self.history.list_agent_tasks().await {
             Ok(mut tasks) if !tasks.is_empty() => {
                 for task in &mut tasks {
                     if task.status == TaskStatus::InProgress {
@@ -131,7 +132,7 @@ impl AgentEngine {
             Err(e) => tracing::warn!("failed to load agent tasks from sqlite: {e}"),
         }
 
-        match self.history.list_goal_runs() {
+        match self.history.list_goal_runs().await {
             Ok(goal_runs) if !goal_runs.is_empty() => {
                 *self.goal_runs.lock().await = goal_runs.into_iter().collect();
             }
@@ -196,7 +197,7 @@ impl AgentEngine {
         ensure_memory_files(&self.data_dir).await?;
         self.refresh_memory_cache().await;
         self.refresh_operator_model().await?;
-        match self.history.list_collaboration_sessions() {
+        match self.history.list_collaboration_sessions().await {
             Ok(rows) if !rows.is_empty() => {
                 let mut collaboration = HashMap::new();
                 for row in rows {
@@ -246,7 +247,7 @@ impl AgentEngine {
         Ok(())
     }
 
-    fn persist_thread_snapshot(&self, thread: &AgentThread) {
+    async fn persist_thread_snapshot(&self, thread: &AgentThread) {
         let thread_row = amux_protocol::AgentDbThread {
             id: thread.id.clone(),
             workspace_id: None,
@@ -266,11 +267,11 @@ impl AgentEngine {
             metadata_json: build_thread_metadata_json(thread),
         };
 
-        if let Err(e) = self.history.delete_thread(&thread.id) {
+        if let Err(e) = self.history.delete_thread(&thread.id).await {
             tracing::warn!(thread_id = %thread.id, "failed to reset sqlite thread state: {e}");
             return;
         }
-        if let Err(e) = self.history.create_thread(&thread_row) {
+        if let Err(e) = self.history.create_thread(&thread_row).await {
             tracing::warn!(thread_id = %thread.id, "failed to persist sqlite thread row: {e}");
             return;
         }
@@ -301,7 +302,7 @@ impl AgentEngine {
                     .and_then(|calls| serde_json::to_string(calls).ok()),
                 metadata_json,
             };
-            if let Err(e) = self.history.add_message(&row) {
+            if let Err(e) = self.history.add_message(&row).await {
                 tracing::warn!(thread_id = %thread.id, message_index = index, "failed to persist sqlite message row: {e}");
             }
         }
@@ -313,14 +314,14 @@ impl AgentEngine {
             threads.get(thread_id).cloned()
         };
         if let Some(thread) = thread {
-            self.persist_thread_snapshot(&thread);
+            self.persist_thread_snapshot(&thread).await;
         }
     }
 
     pub(super) async fn persist_threads(&self) {
         let threads = self.threads.read().await;
         for thread in threads.values() {
-            self.persist_thread_snapshot(thread);
+            self.persist_thread_snapshot(thread).await;
         }
     }
 
@@ -343,7 +344,7 @@ impl AgentEngine {
         let mut tasks = self.tasks.lock().await;
         for task in tasks.iter_mut() {
             task.logs.truncate(MAX_TASK_LOGS);
-            if let Err(e) = self.history.upsert_agent_task(task) {
+            if let Err(e) = self.history.upsert_agent_task(task).await {
                 tracing::warn!(task_id = %task.id, "failed to persist task to sqlite: {e}");
             }
         }
@@ -357,7 +358,7 @@ impl AgentEngine {
         let mut goal_runs = self.goal_runs.lock().await;
         for goal_run in goal_runs.iter_mut() {
             goal_run.events.truncate(MAX_GOAL_RUN_EVENTS);
-            if let Err(e) = self.history.upsert_goal_run(goal_run) {
+            if let Err(e) = self.history.upsert_goal_run(goal_run).await {
                 tracing::warn!(goal_run_id = %goal_run.id, "failed to persist goal run to sqlite: {e}");
             }
         }
@@ -381,7 +382,7 @@ impl AgentEngine {
         super::config::sanitize_config_value(&mut value);
         let mut items = Vec::new();
         super::config::flatten_config_value_to_items(&value, "", &mut items);
-        if let Err(error) = self.history.replace_agent_config_items(&items) {
+        if let Err(error) = self.history.replace_agent_config_items(&items).await {
             tracing::warn!("failed to persist config to sqlite: {error}");
         }
     }

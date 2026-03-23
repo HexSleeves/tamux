@@ -170,7 +170,7 @@ impl AgentEngine {
             subagent_health_label(stats.health_state),
             stats.created_at,
             stats.updated_at,
-        ) {
+        ).await {
             tracing::warn!(task_id = %stats.task_id, "failed to persist subagent metrics: {e}");
         }
     }
@@ -214,6 +214,7 @@ impl AgentEngine {
         let latest = self
             .history
             .list_health_log(1)
+            .await
             .ok()
             .and_then(|items| items.into_iter().next());
 
@@ -229,8 +230,8 @@ impl AgentEngine {
         })
     }
 
-    pub fn health_log_entries(&self, limit: u32) -> Result<Vec<serde_json::Value>> {
-        let rows = self.history.list_health_log(limit)?;
+    pub async fn health_log_entries(&self, limit: u32) -> Result<Vec<serde_json::Value>> {
+        let rows = self.history.list_health_log(limit).await?;
         Ok(rows
             .into_iter()
             .map(

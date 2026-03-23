@@ -296,6 +296,7 @@ impl AgentEngine {
         let recent_health = self
             .history
             .list_health_log(6)
+            .await
             .unwrap_or_default()
             .into_iter()
             .filter(|entry| entry.3 != "healthy")

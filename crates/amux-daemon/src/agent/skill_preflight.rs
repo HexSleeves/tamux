@@ -19,9 +19,9 @@ impl AgentEngine {
         }
 
         let skills_root = skills_dir(&self.data_dir);
-        sync_skill_catalog(&skills_root, &self.history)?;
+        sync_skill_catalog(&skills_root, &self.history).await?;
         let context_tags = resolve_skill_context_tags(&self.session_manager, session_id).await;
-        let matches = select_skill_matches(&self.history, &skills_root, content, &context_tags)?;
+        let matches = select_skill_matches(&self.history, &skills_root, content, &context_tags).await?;
         if matches.is_empty() {
             return Ok(None);
         }
@@ -60,7 +60,7 @@ struct SkillPreflightMatch {
     score: i32,
 }
 
-fn select_skill_matches(
+async fn select_skill_matches(
     history: &HistoryStore,
     skills_root: &Path,
     content: &str,
@@ -71,7 +71,7 @@ fn select_skill_matches(
     let tool_heavy_request = looks_tool_heavy(&request_text);
     let mut matches = Vec::new();
 
-    for record in history.list_skill_variants(None, 256)? {
+    for record in history.list_skill_variants(None, 256).await? {
         if matches!(record.status.as_str(), "archived" | "merged") {
             continue;
         }
@@ -119,11 +119,11 @@ fn select_skill_matches(
     Ok(selected)
 }
 
-fn sync_skill_catalog(skills_root: &Path, history: &HistoryStore) -> Result<()> {
+async fn sync_skill_catalog(skills_root: &Path, history: &HistoryStore) -> Result<()> {
     let mut files = Vec::new();
     collect_skill_documents(skills_root, &mut files)?;
     for path in files {
-        let _ = history.register_skill_document(&path);
+        let _ = history.register_skill_document(&path).await;
     }
     Ok(())
 }

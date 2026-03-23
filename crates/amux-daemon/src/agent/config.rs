@@ -327,7 +327,7 @@ impl AgentEngine {
         sanitize_config_value(&mut value);
         let mut items = Vec::new();
         flatten_config_value_to_items(&value, "", &mut items);
-        if let Err(error) = self.history.replace_agent_config_items(&items) {
+        if let Err(error) = self.history.replace_agent_config_items(&items).await {
             tracing::warn!("failed to persist agent config to sqlite: {error}");
         }
         *self.config.write().await = config;
@@ -348,6 +348,7 @@ impl AgentEngine {
             .context("updated config item could not be parsed")?;
         self.history
             .upsert_agent_config_item(key_path, &value)
+            .await
             .context("failed to persist config item update")?;
         *self.config.write().await = merged.clone();
         self.reinit_gateway().await;

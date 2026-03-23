@@ -23,7 +23,7 @@ impl AgentEngine {
                     goal_run_id: goal_run_id.as_deref(),
                     context_tags,
                     consulted_at: now_millis(),
-                })
+                }).await
         {
             tracing::warn!(
                 thread_id,
@@ -73,6 +73,7 @@ impl AgentEngine {
         match self
             .history
             .settle_skill_variant_usage(thread_id, task_id, goal_run_id, outcome)
+            .await
         {
             Ok(count) => {
                 let _ = self

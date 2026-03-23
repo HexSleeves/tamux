@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use amux_protocol::{ClientMessage, DaemonMessage};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures::SinkExt;
 use futures::StreamExt;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -65,7 +65,21 @@ pub fn socket_path() -> std::path::PathBuf {
 
 /// Run the IPC server until a shutdown signal is received.
 pub async fn run() -> Result<()> {
-    let manager = SessionManager::new();
+    // Create shared history store (single connection for entire daemon)
+    let history = crate::history::HistoryStore::new()
+        .await
+        .context("failed to initialize shared history store")?;
+    let history = Arc::new(history);
+
+    // load_config now takes &HistoryStore
+    let agent_config = crate::agent::load_config_from_history(&history)
+        .await
+        .unwrap_or_default();
+
+    let manager = SessionManager::new_with_history(
+        history.clone(),
+        1024, // Default PTY channel capacity; will be wired to AgentConfig in Task 2
+    );
     let reaper_manager = manager.clone();
 
     tokio::spawn(async move {
@@ -77,8 +91,11 @@ pub async fn run() -> Result<()> {
     });
 
     // Start agent engine
-    let agent_config = crate::agent::load_config().unwrap_or_default();
-    let agent = AgentEngine::new(manager.clone(), agent_config);
+    let agent = AgentEngine::new_with_shared_history(
+        manager.clone(),
+        agent_config,
+        history.clone(),
+    );
 
     // Hydrate persisted state (threads, tasks, heartbeat, memory)
     if let Err(e) = agent.hydrate().await {
@@ -601,7 +618,7 @@ where
                 }
 
                 ClientMessage::SearchHistory { query, limit } => {
-                    match manager.search_history(&query, limit.unwrap_or(8).max(1)) {
+                    match manager.search_history(&query, limit.unwrap_or(8).max(1)).await {
                         Ok((summary, hits)) => {
                             framed
                                 .send(DaemonMessage::HistorySearchResult {
@@ -623,7 +640,7 @@ where
 
                 ClientMessage::AppendCommandLog { entry_json } => {
                     match serde_json::from_str::<amux_protocol::CommandLogEntry>(&entry_json) {
-                        Ok(entry) => match manager.append_command_log(&entry) {
+                        Ok(entry) => match manager.append_command_log(&entry).await {
                             Ok(()) => {
                                 framed.send(DaemonMessage::CommandLogAck).await?;
                             }
@@ -649,7 +666,7 @@ where
                     id,
                     exit_code,
                     duration_ms,
-                } => match manager.complete_command_log(&id, exit_code, duration_ms) {
+                } => match manager.complete_command_log(&id, exit_code, duration_ms).await {
                     Ok(()) => {
                         framed.send(DaemonMessage::CommandLogAck).await?;
                     }
@@ -670,7 +687,7 @@ where
                     workspace_id.as_deref(),
                     pane_id.as_deref(),
                     limit,
-                ) {
+                ).await {
                     Ok(entries) => {
                         let entries_json = serde_json::to_string(&entries).unwrap_or_default();
                         framed
@@ -686,7 +703,7 @@ where
                     }
                 },
 
-                ClientMessage::ClearCommandLog => match manager.clear_command_log() {
+                ClientMessage::ClearCommandLog => match manager.clear_command_log().await {
                     Ok(()) => {
                         framed.send(DaemonMessage::CommandLogAck).await?;
                     }
@@ -701,7 +718,7 @@ where
 
                 ClientMessage::CreateAgentThread { thread_json } => {
                     match serde_json::from_str::<amux_protocol::AgentDbThread>(&thread_json) {
-                        Ok(thread) => match manager.create_agent_thread(&thread) {
+                        Ok(thread) => match manager.create_agent_thread(&thread).await {
                             Ok(()) => {
                                 framed.send(DaemonMessage::AgentDbMessageAck).await?;
                             }
@@ -724,7 +741,7 @@ where
                 }
 
                 ClientMessage::DeleteAgentThread { thread_id } => {
-                    match manager.delete_agent_thread(&thread_id) {
+                    match manager.delete_agent_thread(&thread_id).await {
                         Ok(()) => {
                             framed.send(DaemonMessage::AgentDbMessageAck).await?;
                         }
@@ -738,7 +755,7 @@ where
                     }
                 }
 
-                ClientMessage::ListAgentThreads => match manager.list_agent_threads() {
+                ClientMessage::ListAgentThreads => match manager.list_agent_threads().await {
                     Ok(threads) => {
                         let threads_json = serde_json::to_string(&threads).unwrap_or_default();
                         framed
@@ -755,9 +772,9 @@ where
                 },
 
                 ClientMessage::GetAgentThread { thread_id } => {
-                    match manager.get_agent_thread(&thread_id) {
+                    match manager.get_agent_thread(&thread_id).await {
                         Ok(thread) => {
-                            let messages = manager.list_agent_messages(&thread_id, None)?;
+                            let messages = manager.list_agent_messages(&thread_id, None).await?;
                             let thread_json = serde_json::to_string(&thread).unwrap_or_default();
                             let messages_json =
                                 serde_json::to_string(&messages).unwrap_or_default();
@@ -780,7 +797,7 @@ where
 
                 ClientMessage::AddAgentMessage { message_json } => {
                     match serde_json::from_str::<amux_protocol::AgentDbMessage>(&message_json) {
-                        Ok(message) => match manager.add_agent_message(&message) {
+                        Ok(message) => match manager.add_agent_message(&message).await {
                             Ok(()) => {
                                 framed.send(DaemonMessage::AgentDbMessageAck).await?;
                             }
@@ -826,9 +843,9 @@ where
                 }
 
                 ClientMessage::ListAgentMessages { thread_id, limit } => {
-                    match manager.list_agent_messages(&thread_id, limit) {
+                    match manager.list_agent_messages(&thread_id, limit).await {
                         Ok(messages) => {
-                            let thread = manager.get_agent_thread(&thread_id)?;
+                            let thread = manager.get_agent_thread(&thread_id).await?;
                             let thread_json = serde_json::to_string(&thread).unwrap_or_default();
                             let messages_json =
                                 serde_json::to_string(&messages).unwrap_or_default();
@@ -851,7 +868,7 @@ where
 
                 ClientMessage::UpsertTranscriptIndex { entry_json } => {
                     match serde_json::from_str::<amux_protocol::TranscriptIndexEntry>(&entry_json) {
-                        Ok(entry) => match manager.upsert_transcript_index(&entry) {
+                        Ok(entry) => match manager.upsert_transcript_index(&entry).await {
                             Ok(()) => {
                                 framed.send(DaemonMessage::AgentDbMessageAck).await?;
                             }
@@ -874,7 +891,7 @@ where
                 }
 
                 ClientMessage::ListTranscriptIndex { workspace_id } => {
-                    match manager.list_transcript_index(workspace_id.as_deref()) {
+                    match manager.list_transcript_index(workspace_id.as_deref()).await {
                         Ok(entries) => {
                             let entries_json = serde_json::to_string(&entries).unwrap_or_default();
                             framed
@@ -893,7 +910,7 @@ where
 
                 ClientMessage::UpsertSnapshotIndex { entry_json } => {
                     match serde_json::from_str::<amux_protocol::SnapshotIndexEntry>(&entry_json) {
-                        Ok(entry) => match manager.upsert_snapshot_index(&entry) {
+                        Ok(entry) => match manager.upsert_snapshot_index(&entry).await {
                             Ok(()) => {
                                 framed.send(DaemonMessage::AgentDbMessageAck).await?;
                             }
@@ -916,7 +933,7 @@ where
                 }
 
                 ClientMessage::ListSnapshotIndex { workspace_id } => {
-                    match manager.list_snapshot_index(workspace_id.as_deref()) {
+                    match manager.list_snapshot_index(workspace_id.as_deref()).await {
                         Ok(entries) => {
                             let entries_json = serde_json::to_string(&entries).unwrap_or_default();
                             framed
@@ -935,7 +952,7 @@ where
 
                 ClientMessage::UpsertAgentEvent { event_json } => {
                     match serde_json::from_str::<amux_protocol::AgentEventRow>(&event_json) {
-                        Ok(event) => match manager.upsert_agent_event(&event) {
+                        Ok(event) => match manager.upsert_agent_event(&event).await {
                             Ok(()) => {
                                 framed.send(DaemonMessage::AgentDbMessageAck).await?;
                             }
@@ -963,6 +980,7 @@ where
                     limit,
                 } => {
                     match manager.list_agent_events(category.as_deref(), pane_id.as_deref(), limit)
+                        .await
                     {
                         Ok(events) => {
                             let events_json = serde_json::to_string(&events).unwrap_or_default();
@@ -981,7 +999,7 @@ where
                 }
 
                 ClientMessage::GenerateSkill { query, title } => {
-                    match manager.generate_skill(query.as_deref(), title.as_deref()) {
+                    match manager.generate_skill(query.as_deref(), title.as_deref()).await {
                         Ok((title, path)) => {
                             framed
                                 .send(DaemonMessage::SkillGenerated { title, path })
@@ -1013,7 +1031,7 @@ where
                 }
 
                 ClientMessage::ListSnapshots { workspace_id } => {
-                    match manager.list_snapshots(workspace_id.as_deref()) {
+                    match manager.list_snapshots(workspace_id.as_deref()).await {
                         Ok(snapshots) => {
                             framed
                                 .send(DaemonMessage::SnapshotList { snapshots })
@@ -1030,7 +1048,7 @@ where
                 }
 
                 ClientMessage::RestoreSnapshot { snapshot_id } => {
-                    match manager.restore_snapshot(&snapshot_id) {
+                    match manager.restore_snapshot(&snapshot_id).await {
                         Ok((ok, message)) => {
                             framed
                                 .send(DaemonMessage::SnapshotRestored {
@@ -1506,7 +1524,7 @@ where
                 }
 
                 ClientMessage::AgentGetSubagentMetrics { task_id } => {
-                    let metrics_json = match agent.history.get_subagent_metrics(&task_id) {
+                    let metrics_json = match agent.history.get_subagent_metrics(&task_id).await {
                         Ok(Some(metrics)) => serde_json::to_string(&serde_json::json!({
                             "task_id": metrics.task_id,
                             "parent_task_id": metrics.parent_task_id,
@@ -1543,7 +1561,7 @@ where
 
                 ClientMessage::AgentListCheckpoints { goal_run_id } => {
                     let checkpoints_json =
-                        match agent.history.list_checkpoints_for_goal_run(&goal_run_id) {
+                        match agent.history.list_checkpoints_for_goal_run(&goal_run_id).await {
                             Ok(jsons) => {
                                 let summaries =
                                     crate::agent::liveness::checkpoint::checkpoint_list(&jsons);
@@ -1595,7 +1613,7 @@ where
                 }
 
                 ClientMessage::AgentListHealthLog { limit } => {
-                    let entries_json = match agent.health_log_entries(limit.unwrap_or(50).max(1)) {
+                    let entries_json = match agent.health_log_entries(limit.unwrap_or(50).max(1)).await {
                         Ok(entries) => {
                             serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into())
                         }
@@ -1683,7 +1701,7 @@ where
                     &option_type,
                     &command_family,
                     limit.unwrap_or(20),
-                ) {
+                ).await {
                     Ok(report) => {
                         let report_json =
                             serde_json::to_string(&report).unwrap_or_else(|_| "{}".into());
@@ -1706,6 +1724,7 @@ where
                     match agent
                         .history
                         .memory_provenance_report(target.as_deref(), limit.unwrap_or(25) as usize)
+                        .await
                     {
                         Ok(report) => {
                             let report_json =

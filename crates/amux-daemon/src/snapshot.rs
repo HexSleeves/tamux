@@ -750,11 +750,11 @@ pub struct SnapshotStats {
 /// Returns list of removed snapshot IDs.
 ///
 /// Only operates on snapshots tracked in the `HistoryStore` (SQLite index).
-pub fn enforce_retention(
+pub async fn enforce_retention(
     history: &HistoryStore,
     config: &SnapshotRetentionConfig,
 ) -> Result<Vec<String>> {
-    let mut entries = history.list_snapshot_index(None)?;
+    let mut entries = history.list_snapshot_index(None).await?;
     let mut removed = Vec::new();
 
     // Sort by created_at ascending (oldest first)
@@ -764,7 +764,7 @@ pub fn enforce_retention(
     while entries.len() > config.max_snapshots {
         if let Some(old) = entries.first() {
             let _ = std::fs::remove_file(&old.path);
-            let _ = history.delete_snapshot_index(&old.snapshot_id);
+            let _ = history.delete_snapshot_index(&old.snapshot_id).await;
             removed.push(old.snapshot_id.clone());
             entries.remove(0);
         }
@@ -785,7 +785,7 @@ pub fn enforce_retention(
 
         if let Some(old) = entries.first() {
             let _ = std::fs::remove_file(&old.path);
-            let _ = history.delete_snapshot_index(&old.snapshot_id);
+            let _ = history.delete_snapshot_index(&old.snapshot_id).await;
             removed.push(old.snapshot_id.clone());
             entries.remove(0);
         }
@@ -803,8 +803,8 @@ pub fn enforce_retention(
 }
 
 /// Compute aggregate statistics for all tracked snapshots.
-pub fn get_snapshot_stats(history: &HistoryStore) -> Result<SnapshotStats> {
-    let mut entries = history.list_snapshot_index(None)?;
+pub async fn get_snapshot_stats(history: &HistoryStore) -> Result<SnapshotStats> {
+    let mut entries = history.list_snapshot_index(None).await?;
     entries.sort_by_key(|e| e.created_at);
 
     let total_size: u64 = entries
@@ -822,25 +822,25 @@ pub fn get_snapshot_stats(history: &HistoryStore) -> Result<SnapshotStats> {
 }
 
 /// Delete a single snapshot by ID. Returns `true` if a snapshot was found and removed.
-pub fn delete_snapshot(history: &HistoryStore, snapshot_id: &str) -> Result<bool> {
-    let Some(entry) = history.get_snapshot_index(snapshot_id)? else {
+pub async fn delete_snapshot(history: &HistoryStore, snapshot_id: &str) -> Result<bool> {
+    let Some(entry) = history.get_snapshot_index(snapshot_id).await? else {
         return Ok(false);
     };
     let _ = std::fs::remove_file(&entry.path);
-    history.delete_snapshot_index(snapshot_id)?;
+    history.delete_snapshot_index(snapshot_id).await?;
     tracing::info!(snapshot_id, "deleted snapshot");
     Ok(true)
 }
 
 /// Scan the snapshots directory and remove `.tar.gz` files not tracked in the index.
 /// Returns the number of orphaned files removed.
-pub fn cleanup_orphaned_files(history: &HistoryStore) -> Result<usize> {
+pub async fn cleanup_orphaned_files(history: &HistoryStore) -> Result<usize> {
     let root = amux_protocol::ensure_amux_data_dir()?.join("snapshots");
     if !root.exists() {
         return Ok(0);
     }
 
-    let entries = history.list_snapshot_index(None)?;
+    let entries = history.list_snapshot_index(None).await?;
     let known_paths: HashSet<String> = entries.iter().map(|e| e.path.clone()).collect();
 
     let mut removed = 0;
@@ -870,13 +870,11 @@ pub struct SnapshotStore {
 }
 
 impl SnapshotStore {
-    pub fn new() -> Result<Self> {
-        let root = amux_protocol::ensure_amux_data_dir()?.join("snapshots");
-        std::fs::create_dir_all(&root)?;
-        Ok(Self {
-            history: HistoryStore::new()?,
+    pub fn new_with_history(history: HistoryStore) -> Self {
+        Self {
+            history,
             retention: SnapshotRetentionConfig::from_sources(),
-        })
+        }
     }
 
     /// Update the retention configuration (e.g. when the user changes settings).
@@ -889,7 +887,7 @@ impl SnapshotStore {
         &self.retention
     }
 
-    pub fn create_snapshot(
+    pub async fn create_snapshot(
         &self,
         workspace_id: Option<WorkspaceId>,
         session_id: Option<SessionId>,
@@ -917,11 +915,11 @@ impl SnapshotStore {
         )?;
 
         self.history
-            .upsert_snapshot_index(&encode_snapshot(&snapshot))?;
+            .upsert_snapshot_index(&encode_snapshot(&snapshot)).await?;
 
         // Enforce retention limits after creating a new snapshot
         if retention.auto_cleanup {
-            if let Err(e) = enforce_retention(&self.history, &retention) {
+            if let Err(e) = enforce_retention(&self.history, &retention).await {
                 tracing::warn!(error = %e, "snapshot retention enforcement failed");
             }
         }
@@ -929,13 +927,13 @@ impl SnapshotStore {
         Ok(Some(snapshot))
     }
 
-    pub fn list(&self, workspace_id: Option<&str>) -> Result<Vec<SnapshotInfo>> {
-        let entries = self.history.list_snapshot_index(workspace_id)?;
+    pub async fn list(&self, workspace_id: Option<&str>) -> Result<Vec<SnapshotInfo>> {
+        let entries = self.history.list_snapshot_index(workspace_id).await?;
         Ok(entries.into_iter().map(decode_snapshot).collect())
     }
 
-    pub fn restore(&self, snapshot_id: &str) -> Result<(bool, String)> {
-        let Some(entry) = self.history.get_snapshot_index(snapshot_id)? else {
+    pub async fn restore(&self, snapshot_id: &str) -> Result<(bool, String)> {
+        let Some(entry) = self.history.get_snapshot_index(snapshot_id).await? else {
             return Ok((false, "snapshot not found".to_string()));
         };
         let snapshot = decode_snapshot(entry);
@@ -943,17 +941,17 @@ impl SnapshotStore {
     }
 
     /// Delete a single snapshot by ID.
-    pub fn delete(&self, snapshot_id: &str) -> Result<bool> {
-        delete_snapshot(&self.history, snapshot_id)
+    pub async fn delete(&self, snapshot_id: &str) -> Result<bool> {
+        delete_snapshot(&self.history, snapshot_id).await
     }
 
     /// Get aggregate stats for all tracked snapshots.
-    pub fn stats(&self) -> Result<SnapshotStats> {
-        get_snapshot_stats(&self.history)
+    pub async fn stats(&self) -> Result<SnapshotStats> {
+        get_snapshot_stats(&self.history).await
     }
 
     /// Remove orphaned .tar.gz files not tracked in the index.
-    pub fn cleanup_orphaned(&self) -> Result<usize> {
-        cleanup_orphaned_files(&self.history)
+    pub async fn cleanup_orphaned(&self) -> Result<usize> {
+        cleanup_orphaned_files(&self.history).await
     }
 }

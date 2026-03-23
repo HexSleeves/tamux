@@ -139,7 +139,7 @@ impl AgentEngine {
             &outcome_json,
             trace.model_used.as_deref(),
             trace.created_at,
-        ) {
+        ).await {
             tracing::warn!(thread_id = %thread_id, skill = %selected_variant.skill_name, variant = %selected_variant.variant_name, "failed to persist skill-selection causal trace: {error}");
         }
     }
@@ -174,6 +174,7 @@ impl AgentEngine {
         };
         self.history
             .settle_skill_selection_causal_traces(thread_id, task_id, goal_run_id, &outcome_json)
+            .await
             .unwrap_or(0)
     }
 
@@ -187,6 +188,7 @@ impl AgentEngine {
         let checkpoint_count = self
             .history
             .list_checkpoints_for_goal_run(&goal_run.id)
+            .await
             .map(|items| items.len())
             .unwrap_or(0);
         let has_checkpoint = checkpoint_count > 0;
@@ -288,17 +290,18 @@ impl AgentEngine {
             &outcome_json,
             trace.model_used.as_deref(),
             trace.created_at,
-        ) {
+        ).await {
             tracing::warn!(goal_run_id = %goal_run.id, task_id = %failed_task.id, "failed to persist recovery near-miss trace: {error}");
         }
     }
 
-    pub(super) fn build_causal_guidance_summary(&self) -> Option<String> {
+    pub(super) async fn build_causal_guidance_summary(&self) -> Option<String> {
         let mut advisories = Vec::new();
         for tool_name in ["execute_managed_command", "bash_command"] {
             let records = self
                 .history
                 .list_recent_causal_trace_records(tool_name, 48)
+                .await
                 .ok()?;
             let mut by_family: HashMap<String, FamilyOutcomeSummary> = HashMap::new();
             for record in records {
@@ -359,6 +362,7 @@ impl AgentEngine {
         if let Ok(records) = self
             .history
             .list_recent_causal_trace_records("replan_after_failure", 24)
+            .await
         {
             let mut recovery_patterns = Vec::new();
             for record in records {
@@ -399,7 +403,7 @@ impl AgentEngine {
         }
     }
 
-    pub(super) fn command_blast_radius_advisory(
+    pub(super) async fn command_blast_radius_advisory(
         &self,
         tool_name: &str,
         command: &str,
@@ -408,6 +412,7 @@ impl AgentEngine {
         let records = self
             .history
             .list_recent_causal_trace_records(tool_name, 64)
+            .await
             .ok()?;
         let mut failure_count = 0u32;
         let mut near_miss_count = 0u32;
@@ -588,7 +593,7 @@ impl AgentEngine {
             &outcome_json,
             trace.model_used.as_deref(),
             trace.created_at,
-        ) {
+        ).await {
             tracing::warn!(goal_run_id = %goal_run.id, trace = %decision_label, "failed to persist goal plan causal trace: {error}");
         }
     }
@@ -738,7 +743,7 @@ impl AgentEngine {
             &outcome_json,
             trace.model_used.as_deref(),
             trace.created_at,
-        ) {
+        ).await {
             tracing::warn!(thread_id = %thread_id, tool = %tool_call.function.name, "failed to persist causal trace: {error}");
         }
     }
@@ -750,7 +755,7 @@ impl AgentEngine {
     ) -> Result<serde_json::Value> {
         let rows = self
             .history
-            .list_causal_traces_for_option(option_type, limit.max(1))?;
+            .list_causal_traces_for_option(option_type, limit.max(1)).await?;
 
         let mut success = 0u32;
         let mut failure = 0u32;
@@ -809,7 +814,7 @@ impl AgentEngine {
         }))
     }
 
-    pub fn counterfactual_report(
+    pub async fn counterfactual_report(
         &self,
         option_type: &str,
         family_hint: &str,
@@ -818,7 +823,7 @@ impl AgentEngine {
         let normalized_family = command_family(family_hint);
         let records = self
             .history
-            .list_recent_causal_trace_records(option_type, limit.max(1))?;
+            .list_recent_causal_trace_records(option_type, limit.max(1)).await?;
         let mut success = 0u32;
         let mut failure = 0u32;
         let mut near_miss = 0u32;

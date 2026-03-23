@@ -7,7 +7,7 @@ impl AgentEngine {
         &self,
         checkpoint_id: &str,
     ) -> Result<crate::agent::liveness::state_layers::RestoreOutcome> {
-        let Some(state_json) = self.history.get_checkpoint(checkpoint_id)? else {
+        let Some(state_json) = self.history.get_checkpoint(checkpoint_id).await? else {
             anyhow::bail!("checkpoint not found");
         };
         let checkpoint = crate::agent::liveness::checkpoint::checkpoint_load(&state_json)?;
@@ -102,7 +102,7 @@ impl AgentEngine {
             Some(&indicators_json),
             Some("restore_checkpoint"),
             now_millis(),
-        );
+        ).await;
 
         Ok(outcome)
     }

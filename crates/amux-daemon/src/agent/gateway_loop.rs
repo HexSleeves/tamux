@@ -349,7 +349,7 @@ impl AgentEngine {
                                     .map(|value| format!("{:?}", value.action))
                                     .as_deref(),
                                 now_millis(),
-                            ) {
+                            ).await {
                                 tracing::warn!(task_id = %task.id, "failed to persist health log: {e}");
                             }
                             let _ = self.event_tx.send(AgentEvent::SubagentHealthChange {

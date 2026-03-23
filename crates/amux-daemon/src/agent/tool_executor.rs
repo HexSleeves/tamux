@@ -1939,7 +1939,7 @@ async fn execute_search_history(
 
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
 
-    let (summary, hits) = session_manager.search_history(query, limit)?;
+    let (summary, hits) = session_manager.search_history(query, limit).await?;
 
     if hits.is_empty() {
         Ok("No matching history entries.".into())
@@ -1977,7 +1977,7 @@ async fn execute_session_search(
         .and_then(|v| v.as_u64())
         .unwrap_or(8)
         .clamp(1, 20) as usize;
-    let body = run_session_search(session_manager, query, limit)?;
+    let body = run_session_search(session_manager, query, limit).await?;
     if body.chars().count() > SESSION_SEARCH_OUTPUT_MAX_CHARS {
         Ok(body
             .chars()
@@ -2223,7 +2223,7 @@ async fn execute_list_skills(
         .unwrap_or(20)
         .clamp(1, 100) as usize;
 
-    let mut entries = sync_skill_catalog(&skills_root, history)?;
+    let mut entries = sync_skill_catalog(&skills_root, history).await?;
     if entries.is_empty() {
         return Ok(format!(
             "No local skills found under {}.",
@@ -2298,17 +2298,16 @@ async fn execute_read_skill(
         .unwrap_or(200)
         .clamp(20, 1000) as usize;
     let skills_root = super::skills_dir(agent_data_dir);
-    sync_skill_catalog(&skills_root, history)?;
+    sync_skill_catalog(&skills_root, history).await?;
     let context_tags = resolve_skill_context_tags(session_manager, session_id).await;
-    let variant = history.resolve_skill_variant(skill, &context_tags)?;
-    let candidate_variants = variant
-        .as_ref()
-        .and_then(|selected| {
-            history
-                .list_skill_variants(Some(&selected.skill_name), 8)
-                .ok()
-        })
-        .unwrap_or_default();
+    let variant = history.resolve_skill_variant(skill, &context_tags).await?;
+    let candidate_variants = match variant.as_ref() {
+        Some(selected) => history
+            .list_skill_variants(Some(&selected.skill_name), 8)
+            .await
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
     let skill_path = resolve_skill_path(&skills_root, skill, variant.as_ref())?;
     let content = tokio::fs::read_to_string(&skill_path).await?;
     if let Some(variant) = variant.as_ref() {
@@ -2643,7 +2642,7 @@ fn resolve_skill_path(
     )
 }
 
-fn sync_skill_catalog(
+async fn sync_skill_catalog(
     skills_root: &std::path::Path,
     history: &HistoryStore,
 ) -> Result<Vec<SkillVariantRecord>> {
@@ -2651,7 +2650,7 @@ fn sync_skill_catalog(
     collect_skill_documents(skills_root, &mut files)?;
     let mut entries = Vec::new();
     for path in files {
-        if let Ok(record) = history.register_skill_document(&path) {
+        if let Ok(record) = history.register_skill_document(&path).await {
             entries.push(record);
         }
     }
@@ -3384,7 +3383,7 @@ async fn execute_managed_command(
         }
         DaemonMessage::ApprovalRequired { mut approval, .. } => {
             if let Some(advisory) =
-                agent.command_blast_radius_advisory("execute_managed_command", command)
+                agent.command_blast_radius_advisory("execute_managed_command", command).await
             {
                 approval
                     .reasons

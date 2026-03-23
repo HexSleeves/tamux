@@ -25,7 +25,7 @@ struct RecallGroup {
     snippets: Vec<String>,
 }
 
-pub(super) fn execute_session_search(
+pub(super) async fn execute_session_search(
     session_manager: &Arc<SessionManager>,
     query: &str,
     limit: usize,
@@ -36,9 +36,9 @@ pub(super) fn execute_session_search(
     }
 
     let mut groups = Vec::new();
-    groups.extend(recall_from_threads(session_manager, &tokens)?);
-    groups.extend(recall_from_transcripts(session_manager, &tokens)?);
-    groups.extend(recall_from_agent_events(session_manager, &tokens)?);
+    groups.extend(recall_from_threads(session_manager, &tokens).await?);
+    groups.extend(recall_from_transcripts(session_manager, &tokens).await?);
+    groups.extend(recall_from_agent_events(session_manager, &tokens).await?);
     groups.extend(recall_from_telemetry("cognitive", &tokens)?);
     groups.extend(recall_from_telemetry("operational", &tokens)?);
 
@@ -80,18 +80,18 @@ pub(super) fn execute_session_search(
     Ok(lines.join("\n"))
 }
 
-fn recall_from_threads(
+async fn recall_from_threads(
     session_manager: &SessionManager,
     tokens: &[String],
 ) -> Result<Vec<RecallGroup>> {
-    let mut threads = session_manager.list_agent_threads()?;
+    let mut threads = session_manager.list_agent_threads().await?;
     threads.sort_by_key(|thread| Reverse(thread.updated_at));
     threads.truncate(MAX_THREAD_SCAN);
 
     let mut groups = Vec::new();
     for thread in threads {
         let messages =
-            session_manager.list_agent_messages(&thread.id, Some(MAX_MESSAGES_PER_THREAD))?;
+            session_manager.list_agent_messages(&thread.id, Some(MAX_MESSAGES_PER_THREAD)).await?;
         let mut score = match_score(&thread.title, tokens);
         let mut snippets = Vec::new();
         let mut role_hits = Vec::new();
@@ -129,11 +129,11 @@ fn recall_from_threads(
     Ok(groups)
 }
 
-fn recall_from_transcripts(
+async fn recall_from_transcripts(
     session_manager: &SessionManager,
     tokens: &[String],
 ) -> Result<Vec<RecallGroup>> {
-    let entries = session_manager.list_transcript_index(None)?;
+    let entries = session_manager.list_transcript_index(None).await?;
     let mut groups = Vec::new();
     for entry in entries.into_iter().take(MAX_THREAD_SCAN) {
         let mut combined = entry.preview.clone().unwrap_or_default();
@@ -174,12 +174,12 @@ fn recall_from_transcripts(
     Ok(groups)
 }
 
-fn recall_from_agent_events(
+async fn recall_from_agent_events(
     session_manager: &SessionManager,
     tokens: &[String],
 ) -> Result<Vec<RecallGroup>> {
     let events =
-        session_manager.list_agent_events(Some("behavioral"), None, Some(MAX_EVENT_SCAN))?;
+        session_manager.list_agent_events(Some("behavioral"), None, Some(MAX_EVENT_SCAN)).await?;
     let mut groups = Vec::new();
     for event in events {
         let score = match_score(&event.payload_json, tokens) + match_score(&event.kind, tokens);

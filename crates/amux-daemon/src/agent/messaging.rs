@@ -43,7 +43,7 @@ impl AgentEngine {
         }
 
         let id_refs: Vec<&str> = message_ids.iter().map(String::as_str).collect();
-        self.history.delete_messages(thread_id, &id_refs)
+        self.history.delete_messages(thread_id, &id_refs).await
     }
 
     pub async fn seed_thread_context(
@@ -149,7 +149,7 @@ impl AgentEngine {
         let mut threads = self.threads.write().await;
         if !threads.contains_key(&id) {
             // Try to restore the thread from the database (history continuation)
-            if let Some(restored) = self.restore_thread_from_db(&id) {
+            if let Some(restored) = self.restore_thread_from_db(&id).await {
                 tracing::info!(thread_id = %id, messages = restored.messages.len(), "restored thread from history");
                 threads.insert(id.clone(), restored);
             } else {
@@ -183,9 +183,9 @@ impl AgentEngine {
     }
 
     /// Attempt to restore a thread and its messages from the SQLite history database.
-    fn restore_thread_from_db(&self, thread_id: &str) -> Option<AgentThread> {
-        let db_thread = self.history.get_thread(thread_id).ok().flatten()?;
-        let db_messages = self.history.list_messages(thread_id, Some(500)).ok()?;
+    async fn restore_thread_from_db(&self, thread_id: &str) -> Option<AgentThread> {
+        let db_thread = self.history.get_thread(thread_id).await.ok().flatten()?;
+        let db_messages = self.history.list_messages(thread_id, Some(500)).await.ok()?;
         let thread_metadata = parse_thread_metadata(db_thread.metadata_json.as_deref());
 
         let messages: Vec<AgentMessage> = db_messages

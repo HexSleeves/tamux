@@ -484,6 +484,7 @@ impl AgentEngine {
                 .unwrap_or(snapshot.title.as_str());
             self.history
                 .generate_skill(Some(snapshot.goal.as_str()), Some(skill_title))
+                .await
                 .ok()
                 .map(|(_, path)| path)
         } else {
@@ -648,7 +649,7 @@ impl AgentEngine {
             now,
         );
         if let Err(e) =
-            crate::agent::liveness::checkpoint::checkpoint_store(&self.history, &checkpoint)
+            crate::agent::liveness::checkpoint::checkpoint_store(&self.history, &checkpoint).await
         {
             tracing::warn!(goal_run_id, "failed to store checkpoint: {e}");
         }

@@ -74,7 +74,7 @@ impl AgentEngine {
             &session.parent_task_id,
             &session_json,
             session.updated_at,
-        )
+        ).await
     }
 
     pub(super) async fn register_subagent_collaboration(
