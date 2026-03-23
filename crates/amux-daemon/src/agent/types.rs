@@ -1069,6 +1069,15 @@ pub struct AgentConfig {
     /// Broadcast channel capacity for agent event fanout.
     #[serde(default = "default_agent_event_channel_capacity")]
     pub agent_event_channel_capacity: usize,
+    /// EMA smoothing factor for activity histogram adaptation. Per D-02.
+    #[serde(default = "default_ema_alpha")]
+    pub ema_alpha: f64,
+    /// Heartbeat frequency reduction factor during low-activity hours. Per D-03.
+    #[serde(default = "default_low_activity_frequency_factor")]
+    pub low_activity_frequency_factor: u64,
+    /// Minimum smoothed count to consider an hour "active". Per D-02.
+    #[serde(default = "default_ema_activity_threshold")]
+    pub ema_activity_threshold: f64,
     /// Additional persisted agent settings used by richer frontends and the TUI.
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -1316,6 +1325,15 @@ fn default_keep_recent_on_compact() -> u32 {
 fn default_task_poll_secs() -> u64 {
     10
 }
+fn default_ema_alpha() -> f64 {
+    0.3
+}
+fn default_low_activity_frequency_factor() -> u64 {
+    4
+}
+fn default_ema_activity_threshold() -> f64 {
+    2.0
+}
 fn default_heartbeat_mins() -> u64 {
     30
 }
@@ -1397,6 +1415,9 @@ impl Default for AgentConfig {
             managed_execution: ManagedExecutionConfig::default(),
             pty_channel_capacity: default_pty_channel_capacity(),
             agent_event_channel_capacity: default_agent_event_channel_capacity(),
+            ema_alpha: default_ema_alpha(),
+            low_activity_frequency_factor: default_low_activity_frequency_factor(),
+            ema_activity_threshold: default_ema_activity_threshold(),
             extra: HashMap::new(),
         }
     }
@@ -2554,6 +2575,31 @@ pub struct HeartbeatChecksConfig {
     pub unreplied_messages_cron: Option<String>,
     #[serde(default)]
     pub repo_changes_cron: Option<String>,
+    // Per D-06: Per-check priority weights (0.0-1.0). 1.0 = every cycle.
+    #[serde(default = "default_priority_weight")]
+    pub stale_todos_priority_weight: f64,
+    #[serde(default = "default_priority_weight")]
+    pub stuck_goals_priority_weight: f64,
+    #[serde(default = "default_priority_weight")]
+    pub unreplied_messages_priority_weight: f64,
+    #[serde(default = "default_priority_weight")]
+    pub repo_changes_priority_weight: f64,
+    // Per D-11: Per-check priority overrides (pin to specific weight).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_todos_priority_override: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stuck_goals_priority_override: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreplied_messages_priority_override: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_changes_priority_override: Option<f64>,
+    /// Per D-11: Global reset action — when true, resets all learned priority weights to 1.0.
+    #[serde(default)]
+    pub reset_learned_priorities: bool,
+}
+
+fn default_priority_weight() -> f64 {
+    1.0
 }
 
 fn default_stale_todo_threshold_hours() -> u64 {
@@ -2653,6 +2699,15 @@ impl Default for HeartbeatChecksConfig {
             stuck_goals_cron: None,
             unreplied_messages_cron: None,
             repo_changes_cron: None,
+            stale_todos_priority_weight: default_priority_weight(),
+            stuck_goals_priority_weight: default_priority_weight(),
+            unreplied_messages_priority_weight: default_priority_weight(),
+            repo_changes_priority_weight: default_priority_weight(),
+            stale_todos_priority_override: None,
+            stuck_goals_priority_override: None,
+            unreplied_messages_priority_override: None,
+            repo_changes_priority_override: None,
+            reset_learned_priorities: false,
         }
     }
 }
@@ -2818,6 +2873,29 @@ mod tests {
         assert!(cfg.stuck_goals_cron.is_none());
         assert!(cfg.unreplied_messages_cron.is_none());
         assert!(cfg.repo_changes_cron.is_none());
+        // BEAT-06: Priority weight fields default to 1.0
+        assert!((cfg.stale_todos_priority_weight - 1.0).abs() < f64::EPSILON);
+        assert!((cfg.stuck_goals_priority_weight - 1.0).abs() < f64::EPSILON);
+        assert!((cfg.unreplied_messages_priority_weight - 1.0).abs() < f64::EPSILON);
+        assert!((cfg.repo_changes_priority_weight - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn heartbeat_checks_config_priority_overrides_default_none() {
+        let cfg: HeartbeatChecksConfig = serde_json::from_str("{}").unwrap();
+        assert!(cfg.stale_todos_priority_override.is_none());
+        assert!(cfg.stuck_goals_priority_override.is_none());
+        assert!(cfg.unreplied_messages_priority_override.is_none());
+        assert!(cfg.repo_changes_priority_override.is_none());
+        assert!(!cfg.reset_learned_priorities);
+    }
+
+    #[test]
+    fn agent_config_adaptive_heartbeat_defaults() {
+        let cfg: AgentConfig = serde_json::from_str("{}").unwrap();
+        assert!((cfg.ema_alpha - 0.3).abs() < f64::EPSILON);
+        assert_eq!(cfg.low_activity_frequency_factor, 4);
+        assert!((cfg.ema_activity_threshold - 2.0).abs() < f64::EPSILON);
     }
 
     #[test]

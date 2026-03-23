@@ -481,6 +481,11 @@ pub enum ClientMessage {
     EscalationCancel {
         thread_id: String,
     },
+
+    /// Dismiss an audit entry (user feedback signal). Per BEAT-09/D-04.
+    AuditDismiss {
+        entry_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -835,6 +840,12 @@ pub enum DaemonMessage {
 
     /// Escalation cancel result. Per D-13/TRNS-05.
     EscalationCancelResult {
+        success: bool,
+        message: String,
+    },
+
+    /// Audit dismiss result. Per BEAT-09/D-04.
+    AuditDismissResult {
         success: bool,
         message: String,
     },

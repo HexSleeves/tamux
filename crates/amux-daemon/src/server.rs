@@ -2227,6 +2227,17 @@ where
                     }
                 }
 
+                ClientMessage::AuditDismiss { entry_id } => {
+                    tracing::info!(entry_id = %entry_id, "Audit dismiss requested");
+                    // Full implementation in Phase 4 Plan 2 (wires to HistoryStore.dismiss_audit_entry).
+                    framed
+                        .send(DaemonMessage::AuditDismissResult {
+                            success: false,
+                            message: "Dismiss not yet wired to HistoryStore".to_string(),
+                        })
+                        .await?;
+                }
+
                 ClientMessage::EscalationCancel { thread_id } => {
                     tracing::info!(thread_id = %thread_id, "escalation cancel requested by user (D-13)");
 
