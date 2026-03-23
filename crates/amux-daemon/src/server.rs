@@ -55,6 +55,8 @@ fn should_forward_agent_event(
                 | crate::agent::types::AgentEvent::ConciergeWelcome { .. }
                 | crate::agent::types::AgentEvent::ProviderCircuitOpen { .. }
                 | crate::agent::types::AgentEvent::ProviderCircuitRecovered { .. }
+                | crate::agent::types::AgentEvent::AuditAction { .. }
+                | crate::agent::types::AgentEvent::EscalationUpdate { .. }
         ),
     }
 }
@@ -2177,6 +2179,52 @@ where
                     framed
                         .send(DaemonMessage::AgentConciergeWelcomeDismissed)
                         .await?;
+                }
+
+                ClientMessage::AuditQuery {
+                    action_types,
+                    since,
+                    limit,
+                } => {
+                    let action_types_ref = action_types.as_deref();
+                    let since_i64 = since.map(|s| s as i64);
+                    let limit = limit.unwrap_or(100);
+                    match agent
+                        .history
+                        .list_action_audit(action_types_ref, since_i64, limit)
+                        .await
+                    {
+                        Ok(rows) => {
+                            let public_entries: Vec<amux_protocol::AuditEntryPublic> = rows
+                                .into_iter()
+                                .map(|r| amux_protocol::AuditEntryPublic {
+                                    id: r.id,
+                                    timestamp: r.timestamp,
+                                    action_type: r.action_type,
+                                    summary: r.summary,
+                                    explanation: r.explanation,
+                                    confidence: r.confidence,
+                                    confidence_band: r.confidence_band,
+                                    causal_trace_id: r.causal_trace_id,
+                                    thread_id: r.thread_id,
+                                    goal_run_id: r.goal_run_id,
+                                    task_id: r.task_id,
+                                })
+                                .collect();
+                            let entries_json =
+                                serde_json::to_string(&public_entries).unwrap_or_default();
+                            framed
+                                .send(DaemonMessage::AuditList { entries_json })
+                                .await?;
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::Error {
+                                    message: format!("audit query failed: {e}"),
+                                })
+                                .await?;
+                        }
+                    }
                 }
             }
         }

@@ -93,6 +93,23 @@ pub struct HeartbeatHistoryRow {
     pub status: String,
 }
 
+/// Row type for action_audit table. Per D-06/TRNS-03.
+#[derive(Debug, Clone)]
+pub struct AuditEntryRow {
+    pub id: String,
+    pub timestamp: i64,
+    pub action_type: String,
+    pub summary: String,
+    pub explanation: Option<String>,
+    pub confidence: Option<f64>,
+    pub confidence_band: Option<String>,
+    pub causal_trace_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub goal_run_id: Option<String>,
+    pub task_id: Option<String>,
+    pub raw_data_json: Option<String>,
+}
+
 pub struct ProvenanceEventRecord<'a> {
     pub event_type: &'a str,
     pub summary: &'a str,
@@ -2595,6 +2612,24 @@ impl HistoryStore {
             );
             CREATE INDEX IF NOT EXISTS idx_heartbeat_history_ts ON heartbeat_history(cycle_timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_heartbeat_history_actionable ON heartbeat_history(actionable, cycle_timestamp DESC);
+
+            CREATE TABLE IF NOT EXISTS action_audit (
+                id                TEXT PRIMARY KEY,
+                timestamp         INTEGER NOT NULL,
+                action_type       TEXT NOT NULL,
+                summary           TEXT NOT NULL,
+                explanation       TEXT,
+                confidence        REAL,
+                confidence_band   TEXT,
+                causal_trace_id   TEXT,
+                thread_id         TEXT,
+                goal_run_id       TEXT,
+                task_id           TEXT,
+                raw_data_json     TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_action_audit_ts ON action_audit(timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_action_audit_type_ts ON action_audit(action_type, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_action_audit_thread ON action_audit(thread_id, timestamp DESC);
             ",
         )?;
         // FTS5 virtual table for context archive full-text search.
@@ -3591,6 +3626,165 @@ impl HistoryStore {
             })?.collect::<std::result::Result<Vec<_>, _>>()?;
             Ok(rows)
         }).await.map_err(|e| anyhow::anyhow!("list_heartbeat_history: {e}"))
+    }
+
+    // -----------------------------------------------------------------------
+    // Action audit CRUD (per D-06/TRNS-03)
+    // -----------------------------------------------------------------------
+
+    /// Insert or replace an action audit entry.
+    pub async fn insert_action_audit(&self, entry: &AuditEntryRow) -> Result<()> {
+        let entry = entry.clone();
+        self.conn.call(move |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO action_audit \
+                 (id, timestamp, action_type, summary, explanation, confidence, \
+                  confidence_band, causal_trace_id, thread_id, goal_run_id, task_id, raw_data_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                rusqlite::params![
+                    entry.id,
+                    entry.timestamp,
+                    entry.action_type,
+                    entry.summary,
+                    entry.explanation,
+                    entry.confidence,
+                    entry.confidence_band,
+                    entry.causal_trace_id,
+                    entry.thread_id,
+                    entry.goal_run_id,
+                    entry.task_id,
+                    entry.raw_data_json,
+                ],
+            )?;
+            Ok(())
+        }).await.map_err(|e| anyhow::anyhow!("insert_action_audit: {e}"))
+    }
+
+    /// List action audit entries with optional filters.
+    pub async fn list_action_audit(
+        &self,
+        action_types: Option<&[String]>,
+        since: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<AuditEntryRow>> {
+        let action_types = action_types.map(|a| a.to_vec());
+        self.conn.call(move |conn| {
+            let mut sql = String::from(
+                "SELECT id, timestamp, action_type, summary, explanation, confidence, \
+                 confidence_band, causal_trace_id, thread_id, goal_run_id, task_id, raw_data_json \
+                 FROM action_audit"
+            );
+            let mut conditions: Vec<String> = Vec::new();
+
+            if let Some(ref types) = action_types {
+                if !types.is_empty() {
+                    let placeholders: Vec<String> = types.iter().enumerate()
+                        .map(|(i, _)| format!("?{}", i + 100))
+                        .collect();
+                    conditions.push(format!("action_type IN ({})", placeholders.join(",")));
+                }
+            }
+            if since.is_some() {
+                conditions.push("timestamp >= ?50".to_string());
+            }
+            if !conditions.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&conditions.join(" AND "));
+            }
+            sql.push_str(" ORDER BY timestamp DESC LIMIT ?99");
+
+            let mut stmt = conn.prepare(&sql)?;
+
+            // Bind parameters dynamically
+            let mut param_idx = 1;
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+            // Rewrite: use a simpler approach with raw SQL and named params
+            drop(stmt);
+            drop(params);
+
+            // Build the query more simply
+            let mut where_parts: Vec<String> = Vec::new();
+            let mut bind_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+            if let Some(ref types) = action_types {
+                if !types.is_empty() {
+                    let placeholders: Vec<String> = (0..types.len())
+                        .map(|i| format!("?{}", i + 1))
+                        .collect();
+                    where_parts.push(format!("action_type IN ({})", placeholders.join(",")));
+                    for t in types {
+                        bind_values.push(Box::new(t.clone()));
+                    }
+                }
+            }
+            let since_idx = bind_values.len() + 1;
+            if let Some(ts) = since {
+                where_parts.push(format!("timestamp >= ?{}", since_idx));
+                bind_values.push(Box::new(ts));
+            }
+            let limit_idx = bind_values.len() + 1;
+            bind_values.push(Box::new(limit as i64));
+
+            let mut final_sql = String::from(
+                "SELECT id, timestamp, action_type, summary, explanation, confidence, \
+                 confidence_band, causal_trace_id, thread_id, goal_run_id, task_id, raw_data_json \
+                 FROM action_audit"
+            );
+            if !where_parts.is_empty() {
+                final_sql.push_str(" WHERE ");
+                final_sql.push_str(&where_parts.join(" AND "));
+            }
+            final_sql.push_str(&format!(" ORDER BY timestamp DESC LIMIT ?{}", limit_idx));
+
+            let mut stmt = conn.prepare(&final_sql)?;
+            let params_ref: Vec<&dyn rusqlite::types::ToSql> = bind_values.iter().map(|b| b.as_ref()).collect();
+            let rows = stmt.query_map(params_ref.as_slice(), |row| {
+                Ok(AuditEntryRow {
+                    id: row.get(0)?,
+                    timestamp: row.get(1)?,
+                    action_type: row.get(2)?,
+                    summary: row.get(3)?,
+                    explanation: row.get(4)?,
+                    confidence: row.get(5)?,
+                    confidence_band: row.get(6)?,
+                    causal_trace_id: row.get(7)?,
+                    thread_id: row.get(8)?,
+                    goal_run_id: row.get(9)?,
+                    task_id: row.get(10)?,
+                    raw_data_json: row.get(11)?,
+                })
+            })?.collect::<std::result::Result<Vec<_>, _>>()?;
+            Ok(rows)
+        }).await.map_err(|e| anyhow::anyhow!("list_action_audit: {e}"))
+    }
+
+    /// Delete oldest audit entries exceeding retention limits. Returns count deleted.
+    pub async fn cleanup_action_audit(&self, max_entries: usize, max_age_days: u32) -> Result<usize> {
+        self.conn.call(move |conn| {
+            let mut deleted = 0usize;
+            // Delete by age
+            if max_age_days > 0 {
+                let cutoff = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as i64
+                    - (max_age_days as i64 * 86_400 * 1000);
+                deleted += conn.execute(
+                    "DELETE FROM action_audit WHERE timestamp < ?1",
+                    [cutoff],
+                )? as usize;
+            }
+            // Delete excess entries (keep newest max_entries)
+            if max_entries > 0 {
+                deleted += conn.execute(
+                    "DELETE FROM action_audit WHERE id NOT IN \
+                     (SELECT id FROM action_audit ORDER BY timestamp DESC LIMIT ?1)",
+                    [max_entries as i64],
+                )? as usize;
+            }
+            Ok(deleted)
+        }).await.map_err(|e| anyhow::anyhow!("cleanup_action_audit: {e}"))
     }
 }
 

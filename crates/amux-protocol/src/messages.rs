@@ -469,6 +469,13 @@ pub enum ClientMessage {
 
     /// Request a concierge welcome (sent by frontend on app mount).
     AgentRequestConciergeWelcome,
+
+    /// Query audit trail with optional filters. Per D-08/TRNS-03.
+    AuditQuery {
+        action_types: Option<Vec<String>>,
+        since: Option<u64>,
+        limit: Option<usize>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -814,11 +821,41 @@ pub enum DaemonMessage {
 
     /// Confirmation that welcome was dismissed.
     AgentConciergeWelcomeDismissed,
+
+    /// Audit trail query response. Per D-08/TRNS-03.
+    AuditList {
+        /// Serialized `Vec<AuditEntryPublic>` as JSON.
+        entries_json: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
 // Supporting types
 // ---------------------------------------------------------------------------
+
+/// Public audit entry type shared across all crates. Per D-06.
+/// The daemon maps `AuditEntryRow` -> `AuditEntryPublic` for IPC responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEntryPublic {
+    pub id: String,
+    pub timestamp: i64,
+    pub action_type: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence_band: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub causal_trace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+}
 
 /// Metadata about a running session.
 #[derive(Debug, Clone, Serialize, Deserialize)]

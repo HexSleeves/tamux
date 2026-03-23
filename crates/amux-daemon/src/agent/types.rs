@@ -1016,6 +1016,9 @@ pub struct AgentConfig {
     /// Heartbeat check configuration. Per D-04.
     #[serde(default)]
     pub heartbeat_checks: HeartbeatChecksConfig,
+    /// Audit trail configuration: scope, confidence, retention. Per D-05/D-10.
+    #[serde(default)]
+    pub audit: AuditConfig,
     /// Quiet hours start (hour 0-23, local time). Per D-07.
     #[serde(default)]
     pub quiet_hours_start: Option<u32>,
@@ -1376,6 +1379,7 @@ impl Default for AgentConfig {
             heartbeat_interval_mins: default_heartbeat_mins(),
             heartbeat_cron: None,
             heartbeat_checks: HeartbeatChecksConfig::default(),
+            audit: AuditConfig::default(),
             quiet_hours_start: None,
             quiet_hours_end: None,
             dnd_enabled: false,
@@ -1729,6 +1733,12 @@ pub enum AgentEvent {
         digest: String,
         items: Vec<HeartbeatDigestItem>,
         checked_at: u64,
+        /// Inline explanation for the overall digest. Per D-01.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        explanation: Option<String>,
+        /// Confidence of the overall assessment (0.0..1.0). Per D-01/D-09.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confidence: Option<f64>,
     },
     Notification {
         title: String,
@@ -1785,6 +1795,33 @@ pub enum AgentEvent {
     /// A provider's circuit breaker has recovered to Closed state (per D-07).
     ProviderCircuitRecovered {
         provider: String,
+    },
+    /// Broadcast audit entry to all connected clients. Per D-06/TRNS-03.
+    AuditAction {
+        id: String,
+        timestamp: u64,
+        action_type: String,
+        summary: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        explanation: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confidence: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confidence_band: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        causal_trace_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
+    },
+    /// Escalation level change notification. Per D-11/TRNS-05.
+    EscalationUpdate {
+        thread_id: String,
+        from_level: String,
+        to_level: String,
+        reason: String,
+        attempts: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audit_id: Option<String>,
     },
 }
 
@@ -2529,6 +2566,79 @@ fn default_unreplied_threshold_hours() -> u64 {
     1
 }
 
+// ---------------------------------------------------------------------------
+// Audit configuration (per D-05/D-10)
+// ---------------------------------------------------------------------------
+
+/// Which action types to include in the audit feed. Per D-05.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditScopeConfig {
+    #[serde(default = "default_true")]
+    pub heartbeat: bool,
+    #[serde(default = "default_true")]
+    pub tool: bool,
+    #[serde(default = "default_true")]
+    pub escalation: bool,
+    #[serde(default = "default_true")]
+    pub skill: bool,
+    #[serde(default = "default_true")]
+    pub subagent: bool,
+}
+
+impl Default for AuditScopeConfig {
+    fn default() -> Self {
+        Self {
+            heartbeat: true,
+            tool: true,
+            escalation: true,
+            skill: true,
+            subagent: true,
+        }
+    }
+}
+
+/// Audit trail configuration: scope, confidence thresholds, retention. Per D-05/D-10.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditConfig {
+    /// Which action types to include in the audit feed.
+    #[serde(default)]
+    pub scope: AuditScopeConfig,
+    /// Confidence threshold below which to show qualifiers. Per D-10.
+    #[serde(default = "default_confidence_threshold")]
+    pub confidence_threshold: f64,
+    /// Whether to always show confidence (overrides threshold). Per D-10.
+    #[serde(default)]
+    pub always_show_confidence: bool,
+    /// Maximum audit entries to retain. Per Pitfall 4.
+    #[serde(default = "default_max_audit_entries")]
+    pub max_entries: usize,
+    /// Maximum age of audit entries in days.
+    #[serde(default = "default_max_audit_age_days")]
+    pub max_age_days: u32,
+}
+
+fn default_confidence_threshold() -> f64 {
+    0.80
+}
+fn default_max_audit_entries() -> usize {
+    10_000
+}
+fn default_max_audit_age_days() -> u32 {
+    30
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            scope: AuditScopeConfig::default(),
+            confidence_threshold: default_confidence_threshold(),
+            always_show_confidence: false,
+            max_entries: default_max_audit_entries(),
+            max_age_days: default_max_audit_age_days(),
+        }
+    }
+}
+
 impl Default for HeartbeatChecksConfig {
     fn default() -> Self {
         Self {
@@ -2814,6 +2924,8 @@ mod tests {
                 suggestion: "Review pending items".to_string(),
             }],
             checked_at: 1234567890,
+            explanation: Some("Heartbeat found stale items".to_string()),
+            confidence: Some(0.85),
         };
         let json = serde_json::to_string(&event).unwrap();
         let parsed: AgentEvent = serde_json::from_str(&json).unwrap();
@@ -2824,12 +2936,16 @@ mod tests {
                 digest,
                 items,
                 checked_at,
+                explanation,
+                confidence,
             } => {
                 assert_eq!(cycle_id, "cycle-1");
                 assert!(actionable);
                 assert_eq!(digest, "2 items need attention");
                 assert_eq!(items.len(), 1);
                 assert_eq!(checked_at, 1234567890);
+                assert_eq!(explanation.as_deref(), Some("Heartbeat found stale items"));
+                assert!((confidence.unwrap() - 0.85).abs() < f64::EPSILON);
             }
             _ => panic!("wrong variant after deserialize"),
         }

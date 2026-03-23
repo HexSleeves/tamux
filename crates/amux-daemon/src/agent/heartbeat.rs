@@ -364,6 +364,8 @@ impl AgentEngine {
                 digest: digest_text.clone(),
                 items: digest_items,
                 checked_at: now,
+                explanation: None, // Populated in Plan 02 Task 1
+                confidence: None,  // Populated in Plan 02 Task 1
             });
         } else {
             tracing::debug!(cycle_id = %cycle_id, "heartbeat quiet tick — no broadcast");
