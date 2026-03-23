@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 05-02-PLAN.md
-last_updated: "2026-03-23T14:41:24.952Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 05-04-PLAN.md
+last_updated: "2026-03-23T14:53:25.566Z"
 progress:
   total_phases: 10
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 20
-  completed_plans: 18
+  completed_plans: 19
 ---
 
 # Project State
@@ -64,6 +64,7 @@ Plan: 4 of 4
 | Phase 05 P01 | 12min | 2 tasks | 6 files |
 | Phase 05 P03 | 5min | 2 tasks | 2 files |
 | Phase 05 P02 | 5min | 2 tasks | 3 files |
+| Phase 05 P04 | 9min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -108,6 +109,8 @@ Recent decisions affecting current work:
 - [Phase 05]: Continuity flag stored as two consolidation_state keys (thread_id + topic) for one-shot clearing
 - [Phase 05]: HeuristicStore.update_tool uses succeeded:bool matching existing API (not effectiveness:f64 from plan)
 - [Phase 05]: Facts with no provenance record skipped during decay (no meaningful confidence without last_confirmed_at)
+- [Phase 05]: Learned patterns threshold: usage_count >= 5 AND effectiveness >= 0.6 for system prompt injection
+- [Phase 05]: Memory refinement handles one conflict group per tick (budget-safe); send_refinement_llm_call uses provider api_transport
 
 ### Pending Todos
 
@@ -121,6 +124,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T14:41:24.950Z
-Stopped at: Completed 05-02-PLAN.md
+Last session: 2026-03-23T14:53:25.564Z
+Stopped at: Completed 05-04-PLAN.md
 Resume file: None
