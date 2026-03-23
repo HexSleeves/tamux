@@ -47,7 +47,7 @@ Requirements for the "Living Agent" milestone. Each maps to roadmap phases.
 - [x] **SKIL-03**: Skills follow maturity lifecycle: Draft → Testing → Active → Proven → Canonical
 - [x] **SKIL-04**: Draft skills are validated against a few mental test scenarios (LLM evaluation) before promotion to Testing
 - [x] **SKIL-05**: Skill promotion requires N successful real-world uses (configurable threshold, default: 3)
-- [ ] **SKIL-06**: New and promoted skills surfaced to user naturally in conversation via concierge
+- [x] **SKIL-06**: New and promoted skills surfaced to user naturally in conversation via concierge
 - [ ] **SKIL-07**: Community skill registry: operators can publish skills with provenance metadata
 - [ ] **SKIL-08**: Imported community skills reset to Draft maturity and must prove themselves locally before promotion
 - [ ] **SKIL-09**: Community skill security: mandatory static analysis scan before import
@@ -170,7 +170,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SKIL-03 | Phase 6 | Complete |
 | SKIL-04 | Phase 6 | Complete |
 | SKIL-05 | Phase 6 | Complete |
-| SKIL-06 | Phase 6 | Pending |
+| SKIL-06 | Phase 6 | Complete |
 | SKIL-07 | Phase 7 | Pending |
 | SKIL-08 | Phase 7 | Pending |
 | SKIL-09 | Phase 7 | Pending |
