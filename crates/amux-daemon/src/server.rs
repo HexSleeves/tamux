@@ -2229,13 +2229,18 @@ where
 
                 ClientMessage::AuditDismiss { entry_id } => {
                     tracing::info!(entry_id = %entry_id, "Audit dismiss requested");
-                    // Full implementation in Phase 4 Plan 2 (wires to HistoryStore.dismiss_audit_entry).
-                    framed
-                        .send(DaemonMessage::AuditDismissResult {
+                    let result = agent.history.dismiss_audit_entry(&entry_id).await;
+                    let msg = match result {
+                        Ok(()) => DaemonMessage::AuditDismissResult {
+                            success: true,
+                            message: format!("Dismissed audit entry {}", entry_id),
+                        },
+                        Err(e) => DaemonMessage::AuditDismissResult {
                             success: false,
-                            message: "Dismiss not yet wired to HistoryStore".to_string(),
-                        })
-                        .await?;
+                            message: format!("Failed to dismiss: {}", e),
+                        },
+                    };
+                    framed.send(msg).await?;
                 }
 
                 ClientMessage::EscalationCancel { thread_id } => {

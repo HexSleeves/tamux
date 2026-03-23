@@ -207,31 +207,94 @@ impl AgentEngine {
         let cycle_id = uuid::Uuid::new_v4().to_string();
         let now = now_millis();
 
-        // --- Phase 1: Gather built-in check results (per D-01, D-02) ---
+        // --- Phase 0: Check for global priority reset (D-11) ---
         let config = self.config.read().await.clone();
         let checks_config = &config.heartbeat_checks;
-        let mut check_results: Vec<HeartbeatCheckResult> = Vec::new();
 
-        if checks_config.stale_todos_enabled {
-            check_results.push(
-                self.check_stale_todos(checks_config.stale_todo_threshold_hours)
-                    .await,
-            );
+        if checks_config.reset_learned_priorities {
+            tracing::info!("resetting all learned priority weights to defaults");
+            let mut weights = self.learned_check_weights.write().await;
+            weights.clear();
+            drop(weights);
+            // Note: The config flag is a one-shot action. The user should set it back to false
+            // after reset. If they leave it true, it just means weights stay at defaults.
         }
-        if checks_config.stuck_goals_enabled {
-            check_results.push(
-                self.check_stuck_goal_runs(checks_config.stuck_goal_threshold_hours)
+
+        // --- Phase 1: Priority-aware check gathering (D-01, D-06, D-11) ---
+        // Three-level priority cascade: override > learned > config default.
+        let mut check_results: Vec<HeartbeatCheckResult> = Vec::new();
+        {
+            let learned_weights = self.learned_check_weights.read().await;
+
+            let effective_stale_weight = checks_config
+                .stale_todos_priority_override
+                .unwrap_or_else(|| {
+                    learned_weights
+                        .get(&HeartbeatCheckType::StaleTodos)
+                        .copied()
+                        .unwrap_or(checks_config.stale_todos_priority_weight)
+                });
+
+            let effective_stuck_weight = checks_config
+                .stuck_goals_priority_override
+                .unwrap_or_else(|| {
+                    learned_weights
+                        .get(&HeartbeatCheckType::StuckGoalRuns)
+                        .copied()
+                        .unwrap_or(checks_config.stuck_goals_priority_weight)
+                });
+
+            let effective_unreplied_weight = checks_config
+                .unreplied_messages_priority_override
+                .unwrap_or_else(|| {
+                    learned_weights
+                        .get(&HeartbeatCheckType::UnrepliedGatewayMessages)
+                        .copied()
+                        .unwrap_or(checks_config.unreplied_messages_priority_weight)
+                });
+
+            let effective_repo_weight = checks_config
+                .repo_changes_priority_override
+                .unwrap_or_else(|| {
+                    learned_weights
+                        .get(&HeartbeatCheckType::RepoChanges)
+                        .copied()
+                        .unwrap_or(checks_config.repo_changes_priority_weight)
+                });
+
+            drop(learned_weights);
+
+            if checks_config.stale_todos_enabled
+                && should_run_check(effective_stale_weight, cycle_count)
+            {
+                check_results.push(
+                    self.check_stale_todos(checks_config.stale_todo_threshold_hours)
+                        .await,
+                );
+            }
+            if checks_config.stuck_goals_enabled
+                && should_run_check(effective_stuck_weight, cycle_count)
+            {
+                check_results.push(
+                    self.check_stuck_goal_runs(checks_config.stuck_goal_threshold_hours)
+                        .await,
+                );
+            }
+            if checks_config.unreplied_messages_enabled
+                && should_run_check(effective_unreplied_weight, cycle_count)
+            {
+                check_results.push(
+                    self.check_unreplied_messages(
+                        checks_config.unreplied_message_threshold_hours,
+                    )
                     .await,
-            );
-        }
-        if checks_config.unreplied_messages_enabled {
-            check_results.push(
-                self.check_unreplied_messages(checks_config.unreplied_message_threshold_hours)
-                    .await,
-            );
-        }
-        if checks_config.repo_changes_enabled {
-            check_results.push(self.check_repo_changes().await);
+                );
+            }
+            if checks_config.repo_changes_enabled
+                && should_run_check(effective_repo_weight, cycle_count)
+            {
+                check_results.push(self.check_repo_changes().await);
+            }
         }
 
         // --- Phase 2: Run custom HeartbeatItem checks (per D-03) ---
@@ -513,6 +576,74 @@ impl AgentEngine {
                 alpha,
             );
             model.session_rhythm.smoothed_activity_histogram = new_smoothed;
+        }
+
+        // --- Phase 9: Weight update loop — learn what the operator cares about (D-04, BEAT-07) ---
+        // Query feedback signals from the last 7 days.
+        let seven_days_ago_ms = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64)
+            - (7 * 24 * 3600 * 1000);
+
+        let history = &self.history;
+        let dismissals = history
+            .count_dismissals_by_type(seven_days_ago_ms)
+            .await
+            .unwrap_or_default();
+        let shown = history
+            .count_shown_by_type(seven_days_ago_ms)
+            .await
+            .unwrap_or_default();
+        let acted_on = history
+            .count_acted_on_by_type(seven_days_ago_ms)
+            .await
+            .unwrap_or_default();
+
+        // Compute updated priority weight for each built-in check type.
+        let check_types = [
+            (HeartbeatCheckType::StaleTodos, "stale_todo"),
+            (HeartbeatCheckType::StuckGoalRuns, "stuck_goal"),
+            (HeartbeatCheckType::UnrepliedGatewayMessages, "unreplied_message"),
+            (HeartbeatCheckType::RepoChanges, "repo_change"),
+        ];
+
+        let decay_rate = 0.05; // 5% penalty per dismissal
+        let recovery_rate = 0.1; // 10% recovery per acted-on entry
+
+        let mut new_weights = HashMap::new();
+        for (check_type, action_type_key) in &check_types {
+            let dismiss_count = dismissals.get(*action_type_key).copied().unwrap_or(0);
+            let total_shown = shown.get(*action_type_key).copied().unwrap_or(0);
+            let recovery_count = acted_on.get(*action_type_key).copied().unwrap_or(0);
+            // Inaction = shown but neither dismissed nor acted upon
+            let inaction_count = total_shown
+                .saturating_sub(dismiss_count)
+                .saturating_sub(recovery_count);
+
+            let weight = compute_check_priority(
+                dismiss_count,
+                inaction_count,
+                total_shown,
+                recovery_count,
+                decay_rate,
+                recovery_rate,
+            );
+            new_weights.insert(*check_type, weight);
+        }
+
+        // Store learned weights on AgentEngine (read by should_run_check gating above).
+        {
+            let mut weights = self.learned_check_weights.write().await;
+            *weights = new_weights;
+        }
+
+        {
+            let weights_snapshot = self.learned_check_weights.read().await.clone();
+            tracing::debug!(
+                weights = ?weights_snapshot,
+                "updated learned check priority weights from feedback signals"
+            );
         }
 
         tracing::info!(

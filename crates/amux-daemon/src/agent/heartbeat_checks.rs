@@ -379,6 +379,7 @@ mod tests {
             watcher_refresh_rx: Mutex::new(Some(watcher_refresh_rx)),
             circuit_breakers,
             config_notify: tokio::sync::Notify::new(),
+            learned_check_weights: RwLock::new(HashMap::new()),
         })
     }
 

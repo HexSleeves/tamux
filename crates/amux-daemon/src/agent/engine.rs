@@ -114,6 +114,10 @@ pub struct AgentEngine {
     pub circuit_breakers: Arc<CircuitBreakerRegistry>,
     /// Notifies the run_loop when config changes so heartbeat schedule can be recomputed.
     pub config_notify: tokio::sync::Notify,
+    /// Learned priority weights per check type, updated from feedback signals (D-04).
+    /// When present, these override the config `priority_weight` fields.
+    /// Falls back to config weights when a check type has no learned weight.
+    pub(crate) learned_check_weights: RwLock<HashMap<HeartbeatCheckType, f64>>,
 }
 
 impl AgentEngine {
@@ -206,6 +210,7 @@ impl AgentEngine {
             watcher_refresh_rx: Mutex::new(Some(watcher_refresh_rx)),
             circuit_breakers,
             config_notify: tokio::sync::Notify::new(),
+            learned_check_weights: RwLock::new(HashMap::new()),
         })
     }
 
