@@ -291,6 +291,7 @@ impl TuiModel {
                 digest,
                 items,
                 checked_at,
+                explanation,
             } => {
                 let vm_items: Vec<task::HeartbeatDigestItemVm> = items
                     .into_iter()
@@ -312,11 +313,62 @@ impl TuiModel {
                             digest: digest.clone(),
                             items: vm_items,
                             checked_at,
+                            explanation,
                         },
                     ));
                 if actionable && item_count > 0 {
                     self.status_line = format!("\u{2665} Heartbeat: {}", digest);
                 }
+            }
+            ClientEvent::AuditEntry {
+                id,
+                timestamp,
+                action_type,
+                summary,
+                explanation,
+                confidence,
+                confidence_band,
+                causal_trace_id,
+                thread_id,
+            } => {
+                self.audit
+                    .reduce(crate::state::audit::AuditAction::EntryReceived(
+                        crate::state::audit::AuditEntryVm {
+                            id,
+                            timestamp,
+                            action_type,
+                            summary,
+                            explanation,
+                            confidence,
+                            confidence_band,
+                            causal_trace_id,
+                            thread_id,
+                        },
+                    ));
+            }
+            ClientEvent::EscalationUpdate {
+                thread_id,
+                from_level,
+                to_level,
+                reason,
+                attempts,
+                audit_id,
+            } => {
+                self.status_line = format!(
+                    "Escalating: {}->{} {}",
+                    from_level, to_level, reason
+                );
+                self.audit
+                    .reduce(crate::state::audit::AuditAction::EscalationUpdate(
+                        crate::state::audit::EscalationVm {
+                            thread_id,
+                            from_level,
+                            to_level,
+                            reason,
+                            attempts,
+                            audit_id,
+                        },
+                    ));
             }
             ClientEvent::AnticipatoryItems(items) => {
                 self.anticipatory

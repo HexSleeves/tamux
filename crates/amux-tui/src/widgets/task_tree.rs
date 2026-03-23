@@ -268,6 +268,23 @@ fn build_rows(
                     });
                 }
             }
+            // Inline explanation per D-01: render explanation text beneath digest items
+            if let Some(explanation) = &digest.explanation {
+                if !explanation.is_empty() {
+                    // Wrap long explanation text to available width
+                    let max_text_width = width.saturating_sub(4);
+                    for chunk in wrap_text(explanation, max_text_width) {
+                        rows.push(SidebarRow {
+                            line: Line::from(vec![
+                                Span::raw("  "),
+                                Span::styled(chunk, theme.fg_dim),
+                            ]),
+                            target: None,
+                            selectable_index: None,
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -351,6 +368,33 @@ fn heartbeat_dot(outcome: Option<HeartbeatOutcome>, theme: &ThemeTokens) -> Span
         Some(HeartbeatOutcome::Warn) => Span::styled("\u{25cf}", theme.accent_secondary),
         Some(HeartbeatOutcome::Error) => Span::styled("\u{25cf}", theme.accent_danger),
     }
+}
+
+/// Simple word-aware text wrapping that splits long lines at word boundaries.
+fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
+    if max_width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current = word.to_string();
+        } else if current.len() + 1 + word.len() <= max_width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(current);
+            current = word.to_string();
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
 
 #[cfg(test)]

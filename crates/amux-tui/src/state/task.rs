@@ -117,6 +117,7 @@ pub struct HeartbeatDigestVm {
     pub digest: String,
     pub items: Vec<HeartbeatDigestItemVm>,
     pub checked_at: u64,
+    pub explanation: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -556,6 +557,7 @@ mod tests {
                 suggestion: "Review them".into(),
             }],
             checked_at: 1234567890,
+            explanation: None,
         }));
         let d = state.last_digest().unwrap();
         assert_eq!(d.cycle_id, "c1");
@@ -570,6 +572,7 @@ mod tests {
             digest: "All clear".into(),
             items: vec![],
             checked_at: 1234567891,
+            explanation: None,
         }));
         let d = state.last_digest().unwrap();
         assert_eq!(d.cycle_id, "c2");

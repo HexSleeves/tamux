@@ -75,6 +75,26 @@ pub enum ClientEvent {
         digest: String,
         items: Vec<(u8, String, String, String)>,
         checked_at: u64,
+        explanation: Option<String>,
+    },
+    AuditEntry {
+        id: String,
+        timestamp: u64,
+        action_type: String,
+        summary: String,
+        explanation: Option<String>,
+        confidence: Option<f64>,
+        confidence_band: Option<String>,
+        causal_trace_id: Option<String>,
+        thread_id: Option<String>,
+    },
+    EscalationUpdate {
+        thread_id: String,
+        from_level: String,
+        to_level: String,
+        reason: String,
+        attempts: u32,
+        audit_id: Option<String>,
     },
     AnticipatoryItems(Vec<AnticipatoryItem>),
 
@@ -886,6 +906,7 @@ impl DaemonClient {
                             .collect()
                     })
                     .unwrap_or_default();
+                let explanation = get_string(&event, "explanation");
                 let _ = event_tx
                     .send(ClientEvent::HeartbeatDigest {
                         cycle_id: get_string(&event, "cycle_id").unwrap_or_default(),
@@ -899,6 +920,53 @@ impl DaemonClient {
                             .get("checked_at")
                             .and_then(Value::as_u64)
                             .unwrap_or(0),
+                        explanation,
+                    })
+                    .await;
+            }
+            "audit_action" => {
+                let id = get_string(&event, "id").unwrap_or_default();
+                let timestamp = event
+                    .get("timestamp")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let action_type = get_string(&event, "action_type").unwrap_or_default();
+                let summary = get_string(&event, "summary").unwrap_or_default();
+                let explanation = get_string(&event, "explanation");
+                let confidence = event.get("confidence").and_then(Value::as_f64);
+                let confidence_band = get_string(&event, "confidence_band");
+                let causal_trace_id = get_string(&event, "causal_trace_id");
+                let thread_id = get_string(&event, "thread_id");
+                let _ = event_tx
+                    .send(ClientEvent::AuditEntry {
+                        id,
+                        timestamp,
+                        action_type,
+                        summary,
+                        explanation,
+                        confidence,
+                        confidence_band,
+                        causal_trace_id,
+                        thread_id,
+                    })
+                    .await;
+            }
+            "escalation_update" => {
+                let thread_id = get_string(&event, "thread_id").unwrap_or_default();
+                let from_level = get_string(&event, "from_level").unwrap_or_default();
+                let to_level = get_string(&event, "to_level").unwrap_or_default();
+                let reason = get_string(&event, "reason").unwrap_or_default();
+                let attempts =
+                    event.get("attempts").and_then(Value::as_u64).unwrap_or(0) as u32;
+                let audit_id = get_string(&event, "audit_id");
+                let _ = event_tx
+                    .send(ClientEvent::EscalationUpdate {
+                        thread_id,
+                        from_level,
+                        to_level,
+                        reason,
+                        attempts,
+                        audit_id,
                     })
                     .await;
             }

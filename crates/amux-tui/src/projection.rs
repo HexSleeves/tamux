@@ -60,6 +60,26 @@ pub enum ClientEvent {
         digest: String,
         items: Vec<(u8, String, String, String)>,
         checked_at: u64,
+        explanation: Option<String>,
+    },
+    AuditEntry {
+        id: String,
+        timestamp: u64,
+        action_type: String,
+        summary: String,
+        explanation: Option<String>,
+        confidence: Option<f64>,
+        confidence_band: Option<String>,
+        causal_trace_id: Option<String>,
+        thread_id: Option<String>,
+    },
+    EscalationUpdate {
+        thread_id: String,
+        from_level: String,
+        to_level: String,
+        reason: String,
+        attempts: u32,
+        audit_id: Option<String>,
     },
     AnticipatoryItems(Vec<crate::state::task::HeartbeatItem>),
 
@@ -229,6 +249,8 @@ impl DaemonProjection {
                 vec![AppAction::Task(TaskAction::HeartbeatItemsReceived(items))]
             }
             ClientEvent::HeartbeatDigest { .. } => vec![],
+            ClientEvent::AuditEntry { .. } => vec![],
+            ClientEvent::EscalationUpdate { .. } => vec![],
             ClientEvent::AnticipatoryItems(_) => vec![],
             ClientEvent::WorkflowNotice { message, .. } => vec![AppAction::Status(message)],
             ClientEvent::ProviderAuthStates(_) => vec![],
