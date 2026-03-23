@@ -1191,6 +1191,10 @@ impl DaemonClient {
         })
     }
 
+    pub fn dismiss_audit_entry(&self, entry_id: String) -> Result<()> {
+        self.send(ClientMessage::AuditDismiss { entry_id })
+    }
+
     pub fn resolve_task_approval(&self, approval_id: String, decision: String) -> Result<()> {
         use amux_protocol::ApprovalDecision;
         let decision = match decision.as_str() {

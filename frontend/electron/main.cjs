@@ -4247,6 +4247,15 @@ function registerIpcHandlers() {
         }
     });
 
+    ipcMain.handle('dismiss-audit-entry', async (_event, entryId) => {
+        try {
+            sendAgentCommand({ type: 'audit-dismiss', entry_id: entryId });
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
+
     ipcMain.handle('agent-get-config', async () => {
         try {
             return await sendAgentQuery({ type: 'get-config' }, 'config');

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { AuditEntry } from "../../lib/types";
+import { useAuditStore } from "../../lib/auditStore";
 import { ConfidenceBadge } from "./ConfidenceBadge";
 import { AuditDetailView } from "./AuditDetailView";
 
@@ -33,6 +34,8 @@ export function AuditRow({
   onSelect: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const dismissEntry = useAuditStore((s) => s.dismissEntry);
+  const isDismissed = entry.userAction === "dismissed";
   const badgeColor = ACTION_TYPE_COLORS[entry.actionType] ?? "var(--text-secondary)";
 
   // Per D-10: only show confidence badge when below threshold (not "confident")
@@ -46,6 +49,7 @@ export function AuditRow({
       style={{
         background: isSelected ? "var(--bg-tertiary)" : "transparent",
         borderBottom: "1px solid var(--border)",
+        opacity: isDismissed ? 0.5 : 1,
       }}
     >
       <div
@@ -106,8 +110,9 @@ export function AuditRow({
           <div
             style={{
               fontSize: "var(--text-base)",
-              color: "var(--text-primary)",
+              color: isDismissed ? "var(--text-secondary)" : "var(--text-primary)",
               lineHeight: "var(--leading-normal)",
+              textDecoration: isDismissed ? "line-through" : "none",
             }}
           >
             {entry.summary}
@@ -135,6 +140,34 @@ export function AuditRow({
             </div>
           )}
         </div>
+
+        {/* Dismiss button */}
+        {!isDismissed && (
+          <button
+            aria-label="Dismiss audit entry"
+            title="Dismiss"
+            onClick={(e) => {
+              e.stopPropagation();
+              dismissEntry(entry.id);
+            }}
+            style={{
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              color: "var(--text-secondary)",
+              fontSize: "var(--text-xs)",
+              padding: "2px 4px",
+              borderRadius: "2px",
+              flexShrink: 0,
+              lineHeight: 1,
+              opacity: 0.6,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.6"; }}
+          >
+            &#10005;
+          </button>
+        )}
 
         {/* Expand/collapse chevron */}
         <span

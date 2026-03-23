@@ -108,6 +108,8 @@ export type NotificationSource = "osc9" | "osc99" | "osc777" | "cli" | "system" 
 export type ActionType = "heartbeat" | "tool" | "escalation" | "skill" | "subagent";
 export type TimeRange = "last_hour" | "today" | "this_week" | "all_time";
 
+export type AuditUserAction = "dismissed" | "acted_on" | "pinned";
+
 export interface AuditEntry {
   id: string;
   timestamp: number;
@@ -118,6 +120,7 @@ export interface AuditEntry {
   confidenceBand: string | null;
   causalTraceId: string | null;
   threadId: string | null;
+  userAction?: AuditUserAction;
 }
 
 export interface AuditFilters {

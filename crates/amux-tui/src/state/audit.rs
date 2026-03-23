@@ -15,6 +15,7 @@ pub struct AuditEntryVm {
     pub confidence_band: Option<String>,
     pub causal_trace_id: Option<String>,
     pub thread_id: Option<String>,
+    pub dismissed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +61,7 @@ pub enum AuditAction {
     SetTimeFilter(TimeRange),
     SelectEntry(Option<String>),
     ToggleExpand(String),
+    DismissEntry(String),
     ScrollUp,
     ScrollDown,
     ClearAll,
@@ -118,6 +120,11 @@ impl AuditState {
                     self.expanded_entry = Some(id);
                 }
             }
+            AuditAction::DismissEntry(id) => {
+                if let Some(entry) = self.entries.iter_mut().find(|e| e.id == id) {
+                    entry.dismissed = true;
+                }
+            }
             AuditAction::ScrollUp => {
                 if self.selected_index > 0 {
                     self.selected_index -= 1;
@@ -168,6 +175,14 @@ impl AuditState {
 
     pub fn time_filter(&self) -> &TimeRange {
         &self.time_filter
+    }
+
+    /// Get the ID of the currently selected entry (if any).
+    pub fn selected_entry_id(&self) -> Option<&str> {
+        let filtered = self.filtered_entries();
+        filtered
+            .get(self.selected_index)
+            .map(|e| e.id.as_str())
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -221,6 +236,7 @@ mod tests {
             confidence_band: None,
             causal_trace_id: None,
             thread_id: None,
+            dismissed: false,
         }
     }
 
@@ -235,6 +251,7 @@ mod tests {
             confidence_band: None,
             causal_trace_id: None,
             thread_id: None,
+            dismissed: false,
         }
     }
 
@@ -392,6 +409,28 @@ mod tests {
         // Can't go past end
         state.reduce(AuditAction::ScrollDown);
         assert_eq!(state.selected_index(), 1);
+    }
+
+    #[test]
+    fn dismiss_entry_marks_entry_dismissed() {
+        let mut state = AuditState::new();
+        state.reduce(AuditAction::EntryReceived(make_entry("a1", "heartbeat")));
+        assert!(!state.entries()[0].dismissed);
+
+        state.reduce(AuditAction::DismissEntry("a1".into()));
+        assert!(state.entries()[0].dismissed);
+    }
+
+    #[test]
+    fn selected_entry_id_returns_correct_id() {
+        let mut state = AuditState::new();
+        state.reduce(AuditAction::EntryReceived(make_entry("a1", "heartbeat")));
+        state.reduce(AuditAction::EntryReceived(make_entry("a2", "heartbeat")));
+        // a2 is at index 0, a1 at index 1
+        assert_eq!(state.selected_entry_id(), Some("a2"));
+
+        state.reduce(AuditAction::ScrollDown);
+        assert_eq!(state.selected_entry_id(), Some("a1"));
     }
 
     #[test]

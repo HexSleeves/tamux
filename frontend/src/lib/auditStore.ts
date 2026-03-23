@@ -12,6 +12,7 @@ interface AuditState {
   currentEscalation: EscalationInfo | null;
 
   addEntry: (entry: AuditEntry) => void;
+  dismissEntry: (entryId: string) => void;
   setEscalation: (info: EscalationInfo | null) => void;
   setTypeFilter: (types: Set<ActionType>) => void;
   setTimeRange: (range: TimeRange) => void;
@@ -48,6 +49,19 @@ export const useAuditStore = create<AuditState>((set) => ({
     set((s) => ({
       entries: [entry, ...s.entries].slice(0, MAX_AUDIT_ENTRIES),
     })),
+
+  dismissEntry: (entryId) => {
+    set((s) => ({
+      entries: s.entries.map((e) =>
+        e.id === entryId ? { ...e, userAction: "dismissed" as const } : e
+      ),
+    }));
+    // Send dismiss to daemon via IPC bridge
+    const bridge = (window as Record<string, unknown>).tamux ?? (window as Record<string, unknown>).amux;
+    if (bridge && typeof (bridge as Record<string, unknown>).dismissAuditEntry === "function") {
+      (bridge as Record<string, (...args: unknown[]) => unknown>).dismissAuditEntry(entryId);
+    }
+  },
 
   setEscalation: (info) => set({ currentEscalation: info }),
 

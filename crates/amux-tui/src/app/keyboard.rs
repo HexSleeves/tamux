@@ -333,6 +333,22 @@ impl TuiModel {
                     sidebar::SidebarTab::Todos,
                 ));
             }
+            // Dismiss selected audit entry with 'd' key (BEAT-07)
+            KeyCode::Char('d')
+                if self.focus == FocusArea::Chat
+                    || self.focus == FocusArea::Sidebar =>
+            {
+                if let Some(entry_id) = self.audit.selected_entry_id().map(String::from) {
+                    self.audit
+                        .reduce(crate::state::audit::AuditAction::DismissEntry(
+                            entry_id.clone(),
+                        ));
+                    self.send_daemon_command(DaemonCommand::AuditDismiss {
+                        entry_id,
+                    });
+                    self.show_input_notice("Audit entry dismissed", InputNoticeKind::Success, 40, true);
+                }
+            }
             KeyCode::Char('r') if self.focus == FocusArea::Chat => {
                 if let Some(sel) = self.chat.selected_message() {
                     self.chat.toggle_reasoning(sel);

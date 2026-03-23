@@ -343,6 +343,7 @@ impl TuiModel {
                             confidence_band,
                             causal_trace_id,
                             thread_id,
+                            dismissed: false,
                         },
                     ));
             }

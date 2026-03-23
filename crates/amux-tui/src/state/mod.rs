@@ -101,6 +101,9 @@ pub enum DaemonCommand {
         thread_id: Option<String>,
         goal_run_id: Option<String>,
     },
+    AuditDismiss {
+        entry_id: String,
+    },
 }
 
 // ── Placeholder sub-action enums ──────────────────────────────────────────────

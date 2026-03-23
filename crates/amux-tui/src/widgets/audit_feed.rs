@@ -22,6 +22,7 @@ fn build_lines(state: &AuditState, theme: &ThemeTokens, width: usize) -> Vec<Lin
     lines.push(Line::from(vec![
         Span::styled("Audit Feed", theme.accent_primary),
         Span::styled(format!(" ({})", filtered.len()), theme.fg_dim),
+        Span::styled("  d=dismiss", theme.fg_dim),
     ]));
     lines.push(Line::from(Span::styled(
         "\u{2500}".repeat(width.min(40)),
@@ -41,10 +42,23 @@ fn build_lines(state: &AuditState, theme: &ThemeTokens, width: usize) -> Vec<Lin
 
     for (idx, entry) in filtered.iter().enumerate() {
         let is_selected = idx == selected;
-        let base_style = if is_selected { sel_bg } else { Style::default() };
+        let is_dismissed = entry.dismissed;
+        let base_style = if is_dismissed {
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(ratatui::style::Modifier::CROSSED_OUT)
+        } else if is_selected {
+            sel_bg
+        } else {
+            Style::default()
+        };
 
         // Type icon and color
-        let (icon, type_style) = action_type_style(&entry.action_type, theme);
+        let (icon, type_style) = if is_dismissed {
+            (action_type_icon(&entry.action_type), Style::default().fg(Color::DarkGray))
+        } else {
+            action_type_style(&entry.action_type, theme)
+        };
 
         // Build main line: [icon] summary
         let mut spans = vec![
@@ -113,6 +127,17 @@ fn resolved_scroll(state: &AuditState, lines: &[Line], body_height: usize) -> us
         scroll = selected_line.saturating_add(1).saturating_sub(body_height);
     }
     scroll.min(max_scroll)
+}
+
+/// Return only the icon character for an action type (used for dismissed entries).
+fn action_type_icon(action_type: &str) -> &'static str {
+    match action_type {
+        "heartbeat" => "\u{2665}",  // heart
+        "tool" => "\u{2699}",       // gear
+        "escalation" => "\u{2191}", // up arrow
+        "skill" | "subagent" => "\u{2726}", // star
+        _ => "\u{2022}",            // bullet
+    }
 }
 
 fn action_type_style(action_type: &str, theme: &ThemeTokens) -> (&'static str, Style) {

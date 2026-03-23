@@ -290,6 +290,9 @@ fn start_daemon_bridge(
                             } => {
                                 let _ = client.record_attention(surface, thread_id, goal_run_id);
                             }
+                            DaemonCommand::AuditDismiss { entry_id } => {
+                                let _ = client.dismiss_audit_entry(entry_id);
+                            }
                         }
                     }
                 }

@@ -282,6 +282,7 @@ const bridgeApi = {
     agentSetConciergeConfig: (config) => ipcRenderer.invoke('agent-set-concierge-config', config),
     agentDismissConciergeWelcome: () => ipcRenderer.invoke('agent-dismiss-concierge-welcome'),
     agentRequestConciergeWelcome: () => ipcRenderer.invoke('agent-request-concierge-welcome'),
+    dismissAuditEntry: (entryId) => ipcRenderer.invoke('dismiss-audit-entry', entryId),
     onAgentEvent: (cb) => {
         const listener = (_event, data) => cb(data);
         ipcRenderer.on('agent-event', listener);
