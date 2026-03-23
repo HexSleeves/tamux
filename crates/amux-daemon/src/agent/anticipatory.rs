@@ -23,6 +23,15 @@ pub(super) struct AnticipatoryRuntime {
 }
 
 impl AgentEngine {
+    /// Get anticipatory items formatted for heartbeat merge.
+    /// Returns (items, is_first_heartbeat) tuple. Per D-07/D-08.
+    pub(super) async fn get_anticipatory_for_heartbeat(&self) -> (Vec<AnticipatoryItem>, bool) {
+        let runtime = self.anticipatory.read().await;
+        let items = runtime.items.clone();
+        let is_first = runtime.session_start_pending_at.is_some();
+        (items, is_first)
+    }
+
     pub async fn mark_operator_present(&self, _reason: &str) {
         let now = now_millis();
         let mut runtime = self.anticipatory.write().await;

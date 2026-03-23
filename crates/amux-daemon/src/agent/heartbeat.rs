@@ -315,6 +315,136 @@ impl AgentEngine {
             custom_summaries.push(format!("- Custom check '{}': {}", item.label, item.prompt));
         }
 
+        // --- Phase 2.5: Gather anticipatory items for heartbeat merge (D-07, D-08, D-09) ---
+        let (anticipatory_items, is_first_heartbeat) = self.get_anticipatory_for_heartbeat().await;
+
+        let anticipatory_summary = if anticipatory_items.is_empty() {
+            String::new()
+        } else {
+            anticipatory_items
+                .iter()
+                .map(|item| {
+                    let priority_hint = if item.kind == "hydration" {
+                        "LOW-PRIORITY INFORMATIONAL"
+                    } else {
+                        "ACTIONABLE"
+                    };
+                    let bullets_text = if !item.bullets.is_empty() {
+                        format!("\n    Bullets: {}", item.bullets.join(", "))
+                    } else {
+                        String::new()
+                    };
+                    format!(
+                        "- [{}] ({}) {} (confidence: {:.2}): {}{}",
+                        item.kind, priority_hint, item.title, item.confidence, item.summary,
+                        bullets_text
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let anticipatory_section = if anticipatory_summary.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n== Anticipatory Items ==\n{}", anticipatory_summary)
+        };
+
+        let morning_brief_note = if is_first_heartbeat {
+            "\n\nNOTE: This is the FIRST heartbeat of a new session. Include a morning brief \
+             summary of overnight changes, stuck items, and context for today's work. \
+             Mark morning brief items clearly in your DIGEST."
+        } else {
+            ""
+        };
+
+        // --- Phase 2.6: Learning transparency -- detect and report meaningful pattern changes (D-10) ---
+        let mut learning_observations: Vec<String> = Vec::new();
+
+        // (a) Detect peak hours change: compare current smoothed peak hours to last-reported.
+        {
+            let model = self.operator_model.read().await;
+            let config_snap = self.config.read().await;
+            let threshold = config_snap.ema_activity_threshold;
+            drop(config_snap);
+
+            // Compute current peak hours from smoothed histogram
+            let mut current_peaks: Vec<u8> = model
+                .session_rhythm
+                .smoothed_activity_histogram
+                .iter()
+                .filter(|(_, &v)| v >= threshold)
+                .map(|(&h, _)| h)
+                .collect();
+            current_peaks.sort();
+
+            let previous_peaks = &model.session_rhythm.peak_activity_hours_utc;
+
+            // Meaningful change: symmetric difference has > 2 hours
+            let added: Vec<u8> = current_peaks
+                .iter()
+                .filter(|h| !previous_peaks.contains(h))
+                .copied()
+                .collect();
+            let removed: Vec<u8> = previous_peaks
+                .iter()
+                .filter(|h| !current_peaks.contains(h))
+                .copied()
+                .collect();
+
+            if added.len() + removed.len() > 2 && model.session_rhythm.session_count >= 5 {
+                let peak_str = current_peaks
+                    .iter()
+                    .map(|h| format!("{}:00", h))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let data = serde_json::json!({ "peak_hours": peak_str });
+                if let ExplanationResult::Template(explanation) =
+                    generate_explanation("schedule_learned", &data)
+                {
+                    learning_observations.push(explanation);
+                }
+            }
+        }
+
+        // (b) Detect check deprioritization: when a learned weight crosses below 0.5.
+        {
+            let weights = self.learned_check_weights.read().await;
+            let check_names = [
+                (HeartbeatCheckType::StaleTodos, "stale todos"),
+                (HeartbeatCheckType::StuckGoalRuns, "stuck goals"),
+                (
+                    HeartbeatCheckType::UnrepliedGatewayMessages,
+                    "unreplied messages",
+                ),
+                (HeartbeatCheckType::RepoChanges, "repo changes"),
+            ];
+            for (check_type, check_name) in &check_names {
+                if let Some(&weight) = weights.get(check_type) {
+                    if weight < 0.5 {
+                        let data =
+                            serde_json::json!({ "check_name": check_name, "weight": weight });
+                        if let ExplanationResult::Template(explanation) =
+                            generate_explanation("check_deprioritized", &data)
+                        {
+                            learning_observations.push(explanation);
+                        }
+                    }
+                }
+            }
+        }
+
+        let learning_section = if learning_observations.is_empty() {
+            String::new()
+        } else {
+            let observations = learning_observations
+                .iter()
+                .map(|obs| format!("- [learning] {}", obs))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("\n\n== Learning Observations ==\n{}", observations)
+        };
+
         // --- Phase 3: Build LLM synthesis prompt (per D-09, D-10) ---
         let built_in_summary = check_results
             .iter()
@@ -361,10 +491,16 @@ impl AgentEngine {
              - Priority 1 is highest urgency\n\
              - If nothing is actionable, you may still note meta-observations in DIGEST \
                (e.g., 'All systems quiet for 3 days - is the project stalled?')\n\
-             - Do NOT include items that are purely informational with no suggested action\n\n\
+             - Do NOT include items that are purely informational with no suggested action\n\
+             - Anticipatory items marked LOW-PRIORITY INFORMATIONAL are context only, not actionable\n\
+             - Learning observations should be mentioned in DIGEST when present\n\n\
              == Built-in Check Results ==\n{}\n\n\
-             == Custom Check Results ==\n{}",
-            built_in_summary, custom_summary
+             == Custom Check Results ==\n{}{}{}{}\n",
+            built_in_summary,
+            custom_summary,
+            anticipatory_section,
+            morning_brief_note,
+            learning_section,
         );
 
         // --- Phase 4: Single LLM synthesis call (per D-09, D-10, BEAT-08) ---
@@ -491,6 +627,13 @@ impl AgentEngine {
             });
         } else {
             tracing::debug!(cycle_id = %cycle_id, "heartbeat quiet tick — no broadcast");
+        }
+
+        // Clear morning brief flag after consumption (Pitfall 3: prevent repeat).
+        // Only clear AFTER successful synthesis, not before.
+        if is_first_heartbeat && synthesis_json.is_some() {
+            self.anticipatory.write().await.session_start_pending_at = None;
+            tracing::info!("morning brief consumed in heartbeat digest");
         }
 
         // --- Phase 6b: Create audit entries for each actionable digest item ---

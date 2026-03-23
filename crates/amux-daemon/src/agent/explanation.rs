@@ -164,6 +164,30 @@ pub fn generate_explanation(action_type: &str, data: &serde_json::Value) -> Expl
                 skill_name, confidence, rejected_count
             ))
         }
+        // Learning transparency templates (D-10)
+        "schedule_learned" => {
+            let peak_hours = data["peak_hours"].as_str().unwrap_or("unknown");
+            ExplanationResult::Template(format!(
+                "I've noticed you're usually active during {} UTC. I'll be more attentive during those hours and quieter outside them.",
+                peak_hours
+            ))
+        }
+        "check_deprioritized" => {
+            let check_name = data["check_name"].as_str().unwrap_or("unknown");
+            let weight = data["weight"].as_f64().unwrap_or(1.0);
+            let pct = (weight * 100.0).round() as u32;
+            ExplanationResult::Template(format!(
+                "I've reduced the frequency of {} checks to {}% -- you haven't needed them recently. I'll increase it again if things change.",
+                check_name, pct
+            ))
+        }
+        "check_reprioritized" => {
+            let check_name = data["check_name"].as_str().unwrap_or("unknown");
+            ExplanationResult::Template(format!(
+                "I've increased the frequency of {} checks again -- it seems like they're useful to you now.",
+                check_name
+            ))
+        }
         other => ExplanationResult::Template(format!("Performed {}", other)),
     }
 }
@@ -351,6 +375,46 @@ mod tests {
         match &result {
             ExplanationResult::Template(s) => {
                 assert!(s.contains("Selected skill"), "got: {}", s);
+            }
+            _ => panic!("Expected Template, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn explain_schedule_learned() {
+        let data = json!({"peak_hours": "9:00, 10:00, 11:00"});
+        let result = generate_explanation("schedule_learned", &data);
+        match &result {
+            ExplanationResult::Template(s) => {
+                assert!(s.contains("9:00, 10:00, 11:00"), "got: {}", s);
+                assert!(s.contains("noticed"), "got: {}", s);
+            }
+            _ => panic!("Expected Template, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn explain_check_deprioritized() {
+        let data = json!({"check_name": "stale todos", "weight": 0.3});
+        let result = generate_explanation("check_deprioritized", &data);
+        match &result {
+            ExplanationResult::Template(s) => {
+                assert!(s.contains("stale todos"), "got: {}", s);
+                assert!(s.contains("30%"), "got: {}", s);
+                assert!(s.contains("reduced"), "got: {}", s);
+            }
+            _ => panic!("Expected Template, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn explain_check_reprioritized() {
+        let data = json!({"check_name": "stuck goals"});
+        let result = generate_explanation("check_reprioritized", &data);
+        match &result {
+            ExplanationResult::Template(s) => {
+                assert!(s.contains("stuck goals"), "got: {}", s);
+                assert!(s.contains("increased"), "got: {}", s);
             }
             _ => panic!("Expected Template, got {:?}", result),
         }
