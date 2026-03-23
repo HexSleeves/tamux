@@ -633,10 +633,21 @@ pub async fn send_skill_import(
     source: &str,
     force: bool,
 ) -> Result<(bool, String, Option<String>, Option<String>, u32)> {
+    let publisher_verified = if source.starts_with("http://") || source.starts_with("https://") {
+        false
+    } else {
+        send_skill_search(source)
+            .await?
+            .into_iter()
+            .find(|entry| entry.name.eq_ignore_ascii_case(source))
+            .map(|entry| entry.publisher_verified)
+            .unwrap_or(false)
+    };
+
     match roundtrip(ClientMessage::SkillImport {
         source: source.to_string(),
         force,
-        publisher_verified: false,
+        publisher_verified,
     })
     .await?
     {
