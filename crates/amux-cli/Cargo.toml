@@ -21,4 +21,5 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 clap = { version = "4", features = ["derive"] }
+humantime = { workspace = true }
 base64 = "0.22"

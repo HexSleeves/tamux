@@ -75,6 +75,23 @@ enum Commands {
         text: Option<String>,
     },
 
+    /// View the agent's action audit trail.
+    #[command(alias = "log")]
+    Audit {
+        /// Filter by action type(s), comma-separated (heartbeat,tool,escalation,skill,subagent).
+        #[arg(long, value_delimiter = ',')]
+        r#type: Option<Vec<String>>,
+        /// Show actions since this time ago (e.g., "1h", "24h", "7d").
+        #[arg(long)]
+        since: Option<String>,
+        /// Show full detail for a specific action ID.
+        #[arg(long)]
+        detail: Option<String>,
+        /// Maximum number of entries to show.
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+
     /// Ping the daemon (health check).
     Ping,
 
@@ -233,6 +250,40 @@ async fn main() -> Result<()> {
             );
         }
 
+        Commands::Audit {
+            r#type,
+            since,
+            detail,
+            limit,
+        } => {
+            let since_ts = since.as_deref().and_then(parse_duration_ago);
+
+            let entries = client::send_audit_query(r#type, since_ts, Some(limit)).await?;
+
+            // If --detail specified, find entry by ID and print full detail
+            if let Some(detail_id) = &detail {
+                if let Some(entry) = entries.iter().find(|e| e.id == *detail_id) {
+                    print_audit_detail(entry);
+                } else {
+                    eprintln!("No audit entry found with ID: {}", detail_id);
+                }
+                return Ok(());
+            }
+
+            if entries.is_empty() {
+                println!("No audit entries found.");
+                return Ok(());
+            }
+
+            for entry in &entries {
+                print_audit_row(entry);
+            }
+            println!(
+                "\n{} entries shown. Use --detail <id> for full trace.",
+                entries.len()
+            );
+        }
+
         Commands::Scrub { text } => {
             let input = if let Some(t) = text {
                 t
@@ -302,4 +353,102 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Audit helpers
+// ---------------------------------------------------------------------------
+
+/// Parse a human duration suffix ("1h", "24h", "7d") into an epoch-millis
+/// timestamp representing `now - duration`.
+fn parse_duration_ago(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (num_str, multiplier_ms) = if let Some(n) = s.strip_suffix('d') {
+        (n, 86_400_000u64)
+    } else if let Some(n) = s.strip_suffix('h') {
+        (n, 3_600_000u64)
+    } else if let Some(n) = s.strip_suffix('m') {
+        (n, 60_000u64)
+    } else {
+        return None;
+    };
+    let num: u64 = num_str.parse().ok()?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis() as u64;
+    Some(now_ms.saturating_sub(num * multiplier_ms))
+}
+
+/// Format an epoch-millis timestamp as `YYYY-MM-DD HH:MM` (UTC).
+fn format_timestamp(epoch_ms: i64) -> String {
+    let secs = epoch_ms / 1000;
+    // Use UNIX_EPOCH + Duration to get a SystemTime, then format via
+    // the standard library's time formatting capability.
+    let duration = std::time::Duration::from_secs(secs.unsigned_abs());
+    let system_time = if secs >= 0 {
+        std::time::UNIX_EPOCH + duration
+    } else {
+        std::time::UNIX_EPOCH - duration
+    };
+    // humantime provides a human-readable format
+    let formatted = humantime::format_rfc3339_seconds(system_time).to_string();
+    // RFC3339 is like "2026-03-23T14:30:00Z" — extract "2026-03-23 14:30"
+    if formatted.len() >= 16 {
+        let date_part = &formatted[..10];
+        let time_part = &formatted[11..16];
+        format!("{} {}", date_part, time_part)
+    } else {
+        formatted
+    }
+}
+
+/// Print a single audit row in the CLI table format.
+fn print_audit_row(entry: &amux_protocol::AuditEntryPublic) {
+    let ts = format_timestamp(entry.timestamp);
+    let confidence_tag = match (&entry.confidence_band, entry.confidence) {
+        (Some(band), Some(pct)) if band != "confident" => {
+            format!(" [{} {}%]", band, (pct * 100.0) as u32)
+        }
+        _ => String::new(),
+    };
+    println!(
+        "[{}] [{}]{} {}",
+        ts, entry.action_type, confidence_tag, entry.summary
+    );
+}
+
+/// Print full detail for a single audit entry.
+fn print_audit_detail(entry: &amux_protocol::AuditEntryPublic) {
+    let ts = format_timestamp(entry.timestamp);
+    println!("ID:          {}", entry.id);
+    println!("Time:        {}", ts);
+    println!("Type:        {}", entry.action_type);
+    println!("Summary:     {}", entry.summary);
+    println!(
+        "Explanation: {}",
+        entry.explanation.as_deref().unwrap_or("N/A")
+    );
+    match (&entry.confidence_band, entry.confidence) {
+        (Some(band), Some(pct)) => {
+            println!("Confidence:  {} ({}%)", band, (pct * 100.0) as u32);
+        }
+        _ => {
+            println!("Confidence:  N/A");
+        }
+    }
+    println!(
+        "Trace:       {}",
+        entry.causal_trace_id.as_deref().unwrap_or("N/A")
+    );
+    println!(
+        "Thread:      {}",
+        entry.thread_id.as_deref().unwrap_or("N/A")
+    );
+    if let Some(goal) = &entry.goal_run_id {
+        println!("Goal Run:    {}", goal);
+    }
+    if let Some(task) = &entry.task_id {
+        println!("Task:        {}", task);
+    }
 }

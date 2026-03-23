@@ -544,6 +544,28 @@ pub async fn scrub_text(text: String) -> Result<String> {
     }
 }
 
+pub async fn send_audit_query(
+    action_types: Option<Vec<String>>,
+    since: Option<u64>,
+    limit: Option<usize>,
+) -> Result<Vec<amux_protocol::AuditEntryPublic>> {
+    match roundtrip(ClientMessage::AuditQuery {
+        action_types,
+        since,
+        limit,
+    })
+    .await?
+    {
+        DaemonMessage::AuditList { entries_json } => {
+            let entries: Vec<amux_protocol::AuditEntryPublic> =
+                serde_json::from_str(&entries_json)?;
+            Ok(entries)
+        }
+        DaemonMessage::Error { message } => anyhow::bail!("daemon error: {message}"),
+        other => anyhow::bail!("unexpected response: {other:?}"),
+    }
+}
+
 pub async fn run_bridge(
     session: Option<String>,
     shell: Option<String>,
