@@ -104,7 +104,13 @@ Plans:
   3. All consolidation is append-only with tombstones and a full provenance audit trail; any consolidation can be rolled back within 7 days
   4. Successful tool sequences are automatically promoted into learned heuristics that improve future task execution
   5. After daemon restart, threads resume seamlessly with full context — no "starting fresh" experience
-**Plans**: TBD
+**Plans:** 4 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — Foundation types, config, SQLite tables, idle detection and decay pure functions
+- [ ] 05-02-PLAN.md — Core consolidation engine: trace review, tombstone ops, heartbeat Phase 10 wiring
+- [ ] 05-03-PLAN.md — Cross-session continuity: goal run pausing, context restoration, learning store persistence
+- [ ] 05-04-PLAN.md — Heuristic system prompt injection and LLM-powered memory refinement
 
 ### Phase 6: Skill Discovery
 **Goal**: The agent recognizes when it solved something novel and automatically creates skills that improve through real-world use
@@ -178,7 +184,7 @@ Note: Phases 8 and 9 can execute in parallel with phases 2-7 (they only depend o
 | 2. Core Heartbeat | 4/4 | Complete | |
 | 3. Transparent Autonomy | 5/5 | Complete |  |
 | 4. Adaptive Heartbeat | 0/3 | Not started | - |
-| 5. Memory Consolidation | 0/? | Not started | - |
+| 5. Memory Consolidation | 0/4 | Not started | - |
 | 6. Skill Discovery | 0/? | Not started | - |
 | 7. Community Skills | 0/? | Not started | - |
 | 8. Gateway Completion | 0/? | Not started | - |
