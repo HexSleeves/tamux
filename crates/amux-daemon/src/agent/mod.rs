@@ -20,6 +20,7 @@ mod causal_traces;
 mod circuit_breaker;
 mod collaboration;
 mod compaction;
+mod consolidation;
 mod config;
 mod dispatcher;
 mod engine;
