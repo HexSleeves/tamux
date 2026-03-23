@@ -99,7 +99,40 @@ export interface PaneInfo {
 // ---------------------------------------------------------------------------
 // Notifications (OSC 9, 99, 777)
 // ---------------------------------------------------------------------------
-export type NotificationSource = "osc9" | "osc99" | "osc777" | "cli" | "system" | "approval" | "heartbeat";
+export type NotificationSource = "osc9" | "osc99" | "osc777" | "cli" | "system" | "approval" | "heartbeat" | "audit";
+
+// ---------------------------------------------------------------------------
+// Audit Feed (Phase 3 — Transparent Autonomy)
+// ---------------------------------------------------------------------------
+
+export type ActionType = "heartbeat" | "tool" | "escalation" | "skill" | "subagent";
+export type TimeRange = "last_hour" | "today" | "this_week" | "all_time";
+
+export interface AuditEntry {
+  id: string;
+  timestamp: number;
+  actionType: ActionType;
+  summary: string;
+  explanation: string | null;
+  confidence: number | null;
+  confidenceBand: string | null;
+  causalTraceId: string | null;
+  threadId: string | null;
+}
+
+export interface AuditFilters {
+  types: Set<ActionType>;
+  timeRange: TimeRange;
+}
+
+export interface EscalationInfo {
+  threadId: string;
+  fromLevel: string;
+  toLevel: string;
+  reason: string;
+  attempts: number;
+  auditId: string | null;
+}
 
 export interface TerminalNotification {
   id: NotificationId;
