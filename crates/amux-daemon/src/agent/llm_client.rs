@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::pin::Pin;
 use std::task::Poll;
@@ -562,7 +562,7 @@ pub fn send_completion_request(
 
 /// Convert `AgentMessage` history to API format.
 pub fn messages_to_api_format(messages: &[super::types::AgentMessage]) -> Vec<ApiMessage> {
-    let mut pending_tool_results = HashSet::new();
+    let mut pending_tool_results = std::collections::VecDeque::new();
 
     messages
         .iter()
@@ -575,22 +575,60 @@ pub fn messages_to_api_format(messages: &[super::types::AgentMessage]) -> Vec<Ap
             )
         })
         .filter_map(|m| {
+            let mut normalized_tool_calls = None;
             if matches!(m.role, super::types::MessageRole::Assistant) {
                 pending_tool_results.clear();
                 if let Some(tool_calls) = &m.tool_calls {
-                    for tool_call in tool_calls {
-                        if !tool_call.id.trim().is_empty() {
-                            pending_tool_results.insert(tool_call.id.clone());
-                        }
-                    }
+                    let normalized: Vec<ApiToolCall> = tool_calls
+                        .iter()
+                        .enumerate()
+                        .map(|(index, tc)| {
+                            let normalized_id = if tc.id.trim().is_empty() {
+                                format!(
+                                    "synthetic_tool_call_{}_{}_{}",
+                                    m.timestamp,
+                                    index,
+                                    tc.function.name
+                                )
+                            } else {
+                                tc.id.clone()
+                            };
+                            pending_tool_results.push_back(normalized_id.clone());
+                            ApiToolCall {
+                                id: normalized_id,
+                                call_type: "function".into(),
+                                function: ApiToolCallFunction {
+                                    name: tc.function.name.clone(),
+                                    arguments: tc.function.arguments.clone(),
+                                },
+                            }
+                        })
+                        .collect();
+                    normalized_tool_calls = Some(normalized);
                 }
             }
 
+            let mut normalized_tool_call_id = m.tool_call_id.clone();
             if matches!(m.role, super::types::MessageRole::Tool) {
-                let Some(tool_call_id) = m.tool_call_id.as_ref() else {
-                    return None;
+                let resolved_tool_call_id = if let Some(tool_call_id) =
+                    m.tool_call_id.as_ref().filter(|value| !value.trim().is_empty())
+                {
+                    let position = pending_tool_results
+                        .iter()
+                        .position(|pending_id| pending_id == tool_call_id);
+                    let Some(position) = position else {
+                        return None;
+                    };
+                    pending_tool_results.remove(position).unwrap_or_default()
+                } else {
+                    let Some(next_pending) = pending_tool_results.pop_front() else {
+                        return None;
+                    };
+                    next_pending
                 };
-                if !pending_tool_results.remove(tool_call_id) {
+
+                normalized_tool_call_id = Some(resolved_tool_call_id);
+                if normalized_tool_call_id.as_deref().is_none() {
                     return None;
                 }
             } else if !matches!(m.role, super::types::MessageRole::Assistant)
@@ -598,19 +636,6 @@ pub fn messages_to_api_format(messages: &[super::types::AgentMessage]) -> Vec<Ap
             {
                 pending_tool_results.clear();
             }
-
-            let tool_calls = m.tool_calls.as_ref().map(|tcs| {
-                tcs.iter()
-                    .map(|tc| ApiToolCall {
-                        id: tc.id.clone(),
-                        call_type: "function".into(),
-                        function: ApiToolCallFunction {
-                            name: tc.function.name.clone(),
-                            arguments: tc.function.arguments.clone(),
-                        },
-                    })
-                    .collect()
-            });
 
             Some(ApiMessage {
                 role: match m.role {
@@ -620,12 +645,82 @@ pub fn messages_to_api_format(messages: &[super::types::AgentMessage]) -> Vec<Ap
                     super::types::MessageRole::Tool => "tool".into(),
                 },
                 content: ApiContent::Text(m.content.clone()),
-                tool_call_id: m.tool_call_id.clone(),
+                tool_call_id: normalized_tool_call_id,
                 name: m.tool_name.clone(),
-                tool_calls,
+                tool_calls: normalized_tool_calls.or_else(|| {
+                    m.tool_calls.as_ref().map(|tcs| {
+                        tcs.iter()
+                            .map(|tc| ApiToolCall {
+                                id: tc.id.clone(),
+                                call_type: "function".into(),
+                                function: ApiToolCallFunction {
+                                    name: tc.function.name.clone(),
+                                    arguments: tc.function.arguments.clone(),
+                                },
+                            })
+                            .collect()
+                    })
+                }),
             })
         })
         .collect()
+}
+
+fn api_content_to_json(content: &ApiContent) -> serde_json::Value {
+    match content {
+        ApiContent::Text(text) => serde_json::Value::String(text.clone()),
+        ApiContent::Blocks(blocks) => serde_json::Value::Array(blocks.clone()),
+    }
+}
+
+fn build_chat_completion_messages(
+    system_prompt: &str,
+    messages: &[ApiMessage],
+) -> Result<Vec<serde_json::Value>> {
+    let mut out = Vec::with_capacity(messages.len() + 1);
+    out.push(serde_json::json!({
+        "role": "system",
+        "content": system_prompt,
+    }));
+
+    for message in messages {
+        let mut obj = serde_json::Map::new();
+        obj.insert(
+            "role".to_string(),
+            serde_json::Value::String(message.role.clone()),
+        );
+
+        if message.role == "assistant"
+            && message
+                .tool_calls
+                .as_ref()
+                .is_some_and(|tool_calls| !tool_calls.is_empty())
+        {
+            obj.insert("content".to_string(), serde_json::Value::Null);
+            obj.insert(
+                "tool_calls".to_string(),
+                serde_json::to_value(message.tool_calls.clone().unwrap_or_default())?,
+            );
+        } else {
+            obj.insert("content".to_string(), api_content_to_json(&message.content));
+            if let Some(tool_call_id) = &message.tool_call_id {
+                obj.insert(
+                    "tool_call_id".to_string(),
+                    serde_json::Value::String(tool_call_id.clone()),
+                );
+            }
+            if let Some(name) = &message.name {
+                obj.insert("name".to_string(), serde_json::Value::String(name.clone()));
+            }
+            if let Some(tool_calls) = &message.tool_calls {
+                obj.insert("tool_calls".to_string(), serde_json::to_value(tool_calls)?);
+            }
+        }
+
+        out.push(serde_json::Value::Object(obj));
+    }
+
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -1115,14 +1210,7 @@ async fn run_openai_chat_completions(
 ) -> Result<()> {
     let url = build_chat_completion_url(&config.base_url);
 
-    let mut all_messages = vec![ApiMessage {
-        role: "system".into(),
-        content: ApiContent::Text(system_prompt.into()),
-        tool_call_id: None,
-        name: None,
-        tool_calls: None,
-    }];
-    all_messages.extend_from_slice(messages);
+    let all_messages = build_chat_completion_messages(system_prompt, messages)?;
 
     let mut body = serde_json::json!({
         "model": config.model,
@@ -2112,8 +2200,13 @@ async fn parse_anthropic_sse(
                     if !pending_tool_calls.is_empty() {
                         let tool_calls: Vec<ToolCall> = pending_tool_calls
                             .drain(..)
-                            .map(|tc| ToolCall {
-                                id: tc.id,
+                            .enumerate()
+                            .map(|(index, tc)| ToolCall {
+                                id: if tc.id.trim().is_empty() {
+                                    synthesize_tool_call_id("anthropic", index, &tc.name)
+                                } else {
+                                    tc.id
+                                },
                                 function: ToolFunction {
                                     name: tc.name,
                                     arguments: tc.arguments,
@@ -2184,13 +2277,31 @@ struct PendingToolCall {
     arguments: String,
 }
 
+fn synthesize_tool_call_id(seed: &str, index: usize, name: &str) -> String {
+    let clean_name: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("synthetic_tool_call_{seed}_{index}_{clean_name}")
+}
+
 fn drain_tool_calls(map: &mut HashMap<u32, PendingToolCall>) -> Vec<ToolCall> {
     let mut entries: Vec<(u32, PendingToolCall)> = map.drain().collect();
     entries.sort_by_key(|(idx, _)| *idx);
     entries
         .into_iter()
-        .map(|(_, tc)| ToolCall {
-            id: tc.id,
+        .map(|(idx, tc)| ToolCall {
+            id: if tc.id.trim().is_empty() {
+                synthesize_tool_call_id("openai", idx as usize, &tc.name)
+            } else {
+                tc.id
+            },
             function: ToolFunction {
                 name: tc.name,
                 arguments: tc.arguments,
@@ -2542,5 +2653,87 @@ mod tests {
             .filter(|message| message.role == "tool")
             .count();
         assert_eq!(tool_results, 2);
+    }
+
+    #[test]
+    fn messages_to_api_format_normalizes_empty_tool_ids() {
+        let messages = vec![
+            AgentMessage {
+                role: MessageRole::Assistant,
+                content: String::new(),
+                tool_calls: Some(vec![ToolCall {
+                    id: String::new(),
+                    function: ToolFunction {
+                        name: "list_sessions".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                }]),
+                tool_call_id: None,
+                tool_name: None,
+                tool_arguments: None,
+                tool_status: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                provider: None,
+                model: None,
+                api_transport: None,
+                response_id: None,
+                reasoning: None,
+                timestamp: 42,
+            },
+            AgentMessage {
+                role: MessageRole::Tool,
+                content: "ok".to_string(),
+                tool_calls: None,
+                tool_call_id: Some(String::new()),
+                tool_name: Some("list_sessions".to_string()),
+                tool_arguments: Some("{}".to_string()),
+                tool_status: Some("done".to_string()),
+                input_tokens: 0,
+                output_tokens: 0,
+                provider: None,
+                model: None,
+                api_transport: None,
+                response_id: None,
+                reasoning: None,
+                timestamp: 43,
+            },
+        ];
+
+        let api_messages = messages_to_api_format(&messages);
+        assert_eq!(api_messages.len(), 2);
+        let assistant_tool_id = api_messages[0]
+            .tool_calls
+            .as_ref()
+            .and_then(|calls| calls.first())
+            .map(|call| call.id.clone())
+            .expect("assistant tool call should have normalized id");
+        assert!(!assistant_tool_id.is_empty());
+        assert_eq!(api_messages[1].tool_call_id.as_deref(), Some(assistant_tool_id.as_str()));
+    }
+
+    #[test]
+    fn chat_completion_messages_null_assistant_content_for_tool_calls() {
+        let messages = vec![ApiMessage {
+            role: "assistant".to_string(),
+            content: ApiContent::Text("I'll inspect that now".to_string()),
+            tool_call_id: None,
+            name: None,
+            tool_calls: Some(vec![ApiToolCall {
+                id: "call_1".to_string(),
+                call_type: "function".to_string(),
+                function: ApiToolCallFunction {
+                    name: "list_sessions".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            }]),
+        }];
+
+        let serialized =
+            build_chat_completion_messages("system prompt", &messages).expect("serialize");
+        assert_eq!(serialized.len(), 2);
+        assert_eq!(serialized[1]["role"], "assistant");
+        assert!(serialized[1]["content"].is_null());
+        assert_eq!(serialized[1]["tool_calls"][0]["id"], "call_1");
     }
 }

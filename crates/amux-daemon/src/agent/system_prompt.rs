@@ -113,11 +113,11 @@ pub(super) fn build_system_prompt(
 
     prompt.push_str(
         "\n\n## Terminal Session Discipline\n\
-         - Before running file or command actions, call `list_sessions` (or `list_terminals`) to discover current session IDs and CWD.\n\
+         - Before running file or command actions, call `list_terminals` to discover current session IDs and CWD.\n\
          - Pick a target session and reuse that `session` value across related tool calls so all actions stay in one terminal context.\n\
          - If a command is still running, timed out while still active, or is waiting for interactive completion, treat that terminal as occupied and switch to another terminal/session before continuing other work.\n\
          - If you need another terminal in the same agent workspace, call `allocate_terminal`, then continue with the returned session ID.\n\
-         - If the operator asks to use another terminal, call `list_sessions` again and switch explicitly.\n",
+         - If the operator asks to use another terminal, call `list_terminals` again and switch explicitly.\n",
     );
 
     prompt.push_str(

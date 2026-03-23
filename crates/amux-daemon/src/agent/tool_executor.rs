@@ -18,6 +18,7 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::history::{HistoryStore, SkillVariantRecord};
+use crate::scrub::scrub_sensitive;
 use crate::session_manager::SessionManager;
 
 use super::memory::{apply_memory_update, MemoryTarget, MemoryUpdateMode, MemoryWriteContext};
@@ -45,6 +46,7 @@ const SESSION_SEARCH_OUTPUT_MAX_CHARS: usize = 12_000;
 pub fn get_available_tools(
     config: &AgentConfig,
     agent_data_dir: &std::path::Path,
+    has_workspace_topology: bool,
 ) -> Vec<ToolDefinition> {
     let mut tools = Vec::new();
 
@@ -268,12 +270,13 @@ pub fn get_available_tools(
         }),
     ));
 
-    // Daemon session management
-    tools.push(tool_def(
-        "list_sessions",
-        "List all active terminal sessions managed by the daemon.",
-        serde_json::json!({ "type": "object", "properties": {} }),
-    ));
+    if has_workspace_topology {
+        tools.push(tool_def(
+            "list_sessions",
+            "List frontend-reported workspace sessions and panes when workspace topology is available.",
+            serde_json::json!({ "type": "object", "properties": {} }),
+        ));
+    }
 
     // Always available: notify and memory tools
     tools.push(tool_def(
@@ -790,9 +793,10 @@ pub async fn execute_tool(
     http_client: &reqwest::Client,
     cancel_token: Option<CancellationToken>,
 ) -> ToolResult {
+    let redacted_arguments = scrub_sensitive(&tool_call.function.arguments);
     tracing::info!(
         tool = %tool_call.function.name,
-        args = %tool_call.function.arguments,
+        args = %redacted_arguments,
         "agent tool call"
     );
 
@@ -1036,6 +1040,7 @@ pub async fn execute_tool(
 
     match result {
         Ok(content) => {
+            let content = scrub_sensitive(&content);
             emit_workflow_notice_for_tool(
                 event_tx,
                 thread_id,
@@ -1052,11 +1057,12 @@ pub async fn execute_tool(
             }
         }
         Err(e) => {
-            tracing::warn!(tool = %tool_call.function.name, error = %e, "agent tool result: error");
+            let content = scrub_sensitive(&format!("Error: {e}"));
+            tracing::warn!(tool = %tool_call.function.name, error = %content, "agent tool result: error");
             ToolResult {
                 tool_call_id: tool_call.id.clone(),
                 name: tool_call.function.name.clone(),
-                content: format!("Error: {e}"),
+                content,
                 is_error: true,
                 pending_approval: None,
             }
@@ -4708,9 +4714,11 @@ mod tests {
     use super::{
         build_list_files_script, build_write_file_command, build_write_file_script,
         command_looks_interactive, command_requires_managed_state, execute_headless_shell_command,
-        managed_alias_args, parse_capture_output, resolve_skill_path, should_use_managed_execution,
-        validate_read_path, validate_write_path, wait_for_managed_command_outcome,
+        get_available_tools, managed_alias_args, parse_capture_output, resolve_skill_path,
+        should_use_managed_execution, validate_read_path, validate_write_path,
+        wait_for_managed_command_outcome,
     };
+    use crate::agent::types::AgentConfig;
     use crate::history::SkillVariantRecord;
     use crate::session_manager::SessionManager;
     use amux_protocol::SessionId;
@@ -4942,5 +4950,38 @@ mod tests {
         assert_eq!(resolved, frontend);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn list_sessions_tool_requires_workspace_topology() {
+        let config = AgentConfig::default();
+
+        let no_topology = get_available_tools(&config, std::path::Path::new("/tmp"), false);
+        assert!(
+            no_topology
+                .iter()
+                .all(|tool| tool.function.name != "list_sessions")
+        );
+        assert!(
+            no_topology
+                .iter()
+                .any(|tool| tool.function.name == "list_terminals")
+        );
+
+        let with_topology = get_available_tools(&config, std::path::Path::new("/tmp"), true);
+        assert!(
+            with_topology
+                .iter()
+                .any(|tool| tool.function.name == "list_sessions")
+        );
+    }
+
+    #[test]
+    fn scrub_sensitive_redacts_common_api_key_lines() {
+        let input = "openai api_key=sk-live-secret\nAuthorization: Bearer abc123secret";
+        let scrubbed = crate::scrub::scrub_sensitive(input);
+        assert!(!scrubbed.contains("sk-live-secret"));
+        assert!(!scrubbed.contains("abc123secret"));
+        assert!(scrubbed.contains("***REDACTED***"));
     }
 }

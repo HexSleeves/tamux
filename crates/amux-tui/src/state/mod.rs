@@ -51,6 +51,9 @@ pub enum DaemonCommand {
         content: String,
         session_id: Option<String>,
     },
+    StopStream {
+        thread_id: String,
+    },
     FetchModels {
         provider_id: String,
         base_url: String,

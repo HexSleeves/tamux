@@ -179,7 +179,8 @@ impl AgentEngine {
         }
 
         // Get tools, applying per-task tool filters if configured
-        let mut tools = get_available_tools(&config, &self.data_dir);
+        let has_workspace_topology = self.session_manager.read_workspace_topology().is_some();
+        let mut tools = get_available_tools(&config, &self.data_dir, has_workspace_topology);
         let (
             current_task_snapshot,
             is_durable_goal_task,

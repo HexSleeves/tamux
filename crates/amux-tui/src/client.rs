@@ -963,6 +963,10 @@ impl DaemonClient {
         })
     }
 
+    pub fn stop_stream(&self, thread_id: String) -> Result<()> {
+        self.send(ClientMessage::AgentStopStream { thread_id })
+    }
+
     pub fn delete_messages(&self, thread_id: String, message_ids: Vec<String>) -> Result<()> {
         self.send(ClientMessage::DeleteAgentMessages {
             thread_id,

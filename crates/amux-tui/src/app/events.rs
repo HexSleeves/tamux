@@ -48,6 +48,7 @@ impl TuiModel {
             ClientEvent::Connected => {
                 self.connected = true;
                 self.agent_config_loaded = false;
+                self.ignore_pending_concierge_welcome = false;
                 self.status_line = "Connected to daemon".to_string();
                 self.send_daemon_command(DaemonCommand::Refresh);
                 self.send_daemon_command(DaemonCommand::RefreshServices);
@@ -423,6 +424,13 @@ impl TuiModel {
                     });
             }
             ClientEvent::ConciergeWelcome { content, actions } => {
+                if self.ignore_pending_concierge_welcome {
+                    self.ignore_pending_concierge_welcome = false;
+                    self.concierge
+                        .reduce(crate::state::ConciergeAction::WelcomeDismissed);
+                    return;
+                }
+                self.ignore_pending_concierge_welcome = false;
                 self.concierge
                     .reduce(crate::state::ConciergeAction::WelcomeReceived { content, actions });
                 if self.chat.active_thread_id().is_none() {

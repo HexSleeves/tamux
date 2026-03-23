@@ -152,6 +152,9 @@ pub struct TuiModel {
     // Thread ID whose stream was cancelled via double-Esc (ignore further events)
     cancelled_thread_id: Option<String>,
 
+    // Ignore a stale concierge welcome that arrives after the user navigated away.
+    ignore_pending_concierge_welcome: bool,
+
     // Active mouse drag selection in the chat pane
     chat_drag_anchor: Option<Position>,
     chat_drag_current: Option<Position>,
@@ -217,6 +220,7 @@ impl TuiModel {
             attachments: Vec::new(),
             queued_prompts: Vec::new(),
             cancelled_thread_id: None,
+            ignore_pending_concierge_welcome: false,
             chat_drag_anchor: None,
             chat_drag_current: None,
             chat_drag_anchor_point: None,
@@ -320,6 +324,51 @@ impl TuiModel {
         self.status_line = "Configure provider credentials to start chatting".to_string();
     }
 
+    fn set_input_text(&mut self, text: &str) {
+        self.input.reduce(input::InputAction::Clear);
+        for ch in text.chars() {
+            self.input.reduce(input::InputAction::InsertChar(ch));
+        }
+        self.input.set_mode(input::InputMode::Insert);
+    }
+
+    fn cleanup_concierge_on_navigate(&mut self) {
+        if !self.concierge.auto_cleanup_on_navigate {
+            return;
+        }
+
+        self.ignore_pending_concierge_welcome = true;
+        self.concierge
+            .reduce(crate::state::ConciergeAction::WelcomeDismissed);
+        self.send_daemon_command(DaemonCommand::DismissConciergeWelcome);
+
+        if self.chat.active_thread_id() == Some("concierge") && self.assistant_busy() {
+            let thread_id = "concierge".to_string();
+            self.cancelled_thread_id = Some(thread_id.clone());
+            self.chat.reduce(chat::ChatAction::ForceStopStreaming);
+            self.agent_activity = None;
+            self.send_daemon_command(DaemonCommand::StopStream { thread_id });
+        }
+
+        self.clear_pending_stop();
+    }
+
+    fn open_thread_conversation(&mut self, thread_id: String) {
+        self.cleanup_concierge_on_navigate();
+        self.chat
+            .reduce(chat::ChatAction::SelectThread(thread_id.clone()));
+        self.send_daemon_command(DaemonCommand::RequestThread(thread_id));
+        self.main_pane_view = MainPaneView::Conversation;
+        self.focus = FocusArea::Chat;
+    }
+
+    fn start_new_thread_view(&mut self) {
+        self.cleanup_concierge_on_navigate();
+        self.chat.reduce(chat::ChatAction::NewThread);
+        self.main_pane_view = MainPaneView::Conversation;
+        self.focus = FocusArea::Input;
+    }
+
     fn execute_concierge_action(&mut self, action_index: usize) {
         let Some(action) = self.concierge.welcome_actions.get(action_index).cloned() else {
             return;
@@ -328,34 +377,27 @@ impl TuiModel {
         match action.action_type.as_str() {
             "continue_session" => {
                 if let Some(thread_id) = action.thread_id {
-                    self.concierge
-                        .reduce(crate::state::ConciergeAction::WelcomeDismissed);
-                    self.send_daemon_command(DaemonCommand::DismissConciergeWelcome);
-                    self.chat
-                        .reduce(chat::ChatAction::SelectThread(thread_id.clone()));
-                    self.send_daemon_command(DaemonCommand::RequestThread(thread_id));
-                    self.main_pane_view = MainPaneView::Conversation;
-                    self.focus = FocusArea::Chat;
+                    self.open_thread_conversation(thread_id);
                 }
             }
             "start_new" => {
-                self.concierge
-                    .reduce(crate::state::ConciergeAction::WelcomeDismissed);
-                self.send_daemon_command(DaemonCommand::DismissConciergeWelcome);
-                self.chat.reduce(chat::ChatAction::NewThread);
-                self.main_pane_view = MainPaneView::Conversation;
-                self.focus = FocusArea::Input;
+                self.start_new_thread_view();
             }
             "search" => {
-                self.main_pane_view = MainPaneView::Conversation;
-                self.focus = FocusArea::Input;
-                self.status_line =
-                    "Describe what you want to search in the concierge thread".to_string();
-            }
-            "dismiss" => {
+                self.ignore_pending_concierge_welcome = true;
                 self.concierge
                     .reduce(crate::state::ConciergeAction::WelcomeDismissed);
                 self.send_daemon_command(DaemonCommand::DismissConciergeWelcome);
+                self.chat
+                    .reduce(chat::ChatAction::SelectThread("concierge".to_string()));
+                self.send_daemon_command(DaemonCommand::RequestThread("concierge".to_string()));
+                self.main_pane_view = MainPaneView::Conversation;
+                self.focus = FocusArea::Input;
+                self.set_input_text("Search history for: ");
+                self.status_line = "Describe what you want to search and press Enter".to_string();
+            }
+            "dismiss" => {
+                self.cleanup_concierge_on_navigate();
             }
             _ => {}
         }

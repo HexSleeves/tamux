@@ -223,6 +223,9 @@ fn start_daemon_bridge(
                             DaemonCommand::SendMessage { thread_id, content, session_id } => {
                                 let _ = client.send_message(thread_id, content, session_id);
                             }
+                            DaemonCommand::StopStream { thread_id } => {
+                                let _ = client.stop_stream(thread_id);
+                            }
                             DaemonCommand::DeleteMessages { thread_id, message_ids } => {
                                 let _ = client.delete_messages(thread_id, message_ids);
                             }

@@ -157,6 +157,7 @@ impl TuiModel {
     }
 
     pub(super) fn open_sidebar_target(&mut self, target: sidebar::SidebarItemTarget) {
+        self.cleanup_concierge_on_navigate();
         if let sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. } = &target {
             self.send_daemon_command(DaemonCommand::RequestGoalRunDetail(goal_run_id.clone()));
             self.send_daemon_command(DaemonCommand::RequestGoalRunCheckpoints(
@@ -186,6 +187,7 @@ impl TuiModel {
     }
 
     pub(super) fn open_new_goal_view(&mut self) {
+        self.cleanup_concierge_on_navigate();
         self.main_pane_view = MainPaneView::GoalComposer;
         self.task_view_scroll = 0;
         self.focus = FocusArea::Input;
@@ -257,8 +259,7 @@ impl TuiModel {
                 self.sync_goal_picker_item_count();
             }
             "new" => {
-                self.chat.reduce(chat::ChatAction::NewThread);
-                self.main_pane_view = MainPaneView::Conversation;
+                self.start_new_thread_view();
             }
             "tasks" => {
                 self.modal

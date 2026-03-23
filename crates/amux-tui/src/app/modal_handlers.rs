@@ -453,16 +453,12 @@ impl TuiModel {
                 self.modal.reduce(modal::ModalAction::Pop);
                 self.input.reduce(input::InputAction::Clear);
                 if cursor == 0 {
-                    self.chat.reduce(chat::ChatAction::NewThread);
-                    self.main_pane_view = MainPaneView::Conversation;
+                    self.start_new_thread_view();
                     self.status_line = "New conversation".to_string();
                 } else if let Some(thread) = self.chat.threads().get(cursor - 1) {
                     let tid = thread.id.clone();
                     let title = thread.title.clone();
-                    self.chat
-                        .reduce(chat::ChatAction::SelectThread(tid.clone()));
-                    self.main_pane_view = MainPaneView::Conversation;
-                    self.send_daemon_command(DaemonCommand::RequestThread(tid));
+                    self.open_thread_conversation(tid);
                     self.status_line = format!("Thread: {}", title);
                 }
             }
