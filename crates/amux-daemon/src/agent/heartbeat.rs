@@ -1,4 +1,11 @@
 //! Heartbeat system — periodic health checks and notifications.
+//!
+//! Contains the structured heartbeat orchestration (`run_structured_heartbeat`) that:
+//! - Gathers all built-in check results (stale todos, stuck goals, unreplied messages, repo changes)
+//! - Collects custom HeartbeatItem prompts that are due
+//! - Feeds everything into a single LLM synthesis call (BEAT-08/D-09)
+//! - Broadcasts HeartbeatDigest only when actionable (BEAT-03/D-14)
+//! - Persists every cycle to SQLite regardless of LLM outcome (D-12/Pitfall 4)
 
 use super::*;
 use chrono::Timelike;
@@ -41,6 +48,115 @@ pub(super) fn resolve_cron_from_config(config: &AgentConfig) -> String {
         .unwrap_or_else(|| interval_mins_to_cron(config.heartbeat_interval_mins))
 }
 
+/// Pure function: determine whether to broadcast a HeartbeatDigest event.
+///
+/// Per D-14 (silent default): only broadcast when there are actionable items
+/// OR the LLM produced digest items that need attention.
+pub(super) fn should_broadcast(actionable: bool, items: &[HeartbeatDigestItem]) -> bool {
+    actionable || !items.is_empty()
+}
+
+/// Pure function: determine the persistence status string for a heartbeat cycle.
+///
+/// Per Pitfall 4: persist EVERY cycle regardless of LLM success.
+/// Returns "completed" when synthesis succeeded, "synthesis_failed" otherwise.
+pub(super) fn heartbeat_persistence_status(synthesis_json: Option<&str>) -> &'static str {
+    if synthesis_json.is_some() {
+        "completed"
+    } else {
+        "synthesis_failed"
+    }
+}
+
+/// Pure function: determine if a custom HeartbeatItem check is due for execution.
+///
+/// An item is due if:
+/// - It has never been run (`last_run_at` is None), OR
+/// - The elapsed time since last run exceeds the configured interval.
+///
+/// `item_interval_minutes` is the item's own interval (0 means use global).
+/// `global_interval_mins` is the fallback from `config.heartbeat_interval_mins`.
+pub(super) fn is_custom_item_due(
+    now: u64,
+    last_run_at: Option<u64>,
+    item_interval_minutes: u64,
+    global_interval_mins: u64,
+) -> bool {
+    let interval_ms = if item_interval_minutes > 0 {
+        item_interval_minutes * 60 * 1000
+    } else {
+        global_interval_mins * 60 * 1000
+    };
+    match last_run_at {
+        Some(last) => now.saturating_sub(last) >= interval_ms,
+        None => true,
+    }
+}
+
+/// Parse the LLM synthesis response into structured digest items.
+///
+/// Parses lines matching the format:
+/// `- PRIORITY:<N> TYPE:<check_type> TITLE:<text> SUGGESTION:<text>`
+pub(super) fn parse_digest_items(response: &str) -> Vec<HeartbeatDigestItem> {
+    response
+        .lines()
+        .filter(|l| l.trim_start().starts_with("- PRIORITY:"))
+        .filter_map(|line| {
+            let priority = line
+                .split("PRIORITY:")
+                .nth(1)?
+                .split_whitespace()
+                .next()?
+                .parse::<u8>()
+                .ok()?;
+            let type_str = line.split("TYPE:").nth(1)?.split_whitespace().next()?;
+            let check_type = match type_str.to_lowercase().as_str() {
+                "staletodos" | "stale_todos" => HeartbeatCheckType::StaleTodos,
+                "stuckgoalruns" | "stuck_goal_runs" => HeartbeatCheckType::StuckGoalRuns,
+                "unrepliedgatewaymessages" | "unreplied_gateway_messages" => {
+                    HeartbeatCheckType::UnrepliedGatewayMessages
+                }
+                "repochanges" | "repo_changes" => HeartbeatCheckType::RepoChanges,
+                _ => HeartbeatCheckType::StaleTodos, // fallback
+            };
+            let title = line
+                .split("TITLE:")
+                .nth(1)?
+                .split("SUGGESTION:")
+                .next()?
+                .trim()
+                .to_string();
+            let suggestion = line.split("SUGGESTION:").nth(1)?.trim().to_string();
+            Some(HeartbeatDigestItem {
+                priority,
+                check_type,
+                title,
+                suggestion,
+            })
+        })
+        .collect()
+}
+
+/// Build which built-in checks should run based on `HeartbeatChecksConfig` enabled flags.
+///
+/// Returns a `Vec<HeartbeatCheckType>` of enabled checks.
+pub(super) fn enabled_checks(config: &HeartbeatChecksConfig) -> Vec<HeartbeatCheckType> {
+    let mut checks = Vec::new();
+    if config.stale_todos_enabled {
+        checks.push(HeartbeatCheckType::StaleTodos);
+    }
+    if config.stuck_goals_enabled {
+        checks.push(HeartbeatCheckType::StuckGoalRuns);
+    }
+    if config.unreplied_messages_enabled {
+        checks.push(HeartbeatCheckType::UnrepliedGatewayMessages);
+    }
+    if config.repo_changes_enabled {
+        checks.push(HeartbeatCheckType::RepoChanges);
+    }
+    checks
+}
+
 impl AgentEngine {
     /// Check if current time falls within quiet hours or DND is active. Per D-07.
     pub(super) async fn is_quiet_hours(&self) -> bool {
@@ -59,6 +175,220 @@ impl AgentEngine {
     pub(super) async fn resolve_heartbeat_cron(&self) -> String {
         let config = self.config.read().await;
         resolve_cron_from_config(&config)
+    }
+
+    /// Run the structured heartbeat: gather all checks, synthesize via LLM, broadcast and persist.
+    /// Per D-01, D-09, D-10, D-11, D-12, D-14, BEAT-02, BEAT-03, BEAT-04, BEAT-08.
+    pub(super) async fn run_structured_heartbeat(&self) -> Result<()> {
+        let start = std::time::Instant::now();
+        let cycle_id = uuid::Uuid::new_v4().to_string();
+        let now = now_millis();
+
+        // --- Phase 1: Gather built-in check results (per D-01, D-02) ---
+        let config = self.config.read().await.clone();
+        let checks_config = &config.heartbeat_checks;
+        let mut check_results: Vec<HeartbeatCheckResult> = Vec::new();
+
+        if checks_config.stale_todos_enabled {
+            check_results.push(
+                self.check_stale_todos(checks_config.stale_todo_threshold_hours)
+                    .await,
+            );
+        }
+        if checks_config.stuck_goals_enabled {
+            check_results.push(
+                self.check_stuck_goal_runs(checks_config.stuck_goal_threshold_hours)
+                    .await,
+            );
+        }
+        if checks_config.unreplied_messages_enabled {
+            check_results.push(
+                self.check_unreplied_messages(checks_config.unreplied_message_threshold_hours)
+                    .await,
+            );
+        }
+        if checks_config.repo_changes_enabled {
+            check_results.push(self.check_repo_changes().await);
+        }
+
+        // --- Phase 2: Run custom HeartbeatItem checks (per D-03) ---
+        let custom_items = self.heartbeat_items.read().await.clone();
+        let mut custom_summaries: Vec<String> = Vec::new();
+        for item in &custom_items {
+            if !item.enabled {
+                continue;
+            }
+            if !is_custom_item_due(
+                now,
+                item.last_run_at,
+                item.interval_minutes,
+                config.heartbeat_interval_mins,
+            ) {
+                continue;
+            }
+            custom_summaries.push(format!("- Custom check '{}': {}", item.label, item.prompt));
+        }
+
+        // --- Phase 3: Build LLM synthesis prompt (per D-09, D-10) ---
+        let built_in_summary = check_results
+            .iter()
+            .map(|r| {
+                let mut s = format!(
+                    "### {:?} ({})\n{}",
+                    r.check_type,
+                    if r.items_found > 0 {
+                        format!("{} item(s)", r.items_found)
+                    } else {
+                        "clear".into()
+                    },
+                    r.summary
+                );
+                for detail in &r.details {
+                    s.push_str(&format!(
+                        "\n  - [{:?}] {} ({:.1}h): {}",
+                        detail.severity, detail.label, detail.age_hours, detail.context
+                    ));
+                }
+                s
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let custom_summary = if custom_summaries.is_empty() {
+            "No custom checks configured.".to_string()
+        } else {
+            custom_summaries.join("\n")
+        };
+
+        let synthesis_prompt = format!(
+            "HEARTBEAT SYNTHESIS\n\
+             You are performing a scheduled heartbeat check for the operator. \
+             Analyze the following data and respond in this exact format:\n\n\
+             ACTIONABLE: true|false\n\
+             DIGEST: <one-line natural language summary>\n\
+             ITEMS:\n\
+             - PRIORITY:<1-5> TYPE:<check_type> TITLE:<brief title> SUGGESTION:<suggested action>\n\
+             ...\n\n\
+             Rules:\n\
+             - Set ACTIONABLE to true only if there are items genuinely needing operator attention\n\
+             - Keep DIGEST concise (under 200 chars)\n\
+             - Priority 1 is highest urgency\n\
+             - If nothing is actionable, you may still note meta-observations in DIGEST \
+               (e.g., 'All systems quiet for 3 days - is the project stalled?')\n\
+             - Do NOT include items that are purely informational with no suggested action\n\n\
+             == Built-in Check Results ==\n{}\n\n\
+             == Custom Check Results ==\n{}",
+            built_in_summary, custom_summary
+        );
+
+        // --- Phase 4: Single LLM synthesis call (per D-09, D-10, BEAT-08) ---
+        let checks_json = serde_json::to_string(&check_results).unwrap_or_default();
+        let (synthesis_json, actionable, digest_text, digest_items, llm_tokens) =
+            match self.send_message(None, &synthesis_prompt).await {
+                Ok(thread_id) => {
+                    let threads = self.threads.read().await;
+                    let response = threads
+                        .get(&thread_id)
+                        .and_then(|t| {
+                            t.messages
+                                .iter()
+                                .rev()
+                                .find(|m| m.role == MessageRole::Assistant)
+                                .map(|m| m.content.clone())
+                        })
+                        .unwrap_or_default();
+
+                    let actionable = response.contains("ACTIONABLE: true");
+                    let digest = response
+                        .lines()
+                        .find(|l| l.starts_with("DIGEST:"))
+                        .map(|l| l.trim_start_matches("DIGEST:").trim().to_string())
+                        .unwrap_or_else(|| {
+                            if actionable {
+                                "Items need attention.".into()
+                            } else {
+                                "All systems normal.".into()
+                            }
+                        });
+
+                    let items = parse_digest_items(&response);
+
+                    (
+                        Some(response),
+                        actionable,
+                        digest,
+                        items,
+                        0u64, // token count from Done event not easily accessible here
+                    )
+                }
+                Err(e) => {
+                    tracing::error!("heartbeat LLM synthesis failed: {e}");
+                    (
+                        None,
+                        false,
+                        format!("Synthesis failed: {e}"),
+                        vec![],
+                        0u64,
+                    )
+                }
+            };
+
+        // --- Phase 5: Persist to SQLite (per D-12, Pitfall 4) ---
+        // CRITICAL: Persist REGARDLESS of LLM success/failure (Pitfall 4)
+        let duration_ms = start.elapsed().as_millis() as i64;
+        let status = heartbeat_persistence_status(synthesis_json.as_deref());
+        if let Err(e) = self
+            .history
+            .insert_heartbeat_history(
+                &cycle_id,
+                now as i64,
+                &checks_json,
+                synthesis_json.as_deref(),
+                actionable,
+                Some(&digest_text),
+                llm_tokens as i64,
+                duration_ms,
+                status,
+            )
+            .await
+        {
+            tracing::warn!("failed to persist heartbeat history: {e}");
+        }
+
+        // --- Phase 6: Broadcast to clients (per D-11, D-13, D-14, BEAT-03, BEAT-04) ---
+        // Only broadcast when actionable OR LLM had something to say (per D-14: silent by default)
+        if should_broadcast(actionable, &digest_items) {
+            let _ = self.event_tx.send(AgentEvent::HeartbeatDigest {
+                cycle_id: cycle_id.clone(),
+                actionable,
+                digest: digest_text.clone(),
+                items: digest_items,
+                checked_at: now,
+            });
+        } else {
+            tracing::debug!(cycle_id = %cycle_id, "heartbeat quiet tick — no broadcast");
+        }
+
+        // --- Phase 7: Update custom HeartbeatItem state ---
+        {
+            let mut items = self.heartbeat_items.write().await;
+            for item in items.iter_mut() {
+                if item.enabled {
+                    item.last_run_at = Some(now);
+                }
+            }
+        }
+        self.persist_heartbeat().await;
+
+        tracing::info!(
+            cycle_id = %cycle_id,
+            actionable = actionable,
+            checks = check_results.len(),
+            duration_ms = duration_ms,
+            "heartbeat cycle complete"
+        );
+
+        Ok(())
     }
 
     pub async fn get_heartbeat_items(&self) -> Vec<HeartbeatItem> {
@@ -275,5 +605,175 @@ mod tests {
             ..AgentConfig::default()
         };
         assert_eq!(resolve_cron_from_config(&config), "30 2 * * *");
+    }
+
+    // ── should_broadcast tests (D-14: silent default) ───────────────────
+
+    #[test]
+    fn broadcast_when_actionable_true_and_items_present() {
+        let items = vec![HeartbeatDigestItem {
+            priority: 1,
+            check_type: HeartbeatCheckType::StaleTodos,
+            title: "Stale todo".into(),
+            suggestion: "Review it".into(),
+        }];
+        assert!(should_broadcast(true, &items));
+    }
+
+    #[test]
+    fn broadcast_when_actionable_true_but_no_items() {
+        assert!(should_broadcast(true, &[]));
+    }
+
+    #[test]
+    fn broadcast_when_not_actionable_but_items_present() {
+        let items = vec![HeartbeatDigestItem {
+            priority: 3,
+            check_type: HeartbeatCheckType::RepoChanges,
+            title: "Repo change".into(),
+            suggestion: "Check it".into(),
+        }];
+        assert!(should_broadcast(false, &items));
+    }
+
+    #[test]
+    fn no_broadcast_when_not_actionable_and_no_items() {
+        // D-14: silent default — no event broadcast
+        assert!(!should_broadcast(false, &[]));
+    }
+
+    // ── heartbeat_persistence_status tests (Pitfall 4) ──────────────────
+
+    #[test]
+    fn persistence_status_completed_when_synthesis_present() {
+        assert_eq!(
+            heartbeat_persistence_status(Some("LLM response text")),
+            "completed"
+        );
+    }
+
+    #[test]
+    fn persistence_status_failed_when_synthesis_none() {
+        assert_eq!(heartbeat_persistence_status(None), "synthesis_failed");
+    }
+
+    // ── is_custom_item_due tests ────────────────────────────────────────
+
+    #[test]
+    fn custom_item_due_when_never_run() {
+        // last_run_at=None → always due
+        assert!(is_custom_item_due(100_000_000, None, 15, 30));
+    }
+
+    #[test]
+    fn custom_item_due_when_interval_elapsed() {
+        let now = 100_000_000;
+        let last = now - (16 * 60 * 1000); // 16 minutes ago
+        // item_interval=15min → 15*60*1000=900_000 < 960_000 elapsed → due
+        assert!(is_custom_item_due(now, Some(last), 15, 30));
+    }
+
+    #[test]
+    fn custom_item_not_due_when_interval_not_elapsed() {
+        let now = 100_000_000;
+        let last = now - (10 * 60 * 1000); // 10 minutes ago
+        // item_interval=15min → not enough time elapsed → not due
+        assert!(!is_custom_item_due(now, Some(last), 15, 30));
+    }
+
+    #[test]
+    fn custom_item_uses_global_interval_when_item_interval_zero() {
+        let now = 100_000_000;
+        let last = now - (31 * 60 * 1000); // 31 minutes ago
+        // item_interval=0, global=30min → 30*60*1000=1_800_000 < 1_860_000 elapsed → due
+        assert!(is_custom_item_due(now, Some(last), 0, 30));
+    }
+
+    #[test]
+    fn custom_item_not_due_with_global_interval() {
+        let now = 100_000_000;
+        let last = now - (20 * 60 * 1000); // 20 minutes ago
+        // item_interval=0, global=30min → not enough time elapsed → not due
+        assert!(!is_custom_item_due(now, Some(last), 0, 30));
+    }
+
+    // ── enabled_checks tests (check gating by config) ───────────────────
+
+    #[test]
+    fn all_checks_enabled_by_default() {
+        let config = HeartbeatChecksConfig::default();
+        let checks = enabled_checks(&config);
+        assert_eq!(checks.len(), 4);
+        assert!(checks.contains(&HeartbeatCheckType::StaleTodos));
+        assert!(checks.contains(&HeartbeatCheckType::StuckGoalRuns));
+        assert!(checks.contains(&HeartbeatCheckType::UnrepliedGatewayMessages));
+        assert!(checks.contains(&HeartbeatCheckType::RepoChanges));
+    }
+
+    #[test]
+    fn only_enabled_checks_are_included() {
+        let config = HeartbeatChecksConfig {
+            stale_todos_enabled: true,
+            stuck_goals_enabled: false,
+            unreplied_messages_enabled: false,
+            repo_changes_enabled: true,
+            ..HeartbeatChecksConfig::default()
+        };
+        let checks = enabled_checks(&config);
+        assert_eq!(checks.len(), 2);
+        assert!(checks.contains(&HeartbeatCheckType::StaleTodos));
+        assert!(checks.contains(&HeartbeatCheckType::RepoChanges));
+        assert!(!checks.contains(&HeartbeatCheckType::StuckGoalRuns));
+        assert!(!checks.contains(&HeartbeatCheckType::UnrepliedGatewayMessages));
+    }
+
+    #[test]
+    fn no_checks_when_all_disabled() {
+        let config = HeartbeatChecksConfig {
+            stale_todos_enabled: false,
+            stuck_goals_enabled: false,
+            unreplied_messages_enabled: false,
+            repo_changes_enabled: false,
+            ..HeartbeatChecksConfig::default()
+        };
+        let checks = enabled_checks(&config);
+        assert!(checks.is_empty());
+    }
+
+    // ── parse_digest_items tests ────────────────────────────────────────
+
+    #[test]
+    fn parse_digest_items_from_valid_response() {
+        let response = "\
+ACTIONABLE: true
+DIGEST: 2 items need attention
+ITEMS:
+- PRIORITY:1 TYPE:stale_todos TITLE:Stale todo found SUGGESTION:Review pending items
+- PRIORITY:3 TYPE:repo_changes TITLE:Uncommitted changes SUGGESTION:Commit or stash";
+
+        let items = parse_digest_items(response);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].priority, 1);
+        assert_eq!(items[0].check_type, HeartbeatCheckType::StaleTodos);
+        assert_eq!(items[0].title, "Stale todo found");
+        assert_eq!(items[0].suggestion, "Review pending items");
+        assert_eq!(items[1].priority, 3);
+        assert_eq!(items[1].check_type, HeartbeatCheckType::RepoChanges);
+    }
+
+    #[test]
+    fn parse_digest_items_empty_when_no_items_section() {
+        let response = "ACTIONABLE: false\nDIGEST: All systems normal.";
+        let items = parse_digest_items(response);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn parse_digest_items_handles_camelcase_types() {
+        let response =
+            "- PRIORITY:2 TYPE:StuckGoalRuns TITLE:Goal stuck SUGGESTION:Cancel it";
+        let items = parse_digest_items(response);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].check_type, HeartbeatCheckType::StuckGoalRuns);
     }
 }
