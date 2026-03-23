@@ -107,7 +107,7 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
-- [ ] 05-01-PLAN.md — Foundation types, config, SQLite tables, idle detection and decay pure functions
+- [x] 05-01-PLAN.md — Foundation types, config, SQLite tables, idle detection and decay pure functions
 - [ ] 05-02-PLAN.md — Core consolidation engine: trace review, tombstone ops, heartbeat Phase 10 wiring
 - [ ] 05-03-PLAN.md — Cross-session continuity: goal run pausing, context restoration, learning store persistence
 - [ ] 05-04-PLAN.md — Heuristic system prompt injection and LLM-powered memory refinement
