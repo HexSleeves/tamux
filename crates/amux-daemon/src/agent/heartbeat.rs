@@ -8,6 +8,7 @@
 //! - Persists every cycle to SQLite regardless of LLM outcome (D-12/Pitfall 4)
 
 use super::*;
+use crate::history::AuditEntryRow;
 use chrono::Timelike;
 
 /// Pure function: check if a given hour falls within a quiet window.
@@ -135,6 +136,16 @@ pub(super) fn parse_digest_items(response: &str) -> Vec<HeartbeatDigestItem> {
             })
         })
         .collect()
+}
+
+/// Map a `HeartbeatCheckType` to its action_type string for audit entries.
+fn check_type_to_action_type(check_type: &HeartbeatCheckType) -> &'static str {
+    match check_type {
+        HeartbeatCheckType::StaleTodos => "stale_todo",
+        HeartbeatCheckType::StuckGoalRuns => "stuck_goal",
+        HeartbeatCheckType::UnrepliedGatewayMessages => "unreplied_message",
+        HeartbeatCheckType::RepoChanges => "repo_change",
+    }
 }
 
 /// Build which built-in checks should run based on `HeartbeatChecksConfig` enabled flags.
@@ -356,19 +367,115 @@ impl AgentEngine {
         }
 
         // --- Phase 6: Broadcast to clients (per D-11, D-13, D-14, BEAT-03, BEAT-04) ---
+        // Build composite explanation from digest items per D-01.
+        let digest_explanation = if digest_items.is_empty() {
+            None
+        } else if digest_items.len() == 1 {
+            let item = &digest_items[0];
+            let action_type = check_type_to_action_type(&item.check_type);
+            let item_data = serde_json::json!({
+                "title": item.title,
+                "hours": 0,
+                "count": 1,
+                "source": "heartbeat",
+                "repo": "unknown",
+            });
+            match generate_explanation(action_type, &item_data) {
+                ExplanationResult::Template(s) => Some(s),
+                ExplanationResult::NeedsLlm => Some(item.title.clone()),
+            }
+        } else {
+            let mut parts = Vec::new();
+            for item in &digest_items {
+                let action_type = check_type_to_action_type(&item.check_type);
+                let item_data = serde_json::json!({
+                    "title": item.title,
+                    "hours": 0,
+                    "count": 1,
+                    "source": "heartbeat",
+                    "repo": "unknown",
+                });
+                match generate_explanation(action_type, &item_data) {
+                    ExplanationResult::Template(s) => parts.push(s),
+                    ExplanationResult::NeedsLlm => parts.push(item.title.clone()),
+                }
+            }
+            Some(format!("Found {} items: {}", digest_items.len(), parts.join("; ")))
+        };
+
         // Only broadcast when actionable OR LLM had something to say (per D-14: silent by default)
         if should_broadcast(actionable, &digest_items) {
             let _ = self.event_tx.send(AgentEvent::HeartbeatDigest {
                 cycle_id: cycle_id.clone(),
                 actionable,
                 digest: digest_text.clone(),
-                items: digest_items,
+                items: digest_items.clone(),
                 checked_at: now,
-                explanation: None, // Populated in Plan 02 Task 1
-                confidence: None,  // Populated in Plan 02 Task 1
+                explanation: digest_explanation,
+                confidence: None, // Heartbeat checks don't have confidence
             });
         } else {
             tracing::debug!(cycle_id = %cycle_id, "heartbeat quiet tick — no broadcast");
+        }
+
+        // --- Phase 6b: Create audit entries for each actionable digest item ---
+        if config.audit.scope.heartbeat {
+            for (idx, item) in digest_items.iter().enumerate() {
+                let action_type = check_type_to_action_type(&item.check_type);
+                let item_data = serde_json::json!({
+                    "title": item.title,
+                    "suggestion": item.suggestion,
+                    "priority": item.priority,
+                    "check_type": format!("{:?}", item.check_type),
+                });
+                let summary = match generate_explanation(action_type, &item_data) {
+                    ExplanationResult::Template(s) => s,
+                    ExplanationResult::NeedsLlm => item.title.clone(),
+                };
+                let entry = AuditEntryRow {
+                    id: format!("audit-hb-{}-{}", cycle_id, idx),
+                    timestamp: now as i64,
+                    action_type: action_type.to_string(),
+                    summary: summary.clone(),
+                    explanation: Some(summary.clone()),
+                    confidence: None,
+                    confidence_band: None,
+                    causal_trace_id: None,
+                    thread_id: None,
+                    goal_run_id: None,
+                    task_id: None,
+                    raw_data_json: serde_json::to_string(&item).ok(),
+                };
+                if let Err(e) = self.history.insert_action_audit(&entry).await {
+                    tracing::warn!(cycle_id = %cycle_id, idx = idx, "failed to insert heartbeat audit entry: {e}");
+                }
+                let _ = self.event_tx.send(AgentEvent::AuditAction {
+                    id: entry.id.clone(),
+                    timestamp: now,
+                    action_type: entry.action_type.clone(),
+                    summary: entry.summary.clone(),
+                    explanation: entry.explanation.clone(),
+                    confidence: None,
+                    confidence_band: None,
+                    causal_trace_id: None,
+                    thread_id: None,
+                });
+            }
+
+            // Piggyback audit cleanup on heartbeat cycle per Pitfall 4.
+            match self
+                .history
+                .cleanup_action_audit(config.audit.max_entries, config.audit.max_age_days)
+                .await
+            {
+                Ok(deleted) if deleted > 0 => {
+                    tracing::info!(deleted = deleted, "audit trail cleanup removed old entries");
+                }
+                Err(e) => {
+                    tracing::warn!("audit trail cleanup failed: {e}");
+                }
+                _ => {}
+            }
         }
 
         // --- Phase 7: Update custom HeartbeatItem state ---

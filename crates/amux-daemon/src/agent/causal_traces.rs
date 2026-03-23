@@ -1,6 +1,7 @@
 //! Runtime causal-trace helpers for live decision capture.
 
 use super::*;
+use crate::history::AuditEntryRow;
 
 impl AgentEngine {
     pub(super) async fn persist_skill_selection_causal_trace(
@@ -141,6 +142,52 @@ impl AgentEngine {
             trace.created_at,
         ).await {
             tracing::warn!(thread_id = %thread_id, skill = %selected_variant.skill_name, variant = %selected_variant.variant_name, "failed to persist skill-selection causal trace: {error}");
+        }
+
+        // Create audit entry for skill selection per D-06/TRNS-03.
+        let config = self.config.read().await.clone();
+        if config.audit.scope.skill {
+            let confidence_val = trace.selected.estimated_success_prob;
+            let data_json = serde_json::json!({
+                "skill_name": selected_variant.skill_name,
+                "confidence": confidence_val.map(|p| (p * 100.0).round() as u64).unwrap_or(0),
+                "rejected_count": trace.rejected_options.len(),
+            });
+            let summary = match generate_explanation("skill_selection", &data_json) {
+                ExplanationResult::Template(s) => s,
+                ExplanationResult::NeedsLlm => format!(
+                    "Selected skill \"{}\" for thread {}",
+                    selected_variant.skill_name, thread_id
+                ),
+            };
+            let audit_entry = AuditEntryRow {
+                id: format!("audit-skill-{}", trace.trace_id),
+                timestamp: trace.created_at as i64,
+                action_type: "skill".to_string(),
+                summary: summary.clone(),
+                explanation: Some(summary),
+                confidence: confidence_val,
+                confidence_band: confidence_val.map(|p| confidence_band(p).as_str().to_string()),
+                causal_trace_id: Some(trace.trace_id.clone()),
+                thread_id: Some(thread_id.to_string()),
+                goal_run_id: goal_run_id.map(str::to_string),
+                task_id: task_id.map(str::to_string),
+                raw_data_json: serde_json::to_string(&data_json).ok(),
+            };
+            if let Err(e) = self.history.insert_action_audit(&audit_entry).await {
+                tracing::warn!(thread_id = %thread_id, "failed to insert skill audit entry: {e}");
+            }
+            let _ = self.event_tx.send(AgentEvent::AuditAction {
+                id: audit_entry.id,
+                timestamp: trace.created_at,
+                action_type: audit_entry.action_type,
+                summary: audit_entry.summary,
+                explanation: audit_entry.explanation,
+                confidence: audit_entry.confidence,
+                confidence_band: audit_entry.confidence_band,
+                causal_trace_id: audit_entry.causal_trace_id,
+                thread_id: audit_entry.thread_id,
+            });
         }
     }
 
@@ -745,6 +792,50 @@ impl AgentEngine {
             trace.created_at,
         ).await {
             tracing::warn!(thread_id = %thread_id, tool = %tool_call.function.name, "failed to persist causal trace: {error}");
+        }
+
+        // Create audit entry for tool selection per D-06/TRNS-03.
+        if config.audit.scope.tool {
+            let confidence_val = trace.selected.estimated_success_prob;
+            let data_json = serde_json::json!({
+                "tool_name": tool_call.function.name,
+                "session_id": thread_id,
+            });
+            let summary = match generate_explanation("tool_execution", &data_json) {
+                ExplanationResult::Template(s) => s,
+                ExplanationResult::NeedsLlm => format!(
+                    "Executed tool \"{}\" in thread {}",
+                    tool_call.function.name, thread_id
+                ),
+            };
+            let audit_entry = AuditEntryRow {
+                id: format!("audit-tool-{}", trace.trace_id),
+                timestamp: trace.created_at as i64,
+                action_type: "tool".to_string(),
+                summary: summary.clone(),
+                explanation: Some(summary),
+                confidence: confidence_val,
+                confidence_band: confidence_val.map(|p| confidence_band(p).as_str().to_string()),
+                causal_trace_id: Some(trace.trace_id.clone()),
+                thread_id: Some(thread_id.to_string()),
+                goal_run_id: goal_run_id.map(str::to_string),
+                task_id: task_id.map(str::to_string),
+                raw_data_json: serde_json::to_string(&data_json).ok(),
+            };
+            if let Err(e) = self.history.insert_action_audit(&audit_entry).await {
+                tracing::warn!(thread_id = %thread_id, "failed to insert tool audit entry: {e}");
+            }
+            let _ = self.event_tx.send(AgentEvent::AuditAction {
+                id: audit_entry.id,
+                timestamp: trace.created_at,
+                action_type: audit_entry.action_type,
+                summary: audit_entry.summary,
+                explanation: audit_entry.explanation,
+                confidence: audit_entry.confidence,
+                confidence_band: audit_entry.confidence_band,
+                causal_trace_id: audit_entry.causal_trace_id,
+                thread_id: audit_entry.thread_id,
+            });
         }
     }
 
