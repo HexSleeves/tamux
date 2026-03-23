@@ -57,7 +57,7 @@ Plans:
 - [x] 02-01-PLAN.md — Heartbeat type contracts, config extension, and four built-in check functions
 - [x] 02-02-PLAN.md — Cron scheduling, quiet hours/DND, and SQLite heartbeat_history persistence
 - [x] 02-03-PLAN.md — LLM synthesis orchestration, digest broadcasting, and gateway_loop wiring
-- [ ] 02-04-PLAN.md — Gap closure: wire HeartbeatDigest rendering in TUI and Electron clients
+- [x] 02-04-PLAN.md — Gap closure: wire HeartbeatDigest rendering in TUI and Electron clients
 
 ### Phase 3: Transparent Autonomy
 **Goal**: Users trust the agent's autonomous actions because every action is explained, auditable, and escalation reasoning is visible
