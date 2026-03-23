@@ -21,6 +21,7 @@ use crate::history::{HistoryStore, SkillVariantRecord};
 use crate::scrub::scrub_sensitive;
 use crate::session_manager::SessionManager;
 
+use super::gateway_format;
 use super::memory::{apply_memory_update, MemoryTarget, MemoryUpdateMode, MemoryWriteContext};
 use super::semantic_env::{execute_semantic_query, infer_workspace_context_tags};
 use super::session_recall::execute_session_search as run_session_search;
@@ -4349,6 +4350,14 @@ fn resolve_key_sequence(key: &str) -> Vec<u8> {
 // Gateway messaging — execute via CLI subprocess
 // ---------------------------------------------------------------------------
 
+/// Helper: get current epoch millis for last_response_at tracking.
+fn now_epoch_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
 async fn execute_gateway_message(
     tool_name: &str,
     args: &serde_json::Value,
@@ -4384,23 +4393,76 @@ async fn execute_gateway_message(
                     "Slack token not configured in gateway settings"
                 ));
             }
-            tracing::info!(platform = "slack", channel = %channel, message = %message, "gateway: sending message");
-            let resp = http_client
-                .post("https://slack.com/api/chat.postMessage")
-                .bearer_auth(&slack_token)
-                .json(&serde_json::json!({ "channel": channel, "text": message }))
-                .send()
-                .await?;
-            let body: serde_json::Value = resp.json().await?;
-            if body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
-                Ok(format!("Slack message sent to #{channel}"))
-            } else {
-                let err = body
-                    .get("error")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown error");
-                Err(anyhow::anyhow!("Slack API error: {err}"))
+
+            // Rate limiting: check Slack rate limiter before sending
+            {
+                let mut gw_lock = agent.gateway_state.lock().await;
+                if let Some(gw) = gw_lock.as_mut() {
+                    if let Some(wait) = gw.slack_rate_limiter.try_acquire() {
+                        drop(gw_lock);
+                        tokio::time::sleep(wait).await;
+                    }
+                }
             }
+
+            // Format conversion: markdown to Slack mrkdwn
+            let formatted = gateway_format::markdown_to_slack_mrkdwn(message);
+
+            // Chunking: split long messages at Slack character limit
+            let chunks = gateway_format::chunk_message(&formatted, gateway_format::SLACK_MAX_CHARS);
+
+            // Thread context: auto-inject thread_ts from reply_contexts or agent args
+            let thread_ts = args
+                .get("thread_ts")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    // Look up auto-injected thread context from gateway state
+                    let gw_lock = agent.gateway_state.try_lock().ok()?;
+                    let gw = gw_lock.as_ref()?;
+                    let ctx = gw.reply_contexts.get(&format!("Slack:{channel}"))?;
+                    ctx.slack_thread_ts.clone()
+                });
+
+            tracing::info!(
+                platform = "slack",
+                channel = %channel,
+                chunks = chunks.len(),
+                thread_ts = ?thread_ts,
+                "gateway: sending message"
+            );
+
+            for chunk in &chunks {
+                let mut payload = serde_json::json!({ "channel": channel, "text": chunk });
+                if let Some(ref ts) = thread_ts {
+                    payload["thread_ts"] = serde_json::json!(ts);
+                }
+                let resp = http_client
+                    .post("https://slack.com/api/chat.postMessage")
+                    .bearer_auth(&slack_token)
+                    .json(&payload)
+                    .send()
+                    .await?;
+                let body: serde_json::Value = resp.json().await?;
+                if body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+                    let err = body
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown error");
+                    return Err(anyhow::anyhow!("Slack API error: {err}"));
+                }
+            }
+
+            // Update last_response_at for unreplied message detection
+            {
+                let mut gw_lock = agent.gateway_state.lock().await;
+                if let Some(gw) = gw_lock.as_mut() {
+                    gw.last_response_at
+                        .insert(format!("Slack:{channel}"), now_epoch_millis());
+                }
+            }
+
+            Ok(format!("Slack message sent to #{channel}"))
         }
         "send_discord_message" => {
             let mut channel_id = args
@@ -4458,31 +4520,91 @@ async fn execute_gateway_message(
                 return Err(anyhow::anyhow!("Either channel_id or user_id is required"));
             };
 
-            tracing::info!(platform = "discord", channel = %target_channel, message = %message, "gateway: sending message");
+            // Rate limiting: check Discord rate limiter before sending
+            {
+                let mut gw_lock = agent.gateway_state.lock().await;
+                if let Some(gw) = gw_lock.as_mut() {
+                    if let Some(wait) = gw.discord_rate_limiter.try_acquire() {
+                        drop(gw_lock);
+                        tokio::time::sleep(wait).await;
+                    }
+                }
+            }
+
+            // Format conversion: markdown to Discord format (passthrough)
+            let formatted = gateway_format::markdown_to_discord(message);
+
+            // Chunking: split long messages at Discord character limit
+            let chunks =
+                gateway_format::chunk_message(&formatted, gateway_format::DISCORD_MAX_CHARS);
+
+            // Thread context: auto-inject message_reference from reply_contexts or agent args
+            let reply_msg_id = args
+                .get("reply_to_message_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    let gw_lock = agent.gateway_state.try_lock().ok()?;
+                    let gw = gw_lock.as_ref()?;
+                    let ctx =
+                        gw.reply_contexts.get(&format!("Discord:{target_channel}"))?;
+                    ctx.discord_message_id.clone()
+                });
+
+            tracing::info!(
+                platform = "discord",
+                channel = %target_channel,
+                chunks = chunks.len(),
+                reply_to = ?reply_msg_id,
+                "gateway: sending message"
+            );
+
             let discord_auth = discord_authorization_header(&discord_token);
             if discord_auth.is_empty() {
                 return Err(anyhow::anyhow!(
                     "Discord token not configured in gateway settings"
                 ));
             }
-            let resp = http_client
-                .post(format!(
-                    "https://discord.com/api/v10/channels/{target_channel}/messages"
-                ))
-                .header("Authorization", discord_auth)
-                .json(&serde_json::json!({ "content": message }))
-                .send()
-                .await?;
 
-            if resp.status().is_success() {
-                Ok(format!("Discord message sent to {target_channel}"))
-            } else {
-                let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                Err(anyhow::anyhow!(
-                    "Discord API error (status {status}): {body}"
-                ))
+            for (i, chunk) in chunks.iter().enumerate() {
+                let mut payload = serde_json::json!({ "content": chunk });
+                // Add message_reference to the FIRST chunk only (per D-08/Pitfall 3)
+                if i == 0 {
+                    if let Some(ref mid) = reply_msg_id {
+                        payload["message_reference"] = serde_json::json!({
+                            "message_id": mid,
+                            "fail_if_not_exists": false
+                        });
+                    }
+                }
+                let resp = http_client
+                    .post(format!(
+                        "https://discord.com/api/v10/channels/{target_channel}/messages"
+                    ))
+                    .header("Authorization", &discord_auth)
+                    .json(&payload)
+                    .send()
+                    .await?;
+
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    return Err(anyhow::anyhow!(
+                        "Discord API error (status {status}): {body}"
+                    ));
+                }
             }
+
+            // Update last_response_at for unreplied message detection
+            {
+                let mut gw_lock = agent.gateway_state.lock().await;
+                if let Some(gw) = gw_lock.as_mut() {
+                    gw.last_response_at
+                        .insert(format!("Discord:{target_channel}"), now_epoch_millis());
+                }
+            }
+
+            Ok(format!("Discord message sent to {target_channel}"))
         }
         "send_telegram_message" => {
             let chat_id = args
@@ -4501,23 +4623,140 @@ async fn execute_gateway_message(
                     "Telegram token not configured in gateway settings"
                 ));
             }
-            tracing::info!(platform = "telegram", chat_id = %chat_id, message = %message, "gateway: sending message");
-            let url = format!("https://api.telegram.org/bot{telegram_token}/sendMessage");
-            let resp = http_client
-                .post(&url)
-                .json(&serde_json::json!({ "chat_id": chat_id, "text": message }))
-                .send()
-                .await?;
-            let body: serde_json::Value = resp.json().await?;
-            if body.get("ok").and_then(|v| v.as_bool()) == Some(true) {
-                Ok(format!("Telegram message sent to {chat_id}"))
-            } else {
-                let desc = body
-                    .get("description")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown error");
-                Err(anyhow::anyhow!("Telegram API error: {desc}"))
+
+            // Rate limiting: check Telegram rate limiter before sending
+            {
+                let mut gw_lock = agent.gateway_state.lock().await;
+                if let Some(gw) = gw_lock.as_mut() {
+                    if let Some(wait) = gw.telegram_rate_limiter.try_acquire() {
+                        drop(gw_lock);
+                        tokio::time::sleep(wait).await;
+                    }
+                }
             }
+
+            // Format conversion: markdown to Telegram MarkdownV2
+            let formatted = gateway_format::markdown_to_telegram_v2(message);
+
+            // Chunking: split long messages at Telegram character limit
+            let chunks =
+                gateway_format::chunk_message(&formatted, gateway_format::TELEGRAM_MAX_CHARS);
+
+            // Thread context: auto-inject reply_to_message_id from reply_contexts or agent args
+            let reply_to_id = args
+                .get("reply_to_message_id")
+                .and_then(|v| v.as_i64())
+                .or_else(|| {
+                    let gw_lock = agent.gateway_state.try_lock().ok()?;
+                    let gw = gw_lock.as_ref()?;
+                    let ctx = gw.reply_contexts.get(&format!("Telegram:{chat_id}"))?;
+                    ctx.telegram_message_id
+                });
+
+            tracing::info!(
+                platform = "telegram",
+                chat_id = %chat_id,
+                chunks = chunks.len(),
+                reply_to = ?reply_to_id,
+                "gateway: sending message"
+            );
+
+            let url = format!("https://api.telegram.org/bot{telegram_token}/sendMessage");
+
+            for (i, chunk) in chunks.iter().enumerate() {
+                let mut payload = serde_json::json!({
+                    "chat_id": chat_id,
+                    "text": chunk,
+                    "parse_mode": "MarkdownV2"
+                });
+                // Add reply_to_message_id to the FIRST chunk only
+                if i == 0 {
+                    if let Some(mid) = reply_to_id {
+                        payload["reply_to_message_id"] = serde_json::json!(mid);
+                    }
+                }
+
+                let resp = http_client
+                    .post(&url)
+                    .json(&payload)
+                    .send()
+                    .await?;
+                let body: serde_json::Value = resp.json().await?;
+
+                if body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+                    let desc = body
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown error");
+
+                    // Pitfall 2 fallback: if Telegram can't parse MarkdownV2 entities,
+                    // retry as plain text without parse_mode
+                    if desc.contains("can't parse entities") {
+                        tracing::warn!(
+                            platform = "telegram",
+                            chat_id = %chat_id,
+                            "MarkdownV2 parse failed, falling back to plain text"
+                        );
+                        let plain = gateway_format::markdown_to_plain(message);
+                        let plain_chunks = gateway_format::chunk_message(
+                            &plain,
+                            gateway_format::TELEGRAM_MAX_CHARS,
+                        );
+                        for (j, plain_chunk) in plain_chunks.iter().enumerate() {
+                            let mut plain_payload = serde_json::json!({
+                                "chat_id": chat_id,
+                                "text": plain_chunk
+                            });
+                            if j == 0 {
+                                if let Some(mid) = reply_to_id {
+                                    plain_payload["reply_to_message_id"] =
+                                        serde_json::json!(mid);
+                                }
+                            }
+                            let retry_resp = http_client
+                                .post(&url)
+                                .json(&plain_payload)
+                                .send()
+                                .await?;
+                            let retry_body: serde_json::Value = retry_resp.json().await?;
+                            if retry_body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+                                let retry_desc = retry_body
+                                    .get("description")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown error");
+                                return Err(anyhow::anyhow!(
+                                    "Telegram API error (plain text fallback): {retry_desc}"
+                                ));
+                            }
+                        }
+
+                        // Update last_response_at after successful plain text fallback
+                        {
+                            let mut gw_lock = agent.gateway_state.lock().await;
+                            if let Some(gw) = gw_lock.as_mut() {
+                                gw.last_response_at
+                                    .insert(format!("Telegram:{chat_id}"), now_epoch_millis());
+                            }
+                        }
+                        return Ok(format!(
+                            "Telegram message sent to {chat_id} (plain text fallback)"
+                        ));
+                    }
+
+                    return Err(anyhow::anyhow!("Telegram API error: {desc}"));
+                }
+            }
+
+            // Update last_response_at for unreplied message detection
+            {
+                let mut gw_lock = agent.gateway_state.lock().await;
+                if let Some(gw) = gw_lock.as_mut() {
+                    gw.last_response_at
+                        .insert(format!("Telegram:{chat_id}"), now_epoch_millis());
+                }
+            }
+
+            Ok(format!("Telegram message sent to {chat_id}"))
         }
         "send_whatsapp_message" => {
             let phone = args
