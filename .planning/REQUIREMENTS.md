@@ -55,10 +55,10 @@ Requirements for the "Living Agent" milestone. Each maps to roadmap phases.
 
 ### Transparent Autonomy
 
-- [ ] **TRNS-01**: Every autonomous heartbeat action includes a simple explanation: "I did X because Y"
-- [ ] **TRNS-02**: Causal trace summaries available on demand: user can ask "why did you do that?" and get a clear answer
-- [ ] **TRNS-03**: Action audit feed: chronological list of all autonomous actions accessible from any client
-- [ ] **TRNS-04**: Confidence signals: agent communicates its certainty level on non-trivial decisions
+- [x] **TRNS-01**: Every autonomous heartbeat action includes a simple explanation: "I did X because Y"
+- [x] **TRNS-02**: Causal trace summaries available on demand: user can ask "why did you do that?" and get a clear answer
+- [x] **TRNS-03**: Action audit feed: chronological list of all autonomous actions accessible from any client
+- [x] **TRNS-04**: Confidence signals: agent communicates its certainty level on non-trivial decisions
 - [ ] **TRNS-05**: Escalation visibility: when agent escalates (L0→L1→L2→L3), user sees the progression and reasoning
 
 ### Progressive UX
@@ -175,10 +175,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SKIL-08 | Phase 7 | Pending |
 | SKIL-09 | Phase 7 | Pending |
 | SKIL-10 | Phase 7 | Pending |
-| TRNS-01 | Phase 3 | Pending |
-| TRNS-02 | Phase 3 | Pending |
-| TRNS-03 | Phase 3 | Pending |
-| TRNS-04 | Phase 3 | Pending |
+| TRNS-01 | Phase 3 | Complete |
+| TRNS-02 | Phase 3 | Complete |
+| TRNS-03 | Phase 3 | Complete |
+| TRNS-04 | Phase 3 | Complete |
 | TRNS-05 | Phase 3 | Pending |
 | PRUX-01 | Phase 10 | Pending |
 | PRUX-02 | Phase 10 | Pending |

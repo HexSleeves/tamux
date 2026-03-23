@@ -73,7 +73,7 @@ Plans:
 **UI hint**: yes
 
 Plans:
-- [ ] 03-01-PLAN.md — Daemon foundation: explanation module, action_audit table, AuditAction event, IPC messages
+- [x] 03-01-PLAN.md — Daemon foundation: explanation module, action_audit table, AuditAction event, IPC messages
 - [ ] 03-02-PLAN.md — Daemon integration: heartbeat/escalation/causal-trace audit entry wiring
 - [ ] 03-03-PLAN.md — TUI audit feed: AuditState reducer, audit widget, escalation status line
 - [ ] 03-04-PLAN.md — Electron audit panel: auditStore, AuditPanel components, event listener
