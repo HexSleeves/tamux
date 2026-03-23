@@ -85,7 +85,7 @@ Requirements for the "Living Agent" milestone. Each maps to roadmap phases.
 - [x] **GATE-03**: Daemon-side Telegram gateway: real `getUpdates` long-polling + `sendMessage` via reqwest (not stubs)
 - [x] **GATE-04**: Unified gateway config: single configuration surface for both daemon and Electron gateway paths
 - [x] **GATE-05**: Gateway health monitoring: detect disconnections, auto-reconnect, surface status to user
-- [ ] **GATE-06**: Gateway messages routed through heartbeat: unreplied messages surfaced as proactive items
+- [x] **GATE-06**: Gateway messages routed through heartbeat: unreplied messages surfaced as proactive items
 
 ## v2 Requirements
 
@@ -196,7 +196,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GATE-03 | Phase 8 | Complete |
 | GATE-04 | Phase 8 | Complete |
 | GATE-05 | Phase 8 | Complete |
-| GATE-06 | Phase 8 | Pending |
+| GATE-06 | Phase 8 | Complete |
 
 **Coverage:**
 - v1 requirements: 56 total
