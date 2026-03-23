@@ -1081,6 +1081,12 @@ pub struct AgentConfig {
     /// Memory consolidation controls (Phase 5).
     #[serde(default)]
     pub consolidation: ConsolidationConfig,
+    /// Skill discovery thresholds (Phase 6).
+    #[serde(default)]
+    pub skill_discovery: SkillDiscoveryConfig,
+    /// Skill promotion thresholds (Phase 6).
+    #[serde(default)]
+    pub skill_promotion: SkillPromotionConfig,
     /// Additional persisted agent settings used by richer frontends and the TUI.
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -1316,6 +1322,130 @@ impl Default for ConsolidationConfig {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Skill maturity lifecycle (Phase 6 — skill discovery)
+// ---------------------------------------------------------------------------
+
+/// Maturity stage of a skill variant as it progresses through discovery.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillMaturityStatus {
+    Draft,
+    Testing,
+    Active,
+    Proven,
+    #[serde(rename = "promoted_to_canonical")]
+    PromotedToCanonical,
+}
+
+impl SkillMaturityStatus {
+    /// Return the snake_case string representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Testing => "testing",
+            Self::Active => "active",
+            Self::Proven => "proven",
+            Self::PromotedToCanonical => "promoted_to_canonical",
+        }
+    }
+
+    /// Parse from a status string, supporting both snake_case and legacy kebab-case.
+    pub fn from_status_str(s: &str) -> Option<Self> {
+        match s {
+            "draft" => Some(Self::Draft),
+            "testing" => Some(Self::Testing),
+            "active" => Some(Self::Active),
+            "proven" => Some(Self::Proven),
+            "promoted_to_canonical" | "promoted-to-canonical" => Some(Self::PromotedToCanonical),
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Skill discovery config (Phase 6)
+// ---------------------------------------------------------------------------
+
+/// Thresholds for deciding whether an execution trace qualifies as a skill candidate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillDiscoveryConfig {
+    /// Minimum number of tool calls in the trace to consider it complex enough.
+    #[serde(default = "default_sd_min_tool_count")]
+    pub min_tool_count: usize,
+    /// Minimum number of replan events to indicate adaptive problem-solving.
+    #[serde(default = "default_sd_min_replan_count")]
+    pub min_replan_count: u32,
+    /// Minimum quality score (0.0-1.0) to consider the trace successful enough.
+    #[serde(default = "default_sd_min_quality_score")]
+    pub min_quality_score: f64,
+    /// Jaccard similarity threshold below which a sequence is considered novel.
+    #[serde(default = "default_sd_novelty_threshold")]
+    pub novelty_similarity_threshold: f64,
+}
+
+fn default_sd_min_tool_count() -> usize {
+    8
+}
+fn default_sd_min_replan_count() -> u32 {
+    1
+}
+fn default_sd_min_quality_score() -> f64 {
+    0.8
+}
+fn default_sd_novelty_threshold() -> f64 {
+    0.7
+}
+
+impl Default for SkillDiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            min_tool_count: default_sd_min_tool_count(),
+            min_replan_count: default_sd_min_replan_count(),
+            min_quality_score: default_sd_min_quality_score(),
+            novelty_similarity_threshold: default_sd_novelty_threshold(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Skill promotion config (Phase 6)
+// ---------------------------------------------------------------------------
+
+/// Success thresholds for promoting a skill variant through maturity stages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillPromotionConfig {
+    /// Successful uses required to advance Testing -> Active.
+    #[serde(default = "default_sp_testing_to_active")]
+    pub testing_to_active: u32,
+    /// Successful uses required to advance Active -> Proven.
+    #[serde(default = "default_sp_active_to_proven")]
+    pub active_to_proven: u32,
+    /// Successful uses required to advance Proven -> PromotedToCanonical.
+    #[serde(default = "default_sp_proven_to_canonical")]
+    pub proven_to_canonical: u32,
+}
+
+fn default_sp_testing_to_active() -> u32 {
+    3
+}
+fn default_sp_active_to_proven() -> u32 {
+    5
+}
+fn default_sp_proven_to_canonical() -> u32 {
+    10
+}
+
+impl Default for SkillPromotionConfig {
+    fn default() -> Self {
+        Self {
+            testing_to_active: default_sp_testing_to_active(),
+            active_to_proven: default_sp_active_to_proven(),
+            proven_to_canonical: default_sp_proven_to_canonical(),
+        }
+    }
+}
+
 /// Outcome of a single consolidation tick.
 #[derive(Debug, Clone, Default)]
 pub struct ConsolidationResult {
@@ -1324,6 +1454,11 @@ pub struct ConsolidationResult {
     pub tombstones_purged: usize,
     pub facts_refined: usize,
     pub skipped_reason: Option<String>,
+    /// Skill discovery fields (Phase 6).
+    pub skill_candidates_flagged: usize,
+    pub skills_drafted: usize,
+    pub skills_tested: usize,
+    pub skills_promoted: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1499,6 +1634,8 @@ impl Default for AgentConfig {
             low_activity_frequency_factor: default_low_activity_frequency_factor(),
             ema_activity_threshold: default_ema_activity_threshold(),
             consolidation: ConsolidationConfig::default(),
+            skill_discovery: SkillDiscoveryConfig::default(),
+            skill_promotion: SkillPromotionConfig::default(),
             extra: HashMap::new(),
         }
     }
@@ -2596,6 +2733,7 @@ pub enum HeartbeatCheckType {
     StuckGoalRuns,
     UnrepliedGatewayMessages,
     RepoChanges,
+    SkillLifecycle,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -3190,5 +3328,106 @@ mod tests {
         assert_eq!(result.tombstones_purged, 0);
         assert_eq!(result.facts_refined, 0);
         assert!(result.skipped_reason.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Skill discovery type contract tests (SKIL-01, SKIL-02, SKIL-03, SKIL-05)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn skill_maturity_status_from_str_roundtrip() {
+        let draft = serde_json::from_str::<SkillMaturityStatus>(r#""draft""#).unwrap();
+        assert_eq!(draft, SkillMaturityStatus::Draft);
+        let json = serde_json::to_string(&draft).unwrap();
+        let roundtripped: SkillMaturityStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtripped, SkillMaturityStatus::Draft);
+    }
+
+    #[test]
+    fn skill_maturity_status_serde_snake_case() {
+        assert_eq!(serde_json::to_string(&SkillMaturityStatus::Draft).unwrap(), r#""draft""#);
+        assert_eq!(serde_json::to_string(&SkillMaturityStatus::Testing).unwrap(), r#""testing""#);
+        assert_eq!(serde_json::to_string(&SkillMaturityStatus::Active).unwrap(), r#""active""#);
+        assert_eq!(serde_json::to_string(&SkillMaturityStatus::Proven).unwrap(), r#""proven""#);
+        assert_eq!(
+            serde_json::to_string(&SkillMaturityStatus::PromotedToCanonical).unwrap(),
+            r#""promoted_to_canonical""#
+        );
+    }
+
+    #[test]
+    fn skill_promotion_config_defaults() {
+        let cfg = SkillPromotionConfig::default();
+        assert_eq!(cfg.testing_to_active, 3);
+        assert_eq!(cfg.active_to_proven, 5);
+        assert_eq!(cfg.proven_to_canonical, 10);
+    }
+
+    #[test]
+    fn skill_promotion_config_deserializes_from_empty_json() {
+        let cfg: SkillPromotionConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.testing_to_active, 3);
+        assert_eq!(cfg.active_to_proven, 5);
+        assert_eq!(cfg.proven_to_canonical, 10);
+    }
+
+    #[test]
+    fn skill_discovery_config_defaults() {
+        let cfg = SkillDiscoveryConfig::default();
+        assert_eq!(cfg.min_tool_count, 8);
+        assert_eq!(cfg.min_replan_count, 1);
+        assert!((cfg.min_quality_score - 0.8).abs() < f64::EPSILON);
+        assert!((cfg.novelty_similarity_threshold - 0.7).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn skill_discovery_config_deserializes_from_empty_json() {
+        let cfg: SkillDiscoveryConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.min_tool_count, 8);
+        assert_eq!(cfg.min_replan_count, 1);
+    }
+
+    #[test]
+    fn consolidation_result_has_skill_fields() {
+        let result = ConsolidationResult::default();
+        assert_eq!(result.skill_candidates_flagged, 0);
+        assert_eq!(result.skills_drafted, 0);
+        assert_eq!(result.skills_tested, 0);
+        assert_eq!(result.skills_promoted, 0);
+    }
+
+    #[test]
+    fn heartbeat_check_type_skill_lifecycle_serializes() {
+        let check = HeartbeatCheckType::SkillLifecycle;
+        assert_eq!(serde_json::to_string(&check).unwrap(), r#""skill_lifecycle""#);
+        let roundtripped: HeartbeatCheckType = serde_json::from_str(r#""skill_lifecycle""#).unwrap();
+        assert_eq!(roundtripped, HeartbeatCheckType::SkillLifecycle);
+    }
+
+    #[test]
+    fn skill_maturity_status_as_str() {
+        assert_eq!(SkillMaturityStatus::Draft.as_str(), "draft");
+        assert_eq!(SkillMaturityStatus::Testing.as_str(), "testing");
+        assert_eq!(SkillMaturityStatus::Active.as_str(), "active");
+        assert_eq!(SkillMaturityStatus::Proven.as_str(), "proven");
+        assert_eq!(SkillMaturityStatus::PromotedToCanonical.as_str(), "promoted_to_canonical");
+    }
+
+    #[test]
+    fn skill_maturity_status_from_status_str() {
+        assert_eq!(SkillMaturityStatus::from_status_str("draft"), Some(SkillMaturityStatus::Draft));
+        assert_eq!(SkillMaturityStatus::from_status_str("testing"), Some(SkillMaturityStatus::Testing));
+        assert_eq!(SkillMaturityStatus::from_status_str("active"), Some(SkillMaturityStatus::Active));
+        assert_eq!(SkillMaturityStatus::from_status_str("proven"), Some(SkillMaturityStatus::Proven));
+        assert_eq!(SkillMaturityStatus::from_status_str("promoted_to_canonical"), Some(SkillMaturityStatus::PromotedToCanonical));
+        assert_eq!(SkillMaturityStatus::from_status_str("promoted-to-canonical"), Some(SkillMaturityStatus::PromotedToCanonical));
+        assert_eq!(SkillMaturityStatus::from_status_str("bogus"), None);
+    }
+
+    #[test]
+    fn agent_config_has_skill_discovery_and_promotion() {
+        let cfg: AgentConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.skill_discovery.min_tool_count, 8);
+        assert_eq!(cfg.skill_promotion.testing_to_active, 3);
     }
 }

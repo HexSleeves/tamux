@@ -72,7 +72,7 @@ async fn select_skill_matches(
     let mut matches = Vec::new();
 
     for record in history.list_skill_variants(None, 256).await? {
-        if matches!(record.status.as_str(), "archived" | "merged") {
+        if matches!(record.status.as_str(), "archived" | "merged" | "draft") {
             continue;
         }
 

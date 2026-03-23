@@ -147,6 +147,7 @@ fn check_type_to_action_type(check_type: &HeartbeatCheckType) -> &'static str {
         HeartbeatCheckType::StuckGoalRuns => "stuck_goal",
         HeartbeatCheckType::UnrepliedGatewayMessages => "unreplied_message",
         HeartbeatCheckType::RepoChanges => "repo_change",
+        HeartbeatCheckType::SkillLifecycle => "skill_lifecycle",
     }
 }
 

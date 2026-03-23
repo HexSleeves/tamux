@@ -794,6 +794,48 @@ impl HistoryStore {
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
 
+    /// Update the maturity status of a skill variant and bump `updated_at`.
+    pub async fn update_skill_variant_status(
+        &self,
+        variant_id: &str,
+        new_status: &str,
+    ) -> Result<()> {
+        let variant_id = variant_id.to_string();
+        let new_status = new_status.to_string();
+        self.conn
+            .call(move |conn| {
+                let now = now_ts() as i64;
+                conn.execute(
+                    "UPDATE skill_variants SET status = ?2, updated_at = ?3 WHERE variant_id = ?1",
+                    params![variant_id, new_status, now],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// Retrieve a single skill variant by its `variant_id`.
+    pub async fn get_skill_variant(
+        &self,
+        variant_id: &str,
+    ) -> Result<Option<SkillVariantRecord>> {
+        let variant_id = variant_id.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.query_row(
+                    "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                     FROM skill_variants WHERE variant_id = ?1",
+                    params![variant_id],
+                    map_skill_variant_row,
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     pub async fn resolve_skill_variant(
         &self,
         skill: &str,
@@ -6092,6 +6134,70 @@ mod tests {
         // ASC order
         assert_eq!(traces[0].id, "tr-1");
         assert_eq!(traces[1].id, "tr-3");
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Skill variant status and retrieval tests (SKIL-01, SKIL-02)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn update_skill_variant_status_changes_status_and_updated_at() -> Result<()> {
+        let (store, root) = make_test_store().await?;
+        store.init_schema().await?;
+
+        // Register a skill to create a variant
+        let skill_dir = root.join("skills").join("generated").join("test-skill");
+        fs::create_dir_all(&skill_dir)?;
+        let skill_path = skill_dir.join("canonical.md");
+        fs::write(&skill_path, "# Test Skill\nA test skill document.")?;
+        let record = store.register_skill_document(&skill_path).await?;
+        assert_eq!(record.status, "active");
+
+        // Update status to "testing"
+        store.update_skill_variant_status(&record.variant_id, "testing").await?;
+
+        // Verify the status changed
+        let updated = store.get_skill_variant(&record.variant_id).await?;
+        assert!(updated.is_some());
+        let updated = updated.unwrap();
+        assert_eq!(updated.status, "testing");
+        assert!(updated.updated_at >= record.updated_at);
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_skill_variant_returns_none_for_missing() -> Result<()> {
+        let (store, root) = make_test_store().await?;
+        store.init_schema().await?;
+
+        let result = store.get_skill_variant("nonexistent-variant-id").await?;
+        assert!(result.is_none());
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_skill_variant_returns_some_for_existing() -> Result<()> {
+        let (store, root) = make_test_store().await?;
+        store.init_schema().await?;
+
+        let skill_dir = root.join("skills").join("generated").join("retrieval-skill");
+        fs::create_dir_all(&skill_dir)?;
+        let skill_path = skill_dir.join("canonical.md");
+        fs::write(&skill_path, "# Retrieval Skill\nA skill for retrieval test.")?;
+        let record = store.register_skill_document(&skill_path).await?;
+
+        let fetched = store.get_skill_variant(&record.variant_id).await?;
+        assert!(fetched.is_some());
+        let fetched = fetched.unwrap();
+        assert_eq!(fetched.variant_id, record.variant_id);
+        assert_eq!(fetched.skill_name, record.skill_name);
 
         fs::remove_dir_all(root)?;
         Ok(())
