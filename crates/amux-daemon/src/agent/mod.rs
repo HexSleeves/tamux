@@ -49,6 +49,8 @@ mod session_recall;
 mod skill_evolution;
 mod skill_discovery;
 mod skill_preflight;
+mod skill_security;
+mod skill_community;
 mod system_prompt;
 mod task_crud;
 mod task_prompt;
