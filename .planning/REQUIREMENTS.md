@@ -11,9 +11,9 @@ Requirements for the "Living Agent" milestone. Each maps to roadmap phases.
 
 - [x] **FOUN-01**: Daemon SQLite uses WAL journal mode with `busy_timeout=5000` for concurrent read/write safety
 - [x] **FOUN-02**: HistoryStore uses shared async connection via `tokio-rusqlite` 0.6.0 instead of open-per-call pattern
-- [ ] **FOUN-03**: Single `HistoryStore` instance shared via `Arc` across SessionManager, AgentEngine, and SnapshotManager
-- [ ] **FOUN-04**: Circuit breaker (`circuit_breaker.rs`) wired into `send_completion_request()` LLM call path per-provider
-- [ ] **FOUN-05**: Broadcast channel capacity configurable per-session with sensible defaults (1024+ for PTY, 512+ for agent events)
+- [x] **FOUN-03**: Single `HistoryStore` instance shared via `Arc` across SessionManager, AgentEngine, and SnapshotManager
+- [x] **FOUN-04**: Circuit breaker (`circuit_breaker.rs`) wired into `send_completion_request()` LLM call path per-provider
+- [x] **FOUN-05**: Broadcast channel capacity configurable per-session with sensible defaults (1024+ for PTY, 512+ for agent events)
 - [x] **FOUN-06**: WAL mode pragmas applied on first connection: `journal_mode=WAL`, `synchronous=NORMAL`, `wal_autocheckpoint=1000`
 
 ### Proactive Heartbeat
@@ -143,9 +143,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | FOUN-01 | Phase 1 | Complete |
 | FOUN-02 | Phase 1 | Complete |
-| FOUN-03 | Phase 1 | Pending |
-| FOUN-04 | Phase 1 | Pending |
-| FOUN-05 | Phase 1 | Pending |
+| FOUN-03 | Phase 1 | Complete |
+| FOUN-04 | Phase 1 | Complete |
+| FOUN-05 | Phase 1 | Complete |
 | FOUN-06 | Phase 1 | Complete |
 | BEAT-01 | Phase 2 | Pending |
 | BEAT-02 | Phase 2 | Pending |
