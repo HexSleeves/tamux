@@ -60,6 +60,7 @@ fn should_forward_agent_event(
                 | crate::agent::types::AgentEvent::ProviderCircuitRecovered { .. }
                 | crate::agent::types::AgentEvent::AuditAction { .. }
                 | crate::agent::types::AgentEvent::EscalationUpdate { .. }
+                | crate::agent::types::AgentEvent::GatewayStatus { .. }
         ),
     }
 }

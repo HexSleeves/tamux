@@ -1487,6 +1487,12 @@ pub struct GatewayConfig {
     pub whatsapp_phone_id: String,
     #[serde(default)]
     pub command_prefix: String,
+    /// Feature flag: when false (default), only daemon gateways run.
+    /// When true, Electron bridges run alongside daemon gateways. Per D-07.
+    /// Note: platform tokens may also be provided via env vars as a fallback
+    /// (SLACK_TOKEN, TELEGRAM_TOKEN, etc.) per D-02 migration path.
+    #[serde(default)]
+    pub gateway_electron_bridges_enabled: bool,
 }
 
 fn default_provider() -> String {
@@ -2002,6 +2008,16 @@ pub enum AgentEvent {
         sender: String,
         content: String,
         channel: String,
+    },
+    /// Gateway platform connection status change (per D-05/GATE-05).
+    GatewayStatus {
+        platform: String,
+        /// Serialized status: "connected", "disconnected", "error".
+        status: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        consecutive_failures: Option<u32>,
     },
     /// Sub-agent health state change detected by the supervisor.
     SubagentHealthChange {
