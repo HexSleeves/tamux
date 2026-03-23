@@ -110,6 +110,7 @@ impl TuiModel {
                 self.chat.active_thread_id(),
                 &self.theme,
                 self.focus == FocusArea::Sidebar,
+                &self.gateway_statuses,
             );
         } else {
             match &self.main_pane_view {

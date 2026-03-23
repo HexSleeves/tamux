@@ -3,6 +3,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::state::chat::GatewayStatusVm;
 use crate::state::sidebar::{SidebarState, SidebarTab};
 use crate::state::task::TaskState;
 use crate::theme::ThemeTokens;
@@ -206,6 +207,54 @@ fn resolved_scroll(rows: &[SidebarRow], sidebar: &SidebarState, body_height: usi
     scroll.min(max_scroll)
 }
 
+fn gateway_status_lines(statuses: &[GatewayStatusVm], theme: &ThemeTokens) -> Vec<Line<'static>> {
+    // Only show gateway section if at least one platform is not disconnected
+    let active: Vec<&GatewayStatusVm> = statuses
+        .iter()
+        .filter(|s| s.status != "disconnected")
+        .collect();
+    if active.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(Span::styled(
+        " Gateway",
+        Style::default().fg(Color::Indexed(245)).add_modifier(ratatui::style::Modifier::BOLD),
+    )));
+
+    for gw in &active {
+        let (indicator, color) = match gw.status.as_str() {
+            "connected" => ("\u{25CF}", Color::Green),
+            "error" => ("\u{25CF}", Color::Red),
+            _ => ("\u{25CF}", Color::Indexed(245)),
+        };
+        let platform_label = match gw.platform.as_str() {
+            "slack" => "Slack",
+            "discord" => "Discord",
+            "telegram" => "Telegram",
+            other => other,
+        };
+        let mut spans = vec![
+            Span::styled("  ", theme.fg_dim),
+            Span::styled(indicator.to_string(), Style::default().fg(color)),
+            Span::raw(" "),
+            Span::styled(platform_label.to_string(), theme.fg_active),
+        ];
+        if gw.status == "error" {
+            if let Some(ref err) = gw.last_error {
+                let truncated: String = err.chars().take(30).collect();
+                spans.push(Span::styled(
+                    format!(" ({})", truncated),
+                    Style::default().fg(Color::Red),
+                ));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -214,10 +263,14 @@ pub fn render(
     thread_id: Option<&str>,
     theme: &ThemeTokens,
     _focused: bool,
+    gateway_statuses: &[GatewayStatusVm],
 ) {
     if area.height < 3 {
         return;
     }
+
+    let gw_lines = gateway_status_lines(gateway_statuses, theme);
+    let gw_height = gw_lines.len() as u16;
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -225,6 +278,7 @@ pub fn render(
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Min(1),
+            Constraint::Length(gw_height),
         ])
         .split(area);
     for (tab, cell) in [
@@ -249,6 +303,10 @@ pub fn render(
     let paragraph = Paragraph::new(rows.into_iter().map(|row| row.line).collect::<Vec<_>>())
         .scroll((scroll as u16, 0));
     frame.render_widget(paragraph, chunks[2]);
+
+    if !gw_lines.is_empty() {
+        frame.render_widget(Paragraph::new(gw_lines), chunks[3]);
+    }
 }
 
 pub fn body_item_count(

@@ -748,6 +748,10 @@ export interface AgentState {
   updateConciergeConfig: (config: Record<string, unknown>) => Promise<void>;
   dismissConciergeWelcome: () => Promise<void>;
 
+  // Gateway status
+  gatewayStatuses: Record<string, { status: string; lastError?: string; consecutiveFailures?: number; updatedAt: number }>;
+  setGatewayStatus: (platform: string, status: string, lastError?: string, consecutiveFailures?: number) => void;
+
   // Derived
   getThreadsForPane: (paneId: PaneId) => AgentThread[];
 }
@@ -1833,6 +1837,20 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         }
       }
     } catch { /* ignore */ }
+  },
+  gatewayStatuses: {},
+  setGatewayStatus: (platform, status, lastError, consecutiveFailures) => {
+    set((state) => ({
+      gatewayStatuses: {
+        ...state.gatewayStatuses,
+        [platform]: {
+          status,
+          lastError,
+          consecutiveFailures,
+          updatedAt: Date.now(),
+        },
+      },
+    }));
   },
   getThreadsForPane: (paneId) => get().threads.filter((t) => t.paneId === paneId),
 }));

@@ -166,6 +166,15 @@ export default function App() {
           });
         }
       }
+      // Gateway status events (Phase 8 - Gateway Completion)
+      if (event?.type === "gateway_status") {
+        useAgentStore.getState().setGatewayStatus(
+          event.platform ?? "",
+          event.status ?? "disconnected",
+          event.last_error ?? undefined,
+          event.consecutive_failures ?? undefined,
+        );
+      }
       // Audit event handlers (Phase 3 - Transparent Autonomy)
       if (event?.type === "audit_action") {
         useAuditStore.getState().addEntry({

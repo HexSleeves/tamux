@@ -156,6 +156,9 @@ pub struct TuiModel {
     // Ignore a stale concierge welcome that arrives after the user navigated away.
     ignore_pending_concierge_welcome: bool,
 
+    // Gateway connection statuses received from daemon
+    pub gateway_statuses: Vec<chat::GatewayStatusVm>,
+
     // Active mouse drag selection in the chat pane
     chat_drag_anchor: Option<Position>,
     chat_drag_current: Option<Position>,
@@ -223,6 +226,7 @@ impl TuiModel {
             queued_prompts: Vec::new(),
             cancelled_thread_id: None,
             ignore_pending_concierge_welcome: false,
+            gateway_statuses: Vec::new(),
             chat_drag_anchor: None,
             chat_drag_current: None,
             chat_drag_anchor_point: None,

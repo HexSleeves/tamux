@@ -97,6 +97,12 @@ pub enum ClientEvent {
         audit_id: Option<String>,
     },
     AnticipatoryItems(Vec<AnticipatoryItem>),
+    GatewayStatus {
+        platform: String,
+        status: String,
+        last_error: Option<String>,
+        consecutive_failures: u32,
+    },
 
     Delta {
         thread_id: String,
@@ -967,6 +973,21 @@ impl DaemonClient {
                         reason,
                         attempts,
                         audit_id,
+                    })
+                    .await;
+            }
+            "gateway_status" => {
+                let platform = get_string(&event, "platform").unwrap_or_default();
+                let status = get_string(&event, "status").unwrap_or_default();
+                let last_error = get_string(&event, "last_error");
+                let consecutive_failures =
+                    event.get("consecutive_failures").and_then(Value::as_u64).unwrap_or(0) as u32;
+                let _ = event_tx
+                    .send(ClientEvent::GatewayStatus {
+                        platform,
+                        status,
+                        last_error,
+                        consecutive_failures,
                     })
                     .await;
             }

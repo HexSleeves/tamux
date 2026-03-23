@@ -375,6 +375,30 @@ impl TuiModel {
                 self.anticipatory
                     .reduce(crate::state::AnticipatoryAction::Replace(items));
             }
+            ClientEvent::GatewayStatus {
+                platform,
+                status,
+                last_error,
+                consecutive_failures,
+            } => {
+                let vm = chat::GatewayStatusVm {
+                    platform: platform.clone(),
+                    status: status.clone(),
+                    last_error,
+                    consecutive_failures,
+                };
+                if let Some(existing) = self
+                    .gateway_statuses
+                    .iter_mut()
+                    .find(|g| g.platform == platform)
+                {
+                    *existing = vm;
+                } else {
+                    self.gateway_statuses.push(vm);
+                }
+                self.status_line =
+                    format!("\u{1F310} Gateway {}: {}", platform, status);
+            }
             ClientEvent::Delta { thread_id, content } => {
                 self.agent_activity = Some("writing".to_string());
                 self.chat

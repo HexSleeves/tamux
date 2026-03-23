@@ -82,6 +82,12 @@ pub enum ClientEvent {
         audit_id: Option<String>,
     },
     AnticipatoryItems(Vec<crate::state::task::HeartbeatItem>),
+    GatewayStatus {
+        platform: String,
+        status: String,
+        last_error: Option<String>,
+        consecutive_failures: u32,
+    },
 
     Delta {
         thread_id: String,
@@ -252,6 +258,7 @@ impl DaemonProjection {
             ClientEvent::AuditEntry { .. } => vec![],
             ClientEvent::EscalationUpdate { .. } => vec![],
             ClientEvent::AnticipatoryItems(_) => vec![],
+            ClientEvent::GatewayStatus { .. } => vec![],
             ClientEvent::WorkflowNotice { message, .. } => vec![AppAction::Status(message)],
             ClientEvent::ProviderAuthStates(_) => vec![],
             ClientEvent::ProviderValidation { .. } => vec![],

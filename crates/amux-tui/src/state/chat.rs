@@ -42,6 +42,16 @@ pub enum MessageRole {
     Unknown,
 }
 
+// ── GatewayStatusVm ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct GatewayStatusVm {
+    pub platform: String,
+    pub status: String,
+    pub last_error: Option<String>,
+    pub consecutive_failures: u32,
+}
+
 // ── TranscriptMode ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

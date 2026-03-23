@@ -4277,6 +4277,33 @@ function registerIpcHandlers() {
         }
     });
 
+    ipcMain.handle('gateway:get-config', async () => {
+        try {
+            const config = await sendAgentQuery({ type: 'get-config' }, 'config');
+            return config?.gateway ?? {};
+        } catch (err) {
+            logToFile('warn', '[gateway] get-config IPC error', { error: err.message });
+            return {};
+        }
+    });
+
+    ipcMain.handle('gateway:set-config', async (_event, patch) => {
+        try {
+            for (const [key, value] of Object.entries(patch || {})) {
+                sendAgentCommand({
+                    type: 'set-config-item',
+                    key_path: `gateway.${key}`,
+                    value_json: JSON.stringify(value),
+                });
+            }
+            logToFile('info', '[gateway] Config updated via IPC', { keys: Object.keys(patch || {}) });
+            return { ok: true };
+        } catch (err) {
+            logToFile('warn', '[gateway] set-config IPC error', { error: err.message });
+            return { ok: false, error: err.message };
+        }
+    });
+
     ipcMain.handle('agent-get-provider-auth-states', async () => {
         try {
             return await sendAgentQuery({ type: 'get-provider-auth-states' }, 'provider-auth-states');
