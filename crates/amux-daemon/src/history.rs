@@ -338,6 +338,12 @@ pub struct AgentMessagePatch {
 }
 
 impl HistoryStore {
+    pub fn data_dir(&self) -> &Path {
+        self.skill_dir
+            .parent()
+            .unwrap_or(self.skill_dir.as_path())
+    }
+
     pub async fn new() -> Result<Self> {
         let base = amux_protocol::ensure_amux_data_dir()?;
         let history_dir = base.join("history");

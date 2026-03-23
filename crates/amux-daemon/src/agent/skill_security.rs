@@ -1,12 +1,12 @@
 //! Security scanning for community skill imports.
 
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
+use regex::RegexSet;
 use serde::{Deserialize, Serialize};
 
-use regex::RegexSet;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanVerdict {
     Pass,
@@ -14,7 +14,7 @@ pub enum ScanVerdict {
     Block,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FindingSeverity {
     Critical,
@@ -22,7 +22,7 @@ pub enum FindingSeverity {
     Info,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanTier {
     PatternBlocklist,
@@ -40,7 +40,16 @@ pub struct ScanFinding {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TierResult {
+    pub tier: ScanTier,
+    pub verdict: ScanVerdict,
+    pub findings_count: u32,
+    pub skipped: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScanReport {
+    pub tier_results: Vec<TierResult>,
     pub verdict: ScanVerdict,
     pub findings: Vec<ScanFinding>,
 }
@@ -138,8 +147,7 @@ pub(super) fn scan_patterns(content: &str) -> Vec<ScanFinding> {
 }
 
 pub(super) fn scan_structure(content: &str, tool_whitelist: &[String]) -> Vec<ScanFinding> {
-    let whitelist: std::collections::HashSet<&str> =
-        tool_whitelist.iter().map(String::as_str).collect();
+    let whitelist: HashSet<&str> = tool_whitelist.iter().map(String::as_str).collect();
     let mut findings = Vec::new();
 
     for (index, line) in content.lines().enumerate() {
@@ -175,11 +183,58 @@ pub(super) fn compute_verdict(findings: &[ScanFinding]) -> ScanVerdict {
     }
 }
 
-pub fn scan_skill_content(content: &str, tool_whitelist: &[String]) -> ScanReport {
-    let mut findings = scan_patterns(content);
-    findings.extend(scan_structure(content, tool_whitelist));
+pub fn scan_skill_content(
+    content: &str,
+    tool_whitelist: &[String],
+    skip_llm_tier: bool,
+) -> ScanReport {
+    let pattern_findings = scan_patterns(content);
+    let structural_findings = scan_structure(content, tool_whitelist);
+    let mut findings = pattern_findings.clone();
+    findings.extend(structural_findings.clone());
+
+    let pattern_verdict = compute_verdict(&pattern_findings);
+    let structural_verdict = compute_verdict(&structural_findings);
+    let llm_tier = if skip_llm_tier {
+        TierResult {
+            tier: ScanTier::LlmReview,
+            verdict: ScanVerdict::Pass,
+            findings_count: 0,
+            skipped: true,
+        }
+    } else {
+        TierResult {
+            // D-06: tier 3 LLM review is a no-op in v1; keeping the branch wired
+            // lets verified publishers skip it as soon as the tier becomes active.
+            tier: ScanTier::LlmReview,
+            verdict: ScanVerdict::Pass,
+            findings_count: 0,
+            skipped: false,
+        }
+    };
+
+    let tier_results = vec![
+        TierResult {
+            tier: ScanTier::PatternBlocklist,
+            verdict: pattern_verdict,
+            findings_count: pattern_findings.len() as u32,
+            skipped: false,
+        },
+        TierResult {
+            tier: ScanTier::StructuralValidation,
+            verdict: structural_verdict,
+            findings_count: structural_findings.len() as u32,
+            skipped: false,
+        },
+        llm_tier,
+    ];
+
     let verdict = compute_verdict(&findings);
-    ScanReport { verdict, findings }
+    ScanReport {
+        tier_results,
+        verdict,
+        findings,
+    }
 }
 
 fn extract_tool_references(line: &str) -> Vec<String> {
@@ -199,7 +254,7 @@ fn extract_tool_references(line: &str) -> Vec<String> {
     }
 
     let trimmed = line.trim();
-    if let Some(value) = trimmed.strip_prefix("-") {
+    if let Some(value) = trimmed.strip_prefix('-') {
         let candidate = value.trim();
         if is_tool_name(candidate) {
             refs.push(candidate.to_string());
@@ -335,9 +390,11 @@ mod tests {
         let report = scan_skill_content(
             "Use `execute_command` to run curl https://example.com",
             &whitelist(&["read_file"]),
+            false,
         );
 
         assert_eq!(report.verdict, ScanVerdict::Warn);
+        assert_eq!(report.tier_results.len(), 3);
         assert!(report
             .findings
             .iter()
@@ -346,5 +403,19 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.tier == ScanTier::StructuralValidation));
+    }
+
+    #[test]
+    fn scan_skill_content_skips_llm_tier_for_verified_publishers() {
+        let report = scan_skill_content(
+            "Use `read_file` before replying.",
+            &whitelist(&["read_file"]),
+            true,
+        );
+
+        assert!(report
+            .tier_results
+            .iter()
+            .any(|tier| tier.tier == ScanTier::LlmReview && tier.skipped));
     }
 }

@@ -520,6 +520,8 @@ pub enum ClientMessage {
         source: String,
         /// Override security warnings. Per D-05.
         force: bool,
+        /// Whether the registry marks the publisher as verified. Per D-06.
+        publisher_verified: bool,
     },
 
     /// Export a local skill to a file. Per SKIL-10/D-11.
@@ -1511,13 +1513,19 @@ mod tests {
         let msg = ClientMessage::SkillImport {
             source: "https://registry.tamux.dev/skills/git.tar.gz".to_string(),
             force: true,
+            publisher_verified: true,
         };
         let bytes = bincode::serialize(&msg).unwrap();
         let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
         match decoded {
-            ClientMessage::SkillImport { source, force } => {
+            ClientMessage::SkillImport {
+                source,
+                force,
+                publisher_verified,
+            } => {
                 assert_eq!(source, "https://registry.tamux.dev/skills/git.tar.gz");
                 assert!(force);
+                assert!(publisher_verified);
             }
             other => panic!("unexpected variant: {:?}", other),
         }

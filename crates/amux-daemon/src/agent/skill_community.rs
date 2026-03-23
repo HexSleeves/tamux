@@ -1,7 +1,7 @@
-//! Community skill packaging and format conversion.
+//! Community skill packaging, import/export, and publish preparation.
 
 use std::fs::{self, File};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use flate2::read::GzDecoder;
@@ -10,6 +10,9 @@ use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tar::{Archive, Builder};
+
+use crate::agent::skill_security::{scan_skill_content, ScanReport, ScanTier, ScanVerdict};
+use crate::history::{HistoryStore, ProvenanceEventRecord, SkillVariantRecord};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -78,6 +81,29 @@ pub struct PublishMetadata {
     pub content_hash: String,
     pub tamux_version: String,
     pub maturity_at_publish: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ImportResult {
+    Success {
+        variant_id: String,
+        scan_verdict: String,
+    },
+    Blocked {
+        report_summary: String,
+        findings_count: u32,
+    },
+    NeedsForce {
+        report_summary: String,
+        findings_count: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImportDecision {
+    Import,
+    Blocked,
+    NeedsForce,
 }
 
 pub(super) fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
@@ -168,7 +194,7 @@ pub(super) fn pack_skill(skill_dir: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn unpack_skill(archive: &Path, target_dir: &Path) -> Result<()> {
+pub(crate) fn unpack_skill(archive: &Path, target_dir: &Path) -> Result<()> {
     fs::create_dir_all(target_dir)
         .with_context(|| format!("create target dir {}", target_dir.display()))?;
     let tar_gz =
@@ -181,16 +207,366 @@ pub(super) fn unpack_skill(archive: &Path, target_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(crate) async fn import_community_skill(
+    history: &HistoryStore,
+    skill_content: &str,
+    skill_name: &str,
+    source_description: &str,
+    tool_whitelist: &[String],
+    force: bool,
+    publisher_verified: bool,
+    skills_root: &Path,
+) -> Result<ImportResult> {
+    let report = build_scan_report(skill_content, tool_whitelist, publisher_verified);
+    let findings_count = report.findings.len() as u32;
+    let summary = scan_report_summary(&report);
+
+    match decide_import(report.verdict, force) {
+        ImportDecision::Blocked => {
+            record_import_provenance(
+                history,
+                "community_skill_import_blocked",
+                &summary,
+                &report,
+                skill_name,
+                source_description,
+                publisher_verified,
+                force,
+                None,
+            )
+            .await?;
+            Ok(ImportResult::Blocked {
+                report_summary: summary,
+                findings_count,
+            })
+        }
+        ImportDecision::NeedsForce => {
+            record_import_provenance(
+                history,
+                "community_skill_import_warned",
+                &summary,
+                &report,
+                skill_name,
+                source_description,
+                publisher_verified,
+                force,
+                None,
+            )
+            .await?;
+            Ok(ImportResult::NeedsForce {
+                report_summary: summary,
+                findings_count,
+            })
+        }
+        ImportDecision::Import => {
+            let skill_dir = skills_root.join("community").join(skill_name);
+            tokio::fs::create_dir_all(&skill_dir)
+                .await
+                .with_context(|| format!("create community skill dir {}", skill_dir.display()))?;
+            let skill_path = skill_dir.join("SKILL.md");
+            tokio::fs::write(&skill_path, skill_content)
+                .await
+                .with_context(|| format!("write imported skill {}", skill_path.display()))?;
+
+            let variant = history.register_skill_document(&skill_path).await?;
+            history
+                .update_skill_variant_status(&variant.variant_id, "draft")
+                .await?;
+
+            let event_type = if report.verdict == ScanVerdict::Warn {
+                "community_skill_import_forced"
+            } else {
+                "community_skill_import_passed"
+            };
+            record_import_provenance(
+                history,
+                event_type,
+                &summary,
+                &report,
+                skill_name,
+                source_description,
+                publisher_verified,
+                force,
+                Some(&variant.variant_id),
+            )
+            .await?;
+
+            Ok(ImportResult::Success {
+                variant_id: variant.variant_id,
+                scan_verdict: format_scan_verdict(report.verdict),
+            })
+        }
+    }
+}
+
+pub(crate) fn export_skill(
+    skill_content: &str,
+    format: &str,
+    output_dir: &Path,
+    skill_name: &str,
+) -> Result<String> {
+    let output_name = if format == "agentskills" {
+        let (frontmatter, body) =
+            split_frontmatter(skill_content).ok_or_else(|| anyhow!("missing YAML frontmatter"))?;
+        let tamux: TamuxSkillFrontmatter = match detect_skill_format(frontmatter) {
+            SkillFormat::TamuxNative => {
+                serde_yaml::from_str(frontmatter).context("parse tamux frontmatter")?
+            }
+            SkillFormat::AgentSkillsIo => from_agentskills_format(skill_content)?,
+        };
+        let converted = to_agentskills_format(&tamux, body);
+        let sanitized_name = sanitize_name_for_agentskills(skill_name);
+        let destination = output_dir.join(&sanitized_name);
+        fs::create_dir_all(&destination)
+            .with_context(|| format!("create export dir {}", destination.display()))?;
+        let skill_path = destination.join("SKILL.md");
+        fs::write(&skill_path, converted)
+            .with_context(|| format!("write export {}", skill_path.display()))?;
+        skill_path
+    } else {
+        let destination = output_dir.join(skill_name);
+        fs::create_dir_all(&destination)
+            .with_context(|| format!("create export dir {}", destination.display()))?;
+        let skill_path = destination.join("SKILL.md");
+        fs::write(&skill_path, skill_content)
+            .with_context(|| format!("write export {}", skill_path.display()))?;
+        skill_path
+    };
+
+    Ok(output_name.to_string_lossy().to_string())
+}
+
+pub(crate) fn prepare_publish(
+    skill_dir: &Path,
+    variant: &SkillVariantRecord,
+    machine_id: &str,
+) -> Result<(PathBuf, PublishMetadata)> {
+    let skill_path = skill_dir.join("SKILL.md");
+    let content = fs::read_to_string(&skill_path)
+        .with_context(|| format!("read skill file {}", skill_path.display()))?;
+
+    let metadata = PublishMetadata {
+        publisher_id: publisher_id(machine_id),
+        origin_trace_summary: format!("Published local skill {}", variant.skill_name),
+        success_rate: variant.success_rate(),
+        use_count: variant.use_count,
+        created_at: variant.created_at,
+        content_hash: content_hash(&content),
+        tamux_version: env!("CARGO_PKG_VERSION").to_string(),
+        maturity_at_publish: variant.status.clone(),
+    };
+
+    let temp_root = std::env::temp_dir().join(format!(
+        "tamux-publish-src-{}-{}",
+        variant.skill_name, variant.variant_id
+    ));
+    if temp_root.exists() {
+        let _ = fs::remove_dir_all(&temp_root);
+    }
+    fs::create_dir_all(&temp_root)
+        .with_context(|| format!("create publish temp dir {}", temp_root.display()))?;
+    let tarball_path = temp_root.join(format!("{}.tar.gz", variant.skill_name));
+    pack_skill(skill_dir, &tarball_path)?;
+    let persisted_path = std::env::temp_dir().join(format!(
+        "tamux-publish-{}-{}.tar.gz",
+        variant.skill_name, variant.variant_id
+    ));
+    fs::copy(&tarball_path, &persisted_path)
+        .with_context(|| format!("persist tarball {}", persisted_path.display()))?;
+    Ok((persisted_path, metadata))
+}
+
 fn hex_sha256(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
 }
 
+fn build_scan_report(
+    skill_content: &str,
+    tool_whitelist: &[String],
+    publisher_verified: bool,
+) -> ScanReport {
+    // D-06: tier 3 LLM review is a no-op in v1; this branch will have effect when tier 3 is enabled.
+    let skip_llm_tier = publisher_verified;
+    scan_skill_content(skill_content, tool_whitelist, skip_llm_tier)
+}
+
+fn decide_import(scan_verdict: ScanVerdict, force: bool) -> ImportDecision {
+    match (scan_verdict, force) {
+        (ScanVerdict::Block, _) => ImportDecision::Blocked,
+        (ScanVerdict::Warn, false) => ImportDecision::NeedsForce,
+        (ScanVerdict::Warn, true) | (ScanVerdict::Pass, _) => ImportDecision::Import,
+    }
+}
+
+fn scan_report_summary(report: &ScanReport) -> String {
+    let critical = report
+        .findings
+        .iter()
+        .filter(|finding| finding.severity == crate::agent::skill_security::FindingSeverity::Critical)
+        .count();
+    let suspicious = report
+        .findings
+        .iter()
+        .filter(|finding| {
+            finding.severity == crate::agent::skill_security::FindingSeverity::Suspicious
+        })
+        .count();
+    format!(
+        "Scan verdict={} critical={} suspicious={} findings={}",
+        format_scan_verdict(report.verdict),
+        critical,
+        suspicious,
+        report.findings.len()
+    )
+}
+
+fn format_scan_verdict(verdict: ScanVerdict) -> String {
+    match verdict {
+        ScanVerdict::Pass => "pass",
+        ScanVerdict::Warn => "warn",
+        ScanVerdict::Block => "block",
+    }
+    .to_string()
+}
+
+async fn record_import_provenance(
+    history: &HistoryStore,
+    event_type: &str,
+    summary: &str,
+    report: &ScanReport,
+    skill_name: &str,
+    source_description: &str,
+    publisher_verified: bool,
+    force: bool,
+    variant_id: Option<&str>,
+) -> Result<()> {
+    let details = serde_json::json!({
+        "skill_name": skill_name,
+        "source": source_description,
+        "publisher_verified": publisher_verified,
+        "force": force,
+        "variant_id": variant_id,
+        "scan_verdict": format_scan_verdict(report.verdict),
+        "findings_count": report.findings.len(),
+        "tier_results": report.tier_results.iter().map(|tier| serde_json::json!({
+            "tier": match tier.tier {
+                ScanTier::PatternBlocklist => "pattern_blocklist",
+                ScanTier::StructuralValidation => "structural_validation",
+                ScanTier::LlmReview => "llm_review",
+            },
+            "verdict": format_scan_verdict(tier.verdict),
+            "findings_count": tier.findings_count,
+            "skipped": tier.skipped,
+        })).collect::<Vec<_>>()
+    });
+
+    let record = ProvenanceEventRecord {
+        event_type,
+        summary,
+        details: &details,
+        agent_id: "community-skill-import",
+        goal_run_id: None,
+        task_id: None,
+        thread_id: None,
+        approval_id: None,
+        causal_trace_id: None,
+        compliance_mode: "community-skill-security",
+        sign: true,
+        created_at: current_timestamp(),
+    };
+    history.record_provenance_event(&record).await
+}
+
+fn current_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::skill_security::ScanVerdict;
     use std::fs;
+
+    #[test]
+    fn decide_import_blocks_warns_and_passes() {
+        assert_eq!(decide_import(ScanVerdict::Block, false), ImportDecision::Blocked);
+        assert_eq!(decide_import(ScanVerdict::Warn, false), ImportDecision::NeedsForce);
+        assert_eq!(decide_import(ScanVerdict::Warn, true), ImportDecision::Import);
+        assert_eq!(decide_import(ScanVerdict::Pass, false), ImportDecision::Import);
+    }
+
+    #[test]
+    fn build_scan_report_skips_llm_tier_for_verified_publishers() {
+        let report = build_scan_report("Use `read_file`.", &["read_file".to_string()], true);
+
+        assert_eq!(report.tier_results.len(), 3);
+        assert!(report
+            .tier_results
+            .iter()
+            .any(|tier| tier.tier == ScanTier::LlmReview && tier.skipped));
+    }
+
+    #[test]
+    fn export_skill_writes_agentskills_format() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let content = "---\nname: debug_rust--async\ndescription: Demo\nallowed_tools:\n  - read_file\ntamux:\n  maturity_status: active\n---\nBody";
+
+        let output = export_skill(content, "agentskills", temp.path(), "debug_rust--async")
+            .expect("export succeeds");
+        let exported = fs::read_to_string(output).expect("read export");
+        assert!(exported.contains("name: debug-rust-async"));
+        assert!(!exported.contains("tamux:"));
+    }
+
+    #[test]
+    fn export_skill_writes_tamux_format() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let content = "---\nname: demo\n---\nBody";
+
+        let output = export_skill(content, "tamux", temp.path(), "demo").expect("export succeeds");
+        let exported = fs::read_to_string(output).expect("read export");
+        assert_eq!(exported, content);
+    }
+
+    #[test]
+    fn prepare_publish_excludes_private_metadata_fields() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let skill_dir = temp.path().join("demo");
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        fs::write(skill_dir.join("SKILL.md"), "---\nname: demo\n---\nBody").expect("write skill");
+
+        let variant = SkillVariantRecord {
+            variant_id: "variant-1".to_string(),
+            skill_name: "demo".to_string(),
+            variant_name: "canonical".to_string(),
+            relative_path: "community/demo/SKILL.md".to_string(),
+            parent_variant_id: None,
+            version: "v1.0".to_string(),
+            context_tags: vec![],
+            use_count: 3,
+            success_count: 2,
+            failure_count: 1,
+            status: "proven".to_string(),
+            last_used_at: None,
+            created_at: 123,
+            updated_at: 456,
+        };
+
+        let (tarball, metadata) = prepare_publish(&skill_dir, &variant, "machine-123")
+            .expect("prepare publish succeeds");
+
+        assert!(tarball.exists());
+        let encoded = serde_json::to_string(&metadata).expect("serialize metadata");
+        assert!(!encoded.contains("thread_id"));
+        assert!(!encoded.contains("task_id"));
+        assert!(!encoded.contains("relative_path"));
+        assert!(!encoded.contains("/tmp"));
+    }
 
     #[test]
     fn split_frontmatter_returns_frontmatter_and_body() {
@@ -217,10 +593,7 @@ mod tests {
 
     #[test]
     fn sanitize_name_for_agentskills_normalizes_variant_suffix_and_separators() {
-        assert_eq!(
-            sanitize_name_for_agentskills("debug_rust--async"),
-            "debug-rust-async"
-        );
+        assert_eq!(sanitize_name_for_agentskills("debug_rust--async"), "debug-rust-async");
     }
 
     #[test]
