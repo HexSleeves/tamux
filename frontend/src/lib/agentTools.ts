@@ -13,6 +13,7 @@ import { getBrowserController } from "./browserRegistry";
 import { getCanvasBrowserController } from "./canvasBrowserRegistry";
 import { assessCommandRisk } from "./agentMissionStore";
 import { useAgentStore } from "./agentStore";
+import { useSettingsStore } from "./settingsStore";
 import { resolveSnippetTemplate, useSnippetStore } from "./snippetStore";
 import { queryHonchoMemory } from "./honchoClient";
 import { executePluginAssistantTool, listPluginAssistantTools } from "../plugins/assistantToolRegistry";
