@@ -77,7 +77,7 @@ Plans:
 - [x] 03-02-PLAN.md — Daemon integration: heartbeat/escalation/causal-trace audit entry wiring
 - [x] 03-03-PLAN.md — TUI audit feed: AuditState reducer, audit widget, escalation status line
 - [x] 03-04-PLAN.md — Electron audit panel: auditStore, AuditPanel components, event listener
-- [ ] 03-05-PLAN.md — CLI audit subcommand and escalation cancel IPC flow
+- [x] 03-05-PLAN.md — CLI audit subcommand and escalation cancel IPC flow
 
 ### Phase 4: Adaptive Heartbeat
 **Goal**: The heartbeat learns the operator's rhythm and priorities, becoming a proactive assistant that surfaces the right things at the right time
