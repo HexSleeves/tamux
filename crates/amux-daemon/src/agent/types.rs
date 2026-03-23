@@ -2548,4 +2548,37 @@ mod tests {
             ApiType::Anthropic
         );
     }
+
+    /// FOUN-04: Circuit breaker AgentEvent variants serialize and deserialize correctly.
+    #[test]
+    fn circuit_breaker_event_serde_roundtrip() {
+        let event = AgentEvent::ProviderCircuitOpen {
+            provider: "openai".to_string(),
+            trip_count: 3,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: AgentEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            AgentEvent::ProviderCircuitOpen {
+                provider,
+                trip_count,
+            } => {
+                assert_eq!(provider, "openai");
+                assert_eq!(trip_count, 3);
+            }
+            _ => panic!("wrong variant after deserialize"),
+        }
+
+        let recovery = AgentEvent::ProviderCircuitRecovered {
+            provider: "anthropic".to_string(),
+        };
+        let json = serde_json::to_string(&recovery).unwrap();
+        let parsed: AgentEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            AgentEvent::ProviderCircuitRecovered { provider } => {
+                assert_eq!(provider, "anthropic");
+            }
+            _ => panic!("wrong variant after deserialize"),
+        }
+    }
 }

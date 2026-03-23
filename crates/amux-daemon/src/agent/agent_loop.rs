@@ -372,6 +372,23 @@ impl AgentEngine {
             };
 
             // Call LLM
+            // Circuit breaker check: reject fast if the provider is unhealthy.
+            if let Err(e) = self.check_circuit_breaker(&config.provider).await {
+                let suggestion = self
+                    .suggest_alternative_provider(&config.provider)
+                    .await
+                    .unwrap_or_default();
+                let error_msg = format!(
+                    "Provider '{}' is temporarily unavailable (circuit breaker open). {}",
+                    config.provider, suggestion
+                );
+                let _ = self.event_tx.send(AgentEvent::Error {
+                    thread_id: tid.clone(),
+                    message: error_msg.clone(),
+                });
+                self.finish_stream_cancellation(&tid, stream_generation).await;
+                return Err(e.context(error_msg));
+            }
             let llm_started_at = Instant::now();
             let mut first_token_at: Option<Instant> = None;
             let mut effective_transport_for_turn = prepared_request.transport;
@@ -406,6 +423,7 @@ impl AgentEngine {
                         let chunk = match chunk_result {
                             Ok(chunk) => chunk,
                             Err(e) => {
+                                self.record_llm_outcome(&config.provider, false).await;
                                 self.finish_stream_cancellation(&tid, stream_generation).await;
                                 return Err(e);
                             }
@@ -490,6 +508,7 @@ impl AgentEngine {
                                 break;
                             }
                             CompletionChunk::Error { message } => {
+                                self.record_llm_outcome(&config.provider, false).await;
                                 // Add error as assistant message
                                 self.add_assistant_message(
                                     &tid,
@@ -521,6 +540,11 @@ impl AgentEngine {
 
             if was_cancelled {
                 break 'agent_loop;
+            }
+
+            // Record successful LLM outcome for circuit breaker tracking.
+            if final_chunk.is_some() {
+                self.record_llm_outcome(&config.provider, true).await;
             }
 
             match final_chunk {

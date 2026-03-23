@@ -52,6 +52,12 @@ impl AgentEngine {
             )),
         );
 
+        // Circuit breaker check before memory flush LLM call.
+        if let Err(e) = self.check_circuit_breaker(&config.provider).await {
+            tracing::warn!(thread_id = %thread_id, "memory flush skipped — circuit breaker open: {e}");
+            return Ok(false);
+        }
+
         let mut stream = send_completion_request(
             &self.http_client,
             &config.provider,
@@ -72,6 +78,7 @@ impl AgentEngine {
             let chunk = match chunk_result {
                 Ok(chunk) => chunk,
                 Err(error) => {
+                    self.record_llm_outcome(&config.provider, false).await;
                     tracing::warn!(thread_id = %thread_id, "pre-compaction memory flush failed: {error}");
                     self.emit_workflow_notice(
                         thread_id,
@@ -85,11 +92,13 @@ impl AgentEngine {
 
             match chunk {
                 CompletionChunk::ToolCalls { tool_calls, .. } => {
+                    self.record_llm_outcome(&config.provider, true).await;
                     pending_tool_calls = tool_calls;
                     completed = true;
                     break;
                 }
                 CompletionChunk::Done { .. } => {
+                    self.record_llm_outcome(&config.provider, true).await;
                     completed = true;
                     break;
                 }
@@ -97,6 +106,7 @@ impl AgentEngine {
                 | CompletionChunk::Retry { .. }
                 | CompletionChunk::Delta { .. } => {}
                 CompletionChunk::Error { message } => {
+                    self.record_llm_outcome(&config.provider, false).await;
                     tracing::warn!(thread_id = %thread_id, "pre-compaction memory flush returned error: {message}");
                     self.emit_workflow_notice(
                         thread_id,

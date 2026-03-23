@@ -111,7 +111,7 @@ pub struct AgentEngine {
     pub watcher_refresh_tx: mpsc::UnboundedSender<String>,
     pub watcher_refresh_rx: Mutex<Option<mpsc::UnboundedReceiver<String>>>,
     /// Per-provider circuit breakers for LLM call path gating.
-    pub circuit_breakers: CircuitBreakerRegistry,
+    pub circuit_breakers: Arc<CircuitBreakerRegistry>,
 }
 
 impl AgentEngine {
@@ -149,19 +149,20 @@ impl AgentEngine {
         let http_client = reqwest::Client::new();
 
         // Pre-initialize per-provider circuit breakers from configured providers.
-        let circuit_breakers = CircuitBreakerRegistry::from_provider_keys(
+        let circuit_breakers = Arc::new(CircuitBreakerRegistry::from_provider_keys(
             config
                 .providers
                 .keys()
                 .cloned()
                 .chain(std::iter::once(config.provider.clone())),
-        );
+        ));
 
         let config = Arc::new(RwLock::new(config));
         let concierge = Arc::new(ConciergeEngine::new(
             config.clone(),
             event_tx.clone(),
             http_client.clone(),
+            circuit_breakers.clone(),
         ));
 
         Arc::new(Self {
@@ -203,6 +204,88 @@ impl AgentEngine {
             watcher_refresh_rx: Mutex::new(Some(watcher_refresh_rx)),
             circuit_breakers,
         })
+    }
+
+    // ── Circuit breaker helpers ──────────────────────────────────────────
+
+    /// Check the circuit breaker before an LLM call. Returns `Err` if the
+    /// breaker is open (provider is unhealthy). Callers must invoke
+    /// [`record_llm_outcome`] after the call completes.
+    pub async fn check_circuit_breaker(&self, provider: &str) -> Result<()> {
+        use super::circuit_breaker::CircuitState;
+
+        let breaker_arc = self.circuit_breakers.get(provider).await;
+        let mut breaker = breaker_arc.lock().await;
+        let now = now_millis();
+
+        if !breaker.can_execute(now) {
+            let _ = self.event_tx.send(AgentEvent::ProviderCircuitOpen {
+                provider: provider.to_string(),
+                trip_count: breaker.trip_count(),
+            });
+            anyhow::bail!(
+                "Circuit breaker open for provider '{}' — {} consecutive failures. \
+                 Requests are blocked for ~30s to allow recovery.",
+                provider,
+                breaker.trip_count()
+            );
+        }
+        Ok(())
+    }
+
+    /// Record the outcome of an LLM call for circuit breaker tracking.
+    /// Emits [`AgentEvent::ProviderCircuitOpen`] on trip and
+    /// [`AgentEvent::ProviderCircuitRecovered`] on recovery.
+    pub async fn record_llm_outcome(&self, provider: &str, success: bool) {
+        use super::circuit_breaker::CircuitState;
+
+        let breaker_arc = self.circuit_breakers.get(provider).await;
+        let mut breaker = breaker_arc.lock().await;
+        let now = now_millis();
+
+        if success {
+            let was_half_open = breaker.state() == CircuitState::HalfOpen;
+            breaker.record_success(now);
+            if was_half_open && breaker.state() == CircuitState::Closed {
+                tracing::info!(provider, "circuit breaker recovered — provider is healthy again");
+                let _ = self.event_tx.send(AgentEvent::ProviderCircuitRecovered {
+                    provider: provider.to_string(),
+                });
+            }
+        } else {
+            let was_closed_or_half = breaker.state() != CircuitState::Open;
+            breaker.record_failure(now);
+            if was_closed_or_half && breaker.state() == CircuitState::Open {
+                tracing::warn!(
+                    provider,
+                    trips = breaker.trip_count(),
+                    "circuit breaker tripped — provider marked unhealthy"
+                );
+                let _ = self.event_tx.send(AgentEvent::ProviderCircuitOpen {
+                    provider: provider.to_string(),
+                    trip_count: breaker.trip_count(),
+                });
+            }
+        }
+    }
+
+    /// Suggest an alternative healthy provider when the requested one is unavailable.
+    pub(super) async fn suggest_alternative_provider(&self, failed_provider: &str) -> Option<String> {
+        let config = self.config.read().await;
+        for (name, _pconfig) in &config.providers {
+            if name != failed_provider {
+                let breaker_arc = self.circuit_breakers.get(name).await;
+                let mut breaker = breaker_arc.lock().await;
+                let now = now_millis();
+                if breaker.can_execute(now) {
+                    return Some(format!(
+                        "Consider switching to provider '{}' which is currently healthy.",
+                        name
+                    ));
+                }
+            }
+        }
+        None
     }
 
     #[cfg(test)]

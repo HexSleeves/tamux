@@ -247,6 +247,7 @@ impl AgentEngine {
             name: None,
             tool_calls: None,
         }];
+        self.check_circuit_breaker(&config.provider).await?;
         let mut stream = send_completion_request(
             &self.http_client,
             &config.provider,
@@ -262,7 +263,14 @@ impl AgentEngine {
         let mut content = String::new();
         let mut reasoning = String::new();
         while let Some(chunk) = stream.next().await {
-            match chunk? {
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    self.record_llm_outcome(&config.provider, false).await;
+                    return Err(e);
+                }
+            };
+            match chunk {
                 CompletionChunk::Delta {
                     content: delta,
                     reasoning: r,
@@ -277,6 +285,7 @@ impl AgentEngine {
                     reasoning: r,
                     ..
                 } => {
+                    self.record_llm_outcome(&config.provider, true).await;
                     if let Some(r) = r {
                         reasoning = r;
                     }
@@ -289,11 +298,15 @@ impl AgentEngine {
                     }
                     anyhow::bail!("goal LLM returned empty output");
                 }
-                CompletionChunk::Error { message } => anyhow::bail!(message),
+                CompletionChunk::Error { message } => {
+                    self.record_llm_outcome(&config.provider, false).await;
+                    anyhow::bail!(message);
+                }
                 CompletionChunk::TransportFallback { .. } => {}
                 CompletionChunk::Retry { .. } => {}
                 CompletionChunk::ToolCalls { .. } => {
-                    anyhow::bail!("goal planning unexpectedly returned tool calls")
+                    self.record_llm_outcome(&config.provider, true).await;
+                    anyhow::bail!("goal planning unexpectedly returned tool calls");
                 }
             }
         }
@@ -322,6 +335,7 @@ impl AgentEngine {
             name: None,
             tool_calls: None,
         }];
+        self.check_circuit_breaker(&config.provider).await?;
         let mut stream = send_completion_request(
             &self.http_client,
             &config.provider,
@@ -337,7 +351,14 @@ impl AgentEngine {
         let mut content = String::new();
         let mut reasoning = String::new();
         while let Some(chunk) = stream.next().await {
-            match chunk? {
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    self.record_llm_outcome(&config.provider, false).await;
+                    return Err(e);
+                }
+            };
+            match chunk {
                 CompletionChunk::Delta {
                     content: delta,
                     reasoning: r,
@@ -352,6 +373,7 @@ impl AgentEngine {
                     reasoning: r,
                     ..
                 } => {
+                    self.record_llm_outcome(&config.provider, true).await;
                     if let Some(r) = r {
                         reasoning = r;
                     }
@@ -373,11 +395,15 @@ impl AgentEngine {
                     }
                     anyhow::bail!("goal planning returned empty output");
                 }
-                CompletionChunk::Error { message } => anyhow::bail!(message),
+                CompletionChunk::Error { message } => {
+                    self.record_llm_outcome(&config.provider, false).await;
+                    anyhow::bail!(message);
+                }
                 CompletionChunk::TransportFallback { .. } => {}
                 CompletionChunk::Retry { .. } => {}
                 CompletionChunk::ToolCalls { .. } => {
-                    anyhow::bail!("goal planning unexpectedly returned tool calls")
+                    self.record_llm_outcome(&config.provider, true).await;
+                    anyhow::bail!("goal planning unexpectedly returned tool calls");
                 }
             }
         }

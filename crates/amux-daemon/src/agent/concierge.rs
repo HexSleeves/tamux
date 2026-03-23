@@ -1,5 +1,6 @@
 //! Concierge agent — proactive welcome greetings and lightweight ops assistant.
 
+use super::circuit_breaker::CircuitBreakerRegistry;
 use super::llm_client::{self, ApiContent, ApiMessage, RetryStrategy};
 use super::provider_resolution::resolve_provider_config_for;
 use super::types::*;
@@ -23,6 +24,7 @@ pub struct ConciergeEngine {
     config: Arc<RwLock<AgentConfig>>,
     event_tx: broadcast::Sender<AgentEvent>,
     http_client: reqwest::Client,
+    circuit_breakers: Arc<CircuitBreakerRegistry>,
 }
 
 impl ConciergeEngine {
@@ -30,11 +32,13 @@ impl ConciergeEngine {
         config: Arc<RwLock<AgentConfig>>,
         event_tx: broadcast::Sender<AgentEvent>,
         http_client: reqwest::Client,
+        circuit_breakers: Arc<CircuitBreakerRegistry>,
     ) -> Self {
         Self {
             config,
             event_tx,
             http_client,
+            circuit_breakers,
         }
     }
 
@@ -366,6 +370,9 @@ impl ConciergeEngine {
             tool_calls: None,
         }];
 
+        // Circuit breaker check before LLM call.
+        self.check_circuit_breaker(&provider_id).await?;
+
         let stream = llm_client::send_completion_request(
             &self.http_client,
             &provider_id,
@@ -391,16 +398,19 @@ impl ConciergeEngine {
                     full_content.push_str(&content);
                 }
                 Ok(CompletionChunk::Done { content, .. }) => {
+                    self.record_llm_outcome(&provider_id, true).await;
                     if !content.is_empty() {
                         full_content = content;
                     }
                     break;
                 }
                 Ok(CompletionChunk::Error { message }) => {
+                    self.record_llm_outcome(&provider_id, false).await;
                     anyhow::bail!("LLM error: {message}");
                 }
                 Ok(_) => {} // TransportFallback, Retry, etc.
                 Err(e) => {
+                    self.record_llm_outcome(&provider_id, false).await;
                     anyhow::bail!("Stream error: {e}");
                 }
             }
@@ -549,6 +559,12 @@ impl ConciergeEngine {
             tool_calls: None,
         }];
 
+        // Circuit breaker check before triage LLM call.
+        if let Err(e) = self.check_circuit_breaker(&provider_id).await {
+            tracing::warn!("concierge: triage skipped — circuit breaker open: {e}");
+            return GatewayTriage::Complex;
+        }
+
         let stream = llm_client::send_completion_request(
             &self.http_client,
             &provider_id,
@@ -571,16 +587,19 @@ impl ConciergeEngine {
             match chunk {
                 Ok(CompletionChunk::Delta { content, .. }) => full_content.push_str(&content),
                 Ok(CompletionChunk::Done { content, .. }) => {
+                    self.record_llm_outcome(&provider_id, true).await;
                     if !content.is_empty() {
                         full_content = content;
                     }
                     break;
                 }
                 Ok(CompletionChunk::Error { message }) => {
+                    self.record_llm_outcome(&provider_id, false).await;
                     tracing::warn!("concierge: triage LLM error: {message}");
                     return GatewayTriage::Complex;
                 }
                 Err(e) => {
+                    self.record_llm_outcome(&provider_id, false).await;
                     tracing::warn!("concierge: triage stream error: {e}");
                     return GatewayTriage::Complex;
                 }
@@ -609,6 +628,55 @@ impl ConciergeEngine {
                 "concierge: triage classified as COMPLEX"
             );
             GatewayTriage::Complex
+        }
+    }
+
+    // ── Circuit breaker helpers (delegated to shared registry) ───────────
+
+    async fn check_circuit_breaker(&self, provider: &str) -> Result<()> {
+        use super::circuit_breaker::CircuitState;
+
+        let breaker_arc = self.circuit_breakers.get(provider).await;
+        let mut breaker = breaker_arc.lock().await;
+        let now = super::now_millis();
+
+        if !breaker.can_execute(now) {
+            let _ = self.event_tx.send(AgentEvent::ProviderCircuitOpen {
+                provider: provider.to_string(),
+                trip_count: breaker.trip_count(),
+            });
+            anyhow::bail!(
+                "Circuit breaker open for provider '{}' — requests blocked for ~30s",
+                provider
+            );
+        }
+        Ok(())
+    }
+
+    async fn record_llm_outcome(&self, provider: &str, success: bool) {
+        use super::circuit_breaker::CircuitState;
+
+        let breaker_arc = self.circuit_breakers.get(provider).await;
+        let mut breaker = breaker_arc.lock().await;
+        let now = super::now_millis();
+
+        if success {
+            let was_half_open = breaker.state() == CircuitState::HalfOpen;
+            breaker.record_success(now);
+            if was_half_open && breaker.state() == CircuitState::Closed {
+                let _ = self.event_tx.send(AgentEvent::ProviderCircuitRecovered {
+                    provider: provider.to_string(),
+                });
+            }
+        } else {
+            let was_closed_or_half = breaker.state() != CircuitState::Open;
+            breaker.record_failure(now);
+            if was_closed_or_half && breaker.state() == CircuitState::Open {
+                let _ = self.event_tx.send(AgentEvent::ProviderCircuitOpen {
+                    provider: provider.to_string(),
+                    trip_count: breaker.trip_count(),
+                });
+            }
         }
     }
 }
@@ -738,7 +806,10 @@ mod tests {
     async fn prune_welcome_messages_removes_all_concierge_welcomes() {
         let config = Arc::new(RwLock::new(AgentConfig::default()));
         let (event_tx, _) = broadcast::channel(8);
-        let engine = ConciergeEngine::new(config, event_tx, reqwest::Client::new());
+        let circuit_breakers = Arc::new(CircuitBreakerRegistry::from_provider_keys(
+            std::iter::empty(),
+        ));
+        let engine = ConciergeEngine::new(config, event_tx, reqwest::Client::new(), circuit_breakers);
         let threads = RwLock::new(HashMap::from([(
             CONCIERGE_THREAD_ID.to_string(),
             concierge_thread(vec![
