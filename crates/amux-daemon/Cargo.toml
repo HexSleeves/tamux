@@ -46,6 +46,7 @@ croner = "3"
 chrono = "0.4"
 jsonschema = "0.45"
 semver = "1"
+url = "2"
 
 [target.'cfg(windows)'.dependencies]
 interprocess = { version = "2", features = ["tokio"] }

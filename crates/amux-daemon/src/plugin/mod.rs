@@ -1,7 +1,11 @@
+pub mod api_proxy;
 pub mod loader;
 pub mod manifest;
 pub mod persistence;
+pub mod rate_limiter;
 pub mod schema;
+pub mod ssrf;
+pub mod template;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -10,6 +14,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tokio::sync::RwLock;
 
+pub use api_proxy::PluginApiError;
 pub use loader::LoadedPlugin;
 pub use persistence::{PluginPersistence, PluginRecord};
 
