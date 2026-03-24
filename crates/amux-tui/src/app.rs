@@ -92,6 +92,7 @@ pub struct TuiModel {
     pub auth: AuthState,
     pub subagents: SubAgentsState,
     pub concierge: ConciergeState,
+    pub tier: TierState,
 
     // UI chrome
     focus: FocusArea,
@@ -191,6 +192,7 @@ impl TuiModel {
             auth: AuthState::new(),
             subagents: SubAgentsState::new(),
             concierge: ConciergeState::new(),
+            tier: TierState::default(),
             focus: FocusArea::Input,
             theme: ThemeTokens::default(),
             width: 120,
@@ -402,8 +404,30 @@ impl TuiModel {
                 self.set_input_text("Search history for: ");
                 self.status_line = "Describe what you want to search and press Enter".to_string();
             }
-            "dismiss" => {
+            "dismiss" | "dismiss_welcome" => {
                 self.cleanup_concierge_on_navigate();
+            }
+            "start_goal_run" => {
+                self.cleanup_concierge_on_navigate();
+                self.chat
+                    .reduce(chat::ChatAction::SelectThread("concierge".to_string()));
+                self.send_daemon_command(DaemonCommand::RequestThread("concierge".to_string()));
+                self.main_pane_view = MainPaneView::Conversation;
+                self.focus = FocusArea::Input;
+                self.set_input_text("/goal ");
+                self.status_line = "Describe your goal and press Enter".to_string();
+            }
+            "focus_chat" => {
+                self.cleanup_concierge_on_navigate();
+                self.chat
+                    .reduce(chat::ChatAction::SelectThread("concierge".to_string()));
+                self.send_daemon_command(DaemonCommand::RequestThread("concierge".to_string()));
+                self.main_pane_view = MainPaneView::Conversation;
+                self.focus = FocusArea::Input;
+            }
+            "open_settings" => {
+                self.cleanup_concierge_on_navigate();
+                self.open_settings_tab(SettingsTab::Auth);
             }
             _ => {}
         }

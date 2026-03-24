@@ -1,4 +1,5 @@
 import { useAgentStore } from "../lib/agentStore";
+import { useWorkspaceStore } from "../lib/workspaceStore";
 
 export function ConciergeToast() {
     const welcome = useAgentStore((s) => s.conciergeWelcome);
@@ -6,6 +7,8 @@ export function ConciergeToast() {
     const config = useAgentStore((s) => s.conciergeConfig);
     const setActiveThread = useAgentStore((s) => s.setActiveThread);
     const createThread = useAgentStore((s) => s.createThread);
+    const settingsOpen = useWorkspaceStore((s) => s.settingsOpen);
+    const toggleSettings = useWorkspaceStore((s) => s.toggleSettings);
 
     if (!welcome || !config.enabled) return null;
 
@@ -33,13 +36,25 @@ export function ConciergeToast() {
                     <button
                         key={i}
                         onClick={async () => {
-                            if (action.action_type === "dismiss") {
+                            if (action.action_type === "dismiss" || action.action_type === "dismiss_welcome") {
                                 await dismiss();
                             } else if (action.action_type === "continue_session" && action.thread_id) {
                                 setActiveThread(action.thread_id);
                                 await dismiss();
                             } else if (action.action_type === "start_new") {
                                 createThread({});
+                                await dismiss();
+                            } else if (action.action_type === "start_goal_run") {
+                                // Navigate to goal run creation
+                                createThread({});
+                                await dismiss();
+                            } else if (action.action_type === "focus_chat") {
+                                // Focus chat input
+                                setActiveThread("concierge");
+                                await dismiss();
+                            } else if (action.action_type === "open_settings") {
+                                // Navigate to settings panel
+                                if (!settingsOpen) toggleSettings();
                                 await dismiss();
                             } else {
                                 await dismiss();

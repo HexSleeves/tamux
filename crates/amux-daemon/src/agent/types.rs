@@ -1734,6 +1734,10 @@ pub enum ConciergeActionType {
     StartNew,
     Search,
     Dismiss,
+    StartGoalRun,
+    DismissWelcome,
+    FocusChat,
+    OpenSettings,
 }
 
 /// A structured quick-action button in the concierge welcome message.

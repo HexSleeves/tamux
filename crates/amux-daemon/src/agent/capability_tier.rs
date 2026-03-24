@@ -211,6 +211,10 @@ pub struct TierConfig {
     pub enabled: bool,
     pub user_override: Option<CapabilityTier>,
     pub user_self_assessment: Option<CapabilityTier>,
+    #[serde(default)]
+    pub onboarding_completed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_known_tier: Option<String>,
 }
 
 impl Default for TierConfig {
@@ -219,6 +223,8 @@ impl Default for TierConfig {
             enabled: true,
             user_override: None,
             user_self_assessment: None,
+            onboarding_completed: false,
+            last_known_tier: None,
         }
     }
 }
