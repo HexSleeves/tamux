@@ -607,6 +607,25 @@ pub async fn send_status_query() -> Result<AgentStatusSnapshot> {
     }
 }
 
+pub async fn send_config_get() -> Result<serde_json::Value> {
+    match roundtrip(ClientMessage::AgentGetConfig).await? {
+        DaemonMessage::AgentConfigResponse { config_json } => {
+            let config: serde_json::Value = serde_json::from_str(&config_json)?;
+            Ok(config)
+        }
+        DaemonMessage::Error { message } => anyhow::bail!("daemon error: {message}"),
+        other => anyhow::bail!("unexpected response: {other:?}"),
+    }
+}
+
+pub async fn send_config_set(key_path: String, value_json: String) -> Result<()> {
+    match roundtrip(ClientMessage::AgentSetConfigItem { key_path, value_json }).await? {
+        DaemonMessage::AgentConfigResponse { .. } => Ok(()),
+        DaemonMessage::Error { message } => anyhow::bail!("daemon error: {message}"),
+        other => anyhow::bail!("unexpected response: {other:?}"),
+    }
+}
+
 pub async fn send_audit_query(
     action_types: Option<Vec<String>>,
     since: Option<u64>,
