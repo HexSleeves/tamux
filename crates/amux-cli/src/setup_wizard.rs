@@ -19,6 +19,7 @@ pub struct SetupResult {
     pub api_transport: String,
     pub preferred_client: String,
     pub data_dir: PathBuf,
+    pub capability_tier: Option<String>,
 }
 
 struct ProviderInfo {
@@ -272,7 +273,30 @@ pub async fn run_setup_wizard() -> Result<SetupResult> {
         _ => "tui".to_string(),
     };
 
-    // Step 4: Data directory
+    // Step 4: Experience level (capability tier self-assessment)
+    println!();
+    println!("How familiar are you with AI agents?\n");
+    println!("  1. Just getting started");
+    println!("  2. I've used chatbots");
+    println!("  3. I run automations");
+    println!("  4. I build agent systems");
+    println!();
+
+    let capability_tier = loop {
+        let input = prompt("Select experience level [1-4] (default: 1): ")?;
+        if input.is_empty() {
+            break Some("newcomer".to_string());
+        }
+        match input.as_str() {
+            "1" => break Some("newcomer".to_string()),
+            "2" => break Some("familiar".to_string()),
+            "3" => break Some("power_user".to_string()),
+            "4" => break Some("expert".to_string()),
+            _ => println!("Invalid selection. Enter a number between 1 and 4."),
+        }
+    };
+
+    // Step 5: Data directory (renumbered from Step 4)
     let default_data_dir = amux_protocol::amux_data_dir();
     let data_dir_input = prompt(&format!(
         "Data directory [{}]: ",
@@ -284,7 +308,7 @@ pub async fn run_setup_wizard() -> Result<SetupResult> {
         PathBuf::from(&data_dir_input)
     };
 
-    // Step 5: Connectivity test
+    // Step 6: Connectivity test
     println!();
     println!("Testing connection to {}...", provider.name);
     let test_result = test_connectivity(&base_url, &model, &api_key, &api_transport).await;
@@ -316,6 +340,7 @@ pub async fn run_setup_wizard() -> Result<SetupResult> {
         api_transport: api_transport.clone(),
         preferred_client: preferred_client.clone(),
         data_dir: data_dir.clone(),
+        capability_tier: capability_tier.clone(),
     })
     .context("Failed to write configuration")?;
 
@@ -330,6 +355,7 @@ pub async fn run_setup_wizard() -> Result<SetupResult> {
         api_transport,
         preferred_client,
         data_dir,
+        capability_tier,
     })
 }
 
@@ -406,7 +432,7 @@ fn write_config_atomic(data_dir: &Path, result: &SetupResult) -> Result<()> {
     std::fs::create_dir_all(&agent_dir)
         .context("Failed to create agent config directory")?;
 
-    let config = serde_json::json!({
+    let mut config = serde_json::json!({
         "provider": result.provider,
         "model": result.model,
         "api_key": result.api_key,
@@ -414,6 +440,14 @@ fn write_config_atomic(data_dir: &Path, result: &SetupResult) -> Result<()> {
         "api_transport": result.api_transport,
         "preferred_client": result.preferred_client,
     });
+
+    // Include capability tier self-assessment if set.
+    if let Some(ref tier) = result.capability_tier {
+        config["tier"] = serde_json::json!({
+            "enabled": true,
+            "user_self_assessment": tier,
+        });
+    }
 
     let config_str = serde_json::to_string_pretty(&config)
         .context("Failed to serialize config")?;
@@ -539,6 +573,7 @@ mod tests {
             api_transport: "anthropic".to_string(),
             preferred_client: "tui".to_string(),
             data_dir: tmp.path().to_path_buf(),
+            capability_tier: Some("familiar".to_string()),
         };
 
         write_config_atomic(tmp.path(), &result).unwrap();

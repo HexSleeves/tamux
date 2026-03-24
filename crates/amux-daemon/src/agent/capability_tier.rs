@@ -224,6 +224,171 @@ impl Default for TierConfig {
 }
 
 // ---------------------------------------------------------------------------
+// AgentEngine tier integration
+// ---------------------------------------------------------------------------
+
+use amux_protocol::DaemonMessage;
+
+use super::engine::AgentEngine;
+
+impl AgentEngine {
+    /// Compute the current effective tier from operator model + config signals.
+    pub(super) async fn compute_current_tier(&self) -> CapabilityTier {
+        let config = self.config.read().await;
+        let tier_config = &config.tier;
+
+        if !tier_config.enabled {
+            // Tier system disabled -- fall back to self-assessment or Newcomer.
+            return tier_config
+                .user_self_assessment
+                .unwrap_or(CapabilityTier::Newcomer);
+        }
+
+        let model = self.operator_model.read().await;
+
+        let signals = TierSignals {
+            session_count: model.session_count,
+            unique_tools_used: model.unique_tools_seen.len(),
+            goal_runs_completed: model.goal_runs_completed,
+            risk_tolerance: model.risk_fingerprint.risk_tolerance,
+            user_self_assessment: tier_config.user_self_assessment,
+            user_override: tier_config.user_override,
+        };
+
+        resolve_tier(&signals)
+    }
+
+    /// Build a full status snapshot for the `AgentStatusResponse` protocol message.
+    pub async fn get_status_snapshot(&self) -> DaemonMessage {
+        let tier = self.compute_current_tier().await;
+        let flags = tier_features_visible(tier);
+        let feature_flags_json =
+            serde_json::to_string(&flags).unwrap_or_else(|_| "{}".to_string());
+
+        // Activity state
+        let goal_runs = self.goal_runs.lock().await;
+        let inflight = self.inflight_goal_runs.lock().await;
+        let (activity, active_goal_run_id, active_goal_run_title) = if !inflight.is_empty() {
+            let active_id = inflight.iter().next().cloned();
+            let title = active_id.as_ref().and_then(|id| {
+                goal_runs
+                    .iter()
+                    .find(|g| &g.id == id)
+                    .map(|g| g.title.clone())
+            });
+            ("goal_running".to_string(), active_id, title)
+        } else {
+            ("idle".to_string(), None, None)
+        };
+        drop(goal_runs);
+        drop(inflight);
+
+        // Active thread: pick the most recently updated thread (heuristic).
+        let threads = self.threads.read().await;
+        let active_thread_id = threads
+            .values()
+            .max_by_key(|t| t.messages.last().map(|m| m.timestamp).unwrap_or(0))
+            .map(|t| t.id.clone());
+        drop(threads);
+
+        // Provider health: serialize circuit breaker summaries.
+        let provider_health_json = {
+            let config = self.config.read().await;
+            let mut health = serde_json::Map::new();
+            for name in config.providers.keys() {
+                let breaker = self.circuit_breakers.get(name).await;
+                let mut b = breaker.lock().await;
+                health.insert(
+                    name.clone(),
+                    serde_json::json!({
+                        "can_execute": b.can_execute(super::now_millis()),
+                        "trip_count": b.trip_count(),
+                    }),
+                );
+            }
+            serde_json::to_string(&health).unwrap_or_else(|_| "{}".to_string())
+        };
+
+        // Gateway statuses
+        let gateway_statuses_json = {
+            let gw = self.gateway_state.lock().await;
+            if let Some(ref state) = *gw {
+                let mut statuses = serde_json::Map::new();
+                statuses.insert("slack".to_string(), serde_json::json!({
+                    "status": format!("{:?}", state.slack_health.status),
+                    "consecutive_failures": state.slack_health.consecutive_failure_count,
+                }));
+                statuses.insert("discord".to_string(), serde_json::json!({
+                    "status": format!("{:?}", state.discord_health.status),
+                    "consecutive_failures": state.discord_health.consecutive_failure_count,
+                }));
+                statuses.insert("telegram".to_string(), serde_json::json!({
+                    "status": format!("{:?}", state.telegram_health.status),
+                    "consecutive_failures": state.telegram_health.consecutive_failure_count,
+                }));
+                serde_json::to_string(&statuses).unwrap_or_else(|_| "{}".to_string())
+            } else {
+                "{}".to_string()
+            }
+        };
+
+        // Recent audit actions (last 5).
+        let recent_actions_json = match self.history.list_action_audit(None, None, 5).await {
+            Ok(entries) => {
+                let items: Vec<serde_json::Value> = entries
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "id": e.id,
+                            "timestamp": e.timestamp,
+                            "action_type": e.action_type,
+                            "summary": e.summary,
+                        })
+                    })
+                    .collect();
+                serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string())
+            }
+            Err(_) => "[]".to_string(),
+        };
+
+        DaemonMessage::AgentStatusResponse {
+            tier: tier.to_string(),
+            feature_flags_json,
+            activity,
+            active_thread_id,
+            active_goal_run_id,
+            active_goal_run_title,
+            provider_health_json,
+            gateway_statuses_json,
+            recent_actions_json,
+        }
+    }
+
+    /// Set or clear the tier override, persist config, and broadcast change.
+    pub async fn set_tier_override(&self, tier: Option<CapabilityTier>) {
+        let previous = self.compute_current_tier().await;
+
+        {
+            let mut config = self.config.write().await;
+            config.tier.user_override = tier;
+        }
+
+        // Persist config change.
+        self.persist_config().await;
+
+        let new_tier = self.compute_current_tier().await;
+
+        if previous != new_tier {
+            let _ = self.event_tx.send(super::types::AgentEvent::TierChanged {
+                previous_tier: previous.to_string(),
+                new_tier: new_tier.to_string(),
+                reason: "user_override".to_string(),
+            });
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

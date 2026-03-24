@@ -2787,6 +2787,31 @@ where
 
                     framed.send(msg).await?;
                 }
+
+                ClientMessage::AgentStatusQuery => {
+                    let msg = agent.get_status_snapshot().await;
+                    framed.send(msg).await?;
+                }
+
+                ClientMessage::AgentSetTierOverride { tier } => {
+                    use crate::agent::capability_tier::CapabilityTier;
+                    let parsed = tier.as_deref().and_then(CapabilityTier::from_str_loose);
+                    // If a tier string was provided but failed to parse, return error.
+                    if tier.is_some() && parsed.is_none() {
+                        framed
+                            .send(DaemonMessage::Error {
+                                message: format!(
+                                    "Invalid tier '{}'. Expected: newcomer, familiar, power_user, expert.",
+                                    tier.unwrap_or_default()
+                                ),
+                            })
+                            .await?;
+                    } else {
+                        agent.set_tier_override(parsed).await;
+                        // No explicit response -- a TierChanged event is broadcast if tier
+                        // actually changed, and the caller can query status afterward.
+                    }
+                }
             }
         }
     }

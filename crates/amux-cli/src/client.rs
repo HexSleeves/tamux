@@ -198,6 +198,10 @@ enum AgentBridgeCommand {
     DismissConciergeWelcome,
     RequestConciergeWelcome,
     AuditDismiss { entry_id: String },
+    GetStatus,
+    SetTierOverride {
+        tier: Option<String>,
+    },
     Shutdown,
 }
 
@@ -1293,6 +1297,12 @@ pub async fn run_agent_bridge() -> Result<()> {
                             AgentBridgeCommand::AuditDismiss { entry_id } => {
                                 framed.send(ClientMessage::AuditDismiss { entry_id }).await?;
                             }
+                            AgentBridgeCommand::GetStatus => {
+                                framed.send(ClientMessage::AgentStatusQuery).await?;
+                            }
+                            AgentBridgeCommand::SetTierOverride { tier } => {
+                                framed.send(ClientMessage::AgentSetTierOverride { tier }).await?;
+                            }
                             AgentBridgeCommand::Shutdown => {
                                 framed.send(ClientMessage::AgentUnsubscribe).await?;
                                 break;
@@ -1413,6 +1423,38 @@ pub async fn run_agent_bridge() -> Result<()> {
                     }
                     Some(Ok(DaemonMessage::AgentConciergeWelcomeDismissed)) => {
                         let msg = serde_json::json!({"type":"concierge-welcome-dismissed"});
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentTierChanged { previous_tier, new_tier, reason })) => {
+                        let msg = serde_json::json!({
+                            "type": "tier-changed",
+                            "data": {
+                                "previous_tier": previous_tier,
+                                "new_tier": new_tier,
+                                "reason": reason,
+                            }
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentStatusResponse {
+                        tier, feature_flags_json, activity,
+                        active_thread_id, active_goal_run_id, active_goal_run_title,
+                        provider_health_json, gateway_statuses_json, recent_actions_json,
+                    })) => {
+                        let msg = serde_json::json!({
+                            "type": "status-response",
+                            "data": {
+                                "tier": tier,
+                                "feature_flags": serde_json::from_str::<serde_json::Value>(&feature_flags_json).unwrap_or_default(),
+                                "activity": activity,
+                                "active_thread_id": active_thread_id,
+                                "active_goal_run_id": active_goal_run_id,
+                                "active_goal_run_title": active_goal_run_title,
+                                "provider_health": serde_json::from_str::<serde_json::Value>(&provider_health_json).unwrap_or_default(),
+                                "gateway_statuses": serde_json::from_str::<serde_json::Value>(&gateway_statuses_json).unwrap_or_default(),
+                                "recent_actions": serde_json::from_str::<serde_json::Value>(&recent_actions_json).unwrap_or_default(),
+                            }
+                        });
                         emit_agent_event(&msg.to_string())?;
                     }
                     Some(Ok(DaemonMessage::Error { message })) => {

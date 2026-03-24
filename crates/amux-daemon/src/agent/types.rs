@@ -2084,6 +2084,12 @@ pub enum AgentEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         audit_id: Option<String>,
     },
+    /// Capability tier changed notification (Phase 10).
+    TierChanged {
+        previous_tier: String,
+        new_tier: String,
+        reason: String,
+    },
 }
 
 // ---------------------------------------------------------------------------

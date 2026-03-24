@@ -539,6 +539,14 @@ pub enum ClientMessage {
         /// Skill name or variant ID.
         identifier: String,
     },
+
+    /// Query the agent's current capability tier, feature flags, and status snapshot.
+    AgentStatusQuery,
+
+    /// Set capability tier override (from settings UI). None clears override.
+    AgentSetTierOverride {
+        tier: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -930,6 +938,29 @@ pub enum DaemonMessage {
 
     /// Response to SkillPublish. Per SKIL-07/D-02.
     SkillPublishResult { success: bool, message: String },
+
+    /// Capability tier changed (pushed to all clients on tier transitions).
+    AgentTierChanged {
+        previous_tier: String,
+        new_tier: String,
+        reason: String,
+    },
+
+    /// Agent status snapshot (response to AgentStatusQuery).
+    AgentStatusResponse {
+        tier: String,
+        feature_flags_json: String,
+        activity: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active_thread_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active_goal_run_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active_goal_run_title: Option<String>,
+        provider_health_json: String,
+        gateway_statuses_json: String,
+        recent_actions_json: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
