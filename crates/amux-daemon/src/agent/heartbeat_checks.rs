@@ -451,6 +451,7 @@ mod tests {
             heuristic_store: RwLock::new(super::learning::heuristics::HeuristicStore::default()),
             pattern_store: RwLock::new(super::learning::patterns::PatternStore::default()),
             disclosure_queue: RwLock::new(super::capability_tier::DisclosureQueue::default()),
+            plugin_manager: std::sync::OnceLock::new(),
         })
     }
 

@@ -790,6 +790,21 @@ pub fn get_available_tools(
         tools.extend(generated_tool_definitions(config, agent_data_dir));
     }
 
+    // Plugin API proxy tool -- always available (PluginManager handles disabled/missing checks)
+    tools.push(tool_def(
+        "plugin_api_call",
+        "Call a plugin API endpoint. The daemon proxies the HTTP request, handles auth, rate limiting, and returns the response as text.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "plugin_name": { "type": "string", "description": "Name of the installed plugin" },
+                "endpoint_name": { "type": "string", "description": "Name of the API endpoint from the plugin manifest" },
+                "params": { "type": "object", "description": "Parameters passed to the endpoint template (optional)" }
+            },
+            "required": ["plugin_name", "endpoint_name"]
+        }),
+    ));
+
     tools
 }
 
@@ -1065,6 +1080,40 @@ pub async fn execute_tool(
         }
         "web_search" => execute_web_search(&args, http_client).await,
         "fetch_url" => execute_fetch_url(&args, http_client).await,
+        "plugin_api_call" => {
+            let plugin_name = match get_string_arg(&args, &["plugin_name"]) {
+                Some(name) => name.to_string(),
+                None => return ToolResult {
+                    tool_call_id: tool_call.id.clone(),
+                    name: tool_call.function.name.clone(),
+                    content: "Error: missing 'plugin_name' argument".to_string(),
+                    is_error: true,
+                    pending_approval: None,
+                },
+            };
+            let endpoint_name = match get_string_arg(&args, &["endpoint_name"]) {
+                Some(name) => name.to_string(),
+                None => return ToolResult {
+                    tool_call_id: tool_call.id.clone(),
+                    name: tool_call.function.name.clone(),
+                    content: "Error: missing 'endpoint_name' argument".to_string(),
+                    is_error: true,
+                    pending_approval: None,
+                },
+            };
+            let params = args
+                .get("params")
+                .cloned()
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+
+            match agent.plugin_manager.get() {
+                Some(pm) => match pm.api_call(&plugin_name, &endpoint_name, params).await {
+                    Ok(text) => Ok(text),
+                    Err(e) => Err(anyhow::anyhow!("{}", e)),
+                },
+                None => Err(anyhow::anyhow!("Plugin system not available")),
+            }
+        }
         other => match execute_generated_tool(
             other,
             &args,

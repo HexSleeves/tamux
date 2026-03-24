@@ -124,6 +124,9 @@ pub struct AgentEngine {
     pub(super) pattern_store: RwLock<super::learning::patterns::PatternStore>,
     /// Feature disclosure queue for progressive tier-based feature revelation (D-13).
     pub(super) disclosure_queue: RwLock<super::capability_tier::DisclosureQueue>,
+    /// Plugin manager for API proxy tool executor access (Phase 17).
+    /// Set after both AgentEngine and PluginManager are constructed in server.rs.
+    pub plugin_manager: std::sync::OnceLock<Arc<crate::plugin::PluginManager>>,
 }
 
 impl AgentEngine {
@@ -220,6 +223,7 @@ impl AgentEngine {
             heuristic_store: RwLock::new(super::learning::heuristics::HeuristicStore::default()),
             pattern_store: RwLock::new(super::learning::patterns::PatternStore::default()),
             disclosure_queue: RwLock::new(super::capability_tier::DisclosureQueue::default()),
+            plugin_manager: std::sync::OnceLock::new(),
         })
     }
 
