@@ -76,7 +76,7 @@ Requirements for the "Living Agent" milestone. Each maps to roadmap phases.
 - [x] **DIST-02**: Standalone platform binaries via cargo-dist (Linux, macOS, Windows)
 - [x] **DIST-03**: Shell installer: `curl -fsSL https://tamux.dev/install.sh | sh` for Unix systems
 - [x] **DIST-04**: PowerShell installer for Windows
-- [ ] **DIST-05**: First-run automatically spawns daemon, opens default client, and starts concierge onboarding
+- [x] **DIST-05**: First-run automatically spawns daemon, opens default client, and starts concierge onboarding
 
 ### Gateway Completion
 
@@ -190,7 +190,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DIST-02 | Phase 9 | Complete |
 | DIST-03 | Phase 9 | Complete |
 | DIST-04 | Phase 9 | Complete |
-| DIST-05 | Phase 9 | Pending |
+| DIST-05 | Phase 9 | Complete |
 | GATE-01 | Phase 8 | Complete |
 | GATE-02 | Phase 8 | Complete |
 | GATE-03 | Phase 8 | Complete |
