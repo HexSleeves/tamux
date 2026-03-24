@@ -2956,6 +2956,23 @@ where
                         })
                         .await?;
                 }
+
+                // Plugin API call (Plan 17-02 will wire the full orchestration).
+                ClientMessage::PluginApiCall {
+                    plugin_name,
+                    endpoint_name,
+                    params: _,
+                } => {
+                    framed
+                        .send(DaemonMessage::PluginApiCallResult {
+                            plugin_name,
+                            endpoint_name,
+                            success: false,
+                            result: "API proxy not yet wired (see Plan 17-02)".to_string(),
+                            error_type: Some("not_implemented".to_string()),
+                        })
+                        .await?;
+                }
             }
         }
     }

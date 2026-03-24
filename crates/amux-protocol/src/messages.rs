@@ -584,6 +584,13 @@ pub enum ClientMessage {
 
     /// Test plugin API connectivity. Per PSET-05/D-10.
     PluginTestConnection { name: String },
+
+    /// Call a plugin API endpoint. Per APRX-02. Params is a JSON string.
+    PluginApiCall {
+        plugin_name: String,
+        endpoint_name: String,
+        params: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,6 +1030,17 @@ pub enum DaemonMessage {
         plugin_name: String,
         success: bool,
         message: String,
+    },
+
+    /// Response to PluginApiCall. Per APRX-02.
+    PluginApiCallResult {
+        plugin_name: String,
+        endpoint_name: String,
+        success: bool,
+        /// Result body (rendered response on success, error message on failure).
+        result: String,
+        /// Error type key (e.g. "ssrf_blocked", "rate_limited", "timeout") on failure.
+        error_type: Option<String>,
     },
 }
 
@@ -2213,6 +2231,87 @@ mod tests {
                 assert_eq!(plugin_name, "gmail");
                 assert!(success);
                 assert_eq!(message, "Connection successful");
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn plugin_api_call_bincode_roundtrip() {
+        let msg = ClientMessage::PluginApiCall {
+            plugin_name: "gmail".into(),
+            endpoint_name: "list_messages".into(),
+            params: r#"{"query":"is:unread"}"#.into(),
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            ClientMessage::PluginApiCall {
+                plugin_name,
+                endpoint_name,
+                params,
+            } => {
+                assert_eq!(plugin_name, "gmail");
+                assert_eq!(endpoint_name, "list_messages");
+                assert_eq!(params, r#"{"query":"is:unread"}"#);
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn plugin_api_call_result_success_bincode_roundtrip() {
+        let msg = DaemonMessage::PluginApiCallResult {
+            plugin_name: "gmail".into(),
+            endpoint_name: "list_messages".into(),
+            success: true,
+            result: "Subject: Hello\nFrom: alice@example.com".into(),
+            error_type: None,
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            DaemonMessage::PluginApiCallResult {
+                plugin_name,
+                endpoint_name,
+                success,
+                result,
+                error_type,
+            } => {
+                assert_eq!(plugin_name, "gmail");
+                assert_eq!(endpoint_name, "list_messages");
+                assert!(success);
+                assert!(result.contains("Hello"));
+                assert!(error_type.is_none());
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn plugin_api_call_result_error_bincode_roundtrip() {
+        let msg = DaemonMessage::PluginApiCallResult {
+            plugin_name: "gmail".into(),
+            endpoint_name: "list_messages".into(),
+            success: false,
+            result: "Rate limited".into(),
+            error_type: Some("rate_limited".into()),
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            DaemonMessage::PluginApiCallResult {
+                plugin_name,
+                endpoint_name,
+                success,
+                result,
+                error_type,
+            } => {
+                assert_eq!(plugin_name, "gmail");
+                assert_eq!(endpoint_name, "list_messages");
+                assert!(!success);
+                assert_eq!(result, "Rate limited");
+                assert_eq!(error_type.as_deref(), Some("rate_limited"));
             }
             other => panic!("unexpected variant: {:?}", other),
         }
