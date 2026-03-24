@@ -22,6 +22,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8: Gateway Completion** - Daemon-side Slack, Discord, Telegram with unified config and health monitoring
 - [ ] **Phase 9: Distribution** - Single-command install via npm, cargo-dist binaries, platform installers
 - [x] **Phase 10: Progressive UX** - Capability tiers, concierge onboarding, typed bridge helper, consistent status (completed 2026-03-24)
+- [ ] **Phase 11: Setup Wizard Rewrite** - IPC-based config, synced providers, arrow-key navigation, tier-appropriate depth
+- [ ] **Phase 12: CLI Polish** - Launch commands, fix stats, hide internals, audit IDs, settings subcommand
+- [ ] **Phase 13: TUI UX Fixes** - Concierge in conversation, tier settings, feature settings, recent actions
 
 ## Phase Details
 
@@ -201,11 +204,50 @@ Plans:
 - [x] 10-04-PLAN.md — Client-side tier gating: Zustand tierStore, TierGatedSection component, TUI TierState
 - [x] 10-05-PLAN.md — Unified status visibility: statusStore, enhanced StatusBar, TUI sidebar status, CLI status subcommand
 
+### Phase 11: Setup Wizard Rewrite
+**Goal**: Setup wizard correctly configures the daemon via IPC (not config.json), syncs with actual provider list, supports arrow-key navigation, and offers tier-appropriate configuration depth
+**Depends on**: Phase 10
+**Requirements**: DIST-05 (reopen), PRUX-01
+**Gap Closure:** Closes UAT issues: wizard→daemon config path, provider list mismatch, input UX, advanced user path, newcomer security defaults, web search/gateway optional steps
+**Success Criteria** (what must be TRUE):
+  1. Setup wizard writes config to daemon DB via IPC, NOT to config.json
+  2. Provider list matches daemon's actual provider definitions
+  3. Navigation uses arrow keys/enter/tab (not number input)
+  4. Advanced users get optional steps for web search, gateway, and tool configuration
+  5. Newcomer tier defaults to strictest approval thresholds
+**Plans**: TBD
+
+### Phase 12: CLI Polish
+**Goal**: CLI subcommands are complete, functional, and don't expose internal-only commands
+**Depends on**: Phase 11
+**Requirements**: DIST-01
+**Gap Closure:** Closes UAT issues: missing tui/gui commands, broken stats, internal command hiding, audit ID display, settings subcommand
+**Success Criteria** (what must be TRUE):
+  1. `tamux tui` launches the TUI and `tamux gui` launches Electron
+  2. `tamux stats` returns valid statistics without deserialization errors
+  3. Internal commands (attach, new, scrub) are hidden from `tamux --help`
+  4. `tamux audit` list output shows entry IDs usable with `--detail`
+  5. `tamux settings` allows CLI-based configuration of all daemon settings
+**Plans**: TBD
+
+### Phase 13: TUI UX Fixes
+**Goal**: TUI correctly renders concierge onboarding in conversation, exposes tier and feature settings, and shows full status information
+**Depends on**: Phase 11
+**Requirements**: PRUX-03, PRUX-04, PRUX-06
+**Gap Closure:** Closes UAT issues: concierge clipping, missing tier settings, missing feature settings, TUI recent_actions
+**Success Criteria** (what must be TRUE):
+  1. Concierge onboarding message renders in the conversation thread, not a clipped overlay panel
+  2. TUI settings panel includes tier override selector (D-03)
+  3. TUI advanced settings tab shows controls for heartbeat, memory, skills, gateway features
+  4. TUI sidebar displays recent autonomous actions from AgentStatusResponse
+**Plans**: TBD
+**UI hint**: yes
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 > 2 > 3 > 4 > 5 > 6 > 7 > 8 > 9 > 10
-Note: Phases 8 and 9 can execute in parallel with phases 2-7 (they only depend on Phase 1).
+Phases 1-10 (original milestone), then 11 > 12 > 13 (gap closure).
+Phases 12 and 13 can execute in parallel (both depend on 11).
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -218,4 +260,7 @@ Note: Phases 8 and 9 can execute in parallel with phases 2-7 (they only depend o
 | 7. Community Skills | 1/3 | In Progress | - |
 | 8. Gateway Completion | 0/4 | Not started | - |
 | 9. Distribution | 0/4 | Not started | - |
-| 10. Progressive UX | 5/5 | Complete    | 2026-03-24 |
+| 10. Progressive UX | 5/5 | Complete | 2026-03-24 |
+| 11. Setup Wizard Rewrite | 0/? | Not started | - |
+| 12. CLI Polish | 0/? | Not started | - |
+| 13. TUI UX Fixes | 0/? | Not started | - |
