@@ -23,8 +23,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 9: Distribution** - Single-command install via npm, cargo-dist binaries, platform installers
 - [x] **Phase 10: Progressive UX** - Capability tiers, concierge onboarding, typed bridge helper, consistent status (completed 2026-03-24)
 - [x] **Phase 11: Setup Wizard Rewrite** - IPC-based config, synced providers, arrow-key navigation, tier-appropriate depth (completed 2026-03-24)
-- [ ] **Phase 12: CLI Polish** - Launch commands, fix stats, hide internals, audit IDs, settings subcommand
-- [ ] **Phase 13: TUI UX Fixes** - Concierge in conversation, tier settings, feature settings, recent actions
+- [x] **Phase 12: CLI Polish** - Launch commands, fix stats, hide internals, audit IDs, settings subcommand (completed 2026-03-24)
+- [x] **Phase 13: TUI UX Fixes** - Concierge in conversation, tier settings, feature settings, recent actions (completed 2026-03-24)
 
 ## Phase Details
 
@@ -232,7 +232,7 @@ Plans:
   3. Internal commands (attach, new, scrub) are hidden from `tamux --help`
   4. `tamux audit` list output shows entry IDs usable with `--detail`
   5. `tamux settings` allows CLI-based configuration of all daemon settings
-**Plans:** 1/2 plans executed
+**Plans:** 1/2 plans complete
 
 Plans:
 - [x] 12-01-PLAN.md — Add tui/gui launch commands, stats alias, hide internals, fix audit ID display
@@ -248,7 +248,7 @@ Plans:
   2. TUI settings panel includes tier override selector (D-03)
   3. TUI advanced settings tab shows controls for heartbeat, memory, skills, gateway features
   4. TUI sidebar displays recent autonomous actions from AgentStatusResponse
-**Plans:** 2/3 plans executed
+**Plans:** 2/3 plans complete
 **UI hint**: yes
 
 Plans:
@@ -275,5 +275,5 @@ Phases 12 and 13 can execute in parallel (both depend on 11).
 | 9. Distribution | 0/4 | Not started | - |
 | 10. Progressive UX | 5/5 | Complete | 2026-03-24 |
 | 11. Setup Wizard Rewrite | 2/2 | Complete    | 2026-03-24 |
-| 12. CLI Polish | 1/2 | In Progress|  |
-| 13. TUI UX Fixes | 2/3 | In Progress|  |
+| 12. CLI Polish | 1/2 | Complete    | 2026-03-24 |
+| 13. TUI UX Fixes | 2/3 | Complete    | 2026-03-24 |
