@@ -32,7 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 14: Plugin Manifest & Loader** - JSON Schema definition, manifest validation, daemon loader, SQLite storage (completed 2026-03-24)
 - [x] **Phase 15: Plugin CLI & Install** - Extend plugins.rs for new manifest format, npm/GitHub/local install, daemon IPC registration (completed 2026-03-24)
-- [ ] **Phase 16: Plugin Settings UI** - Plugins tab in TUI and Electron, dynamic form rendering from manifest schema
+- [x] **Phase 16: Plugin Settings UI** - Plugins tab in TUI and Electron, dynamic form rendering from manifest schema (completed 2026-03-24)
 - [ ] **Phase 17: API Proxy Layer** - HTTP proxy in daemon, Handlebars templates, SSRF protection, rate limiting
 - [ ] **Phase 18: OAuth2 Flow** - Authorization code + PKCE, encrypted token storage, refresh lifecycle, UI integration
 - [ ] **Phase 19: Plugin Skills & Commands** - Bundled skill registration, command namespacing, agent integration
@@ -313,13 +313,13 @@ Plans:
   4. Secret fields are masked in UI, encrypted in storage
   5. Settings changes flow from UI -> IPC -> daemon SQLite (single source of truth)
   6. OAuth-enabled plugins show "Connect" / "Connected" / "Reconnect" button
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 **UI hint**: yes
 
 Plans:
 - [x] 16-01-PLAN.md — IPC protocol messages, daemon persistence/handlers, agent bridge, Electron/TUI client methods
 - [x] 16-02-PLAN.md — Electron PluginsTab: pluginStore, dynamic settings form, auth badges, test connection
-- [ ] 16-03-PLAN.md — TUI Plugins tab: SettingsTab::Plugins, render_plugins_tab widget, settings_handlers wiring
+- [x] 16-03-PLAN.md — TUI Plugins tab: SettingsTab::Plugins, render_plugins_tab widget, settings_handlers wiring
 
 ### Phase 17: API Proxy Layer
 **Goal**: Daemon proxies HTTP requests for plugins per their API contract definitions, with template rendering and security protections
@@ -406,7 +406,7 @@ Phase 14 (Manifest & Loader) ─────┬──► Phase 15 (CLI & Install
 | **v2.0** | | | |
 | 14. Plugin Manifest & Loader | 2/2 | Complete    | 2026-03-24 |
 | 15. Plugin CLI & Install | 2/2 | Complete    | 2026-03-24 |
-| 16. Plugin Settings UI | 2/3 | In Progress|  |
+| 16. Plugin Settings UI | 3/3 | Complete   | 2026-03-24 |
 | 17. API Proxy Layer | 0/? | Not started | - |
 | 18. OAuth2 Flow | 0/? | Not started | - |
 | 19. Plugin Skills & Commands | 0/? | Not started | - |

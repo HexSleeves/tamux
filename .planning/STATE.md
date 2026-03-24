@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Plugin Ecosystem
-status: Ready to execute
-stopped_at: Completed 16-02-PLAN.md
-last_updated: "2026-03-24T22:15:11.148Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 16-03-PLAN.md
+last_updated: "2026-03-24T22:22:52.554Z"
 progress:
   total_phases: 20
-  completed_phases: 11
+  completed_phases: 12
   total_plans: 54
-  completed_plans: 49
+  completed_plans: 50
 ---
 
 # Project State
@@ -97,6 +97,7 @@ Plan: 3 of 3
 | Phase 15 P02 | 4min | 2 tasks | 4 files |
 | Phase 16 P01 | 7min | 2 tasks | 9 files |
 | Phase 16 P02 | 4min | 2 tasks | 3 files |
+| Phase 16 P03 | 10min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -198,6 +199,8 @@ Recent decisions affecting current work:
 - [Phase 16]: Secret masking at PluginManager layer; persistence returns raw decoded values for daemon use
 - [Phase 16]: Save-on-blur for text/password/number via wrapper div onBlur; immediate for toggle/select
 - [Phase 16]: Auth status hardcoded to not_configured in Phase 16; real OAuth wiring deferred to Phase 18
+- [Phase 16]: PluginSettingsState stored separately on TuiModel (not inside SettingsState) because plugin data is dynamic and schema-driven
+- [Phase 16]: DaemonCommand enum extended with 7 plugin variants for TUI plugin IPC routing through main.rs dispatcher
 
 ### Pending Todos
 
@@ -211,6 +214,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T22:15:11.146Z
-Stopped at: Completed 16-02-PLAN.md
+Last session: 2026-03-24T22:22:52.552Z
+Stopped at: Completed 16-03-PLAN.md
 Resume file: None
