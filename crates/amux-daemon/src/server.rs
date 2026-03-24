@@ -2167,6 +2167,12 @@ where
                         if let Err(e) = agent.concierge.deliver_onboarding(tier).await {
                             tracing::warn!("onboarding delivery failed, falling back to generic welcome: {e}");
                         }
+                        // Mark onboarding as completed so it doesn't re-trigger on reconnect
+                        {
+                            let mut cfg = agent.config.write().await;
+                            cfg.tier.onboarding_completed = true;
+                            // Config will be persisted on next heartbeat or config change
+                        }
                     }
 
                     // Generate welcome inline (awaits LLM call for non-Minimal levels).
