@@ -89,6 +89,84 @@ Requirements for the "Living Agent" milestone. Each maps to roadmap phases.
 
 ## v2 Requirements
 
+Requirements for the "Plugin Ecosystem" milestone. Each maps to roadmap phases 14-20.
+
+### Plugin Manifest
+
+- [x] **PLUG-01**: Plugin manifest format defined as JSON with versioned schema (`schema_version: 1`)
+- [ ] **PLUG-02**: Daemon validates plugin manifests against JSON Schema on load, rejects invalid manifests with clear error messages
+- [ ] **PLUG-03**: Daemon loads all valid plugin manifests from `~/.tamux/plugins/` on startup
+- [x] **PLUG-04**: Plugin manifests declare settings fields with types (string, number, boolean, select), labels, required/optional, and secret flag
+- [x] **PLUG-05**: Plugin manifests declare API endpoints with method, path template, params, headers, and response template
+- [x] **PLUG-06**: Plugin manifests declare commands (slash commands) with description and action mapping to API endpoints
+- [x] **PLUG-07**: Plugin manifests reference bundled YAML skills by relative path
+- [ ] **PLUG-08**: Plugin manifest size limit enforced (100KB max, 50 endpoints max, 30 settings fields max)
+- [ ] **PLUG-09**: Plugin metadata stored in SQLite `plugins` table with name, version, manifest, source, enabled status
+
+### Plugin Install & Lifecycle
+
+- [ ] **INST-01**: `tamux plugin install <npm-package>` installs plugin from npm registry
+- [ ] **INST-02**: `tamux plugin install <github-url>` installs plugin from GitHub repository
+- [ ] **INST-03**: `tamux plugin install <local-path>` installs plugin from local directory (dev workflow)
+- [ ] **INST-04**: `tamux plugin uninstall <name>` removes plugin files, deregisters from daemon, cleans up bundled skills
+- [ ] **INST-05**: `tamux plugin list` shows installed plugins with name, version, enabled status, and auth status
+- [ ] **INST-06**: `tamux plugin enable/disable <name>` toggles plugin without uninstall
+- [ ] **INST-07**: Plugin install rejects manifests that conflict with existing command or skill names (namespace: `/pluginname.command`)
+- [ ] **INST-08**: npm install uses `--ignore-scripts` to prevent lifecycle script execution (security)
+
+### Plugin Settings UI
+
+- [ ] **PSET-01**: Plugins tab in Electron settings renders installed plugins list with enable/disable toggle
+- [ ] **PSET-02**: Plugins tab in TUI settings renders installed plugins list with enable/disable toggle
+- [ ] **PSET-03**: Plugin settings form dynamically generated from manifest `settings` schema in both TUI and Electron
+- [ ] **PSET-04**: Secret settings fields masked in UI and stored encrypted
+- [ ] **PSET-05**: "Test Connection" button validates plugin API connectivity using configured credentials
+- [ ] **PSET-06**: Plugin settings persisted in daemon SQLite, retrieved via IPC (single source of truth for both UIs)
+- [ ] **PSET-07**: OAuth-enabled plugins show "Connect" / "Connected" / "Reconnect" button in settings
+
+### API Proxy
+
+- [ ] **APRX-01**: Daemon proxies HTTP requests per plugin API contract definitions (method, URL, headers, params)
+- [ ] **APRX-02**: Request URL and params rendered via Handlebars templates with plugin-scoped context
+- [ ] **APRX-03**: Response body transformed via Handlebars response template into agent-friendly text
+- [ ] **APRX-04**: SSRF protection: block requests to internal IP ranges (127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16)
+- [ ] **APRX-05**: Template rendering timeout (1 second max) and strict mode (no implicit traversal)
+- [ ] **APRX-06**: Per-plugin rate limiting when declared in manifest (`rate_limit.requests_per_minute`)
+- [ ] **APRX-07**: API proxy errors surfaced to agent with actionable context (rate limited, auth expired, endpoint unreachable)
+
+### OAuth2
+
+- [ ] **AUTH-01**: Daemon manages OAuth2 authorization code + PKCE flow for plugins declaring `auth.type: "oauth2"`
+- [ ] **AUTH-02**: Daemon starts temporary localhost HTTP listener for OAuth callback redirect
+- [ ] **AUTH-03**: Access tokens and refresh tokens encrypted at rest in SQLite `plugin_credentials` table
+- [ ] **AUTH-04**: Automatic token refresh before expiry (at 80% of TTL), with fallback to user re-authorization on refresh failure
+- [ ] **AUTH-05**: OAuth tokens never included in agent context or LLM API calls — injected internally by API proxy
+- [ ] **AUTH-06**: Plugin credential keys redacted in all daemon logging (extend existing sensitive key redaction)
+- [ ] **AUTH-07**: UI shows plugin auth status: "Not Configured" / "Connected" / "Token Expired — Reconnect"
+
+### Plugin Skills & Commands
+
+- [ ] **PSKL-01**: Bundled YAML skills copied to `~/.tamux/skills/plugins/<plugin-name>/` on install
+- [ ] **PSKL-02**: Bundled skills deregistered and removed on plugin uninstall (no orphans)
+- [ ] **PSKL-03**: Bundled skills can reference plugin API endpoints by name (e.g., `plugin:gmail-calendar:list_events`)
+- [ ] **PSKL-04**: Plugin commands registered as slash commands accessible from CLI, TUI, and Electron
+- [ ] **PSKL-05**: Plugin commands namespaced: `/pluginname.command` to prevent conflicts
+- [ ] **PSKL-06**: Agent discovers plugin capabilities through standard skill system (no special plugin awareness needed)
+
+### Validation: Gmail/Calendar Plugin
+
+- [ ] **GMAI-01**: Gmail plugin manifest reads inbox messages via Gmail REST API
+- [ ] **GMAI-02**: Gmail plugin manifest searches emails via Gmail REST API query parameter
+- [ ] **GMAI-03**: Calendar plugin manifest lists today's events via Google Calendar REST API
+- [ ] **GMAI-04**: Google OAuth2 flow completes end-to-end through daemon (authorization → token → stored)
+- [ ] **GMAI-05**: Agent correctly answers "what's on my calendar today?" using plugin skills
+- [ ] **GMAI-06**: Agent correctly answers "what's in my inbox?" using plugin skills
+- [ ] **GMAI-07**: Plugin installable from npm: `tamux plugin install tamux-plugin-gmail-calendar`
+- [ ] **GMAI-08**: Plugin configurable in Plugins settings tab (both TUI and Electron)
+- [ ] **GMAI-09**: `/gmail.inbox` and `/calendar.today` commands work from CLI, TUI, and Electron
+
+## v3 Requirements
+
 Deferred to future milestone. Tracked but not in current roadmap.
 
 ### Advanced Security
@@ -121,6 +199,14 @@ Deferred to future milestone. Tracked but not in current roadmap.
 - **ELEC-02**: Automated tests for Electron main process logic
 - **ELEC-03**: Agent-side workspace tool gating (disable workspace tools when no Electron client connected)
 
+### Plugin Ecosystem Extensions
+
+- **PEXT-01**: Plugin marketplace / hosted registry for discovery
+- **PEXT-02**: Plugin auto-update mechanism (`tamux plugin update <name>`)
+- **PEXT-03**: Plugin scaffolding command (`tamux plugin create <name>`)
+- **PEXT-04**: Plugin live reload during development (watch manifest changes)
+- **PEXT-05**: Plugin-contributed custom UI widgets (requires executable code model)
+
 ## Out of Scope
 
 | Feature | Reason |
@@ -130,10 +216,14 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | Mobile app | Desktop-first; mobile access via gateway messaging platforms (WhatsApp, Telegram) |
 | Multi-user/multi-tenant | Single-operator desktop tool; multi-user auth complexity not justified |
 | Browser extension / IDE plugin | Standalone runtime, not a plugin; MCP server provides IDE integration |
-| Real-time collaborative editing | Agent collaborates with one operator, not multiple humans |
-| Vector database for memory | Research confirms SQLite FTS5 is sufficient; vector DB adds operational complexity for marginal gain |
-| Automatic rusqlite upgrade (0.32→0.38) | tokio-rusqlite 0.6.0 buys compatibility; full upgrade is a separate future effort |
-| WASM skill execution this milestone | Significant scope; local-only skills don't need sandboxing; defer until community registry proves demand |
+| Executable plugin code (JS/WASM) | Plugins are declarative JSON — no runtime code. Prevents supply chain attacks. Defer to v3 |
+| Plugin marketplace / hosted registry | v2.0 uses npm/GitHub for distribution. tamux-specific registry is v3 scope |
+| Plugin-to-plugin dependencies | Introduces diamond dependency hell. Each plugin must be self-contained |
+| Plugin-contributed React/Ratatui widgets | Declarative settings fields only. Custom widgets require executable code |
+| Plugin auto-update | User controls updates. `tamux plugin update` is v3 scope |
+| Plugin revenue / paid plugins | Community-first. Monetization is a future concern |
+| Email sending via Gmail plugin | Read-only is sufficient to prove the plugin loop. Write capabilities are follow-up |
+| Calendar event creation | List events is sufficient to validate. Create is follow-up |
 
 ## Traceability
 
@@ -198,11 +288,66 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GATE-05 | Phase 8 | Complete |
 | GATE-06 | Phase 8 | Complete |
 
+| PLUG-01 | Phase 14 | Complete |
+| PLUG-02 | Phase 14 | Pending |
+| PLUG-03 | Phase 14 | Pending |
+| PLUG-04 | Phase 14 | Complete |
+| PLUG-05 | Phase 14 | Complete |
+| PLUG-06 | Phase 14 | Complete |
+| PLUG-07 | Phase 14 | Complete |
+| PLUG-08 | Phase 14 | Pending |
+| PLUG-09 | Phase 14 | Pending |
+| INST-01 | Phase 15 | Pending |
+| INST-02 | Phase 15 | Pending |
+| INST-03 | Phase 15 | Pending |
+| INST-04 | Phase 15 | Pending |
+| INST-05 | Phase 15 | Pending |
+| INST-06 | Phase 15 | Pending |
+| INST-07 | Phase 15 | Pending |
+| INST-08 | Phase 15 | Pending |
+| PSET-01 | Phase 16 | Pending |
+| PSET-02 | Phase 16 | Pending |
+| PSET-03 | Phase 16 | Pending |
+| PSET-04 | Phase 16 | Pending |
+| PSET-05 | Phase 16 | Pending |
+| PSET-06 | Phase 16 | Pending |
+| PSET-07 | Phase 16 | Pending |
+| APRX-01 | Phase 17 | Pending |
+| APRX-02 | Phase 17 | Pending |
+| APRX-03 | Phase 17 | Pending |
+| APRX-04 | Phase 17 | Pending |
+| APRX-05 | Phase 17 | Pending |
+| APRX-06 | Phase 17 | Pending |
+| APRX-07 | Phase 17 | Pending |
+| AUTH-01 | Phase 18 | Pending |
+| AUTH-02 | Phase 18 | Pending |
+| AUTH-03 | Phase 18 | Pending |
+| AUTH-04 | Phase 18 | Pending |
+| AUTH-05 | Phase 18 | Pending |
+| AUTH-06 | Phase 18 | Pending |
+| AUTH-07 | Phase 18 | Pending |
+| PSKL-01 | Phase 19 | Pending |
+| PSKL-02 | Phase 19 | Pending |
+| PSKL-03 | Phase 19 | Pending |
+| PSKL-04 | Phase 19 | Pending |
+| PSKL-05 | Phase 19 | Pending |
+| PSKL-06 | Phase 19 | Pending |
+| GMAI-01 | Phase 20 | Pending |
+| GMAI-02 | Phase 20 | Pending |
+| GMAI-03 | Phase 20 | Pending |
+| GMAI-04 | Phase 20 | Pending |
+| GMAI-05 | Phase 20 | Pending |
+| GMAI-06 | Phase 20 | Pending |
+| GMAI-07 | Phase 20 | Pending |
+| GMAI-08 | Phase 20 | Pending |
+| GMAI-09 | Phase 20 | Pending |
+
 **Coverage:**
-- v1 requirements: 56 total
-- Mapped to phases: 56
-- Unmapped: 0
+- v1 requirements: 56 total (all complete)
+- v2 requirements: 55 total
+- Mapped to phases: 55
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-03-23*
-*Last updated: 2026-03-23 after roadmap creation*
+*Last updated: 2026-03-24 after v2.0 milestone requirements*

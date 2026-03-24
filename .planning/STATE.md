@@ -1,30 +1,30 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: Milestone complete
-stopped_at: Completed 12-02-PLAN.md
-last_updated: "2026-03-24T12:06:10.481Z"
+milestone: v2.0
+milestone_name: Plugin Ecosystem
+status: Ready to execute
+stopped_at: Completed 14-01-PLAN.md
+last_updated: "2026-03-24T17:58:00.441Z"
 progress:
-  total_phases: 13
+  total_phases: 20
   completed_phases: 9
-  total_plans: 47
-  completed_plans: 43
+  total_plans: 49
+  completed_plans: 44
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-23)
+See: .planning/PROJECT.md (updated 2026-03-24)
 
 **Core value:** An agent that feels alive and gets smarter over time -- while remaining simple enough that anyone can understand what it's doing and why.
-**Current focus:** Phase 13 — tui-ux-fixes
+**Current focus:** Phase 14 — plugin-manifest-loader
 
 ## Current Position
 
-Phase: 13
-Plan: Not started
+Phase: 14 (plugin-manifest-loader) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -91,6 +91,7 @@ Plan: Not started
 | Phase 13 P01 | 3min | 2 tasks | 4 files |
 | Phase 13-tui-ux-fixes P02 | 7min | 1 tasks | 6 files |
 | Phase 12 P02 | 2min | 2 tasks | 2 files |
+| Phase 14 P01 | 7min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -178,6 +179,9 @@ Recent decisions affecting current work:
 - [Phase 13]: concierge_banner_visible() returns false to disable overlay; action buttons as text in chat message; recent actions from HeartbeatDigest events
 - [Phase 13-tui-ux-fixes]: Features tab at index 9 (between Concierge and Advanced); optimistic local raw config update alongside IPC SetConfigItem for responsive UI; security level in Features uses permissive/balanced/strict distinct from Advanced tab levels
 - [Phase 12]: Settings operations use IPC roundtrip to daemon (AgentGetConfig/AgentSetConfigItem), never config.json; dot-notation keys converted to JSON pointer format
+- [Phase 14]: jsonschema 0.45 for JSON Schema Draft 2020-12 validation; compile once, reuse validator
+- [Phase 14]: Permissive deserialization with serde(flatten) captures unknown fields per D-01
+- [Phase 14]: Plugin module at crate::plugin (daemon-level, not inside agent/) to avoid circular dependency
 
 ### Pending Todos
 
@@ -191,6 +195,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T12:05:28.219Z
-Stopped at: Completed 12-02-PLAN.md
+Last session: 2026-03-24T17:58:00.439Z
+Stopped at: Completed 14-01-PLAN.md
 Resume file: None
