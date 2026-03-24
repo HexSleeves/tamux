@@ -559,6 +559,17 @@ pub enum ClientMessage {
 
     /// Disable a plugin by name. Per PLUG-09.
     PluginDisable { name: String },
+
+    /// Register a newly-installed plugin. Per INST-01/02/03/D-04.
+    PluginInstall {
+        /// Plugin directory name under ~/.tamux/plugins/
+        dir_name: String,
+        /// Install source identifier (e.g., "npm:package-name", "github:user/repo", "local:/path")
+        install_source: String,
+    },
+
+    /// Uninstall a plugin: deregister from SQLite and memory. Per INST-04/D-06.
+    PluginUninstall { name: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -1958,6 +1969,41 @@ mod tests {
         let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
         match decoded {
             ClientMessage::PluginDisable { name } => {
+                assert_eq!(name, "gmail");
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn plugin_install_bincode_roundtrip() {
+        let msg = ClientMessage::PluginInstall {
+            dir_name: "gmail-plugin".into(),
+            install_source: "npm:tamux-plugin-gmail".into(),
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            ClientMessage::PluginInstall {
+                dir_name,
+                install_source,
+            } => {
+                assert_eq!(dir_name, "gmail-plugin");
+                assert_eq!(install_source, "npm:tamux-plugin-gmail");
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn plugin_uninstall_bincode_roundtrip() {
+        let msg = ClientMessage::PluginUninstall {
+            name: "gmail".into(),
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            ClientMessage::PluginUninstall { name } => {
                 assert_eq!(name, "gmail");
             }
             other => panic!("unexpected variant: {:?}", other),

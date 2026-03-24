@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tokio::sync::RwLock;
 
 pub use loader::LoadedPlugin;
@@ -147,6 +147,134 @@ impl PluginManager {
     /// Enable or disable a plugin.
     pub async fn set_enabled(&self, name: &str, enabled: bool) -> Result<()> {
         self.persistence.set_enabled(name, enabled).await
+    }
+
+    /// Check if a manifest's commands or skills conflict with existing plugins.
+    /// Returns Ok(()) if no conflicts, Err with conflict details if any found.
+    /// Namespace convention: commands are namespaced as /pluginname.command per PSKL-05.
+    /// Conflicts happen when two different plugins declare the same command key or skill path.
+    pub async fn check_conflicts(
+        &self,
+        new_manifest: &manifest::PluginManifest,
+    ) -> Result<()> {
+        let plugins = self.plugins.read().await;
+        let mut conflicts: Vec<String> = Vec::new();
+
+        for (existing_name, existing) in plugins.iter() {
+            if existing_name == &new_manifest.name {
+                continue; // Same plugin (re-install) is not a conflict
+            }
+
+            // Check command name conflicts
+            if let (Some(new_cmds), Some(existing_cmds)) =
+                (&new_manifest.commands, &existing.manifest.commands)
+            {
+                for cmd_name in new_cmds.keys() {
+                    if existing_cmds.contains_key(cmd_name.as_str()) {
+                        conflicts.push(format!(
+                            "command '{}' conflicts with plugin '{}'",
+                            cmd_name, existing_name
+                        ));
+                    }
+                }
+            }
+
+            // Check skill path conflicts
+            if let (Some(new_skills), Some(existing_skills)) =
+                (&new_manifest.skills, &existing.manifest.skills)
+            {
+                for skill_path in new_skills {
+                    if existing_skills.contains(skill_path) {
+                        conflicts.push(format!(
+                            "skill '{}' conflicts with plugin '{}'",
+                            skill_path, existing_name
+                        ));
+                    }
+                }
+            }
+        }
+
+        if conflicts.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "Name conflicts detected:\n{}",
+                conflicts.join("\n")
+            ))
+        }
+    }
+
+    /// Register a plugin from its directory. Validates manifest, checks conflicts,
+    /// persists to SQLite, and adds to in-memory map.
+    /// Called by the PluginInstall IPC handler after CLI has copied files to disk.
+    pub async fn register_plugin(
+        &self,
+        dir_name: &str,
+        install_source: &str,
+    ) -> Result<amux_protocol::PluginInfo> {
+        let manifest_path = self.plugins_dir.join(dir_name).join("plugin.json");
+        let raw_bytes = std::fs::read(&manifest_path)
+            .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+
+        let (manifest, manifest_json) =
+            loader::validate_manifest(&raw_bytes, &self.schema_validator)?;
+
+        // Check for command/skill conflicts (INST-07)
+        self.check_conflicts(&manifest).await?;
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let record = PluginRecord {
+            name: manifest.name.clone(),
+            version: manifest.version.clone(),
+            description: manifest.description.clone(),
+            author: manifest.author.clone(),
+            manifest_json: manifest_json.clone(),
+            install_source: install_source.to_string(),
+            enabled: true,
+            installed_at: now.clone(),
+            updated_at: now,
+        };
+
+        self.persistence.upsert_plugin(&record).await?;
+
+        let info = to_plugin_info_from_record(
+            &record,
+            Some(&loader::LoadedPlugin {
+                manifest: manifest.clone(),
+                manifest_json,
+                dir_name: dir_name.to_string(),
+            }),
+        );
+
+        // Add to in-memory map
+        self.plugins.write().await.insert(
+            manifest.name.clone(),
+            loader::LoadedPlugin {
+                manifest,
+                manifest_json: record.manifest_json,
+                dir_name: dir_name.to_string(),
+            },
+        );
+
+        tracing::info!(plugin = %record.name, source = %install_source, "plugin registered");
+        Ok(info)
+    }
+
+    /// Unregister a plugin: remove from SQLite (plugins + settings + credentials)
+    /// and from in-memory map. Does NOT delete files from disk (CLI handles that).
+    pub async fn unregister_plugin(&self, name: &str) -> Result<()> {
+        let existed = self.persistence.remove_plugin(name).await?;
+        if !existed {
+            return Err(anyhow::anyhow!("plugin '{}' not found", name));
+        }
+        self.plugins.write().await.remove(name);
+        tracing::info!(plugin = %name, "plugin unregistered");
+        Ok(())
+    }
+
+    /// Get the plugins directory path.
+    pub fn plugins_dir(&self) -> &std::path::Path {
+        &self.plugins_dir
     }
 }
 

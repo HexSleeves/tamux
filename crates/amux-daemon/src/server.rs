@@ -2892,6 +2892,26 @@ where
                         .send(DaemonMessage::PluginActionResult { success, message })
                         .await?;
                 }
+                ClientMessage::PluginInstall { dir_name, install_source } => {
+                    let result = plugin_manager.register_plugin(&dir_name, &install_source).await;
+                    let (success, message) = match result {
+                        Ok(info) => (true, format!("Plugin '{}' v{} registered successfully", info.name, info.version)),
+                        Err(e) => (false, format!("Failed to register plugin: {}", e)),
+                    };
+                    framed
+                        .send(DaemonMessage::PluginActionResult { success, message })
+                        .await?;
+                }
+                ClientMessage::PluginUninstall { name } => {
+                    let result = plugin_manager.unregister_plugin(&name).await;
+                    let (success, message) = match result {
+                        Ok(()) => (true, format!("Plugin '{}' unregistered", name)),
+                        Err(e) => (false, format!("Failed to unregister plugin '{}': {}", name, e)),
+                    };
+                    framed
+                        .send(DaemonMessage::PluginActionResult { success, message })
+                        .await?;
+                }
             }
         }
     }

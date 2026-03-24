@@ -133,6 +133,28 @@ impl PluginPersistence {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
+    /// Remove a single plugin by name (and its settings/credentials). Per INST-04/D-06.
+    pub async fn remove_plugin(&self, name: &str) -> Result<bool> {
+        let name = name.to_string();
+        self.history
+            .conn
+            .call(move |conn| {
+                // Delete from all plugin tables
+                conn.execute(
+                    "DELETE FROM plugin_settings WHERE plugin_name = ?1",
+                    params![name],
+                )?;
+                conn.execute(
+                    "DELETE FROM plugin_credentials WHERE plugin_name = ?1",
+                    params![name],
+                )?;
+                let rows = conn.execute("DELETE FROM plugins WHERE name = ?1", params![name])?;
+                Ok(rows > 0)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     /// Remove plugins not in the provided set (stale record reconciliation per Pitfall 6).
     /// Returns the number of rows deleted.
     pub async fn remove_stale_plugins(&self, active_names: &[String]) -> Result<u64> {
@@ -277,6 +299,31 @@ mod tests {
         let persistence = PluginPersistence::new(history);
         let result = persistence.get_plugin("nonexistent").await.unwrap();
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn remove_plugin_deletes_record() {
+        let history = make_test_history().await;
+        let persistence = PluginPersistence::new(history);
+
+        let record = sample_record("doomed-plugin");
+        persistence.upsert_plugin(&record).await.unwrap();
+
+        // Confirm it exists
+        let found = persistence.get_plugin("doomed-plugin").await.unwrap();
+        assert!(found.is_some());
+
+        // Remove it
+        let existed = persistence.remove_plugin("doomed-plugin").await.unwrap();
+        assert!(existed);
+
+        // Confirm it's gone
+        let gone = persistence.get_plugin("doomed-plugin").await.unwrap();
+        assert!(gone.is_none());
+
+        // Removing again should return false
+        let existed_again = persistence.remove_plugin("doomed-plugin").await.unwrap();
+        assert!(!existed_again);
     }
 
     #[tokio::test]
