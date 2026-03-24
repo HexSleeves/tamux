@@ -339,7 +339,7 @@
   /* Border Colors - More visible for flat aesthetic */
   --border: rgba(255, 255, 255, 0.10);
   --border-strong: rgba(255, 255, 255, 0.15);
-  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-subtle: rgba(255, 255, 255, 0.04);
   --border-focus: rgba(94, 231, 223, 0.4);
   --glass-border: rgba(255, 255, 255, 0.10);
   --glass-border-light: rgba(255, 255, 255, 0.12);

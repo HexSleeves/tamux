@@ -4,6 +4,37 @@
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ─────────────────────────────────────────────────────────────────────────
+ * LEGACY FORM ELEMENTS - Preserve pre-primitive default field styling
+ * ───────────────────────────────────────────────────────────────────────── */
+input,
+textarea,
+select {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-base);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+input:hover,
+textarea:hover,
+select:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-tertiary);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent);
+  background: var(--bg-tertiary);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
  * SHELL CARD - Primary container component
  * Refined glass-morphism with subtle depth
  * ───────────────────────────────────────────────────────────────────────── */
