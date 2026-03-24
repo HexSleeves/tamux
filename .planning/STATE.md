@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Plugin Ecosystem
-status: Ready to execute
-stopped_at: Completed 17-02-PLAN.md
-last_updated: "2026-03-24T23:34:36.008Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 19-01-PLAN.md
+last_updated: "2026-03-24T23:39:20.853Z"
 progress:
   total_phases: 20
   completed_phases: 15
   total_plans: 58
-  completed_plans: 54
+  completed_plans: 55
 ---
 
 # Project State
@@ -100,6 +100,7 @@ Plan: 2 of 2
 | Phase 16 P03 | 10min | 2 tasks | 11 files |
 | Phase 17 P01 | 9min | 2 tasks | 8 files |
 | Phase 17 P02 | 8min | 2 tasks | 6 files |
+| Phase 19 P01 | 4min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -208,6 +209,8 @@ Recent decisions affecting current work:
 - [Phase 17]: render_request uses spawn_blocking + 1s timeout for template isolation; PluginApiCall stub until Plan 17-02
 - [Phase 17]: OnceLock for plugin_manager field on AgentEngine to avoid runtime locking overhead while supporting post-construction initialization
 - [Phase 17]: plugin_api_call tool always available (not gated on config); PluginManager handles disabled/missing checks internally
+- [Phase 19]: LLM augmentation over bypass: plugin commands inject system hints so LLM naturally uses plugin API tool, preserving agent tool-calling loop
+- [Phase 19]: OnceLock for plugin_manager on AgentEngine: set after both are constructed in server.rs, avoids circular dependency
 
 ### Pending Todos
 
@@ -221,6 +224,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T23:34:36.006Z
-Stopped at: Completed 17-02-PLAN.md
+Last session: 2026-03-24T23:39:20.850Z
+Stopped at: Completed 19-01-PLAN.md
 Resume file: None

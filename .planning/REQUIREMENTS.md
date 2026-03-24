@@ -146,11 +146,11 @@ Requirements for the "Plugin Ecosystem" milestone. Each maps to roadmap phases 1
 
 ### Plugin Skills & Commands
 
-- [ ] **PSKL-01**: Bundled YAML skills copied to `~/.tamux/skills/plugins/<plugin-name>/` on install
-- [ ] **PSKL-02**: Bundled skills deregistered and removed on plugin uninstall (no orphans)
-- [ ] **PSKL-03**: Bundled skills can reference plugin API endpoints by name (e.g., `plugin:gmail-calendar:list_events`)
-- [ ] **PSKL-04**: Plugin commands registered as slash commands accessible from CLI, TUI, and Electron
-- [ ] **PSKL-05**: Plugin commands namespaced: `/pluginname.command` to prevent conflicts
+- [x] **PSKL-01**: Bundled YAML skills copied to `~/.tamux/skills/plugins/<plugin-name>/` on install
+- [x] **PSKL-02**: Bundled skills deregistered and removed on plugin uninstall (no orphans)
+- [x] **PSKL-03**: Bundled skills can reference plugin API endpoints by name (e.g., `plugin:gmail-calendar:list_events`)
+- [x] **PSKL-04**: Plugin commands registered as slash commands accessible from CLI, TUI, and Electron
+- [x] **PSKL-05**: Plugin commands namespaced: `/pluginname.command` to prevent conflicts
 - [ ] **PSKL-06**: Agent discovers plugin capabilities through standard skill system (no special plugin awareness needed)
 
 ### Validation: Gmail/Calendar Plugin
@@ -326,11 +326,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTH-05 | Phase 18 | Pending |
 | AUTH-06 | Phase 18 | Pending |
 | AUTH-07 | Phase 18 | Pending |
-| PSKL-01 | Phase 19 | Pending |
-| PSKL-02 | Phase 19 | Pending |
-| PSKL-03 | Phase 19 | Pending |
-| PSKL-04 | Phase 19 | Pending |
-| PSKL-05 | Phase 19 | Pending |
+| PSKL-01 | Phase 19 | Complete |
+| PSKL-02 | Phase 19 | Complete |
+| PSKL-03 | Phase 19 | Complete |
+| PSKL-04 | Phase 19 | Complete |
+| PSKL-05 | Phase 19 | Complete |
 | PSKL-06 | Phase 19 | Pending |
 | GMAI-01 | Phase 20 | Pending |
 | GMAI-02 | Phase 20 | Pending |
