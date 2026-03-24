@@ -65,6 +65,17 @@ impl AgentEngine {
             tracing::info!(thread_id = %tid, "injected continuity acknowledgment");
         }
 
+        // Augment plugin command messages with system hints (PSKL-05)
+        if let Some(hint) = self.try_augment_plugin_command(content).await {
+            let mut threads = self.threads.write().await;
+            if let Some(thread) = threads.get_mut(&tid) {
+                let mut msg = AgentMessage::user(&hint, now_millis());
+                msg.role = MessageRole::System;
+                thread.messages.push(msg);
+            }
+            tracing::info!(thread_id = %tid, "injected plugin command hint");
+        }
+
         // Resolve provider config after the user message is attached so
         // startup/config failures still persist a complete thread history.
         // If the current task has a sub-agent provider override, use that instead.
@@ -1265,6 +1276,37 @@ impl AgentEngine {
         }
         drop(threads);
         self.persist_thread_by_id(thread_id).await;
+    }
+}
+
+impl AgentEngine {
+    /// Check if user content is a plugin command and return a system hint for the LLM.
+    ///
+    /// Does NOT bypass the LLM -- instead augments the conversation with context
+    /// so the agent naturally uses the plugin API tool.
+    pub(super) async fn try_augment_plugin_command(&self, content: &str) -> Option<String> {
+        let (command_key, args) = parse_plugin_command(content)?;
+        let pm = self.plugin_manager.get()?;
+        let entry = pm.resolve_command(command_key).await?;
+        let endpoint = entry.api_endpoint.as_deref().unwrap_or("default");
+        let args_part = if args.is_empty() {
+            String::new()
+        } else {
+            format!(" with arguments: {}", args)
+        };
+        Some(format!(
+            "[Plugin command: {}]\n\
+             The user invoked plugin command `{}`. \
+             Plugin: '{}'. Description: {}. \
+             Call the plugin API endpoint '{}' for plugin '{}'{} to fulfill this request.",
+            entry.command_key,
+            entry.command_key,
+            entry.plugin_name,
+            entry.description,
+            endpoint,
+            entry.plugin_name,
+            args_part,
+        ))
     }
 }
 
