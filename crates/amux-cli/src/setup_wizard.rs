@@ -124,10 +124,16 @@ async fn ensure_daemon_running() -> Result<()> {
 
 /// Interactive select list with arrow-key navigation.
 /// Returns `Some(index)` on Enter, `None` on Esc (only if `allow_esc` is true).
-fn select_list(title: &str, items: &[(&str, &str)], allow_esc: bool) -> Result<Option<usize>> {
+/// `default_index` sets the initially highlighted item.
+fn select_list(
+    title: &str,
+    items: &[(&str, &str)],
+    allow_esc: bool,
+    default_index: usize,
+) -> Result<Option<usize>> {
     use crossterm::cursor;
 
-    let mut selected: usize = 0;
+    let mut selected: usize = default_index.min(items.len().saturating_sub(1));
 
     terminal::enable_raw_mode().context("Failed to enable raw mode")?;
 
@@ -301,6 +307,48 @@ fn is_local_provider(id: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Tier-gated helper functions (pure, testable)
+// ---------------------------------------------------------------------------
+
+/// Returns the default security level selection index for a given tier.
+/// - newcomer  -> 0 (highest: approve all actions)
+/// - familiar  -> 1 (moderate: approve risky actions)
+/// - power_user -> 2 (lowest: approve destructive only)
+/// - expert    -> 2 (lowest: approve destructive only)
+fn default_security_index(tier: &str) -> usize {
+    match tier {
+        "newcomer" => 0,
+        "familiar" => 1,
+        "power_user" | "expert" => 2,
+        _ => 1, // safe default
+    }
+}
+
+/// Returns whether a given tier should see a specific optional step.
+/// Steps: "model", "web_search", "gateway", "data_dir"
+fn tier_shows_step(tier: &str, step: &str) -> bool {
+    match step {
+        "model" | "web_search" | "data_dir" => {
+            matches!(tier, "familiar" | "power_user" | "expert")
+        }
+        "gateway" => matches!(tier, "power_user" | "expert"),
+        // security is shown to all tiers, not gated
+        _ => false,
+    }
+}
+
+/// Maps a security level selection index to its kebab-case string and label.
+fn security_level_from_index(index: usize) -> (&'static str, &'static str) {
+    match index {
+        0 => ("highest", "Approve all actions"),
+        1 => ("moderate", "Approve risky actions"),
+        2 => ("lowest", "Approve destructive only"),
+        3 => ("yolo", "Minimize interruptions"),
+        _ => ("moderate", "Approve risky actions"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Setup detection
 // ---------------------------------------------------------------------------
 
@@ -395,6 +443,7 @@ pub async fn run_setup_wizard() -> Result<()> {
         "How familiar are you with AI agents?",
         &tier_items,
         false,
+        0,
     )?
     .expect("tier selection is required");
 
@@ -441,7 +490,7 @@ pub async fn run_setup_wizard() -> Result<()> {
         .map(|p| (p.provider_name.as_str(), p.provider_id.as_str()))
         .collect();
 
-    let provider_idx = select_list("Select your LLM provider:", &provider_items, false)?
+    let provider_idx = select_list("Select your LLM provider:", &provider_items, false, 0)?
         .expect("provider selection is required");
 
     let selected_provider = &providers[provider_idx];
@@ -454,6 +503,7 @@ pub async fn run_setup_wizard() -> Result<()> {
     println!();
 
     // Step 4: API key (per D-05)
+    let mut api_key_saved = String::new();
     if is_local_provider(&provider_id) {
         println!("Local provider -- no API key needed.");
     } else {
@@ -467,6 +517,8 @@ pub async fn run_setup_wizard() -> Result<()> {
         if api_key.is_empty() {
             println!("No API key entered. You can set it later with `tamux setup`.");
         } else {
+            api_key_saved = api_key.clone();
+
             // Send via IPC: AgentLoginProvider
             wizard_send(
                 &mut framed,
@@ -494,7 +546,7 @@ pub async fn run_setup_wizard() -> Result<()> {
 
             println!();
 
-            // Step 6: Connectivity test (required per D-08)
+            // Connectivity test (required per D-08)
             println!("Testing connection to {provider_name}...");
             wizard_send(
                 &mut framed,
@@ -547,7 +599,7 @@ pub async fn run_setup_wizard() -> Result<()> {
 
     println!();
 
-    // Step 5: Set as active provider
+    // Set as active provider
     wizard_send(
         &mut framed,
         ClientMessage::AgentSetConfigItem {
@@ -558,7 +610,7 @@ pub async fn run_setup_wizard() -> Result<()> {
     .await
     .context("Failed to set active provider")?;
 
-    // Set default model
+    // Set default model from provider definition
     if !default_model.is_empty() {
         wizard_send(
             &mut framed,
@@ -574,11 +626,312 @@ pub async fn run_setup_wizard() -> Result<()> {
     // Brief pause for daemon to process
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Step 7: Completion
-    println!(
-        "{}",
-        format!("Setup complete! Provider: {provider_name}").bold()
-    );
+    // ----- Security preference step (per D-10, D-11) -- all tiers -----
+    println!();
+    let security_items: Vec<(&str, &str)> = vec![
+        ("Ask me before doing anything", "highest"),
+        ("Ask for risky actions only", "moderate"),
+        ("Ask for destructive actions only", "lowest"),
+        ("I trust it, minimize interruptions", "yolo"),
+    ];
+
+    let security_default = default_security_index(&tier_string);
+    let security_idx = select_list(
+        "How cautious should tamux be?",
+        &security_items,
+        false,
+        security_default,
+    )?
+    .expect("security selection is required");
+
+    let (security_level_str, security_level_label) = security_level_from_index(security_idx);
+
+    wizard_send(
+        &mut framed,
+        ClientMessage::AgentSetConfigItem {
+            key_path: "managed_execution.security_level".to_string(),
+            value_json: format!("\"{}\"", security_level_str),
+        },
+    )
+    .await
+    .context("Failed to set security level")?;
+
+    // Brief pause for daemon to process
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Track summary info for final message
+    let mut summary_model: Option<String> = None;
+    let mut summary_web_search: Option<String> = None;
+    let mut summary_gateway: Option<String> = None;
+
+    // ----- Optional step: Model selection (Familiar+ per D-08 item 1) -----
+    if tier_shows_step(&tier_string, "model") {
+        println!();
+        println!("Fetching available models...");
+
+        wizard_send(
+            &mut framed,
+            ClientMessage::AgentFetchModels {
+                provider_id: provider_id.clone(),
+                base_url: base_url.clone(),
+                api_key: api_key_saved.clone(),
+            },
+        )
+        .await
+        .context("Failed to fetch models")?;
+
+        match wizard_recv(&mut framed).await? {
+            DaemonMessage::AgentModelsResponse { models_json } => {
+                let models: Vec<String> =
+                    serde_json::from_str(&models_json).unwrap_or_default();
+
+                if !models.is_empty() {
+                    let model_items: Vec<(&str, &str)> = models
+                        .iter()
+                        .map(|m| (m.as_str(), ""))
+                        .collect();
+
+                    match select_list(
+                        "Select default model:",
+                        &model_items,
+                        true,
+                        0,
+                    )? {
+                        Some(idx) => {
+                            let chosen_model = &models[idx];
+                            wizard_send(
+                                &mut framed,
+                                ClientMessage::AgentSetConfigItem {
+                                    key_path: "model".to_string(),
+                                    value_json: format!("\"{}\"", chosen_model),
+                                },
+                            )
+                            .await
+                            .context("Failed to set model")?;
+                            summary_model = Some(chosen_model.clone());
+                        }
+                        None => {
+                            println!("Skipped -- using default model.");
+                        }
+                    }
+                } else {
+                    // Empty model list -- offer manual entry
+                    let fallback_default = if default_model.is_empty() {
+                        ""
+                    } else {
+                        &default_model
+                    };
+                    match text_input(
+                        "Enter model name (or Esc to skip)",
+                        fallback_default,
+                        false,
+                    )? {
+                        Some(m) if !m.is_empty() => {
+                            wizard_send(
+                                &mut framed,
+                                ClientMessage::AgentSetConfigItem {
+                                    key_path: "model".to_string(),
+                                    value_json: format!("\"{}\"", m),
+                                },
+                            )
+                            .await
+                            .context("Failed to set model")?;
+                            summary_model = Some(m);
+                        }
+                        _ => {
+                            println!("Skipped -- using default model.");
+                        }
+                    }
+                }
+            }
+            DaemonMessage::AgentError { message } => {
+                println!("Could not fetch models: {message}");
+                // Offer manual entry as fallback
+                let fallback_default = if default_model.is_empty() {
+                    ""
+                } else {
+                    &default_model
+                };
+                match text_input(
+                    "Enter model name (or Esc to skip)",
+                    fallback_default,
+                    false,
+                )? {
+                    Some(m) if !m.is_empty() => {
+                        wizard_send(
+                            &mut framed,
+                            ClientMessage::AgentSetConfigItem {
+                                key_path: "model".to_string(),
+                                value_json: format!("\"{}\"", m),
+                            },
+                        )
+                        .await
+                        .context("Failed to set model")?;
+                        summary_model = Some(m);
+                    }
+                    _ => {
+                        println!("Skipped -- using default model.");
+                    }
+                }
+            }
+            _ => {
+                println!("Unexpected response fetching models.");
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    // ----- Optional step: Web search API key (Familiar+ per D-08 item 2) -----
+    if tier_shows_step(&tier_string, "web_search") {
+        println!();
+        let web_search_items: Vec<(&str, &str)> = vec![
+            ("Firecrawl", "firecrawl_api_key"),
+            ("Exa", "exa_api_key"),
+            ("Tavily", "tavily_api_key"),
+            ("Skip", ""),
+        ];
+
+        match select_list(
+            "Configure web search? (enables agent web browsing)",
+            &web_search_items,
+            true,
+            0,
+        )? {
+            Some(idx) if idx < 3 => {
+                let (provider_label, key_name) = web_search_items[idx];
+                match text_input(
+                    &format!("Enter {provider_label} API key"),
+                    "",
+                    true,
+                )? {
+                    Some(key) if !key.is_empty() => {
+                        // Enable web_search tool
+                        wizard_send(
+                            &mut framed,
+                            ClientMessage::AgentSetConfigItem {
+                                key_path: "tools.web_search".to_string(),
+                                value_json: "true".to_string(),
+                            },
+                        )
+                        .await
+                        .context("Failed to enable web search")?;
+
+                        // Set the API key
+                        wizard_send(
+                            &mut framed,
+                            ClientMessage::AgentSetConfigItem {
+                                key_path: key_name.to_string(),
+                                value_json: format!("\"{}\"", key),
+                            },
+                        )
+                        .await
+                        .context("Failed to set web search API key")?;
+
+                        summary_web_search = Some(provider_label.to_string());
+                        println!("Web search configured with {provider_label}.");
+                    }
+                    _ => {
+                        println!("Skipped -- you can add web search later with `tamux setup`.");
+                    }
+                }
+            }
+            _ => {
+                println!("Skipped -- you can add web search later with `tamux setup`.");
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    // ----- Optional step: Gateway setup (Power User/Expert per D-09) -----
+    if tier_shows_step(&tier_string, "gateway") {
+        println!();
+        let gateway_items: Vec<(&str, &str)> = vec![
+            ("Slack", "slack"),
+            ("Discord", "discord"),
+            ("Telegram", "telegram"),
+            ("Skip", ""),
+        ];
+
+        match select_list(
+            "Configure a chat gateway? (Slack, Discord, Telegram)",
+            &gateway_items,
+            true,
+            0,
+        )? {
+            Some(idx) if idx < 3 => {
+                let (platform_label, platform) = gateway_items[idx];
+                match text_input(
+                    &format!("Enter {platform_label} token"),
+                    "",
+                    true,
+                )? {
+                    Some(token) if !token.is_empty() => {
+                        // Enable gateway
+                        wizard_send(
+                            &mut framed,
+                            ClientMessage::AgentSetConfigItem {
+                                key_path: "gateway.enabled".to_string(),
+                                value_json: "true".to_string(),
+                            },
+                        )
+                        .await
+                        .context("Failed to enable gateway")?;
+
+                        // Set the platform token
+                        let token_key = format!("gateway.{}_token", platform);
+                        wizard_send(
+                            &mut framed,
+                            ClientMessage::AgentSetConfigItem {
+                                key_path: token_key,
+                                value_json: format!("\"{}\"", token),
+                            },
+                        )
+                        .await
+                        .context("Failed to set gateway token")?;
+
+                        summary_gateway = Some(platform_label.to_string());
+                        println!("{platform_label} gateway configured.");
+                    }
+                    _ => {
+                        println!(
+                            "Skipped -- you can configure gateways later with `tamux setup`."
+                        );
+                    }
+                }
+            }
+            _ => {
+                println!("Skipped -- you can configure gateways later with `tamux setup`.");
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    // ----- Optional step: Data directory info (Familiar+ per D-08 item 4) -----
+    if tier_shows_step(&tier_string, "data_dir") {
+        println!();
+        let data_dir = amux_protocol::amux_data_dir();
+        println!("Data stored at: {}", data_dir.display());
+    }
+
+    // ----- Final completion message with summary -----
+    println!();
+    println!("{}", "Setup complete!".bold());
+    println!();
+    println!("  Provider:  {provider_name}");
+    println!("  Security:  {security_level_label}");
+    if let Some(ref model) = summary_model {
+        println!("  Model:     {model}");
+    }
+    if let Some(ref ws) = summary_web_search {
+        println!("  Web Search: Enabled ({ws})");
+    }
+    if let Some(ref gw) = summary_gateway {
+        println!("  Gateway:   {gw} configured");
+    }
+    println!();
     println!("Run 'tamux' to start using tamux.");
 
     Ok(())

@@ -1,31 +1,35 @@
 import type React from "react";
 import type { UINodeBuilderMeta } from "../../schemas/uiSchema";
 
-export interface HeaderProps {
+export interface ComponentPresentationProps {
+    style?: React.CSSProperties;
+    className?: string;
+}
+
+export interface HeaderProps extends ComponentPresentationProps {
     title?: string;
     description?: string;
 }
 
-export interface ButtonProps {
+export interface ButtonProps extends ComponentPresentationProps {
     label?: string;
-    style?: React.CSSProperties;
     command?: string;
     variant?: "primary" | "secondary" | "danger";
 }
 
-export interface InputProps {
+export interface InputProps extends ComponentPresentationProps {
     placeholder?: string;
     type?: string;
     name?: string;
     command?: string;
 }
 
-export interface TextProps {
+export interface TextProps extends ComponentPresentationProps {
     value?: string;
     as?: React.ElementType;
 }
 
-export interface TextAreaProps {
+export interface TextAreaProps extends ComponentPresentationProps {
     placeholder?: string;
     name?: string;
     rows?: number;
@@ -38,11 +42,12 @@ export interface SelectOption {
     value: string;
 }
 
-export interface SelectProps {
+export interface SelectProps extends ComponentPresentationProps {
     name?: string;
     value?: string;
     options?: SelectOption[];
     command?: string;
+    placeholder?: string;
 }
 
 export interface SpacerProps {

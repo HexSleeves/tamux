@@ -1,28 +1,17 @@
 import { useMemo, useCallback } from "react";
 import { useCommandLogStore } from "../lib/commandLogStore";
 import { useWorkspaceStore } from "../lib/workspaceStore";
+import { Button } from "./ui";
 
 function OpenCanvasButton() {
   const toggleCanvas = useWorkspaceStore((s) => s.toggleCanvas);
   const handleClick = useCallback(() => toggleCanvas(), [toggleCanvas]);
   return (
-    <button onClick={handleClick} style={openCanvasBtnStyle} title="Open Infinite Canvas">
+    <Button variant="outline" size="sm" onClick={handleClick} title="Open Infinite Canvas">
       ◈ Canvas
-    </button>
+    </Button>
   );
 }
-
-const openCanvasBtnStyle: React.CSSProperties = {
-  background: "rgba(255,255,255,0.04)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  color: "var(--agent)",
-  cursor: "pointer",
-  fontSize: 11,
-  fontWeight: 600,
-  padding: "5px 10px",
-  borderRadius: 10,
-  fontFamily: "inherit",
-};
 
 type GraphStep = {
   id: string;

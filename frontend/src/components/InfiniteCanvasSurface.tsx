@@ -24,6 +24,7 @@ import { shortenHomePath, useWorkspaceStore } from "../lib/workspaceStore";
 import { AppConfirmDialog } from "./AppConfirmDialog";
 import { TerminalPane } from "./TerminalPane";
 import { CanvasBrowserPane } from "./web-browser-panel/CanvasBrowserPane";
+import { Badge, Button, cn, popoverSurfaceClassName } from "./ui";
 
 const CANVAS_GRID_SIZE = 32;
 const MIN_CANVAS_ZOOM = 0.04;
@@ -934,43 +935,22 @@ export function InfiniteCanvasSurface({ surface }: InfiniteCanvasSurfaceProps) {
         />
       ) : null}
 
-      <div data-canvas-toolbar="true" style={{ position: "absolute", top: 10, left: 10, display: "flex", gap: 8, zIndex: 40 }}>
-        <div style={{ position: "relative" }}>
-          <button
+      <div data-canvas-toolbar="true" className="absolute left-2.5 top-2.5 z-40 flex gap-2">
+        <div className="relative">
+          <Button
             type="button"
             onClick={() => setShowNewPanelMenu((v) => !v)}
             title="Add panel"
-            style={{
-              height: 30,
-              minWidth: 32,
-              borderRadius: "var(--radius-md)",
-              border: "1px solid var(--accent)",
-              background: "var(--accent-soft)",
-              color: "var(--accent)",
-              fontSize: 18,
-              lineHeight: 1,
-              cursor: "pointer",
-            }}
+            variant="primary"
+            size="sm"
+            className="h-[30px] min-w-8 text-[18px] leading-none"
           >
             +
-          </button>
+          </Button>
           {showNewPanelMenu ? (
             <div
               data-canvas-menu="true"
-              style={{
-                position: "absolute",
-                top: 34,
-                left: 0,
-                zIndex: 50,
-                minWidth: 150,
-                border: "1px solid var(--glass-border)",
-                borderRadius: "var(--radius-md)",
-                background: "var(--bg-primary)",
-                boxShadow: "var(--shadow-sm)",
-                padding: 4,
-                display: "grid",
-                gap: 2,
-              }}
+              className={cn(popoverSurfaceClassName, "absolute left-0 top-[34px] z-50 grid min-w-[150px] gap-[2px] p-[4px]")}
             >
               <button
                 type="button"
@@ -996,62 +976,41 @@ export function InfiniteCanvasSurface({ surface }: InfiniteCanvasSurfaceProps) {
           ) : null}
         </div>
 
-        <button
+        <Button
           type="button"
           onClick={() => arrangeCanvasPanels(surface.id)}
           title="Auto arrange panels"
-          style={{
-            height: 30,
-            borderRadius: "var(--radius-md)",
-            border: "1px solid var(--border)",
-            background: "var(--bg-secondary)",
-            color: "var(--text-secondary)",
-            fontSize: 12,
-            padding: "0 10px",
-            cursor: "pointer",
-          }}
+          variant="secondary"
+          size="sm"
+          className="h-[30px] text-[12px]"
         >
           Arrange
-        </button>
+        </Button>
 
-        <button
+        <Button
           type="button"
           onClick={() => setSnapEnabled((value) => !value)}
           title="Toggle grid snap"
-          style={{
-            height: 30,
-            borderRadius: "var(--radius-md)",
-            border: snapEnabled ? "1px solid var(--accent)" : "1px solid var(--border)",
-            background: snapEnabled ? "var(--accent-soft)" : "var(--bg-secondary)",
-            color: snapEnabled ? "var(--accent)" : "var(--text-secondary)",
-            fontSize: 12,
-            padding: "0 10px",
-            cursor: "pointer",
-          }}
+          variant={snapEnabled ? "primary" : "secondary"}
+          size="sm"
+          className="h-[30px] text-[12px]"
         >
           Snap
-        </button>
+        </Button>
 
-        <button
+        <Button
           type="button"
           onClick={handleCenterView}
           title="Center view"
-          style={{
-            height: 30,
-            borderRadius: "var(--radius-md)",
-            border: "1px solid var(--border)",
-            background: "var(--bg-secondary)",
-            color: "var(--text-secondary)",
-            fontSize: 12,
-            padding: "0 10px",
-            cursor: "pointer",
-          }}
+          variant="secondary"
+          size="sm"
+          className="h-[30px] text-[12px]"
         >
           Center
-        </button>
+        </Button>
 
         {surface.canvasState.previousView ? (
-          <button
+          <Button
             type="button"
             onClick={() => {
               setAnimateTransform(true);
@@ -1064,39 +1023,20 @@ export function InfiniteCanvasSurface({ surface }: InfiniteCanvasSurfaceProps) {
               window.setTimeout(() => setAnimateTransform(false), 260);
             }}
             title="Return to previous view"
-            style={{
-              height: 30,
-              borderRadius: "var(--radius-md)",
-              border: "1px solid var(--glass-border)",
-              background: "var(--bg-secondary)",
-              color: "var(--text-secondary)",
-              fontSize: 12,
-              padding: "0 10px",
-              cursor: "pointer",
-            }}
+            variant="secondary"
+            size="sm"
+            className="h-[30px] text-[12px]"
           >
             Back to previous
-          </button>
+          </Button>
         ) : null}
       </div>
 
       {contextMenu ? (
         <div
           data-canvas-menu="true"
-          style={{
-            position: "fixed",
-            left: contextMenu.x,
-            top: contextMenu.y,
-            zIndex: 120,
-            minWidth: 210,
-            border: "1px solid var(--glass-border)",
-            borderRadius: "var(--radius-md)",
-            background: "var(--bg-primary)",
-            boxShadow: "var(--shadow-sm)",
-            padding: 4,
-            display: "grid",
-            gap: 2,
-          }}
+          className={cn(popoverSurfaceClassName, "fixed z-[120] grid min-w-[210px] gap-[2px] p-[4px]")}
+          style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
             type="button"
@@ -1213,20 +1153,8 @@ export function InfiniteCanvasSurface({ surface }: InfiniteCanvasSurfaceProps) {
       {iconPicker ? (
         <div
           data-canvas-menu="true"
-          style={{
-            position: "fixed",
-            left: iconPicker.x,
-            top: iconPicker.y,
-            zIndex: 130,
-            minWidth: 180,
-            border: "1px solid var(--glass-border)",
-            borderRadius: "var(--radius-md)",
-            background: "var(--bg-secondary)",
-            boxShadow: "var(--shadow-sm)",
-            padding: 4,
-            display: "grid",
-            gap: 2,
-          }}
+          className={cn(popoverSurfaceClassName, "fixed z-[130] grid min-w-[180px] gap-[2px] p-[4px]")}
+          style={{ left: iconPicker.x, top: iconPicker.y }}
         >
           {iconChoices(PANE_ICON_IDS).map((icon) => (
             <button
@@ -1474,7 +1402,7 @@ function CanvasPanelShell({
           ? "0 0 0 1px var(--approval), 0 0 24px rgba(251, 191, 36, 0.22)"
           : "none",
         background: "var(--bg-primary)",
-        borderRadius: "8px",
+        borderRadius: "var(--radius-lg)",
         overflow: "hidden",
       }}
     >
@@ -1487,29 +1415,14 @@ function CanvasPanelShell({
           event.stopPropagation();
           onDoubleClick();
         }}
-        style={{
-          height: 32,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "0 10px",
-          borderBottom: "1px solid var(--glass-border)",
-          background: panel.status === "needs_approval"
-            ? "var(--approval-soft)"
+        className={cn(
+          "flex h-8 cursor-grab select-none items-center justify-between border-b border-[var(--glass-border)] px-[10px] text-[var(--text-xs)] uppercase tracking-[0.04em]",
+          panel.status === "needs_approval"
+            ? "bg-[var(--approval-soft)] text-[var(--approval)]"
             : (selected || active)
-              ? "var(--human-soft)"
-              : "var(--bg-secondary)",
-          color: panel.status === "needs_approval"
-            ? "var(--approval)"
-            : (selected || active)
-              ? "var(--human)"
-              : "var(--text-secondary)",
-          cursor: "grab",
-          userSelect: "none",
-          fontSize: "var(--text-xs)",
-          letterSpacing: "0.04em",
-          textTransform: "uppercase",
-        }}
+              ? "bg-[var(--human-soft)] text-[var(--human)]"
+              : "bg-[var(--bg-secondary)] text-[var(--text-secondary)]"
+        )}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", gap: 12, overflow: "hidden", minWidth: 0 }}>
           <div style={{
@@ -1549,14 +1462,18 @@ function CanvasPanelShell({
               </span>
             ) : null}
           </div>
-          <span style={{ color: "var(--text-muted)", opacity: 0.5, fontSize: "7px", whiteSpace: "nowrap", flexShrink: 0 }}>{panel.paneId.slice(0, 8)}</span>
+          <Badge variant="default" className="shrink-0 px-[var(--space-2)] py-0 text-[7px] opacity-70">
+            {panel.paneId.slice(0, 8)}
+          </Badge>
 
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+        <div className="flex shrink-0 items-center gap-2">
           {panel.status === "needs_approval" ? (
-            <span style={{ color: "var(--approval)", fontWeight: 700 }}>action required</span>
+            <Badge variant="approval" className="px-[var(--space-2)] py-0">
+              action required
+            </Badge>
           ) : null}
-          <button
+          <Button
             type="button"
             onClick={(event) => {
               event.preventDefault();
@@ -1565,29 +1482,12 @@ function CanvasPanelShell({
             }}
             title="Close panel"
             aria-label="Close panel"
-            style={{
-              border: "none",
-              background: "transparent",
-              color: panel.status === "needs_approval"
-                ? "var(--approval)"
-                : (selected || active)
-                  ? "var(--human)"
-                  : "var(--text-muted)",
-              cursor: "pointer",
-              fontSize: "var(--text-sm)",
-              lineHeight: 1,
-              width: 22,
-              height: 22,
-              borderRadius: 6,
-              padding: 0,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-            }}
+            variant="ghost"
+            size="sm"
+            className="h-[22px] w-[22px] shrink-0 rounded-[6px] p-0 text-[var(--text-sm)]"
           >
             ×
-          </button>
+          </Button>
         </div>
       </div>
 

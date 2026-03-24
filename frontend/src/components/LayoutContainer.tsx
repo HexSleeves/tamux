@@ -3,6 +3,7 @@ import { allLeafIds, computeLeafRects, computeSplitBoundaries, findLeaf, SplitBo
 import { useWorkspaceStore } from "../lib/workspaceStore";
 import { TerminalPane } from "./TerminalPane";
 import { InfiniteCanvasSurface } from "./InfiniteCanvasSurface";
+import { Badge, cn } from "./ui";
 
 export function LayoutContainer() {
   const surface = useWorkspaceStore((s) => s.activeSurface());
@@ -12,21 +13,13 @@ export function LayoutContainer() {
 
   if (!surface) {
     return (
-      <div
-        style={{
-          width: "100%",
-          height: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "var(--text-muted)",
-          fontSize: "var(--text-md)",
-        }}
-      >
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 32, marginBottom: "var(--space-3)", opacity: 0.5 }}>◈</div>
-          <div>No active surface</div>
-          <div style={{ fontSize: "var(--text-sm)", marginTop: "var(--space-2)", color: "var(--text-muted)" }}>
+      <div className="flex h-full w-full items-center justify-center text-[var(--text-md)] text-[var(--text-muted)]">
+        <div className="text-center">
+          <div className="mb-[var(--space-3)] text-[32px] opacity-50">◈</div>
+          <Badge variant="default" className="px-[var(--space-3)] py-[var(--space-2)] text-[var(--text-sm)]">
+            No active surface
+          </Badge>
+          <div className="mt-[var(--space-2)] text-[var(--text-sm)] text-[var(--text-muted)]">
             Create a new surface to begin
           </div>
         </div>
@@ -36,7 +29,7 @@ export function LayoutContainer() {
 
   if (surface.layoutMode === "canvas") {
     return (
-      <div style={{ width: "100%", height: "100%", position: "relative" }}>
+      <div className="relative h-full w-full">
         <InfiniteCanvasSurface surface={surface} />
       </div>
     );
@@ -46,7 +39,7 @@ export function LayoutContainer() {
     const zoomedLeaf = findLeaf(surface.layout, zoomedPaneId);
 
     return (
-      <div style={{ width: "100%", height: "100%", padding: "var(--space-1)", position: "relative" }}>
+      <div className="relative h-full w-full p-[var(--space-1)]">
         <TerminalPane
           key={zoomedPaneId}
           paneId={zoomedPaneId}
@@ -63,14 +56,7 @@ export function LayoutContainer() {
   return (
     <div
       ref={containerRef}
-      style={{
-        width: "100%",
-        height: "100%",
-        position: "relative",
-        background: "var(--bg-deep)",
-        overflow: "hidden",
-        borderRadius: "var(--radius-lg)",
-      }}
+      className="relative h-full w-full overflow-hidden rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-deep)] shadow-[var(--shadow-sm)]"
     >
       {paneIds.map((paneId) => {
         const rect = rects.get(paneId);
@@ -193,13 +179,13 @@ function SplitHandle({
   return (
     <div
       style={style}
+      className={cn(
+        "group",
+        isHorizontal
+          ? "after:absolute after:inset-y-[6px] after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-[var(--border-strong)] after:opacity-0 after:transition-opacity hover:bg-[rgba(94,231,223,0.12)] hover:after:opacity-100"
+          : "after:absolute after:inset-x-[6px] after:top-1/2 after:h-px after:-translate-y-1/2 after:bg-[var(--border-strong)] after:opacity-0 after:transition-opacity hover:bg-[rgba(94,231,223,0.12)] hover:after:opacity-100"
+      )}
       onPointerDown={handlePointerDown}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = "rgba(94, 231, 223, 0.18)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-      }}
     />
   );
 }

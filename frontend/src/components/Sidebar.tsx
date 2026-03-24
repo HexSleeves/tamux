@@ -16,6 +16,7 @@ import { AppConfirmDialog } from "./AppConfirmDialog";
 import { SidebarActions } from "./sidebar/SidebarActions";
 import { SidebarHeader } from "./sidebar/SidebarHeader";
 import { SidebarResizeHandle } from "./sidebar/SidebarResizeHandle";
+import { Badge, ScrollArea, cn, popoverSurfaceClassName } from "./ui";
 
 type TreeContextMenu =
   | {
@@ -717,19 +718,8 @@ export function Sidebar() {
   return (
     <div
       ref={sidebarRef}
-      style={{
-        height: "100%",
-        width: `${sidebarWidth}px`,
-        minWidth: `${sidebarWidth}px`,
-        maxWidth: `${sidebarWidth}px`,
-        minHeight: 0,
-        background: "var(--bg-primary)",
-        borderRight: "1px solid var(--border)",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        position: "relative",
-      }}
+      className="relative flex h-full min-h-0 flex-col overflow-hidden border-r border-[var(--border)] bg-[var(--bg-primary)]"
+      style={{ width: `${sidebarWidth}px`, minWidth: `${sidebarWidth}px`, maxWidth: `${sidebarWidth}px` }}
     >
       <SidebarHeader
         workspacesCount={workspaces.length}
@@ -740,15 +730,15 @@ export function Sidebar() {
         setQuery={setQuery}
       />
 
-      <div style={{ flex: 1, overflow: "auto", padding: "var(--space-2) var(--space-3)" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <ScrollArea className="flex-1 px-[var(--space-3)] py-[var(--space-2)]">
+        <div className="flex flex-col gap-[2px]">
           {filteredWorkspaces.map((workspace) => {
             const workspaceCollapsed = collapsedWorkspaces[workspace.id] ?? false;
             const workspaceActive = workspace.id === activeWorkspaceId;
             const workspaceContextActive = contextMenu?.kind === "workspace" && contextMenu.workspaceId === workspace.id;
 
             return (
-              <div key={workspace.id} style={{ display: "grid", gap: 2 }}>
+              <div key={workspace.id} className="grid gap-[2px]">
                 <div
                   onContextMenu={(event) => {
                     event.preventDefault();
@@ -761,14 +751,10 @@ export function Sidebar() {
                       y: event.clientY,
                     });
                   }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "3px 4px",
-                    borderRadius: "var(--radius-sm)",
-                    background: workspaceActive || workspaceContextActive ? "var(--bg-secondary)" : "transparent",
-                  }}
+                  className={cn(
+                    "flex items-center gap-[6px] rounded-[var(--radius-sm)] px-[4px] py-[3px]",
+                    (workspaceActive || workspaceContextActive) && "bg-[var(--bg-secondary)]"
+                  )}
                 >
                   <button
                     type="button"
@@ -825,19 +811,21 @@ export function Sidebar() {
                   </button>
 
                   {getUnread(workspace.id) > 0 ? (
-                    <span style={countBadgeStyle}>{getUnread(workspace.id)}</span>
+                    <Badge variant="accent" className="min-w-[18px] px-[6px] py-0 text-[var(--text-xs)] leading-4">
+                      {getUnread(workspace.id)}
+                    </Badge>
                   ) : null}
                 </div>
 
                 {!workspaceCollapsed ? (
-                  <div style={{ marginLeft: 16, borderLeft: "1px solid var(--border)", paddingLeft: 8, display: "grid", gap: 2 }}>
+                  <div className="ml-4 grid gap-[2px] border-l border-[var(--border)] pl-2">
                     {workspace.surfaces.map((surface) => {
                       const surfaceCollapsed = collapsedSurfaces[surface.id] ?? false;
                       const paneIds = allLeafIds(surface.layout);
                       const surfaceSelected = selectionWorkspaceId === workspace.id && selectedSurfaceIds.includes(surface.id);
 
                       return (
-                        <div key={surface.id} style={{ display: "grid", gap: 2 }}>
+                        <div key={surface.id} className="grid gap-[2px]">
                           <div
                             onContextMenu={(event) => {
                               event.preventDefault();
@@ -856,7 +844,7 @@ export function Sidebar() {
                                 y: event.clientY,
                               });
                             }}
-                            style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 0" }}
+                            className="flex items-center gap-[6px] py-[2px]"
                           >
                             <button
                               type="button"
@@ -892,7 +880,7 @@ export function Sidebar() {
                           </div>
 
                           {!surfaceCollapsed ? (
-                            <div style={{ marginLeft: 16, borderLeft: "1px dotted var(--border)", paddingLeft: 8, display: "grid", gap: 1 }}>
+                            <div className="ml-4 grid gap-[1px] border-l border-dotted border-[var(--border)] pl-2">
                               {paneIds.map((paneId) => {
                                 const paneActive = workspaceActive && workspace.activeSurfaceId === surface.id && surface.activePaneId === paneId;
                                 const paneSelected = selectionWorkspaceId === workspace.id && selectedPaneIds.includes(paneId);
@@ -927,14 +915,10 @@ export function Sidebar() {
                                         y: event.clientY,
                                       });
                                     }}
-                                    style={{
-                                      display: "flex",
-                                      alignItems: "center",
-                                      gap: 6,
-                                      padding: "2px 4px",
-                                      borderRadius: "var(--radius-sm)",
-                                      background: paneSelected || paneActive ? "var(--bg-tertiary)" : "transparent",
-                                    }}
+                                    className={cn(
+                                      "flex items-center gap-[6px] rounded-[var(--radius-sm)] px-[4px] py-[2px]",
+                                      (paneSelected || paneActive) && "bg-[var(--bg-tertiary)]"
+                                    )}
                                   >
                                     <button
                                       type="button"
@@ -1011,9 +995,12 @@ export function Sidebar() {
                                         {paneId.slice(0, 8)}
                                       </span>
                                       {paneAttentionCount > 0 ? (
-                                        <span style={paneCountBadgeStyle(needsApproval)}>
+                                        <Badge
+                                          variant={needsApproval ? "approval" : "default"}
+                                          className="ml-auto min-w-4 px-1 py-0 text-[10px] font-bold leading-4"
+                                        >
                                           {paneAttentionCount > 9 ? "9+" : paneAttentionCount}
-                                        </span>
+                                        </Badge>
                                       ) : null}
                                     </button>
                                   </div>
@@ -1030,7 +1017,7 @@ export function Sidebar() {
             );
           })}
         </div>
-      </div>
+      </ScrollArea>
 
       <SidebarActions
         workspacesCount={workspaces.length}
@@ -1050,20 +1037,8 @@ export function Sidebar() {
       {contextMenu ? (
         <div
           ref={contextMenuRef}
-          style={{
-            position: "fixed",
-            left: contextMenu.x,
-            top: contextMenu.y,
-            zIndex: 2500,
-            minWidth: 190,
-            border: "1px solid var(--glass-border)",
-            borderRadius: "var(--radius-md)",
-            background: "var(--bg-secondary)",
-            boxShadow: "var(--shadow-sm)",
-            padding: 4,
-            display: "grid",
-            gap: 2,
-          }}
+          className={cn(popoverSurfaceClassName, "fixed z-[2500] grid min-w-[190px] gap-[2px] p-[4px]")}
+          style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           {contextMenu.kind === "workspace" ? (
             <>
@@ -1132,20 +1107,8 @@ export function Sidebar() {
       {iconPicker ? (
         <div
           ref={iconPickerRef}
-          style={{
-            position: "fixed",
-            left: iconPicker.x,
-            top: iconPicker.y,
-            zIndex: 2600,
-            minWidth: 160,
-            border: "1px solid var(--glass-border)",
-            borderRadius: "var(--radius-md)",
-            background: "var(--bg-primary)",
-            boxShadow: "var(--shadow-sm)",
-            padding: 4,
-            display: "grid",
-            gap: 2,
-          }}
+          className={cn(popoverSurfaceClassName, "fixed z-[2600] grid min-w-[160px] gap-[2px] p-[4px]")}
+          style={{ left: iconPicker.x, top: iconPicker.y }}
         >
           {iconChoices(iconPicker.kind === "workspace" ? WORKSPACE_ICON_IDS : PANE_ICON_IDS).map((icon) => (
             <button
@@ -1256,23 +1219,6 @@ function paneNodeButtonStyle(needsApproval: boolean): CSSProperties {
   };
 }
 
-function paneCountBadgeStyle(needsApproval: boolean): CSSProperties {
-  return {
-    marginLeft: "auto",
-    background: needsApproval ? "var(--approval-soft)" : "var(--bg-tertiary)",
-    border: "1px solid",
-    borderColor: needsApproval ? "var(--approval-border)" : "var(--glass-border)",
-    color: needsApproval ? "var(--approval)" : "var(--text-muted)",
-    borderRadius: "var(--radius-full)",
-    fontSize: 10,
-    fontWeight: 700,
-    lineHeight: "16px",
-    minWidth: 16,
-    textAlign: "center",
-    padding: "0 4px",
-  };
-}
-
 const paneRenameInputStyle: CSSProperties = {
   width: "100%",
   background: "var(--bg-secondary)",
@@ -1290,18 +1236,6 @@ const pendingDotStyle: CSSProperties = {
   background: "var(--approval)",
   flexShrink: 0,
   animation: "agent-pulse 1.4s ease-in-out infinite",
-};
-
-const countBadgeStyle: CSSProperties = {
-  background: "var(--accent)",
-  color: "var(--bg-primary)",
-  borderRadius: "var(--radius-full)",
-  padding: "0 6px",
-  fontSize: "var(--text-xs)",
-  fontWeight: 700,
-  minWidth: 18,
-  textAlign: "center",
-  lineHeight: "16px",
 };
 
 const contextMenuItemStyle: CSSProperties = {

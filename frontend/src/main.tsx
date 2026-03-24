@@ -15,7 +15,9 @@ import { hydrateSnippetStore } from "./lib/snippetStore";
 import { hydrateStatusStore } from "./lib/statusStore";
 import { hydrateTierStore } from "./lib/tierStore";
 import { useWorkspaceStore } from "./lib/workspaceStore";
+import "./styles/tailwind.css";
 import "./styles/global.css";
+import "./styles/legacy-catalog.css";
 
 const renderRoot = (useCDUI: boolean): void => {
   ReactDOM.createRoot(document.getElementById("root")!).render(
