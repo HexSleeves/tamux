@@ -41,7 +41,7 @@ pub struct WormIntegrityResult {
 
 #[derive(Clone)]
 pub struct HistoryStore {
-    conn: tokio_rusqlite::Connection,
+    pub(crate) conn: tokio_rusqlite::Connection,
     skill_dir: PathBuf,
     telemetry_dir: PathBuf,
     worm_dir: PathBuf,
@@ -2743,6 +2743,38 @@ impl HistoryStore {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS plugins (
+                name            TEXT PRIMARY KEY,
+                version         TEXT NOT NULL,
+                description     TEXT,
+                author          TEXT,
+                manifest_json   TEXT NOT NULL,
+                install_source  TEXT NOT NULL DEFAULT 'local',
+                enabled         INTEGER NOT NULL DEFAULT 1,
+                installed_at    TEXT NOT NULL,
+                updated_at      TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS plugin_settings (
+                plugin_name     TEXT NOT NULL,
+                key             TEXT NOT NULL,
+                value           TEXT NOT NULL,
+                is_secret       INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (plugin_name, key),
+                FOREIGN KEY (plugin_name) REFERENCES plugins(name) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS plugin_credentials (
+                plugin_name      TEXT NOT NULL,
+                credential_type  TEXT NOT NULL,
+                encrypted_value  BLOB,
+                expires_at       TEXT,
+                created_at       TEXT NOT NULL,
+                updated_at       TEXT NOT NULL,
+                PRIMARY KEY (plugin_name, credential_type),
+                FOREIGN KEY (plugin_name) REFERENCES plugins(name) ON DELETE CASCADE
             );
             ",
         )?;
