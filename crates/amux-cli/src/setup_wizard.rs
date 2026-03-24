@@ -107,6 +107,32 @@ async fn validate_provider(provider_id: &str, auth_source: &str) -> Result<bool>
 }
 
 // ---------------------------------------------------------------------------
+// Read a config value from daemon (fresh connection to avoid stream state issues)
+// ---------------------------------------------------------------------------
+
+async fn read_config_key(key: &str) -> Option<String> {
+    let mut conn = wizard_connect().await.ok()?;
+    wizard_send(&mut conn, ClientMessage::AgentGetConfig).await.ok()?;
+    match wizard_recv(&mut conn).await.ok()? {
+        DaemonMessage::AgentConfigResponse { config_json } => {
+            let val: serde_json::Value = serde_json::from_str(&config_json).ok()?;
+            // Support dot notation: "gateway.slack_token" -> val["gateway"]["slack_token"]
+            let mut current = &val;
+            for part in key.split('.') {
+                current = current.get(part)?;
+            }
+            match current {
+                serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+                serde_json::Value::Bool(b) => Some(b.to_string()),
+                serde_json::Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Ensure daemon is running (Step 0 per D-02)
 // ---------------------------------------------------------------------------
 
@@ -833,27 +859,55 @@ pub async fn run_setup_wizard() -> Result<()> {
     // ----- Optional step: Web search API key (Familiar+ per D-08 item 2) -----
     if tier_shows_step(&tier_string, "web_search") {
         println!();
-        let web_search_items: Vec<(&str, &str)> = vec![
-            ("Firecrawl", "firecrawl_api_key"),
-            ("Exa", "exa_api_key"),
-            ("Tavily", "tavily_api_key"),
-            ("Skip", ""),
-        ];
 
-        match select_list(
-            "Configure web search? (enables agent web browsing)",
-            &web_search_items,
-            true,
-            0,
-        )? {
-            Some(idx) if idx < 3 => {
-                let (provider_label, key_name) = web_search_items[idx];
-                match text_input(
-                    &format!("Enter {provider_label} API key"),
-                    "",
-                    true,
-                )? {
-                    Some(key) if !key.is_empty() => {
+        // Check if any web search key is already configured
+        let existing_ws = if read_config_key("firecrawl_api_key").await.is_some() {
+            Some("Firecrawl")
+        } else if read_config_key("exa_api_key").await.is_some() {
+            Some("Exa")
+        } else if read_config_key("tavily_api_key").await.is_some() {
+            Some("Tavily")
+        } else {
+            None
+        };
+
+        let should_configure = if let Some(provider) = existing_ws {
+            println!("Web search is already configured ({provider}).");
+            match select_list(
+                "Replace web search configuration?",
+                &[("No, keep existing", ""), ("Yes, reconfigure", "")],
+                true,
+                0,
+            )? {
+                Some(1) => true,
+                _ => { summary_web_search = Some(provider.to_string()); false }
+            }
+        } else {
+            true
+        };
+
+        if should_configure {
+            let web_search_items: Vec<(&str, &str)> = vec![
+                ("Firecrawl", "firecrawl_api_key"),
+                ("Exa", "exa_api_key"),
+                ("Tavily", "tavily_api_key"),
+                ("Skip", ""),
+            ];
+
+            match select_list(
+                "Configure web search? (enables agent web browsing)",
+                &web_search_items,
+                true,
+                0,
+            )? {
+                Some(idx) if idx < 3 => {
+                    let (provider_label, key_name) = web_search_items[idx];
+                    match text_input(
+                        &format!("Enter {provider_label} API key"),
+                        "",
+                        true,
+                    )? {
+                        Some(key) if !key.is_empty() => {
                         // Enable web_search tool
                         wizard_send(
                             &mut framed,
@@ -888,6 +942,7 @@ pub async fn run_setup_wizard() -> Result<()> {
                 println!("Skipped -- you can add web search later with `tamux setup`.");
             }
         }
+        } // end if should_configure
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
@@ -895,27 +950,55 @@ pub async fn run_setup_wizard() -> Result<()> {
     // ----- Optional step: Gateway setup (Power User/Expert per D-09) -----
     if tier_shows_step(&tier_string, "gateway") {
         println!();
-        let gateway_items: Vec<(&str, &str)> = vec![
-            ("Slack", "slack"),
-            ("Discord", "discord"),
-            ("Telegram", "telegram"),
-            ("Skip", ""),
-        ];
 
-        match select_list(
-            "Configure a chat gateway? (Slack, Discord, Telegram)",
-            &gateway_items,
-            true,
-            0,
-        )? {
-            Some(idx) if idx < 3 => {
-                let (platform_label, platform) = gateway_items[idx];
-                match text_input(
-                    &format!("Enter {platform_label} token"),
-                    "",
-                    true,
-                )? {
-                    Some(token) if !token.is_empty() => {
+        // Check if any gateway is already configured
+        let existing_gw = if read_config_key("gateway.slack_token").await.is_some() {
+            Some("Slack")
+        } else if read_config_key("gateway.discord_token").await.is_some() {
+            Some("Discord")
+        } else if read_config_key("gateway.telegram_token").await.is_some() {
+            Some("Telegram")
+        } else {
+            None
+        };
+
+        let should_configure_gw = if let Some(platform) = existing_gw {
+            println!("Gateway is already configured ({platform}).");
+            match select_list(
+                "Replace gateway configuration?",
+                &[("No, keep existing", ""), ("Yes, reconfigure", "")],
+                true,
+                0,
+            )? {
+                Some(1) => true,
+                _ => { summary_gateway = Some(platform.to_string()); false }
+            }
+        } else {
+            true
+        };
+
+        if should_configure_gw {
+            let gateway_items: Vec<(&str, &str)> = vec![
+                ("Slack", "slack"),
+                ("Discord", "discord"),
+                ("Telegram", "telegram"),
+                ("Skip", ""),
+            ];
+
+            match select_list(
+                "Configure a chat gateway? (Slack, Discord, Telegram)",
+                &gateway_items,
+                true,
+                0,
+            )? {
+                Some(idx) if idx < 3 => {
+                    let (platform_label, platform) = gateway_items[idx];
+                    match text_input(
+                        &format!("Enter {platform_label} token"),
+                        "",
+                        true,
+                    )? {
+                        Some(token) if !token.is_empty() => {
                         // Enable gateway
                         wizard_send(
                             &mut framed,
@@ -953,6 +1036,7 @@ pub async fn run_setup_wizard() -> Result<()> {
                 println!("Skipped -- you can configure gateways later with `tamux setup`.");
             }
         }
+        } // end if should_configure_gw
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
