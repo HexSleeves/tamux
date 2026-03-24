@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 10-01-PLAN.md
-last_updated: "2026-03-24T08:28:34.979Z"
+stopped_at: Completed 10-04-PLAN.md
+last_updated: "2026-03-24T08:41:15.086Z"
 progress:
   total_phases: 10
   completed_phases: 7
   total_plans: 40
-  completed_plans: 35
+  completed_plans: 37
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-23)
 ## Current Position
 
 Phase: 10 (progressive-ux) — EXECUTING
-Plan: 3 of 5
+Plan: 5 of 5
 
 ## Performance Metrics
 
@@ -81,6 +81,8 @@ Plan: 3 of 5
 | Phase 09 P04 | 4min | 2 tasks | 3 files |
 | Phase 10 P02 | 13min | 2 tasks | 38 files |
 | Phase 10 P01 | 14min | 2 tasks | 8 files |
+| Phase 10-progressive-ux P04 | 9min | 2 tasks | 16 files |
+| Phase 10 P03 | 7min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -156,6 +158,9 @@ Recent decisions affecting current work:
 - [Phase 10]: AmuxBridge type expanded with 30+ missing method declarations to replace any-typed casts
 - [Phase 10]: getAgentBridge() delegates to shared getBridge() rather than being eliminated to preserve existing imports
 - [Phase 10]: CapabilityTier module pub(crate) visibility for server.rs import; AgentSetTierOverride no-response pattern; manual JSON serialization for non-Serialize types
+- [Phase 10-progressive-ux]: Tier gating wraps SettingsPanel tab content (5 tabs) rather than individual sub-sections; TUI uses pre-computed boolean flags for per-frame efficiency
+- [Phase 10]: ConciergeActionType enum extended with typed variants for compile-time safety over raw strings
+- [Phase 10]: Tier change detection runs every heartbeat; disclosure queue on AgentEngine for shared heartbeat access
 
 ### Pending Todos
 
@@ -169,6 +174,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T08:28:34.977Z
-Stopped at: Completed 10-01-PLAN.md
+Last session: 2026-03-24T08:41:15.084Z
+Stopped at: Completed 10-04-PLAN.md
 Resume file: None

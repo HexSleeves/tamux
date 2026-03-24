@@ -64,9 +64,9 @@ Requirements for the "Living Agent" milestone. Each maps to roadmap phases.
 ### Progressive UX
 
 - [x] **PRUX-01**: Capability tiers driven by operator model: Newcomer → Familiar → Power User → Expert
-- [ ] **PRUX-02**: Tier transitions announced naturally via concierge ("You've been using goal runs — here's what else they can do")
-- [ ] **PRUX-03**: New users see simplified interface with core features; advanced capabilities revealed as usage grows
-- [ ] **PRUX-04**: Concierge onboarding: guided first experience that explains what the agent can do, with hands-on examples
+- [x] **PRUX-02**: Tier transitions announced naturally via concierge ("You've been using goal runs — here's what else they can do")
+- [x] **PRUX-03**: New users see simplified interface with core features; advanced capabilities revealed as usage grows
+- [x] **PRUX-04**: Concierge onboarding: guided first experience that explains what the agent can do, with hands-on examples
 - [x] **PRUX-05**: Typed `getBridge()` helper replaces all 39 `(window as any).tamux ?? (window as any).amux` casts in frontend
 - [ ] **PRUX-06**: Consistent status visibility across TUI, Electron, and CLI: user always knows what agent is doing and why
 
@@ -181,9 +181,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TRNS-04 | Phase 3 | Complete |
 | TRNS-05 | Phase 3 | Complete |
 | PRUX-01 | Phase 10 | Complete |
-| PRUX-02 | Phase 10 | Pending |
-| PRUX-03 | Phase 10 | Pending |
-| PRUX-04 | Phase 10 | Pending |
+| PRUX-02 | Phase 10 | Complete |
+| PRUX-03 | Phase 10 | Complete |
+| PRUX-04 | Phase 10 | Complete |
 | PRUX-05 | Phase 10 | Complete |
 | PRUX-06 | Phase 10 | Pending |
 | DIST-01 | Phase 9 | Complete |
