@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Plugin Ecosystem
-status: Ready to plan
-stopped_at: Completed 14-02-PLAN.md
-last_updated: "2026-03-24T18:13:01.248Z"
+status: Ready to execute
+stopped_at: Completed 15-01-PLAN.md
+last_updated: "2026-03-24T20:57:52.596Z"
 progress:
   total_phases: 20
   completed_phases: 10
-  total_plans: 49
-  completed_plans: 45
+  total_plans: 51
+  completed_plans: 46
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-24)
 
 **Core value:** An agent that feels alive and gets smarter over time -- while remaining simple enough that anyone can understand what it's doing and why.
-**Current focus:** Phase 14 — plugin-manifest-loader
+**Current focus:** Phase 15 — plugin-cli-install
 
 ## Current Position
 
-Phase: 15
-Plan: Not started
+Phase: 15 (plugin-cli-install) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -93,6 +93,7 @@ Plan: Not started
 | Phase 12 P02 | 2min | 2 tasks | 2 files |
 | Phase 14 P01 | 7min | 2 tasks | 7 files |
 | Phase 14 P02 | 8min | 2 tasks | 5 files |
+| Phase 15 P01 | 4min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -186,6 +187,7 @@ Recent decisions affecting current work:
 - [Phase 14]: HistoryStore.conn made pub(crate) for cross-module SQLite access from plugin persistence
 - [Phase 14]: PluginManager reads from SQLite for list_plugins (not just in-memory) to reflect IPC-toggled enabled state
 - [Phase 14]: Settings schema extracted from manifest_json as standalone JSON for future dynamic form rendering
+- [Phase 15]: Combined Tasks 1+2 into single commit due to Rust exhaustive match; conflict detection uses in-memory map for loaded state; re-install skips conflict check for same-named plugins
 
 ### Pending Todos
 
@@ -199,6 +201,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T18:09:15.638Z
-Stopped at: Completed 14-02-PLAN.md
+Last session: 2026-03-24T20:57:52.593Z
+Stopped at: Completed 15-01-PLAN.md
 Resume file: None

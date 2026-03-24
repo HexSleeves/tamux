@@ -296,10 +296,10 @@ Plans:
   4. `tamux plugin uninstall <name>` removes files, deregisters from daemon, cleans up bundled skills
   5. `tamux plugin list` shows all installed plugins with status
   6. Plugin install rejects on command/skill name conflicts with clear error
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
-- [ ] 15-01-PLAN.md — IPC messages (PluginInstall/Uninstall), PluginManager register/unregister/conflict-check, server handlers
+- [x] 15-01-PLAN.md — IPC messages (PluginInstall/Uninstall), PluginManager register/unregister/conflict-check, server handlers
 - [ ] 15-02-PLAN.md — CLI plugin add/remove/ls/enable/disable with npm/GitHub/local source detection and daemon IPC
 
 ### Phase 16: Plugin Settings UI
@@ -400,7 +400,7 @@ Phase 14 (Manifest & Loader) ─────┬──► Phase 15 (CLI & Install
 | 13. TUI UX Fixes | 3/3 | Complete | 2026-03-24 |
 | **v2.0** | | | |
 | 14. Plugin Manifest & Loader | 2/2 | Complete    | 2026-03-24 |
-| 15. Plugin CLI & Install | 0/2 | Planned | - |
+| 15. Plugin CLI & Install | 1/2 | In Progress|  |
 | 16. Plugin Settings UI | 0/? | Not started | - |
 | 17. API Proxy Layer | 0/? | Not started | - |
 | 18. OAuth2 Flow | 0/? | Not started | - |

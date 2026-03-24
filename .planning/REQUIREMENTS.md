@@ -108,10 +108,10 @@ Requirements for the "Plugin Ecosystem" milestone. Each maps to roadmap phases 1
 - [ ] **INST-01**: `tamux plugin install <npm-package>` installs plugin from npm registry
 - [ ] **INST-02**: `tamux plugin install <github-url>` installs plugin from GitHub repository
 - [ ] **INST-03**: `tamux plugin install <local-path>` installs plugin from local directory (dev workflow)
-- [ ] **INST-04**: `tamux plugin uninstall <name>` removes plugin files, deregisters from daemon, cleans up bundled skills
+- [x] **INST-04**: `tamux plugin uninstall <name>` removes plugin files, deregisters from daemon, cleans up bundled skills
 - [ ] **INST-05**: `tamux plugin list` shows installed plugins with name, version, enabled status, and auth status
-- [ ] **INST-06**: `tamux plugin enable/disable <name>` toggles plugin without uninstall
-- [ ] **INST-07**: Plugin install rejects manifests that conflict with existing command or skill names (namespace: `/pluginname.command`)
+- [x] **INST-06**: `tamux plugin enable/disable <name>` toggles plugin without uninstall
+- [x] **INST-07**: Plugin install rejects manifests that conflict with existing command or skill names (namespace: `/pluginname.command`)
 - [ ] **INST-08**: npm install uses `--ignore-scripts` to prevent lifecycle script execution (security)
 
 ### Plugin Settings UI
@@ -300,10 +300,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INST-01 | Phase 15 | Pending |
 | INST-02 | Phase 15 | Pending |
 | INST-03 | Phase 15 | Pending |
-| INST-04 | Phase 15 | Pending |
+| INST-04 | Phase 15 | Complete |
 | INST-05 | Phase 15 | Pending |
-| INST-06 | Phase 15 | Pending |
-| INST-07 | Phase 15 | Pending |
+| INST-06 | Phase 15 | Complete |
+| INST-07 | Phase 15 | Complete |
 | INST-08 | Phase 15 | Pending |
 | PSET-01 | Phase 16 | Pending |
 | PSET-02 | Phase 16 | Pending |
