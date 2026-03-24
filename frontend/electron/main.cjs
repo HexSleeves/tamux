@@ -3406,6 +3406,66 @@ function registerIpcHandlers() {
     ipcMain.handle('ai-training-discover', (_event, workspacePath) => discoverAITraining(workspacePath));
     ipcMain.handle('plugin-list-installed', () => listInstalledPlugins());
     ipcMain.handle('plugin-load-installed', () => loadInstalledPluginScripts());
+
+    // Plugin daemon IPC handlers (Plan 16-01)
+    ipcMain.handle('plugin-daemon-list', async () => {
+        try {
+            return await sendAgentQuery({ type: 'plugin-list' }, 'plugin-list-result');
+        } catch (err) {
+            return { plugins: [] };
+        }
+    });
+    ipcMain.handle('plugin-daemon-get', async (_event, name) => {
+        try {
+            return await sendAgentQuery({ type: 'plugin-get', name }, 'plugin-get-result');
+        } catch (err) {
+            return { plugin: null, settings_schema: null };
+        }
+    });
+    ipcMain.handle('plugin-daemon-enable', async (_event, name) => {
+        try {
+            sendAgentCommand({ type: 'plugin-enable', name });
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
+    ipcMain.handle('plugin-daemon-disable', async (_event, name) => {
+        try {
+            sendAgentCommand({ type: 'plugin-disable', name });
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
+    ipcMain.handle('plugin-get-settings', async (_event, name) => {
+        try {
+            return await sendAgentQuery({ type: 'plugin-get-settings', name }, 'plugin-settings');
+        } catch (err) {
+            return { plugin_name: name, settings: [] };
+        }
+    });
+    ipcMain.handle('plugin-update-settings', async (_event, pluginName, key, value, isSecret) => {
+        try {
+            sendAgentCommand({
+                type: 'plugin-update-settings',
+                plugin_name: pluginName,
+                key,
+                value: String(value),
+                is_secret: Boolean(isSecret),
+            });
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
+    ipcMain.handle('plugin-test-connection', async (_event, name) => {
+        try {
+            return await sendAgentQuery({ type: 'plugin-test-connection', name }, 'plugin-test-connection-result');
+        } catch (err) {
+            return { plugin_name: name, success: false, message: err.message || 'Bridge error' };
+        }
+    });
     ipcMain.handle('diagnostics-check-lsp', checkLspHealth);
     ipcMain.handle('diagnostics-check-mcp', checkMcpHealth);
     ipcMain.handle('persistence-get-data-dir', () => ensureTamuxDataDir());

@@ -1232,6 +1232,46 @@ impl DaemonClient {
         self.send(ClientMessage::AuditDismiss { entry_id })
     }
 
+    // Plugin IPC methods (Plan 16-01)
+    pub fn plugin_list(&self) -> Result<()> {
+        self.send(ClientMessage::PluginList {})
+    }
+
+    pub fn plugin_get(&self, name: String) -> Result<()> {
+        self.send(ClientMessage::PluginGet { name })
+    }
+
+    pub fn plugin_enable(&self, name: String) -> Result<()> {
+        self.send(ClientMessage::PluginEnable { name })
+    }
+
+    pub fn plugin_disable(&self, name: String) -> Result<()> {
+        self.send(ClientMessage::PluginDisable { name })
+    }
+
+    pub fn plugin_get_settings(&self, name: String) -> Result<()> {
+        self.send(ClientMessage::PluginGetSettings { name })
+    }
+
+    pub fn plugin_update_setting(
+        &self,
+        plugin_name: String,
+        key: String,
+        value: String,
+        is_secret: bool,
+    ) -> Result<()> {
+        self.send(ClientMessage::PluginUpdateSettings {
+            plugin_name,
+            key,
+            value,
+            is_secret,
+        })
+    }
+
+    pub fn plugin_test_connection(&self, name: String) -> Result<()> {
+        self.send(ClientMessage::PluginTestConnection { name })
+    }
+
     pub fn resolve_task_approval(&self, approval_id: String, decision: String) -> Result<()> {
         use amux_protocol::ApprovalDecision;
         let decision = match decision.as_str() {

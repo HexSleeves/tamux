@@ -332,6 +332,13 @@ declare global {
         agentRequestConciergeWelcome?: () => Promise<{ ok?: boolean }>;
         listInstalledPlugins?: () => Promise<AmuxInstalledPluginRecord[]>;
         loadInstalledPlugins?: () => Promise<AmuxInstalledPluginLoadResult[]>;
+        pluginDaemonList?: () => Promise<{ plugins: Array<{ name: string; version: string; description?: string; author?: string; enabled: boolean; install_source: string; has_api: boolean; has_auth: boolean; has_commands: boolean; has_skills: boolean; endpoint_count: number; settings_count: number; installed_at: string; updated_at: string }> }>;
+        pluginDaemonGet?: (name: string) => Promise<{ plugin: { name: string; version: string; description?: string; author?: string; enabled: boolean; install_source: string; has_api: boolean; has_auth: boolean; has_commands: boolean; has_skills: boolean; endpoint_count: number; settings_count: number; installed_at: string; updated_at: string } | null; settings_schema: string | null }>;
+        pluginDaemonEnable?: (name: string) => Promise<{ ok?: boolean; error?: string }>;
+        pluginDaemonDisable?: (name: string) => Promise<{ ok?: boolean; error?: string }>;
+        pluginGetSettings?: (name: string) => Promise<{ plugin_name: string; settings: Array<{ key: string; value: string; is_secret: boolean }> }>;
+        pluginUpdateSettings?: (pluginName: string, key: string, value: string, isSecret: boolean) => Promise<{ ok?: boolean; error?: string }>;
+        pluginTestConnection?: (name: string) => Promise<{ plugin_name: string; success: boolean; message: string }>;
         readClipboardText?: () => Promise<string | null>;
         writeClipboardText?: (text: string) => Promise<void>;
         agentResolveTaskApproval?: (approvalId: string, decision: string) => Promise<unknown>;

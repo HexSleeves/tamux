@@ -202,6 +202,25 @@ enum AgentBridgeCommand {
     SetTierOverride {
         tier: Option<String>,
     },
+    #[serde(rename = "plugin-list")]
+    PluginList,
+    #[serde(rename = "plugin-get")]
+    PluginGetDetail { name: String },
+    #[serde(rename = "plugin-enable")]
+    PluginEnableCmd { name: String },
+    #[serde(rename = "plugin-disable")]
+    PluginDisableCmd { name: String },
+    #[serde(rename = "plugin-get-settings")]
+    PluginGetSettings { name: String },
+    #[serde(rename = "plugin-update-settings")]
+    PluginUpdateSettings {
+        plugin_name: String,
+        key: String,
+        value: String,
+        is_secret: bool,
+    },
+    #[serde(rename = "plugin-test-connection")]
+    PluginTestConnection { name: String },
     Shutdown,
 }
 
@@ -1408,6 +1427,27 @@ pub async fn run_agent_bridge() -> Result<()> {
                             AgentBridgeCommand::SetTierOverride { tier } => {
                                 framed.send(ClientMessage::AgentSetTierOverride { tier }).await?;
                             }
+                            AgentBridgeCommand::PluginList => {
+                                framed.send(ClientMessage::PluginList {}).await?;
+                            }
+                            AgentBridgeCommand::PluginGetDetail { name } => {
+                                framed.send(ClientMessage::PluginGet { name }).await?;
+                            }
+                            AgentBridgeCommand::PluginEnableCmd { name } => {
+                                framed.send(ClientMessage::PluginEnable { name }).await?;
+                            }
+                            AgentBridgeCommand::PluginDisableCmd { name } => {
+                                framed.send(ClientMessage::PluginDisable { name }).await?;
+                            }
+                            AgentBridgeCommand::PluginGetSettings { name } => {
+                                framed.send(ClientMessage::PluginGetSettings { name }).await?;
+                            }
+                            AgentBridgeCommand::PluginUpdateSettings { plugin_name, key, value, is_secret } => {
+                                framed.send(ClientMessage::PluginUpdateSettings { plugin_name, key, value, is_secret }).await?;
+                            }
+                            AgentBridgeCommand::PluginTestConnection { name } => {
+                                framed.send(ClientMessage::PluginTestConnection { name }).await?;
+                            }
                             AgentBridgeCommand::Shutdown => {
                                 framed.send(ClientMessage::AgentUnsubscribe).await?;
                                 break;
@@ -1559,6 +1599,60 @@ pub async fn run_agent_bridge() -> Result<()> {
                                 "gateway_statuses": serde_json::from_str::<serde_json::Value>(&gateway_statuses_json).unwrap_or_default(),
                                 "recent_actions": serde_json::from_str::<serde_json::Value>(&recent_actions_json).unwrap_or_default(),
                             }
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::PluginListResult { plugins })) => {
+                        let msg = serde_json::json!({
+                            "type": "plugin-list-result",
+                            "plugins": plugins.iter().map(|p| serde_json::json!({
+                                "name": p.name, "version": p.version, "description": p.description,
+                                "author": p.author, "enabled": p.enabled, "install_source": p.install_source,
+                                "has_api": p.has_api, "has_auth": p.has_auth, "has_commands": p.has_commands,
+                                "has_skills": p.has_skills, "endpoint_count": p.endpoint_count,
+                                "settings_count": p.settings_count, "installed_at": p.installed_at,
+                                "updated_at": p.updated_at,
+                            })).collect::<Vec<_>>(),
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::PluginGetResult { plugin, settings_schema })) => {
+                        let msg = serde_json::json!({
+                            "type": "plugin-get-result",
+                            "plugin": plugin.as_ref().map(|p| serde_json::json!({
+                                "name": p.name, "version": p.version, "description": p.description,
+                                "author": p.author, "enabled": p.enabled, "install_source": p.install_source,
+                                "has_api": p.has_api, "has_auth": p.has_auth, "has_commands": p.has_commands,
+                                "has_skills": p.has_skills, "endpoint_count": p.endpoint_count,
+                                "settings_count": p.settings_count, "installed_at": p.installed_at,
+                                "updated_at": p.updated_at,
+                            })),
+                            "settings_schema": settings_schema,
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::PluginActionResult { success, message })) => {
+                        let msg = serde_json::json!({
+                            "type": "plugin-action-result",
+                            "success": success,
+                            "message": message,
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::PluginSettingsResult { plugin_name, settings })) => {
+                        let msg = serde_json::json!({
+                            "type": "plugin-settings",
+                            "plugin_name": plugin_name,
+                            "settings": settings.iter().map(|(k, v, s)| serde_json::json!({"key": k, "value": v, "is_secret": s})).collect::<Vec<_>>(),
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::PluginTestConnectionResult { plugin_name, success, message })) => {
+                        let msg = serde_json::json!({
+                            "type": "plugin-test-connection-result",
+                            "plugin_name": plugin_name,
+                            "success": success,
+                            "message": message,
                         });
                         emit_agent_event(&msg.to_string())?;
                     }
