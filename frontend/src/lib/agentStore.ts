@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { getBridge } from "./bridge";
 import type { WorkspaceId, SurfaceId, PaneId } from "./types";
 import type { ToolCall } from "./agentTools";
 import { readPersistedJson, scheduleJsonWrite } from "./persistence";
@@ -776,10 +777,6 @@ export function clearThreadAbortController(threadId: string, controller?: AbortC
   threadAbortControllers.delete(threadId);
 }
 
-function getBridge(): AmuxBridge | null {
-  return (window as any).tamux ?? (window as any).amux ?? null;
-}
-
 let _threadId = 0;
 let _msgId = 0;
 
@@ -954,7 +951,7 @@ type RemoteAgentThreadRecord = {
 };
 
 function getAgentDbApi(): AgentDbApi | null {
-  const api = (window as any).tamux ?? (window as any).amux;
+  const api = getBridge();
   if (!api) return null;
   return api as AgentDbApi;
 }
@@ -1878,7 +1875,7 @@ export async function hydrateAgentStore(): Promise<void> {
   useAgentStore.setState({ agentSettingsHydrated });
 
   if (!shouldPersistHistory(configuredBackend)) {
-    const amux = (window as any).tamux ?? (window as any).amux;
+    const amux = getBridge();
     if (amux?.agentListThreads) {
       const remoteThreads = await amux.agentListThreads().catch(() => []);
       if (Array.isArray(remoteThreads) && remoteThreads.length > 0) {
