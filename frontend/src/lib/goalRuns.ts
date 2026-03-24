@@ -86,9 +86,7 @@ export interface StartGoalRunPayload {
     clientRequestId?: string | null;
 }
 
-function getBridge(): AmuxBridge | null {
-    return (window as any).tamux ?? (window as any).amux ?? null;
-}
+import { getBridge } from "./bridge";
 
 function toStepKind(value: unknown): GoalRunStepKind {
     if (typeof value !== "string") {

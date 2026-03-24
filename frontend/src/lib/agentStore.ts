@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { getBridge } from "./bridge";
 import type { WorkspaceId, SurfaceId, PaneId } from "./types";
 import type { ToolCall } from "./agentTools";
 import { readPersistedJson, scheduleJsonWrite } from "./persistence";
@@ -774,10 +775,6 @@ export function clearThreadAbortController(threadId: string, controller?: AbortC
   if (!current) return;
   if (controller && current !== controller) return;
   threadAbortControllers.delete(threadId);
-}
-
-function getBridge(): AmuxBridge | null {
-  return (window as any).tamux ?? (window as any).amux ?? null;
 }
 
 let _threadId = 0;
