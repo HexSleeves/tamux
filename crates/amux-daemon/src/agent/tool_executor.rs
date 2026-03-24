@@ -376,7 +376,7 @@ pub fn get_available_tools(
 
     tools.push(tool_def(
         "list_skills",
-        "List reusable local skills available to the tamux agent from ~/.tamux/skills (platform dependent).",
+        "List reusable local skills available to the tamux agent from ~/.tamux/skills (platform dependent). Includes built-in, generated, community, and plugin-bundled skills.",
         serde_json::json!({
             "type": "object",
             "properties": {

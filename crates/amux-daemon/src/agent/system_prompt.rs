@@ -66,6 +66,30 @@ pub(super) fn build_system_prompt(
             skills_root.display(),
         ),
     );
+    // Check if any plugin skills exist
+    let plugin_skills_dir = skills_root.join("plugins");
+    if plugin_skills_dir.exists() && plugin_skills_dir.is_dir() {
+        let plugin_count = std::fs::read_dir(&plugin_skills_dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .count()
+            })
+            .unwrap_or(0);
+        if plugin_count > 0 {
+            prompt.push_str(&format!(
+                "\n### Plugin Skills\n\
+                 - Plugin skills: {}/plugins/ ({} plugin(s) with bundled skills)\n\
+                 - Plugin skills may reference API endpoints using `plugin:<plugin-name>:<endpoint>` notation\n\
+                 - When a skill references `plugin:<name>:<endpoint>`, use the plugin API tool to call that endpoint\n\
+                 - Plugin commands are available as slash commands (e.g., /pluginname.command)\n",
+                skills_root.display(),
+                plugin_count,
+            ));
+        }
+    }
+
     if let Some(skill_index) = render_skill_index(&skills_root) {
         prompt
             .push_str("\nSkill index (load full content with `read_skill` only when relevant):\n");
