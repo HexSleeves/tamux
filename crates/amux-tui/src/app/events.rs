@@ -305,6 +305,21 @@ impl TuiModel {
                     })
                     .collect();
                 let item_count = vm_items.len();
+
+                // Extract recent actions BEFORE moving vm_items into the task state
+                for item in &vm_items {
+                    self.recent_actions.push(super::RecentActionVm {
+                        action_type: item.check_type.clone(),
+                        summary: item.title.clone(),
+                        timestamp: checked_at,
+                    });
+                }
+                // Retain only the 3 most recent actions
+                if self.recent_actions.len() > 3 {
+                    let start = self.recent_actions.len() - 3;
+                    self.recent_actions = self.recent_actions.split_off(start);
+                }
+
                 self.tasks
                     .reduce(task::TaskAction::HeartbeatDigestReceived(
                         task::HeartbeatDigestVm {

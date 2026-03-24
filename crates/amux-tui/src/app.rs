@@ -39,6 +39,14 @@ pub struct Attachment {
     pub size_bytes: usize,
 }
 
+/// A recent autonomous action displayed in the sidebar.
+#[derive(Debug, Clone)]
+pub struct RecentActionVm {
+    pub action_type: String,
+    pub summary: String,
+    pub timestamp: u64,
+}
+
 /// Flat representation of a sidebar item for matching selected index to data.
 struct SidebarFlatItem {
     target: Option<sidebar::SidebarItemTarget>,
@@ -160,6 +168,9 @@ pub struct TuiModel {
     // Gateway connection statuses received from daemon
     pub gateway_statuses: Vec<chat::GatewayStatusVm>,
 
+    // Recent autonomous actions from heartbeat digests (shown in sidebar)
+    pub recent_actions: Vec<RecentActionVm>,
+
     // Active mouse drag selection in the chat pane
     chat_drag_anchor: Option<Position>,
     chat_drag_current: Option<Position>,
@@ -229,6 +240,7 @@ impl TuiModel {
             cancelled_thread_id: None,
             ignore_pending_concierge_welcome: false,
             gateway_statuses: Vec::new(),
+            recent_actions: Vec::new(),
             chat_drag_anchor: None,
             chat_drag_current: None,
             chat_drag_anchor_point: None,
