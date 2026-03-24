@@ -1,5 +1,6 @@
 mod client;
 mod plugins;
+mod setup_wizard;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

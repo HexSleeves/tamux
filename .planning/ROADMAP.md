@@ -177,8 +177,8 @@ Plans:
 
 Plans:
 - [ ] 09-01-PLAN.md — Thin npm wrapper package with postinstall binary downloader and bin launcher
-- [ ] 09-02-PLAN.md — GitLab CI release pipeline with multi-platform build matrix and release automation
-- [ ] 09-03-PLAN.md — Unix install script (install.sh) and PowerShell installer (install.ps1)
+- [x] 09-02-PLAN.md — GitLab CI release pipeline with multi-platform build matrix and release automation
+- [x] 09-03-PLAN.md — Unix install script (install.sh) and PowerShell installer (install.ps1)
 - [ ] 09-04-PLAN.md — First-run setup wizard with provider configuration and daemon auto-start
 
 ### Phase 10: Progressive UX
