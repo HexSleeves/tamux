@@ -265,6 +265,6 @@ Phases 12 and 13 can execute in parallel (both depend on 11).
 | 8. Gateway Completion | 0/4 | Not started | - |
 | 9. Distribution | 0/4 | Not started | - |
 | 10. Progressive UX | 5/5 | Complete | 2026-03-24 |
-| 11. Setup Wizard Rewrite | 2/2 | Complete   | 2026-03-24 |
+| 11. Setup Wizard Rewrite | 2/2 | Complete    | 2026-03-24 |
 | 12. CLI Polish | 0/? | Not started | - |
 | 13. TUI UX Fixes | 0/? | Not started | - |
