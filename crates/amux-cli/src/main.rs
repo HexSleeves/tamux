@@ -148,6 +148,12 @@ enum Commands {
     #[command(name = "daemon")]
     StartDaemon,
 
+    /// Manage plugins (v2 manifest format).
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
+
     /// Install runtime extensions.
     Install {
         #[command(subcommand)]
@@ -192,6 +198,33 @@ enum InstallTarget {
     Plugin {
         /// npm package spec or local package directory.
         package: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PluginAction {
+    /// Install a plugin from npm, GitHub, or local path.
+    Add {
+        /// Plugin source: npm package name, GitHub URL, or local directory path.
+        source: String,
+    },
+    /// Uninstall a plugin by name.
+    Remove {
+        /// Plugin name to uninstall.
+        name: String,
+    },
+    /// List installed plugins. Per INST-05/D-08.
+    #[command(alias = "list")]
+    Ls,
+    /// Enable a disabled plugin. Per INST-06.
+    Enable {
+        /// Plugin name to enable.
+        name: String,
+    },
+    /// Disable a plugin without uninstalling. Per INST-06.
+    Disable {
+        /// Plugin name to disable.
+        name: String,
     },
 }
 
@@ -729,6 +762,108 @@ async fn main() -> Result<()> {
             cmd.spawn()?;
             println!("Daemon started.");
         }
+
+        Commands::Plugin { action } => match action {
+            PluginAction::Add { source } => {
+                println!("Installing plugin from '{}'...", source);
+
+                // Step 1: Install files to disk
+                let (dir_name, source_label) = plugins::install_plugin_v2(&source)?;
+                println!("Files installed to ~/.tamux/plugins/{}/", dir_name);
+
+                // Step 2: Register with daemon via IPC
+                match client::send_plugin_install(&dir_name, &source_label).await {
+                    Ok((true, message)) => {
+                        println!("{}", message);
+                    }
+                    Ok((false, message)) => {
+                        // Registration failed (e.g., conflict). Clean up files.
+                        eprintln!("Registration failed: {}", message);
+                        let _ = plugins::remove_plugin_files(&dir_name);
+                        eprintln!("Cleaned up plugin files.");
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        // Daemon not reachable. Files are installed, warn user.
+                        eprintln!(
+                            "Warning: Could not register with daemon ({}). Plugin files installed. Start the daemon to activate.",
+                            e
+                        );
+                    }
+                }
+            }
+            PluginAction::Remove { name } => {
+                // Step 1: Deregister from daemon via IPC (per D-06: daemon first, then files)
+                match client::send_plugin_uninstall(&name).await {
+                    Ok((true, message)) => {
+                        println!("{}", message);
+                    }
+                    Ok((false, message)) => {
+                        eprintln!("Warning: {}", message);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Could not reach daemon ({}). Removing files only.",
+                            e
+                        );
+                    }
+                }
+
+                // Step 2: Remove files from disk (per D-06)
+                plugins::remove_plugin_files(&name)?;
+                println!("Plugin '{}' removed.", name);
+            }
+            PluginAction::Ls => {
+                // Per D-08/INST-05: table format with name | version | enabled | auth | source
+                match client::send_plugin_list().await {
+                    Ok(plugins) => {
+                        if plugins.is_empty() {
+                            println!("No plugins installed.");
+                        } else {
+                            println!(
+                                "{:<24} {:>8} {:>8} {:>6} {}",
+                                "NAME", "VERSION", "ENABLED", "AUTH", "SOURCE"
+                            );
+                            for p in &plugins {
+                                let auth_status = if p.has_auth { "yes" } else { "-" };
+                                let enabled = if p.enabled { "yes" } else { "no" };
+                                println!(
+                                    "{:<24} {:>8} {:>8} {:>6} {}",
+                                    truncate_for_display(&p.name, 24),
+                                    truncate_for_display(&p.version, 8),
+                                    enabled,
+                                    auth_status,
+                                    truncate_for_display(&p.install_source, 40),
+                                );
+                            }
+                            println!("\n{} plugin(s) installed.", plugins.len());
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Could not reach daemon: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            PluginAction::Enable { name } => {
+                let (success, message) = client::send_plugin_enable(&name).await?;
+                if success {
+                    println!("{}", message);
+                } else {
+                    eprintln!("{}", message);
+                    std::process::exit(1);
+                }
+            }
+            PluginAction::Disable { name } => {
+                let (success, message) = client::send_plugin_disable(&name).await?;
+                if success {
+                    println!("{}", message);
+                } else {
+                    eprintln!("{}", message);
+                    std::process::exit(1);
+                }
+            }
+        },
 
         Commands::Install { target } => match target {
             InstallTarget::Plugin { package } => {
