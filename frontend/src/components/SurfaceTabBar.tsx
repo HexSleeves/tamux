@@ -13,7 +13,7 @@ import { AppConfirmDialog } from "./AppConfirmDialog";
 import { SurfaceTabActions } from "./surface-tab-bar/SurfaceTabActions";
 import { SurfaceCreateButton } from "./surface-tab-bar/SurfaceCreateButton";
 import { SurfaceTabItem } from "./surface-tab-bar/SurfaceTabItem";
-import { Button, Separator } from "./ui";
+import { Button, Separator, Tabs, TabsList } from "./ui";
 
 export function SurfaceTabBar() {
   const ws = useWorkspaceStore((s) => s.activeWorkspace());
@@ -100,22 +100,32 @@ export function SurfaceTabBar() {
 
       <Separator orientation="vertical" className="h-5 bg-[var(--border)]" />
 
-      <div className="flex min-w-0 flex-1 items-center gap-[var(--space-1)] overflow-x-auto">
-        {surfaces.map((sf) => (
-          <SurfaceTabItem
-            key={sf.id}
-            surface={sf}
-            isActive={sf.id === activeSurfaceId}
-            accentColor={ws?.accentColor ?? "var(--accent)"}
-            approvalCount={approvals.filter((entry) => entry.surfaceId === sf.id && entry.status === "pending").length}
-            paneCount={allLeafIds(sf.layout).length}
-            onSelect={() => setActiveSurface(sf.id)}
-            onClose={() => setPendingCloseSurface({ id: sf.id, name: sf.name })}
-            onRename={(name) => renameSurface(sf.id, name)}
-            onSetIcon={(icon) => setSurfaceIcon(sf.id, icon)}
-          />
-        ))}
-      </div>
+      <Tabs
+        value={activeSurfaceId ?? undefined}
+        onValueChange={setActiveSurface}
+        className="min-w-0 flex-1"
+      >
+        <div className="min-w-0 overflow-x-auto">
+          <TabsList
+            aria-label="Workspace surfaces"
+            className="flex h-auto min-w-max items-center gap-[var(--space-1)] rounded-none border-none bg-transparent p-0"
+          >
+            {surfaces.map((sf) => (
+              <SurfaceTabItem
+                key={sf.id}
+                surface={sf}
+                isActive={sf.id === activeSurfaceId}
+                accentColor={ws?.accentColor ?? "var(--accent)"}
+                approvalCount={approvals.filter((entry) => entry.surfaceId === sf.id && entry.status === "pending").length}
+                paneCount={allLeafIds(sf.layout).length}
+                onClose={() => setPendingCloseSurface({ id: sf.id, name: sf.name })}
+                onRename={(name) => renameSurface(sf.id, name)}
+                onSetIcon={(icon) => setSurfaceIcon(sf.id, icon)}
+              />
+            ))}
+          </TabsList>
+        </div>
+      </Tabs>
 
       <SurfaceCreateButton
         layoutMode={activeLayoutMode}
