@@ -13,7 +13,7 @@ import { AppConfirmDialog } from "./AppConfirmDialog";
 import { SurfaceTabActions } from "./surface-tab-bar/SurfaceTabActions";
 import { SurfaceCreateButton } from "./surface-tab-bar/SurfaceCreateButton";
 import { SurfaceTabItem } from "./surface-tab-bar/SurfaceTabItem";
-import { dividerStyle } from "./surface-tab-bar/shared";
+import { Button, Separator } from "./ui";
 
 export function SurfaceTabBar() {
   const ws = useWorkspaceStore((s) => s.activeWorkspace());
@@ -73,40 +73,18 @@ export function SurfaceTabBar() {
   };
 
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        background: "var(--bg-secondary)",
-        borderBottom: "1px solid var(--border)",
-        height: "var(--tab-height)",
-        overflow: "hidden",
-        padding: "0 var(--space-2)",
-        gap: "var(--space-2)",
-        flexShrink: 0,
-      }}
-    >
-      <button
+    <div className="flex h-[var(--tab-height)] shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--border)] bg-[var(--bg-secondary)] px-[var(--space-2)]">
+      <Button
         onClick={toggleSidebar}
-        style={{
-          background: sidebarVisible ? "var(--accent-soft)" : "transparent",
-          border: "1px solid",
-          borderColor: sidebarVisible ? "var(--accent-soft)" : "var(--glass-border)",
-          color: sidebarVisible ? "var(--accent)" : "var(--text-muted)",
-          cursor: "pointer",
-          fontSize: "var(--text-sm)",
-          padding: "0 var(--space-2)",
-          height: 26,
-          minWidth: 28,
-          borderRadius: "var(--radius-md)",
-          transition: "all var(--transition-fast)",
-        }}
+        variant={sidebarVisible ? "primary" : "secondary"}
+        size="sm"
+        className="h-7 min-w-7 px-[var(--space-2)] text-[var(--text-sm)]"
         title="Toggle sidebar"
       >
         ☰
-      </button>
+      </Button>
 
-      <div style={dividerStyle} />
+      <Separator orientation="vertical" className="h-5 bg-[var(--border)]" />
 
       <SurfaceTabActions
         layoutMode={activeLayoutMode}
@@ -120,17 +98,9 @@ export function SurfaceTabBar() {
         toggleWebBrowser={toggleWebBrowser}
       />
 
-      <div style={dividerStyle} />
+      <Separator orientation="vertical" className="h-5 bg-[var(--border)]" />
 
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          flex: 1,
-          overflow: "auto",
-          gap: "var(--space-1)",
-        }}
-      >
+      <div className="flex min-w-0 flex-1 items-center gap-[var(--space-1)] overflow-x-auto">
         {surfaces.map((sf) => (
           <SurfaceTabItem
             key={sf.id}

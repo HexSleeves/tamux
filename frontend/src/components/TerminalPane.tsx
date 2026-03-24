@@ -33,6 +33,7 @@ import { registerTerminalController, type TerminalSendOptions } from "../lib/ter
 import { allLeafIds, findLeaf } from "../lib/bspTree";
 import { getEffectiveTheme } from "../lib/themes";
 import { SharedCursor } from "./SharedCursor";
+import { cn, panelSurfaceClassName } from "./ui";
 import {
   cloneSessionForDuplication,
   queuePaneBootstrapCommand,
@@ -1735,15 +1736,11 @@ export function TerminalPane({ paneId, sessionId, hideHeader }: TerminalPaneProp
       ref={wrapperRef}
       onClick={handleFocus}
       tabIndex={-1}
-      style={{
-        width: "100%",
-        height: "100%",
-        background: "var(--bg-primary)",
-        padding: `${Math.max(12, settings.padding)}px`,
-        position: "relative",
-        outline: "none",
-        overflow: "hidden",
-      }}
+      className={cn(
+        panelSurfaceClassName,
+        "relative h-full w-full overflow-hidden bg-[var(--bg-primary)] outline-none"
+      )}
+      style={{ padding: `${Math.max(12, settings.padding)}px` }}
     >
       {hideHeader ? null : (
         <TerminalPaneHeader
@@ -1755,7 +1752,7 @@ export function TerminalPane({ paneId, sessionId, hideHeader }: TerminalPaneProp
         />
       )}
 
-      <div ref={containerRef} style={{ width: "100%", height: hideHeader ? "100%" : "calc(100% - 36px)" }} />
+      <div ref={containerRef} className="w-full" style={{ height: hideHeader ? "100%" : "calc(100% - 36px)" }} />
       <SharedCursor mode={sharedCursorMode} />
 
       <TerminalContextMenu
