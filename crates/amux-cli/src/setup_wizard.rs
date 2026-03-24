@@ -78,12 +78,15 @@ async fn wizard_recv(
 // Validate provider using a fresh IPC connection (avoids state issues on wizard stream)
 // ---------------------------------------------------------------------------
 
-/// Validate provider by sending a minimal chat completion via the daemon.
-/// Uses a fresh IPC connection to avoid state issues on the wizard stream.
-async fn validate_provider(provider_id: &str, auth_source: &str) -> Result<bool> {
-    let mut conn = wizard_connect().await.context("reconnect for validation")?;
+/// Validate provider via daemon IPC AgentValidateProvider on the given framed connection.
+/// Loops to skip any interleaved DaemonMessage::Error (from prior fire-and-forget config sets).
+async fn validate_provider_on_stream(
+    framed: &mut Framed<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin, AmuxCodec>,
+    provider_id: &str,
+    auth_source: &str,
+) -> Result<bool> {
     wizard_send(
-        &mut conn,
+        framed,
         ClientMessage::AgentValidateProvider {
             provider_id: provider_id.to_string(),
             base_url: String::new(),
@@ -93,12 +96,9 @@ async fn validate_provider(provider_id: &str, auth_source: &str) -> Result<bool>
     )
     .await?;
 
-    // Read response — loop to skip any interleaved AgentEvent messages.
-    // Use a timeout since the daemon makes an HTTP call to the provider.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        let recv_result = tokio::time::timeout_at(deadline, wizard_recv(&mut conn)).await;
-        match recv_result {
+        match tokio::time::timeout_at(deadline, wizard_recv(framed)).await {
             Ok(Ok(DaemonMessage::AgentProviderValidation { valid, error, .. })) => {
                 if !valid {
                     if let Some(err) = error {
@@ -107,21 +107,19 @@ async fn validate_provider(provider_id: &str, auth_source: &str) -> Result<bool>
                 }
                 return Ok(valid);
             }
-            Ok(Ok(DaemonMessage::AgentError { message })) => {
-                anyhow::bail!("Daemon error: {message}");
+            Ok(Ok(DaemonMessage::Error { message })) => {
+                // Skip errors from prior fire-and-forget config sets
+                tracing::debug!("skipping daemon error during validate: {message}");
+                continue;
             }
-            Ok(Ok(DaemonMessage::AgentEvent { .. })) => {
-                continue; // skip broadcast events
+            Ok(Ok(DaemonMessage::AgentEvent { .. })) => continue,
+            Ok(Ok(DaemonMessage::AgentConfigResponse { .. })) => continue,
+            Ok(Ok(other)) => {
+                tracing::debug!("unexpected message during validate: {other:?}");
+                continue;
             }
-            Ok(Ok(_)) => {
-                return Ok(false);
-            }
-            Ok(Err(e)) => {
-                anyhow::bail!("Connection error: {e}");
-            }
-            Err(_) => {
-                anyhow::bail!("Timed out waiting for provider response (30s)");
-            }
+            Ok(Err(e)) => anyhow::bail!("Connection error: {e}"),
+            Err(_) => anyhow::bail!("Timed out (30s)"),
         }
     }
 }
@@ -670,11 +668,12 @@ pub async fn run_setup_wizard() -> Result<()> {
     }
 
     // Connectivity test — runs for ALL non-local providers (existing or new key).
-    // Uses a SEPARATE IPC connection to avoid protocol state issues on the main stream.
+    // Uses the MAIN wizard IPC connection. Prior AgentSetConfigItem calls are fire-and-forget
+    // (no response on success, DaemonMessage::Error on failure) — the validate loop skips those.
     if !is_local_provider(&provider_id) && !api_key_saved.is_empty() {
         println!();
         println!("Testing connection to {provider_name}...");
-        match validate_provider(&provider_id, &auth_source).await {
+        match validate_provider_on_stream(&mut framed, &provider_id, &auth_source).await {
             Ok(true) => {
                 println!(
                     "{}",
