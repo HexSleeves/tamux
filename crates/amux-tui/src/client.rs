@@ -170,6 +170,10 @@ pub enum ClientEvent {
     },
     ConciergeWelcomeDismissed,
 
+    TierChanged {
+        new_tier: String,
+    },
+
     Error(String),
 }
 
@@ -989,6 +993,18 @@ impl DaemonClient {
                         last_error,
                         consecutive_failures,
                     })
+                    .await;
+            }
+            "tier_changed" | "tier-changed" => {
+                let data = event.get("data").cloned().unwrap_or_else(|| event.clone());
+                let new_tier = data
+                    .get("new_tier")
+                    .or_else(|| data.get("newTier"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("newcomer")
+                    .to_string();
+                let _ = event_tx
+                    .send(ClientEvent::TierChanged { new_tier })
                     .await;
             }
             _ => {}

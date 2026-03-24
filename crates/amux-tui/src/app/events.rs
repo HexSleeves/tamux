@@ -399,6 +399,10 @@ impl TuiModel {
                 self.status_line =
                     format!("\u{1F310} Gateway {}: {}", platform, status);
             }
+            ClientEvent::TierChanged { new_tier } => {
+                self.tier.on_tier_changed(&new_tier);
+                self.status_line = format!("Tier: {}", new_tier);
+            }
             ClientEvent::Delta { thread_id, content } => {
                 self.agent_activity = Some("writing".to_string());
                 self.chat

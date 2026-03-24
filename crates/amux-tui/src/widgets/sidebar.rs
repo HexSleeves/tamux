@@ -6,6 +6,7 @@ use ratatui::widgets::Paragraph;
 use crate::state::chat::GatewayStatusVm;
 use crate::state::sidebar::{SidebarState, SidebarTab};
 use crate::state::task::TaskState;
+use crate::state::tier::TierState;
 use crate::theme::ThemeTokens;
 
 const TAB_LABELS: [&str; 2] = ["Files", "Todos"];
@@ -255,6 +256,37 @@ fn gateway_status_lines(statuses: &[GatewayStatusVm], theme: &ThemeTokens) -> Ve
     lines
 }
 
+/// Render a dimmed one-line placeholder for a tier-locked sidebar section (D-05).
+fn tier_placeholder_line(label: &str, required_tier: &str) -> Line<'static> {
+    let dim = Style::default().fg(Color::DarkGray);
+    Line::from(vec![
+        Span::styled("  \u{25B6} ", dim),
+        Span::styled(label.to_string(), dim),
+        Span::styled(format!("  [{}]", required_tier.replace('_', " ")), dim),
+    ])
+}
+
+/// Collect tier-gated placeholder lines for hidden sidebar sections.
+fn tier_gated_lines(tier: &TierState) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if !tier.show_goal_runs {
+        lines.push(tier_placeholder_line("Goal Runs", "familiar"));
+    }
+    if !tier.show_task_queue {
+        lines.push(tier_placeholder_line("Task Queue", "familiar"));
+    }
+    if !tier.show_gateway_config {
+        lines.push(tier_placeholder_line("Gateway", "familiar"));
+    }
+    if !tier.show_subagents {
+        lines.push(tier_placeholder_line("Sub-Agents", "power user"));
+    }
+    if !tier.show_memory_controls {
+        lines.push(tier_placeholder_line("Memory", "expert"));
+    }
+    lines
+}
+
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -264,13 +296,21 @@ pub fn render(
     theme: &ThemeTokens,
     _focused: bool,
     gateway_statuses: &[GatewayStatusVm],
+    tier: &TierState,
 ) {
     if area.height < 3 {
         return;
     }
 
-    let gw_lines = gateway_status_lines(gateway_statuses, theme);
+    let gw_lines = if tier.show_gateway_config {
+        gateway_status_lines(gateway_statuses, theme)
+    } else {
+        Vec::new()
+    };
     let gw_height = gw_lines.len() as u16;
+
+    let tier_lines = tier_gated_lines(tier);
+    let tier_height = tier_lines.len() as u16;
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -279,6 +319,7 @@ pub fn render(
             Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(gw_height),
+            Constraint::Length(tier_height),
         ])
         .split(area);
     for (tab, cell) in [
@@ -306,6 +347,10 @@ pub fn render(
 
     if !gw_lines.is_empty() {
         frame.render_widget(Paragraph::new(gw_lines), chunks[3]);
+    }
+
+    if !tier_lines.is_empty() {
+        frame.render_widget(Paragraph::new(tier_lines), chunks[4]);
     }
 }
 

@@ -317,6 +317,21 @@ impl AgentEngine {
                     } else {
                         tracing::debug!("heartbeat suppressed (quiet hours/DND)");
                     }
+
+                    // Check for tier changes and disclosure (Phase 10 Plan 03)
+                    if let Err(e) = self.check_tier_change().await {
+                        tracing::warn!(error = %e, "tier change check failed");
+                    }
+
+                    // Deliver next feature disclosure if pending
+                    {
+                        let session_count = self.operator_model.read().await.session_count;
+                        let mut queue = self.disclosure_queue.write().await;
+                        if let Err(e) = self.concierge.deliver_next_disclosure(&mut queue, session_count).await {
+                            tracing::warn!(error = %e, "feature disclosure delivery failed");
+                        }
+                    }
+
                     // Recompute next occurrence AFTER heartbeat completes (Pitfall 1)
                     let now_local = chrono::Local::now();
                     next_heartbeat = heartbeat_cron

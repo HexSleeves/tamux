@@ -392,6 +392,131 @@ impl AgentEngine {
             });
         }
     }
+
+    /// Check if the capability tier has changed since last check.
+    /// If changed, broadcast TierChanged event and populate disclosure queue.
+    /// Called from heartbeat/gateway_loop on each cycle.
+    pub(super) async fn check_tier_change(&self) -> anyhow::Result<()> {
+        let new_tier = self.compute_current_tier().await;
+        let mut config = self.config.write().await;
+
+        let previous_tier_str = config
+            .tier
+            .last_known_tier
+            .clone()
+            .unwrap_or_else(|| "newcomer".to_string());
+        let new_tier_str = new_tier.to_string();
+
+        if previous_tier_str != new_tier_str {
+            let reason = if config.tier.user_override.is_some() {
+                "user_override"
+            } else {
+                "auto_promotion"
+            };
+
+            // Broadcast TierChanged event
+            let _ = self.event_tx.send(super::types::AgentEvent::TierChanged {
+                previous_tier: previous_tier_str.clone(),
+                new_tier: new_tier_str.clone(),
+                reason: reason.to_string(),
+            });
+
+            // Populate disclosure queue with features unlocked at the new tier
+            self.populate_disclosure_queue(&mut config, new_tier).await;
+
+            // Update last_known_tier
+            config.tier.last_known_tier = Some(new_tier_str.clone());
+
+            // Persist config change
+            drop(config);
+            self.persist_config().await;
+
+            tracing::info!(
+                previous = %previous_tier_str,
+                new = %new_tier_str,
+                reason,
+                "capability tier changed"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Populate the disclosure queue with features newly unlocked at the given tier.
+    /// Features already disclosed are skipped.
+    pub(super) async fn populate_disclosure_queue(
+        &self,
+        _config: &mut super::types::AgentConfig,
+        new_tier: CapabilityTier,
+    ) {
+        let features = tier_disclosure_features(new_tier);
+        let mut queue = self.disclosure_queue.write().await;
+        for feature in features {
+            if !queue
+                .disclosed_features
+                .contains(&feature.feature_id)
+                && !queue
+                    .pending_features
+                    .iter()
+                    .any(|f| f.feature_id == feature.feature_id)
+            {
+                queue.pending_features.push(feature);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Disclosure features per tier (D-13)
+// ---------------------------------------------------------------------------
+
+/// Define features available at each tier for progressive disclosure.
+fn tier_disclosure_features(tier: CapabilityTier) -> Vec<FeatureDisclosure> {
+    match tier {
+        CapabilityTier::Newcomer => vec![],
+        CapabilityTier::Familiar => vec![
+            FeatureDisclosure {
+                feature_id: "goal_runs".into(),
+                tier: CapabilityTier::Familiar,
+                title: "Goal Runs".into(),
+                description: "You can now set multi-step goals and I'll plan and execute them autonomously.".into(),
+            },
+            FeatureDisclosure {
+                feature_id: "task_queue".into(),
+                tier: CapabilityTier::Familiar,
+                title: "Task Queue".into(),
+                description: "Schedule tasks to run later or in the background.".into(),
+            },
+            FeatureDisclosure {
+                feature_id: "gateway_config".into(),
+                tier: CapabilityTier::Familiar,
+                title: "Chat Gateways".into(),
+                description: "Connect me to Slack, Discord, or Telegram so I can work where you communicate.".into(),
+            },
+        ],
+        CapabilityTier::PowerUser => vec![
+            FeatureDisclosure {
+                feature_id: "subagents".into(),
+                tier: CapabilityTier::PowerUser,
+                title: "Sub-Agents".into(),
+                description: "I can spawn specialized sub-agents for complex tasks \u{2014} like having a team.".into(),
+            },
+            FeatureDisclosure {
+                feature_id: "advanced_settings".into(),
+                tier: CapabilityTier::PowerUser,
+                title: "Advanced Settings".into(),
+                description: "Fine-tune my behavior: model selection, tool policies, and execution preferences.".into(),
+            },
+        ],
+        CapabilityTier::Expert => vec![
+            FeatureDisclosure {
+                feature_id: "memory_controls".into(),
+                tier: CapabilityTier::Expert,
+                title: "Memory Controls".into(),
+                description: "Full control over my memory: consolidation settings, decay rates, and manual fact management.".into(),
+            },
+        ],
+    }
 }
 
 // ---------------------------------------------------------------------------

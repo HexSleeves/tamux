@@ -827,6 +827,22 @@ impl TuiModel {
             }
         }
 
+        // Hydrate tier from daemon config (override > self_assessment > "newcomer")
+        if let Some(tier_config) = json.get("tier") {
+            let tier_str = tier_config
+                .get("user_override")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    tier_config
+                        .get("user_self_assessment")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                })
+                .unwrap_or("newcomer");
+            self.tier.on_tier_changed(tier_str);
+        }
+
         self.config.agent_config_raw = Some(json.clone());
         self.config
             .reduce(config::ConfigAction::ConfigRawReceived(json.clone()));

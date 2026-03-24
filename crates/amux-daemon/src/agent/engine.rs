@@ -122,6 +122,8 @@ pub struct AgentEngine {
     pub(super) heuristic_store: RwLock<super::learning::heuristics::HeuristicStore>,
     /// Mined tool-usage patterns persisted across restarts (Phase 5).
     pub(super) pattern_store: RwLock<super::learning::patterns::PatternStore>,
+    /// Feature disclosure queue for progressive tier-based feature revelation (D-13).
+    pub(super) disclosure_queue: RwLock<super::capability_tier::DisclosureQueue>,
 }
 
 impl AgentEngine {
@@ -217,6 +219,7 @@ impl AgentEngine {
             learned_check_weights: RwLock::new(HashMap::new()),
             heuristic_store: RwLock::new(super::learning::heuristics::HeuristicStore::default()),
             pattern_store: RwLock::new(super::learning::patterns::PatternStore::default()),
+            disclosure_queue: RwLock::new(super::capability_tier::DisclosureQueue::default()),
         })
     }
 

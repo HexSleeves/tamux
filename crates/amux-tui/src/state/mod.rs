@@ -12,6 +12,7 @@ pub mod settings;
 pub mod sidebar;
 pub mod subagents;
 pub mod task;
+pub mod tier;
 
 // ── Focus ────────────────────────────────────────────────────────────────────
 
@@ -135,6 +136,8 @@ pub use sidebar::{SidebarAction, SidebarItemTarget, SidebarState, SidebarTab};
 pub use subagents::{SubAgentEntry, SubAgentsAction, SubAgentsState};
 #[allow(unused_imports)]
 pub use task::{TaskAction, TaskState};
+#[allow(unused_imports)]
+pub use tier::TierState;
 
 // ── Top-level app action ──────────────────────────────────────────────────────
 

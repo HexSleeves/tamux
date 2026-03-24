@@ -111,6 +111,7 @@ impl TuiModel {
                 &self.theme,
                 self.focus == FocusArea::Sidebar,
                 &self.gateway_statuses,
+                &self.tier,
             );
         } else {
             match &self.main_pane_view {
