@@ -22,7 +22,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8: Gateway Completion** - Daemon-side Slack, Discord, Telegram with unified config and health monitoring
 - [ ] **Phase 9: Distribution** - Single-command install via npm, cargo-dist binaries, platform installers
 - [x] **Phase 10: Progressive UX** - Capability tiers, concierge onboarding, typed bridge helper, consistent status (completed 2026-03-24)
-- [ ] **Phase 11: Setup Wizard Rewrite** - IPC-based config, synced providers, arrow-key navigation, tier-appropriate depth
+- [x] **Phase 11: Setup Wizard Rewrite** - IPC-based config, synced providers, arrow-key navigation, tier-appropriate depth (completed 2026-03-24)
 - [ ] **Phase 12: CLI Polish** - Launch commands, fix stats, hide internals, audit IDs, settings subcommand
 - [ ] **Phase 13: TUI UX Fixes** - Concierge in conversation, tier settings, feature settings, recent actions
 
@@ -215,11 +215,11 @@ Plans:
   3. Navigation uses arrow keys/enter/tab (not number input)
   4. Advanced users get optional steps for web search, gateway, and tool configuration
   5. Newcomer tier defaults to strictest approval thresholds
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 11-01-PLAN.md — IPC-based wizard core: crossterm navigation, daemon-queried providers, IPC config writes
-- [ ] 11-02-PLAN.md — Tier-gated optional steps: security defaults, model selection, web search, gateway
+- [x] 11-02-PLAN.md — Tier-gated optional steps: security defaults, model selection, web search, gateway
 
 ### Phase 12: CLI Polish
 **Goal**: CLI subcommands are complete, functional, and don't expose internal-only commands
@@ -265,6 +265,6 @@ Phases 12 and 13 can execute in parallel (both depend on 11).
 | 8. Gateway Completion | 0/4 | Not started | - |
 | 9. Distribution | 0/4 | Not started | - |
 | 10. Progressive UX | 5/5 | Complete | 2026-03-24 |
-| 11. Setup Wizard Rewrite | 1/2 | In Progress|  |
+| 11. Setup Wizard Rewrite | 2/2 | Complete   | 2026-03-24 |
 | 12. CLI Polish | 0/? | Not started | - |
 | 13. TUI UX Fixes | 0/? | Not started | - |
