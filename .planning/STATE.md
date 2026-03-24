@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Plugin Ecosystem
 status: Ready to execute
-stopped_at: Completed 17-01-PLAN.md
-last_updated: "2026-03-24T23:17:52.640Z"
+stopped_at: Completed 17-02-PLAN.md
+last_updated: "2026-03-24T23:34:36.008Z"
 progress:
   total_phases: 20
-  completed_phases: 14
+  completed_phases: 15
   total_plans: 58
-  completed_plans: 53
+  completed_plans: 54
 ---
 
 # Project State
@@ -19,11 +19,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-24)
 
 **Core value:** An agent that feels alive and gets smarter over time -- while remaining simple enough that anyone can understand what it's doing and why.
-**Current focus:** Phase 17 — api-proxy-layer
+**Current focus:** Phase 19 — plugin-skills-commands
 
 ## Current Position
 
-Phase: 17 (api-proxy-layer) — EXECUTING
+Phase: 19 (plugin-skills-commands) — EXECUTING
 Plan: 2 of 2
 
 ## Performance Metrics
@@ -99,6 +99,7 @@ Plan: 2 of 2
 | Phase 16 P02 | 4min | 2 tasks | 3 files |
 | Phase 16 P03 | 10min | 2 tasks | 11 files |
 | Phase 17 P01 | 9min | 2 tasks | 8 files |
+| Phase 17 P02 | 8min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -205,6 +206,8 @@ Recent decisions affecting current work:
 - [Phase 17]: url crate added as direct dependency for SSRF URL parsing
 - [Phase 17]: Handlebars helpers as manual HelperDef impl for parameter control; serde skip_serializing_if incompatible with bincode
 - [Phase 17]: render_request uses spawn_blocking + 1s timeout for template isolation; PluginApiCall stub until Plan 17-02
+- [Phase 17]: OnceLock for plugin_manager field on AgentEngine to avoid runtime locking overhead while supporting post-construction initialization
+- [Phase 17]: plugin_api_call tool always available (not gated on config); PluginManager handles disabled/missing checks internally
 
 ### Pending Todos
 
@@ -218,6 +221,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T23:17:52.637Z
-Stopped at: Completed 17-01-PLAN.md
+Last session: 2026-03-24T23:34:36.006Z
+Stopped at: Completed 17-02-PLAN.md
 Resume file: None

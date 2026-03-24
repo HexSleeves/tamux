@@ -126,9 +126,9 @@ Requirements for the "Plugin Ecosystem" milestone. Each maps to roadmap phases 1
 
 ### API Proxy
 
-- [ ] **APRX-01**: Daemon proxies HTTP requests per plugin API contract definitions (method, URL, headers, params)
+- [x] **APRX-01**: Daemon proxies HTTP requests per plugin API contract definitions (method, URL, headers, params)
 - [x] **APRX-02**: Request URL and params rendered via Handlebars templates with plugin-scoped context
-- [ ] **APRX-03**: Response body transformed via Handlebars response template into agent-friendly text
+- [x] **APRX-03**: Response body transformed via Handlebars response template into agent-friendly text
 - [x] **APRX-04**: SSRF protection: block requests to internal IP ranges (127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16)
 - [x] **APRX-05**: Template rendering timeout (1 second max) and strict mode (no implicit traversal)
 - [x] **APRX-06**: Per-plugin rate limiting when declared in manifest (`rate_limit.requests_per_minute`)
@@ -312,9 +312,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PSET-05 | Phase 16 | Complete |
 | PSET-06 | Phase 16 | Complete |
 | PSET-07 | Phase 16 | Complete |
-| APRX-01 | Phase 17 | Pending |
+| APRX-01 | Phase 17 | Complete |
 | APRX-02 | Phase 17 | Complete |
-| APRX-03 | Phase 17 | Pending |
+| APRX-03 | Phase 17 | Complete |
 | APRX-04 | Phase 17 | Complete |
 | APRX-05 | Phase 17 | Complete |
 | APRX-06 | Phase 17 | Complete |
