@@ -20,13 +20,14 @@ import { TerminalTab } from "./settings-panel/TerminalTab";
 import { ProviderAuthTab } from "./settings-panel/ProviderAuthTab";
 import { SubAgentsTab } from "./settings-panel/SubAgentsTab";
 import { ConciergeSection } from "./settings-panel/ConciergeSection";
+import { PluginsTab } from "./settings-panel/PluginsTab";
 import { TierGatedSection } from "./base-components/TierGatedSection";
 import {
   headerBtnStyle,
 } from "./settings-panel/shared";
 import { useTierStore, type CapabilityTier } from "../lib/tierStore";
 
-type SettingsTab = "appearance" | "terminal" | "behavior" | "auth" | "agent" | "concierge" | "subagents" | "gateway" | "keyboard" | "about";
+type SettingsTab = "appearance" | "terminal" | "behavior" | "auth" | "agent" | "concierge" | "subagents" | "gateway" | "keyboard" | "about" | "plugins";
 
 type SettingsPanelProps = {
   style?: CSSProperties;
@@ -144,7 +145,7 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
       const requestedTab = customEvent.detail?.tab;
       if (!requestedTab) return;
 
-      if (["appearance", "terminal", "behavior", "auth", "agent", "concierge", "subagents", "gateway", "keyboard", "about"].includes(requestedTab)) {
+      if (["appearance", "terminal", "behavior", "auth", "agent", "concierge", "subagents", "gateway", "keyboard", "about", "plugins"].includes(requestedTab)) {
         setTab(requestedTab);
       }
     };
@@ -170,6 +171,7 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
     { id: "gateway", label: "Gateway" },
     { id: "keyboard", label: "Bindings" },
     { id: "about", label: "Runtime" },
+    { id: "plugins", label: "Plugins" },
   ];
 
   return (
@@ -327,6 +329,11 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
           {tab === "about" && (
             <TierGatedSection requiredTier="expert" label="Memory & Learning Controls">
               <AboutTab />
+            </TierGatedSection>
+          )}
+          {tab === "plugins" && (
+            <TierGatedSection requiredTier="familiar" label="Plugins">
+              <PluginsTab />
             </TierGatedSection>
           )}
         </div>
