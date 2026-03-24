@@ -522,30 +522,65 @@ pub async fn run_setup_wizard() -> Result<()> {
         } else {
             api_key_saved = api_key.clone();
 
-            // Send via IPC: AgentLoginProvider
+            // Send provider config via IPC using AgentSetConfigItem (the actual protocol message)
+            // Set provider
             wizard_send(
                 &mut framed,
-                ClientMessage::AgentLoginProvider {
-                    provider_id: provider_id.clone(),
-                    api_key: api_key.clone(),
-                    base_url: String::new(),
+                ClientMessage::AgentSetConfigItem {
+                    key_path: "provider".to_string(),
+                    value_json: serde_json::to_string(&provider_id)
+                        .unwrap_or_else(|_| format!("\"{}\"", provider_id)),
                 },
             )
             .await
-            .context("Failed to send API key to daemon")?;
+            .context("Failed to set provider")?;
+            // Consume response
+            let _ = wizard_recv(&mut framed).await;
 
-            // Await response (AgentProviderAuthStates) to confirm
-            match wizard_recv(&mut framed).await? {
-                DaemonMessage::AgentProviderAuthStates { .. } => {
-                    println!("API key saved.");
-                }
-                DaemonMessage::AgentError { message } => {
-                    println!("Warning: daemon error setting API key: {message}");
-                }
-                _ => {
-                    // Accept any response -- key was sent
-                }
+            // Set api_key
+            wizard_send(
+                &mut framed,
+                ClientMessage::AgentSetConfigItem {
+                    key_path: "api_key".to_string(),
+                    value_json: serde_json::to_string(&api_key)
+                        .unwrap_or_else(|_| format!("\"{}\"", api_key)),
+                },
+            )
+            .await
+            .context("Failed to set API key")?;
+            let _ = wizard_recv(&mut framed).await;
+
+            // Set base_url if not default
+            if !base_url.is_empty() {
+                wizard_send(
+                    &mut framed,
+                    ClientMessage::AgentSetConfigItem {
+                        key_path: "base_url".to_string(),
+                        value_json: serde_json::to_string(&base_url)
+                            .unwrap_or_else(|_| format!("\"{}\"", base_url)),
+                    },
+                )
+                .await
+                .context("Failed to set base_url")?;
+                let _ = wizard_recv(&mut framed).await;
             }
+
+            // Set model
+            if !default_model.is_empty() {
+                wizard_send(
+                    &mut framed,
+                    ClientMessage::AgentSetConfigItem {
+                        key_path: "model".to_string(),
+                        value_json: serde_json::to_string(&default_model)
+                            .unwrap_or_else(|_| format!("\"{}\"", default_model)),
+                    },
+                )
+                .await
+                .context("Failed to set model")?;
+                let _ = wizard_recv(&mut framed).await;
+            }
+
+            println!("API key saved.");
 
             println!();
 
