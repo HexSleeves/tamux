@@ -431,6 +431,11 @@ impl AgentEngine {
             drop(config);
             self.persist_config().await;
 
+            // Announce tier transition via concierge (D-12)
+            if let Err(e) = self.concierge.announce_tier_transition(&previous_tier_str, &new_tier_str).await {
+                tracing::warn!("tier transition announcement failed: {e}");
+            }
+
             tracing::info!(
                 previous = %previous_tier_str,
                 new = %new_tier_str,

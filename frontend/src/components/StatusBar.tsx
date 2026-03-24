@@ -43,6 +43,7 @@ export function StatusBar() {
   const activity = useStatusStore((s) => s.activity);
   const activeGoalRunTitle = useStatusStore((s) => s.activeGoalRunTitle);
   const providerHealth = useStatusStore((s) => s.providerHealth);
+  const recentActions = useStatusStore((s) => s.recentActions);
   const currentTier = useTierStore((s) => s.currentTier);
   const [daemonConnected, setDaemonConnected] = useState(false);
   const pendingApprovals = useMemo(() => approvals.filter((entry) => entry.status === "pending").length, [approvals]);
@@ -86,6 +87,21 @@ export function StatusBar() {
             label={activityLabel}
             status={activityInfo.status}
           />
+        )}
+
+        {currentTier && currentTier !== "newcomer" && (
+          <span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)", textTransform: "capitalize" }}>
+            {currentTier}
+          </span>
+        )}
+
+        {recentActions.length > 0 && (
+          <span
+            style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            title={recentActions.map((a) => a.summary).join("\n")}
+          >
+            last: {recentActions[0]?.summary ?? ""}
+          </span>
         )}
 
         {unhealthyProviders.length > 0 && (

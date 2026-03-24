@@ -2154,6 +2154,19 @@ where
 
                 ClientMessage::AgentRequestConciergeWelcome => {
                     tracing::info!("server: received AgentRequestConciergeWelcome");
+
+                    // If first-time user (onboarding not completed), deliver tier-adapted onboarding
+                    let tier = agent.compute_current_tier().await;
+                    let onboarding_done = {
+                        let cfg = agent.config.read().await;
+                        cfg.tier.as_ref().map(|t| t.onboarding_completed).unwrap_or(false)
+                    };
+                    if !onboarding_done {
+                        if let Err(e) = agent.concierge.deliver_onboarding(tier).await {
+                            tracing::warn!("onboarding delivery failed, falling back to generic welcome: {e}");
+                        }
+                    }
+
                     // Generate welcome inline (awaits LLM call for non-Minimal levels).
                     // We send the result directly as a DaemonMessage rather than going
                     // through the broadcast event channel, because the connection handler's
