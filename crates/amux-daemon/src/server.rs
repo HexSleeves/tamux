@@ -106,6 +106,15 @@ pub async fn run() -> Result<()> {
         history.clone(),
     );
 
+    // Initialize plugin manager
+    let plugins_dir = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".tamux")
+        .join("plugins");
+    let plugin_manager = Arc::new(crate::plugin::PluginManager::new(history.clone(), plugins_dir));
+    let (pm_loaded, pm_skipped) = plugin_manager.load_all_from_disk().await;
+    tracing::info!(loaded = pm_loaded, skipped = pm_skipped, "plugin loader complete");
+
     // Hydrate persisted state (threads, tasks, heartbeat, memory)
     if let Err(e) = agent.hydrate().await {
         tracing::warn!("failed to hydrate agent engine: {e}");
@@ -122,10 +131,10 @@ pub async fn run() -> Result<()> {
     });
 
     #[cfg(unix)]
-    let result = run_unix(manager, agent.clone()).await;
+    let result = run_unix(manager, agent.clone(), plugin_manager.clone()).await;
 
     #[cfg(windows)]
-    let result = run_windows(manager, agent.clone()).await;
+    let result = run_windows(manager, agent.clone(), plugin_manager.clone()).await;
 
     // Signal agent loop shutdown
     let _ = shutdown_tx.send(true);
@@ -138,7 +147,7 @@ pub async fn run() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 #[cfg(unix)]
-async fn run_unix(manager: Arc<SessionManager>, agent: Arc<AgentEngine>) -> Result<()> {
+async fn run_unix(manager: Arc<SessionManager>, agent: Arc<AgentEngine>, plugin_manager: Arc<crate::plugin::PluginManager>) -> Result<()> {
     use tokio::net::UnixListener;
 
     let path = socket_path();
@@ -156,7 +165,7 @@ async fn run_unix(manager: Arc<SessionManager>, agent: Arc<AgentEngine>) -> Resu
     };
 
     tokio::select! {
-        _ = accept_loop_unix(listener, manager, agent) => {}
+        _ = accept_loop_unix(listener, manager, agent, plugin_manager) => {}
         _ = shutdown => {}
     }
 
@@ -170,14 +179,16 @@ async fn accept_loop_unix(
     listener: tokio::net::UnixListener,
     manager: Arc<SessionManager>,
     agent: Arc<AgentEngine>,
+    plugin_manager: Arc<crate::plugin::PluginManager>,
 ) {
     loop {
         match listener.accept().await {
             Ok((stream, _addr)) => {
                 let manager = manager.clone();
                 let agent = agent.clone();
+                let plugin_manager = plugin_manager.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, manager, agent).await {
+                    if let Err(e) = handle_connection(stream, manager, agent, plugin_manager).await {
                         tracing::error!(error = %e, "client connection error");
                     }
                 });
@@ -194,15 +205,15 @@ async fn accept_loop_unix(
 // ---------------------------------------------------------------------------
 
 #[cfg(windows)]
-async fn run_windows(manager: Arc<SessionManager>, agent: Arc<AgentEngine>) -> Result<()> {
+async fn run_windows(manager: Arc<SessionManager>, agent: Arc<AgentEngine>, plugin_manager: Arc<crate::plugin::PluginManager>) -> Result<()> {
     let addr = amux_protocol::default_tcp_addr();
     tracing::info!(%addr, "daemon listening on TCP");
-    run_tcp_fallback(manager, agent).await
+    run_tcp_fallback(manager, agent, plugin_manager).await
 }
 
 /// TCP server used for Windows IPC.
 #[allow(dead_code)]
-async fn run_tcp_fallback(manager: Arc<SessionManager>, agent: Arc<AgentEngine>) -> Result<()> {
+async fn run_tcp_fallback(manager: Arc<SessionManager>, agent: Arc<AgentEngine>, plugin_manager: Arc<crate::plugin::PluginManager>) -> Result<()> {
     use tokio::net::TcpListener;
 
     let addr = amux_protocol::default_tcp_addr();
@@ -223,7 +234,7 @@ async fn run_tcp_fallback(manager: Arc<SessionManager>, agent: Arc<AgentEngine>)
     };
 
     tokio::select! {
-        _ = accept_loop_tcp(listener, manager, agent) => {}
+        _ = accept_loop_tcp(listener, manager, agent, plugin_manager) => {}
         _ = shutdown => {}
     }
 
@@ -236,6 +247,7 @@ async fn accept_loop_tcp(
     listener: tokio::net::TcpListener,
     manager: Arc<SessionManager>,
     agent: Arc<AgentEngine>,
+    plugin_manager: Arc<crate::plugin::PluginManager>,
 ) {
     loop {
         match listener.accept().await {
@@ -243,8 +255,9 @@ async fn accept_loop_tcp(
                 tracing::info!(%addr, "client connected");
                 let manager = manager.clone();
                 let agent = agent.clone();
+                let plugin_manager = plugin_manager.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, manager, agent).await {
+                    if let Err(e) = handle_connection(stream, manager, agent, plugin_manager).await {
                         tracing::error!(%addr, error = %e, "client connection error");
                     }
                 });
@@ -264,6 +277,7 @@ async fn handle_connection<S>(
     stream: S,
     manager: Arc<SessionManager>,
     agent: Arc<AgentEngine>,
+    plugin_manager: Arc<crate::plugin::PluginManager>,
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -2831,37 +2845,51 @@ where
                     }
                 }
 
-                // Plugin operations -- handlers wired in Plan 14-02.
+                // Plugin operations (Plan 14-02).
                 ClientMessage::PluginList {} => {
+                    let plugins = plugin_manager.list_plugins().await;
                     framed
-                        .send(DaemonMessage::PluginListResult { plugins: vec![] })
+                        .send(DaemonMessage::PluginListResult { plugins })
                         .await?;
                 }
                 ClientMessage::PluginGet { name } => {
-                    tracing::debug!(plugin = %name, "plugin get (not yet wired)");
-                    framed
-                        .send(DaemonMessage::PluginGetResult {
-                            plugin: None,
-                            settings_schema: None,
-                        })
-                        .await?;
+                    match plugin_manager.get_plugin(&name).await {
+                        Some((info, settings_schema)) => {
+                            framed
+                                .send(DaemonMessage::PluginGetResult {
+                                    plugin: Some(info),
+                                    settings_schema,
+                                })
+                                .await?;
+                        }
+                        None => {
+                            framed
+                                .send(DaemonMessage::PluginGetResult {
+                                    plugin: None,
+                                    settings_schema: None,
+                                })
+                                .await?;
+                        }
+                    }
                 }
                 ClientMessage::PluginEnable { name } => {
-                    tracing::debug!(plugin = %name, "plugin enable (not yet wired)");
+                    let result = plugin_manager.set_enabled(&name, true).await;
+                    let (success, message) = match result {
+                        Ok(()) => (true, format!("Plugin '{}' enabled", name)),
+                        Err(e) => (false, format!("Failed to enable plugin '{}': {}", name, e)),
+                    };
                     framed
-                        .send(DaemonMessage::PluginActionResult {
-                            success: false,
-                            message: "plugin system not yet initialized".into(),
-                        })
+                        .send(DaemonMessage::PluginActionResult { success, message })
                         .await?;
                 }
                 ClientMessage::PluginDisable { name } => {
-                    tracing::debug!(plugin = %name, "plugin disable (not yet wired)");
+                    let result = plugin_manager.set_enabled(&name, false).await;
+                    let (success, message) = match result {
+                        Ok(()) => (true, format!("Plugin '{}' disabled", name)),
+                        Err(e) => (false, format!("Failed to disable plugin '{}': {}", name, e)),
+                    };
                     framed
-                        .send(DaemonMessage::PluginActionResult {
-                            success: false,
-                            message: "plugin system not yet initialized".into(),
-                        })
+                        .send(DaemonMessage::PluginActionResult { success, message })
                         .await?;
                 }
             }
