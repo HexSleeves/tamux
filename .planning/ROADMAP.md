@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 7: Community Skills** - Skill registry, import with security scanning, agentskills.io compatibility
 - [ ] **Phase 8: Gateway Completion** - Daemon-side Slack, Discord, Telegram with unified config and health monitoring
 - [ ] **Phase 9: Distribution** - Single-command install via npm, cargo-dist binaries, platform installers
-- [ ] **Phase 10: Progressive UX** - Capability tiers, concierge onboarding, typed bridge helper, consistent status
+- [x] **Phase 10: Progressive UX** - Capability tiers, concierge onboarding, typed bridge helper, consistent status (completed 2026-03-24)
 
 ## Phase Details
 
@@ -191,7 +191,7 @@ Plans:
   3. New users see a simplified interface; advanced features appear only as usage grows
   4. First-time users experience a guided concierge onboarding with hands-on examples
   5. Status visibility is consistent across TUI, Electron, and CLI — user always knows what the agent is doing and why
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 **UI hint**: yes
 
 Plans:
@@ -199,7 +199,7 @@ Plans:
 - [x] 10-02-PLAN.md — Typed getBridge() helper replacing all 85 unsafe (window as any) casts across 39 frontend files
 - [x] 10-03-PLAN.md — Concierge onboarding with tier-adapted content, tier transition announcements, disclosure queue
 - [x] 10-04-PLAN.md — Client-side tier gating: Zustand tierStore, TierGatedSection component, TUI TierState
-- [ ] 10-05-PLAN.md — Unified status visibility: statusStore, enhanced StatusBar, TUI sidebar status, CLI status subcommand
+- [x] 10-05-PLAN.md — Unified status visibility: statusStore, enhanced StatusBar, TUI sidebar status, CLI status subcommand
 
 ## Progress
 
@@ -218,4 +218,4 @@ Note: Phases 8 and 9 can execute in parallel with phases 2-7 (they only depend o
 | 7. Community Skills | 1/3 | In Progress | - |
 | 8. Gateway Completion | 0/4 | Not started | - |
 | 9. Distribution | 0/4 | Not started | - |
-| 10. Progressive UX | 4/5 | In Progress|  |
+| 10. Progressive UX | 5/5 | Complete   | 2026-03-24 |
