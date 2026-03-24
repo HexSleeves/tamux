@@ -78,6 +78,8 @@ async fn wizard_recv(
 // Validate provider using a fresh IPC connection (avoids state issues on wizard stream)
 // ---------------------------------------------------------------------------
 
+/// Validate provider by sending a minimal chat completion via the daemon.
+/// Uses a fresh IPC connection to avoid state issues on the wizard stream.
 async fn validate_provider(provider_id: &str, auth_source: &str) -> Result<bool> {
     let mut conn = wizard_connect().await.context("reconnect for validation")?;
     wizard_send(
@@ -91,11 +93,13 @@ async fn validate_provider(provider_id: &str, auth_source: &str) -> Result<bool>
     )
     .await?;
 
-    // The daemon may take a few seconds to call the provider API.
     // Read response — loop to skip any interleaved AgentEvent messages.
+    // Use a timeout since the daemon makes an HTTP call to the provider.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        match wizard_recv(&mut conn).await {
-            Ok(DaemonMessage::AgentProviderValidation { valid, error, .. }) => {
+        let recv_result = tokio::time::timeout_at(deadline, wizard_recv(&mut conn)).await;
+        match recv_result {
+            Ok(Ok(DaemonMessage::AgentProviderValidation { valid, error, .. })) => {
                 if !valid {
                     if let Some(err) = error {
                         println!("Validation error: {err}");
@@ -103,19 +107,20 @@ async fn validate_provider(provider_id: &str, auth_source: &str) -> Result<bool>
                 }
                 return Ok(valid);
             }
-            Ok(DaemonMessage::AgentError { message }) => {
+            Ok(Ok(DaemonMessage::AgentError { message })) => {
                 anyhow::bail!("Daemon error: {message}");
             }
-            Ok(DaemonMessage::AgentEvent { .. }) => {
-                // Skip broadcast events, keep reading
-                continue;
+            Ok(Ok(DaemonMessage::AgentEvent { .. })) => {
+                continue; // skip broadcast events
             }
-            Ok(other) => {
-                eprintln!("[debug] unexpected response: {other:?}");
+            Ok(Ok(_)) => {
                 return Ok(false);
             }
-            Err(e) => {
-                anyhow::bail!("Connection lost while waiting for validation: {e}");
+            Ok(Err(e)) => {
+                anyhow::bail!("Connection error: {e}");
+            }
+            Err(_) => {
+                anyhow::bail!("Timed out waiting for provider response (30s)");
             }
         }
     }

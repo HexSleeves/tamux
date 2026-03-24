@@ -2433,12 +2433,8 @@ pub async fn validate_provider_connection(
         return Ok(None);
     }
 
-    if def.supports_model_fetch {
-        return fetch_models(provider_id, &resolved_base_url, api_key)
-            .await
-            .map(Some);
-    }
-
+    // Always validate via a minimal chat completion — this tests both connectivity
+    // AND the API key (fetch_models doesn't require auth on some providers like OpenRouter).
     let client = reqwest::Client::new();
     let api_type = get_provider_api_type(provider_id, def.default_model, &resolved_base_url);
     let request = match api_type {

@@ -2073,17 +2073,17 @@ where
                     )
                     .await
                     {
-                        Ok(models) => {
+                        Ok(_models) => {
                             tracing::info!(provider = %provider_id, "server: validation OK");
-                            let json = models
-                                .as_ref()
-                                .map(|value| serde_json::to_string(value).unwrap_or_default());
+                            // Don't send the full models list — providers like OpenRouter
+                            // return hundreds of models which bloats the response frame.
+                            // Callers that need models use AgentFetchModels instead.
                             framed
                                 .send(DaemonMessage::AgentProviderValidation {
                                     provider_id,
                                     valid: true,
                                     error: None,
-                                    models_json: json,
+                                    models_json: None,
                                 })
                                 .await?;
                         }
