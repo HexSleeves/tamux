@@ -248,12 +248,12 @@ Plans:
   2. TUI settings panel includes tier override selector (D-03)
   3. TUI advanced settings tab shows controls for heartbeat, memory, skills, gateway features
   4. TUI sidebar displays recent autonomous actions from AgentStatusResponse
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 **UI hint**: yes
 
 Plans:
 - [ ] 13-01-PLAN.md — Concierge onboarding in conversation thread + sidebar recent actions
-- [ ] 13-02-PLAN.md — TUI Features settings tab with tier, heartbeat, memory, and skills controls
+- [x] 13-02-PLAN.md — TUI Features settings tab with tier, heartbeat, memory, and skills controls
 - [x] 13-03-PLAN.md — Electron StatusBar shadcn re-integration (tier badge, activity, provider health, recent actions)
 
 ## Progress
@@ -276,4 +276,4 @@ Phases 12 and 13 can execute in parallel (both depend on 11).
 | 10. Progressive UX | 5/5 | Complete | 2026-03-24 |
 | 11. Setup Wizard Rewrite | 2/2 | Complete    | 2026-03-24 |
 | 12. CLI Polish | 1/2 | In Progress|  |
-| 13. TUI UX Fixes | 1/3 | In Progress|  |
+| 13. TUI UX Fixes | 2/3 | In Progress|  |
