@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to plan
-stopped_at: Phase 13 plans complete (3 plans)
-last_updated: "2026-03-24T11:34:42.129Z"
+status: Ready to execute
+stopped_at: Completed 12-01-PLAN.md
+last_updated: "2026-03-24T11:50:08.228Z"
 progress:
   total_phases: 13
   completed_phases: 9
   total_plans: 47
-  completed_plans: 40
+  completed_plans: 41
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-23)
 
 **Core value:** An agent that feels alive and gets smarter over time -- while remaining simple enough that anyone can understand what it's doing and why.
-**Current focus:** Phase 11 — setup-wizard-rewrite
+**Current focus:** Phase 13 — tui-ux-fixes
 
 ## Current Position
 
-Phase: 12
-Plan: Not started
+Phase: 13 (tui-ux-fixes) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -86,6 +86,7 @@ Plan: Not started
 | Phase 10 P05 | 10min | 2 tasks | 9 files |
 | Phase 11 P01 | 4min | 2 tasks | 2 files |
 | Phase 11 P02 | 6min | 2 tasks | 1 files |
+| Phase 12 P01 | 1min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -168,6 +169,7 @@ Recent decisions affecting current work:
 - [Phase 10]: TUI agent_status_line maps existing agent_activity event strings to user-friendly colored status indicators
 - [Phase 11]: Auth source string read from ProviderAuthState rather than hardcoded mapping; legacy needs_setup_at kept as read-only fallback; AgentSetTierOverride fire-and-forget with 100ms delay
 - [Phase 11]: SecurityLevel serialized as kebab-case; model selection falls back to text_input; gateway restricted to Power User+ per D-09
+- [Phase 12]: find_sibling_binary checks exe parent dir first, then bare name for PATH lookup -- no which dependency added
 
 ### Pending Todos
 
@@ -181,6 +183,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T11:34:42.127Z
-Stopped at: Phase 13 plans complete (3 plans)
-Resume file: .planning/phases/13-tui-ux-fixes/13-01-PLAN.md
+Last session: 2026-03-24T11:50:08.226Z
+Stopped at: Completed 12-01-PLAN.md
+Resume file: None

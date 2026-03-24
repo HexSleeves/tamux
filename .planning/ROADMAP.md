@@ -232,10 +232,10 @@ Plans:
   3. Internal commands (attach, new, scrub) are hidden from `tamux --help`
   4. `tamux audit` list output shows entry IDs usable with `--detail`
   5. `tamux settings` allows CLI-based configuration of all daemon settings
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
-- [ ] 12-01-PLAN.md — Add tui/gui launch commands, stats alias, hide internals, fix audit ID display
+- [x] 12-01-PLAN.md — Add tui/gui launch commands, stats alias, hide internals, fix audit ID display
 - [ ] 12-02-PLAN.md — Settings subcommand with list/get/set via daemon IPC
 
 ### Phase 13: TUI UX Fixes
@@ -275,5 +275,5 @@ Phases 12 and 13 can execute in parallel (both depend on 11).
 | 9. Distribution | 0/4 | Not started | - |
 | 10. Progressive UX | 5/5 | Complete | 2026-03-24 |
 | 11. Setup Wizard Rewrite | 2/2 | Complete    | 2026-03-24 |
-| 12. CLI Polish | 0/2 | Not started | - |
+| 12. CLI Polish | 1/2 | In Progress|  |
 | 13. TUI UX Fixes | 0/3 | Not started | - |
