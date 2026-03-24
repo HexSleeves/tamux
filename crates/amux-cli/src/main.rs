@@ -19,7 +19,7 @@ fn truncate_for_display(value: &str, max_chars: usize) -> String {
 #[command(name = "tamux", about = "tamux terminal multiplexer CLI")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -107,6 +107,9 @@ enum Commands {
         #[command(subcommand)]
         action: SkillAction,
     },
+
+    /// Run the first-time setup wizard.
+    Setup,
 
     /// Ping the daemon (health check).
     Ping,
@@ -251,13 +254,66 @@ fn init_logging(log_file_name: &str) -> Result<tracing_appender::non_blocking::W
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let log_file_name = match &cli.command {
-        Commands::Bridge { .. } => "tamux-bridge.log",
+        Some(Commands::Bridge { .. }) => "tamux-bridge.log",
         _ => "tamux-cli.log",
     };
     let _log_guard = init_logging(log_file_name)?;
     tracing::info!(command = ?cli.command, "tamux-cli starting");
 
-    match cli.command {
+    // If no subcommand provided, check for first-run setup per D-14
+    if cli.command.is_none() {
+        if setup_wizard::needs_setup() {
+            println!("Welcome to tamux! Running first-time setup...\n");
+            let result = setup_wizard::run_setup_wizard().await?;
+
+            // Auto-start daemon per D-16
+            println!("\nStarting daemon...");
+            let mut cmd = std::process::Command::new("tamux-daemon");
+            cmd.stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+
+            if let Err(e) = cmd.spawn() {
+                eprintln!("Warning: could not start daemon: {e}");
+                eprintln!("You can start it manually with: tamux daemon");
+            } else {
+                println!("Daemon started.");
+                // Brief pause for daemon to initialize
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+
+            // Launch preferred client per D-04
+            if result.preferred_client == "electron" {
+                println!("Launching desktop app...");
+                let _ = std::process::Command::new("tamux-desktop").spawn();
+            } else {
+                println!("Launching TUI...");
+                let status = std::process::Command::new("tamux-tui")
+                    .status()
+                    .unwrap_or_else(|e| {
+                        eprintln!("Could not launch TUI: {e}");
+                        eprintln!("Start manually with: tamux-tui");
+                        std::process::exit(1);
+                    });
+                std::process::exit(status.code().unwrap_or(1));
+            }
+            return Ok(());
+        } else {
+            // Config exists, no subcommand -- show help
+            Cli::parse_from(["tamux", "--help"]);
+            return Ok(());
+        }
+    }
+
+    let command = cli.command.unwrap(); // Safe: we handled None above
+
+    match command {
         Commands::List => {
             let sessions = client::list_sessions().await?;
             if sessions.is_empty() {
@@ -505,6 +561,15 @@ async fn main() -> Result<()> {
             };
             let result = client::scrub_text(input).await?;
             print!("{result}");
+        }
+
+        Commands::Setup => {
+            let result = setup_wizard::run_setup_wizard().await?;
+            println!(
+                "\nSetup complete! Provider: {}, Model: {}",
+                result.provider, result.model
+            );
+            println!("Run 'tamux' again to start.");
         }
 
         Commands::Ping => {
