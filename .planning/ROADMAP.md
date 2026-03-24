@@ -333,10 +333,10 @@ Plans:
   5. Template rendering has 1-second timeout and strict mode
   6. Rate limits from manifest enforced via token bucket
   7. Errors returned to agent with actionable context
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
-- [ ] 17-01-PLAN.md — SSRF validation, rate limiter, Handlebars template engine, PluginApiError, IPC protocol messages
+- [x] 17-01-PLAN.md — SSRF validation, rate limiter, Handlebars template engine, PluginApiError, IPC protocol messages
 - [ ] 17-02-PLAN.md — HTTP execution, PluginManager.api_call() orchestration, tool executor wiring, server.rs IPC handler
 
 ### Phase 18: OAuth2 Flow
@@ -415,7 +415,7 @@ Phase 14 (Manifest & Loader) ─────┬──► Phase 15 (CLI & Install
 | 14. Plugin Manifest & Loader | 2/2 | Complete    | 2026-03-24 |
 | 15. Plugin CLI & Install | 2/2 | Complete    | 2026-03-24 |
 | 16. Plugin Settings UI | 3/3 | Complete    | 2026-03-24 |
-| 17. API Proxy Layer | 0/2 | Planned | - |
+| 17. API Proxy Layer | 1/2 | In Progress|  |
 | 18. OAuth2 Flow | 0/? | Not started | - |
 | 19. Plugin Skills & Commands | 0/2 | Planned | - |
 | 20. Gmail/Calendar Validation | 0/? | Not started | - |
