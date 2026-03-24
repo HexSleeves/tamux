@@ -1,14 +1,16 @@
 pub mod api_proxy;
+pub mod commands;
 pub mod loader;
 pub mod manifest;
 pub mod persistence;
 pub mod rate_limiter;
 pub mod schema;
+pub mod skills;
 pub mod ssrf;
 pub mod template;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +27,8 @@ pub struct PluginManager {
     plugins: RwLock<HashMap<String, LoadedPlugin>>,
     persistence: PluginPersistence,
     plugins_dir: PathBuf,
+    /// Root directory for skill files (`~/.tamux/skills/`).
+    skills_root: PathBuf,
     schema_validator: jsonschema::Validator,
     /// Shared HTTP client for plugin API proxy requests.
     http_client: reqwest::Client,
@@ -32,6 +36,8 @@ pub struct PluginManager {
     rate_limiters: tokio::sync::Mutex<rate_limiter::RateLimiterMap>,
     /// Handlebars template registry with custom helpers for request/response rendering.
     template_registry: handlebars::Handlebars<'static>,
+    /// Registry of plugin slash commands, rebuilt on plugin changes.
+    command_registry: RwLock<commands::PluginCommandRegistry>,
 }
 
 impl PluginManager {
@@ -42,14 +48,21 @@ impl PluginManager {
             .build()
             .unwrap_or_default();
 
+        let skills_root = plugins_dir
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("skills");
+
         Self {
             plugins: RwLock::new(HashMap::new()),
             persistence: PluginPersistence::new(history),
             plugins_dir,
+            skills_root,
             schema_validator: schema::compile_schema_v1(),
             http_client,
             rate_limiters: tokio::sync::Mutex::new(rate_limiter::RateLimiterMap::new()),
             template_registry: template::create_registry(),
+            command_registry: RwLock::new(commands::PluginCommandRegistry::new()),
         }
     }
 
@@ -500,6 +513,35 @@ impl PluginManager {
     /// Get the plugins directory path.
     pub fn plugins_dir(&self) -> &std::path::Path {
         &self.plugins_dir
+    }
+
+    /// Resolve a user input string to a plugin command entry.
+    /// Returns a cloned entry if found.
+    pub async fn resolve_command(&self, input: &str) -> Option<commands::PluginCommandEntry> {
+        let registry = self.command_registry.read().await;
+        registry.resolve(input).cloned()
+    }
+
+    /// List all registered plugin commands as PluginCommandInfo for IPC responses.
+    pub async fn list_commands(&self) -> Vec<amux_protocol::PluginCommandInfo> {
+        let registry = self.command_registry.read().await;
+        registry
+            .list_all()
+            .into_iter()
+            .map(|e| amux_protocol::PluginCommandInfo {
+                command: e.command_key.clone(),
+                plugin_name: e.plugin_name.clone(),
+                description: e.description.clone(),
+                api_endpoint: e.api_endpoint.clone(),
+            })
+            .collect()
+    }
+
+    /// Rebuild command registry from currently loaded plugins.
+    async fn rebuild_command_registry(&self) {
+        let plugins = self.plugins.read().await;
+        let mut registry = self.command_registry.write().await;
+        registry.rebuild_from_plugins(&plugins);
     }
 }
 

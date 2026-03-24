@@ -115,6 +115,9 @@ pub async fn run() -> Result<()> {
     let (pm_loaded, pm_skipped) = plugin_manager.load_all_from_disk().await;
     tracing::info!(loaded = pm_loaded, skipped = pm_skipped, "plugin loader complete");
 
+    // Wire plugin manager into agent engine for tool executor access (Phase 17)
+    let _ = agent.plugin_manager.set(plugin_manager.clone());
+
     // Hydrate persisted state (threads, tasks, heartbeat, memory)
     if let Err(e) = agent.hydrate().await {
         tracing::warn!("failed to hydrate agent engine: {e}");
@@ -2957,21 +2960,55 @@ where
                         .await?;
                 }
 
-                // Plugin API call (Plan 17-02 will wire the full orchestration).
+                ClientMessage::PluginListCommands {} => {
+                    let commands = plugin_manager.list_commands().await;
+                    framed
+                        .send(DaemonMessage::PluginCommandsResult { commands })
+                        .await?;
+                }
+
+                // Plugin API proxy call: orchestrates full proxy flow through PluginManager.
                 ClientMessage::PluginApiCall {
                     plugin_name,
                     endpoint_name,
-                    params: _,
+                    params,
                 } => {
-                    framed
-                        .send(DaemonMessage::PluginApiCallResult {
-                            plugin_name,
-                            endpoint_name,
-                            success: false,
-                            result: "API proxy not yet wired (see Plan 17-02)".to_string(),
-                            error_type: Some("not_implemented".to_string()),
-                        })
-                        .await?;
+                    let params_json: serde_json::Value = serde_json::from_str(&params)
+                        .unwrap_or(serde_json::Value::Object(Default::default()));
+                    match plugin_manager.api_call(&plugin_name, &endpoint_name, params_json).await {
+                        Ok(result_text) => {
+                            framed
+                                .send(DaemonMessage::PluginApiCallResult {
+                                    plugin_name,
+                                    endpoint_name,
+                                    success: true,
+                                    result: result_text,
+                                    error_type: None,
+                                })
+                                .await?;
+                        }
+                        Err(e) => {
+                            let error_type = match &e {
+                                crate::plugin::PluginApiError::SsrfBlocked { .. } => "ssrf_blocked",
+                                crate::plugin::PluginApiError::RateLimited { .. } => "rate_limited",
+                                crate::plugin::PluginApiError::Timeout => "timeout",
+                                crate::plugin::PluginApiError::HttpError { .. } => "http_error",
+                                crate::plugin::PluginApiError::TemplateError { .. } => "template_error",
+                                crate::plugin::PluginApiError::EndpointNotFound { .. } => "endpoint_not_found",
+                                crate::plugin::PluginApiError::PluginNotFound { .. } => "plugin_not_found",
+                                crate::plugin::PluginApiError::PluginDisabled { .. } => "plugin_disabled",
+                            };
+                            framed
+                                .send(DaemonMessage::PluginApiCallResult {
+                                    plugin_name,
+                                    endpoint_name,
+                                    success: false,
+                                    result: e.to_string(),
+                                    error_type: Some(error_type.to_string()),
+                                })
+                                .await?;
+                        }
+                    }
                 }
             }
         }

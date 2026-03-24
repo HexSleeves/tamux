@@ -591,6 +591,9 @@ pub enum ClientMessage {
         endpoint_name: String,
         params: String,
     },
+
+    /// List all registered plugin commands. Per PSKL-05.
+    PluginListCommands {},
 }
 
 // ---------------------------------------------------------------------------
@@ -1042,6 +1045,11 @@ pub enum DaemonMessage {
         /// Error type key (e.g. "ssrf_blocked", "rate_limited", "timeout") on failure.
         error_type: Option<String>,
     },
+
+    /// Response to PluginListCommands. Per PSKL-05.
+    PluginCommandsResult {
+        commands: Vec<PluginCommandInfo>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1134,6 +1142,15 @@ pub struct PluginInfo {
     pub settings_count: u32,
     pub installed_at: String,
     pub updated_at: String,
+}
+
+/// Info about a registered plugin command. Per PSKL-05.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PluginCommandInfo {
+    pub command: String,
+    pub plugin_name: String,
+    pub description: String,
+    pub api_endpoint: Option<String>,
 }
 
 /// Metadata about a running session.
@@ -2323,5 +2340,50 @@ mod tests {
         let json = serde_json::to_string(&info).unwrap();
         let decoded: PluginInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, info);
+    }
+
+    #[test]
+    fn plugin_list_commands_bincode_roundtrip() {
+        let msg = ClientMessage::PluginListCommands {};
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            ClientMessage::PluginListCommands {} => {}
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn plugin_commands_result_bincode_roundtrip() {
+        let msg = DaemonMessage::PluginCommandsResult {
+            commands: vec![
+                PluginCommandInfo {
+                    command: "/gmail.inbox".into(),
+                    plugin_name: "gmail".into(),
+                    description: "Show inbox".into(),
+                    api_endpoint: Some("list_messages".into()),
+                },
+                PluginCommandInfo {
+                    command: "/weather.forecast".into(),
+                    plugin_name: "weather".into(),
+                    description: "Get forecast".into(),
+                    api_endpoint: None,
+                },
+            ],
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            DaemonMessage::PluginCommandsResult { commands } => {
+                assert_eq!(commands.len(), 2);
+                assert_eq!(commands[0].command, "/gmail.inbox");
+                assert_eq!(commands[0].plugin_name, "gmail");
+                assert_eq!(commands[0].description, "Show inbox");
+                assert_eq!(commands[0].api_endpoint.as_deref(), Some("list_messages"));
+                assert_eq!(commands[1].command, "/weather.forecast");
+                assert_eq!(commands[1].api_endpoint, None);
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
     }
 }
