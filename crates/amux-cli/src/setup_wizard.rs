@@ -75,6 +75,38 @@ async fn wizard_recv(
 }
 
 // ---------------------------------------------------------------------------
+// Validate provider using a fresh IPC connection (avoids state issues on wizard stream)
+// ---------------------------------------------------------------------------
+
+async fn validate_provider(provider_id: &str, auth_source: &str) -> Result<bool> {
+    let mut conn = wizard_connect().await.context("reconnect for validation")?;
+    wizard_send(
+        &mut conn,
+        ClientMessage::AgentValidateProvider {
+            provider_id: provider_id.to_string(),
+            base_url: String::new(),
+            api_key: String::new(),
+            auth_source: auth_source.to_string(),
+        },
+    )
+    .await?;
+    match wizard_recv(&mut conn).await? {
+        DaemonMessage::AgentProviderValidation { valid, error, .. } => {
+            if !valid {
+                if let Some(err) = error {
+                    println!("Validation error: {err}");
+                }
+            }
+            Ok(valid)
+        }
+        DaemonMessage::AgentError { message } => {
+            anyhow::bail!("Daemon error: {message}");
+        }
+        _ => Ok(false),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Ensure daemon is running (Step 0 per D-02)
 // ---------------------------------------------------------------------------
 
@@ -591,55 +623,24 @@ pub async fn run_setup_wizard() -> Result<()> {
         }
     }
 
-    // Connectivity test — runs for ALL non-local providers (existing or new key)
-    // AgentValidateProvider resolves credentials from daemon config if api_key is empty
+    // Connectivity test — runs for ALL non-local providers (existing or new key).
+    // Uses a SEPARATE IPC connection to avoid protocol state issues on the main stream.
     if !is_local_provider(&provider_id) && !api_key_saved.is_empty() {
         println!();
         println!("Testing connection to {provider_name}...");
-        wizard_send(
-            &mut framed,
-            ClientMessage::AgentValidateProvider {
-                provider_id: provider_id.clone(),
-                base_url: String::new(),   // daemon resolves from config
-                api_key: String::new(),     // daemon resolves from config
-                auth_source: auth_source.clone(),
-            },
-        )
-        .await
-        .context("Failed to send connectivity test")?;
-
-        match wizard_recv(&mut framed).await? {
-            DaemonMessage::AgentProviderValidation {
-                valid, error, ..
-            } => {
-                if valid {
-                    println!(
-                        "{}",
-                        "Connection successful!".with(style::Color::Green)
-                    );
-                } else if let Some(ref err) = error {
-                    if err.contains("401") || err.contains("403") {
-                        println!(
-                            "API key was rejected. You can update it later with `tamux setup`."
-                        );
-                    } else {
-                        println!(
-                            "Could not reach provider: {err}. You can fix this later with `tamux setup`."
-                        );
-                    }
-                } else {
-                    println!(
-                        "Validation returned invalid with no error detail. You can retry with `tamux setup`."
-                    );
-                }
-            }
-            DaemonMessage::AgentError { message } => {
+        match validate_provider(&provider_id, &auth_source).await {
+            Ok(true) => {
                 println!(
-                    "Could not validate provider: {message}. You can fix this later with `tamux setup`."
+                    "{}",
+                    "Connection successful!".with(style::Color::Green)
                 );
             }
-            _ => {
-                println!("Unexpected response during connectivity test.");
+            Ok(false) => {
+                println!("Provider validation returned invalid. You can retry with `tamux setup`.");
+            }
+            Err(e) => {
+                println!("Could not test connection: {e}");
+                println!("You can retry later with `tamux setup`.");
             }
         }
     }
