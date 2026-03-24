@@ -471,7 +471,7 @@ export const AgentChatDockShell: React.FC<ViewProps> = (props) => {
             height: "100%",
             cursor: "col-resize",
             zIndex: 20,
-            background: "linear-gradient(90deg, rgba(148, 163, 184, 0.2), rgba(148, 163, 184, 0.45), transparent)",
+            background: "var(--resize-handle-gradient)",
           }}
         />
       </div>

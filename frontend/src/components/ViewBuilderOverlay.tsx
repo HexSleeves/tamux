@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import type React from "react";
 import { ComponentRegistryAPI } from "../registry/componentRegistry";
 import { VIEW_BUILDER_PRIMITIVE_PALETTE } from "../lib/viewBuilderPrimitives";
 import { useViewBuilderStore } from "../lib/viewBuilderStore";
@@ -10,17 +9,7 @@ import { BuilderHeader } from "./view-builder-overlay/BuilderHeader";
 import { BuilderInspector } from "./view-builder-overlay/BuilderInspector";
 import { BuilderPaletteSection } from "./view-builder-overlay/BuilderPaletteSection";
 import { BuilderSelectionPanel } from "./view-builder-overlay/BuilderSelectionPanel";
-import { BUILDER_PRIMITIVE_COMPONENTS, findNodeById, findNodeEditable } from "./view-builder-overlay/shared";
-
-const overlayShellStyle: React.CSSProperties = {
-  position: "fixed",
-  top: 20,
-  right: 20,
-  width: 320,
-  maxHeight: "calc(100vh - 40px)",
-  overflow: "auto",
-  zIndex: 5000,
-};
+import { BUILDER_PRIMITIVE_COMPONENTS, findNodeById, findNodeEditable, overlayShellStyle } from "./view-builder-overlay/shared";
 
 export function ViewBuilderOverlay() {
   const isEditMode = useViewBuilderStore((state) => state.isEditMode);
@@ -60,7 +49,7 @@ export function ViewBuilderOverlay() {
   return (
     <Card
       style={overlayShellStyle}
-      className="overflow-auto bg-[rgba(10,14,24,0.92)] text-[var(--text-primary)] shadow-[0_24px_70px_rgba(0,0,0,0.45)] backdrop-blur-[20px]"
+      className="overflow-auto text-[var(--text-primary)]"
     >
       <BuilderHeader
         activeViewId={activeViewId}

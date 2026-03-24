@@ -104,7 +104,7 @@ export function ExecutionCanvas({ style, className }: ExecutionCanvasProps = {})
           display: "flex",
           flexDirection: "column",
           borderRadius: "var(--radius-xl)",
-          background: "color-mix(in srgb, var(--card) 94%, var(--bg-overlay))",
+          background: "var(--surface-panel-blend)",
           boxShadow: "var(--shadow-lg)",
         }}
       >

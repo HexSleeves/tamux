@@ -30,8 +30,8 @@ export function BuilderPaletteSection({
                                 fontSize: 12,
                                 padding: "6px 10px",
                                 borderRadius: 999,
-                                background: "rgba(255,255,255,0.06)",
-                                border: "1px solid rgba(255,255,255,0.08)",
+                                background: "var(--surface-soft)",
+                                border: "1px solid var(--border)",
                                 color: "var(--text-primary)",
                                 cursor: "pointer",
                             }}

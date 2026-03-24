@@ -118,7 +118,7 @@ export function SetupOnboardingPanel() {
           padding: 20,
           display: "grid",
           gap: 14,
-          background: "color-mix(in srgb, var(--card) 94%, var(--bg-overlay))",
+          background: "var(--surface-panel-blend)",
           boxShadow: "var(--shadow-lg)",
         }}
       >

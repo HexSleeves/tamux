@@ -55,7 +55,7 @@ export function AgentApprovalOverlay({ style, className }: AgentApprovalOverlayP
           borderRadius: "var(--radius-2xl)",
           overflow: "hidden",
           borderColor: "var(--border-strong)",
-          background: "color-mix(in srgb, var(--card) 94%, var(--bg-overlay))",
+          background: "var(--surface-panel-blend)",
           boxShadow: "var(--shadow-lg)",
         }}
       >

@@ -798,10 +798,10 @@ export function TerminalPane({ paneId, sessionId, hideHeader }: TerminalPaneProp
           regex: searchOptions?.regex ?? false,
           caseSensitive: searchOptions?.caseSensitive ?? false,
           decorations: {
-            activeMatchBackground: "#f59e0b",
-            matchBackground: "rgba(245, 158, 11, 0.28)",
-            matchOverviewRuler: "rgba(245, 158, 11, 0.45)",
-            activeMatchColorOverviewRuler: "#f59e0b",
+            activeMatchBackground: themeColors.yellow,
+            matchBackground: themeColors.selectionBg,
+            matchOverviewRuler: themeColors.selectionBg,
+            activeMatchColorOverviewRuler: themeColors.yellow,
           },
         };
 

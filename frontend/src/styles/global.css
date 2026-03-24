@@ -256,6 +256,23 @@
   --warning-border: color-mix(in srgb, var(--warning) 28%, transparent);
   --danger-border: color-mix(in srgb, var(--danger) 28%, transparent);
   --info-border: color-mix(in srgb, var(--info) 28%, transparent);
+  --surface-muted: color-mix(in srgb, var(--foreground) 3%, transparent);
+  --surface-subtle: color-mix(in srgb, var(--foreground) 4%, transparent);
+  --surface-soft: color-mix(in srgb, var(--foreground) 6%, transparent);
+  --surface-overlay-panel: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  --surface-panel-blend: color-mix(in srgb, var(--card) 94%, var(--bg-overlay));
+  --surface-panel-blend-strong: color-mix(in srgb, var(--card) 92%, var(--bg-overlay));
+  --surface-highlight-accent: color-mix(in srgb, var(--accent) 16%, transparent);
+  --surface-highlight-accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --surface-highlight-accent-border: color-mix(in srgb, var(--accent) 70%, transparent);
+  --surface-highlight-warning: color-mix(in srgb, var(--warning) 18%, transparent);
+  --surface-highlight-warning-border: color-mix(in srgb, var(--warning) 45%, transparent);
+  --resize-handle-gradient: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--neutral-400) 20%, transparent),
+    color-mix(in srgb, var(--neutral-400) 45%, transparent),
+    transparent
+  );
 
   /* ═══════════════════════════════════════════════════════════════════════
    * TYPOGRAPHY

@@ -21,7 +21,7 @@ export function ConciergeToast() {
                 maxWidth: 400,
                 padding: 16,
                 borderColor: "var(--accent-border)",
-                background: "color-mix(in srgb, var(--card) 92%, var(--bg-overlay))",
+                background: "var(--surface-panel-blend-strong)",
                 boxShadow: "var(--shadow-lg)",
             }}
         >
