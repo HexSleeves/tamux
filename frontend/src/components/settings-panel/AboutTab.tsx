@@ -39,8 +39,11 @@ export function AboutTab() {
     return (
         <>
             <Section title="Runtime Mode">
-                <SettingRow label="Use New CDUI">
-                    <Toggle value={cduiEnabled} onChange={setCduiEnabledState} />
+                <SettingRow label="Use New CDUI (this will reload the app immediately!)">
+                    <Toggle value={cduiEnabled} onChange={() => {
+                        setCduiEnabledState((prev) => !prev);
+                        setCDUIEnabled(!cduiEnabled);
+                    }} />
                 </SettingRow>
                 <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                     <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
