@@ -42,6 +42,9 @@ async function bootstrap() {
     hydrateTierStore(),
   ]);
 
+  // Start status polling after stores are hydrated (non-blocking)
+  hydrateStatusStore();
+
   const useCDUI = isCDUIEnabled();
 
   const persistedSession = await loadSession();
