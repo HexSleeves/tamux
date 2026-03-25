@@ -42,6 +42,8 @@ Returns summary, times, location, description, creator, organizer, and attendees
 
 ## Creating Events
 
+**IMPORTANT:** Always pass ALL params including `location` and `description` (use empty string `""` if not specified by user).
+
 ```json
 {"plugin_name": "calendar", "endpoint_name": "create_event", "params": {
   "summary": "Team standup",

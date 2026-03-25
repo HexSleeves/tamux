@@ -62,8 +62,8 @@
           "summary": "{{params.summary}}",
           "start": { "dateTime": "{{params.start_time}}" },
           "end": { "dateTime": "{{params.end_time}}" },
-          "location": "{{default params.location \"\"}}",
-          "description": "{{default params.description \"\"}}"
+          "location": "{{params.location}}",
+          "description": "{{params.description}}"
         },
         "response_template": "Event created: **{{summary}}**\nID: {{id}}\nStart: {{default start.dateTime start.date}}\nEnd: {{default end.dateTime end.date}}\nLink: {{htmlLink}}"
       },
@@ -78,8 +78,8 @@
           "summary": "{{params.summary}}",
           "start": { "dateTime": "{{params.start_time}}" },
           "end": { "dateTime": "{{params.end_time}}" },
-          "location": "{{default params.location \"\"}}",
-          "description": "{{default params.description \"\"}}"
+          "location": "{{params.location}}",
+          "description": "{{params.description}}"
         },
         "response_template": "Event updated: **{{summary}}**\nID: {{id}}\nStart: {{default start.dateTime start.date}}\nEnd: {{default end.dateTime end.date}}"
       },
