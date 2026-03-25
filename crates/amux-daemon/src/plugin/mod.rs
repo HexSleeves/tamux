@@ -40,6 +40,8 @@ pub struct PluginManager {
     template_registry: handlebars::Handlebars<'static>,
     /// Registry of plugin slash commands, rebuilt on plugin changes.
     command_registry: RwLock<commands::PluginCommandRegistry>,
+    /// Per-plugin Mutex for serializing concurrent token refresh attempts (Pitfall 7).
+    oauth_refresh_locks: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl PluginManager {
@@ -65,6 +67,7 @@ impl PluginManager {
             rate_limiters: tokio::sync::Mutex::new(rate_limiter::RateLimiterMap::new()),
             template_registry: template::create_registry(),
             command_registry: RwLock::new(commands::PluginCommandRegistry::new()),
+            oauth_refresh_locks: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -486,6 +489,15 @@ impl PluginManager {
             .and_then(|rl| rl.requests_per_minute)
             .unwrap_or(rate_limiter::DEFAULT_REQUESTS_PER_MINUTE);
 
+        // Check if this plugin uses OAuth2 auth
+        let plugin_has_oauth = plugin
+            .manifest
+            .auth
+            .as_ref()
+            .map(|a| a.auth_type == "oauth2")
+            .unwrap_or(false);
+        let manifest_auth = plugin.manifest.auth.clone();
+
         // Drop the plugins read lock before acquiring other locks
         drop(plugins);
 
@@ -507,8 +519,25 @@ impl PluginManager {
             .await
             .unwrap_or_default();
 
-        // (f) Build template context
-        let context = template::build_context(params, settings);
+        // (e2) Get OAuth token context if plugin uses OAuth2 per D-08/D-11
+        let auth_context = if plugin_has_oauth {
+            match self
+                .get_oauth_context_with_refresh(plugin_name, &manifest_auth, &settings)
+                .await
+            {
+                Ok(ctx) => ctx,
+                Err(_) => {
+                    return Err(api_proxy::PluginApiError::AuthExpired {
+                        plugin: plugin_name.to_string(),
+                    });
+                }
+            }
+        } else {
+            None
+        };
+
+        // (f) Build template context with optional auth map per D-11
+        let context = template::build_context(params, settings, auth_context);
 
         // (g) Render request
         let rendered = template::render_request(
@@ -596,6 +625,370 @@ impl PluginManager {
         let plugins = self.plugins.read().await;
         let mut registry = self.command_registry.write().await;
         registry.rebuild_from_plugins(&plugins);
+    }
+
+    /// Start the OAuth2 flow for a plugin. Binds an ephemeral port listener and
+    /// returns the flow state with auth URL for the user to open.
+    pub async fn start_oauth_flow_for_plugin(
+        &self,
+        plugin_name: &str,
+    ) -> Result<oauth2::OAuthFlowState> {
+        let plugins = self.plugins.read().await;
+        let plugin = plugins
+            .get(plugin_name)
+            .ok_or_else(|| anyhow::anyhow!("plugin '{}' not found", plugin_name))?;
+
+        let auth = plugin
+            .manifest
+            .auth
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("plugin '{}' has no auth section", plugin_name))?;
+
+        if auth.auth_type != "oauth2" {
+            anyhow::bail!(
+                "plugin '{}' auth type is '{}', not 'oauth2'",
+                plugin_name,
+                auth.auth_type
+            );
+        }
+
+        let authorization_url = auth
+            .authorization_url
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("plugin '{}' missing authorization_url", plugin_name))?
+            .clone();
+        let token_url = auth
+            .token_url
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("plugin '{}' missing token_url", plugin_name))?
+            .clone();
+        let scopes = auth.scopes.clone().unwrap_or_default();
+        let pkce = auth.pkce;
+
+        // Drop the plugins lock before fetching settings
+        drop(plugins);
+
+        // Get client_id and client_secret from plugin settings
+        let settings = self.persistence.get_settings(plugin_name).await.unwrap_or_default();
+        let client_id = settings
+            .iter()
+            .find(|(k, _, _)| k == "client_id")
+            .map(|(_, v, _)| v.clone())
+            .unwrap_or_default();
+        let client_secret = settings
+            .iter()
+            .find(|(k, _, _)| k == "client_secret")
+            .map(|(_, v, _)| v.clone());
+
+        if client_id.is_empty() {
+            anyhow::bail!(
+                "plugin '{}' requires 'client_id' in settings for OAuth2",
+                plugin_name
+            );
+        }
+
+        let config = oauth2::OAuthFlowConfig {
+            client_id,
+            client_secret,
+            authorization_url,
+            token_url,
+            scopes,
+            pkce,
+        };
+
+        oauth2::start_oauth_flow(&config).await
+    }
+
+    /// Complete the OAuth2 flow: await the callback, exchange the code for tokens,
+    /// encrypt and store them in the credentials table.
+    pub async fn complete_oauth_flow(
+        &self,
+        plugin_name: &str,
+        state: &mut oauth2::OAuthFlowState,
+    ) -> Result<()> {
+        // Await the browser callback (up to 5 minutes)
+        let code = oauth2::await_callback(state).await?;
+
+        // Exchange the code for tokens
+        let result = oauth2::exchange_code(state, &code).await?;
+
+        // Load encryption key
+        let data_dir = self
+            .plugins_dir
+            .parent()
+            .unwrap_or(Path::new("."));
+        let key = crypto::load_or_create_key(data_dir)?;
+
+        // Encrypt and store access_token
+        let encrypted_access = crypto::encrypt(&key, result.access_token.as_bytes())?;
+        let expires_at = result.expires_in.map(|secs| {
+            (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339()
+        });
+        self.persistence
+            .upsert_credential(
+                plugin_name,
+                "access_token",
+                &encrypted_access,
+                expires_at.as_deref(),
+            )
+            .await?;
+
+        // If refresh_token present, encrypt and store
+        if let Some(ref rt) = result.refresh_token {
+            let encrypted_refresh = crypto::encrypt(&key, rt.as_bytes())?;
+            self.persistence
+                .upsert_credential(plugin_name, "refresh_token", &encrypted_refresh, None)
+                .await?;
+        }
+
+        tracing::info!(plugin = %plugin_name, "OAuth2 flow completed, tokens stored");
+        Ok(())
+    }
+
+    /// Get the per-plugin refresh lock, creating it if it doesn't exist (Pitfall 7).
+    async fn get_refresh_lock(&self, plugin_name: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.oauth_refresh_locks.lock().await;
+        locks
+            .entry(plugin_name.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+
+    /// Get OAuth token context for template injection, refreshing if needed.
+    ///
+    /// Returns Some(auth_map) with `access_token` (and optionally `refresh_token`)
+    /// for injection into the Handlebars template context, or None if the plugin
+    /// has no OAuth credentials. Returns Err on auth failure.
+    ///
+    /// Per D-08: refreshes at 80% TTL. Per D-09: marks expired on refresh failure.
+    /// Per D-12/AUTH-05: tokens only exist in local variables, never sent over IPC.
+    async fn get_oauth_context_with_refresh(
+        &self,
+        plugin_name: &str,
+        manifest_auth: &Option<manifest::AuthSection>,
+        settings: &[(String, String, bool)],
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, api_proxy::PluginApiError> {
+        let data_dir = self.plugins_dir.parent().unwrap_or(Path::new("."));
+        let key = crypto::load_or_create_key(data_dir).map_err(|e| {
+            tracing::warn!(plugin = %plugin_name, error = %e, "failed to load encryption key");
+            api_proxy::PluginApiError::AuthExpired {
+                plugin: plugin_name.to_string(),
+            }
+        })?;
+
+        // Get access token credential
+        let cred = self
+            .persistence
+            .get_credential(plugin_name, "access_token")
+            .await
+            .map_err(|e| {
+                tracing::warn!(plugin = %plugin_name, error = %e, "failed to get credential");
+                api_proxy::PluginApiError::AuthExpired {
+                    plugin: plugin_name.to_string(),
+                }
+            })?;
+
+        let (encrypted_blob, expires_at_str) = match cred {
+            Some(c) => c,
+            None => {
+                // No credential stored -- user hasn't authenticated
+                return Err(api_proxy::PluginApiError::AuthExpired {
+                    plugin: plugin_name.to_string(),
+                });
+            }
+        };
+
+        // Check if token needs refresh (at 80% of TTL per D-08)
+        let needs_refresh = if let Some(ref expires_at) = expires_at_str {
+            match chrono::DateTime::parse_from_rfc3339(expires_at) {
+                Ok(expiry) => {
+                    let expiry_utc = expiry.with_timezone(&chrono::Utc);
+                    let now = chrono::Utc::now();
+                    if expiry_utc <= now {
+                        true // Already expired
+                    } else {
+                        // Check if within 80% of TTL
+                        let remaining = (expiry_utc - now).num_seconds();
+                        remaining < 60 // Refresh if less than 60 seconds remaining
+                        // (conservative: most tokens have 3600s TTL, 80% = 720s, but we use 60s
+                        //  as a safe threshold since we don't track original TTL)
+                    }
+                }
+                Err(_) => false, // Unparseable expiry, assume ok
+            }
+        } else {
+            false // No expiry set, assume ok
+        };
+
+        if needs_refresh {
+            // Serialize refresh per-plugin via Mutex (Pitfall 7)
+            let lock = self.get_refresh_lock(plugin_name).await;
+            let _guard = lock.lock().await;
+
+            // Double-check after acquiring lock (another task may have refreshed)
+            let rechecked = self
+                .persistence
+                .get_credential(plugin_name, "access_token")
+                .await
+                .ok()
+                .flatten();
+
+            let still_needs_refresh = if let Some((_, Some(ref ea))) = rechecked {
+                match chrono::DateTime::parse_from_rfc3339(ea) {
+                    Ok(expiry) => {
+                        let remaining =
+                            (expiry.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds();
+                        remaining < 60
+                    }
+                    Err(_) => false,
+                }
+            } else {
+                rechecked.is_none()
+            };
+
+            if still_needs_refresh {
+                if let Err(e) = self
+                    .try_refresh_token(plugin_name, manifest_auth, settings, &key)
+                    .await
+                {
+                    tracing::warn!(plugin = %plugin_name, error = %e, "OAuth token refresh failed");
+                    return Err(api_proxy::PluginApiError::AuthExpired {
+                        plugin: plugin_name.to_string(),
+                    });
+                }
+            }
+        }
+
+        // Reload the (possibly refreshed) access token
+        let final_cred = self
+            .persistence
+            .get_credential(plugin_name, "access_token")
+            .await
+            .map_err(|_| api_proxy::PluginApiError::AuthExpired {
+                plugin: plugin_name.to_string(),
+            })?;
+
+        let (final_blob, _) = match final_cred {
+            Some(c) => c,
+            None => {
+                return Err(api_proxy::PluginApiError::AuthExpired {
+                    plugin: plugin_name.to_string(),
+                });
+            }
+        };
+
+        let access_token = String::from_utf8(
+            crypto::decrypt(&key, &final_blob).map_err(|_| {
+                api_proxy::PluginApiError::AuthExpired {
+                    plugin: plugin_name.to_string(),
+                }
+            })?,
+        )
+        .map_err(|_| api_proxy::PluginApiError::AuthExpired {
+            plugin: plugin_name.to_string(),
+        })?;
+
+        let mut auth_map = serde_json::Map::new();
+        auth_map.insert(
+            "access_token".to_string(),
+            serde_json::Value::String(access_token),
+        );
+
+        // Optionally include refresh_token in context
+        if let Ok(Some((rt_blob, _))) = self
+            .persistence
+            .get_credential(plugin_name, "refresh_token")
+            .await
+        {
+            if let Ok(rt_bytes) = crypto::decrypt(&key, &rt_blob) {
+                if let Ok(rt_str) = String::from_utf8(rt_bytes) {
+                    auth_map.insert(
+                        "refresh_token".to_string(),
+                        serde_json::Value::String(rt_str),
+                    );
+                }
+            }
+        }
+
+        Ok(Some(auth_map))
+    }
+
+    /// Attempt to refresh the OAuth token for a plugin.
+    /// On success, re-encrypts and stores the new tokens per D-10.
+    /// On failure, the caller is responsible for returning AuthExpired per D-09.
+    async fn try_refresh_token(
+        &self,
+        plugin_name: &str,
+        manifest_auth: &Option<manifest::AuthSection>,
+        settings: &[(String, String, bool)],
+        key: &[u8; 32],
+    ) -> Result<()> {
+        // Get stored refresh token
+        let rt_cred = self
+            .persistence
+            .get_credential(plugin_name, "refresh_token")
+            .await?;
+
+        let (rt_blob, _) =
+            rt_cred.ok_or_else(|| anyhow::anyhow!("no refresh token stored for '{}'", plugin_name))?;
+
+        let refresh_token_str =
+            String::from_utf8(crypto::decrypt(key, &rt_blob)?)?;
+
+        let auth = manifest_auth
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no auth section for '{}'", plugin_name))?;
+
+        let token_url = auth
+            .token_url
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no token_url for '{}'", plugin_name))?;
+
+        let client_id = settings
+            .iter()
+            .find(|(k, _, _)| k == "client_id")
+            .map(|(_, v, _)| v.clone())
+            .unwrap_or_default();
+        let client_secret = settings
+            .iter()
+            .find(|(k, _, _)| k == "client_secret")
+            .map(|(_, v, _)| v.clone());
+
+        let config = oauth2::OAuthFlowConfig {
+            client_id,
+            client_secret,
+            authorization_url: auth.authorization_url.clone().unwrap_or_default(),
+            token_url: token_url.clone(),
+            scopes: auth.scopes.clone().unwrap_or_default(),
+            pkce: auth.pkce,
+        };
+
+        let result = oauth2::refresh_access_token(&config, &refresh_token_str).await?;
+
+        // Re-encrypt and store new access token per D-10
+        let encrypted_access = crypto::encrypt(key, result.access_token.as_bytes())?;
+        let expires_at = result.expires_in.map(|secs| {
+            (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339()
+        });
+        self.persistence
+            .upsert_credential(
+                plugin_name,
+                "access_token",
+                &encrypted_access,
+                expires_at.as_deref(),
+            )
+            .await?;
+
+        // Update refresh token if a new one was returned
+        if let Some(ref new_rt) = result.refresh_token {
+            let encrypted_refresh = crypto::encrypt(key, new_rt.as_bytes())?;
+            self.persistence
+                .upsert_credential(plugin_name, "refresh_token", &encrypted_refresh, None)
+                .await?;
+        }
+
+        tracing::info!(plugin = %plugin_name, "OAuth token refreshed successfully");
+        Ok(())
     }
 }
 

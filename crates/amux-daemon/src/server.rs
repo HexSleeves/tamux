@@ -43,6 +43,61 @@ fn agent_event_thread_id(event: &crate::agent::types::AgentEvent) -> Option<&str
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::concierge_welcome_fingerprint;
+    use crate::agent::types::{
+        AgentEvent, ConciergeAction, ConciergeActionType, ConciergeDetailLevel,
+    };
+
+    #[test]
+    fn concierge_welcome_fingerprint_matches_for_identical_events() {
+        let event_a = AgentEvent::ConciergeWelcome {
+            thread_id: "concierge".to_string(),
+            content: "Welcome".to_string(),
+            detail_level: ConciergeDetailLevel::ProactiveTriage,
+            actions: vec![ConciergeAction {
+                label: "Dismiss".to_string(),
+                action_type: ConciergeActionType::DismissWelcome,
+                thread_id: None,
+            }],
+        };
+        let event_b = event_a.clone();
+        assert_eq!(
+            concierge_welcome_fingerprint(&event_a),
+            concierge_welcome_fingerprint(&event_b)
+        );
+    }
+
+    #[test]
+    fn concierge_welcome_fingerprint_changes_with_action_payload() {
+        let event_a = AgentEvent::ConciergeWelcome {
+            thread_id: "concierge".to_string(),
+            content: "Welcome".to_string(),
+            detail_level: ConciergeDetailLevel::ProactiveTriage,
+            actions: vec![ConciergeAction {
+                label: "Dismiss".to_string(),
+                action_type: ConciergeActionType::DismissWelcome,
+                thread_id: None,
+            }],
+        };
+        let event_b = AgentEvent::ConciergeWelcome {
+            thread_id: "concierge".to_string(),
+            content: "Welcome".to_string(),
+            detail_level: ConciergeDetailLevel::ProactiveTriage,
+            actions: vec![ConciergeAction {
+                label: "Continue".to_string(),
+                action_type: ConciergeActionType::ContinueSession,
+                thread_id: Some("thread-1".to_string()),
+            }],
+        };
+        assert_ne!(
+            concierge_welcome_fingerprint(&event_a),
+            concierge_welcome_fingerprint(&event_b)
+        );
+    }
+}
+
 fn should_forward_agent_event(
     event: &crate::agent::types::AgentEvent,
     client_threads: &HashSet<String>,
@@ -62,6 +117,18 @@ fn should_forward_agent_event(
                 | crate::agent::types::AgentEvent::EscalationUpdate { .. }
                 | crate::agent::types::AgentEvent::GatewayStatus { .. }
         ),
+    }
+}
+
+fn concierge_welcome_fingerprint(event: &crate::agent::types::AgentEvent) -> Option<String> {
+    match event {
+        crate::agent::types::AgentEvent::ConciergeWelcome {
+            thread_id,
+            content,
+            detail_level,
+            actions,
+        } => serde_json::to_string(&(thread_id, content, detail_level, actions)).ok(),
+        _ => None,
     }
 }
 
@@ -292,6 +359,7 @@ where
     let mut attached_rxs: Vec<(amux_protocol::SessionId, broadcast::Receiver<DaemonMessage>)> =
         Vec::new();
     let mut client_agent_threads: HashSet<String> = HashSet::new();
+    let mut last_concierge_welcome_fingerprint: Option<String> = None;
 
     // Optional agent event subscription.
     let mut agent_event_rx: Option<broadcast::Receiver<crate::agent::types::AgentEvent>> = None;
@@ -303,6 +371,14 @@ where
                 match rx.try_recv() {
                     Ok(event) => {
                         if should_forward_agent_event(&event, &client_agent_threads) {
+                            if let Some(fingerprint) = concierge_welcome_fingerprint(&event) {
+                                if last_concierge_welcome_fingerprint.as_deref()
+                                    == Some(fingerprint.as_str())
+                                {
+                                    continue;
+                                }
+                                last_concierge_welcome_fingerprint = Some(fingerprint);
+                            }
                             if let Ok(json) = serde_json::to_string(&event) {
                                 framed
                                     .send(DaemonMessage::AgentEvent { event_json: json })
@@ -2204,6 +2280,17 @@ where
                             detail_level,
                             actions,
                         };
+                        if let Some(fingerprint) = concierge_welcome_fingerprint(&event) {
+                            if last_concierge_welcome_fingerprint.as_deref()
+                                == Some(fingerprint.as_str())
+                            {
+                                tracing::info!(
+                                    "server: suppressed duplicate concierge welcome for client"
+                                );
+                                continue;
+                            }
+                            last_concierge_welcome_fingerprint = Some(fingerprint);
+                        }
                         if let Ok(json) = serde_json::to_string(&event) {
                             framed
                                 .send(DaemonMessage::AgentEvent { event_json: json })
@@ -2215,6 +2302,7 @@ where
 
                 ClientMessage::AgentDismissConciergeWelcome => {
                     agent.concierge.prune_welcome_messages(&agent.threads).await;
+                    last_concierge_welcome_fingerprint = None;
                     framed
                         .send(DaemonMessage::AgentConciergeWelcomeDismissed)
                         .await?;
@@ -2967,16 +3055,54 @@ where
                         .await?;
                 }
 
-                // OAuth start: stub response until Phase 18-02 implements the full flow.
+                // OAuth2 flow: start listener, return URL, await callback, exchange, store.
                 ClientMessage::PluginOAuthStart { name } => {
-                    tracing::info!(plugin = %name, "OAuth2 flow start requested (not yet implemented)");
-                    framed
-                        .send(DaemonMessage::PluginOAuthComplete {
-                            name,
-                            success: false,
-                            error: Some("OAuth2 flow not yet implemented".to_string()),
-                        })
-                        .await?;
+                    tracing::info!(plugin = %name, "OAuth2 flow start requested");
+                    match plugin_manager.start_oauth_flow_for_plugin(&name).await {
+                        Ok(mut flow_state) => {
+                            // Send the auth URL to the requesting client immediately
+                            let auth_url = flow_state.auth_url.clone();
+                            framed
+                                .send(DaemonMessage::PluginOAuthUrl {
+                                    name: name.clone(),
+                                    url: auth_url,
+                                })
+                                .await?;
+
+                            // Await callback and complete the flow (up to 5 min timeout)
+                            match plugin_manager.complete_oauth_flow(&name, &mut flow_state).await {
+                                Ok(()) => {
+                                    framed
+                                        .send(DaemonMessage::PluginOAuthComplete {
+                                            name,
+                                            success: true,
+                                            error: None,
+                                        })
+                                        .await?;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(plugin = %name, error = %e, "OAuth2 flow failed");
+                                    framed
+                                        .send(DaemonMessage::PluginOAuthComplete {
+                                            name,
+                                            success: false,
+                                            error: Some(e.to_string()),
+                                        })
+                                        .await?;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(plugin = %name, error = %e, "OAuth2 flow start failed");
+                            framed
+                                .send(DaemonMessage::PluginOAuthComplete {
+                                    name,
+                                    success: false,
+                                    error: Some(e.to_string()),
+                                })
+                                .await?;
+                        }
+                    }
                 }
 
                 // Plugin API proxy call: orchestrates full proxy flow through PluginManager.

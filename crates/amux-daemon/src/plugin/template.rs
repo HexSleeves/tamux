@@ -28,23 +28,31 @@ pub fn create_registry() -> Handlebars<'static> {
     hbs
 }
 
-/// Build an isolated template context with `params` and `settings` keys.
+/// Build an isolated template context with `params`, `settings`, and optional `auth` keys.
 ///
 /// `params` comes from the API call arguments.
 /// `settings` is built from the plugin's persisted settings (key, value, is_secret).
+/// `auth` (if Some) provides OAuth token variables (`auth.access_token`, etc.) per D-11.
 pub fn build_context(
     params: serde_json::Value,
     settings: Vec<(String, String, bool)>,
+    auth: Option<serde_json::Map<String, serde_json::Value>>,
 ) -> serde_json::Value {
     let mut settings_map = serde_json::Map::new();
     for (key, value, _is_secret) in settings {
         settings_map.insert(key, serde_json::Value::String(value));
     }
 
-    serde_json::json!({
+    let mut ctx = serde_json::json!({
         "params": params,
         "settings": settings_map,
-    })
+    });
+
+    if let Some(auth_map) = auth {
+        ctx["auth"] = serde_json::Value::Object(auth_map);
+    }
+
+    ctx
 }
 
 /// Render a full HTTP request from an EndpointDef and template context.
@@ -401,6 +409,7 @@ mod tests {
                 ("api_key".to_string(), "secret123".to_string(), true),
                 ("base_url".to_string(), "https://api.example.com".to_string(), false),
             ],
+            None,
         );
         assert_eq!(ctx["params"]["query"], "test");
         assert_eq!(ctx["settings"]["api_key"], "secret123");
@@ -430,6 +439,7 @@ mod tests {
         let ctx = build_context(
             serde_json::json!({"user_id": "123", "message": "hello"}),
             vec![("api_key".to_string(), "tok_abc".to_string(), true)],
+            None,
         );
 
         let req = render_request(&reg, &api, &endpoint, &ctx).await.unwrap();
