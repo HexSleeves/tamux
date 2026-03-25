@@ -2967,6 +2967,18 @@ where
                         .await?;
                 }
 
+                // OAuth start: stub response until Phase 18-02 implements the full flow.
+                ClientMessage::PluginOAuthStart { name } => {
+                    tracing::info!(plugin = %name, "OAuth2 flow start requested (not yet implemented)");
+                    framed
+                        .send(DaemonMessage::PluginOAuthComplete {
+                            name,
+                            success: false,
+                            error: Some("OAuth2 flow not yet implemented".to_string()),
+                        })
+                        .await?;
+                }
+
                 // Plugin API proxy call: orchestrates full proxy flow through PluginManager.
                 ClientMessage::PluginApiCall {
                     plugin_name,

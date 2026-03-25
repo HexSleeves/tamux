@@ -594,6 +594,9 @@ pub enum ClientMessage {
 
     /// List all registered plugin commands. Per PSKL-05.
     PluginListCommands {},
+
+    /// Start OAuth2 flow for a plugin. Per D-13/AUTH-01.
+    PluginOAuthStart { name: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -1049,6 +1052,16 @@ pub enum DaemonMessage {
     /// Response to PluginListCommands. Per PSKL-05.
     PluginCommandsResult {
         commands: Vec<PluginCommandInfo>,
+    },
+
+    /// OAuth2 authorization URL for client to open in browser. Per D-13.
+    PluginOAuthUrl { name: String, url: String },
+
+    /// OAuth2 flow completed (success or failure). Per D-13. Broadcast to all clients.
+    PluginOAuthComplete {
+        name: String,
+        success: bool,
+        error: Option<String>,
     },
 }
 
@@ -2386,6 +2399,79 @@ mod tests {
                 assert_eq!(commands[0].api_endpoint.as_deref(), Some("list_messages"));
                 assert_eq!(commands[1].command, "/weather.forecast");
                 assert_eq!(commands[1].api_endpoint, None);
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plugin_oauth_roundtrip() {
+        // PluginOAuthStart (ClientMessage)
+        let msg = ClientMessage::PluginOAuthStart {
+            name: "gmail".into(),
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            ClientMessage::PluginOAuthStart { name } => {
+                assert_eq!(name, "gmail");
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+
+        // PluginOAuthUrl (DaemonMessage)
+        let msg = DaemonMessage::PluginOAuthUrl {
+            name: "gmail".into(),
+            url: "https://accounts.google.com/o/oauth2/auth?client_id=xxx".into(),
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            DaemonMessage::PluginOAuthUrl { name, url } => {
+                assert_eq!(name, "gmail");
+                assert!(url.contains("accounts.google.com"));
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+
+        // PluginOAuthComplete success (DaemonMessage)
+        let msg = DaemonMessage::PluginOAuthComplete {
+            name: "gmail".into(),
+            success: true,
+            error: None,
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            DaemonMessage::PluginOAuthComplete {
+                name,
+                success,
+                error,
+            } => {
+                assert_eq!(name, "gmail");
+                assert!(success);
+                assert!(error.is_none());
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+
+        // PluginOAuthComplete failure (DaemonMessage)
+        let msg = DaemonMessage::PluginOAuthComplete {
+            name: "gmail".into(),
+            success: false,
+            error: Some("invalid_grant".into()),
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            DaemonMessage::PluginOAuthComplete {
+                name,
+                success,
+                error,
+            } => {
+                assert_eq!(name, "gmail");
+                assert!(!success);
+                assert_eq!(error.as_deref(), Some("invalid_grant"));
             }
             other => panic!("unexpected variant: {:?}", other),
         }
