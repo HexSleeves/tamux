@@ -652,6 +652,48 @@ mod tests {
         assert!(updated.gateway.whatsapp_link_fallback_electron);
     }
 
+    #[tokio::test]
+    async fn whatsapp_link_fallback_flag_persists_across_sqlite_roundtrip() {
+        let root = tempdir().unwrap();
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+        let baseline_items = engine
+            .history
+            .list_agent_config_items()
+            .await
+            .expect("baseline config should be readable");
+        let baseline_loaded =
+            load_config_from_items(baseline_items).expect("baseline config should deserialize");
+        assert!(
+            !baseline_loaded.gateway.whatsapp_link_fallback_electron,
+            "default should remain false when unset"
+        );
+
+        engine
+            .merge_config_patch_json(
+                r#"{
+                    "gateway": {
+                        "whatsapp_link_fallback_electron": true
+                    }
+                }"#,
+            )
+            .await
+            .expect("patch should persist fallback flag");
+
+        let persisted_items = engine
+            .history
+            .list_agent_config_items()
+            .await
+            .expect("persisted config should be readable");
+        let rehydrated =
+            load_config_from_items(persisted_items).expect("persisted config should deserialize");
+        assert!(
+            rehydrated.gateway.whatsapp_link_fallback_electron,
+            "override should survive sqlite write/read roundtrip"
+        );
+    }
+
     #[test]
     fn agent_config_serializes_honcho_fields_in_snake_case() {
         let config = AgentConfig {

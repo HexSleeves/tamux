@@ -69,6 +69,8 @@ struct RuntimeInner {
     stopping: bool,
     retry_count: u32,
     last_retry_at_ms: Option<u64>,
+    #[cfg(test)]
+    forced_stop_kill_error: Option<String>,
 }
 
 pub struct WhatsAppLinkRuntime {
@@ -95,6 +97,8 @@ impl WhatsAppLinkRuntime {
                 stopping: false,
                 retry_count: 0,
                 last_retry_at_ms: None,
+                #[cfg(test)]
+                forced_stop_kill_error: None,
             }),
             subscribers: Mutex::new(HashMap::new()),
             next_subscriber_id: AtomicU64::new(1),
@@ -111,18 +115,38 @@ impl WhatsAppLinkRuntime {
     }
 
     pub async fn stop(&self, reason: Option<String>) -> Result<()> {
+        #[cfg(test)]
+        let mut forced_stop_kill_error = None::<String>;
         let mut child = {
             let mut inner = self.inner.lock().await;
             inner.stopping = true;
             inner.retry_count = 0;
             inner.last_retry_at_ms = None;
+            #[cfg(test)]
+            {
+                forced_stop_kill_error = inner.forced_stop_kill_error.take();
+            }
             inner.process.take()
         };
 
         let kill_result = if let Some(ref mut proc) = child {
-            proc.kill()
-                .await
-                .context("failed to stop whatsapp link sidecar process")
+            let forced_stop_kill_error: Option<String> = {
+                #[cfg(test)]
+                {
+                    forced_stop_kill_error
+                }
+                #[cfg(not(test))]
+                {
+                    None
+                }
+            };
+            if let Some(message) = forced_stop_kill_error {
+                Err(anyhow::Error::msg(message))
+            } else {
+                proc.kill()
+                    .await
+                    .context("failed to stop whatsapp link sidecar process")
+            }
         } else {
             Ok(())
         };
@@ -611,6 +635,96 @@ mod tests {
             !proc_path.exists(),
             "discarded child process should be terminated"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_kill_failure_emits_error_without_disconnected_and_preserves_process() {
+        let runtime = WhatsAppLinkRuntime::new();
+        runtime.start().await.expect("start should succeed");
+        runtime.broadcast_linked(Some("+123456789".to_string())).await;
+        let mut rx = runtime.subscribe().await;
+        let _ = timeout(Duration::from_millis(250), rx.recv())
+            .await
+            .expect("initial status snapshot should arrive")
+            .expect("broadcast should be open");
+
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 10")
+            .spawn()
+            .expect("sleep process should spawn");
+        let expected_pid = child.id().expect("sleep process pid should be available");
+        {
+            let mut inner = runtime.inner.lock().await;
+            inner.process = Some(child);
+            inner.forced_stop_kill_error = Some("forced kill failure".to_string());
+        }
+
+        let err = runtime
+            .stop(Some("operator_cancelled".to_string()))
+            .await
+            .expect_err("stop should fail when sidecar kill fails");
+        assert!(
+            err.to_string().contains("forced kill failure"),
+            "unexpected stop error: {err}"
+        );
+
+        let error_event = timeout(Duration::from_millis(250), rx.recv())
+            .await
+            .expect("error event should arrive")
+            .expect("broadcast should be open");
+        match error_event {
+            WhatsAppLinkEvent::Error {
+                message,
+                recoverable,
+            } => {
+                assert_eq!(message, "forced kill failure");
+                assert!(!recoverable);
+            }
+            other => panic!("expected error event, got {other:?}"),
+        }
+
+        let status_event = timeout(Duration::from_millis(250), rx.recv())
+            .await
+            .expect("status event should arrive")
+            .expect("broadcast should be open");
+        match status_event {
+            WhatsAppLinkEvent::Status(snapshot) => {
+                assert_eq!(snapshot.state, "error");
+                assert_eq!(snapshot.phone.as_deref(), Some("+123456789"));
+                assert_eq!(snapshot.last_error.as_deref(), Some("forced kill failure"));
+            }
+            other => panic!("expected status event, got {other:?}"),
+        }
+
+        let disconnected = timeout(Duration::from_millis(100), rx.recv()).await;
+        assert!(
+            disconnected.is_err(),
+            "disconnected event should not be emitted on kill failure"
+        );
+
+        let snapshot = runtime.status_snapshot().await;
+        assert_eq!(snapshot.state, "error");
+        assert_eq!(snapshot.phone.as_deref(), Some("+123456789"));
+        assert_eq!(snapshot.last_error.as_deref(), Some("forced kill failure"));
+
+        let mut retained = {
+            let mut inner = runtime.inner.lock().await;
+            assert!(!inner.stopping, "runtime should clear stopping flag");
+            inner
+                .process
+                .take()
+                .expect("process handle should be retained after kill failure")
+        };
+        assert_eq!(
+            retained.id().expect("retained process should still have pid"),
+            expected_pid
+        );
+        retained
+            .kill()
+            .await
+            .expect("retained process should be killable during cleanup");
     }
 
     #[test]
