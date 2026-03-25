@@ -14,6 +14,20 @@
     "pkce": true
   },
   "settings": {
+    "client_id": {
+      "type": "string",
+      "label": "Google Client ID",
+      "required": true,
+      "secret": false,
+      "description": "OAuth2 Client ID from Google Cloud Console"
+    },
+    "client_secret": {
+      "type": "string",
+      "label": "Google Client Secret",
+      "required": true,
+      "secret": true,
+      "description": "OAuth2 Client Secret from Google Cloud Console"
+    },
     "default_calendar": {
       "type": "string",
       "label": "Calendar ID",
