@@ -621,6 +621,13 @@ impl InputState {
         self.sync_buffer_cache();
     }
 
+    /// Replace input buffer with the given text and place cursor at end.
+    pub fn set_text(&mut self, text: &str) {
+        self.clear_text();
+        self.textarea.insert_str(text);
+        self.sync_buffer_cache();
+    }
+
     pub fn reduce(&mut self, action: InputAction) {
         match action {
             InputAction::InsertChar(c) => {

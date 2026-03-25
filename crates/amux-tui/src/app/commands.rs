@@ -298,10 +298,11 @@ impl TuiModel {
                 self.modal.set_picker_item_count(100);
             }
             _ => {
-                // Plugin commands (contain '.') are sent as chat messages
-                // so the daemon's agent_loop can intercept and augment them
+                // Plugin commands (contain '.') are inserted into the input
+                // so the user can add context (e.g. "/gmail.archive the security alert")
                 if command.contains('.') {
-                    self.submit_prompt(format!("/{command}"));
+                    self.input.set_text(&format!("/{command} "));
+                    self.focus = FocusArea::Chat;
                 } else {
                     self.status_line = format!("Unknown command: {}", command);
                 }
