@@ -723,6 +723,12 @@ impl TuiModel {
                     // Refresh plugin list on successful action (enable/disable/update)
                     if self.settings.active_tab() == settings::SettingsTab::Plugins {
                         self.send_daemon_command(DaemonCommand::PluginList);
+                        // Also refresh settings values so the UI reflects the saved state
+                        if let Some(plugin) = self.plugin_settings.selected_plugin() {
+                            self.send_daemon_command(DaemonCommand::PluginGetSettings(
+                                plugin.name.clone(),
+                            ));
+                        }
                     }
                 } else {
                     self.status_line = format!("Plugin error: {}", message);
