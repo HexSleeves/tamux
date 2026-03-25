@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Plugin Ecosystem
 status: Ready to execute
-stopped_at: Completed 18-01-PLAN.md
-last_updated: "2026-03-25T07:36:53.063Z"
+stopped_at: Completed 18-02-PLAN.md
+last_updated: "2026-03-25T07:54:22.874Z"
 progress:
   total_phases: 20
   completed_phases: 16
-  total_plans: 61
-  completed_plans: 57
+  total_plans: 64
+  completed_plans: 58
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-24)
 ## Current Position
 
 Phase: 18 (oauth2-flow) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -103,6 +103,7 @@ Plan: 2 of 3
 | Phase 19 P01 | 4min | 2 tasks | 7 files |
 | Phase 19 P02 | 6min | 2 tasks | 5 files |
 | Phase 18 P01 | 8min | 2 tasks | 9 files |
+| Phase 18 P02 | 13min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -219,6 +220,9 @@ Recent decisions affecting current work:
 - [Phase 18]: Nonce-prefixed blob format: 12-byte nonce || AES-256-GCM ciphertext for all credential storage
 - [Phase 18]: skip_serializing_if removed from bincode-serialized Option fields (bincode is not self-describing)
 - [Phase 18]: auth_status computed from DB row existence and expiry (no decryption needed)
+- [Phase 18]: oauth2 5.0.0 typestate: separate client builds per function to satisfy HasAuthUrl/HasTokenUrl constraints
+- [Phase 18]: Inline OAuth flow in handler (not spawned) since each client runs in own task with 5-min timeout
+- [Phase 18]: 60-second refresh threshold instead of 80% TTL since original TTL not stored; conservative for 3600s tokens
 
 ### Pending Todos
 
@@ -232,6 +236,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T07:36:53.058Z
-Stopped at: Completed 18-01-PLAN.md
+Last session: 2026-03-25T07:54:22.872Z
+Stopped at: Completed 18-02-PLAN.md
 Resume file: None

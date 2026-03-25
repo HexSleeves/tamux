@@ -136,11 +136,11 @@ Requirements for the "Plugin Ecosystem" milestone. Each maps to roadmap phases 1
 
 ### OAuth2
 
-- [ ] **AUTH-01**: Daemon manages OAuth2 authorization code + PKCE flow for plugins declaring `auth.type: "oauth2"`
-- [ ] **AUTH-02**: Daemon starts temporary localhost HTTP listener for OAuth callback redirect
+- [x] **AUTH-01**: Daemon manages OAuth2 authorization code + PKCE flow for plugins declaring `auth.type: "oauth2"`
+- [x] **AUTH-02**: Daemon starts temporary localhost HTTP listener for OAuth callback redirect
 - [x] **AUTH-03**: Access tokens and refresh tokens encrypted at rest in SQLite `plugin_credentials` table
-- [ ] **AUTH-04**: Automatic token refresh before expiry (at 80% of TTL), with fallback to user re-authorization on refresh failure
-- [ ] **AUTH-05**: OAuth tokens never included in agent context or LLM API calls — injected internally by API proxy
+- [x] **AUTH-04**: Automatic token refresh before expiry (at 80% of TTL), with fallback to user re-authorization on refresh failure
+- [x] **AUTH-05**: OAuth tokens never included in agent context or LLM API calls — injected internally by API proxy
 - [x] **AUTH-06**: Plugin credential keys redacted in all daemon logging (extend existing sensitive key redaction)
 - [x] **AUTH-07**: UI shows plugin auth status: "Not Configured" / "Connected" / "Token Expired — Reconnect"
 
@@ -319,11 +319,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | APRX-05 | Phase 17 | Complete |
 | APRX-06 | Phase 17 | Complete |
 | APRX-07 | Phase 17 | Complete |
-| AUTH-01 | Phase 18 | Pending |
-| AUTH-02 | Phase 18 | Pending |
+| AUTH-01 | Phase 18 | Complete |
+| AUTH-02 | Phase 18 | Complete |
 | AUTH-03 | Phase 18 | Complete |
-| AUTH-04 | Phase 18 | Pending |
-| AUTH-05 | Phase 18 | Pending |
+| AUTH-04 | Phase 18 | Complete |
+| AUTH-05 | Phase 18 | Complete |
 | AUTH-06 | Phase 18 | Complete |
 | AUTH-07 | Phase 18 | Complete |
 | PSKL-01 | Phase 19 | Complete |
