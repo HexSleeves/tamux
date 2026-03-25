@@ -299,7 +299,7 @@ impl ConciergeEngine {
 
         let mut recent_threads: Vec<ThreadSummary> = threads_guard
             .values()
-            .filter(|t| t.id != CONCIERGE_THREAD_ID && !t.messages.is_empty())
+            .filter(|thread| include_thread_in_concierge_context(thread))
             .map(|t| {
                 let opening_message = t
                     .messages
@@ -344,7 +344,8 @@ impl ConciergeEngine {
                 | ConciergeDetailLevel::DailyBriefing
         ) {
             let tasks_guard = tasks.lock().await;
-            sample_pending_tasks(tasks_guard.iter())
+            let preferred_thread_id = recent_threads.first().map(|thread| thread.id.as_str());
+            sample_pending_tasks(tasks_guard.iter(), preferred_thread_id)
         } else {
             (0, Vec::new())
         };
@@ -364,7 +365,7 @@ impl ConciergeEngine {
         let threads_guard = threads.read().await;
         let recent_threads = threads_guard
             .values()
-            .filter(|t| t.id != CONCIERGE_THREAD_ID && !t.messages.is_empty())
+            .filter(|thread| include_thread_in_concierge_context(thread))
             .max_by_key(|thread| thread.updated_at)
             .map(|thread| {
                 vec![ThreadSummary {
@@ -1156,6 +1157,14 @@ struct ThreadSummary {
     last_messages: Vec<String>,
 }
 
+fn include_thread_in_concierge_context(thread: &AgentThread) -> bool {
+    thread.id != CONCIERGE_THREAD_ID
+        && thread
+            .messages
+            .iter()
+            .any(|message| message.role == MessageRole::User && !message.content.is_empty())
+}
+
 fn format_message_snippet(message: &AgentMessage) -> String {
     let role = match message.role {
         MessageRole::User => "User",
@@ -1166,7 +1175,7 @@ fn format_message_snippet(message: &AgentMessage) -> String {
     format!("{role}: {snippet}")
 }
 
-fn sample_pending_tasks<'a, I>(tasks: I) -> (usize, Vec<String>)
+fn sample_pending_tasks<'a, I>(tasks: I, preferred_thread_id: Option<&str>) -> (usize, Vec<String>)
 where
     I: IntoIterator<Item = &'a AgentTask>,
 {
@@ -1184,18 +1193,18 @@ where
         return (0, Vec::new());
     }
 
-    let mut sorted = unresolved;
-    sorted.sort_by_key(|task| task.created_at);
-
     let mut sampled = Vec::new();
-    for task in sorted.iter().take(2) {
-        sampled.push(*task);
+    if let Some(thread_id) = preferred_thread_id {
+        let preferred: Vec<&AgentTask> = unresolved
+            .iter()
+            .copied()
+            .filter(|task| task_belongs_to_thread(task, thread_id))
+            .collect();
+        append_task_slice(&mut sampled, &preferred, 5);
     }
-    for task in sorted.iter().rev().take(3).rev() {
-        if sampled.iter().any(|existing| existing.id == task.id) {
-            continue;
-        }
-        sampled.push(*task);
+
+    if sampled.len() < 5 {
+        append_task_slice(&mut sampled, &unresolved, 5);
     }
 
     let entries = sampled
@@ -1211,6 +1220,47 @@ where
         .collect();
 
     (total, entries)
+}
+
+fn append_task_slice<'a>(
+    sampled: &mut Vec<&'a AgentTask>,
+    tasks: &[&'a AgentTask],
+    target_len: usize,
+) {
+    if sampled.len() >= target_len || tasks.is_empty() {
+        return;
+    }
+
+    let mut sorted = tasks.to_vec();
+    sorted.sort_by_key(|task| task.created_at);
+    sorted.retain(|task| !sampled.iter().any(|existing| existing.id == task.id));
+    if sorted.is_empty() {
+        return;
+    }
+
+    let remaining_slots = target_len.saturating_sub(sampled.len());
+    let oldest_quota = match remaining_slots {
+        0 => 0,
+        1 => 1,
+        _ => std::cmp::min(2, remaining_slots / 2),
+    };
+    let newest_quota = remaining_slots.saturating_sub(oldest_quota);
+
+    for task in sorted.iter().take(oldest_quota) {
+        sampled.push(*task);
+    }
+
+    for task in sorted.iter().rev().take(newest_quota).rev() {
+        if sampled.iter().any(|existing| existing.id == task.id) {
+            continue;
+        }
+        sampled.push(*task);
+    }
+}
+
+fn task_belongs_to_thread(task: &AgentTask, thread_id: &str) -> bool {
+    task.thread_id.as_deref() == Some(thread_id)
+        || task.parent_thread_id.as_deref() == Some(thread_id)
 }
 
 fn fast_concierge_provider_config(config: &ProviderConfig) -> ProviderConfig {
@@ -1494,6 +1544,12 @@ mod tests {
             override_system_prompt: None,
             sub_agent_def_id: None,
         }
+    }
+
+    fn sample_task_for_thread(id: &str, title: &str, created_at: u64, thread_id: &str) -> AgentTask {
+        let mut task = sample_task(id, title, created_at);
+        task.thread_id = Some(thread_id.to_string());
+        task
     }
 
     #[tokio::test]
@@ -1794,6 +1850,136 @@ mod tests {
             .pending_tasks
             .iter()
             .any(|task| task.contains("middle")));
+    }
+
+    #[tokio::test]
+    async fn context_summary_prefers_tasks_for_latest_thread_before_global_fallback() {
+        let config = Arc::new(RwLock::new(AgentConfig::default()));
+        let (event_tx, _) = broadcast::channel(8);
+        let circuit_breakers = Arc::new(CircuitBreakerRegistry::from_provider_keys(
+            std::iter::empty(),
+        ));
+        let engine =
+            ConciergeEngine::new(config, event_tx, reqwest::Client::new(), circuit_breakers);
+        let now = test_now_millis();
+        let threads = RwLock::new(HashMap::from([(
+            "thread-1".to_string(),
+            AgentThread {
+                id: "thread-1".to_string(),
+                title: "Newest".to_string(),
+                created_at: 1,
+                updated_at: now,
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                messages: vec![AgentMessage::user("kickoff", now - 5)],
+            },
+        )]));
+        let tasks = Mutex::new(std::collections::VecDeque::from([
+            sample_task_for_thread("task-a", "thread task old", now - 250, "thread-1"),
+            sample_task_for_thread("task-b", "thread task new", now - 150, "thread-1"),
+            sample_task("task-c", "global old", now - 500),
+            sample_task("task-d", "global middle", now - 300),
+            sample_task("task-e", "global new-2", now - 100),
+            sample_task("task-f", "global new-1", now - 10),
+        ]));
+
+        let context = engine
+            .gather_context(&threads, &tasks, ConciergeDetailLevel::ContextSummary)
+            .await;
+
+        assert_eq!(context.pending_task_total, 6);
+        assert!(context
+            .pending_tasks
+            .iter()
+            .any(|task| task.contains("thread task old")));
+        assert!(context
+            .pending_tasks
+            .iter()
+            .any(|task| task.contains("thread task new")));
+        assert!(context
+            .pending_tasks
+            .iter()
+            .any(|task| task.contains("global old")));
+        assert!(context
+            .pending_tasks
+            .iter()
+            .any(|task| task.contains("global new-2")));
+        assert!(context
+            .pending_tasks
+            .iter()
+            .any(|task| task.contains("global new-1")));
+        assert!(!context
+            .pending_tasks
+            .iter()
+            .any(|task| task.contains("global middle")));
+    }
+
+    #[tokio::test]
+    async fn context_summary_ignores_assistant_only_concierge_like_threads() {
+        let config = Arc::new(RwLock::new(AgentConfig::default()));
+        let (event_tx, _) = broadcast::channel(8);
+        let circuit_breakers = Arc::new(CircuitBreakerRegistry::from_provider_keys(
+            std::iter::empty(),
+        ));
+        let engine =
+            ConciergeEngine::new(config, event_tx, reqwest::Client::new(), circuit_breakers);
+        let now = test_now_millis();
+        let threads = RwLock::new(HashMap::from([
+            (
+                "thread-real".to_string(),
+                AgentThread {
+                    id: "thread-real".to_string(),
+                    title: "Actual work".to_string(),
+                    created_at: 1,
+                    updated_at: now - 100,
+                    pinned: false,
+                    upstream_thread_id: None,
+                    upstream_transport: None,
+                    upstream_provider: None,
+                    upstream_model: None,
+                    upstream_assistant_id: None,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    messages: vec![
+                        AgentMessage::user("fix concierge context", now - 120),
+                        assistant_message("working on it", now - 110),
+                    ],
+                },
+            ),
+            (
+                "thread-meta".to_string(),
+                AgentThread {
+                    id: "thread-meta".to_string(),
+                    title: "Concierge".to_string(),
+                    created_at: 1,
+                    updated_at: now,
+                    pinned: false,
+                    upstream_thread_id: None,
+                    upstream_transport: None,
+                    upstream_provider: None,
+                    upstream_model: None,
+                    upstream_assistant_id: None,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    messages: vec![assistant_message("welcome back", now - 10)],
+                },
+            ),
+        ]));
+        let tasks = Mutex::new(std::collections::VecDeque::new());
+
+        let context = engine
+            .gather_context(&threads, &tasks, ConciergeDetailLevel::ContextSummary)
+            .await;
+
+        assert_eq!(context.recent_threads.len(), 1);
+        assert_eq!(context.recent_threads[0].id, "thread-real");
+        assert_eq!(context.recent_threads[0].title, "Actual work");
     }
 
     #[tokio::test]
