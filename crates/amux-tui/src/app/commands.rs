@@ -209,6 +209,15 @@ impl TuiModel {
         self.status_line = "Starting goal run...".to_string();
     }
 
+    pub(super) fn is_builtin_command(&self, command: &str) -> bool {
+        matches!(
+            command,
+            "provider" | "model" | "tools" | "effort" | "thread" | "new"
+            | "goals" | "tasks" | "conversation" | "chat" | "settings"
+            | "view" | "quit" | "prompt" | "goal" | "attach" | "help"
+        )
+    }
+
     pub(super) fn execute_command(&mut self, command: &str) {
         tracing::info!("execute_command: {:?}", command);
         match command {
@@ -298,14 +307,10 @@ impl TuiModel {
                 self.modal.set_picker_item_count(100);
             }
             _ => {
-                // Plugin commands (contain '.') are inserted into the input
-                // so the user can add context (e.g. "/gmail.archive the security alert")
-                if command.contains('.') {
-                    self.input.set_text(&format!("/{command} "));
-                    self.focus = FocusArea::Chat;
-                } else {
-                    self.status_line = format!("Unknown command: {}", command);
-                }
+                // Unrecognized commands — insert into input so user can add
+                // context before sending to the agent (plugin commands, etc.)
+                self.input.set_text(&format!("/{command} "));
+                self.focus = FocusArea::Chat;
             }
         }
     }

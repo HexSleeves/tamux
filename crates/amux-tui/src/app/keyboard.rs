@@ -467,11 +467,15 @@ impl TuiModel {
                             }
                         } else if cmd == "attach" && !args.is_empty() {
                             self.attach_file(args);
-                        } else if cmd.contains('.') {
-                            // Plugin commands — send as chat message for agent_loop interception
-                            self.submit_prompt(prompt);
                         } else {
-                            self.execute_command(cmd);
+                            // Try built-in command first; if unrecognized, send as
+                            // chat message so the agent can handle it (plugin commands,
+                            // skill invocations, or just treat as regular input)
+                            if self.is_builtin_command(cmd) {
+                                self.execute_command(cmd);
+                            } else {
+                                self.submit_prompt(prompt);
+                            }
                         }
                     } else {
                         if matches!(self.main_pane_view, MainPaneView::GoalComposer) {
