@@ -116,9 +116,6 @@ impl WhatsAppLinkRuntime {
             inner.stopping = true;
             inner.retry_count = 0;
             inner.last_retry_at_ms = None;
-            inner.last_error = None;
-            inner.active_qr = None;
-            inner.phone = None;
             inner.process.take()
         };
 
@@ -130,17 +127,34 @@ impl WhatsAppLinkRuntime {
             Ok(())
         };
 
-        self.broadcast_disconnected(reason).await;
-        self.broadcast_status().await;
-
-        {
-            let mut inner = self.inner.lock().await;
-            inner.process = None;
-            inner.stopping = false;
+        match kill_result {
+            Ok(()) => {
+                self.broadcast_disconnected(reason).await;
+                self.broadcast_status().await;
+                let mut inner = self.inner.lock().await;
+                inner.process = None;
+                inner.stopping = false;
+                inner.last_error = None;
+                Ok(())
+            }
+            Err(err) => {
+                let message = err.to_string();
+                {
+                    let mut inner = self.inner.lock().await;
+                    inner.process = child;
+                    inner.stopping = false;
+                    inner.state = WhatsAppLinkState::Error;
+                    inner.last_error = Some(message.clone());
+                }
+                self.broadcast_event(WhatsAppLinkEvent::Error {
+                    message,
+                    recoverable: false,
+                })
+                .await;
+                self.broadcast_status().await;
+                Err(err)
+            }
         }
-
-        kill_result?;
-        Ok(())
     }
 
     pub async fn status_snapshot(&self) -> WhatsAppLinkStatusSnapshot {
@@ -153,12 +167,16 @@ impl WhatsAppLinkRuntime {
     }
 
     pub async fn subscribe(&self) -> broadcast::Receiver<WhatsAppLinkEvent> {
-        let snapshot = self.status_snapshot().await;
         let (tx, rx) = broadcast::channel(64);
         let id = self.next_subscriber_id.fetch_add(1, Ordering::Relaxed);
+        let inner = self.inner.lock().await;
+        let snapshot = WhatsAppLinkStatusSnapshot {
+            state: inner.state.as_str().to_string(),
+            phone: inner.phone.clone(),
+            last_error: inner.last_error.clone(),
+        };
         let mut subscribers = self.subscribers.lock().await;
         subscribers.insert(id, tx.clone());
-        drop(subscribers);
         let _ = tx.send(WhatsAppLinkEvent::Status(snapshot));
         rx
     }
@@ -506,6 +524,51 @@ mod tests {
 
         let duplicate = timeout(Duration::from_millis(75), existing.recv()).await;
         assert!(duplicate.is_err(), "existing subscriber got duplicate status");
+    }
+
+    #[tokio::test]
+    async fn error_event_updates_snapshot_state_and_payload() {
+        let runtime = WhatsAppLinkRuntime::new();
+        let mut rx = runtime.subscribe().await;
+        let _ = timeout(Duration::from_millis(250), rx.recv())
+            .await
+            .expect("initial snapshot should arrive")
+            .expect("broadcast should be open");
+
+        runtime
+            .broadcast_error("socket timeout".to_string(), true)
+            .await;
+
+        let error_event = timeout(Duration::from_millis(250), rx.recv())
+            .await
+            .expect("error event should arrive")
+            .expect("broadcast should be open");
+        match error_event {
+            WhatsAppLinkEvent::Error {
+                message,
+                recoverable,
+            } => {
+                assert_eq!(message, "socket timeout");
+                assert!(recoverable);
+            }
+            other => panic!("expected error event, got {other:?}"),
+        }
+
+        let status_event = timeout(Duration::from_millis(250), rx.recv())
+            .await
+            .expect("status event should arrive")
+            .expect("broadcast should be open");
+        match status_event {
+            WhatsAppLinkEvent::Status(snapshot) => {
+                assert_eq!(snapshot.state, "error");
+                assert_eq!(snapshot.last_error.as_deref(), Some("socket timeout"));
+            }
+            other => panic!("expected status event, got {other:?}"),
+        }
+
+        let snapshot = runtime.status_snapshot().await;
+        assert_eq!(snapshot.state, "error");
+        assert_eq!(snapshot.last_error.as_deref(), Some("socket timeout"));
     }
 
     #[cfg(unix)]
