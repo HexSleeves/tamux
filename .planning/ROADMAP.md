@@ -35,7 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 16: Plugin Settings UI** - Plugins tab in TUI and Electron, dynamic form rendering from manifest schema (completed 2026-03-24)
 - [x] **Phase 17: API Proxy Layer** - HTTP proxy in daemon, Handlebars templates, SSRF protection, rate limiting (completed 2026-03-24)
 - [ ] **Phase 18: OAuth2 Flow** - Authorization code + PKCE, encrypted token storage, refresh lifecycle, UI integration
-- [ ] **Phase 19: Plugin Skills & Commands** - Bundled skill registration, command namespacing, agent integration
+- [x] **Phase 19: Plugin Skills & Commands** - Bundled skill registration, command namespacing, agent integration (completed 2026-03-24)
 - [ ] **Phase 20: Gmail/Calendar Validation Plugin** - End-to-end proof: manifest, OAuth, API proxy, skills, install, configure, use
 
 ## Phase Details
@@ -351,7 +351,13 @@ Plans:
   5. Tokens never appear in agent context or LLM API calls
   6. Plugin credentials redacted in all daemon logging
   7. UI shows auth status per plugin: Not Configured / Connected / Token Expired
-**Plans:** TBD
+**Plans:** 3 plans
+**UI hint**: yes
+
+Plans:
+- [ ] 18-01-PLAN.md — Crypto module, credential persistence, IPC protocol messages, auth_status on PluginInfo
+- [ ] 18-02-PLAN.md — OAuth2 flow module, server handler, api_call() token injection and refresh
+- [ ] 18-03-PLAN.md — Electron and TUI OAuth Connect wiring, real auth_status display
 
 ### Phase 19: Plugin Skills & Commands
 **Goal**: Plugins can bundle YAML skills and register commands that integrate seamlessly with the existing agent system
@@ -363,7 +369,7 @@ Plans:
   3. Skills can reference plugin API endpoints (e.g., `plugin:gmail-calendar:list_events`)
   4. Plugin commands registered as namespaced slash commands (`/pluginname.command`)
   5. Agent discovers plugin skills through standard skill system (no special awareness needed)
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 19-01-PLAN.md — Skill bundling module, command registry, IPC messages, and agent command dispatch
@@ -415,7 +421,7 @@ Phase 14 (Manifest & Loader) ─────┬──► Phase 15 (CLI & Install
 | 14. Plugin Manifest & Loader | 2/2 | Complete    | 2026-03-24 |
 | 15. Plugin CLI & Install | 2/2 | Complete    | 2026-03-24 |
 | 16. Plugin Settings UI | 3/3 | Complete    | 2026-03-24 |
-| 17. API Proxy Layer | 2/2 | Complete   | 2026-03-24 |
-| 18. OAuth2 Flow | 0/? | Not started | - |
-| 19. Plugin Skills & Commands | 1/2 | In Progress|  |
+| 17. API Proxy Layer | 2/2 | Complete    | 2026-03-24 |
+| 18. OAuth2 Flow | 0/3 | Not started | - |
+| 19. Plugin Skills & Commands | 1/2 | Complete    | 2026-03-24 |
 | 20. Gmail/Calendar Validation | 0/? | Not started | - |
