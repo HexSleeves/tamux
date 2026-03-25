@@ -42,6 +42,7 @@ let whatsappProcess = null;
 let whatsappRpcId = 0;
 const whatsappPendingCalls = new Map();
 let whatsappDaemonSubscribed = false;
+let whatsappDaemonSubscriptionDesired = false;
 let discordClient = null;
 let discordClientToken = null;
 let discordListenerAttached = false;
@@ -3739,6 +3740,7 @@ function registerIpcHandlers() {
         if (whatsappDaemonSubscribed) return;
         sendAgentCommand({ type: 'whatsapp-link-subscribe' });
         whatsappDaemonSubscribed = true;
+        whatsappDaemonSubscriptionDesired = true;
     }
 
     // WhatsApp link bridge: daemon protocol by default, Electron sidecar if fallback flag is enabled.
@@ -3772,6 +3774,7 @@ function registerIpcHandlers() {
                 sendAgentCommand({ type: 'whatsapp-link-unsubscribe' });
                 whatsappDaemonSubscribed = false;
             }
+            whatsappDaemonSubscriptionDesired = false;
             return { ok: true };
         } catch (err) {
             return { ok: false, error: err.message };
@@ -3860,6 +3863,17 @@ function registerIpcHandlers() {
                 if (event.type === 'ready') {
                     agentBridge.ready = true;
                     logToFile('info', 'agent bridge ready');
+                    if (whatsappDaemonSubscriptionDesired && !whatsappDaemonSubscribed) {
+                        try {
+                            sendAgentCommand({ type: 'whatsapp-link-subscribe' });
+                            whatsappDaemonSubscribed = true;
+                            logToFile('info', 'restored daemon WhatsApp subscription after bridge ready');
+                        } catch (error) {
+                            logToFile('warn', 'failed to restore daemon WhatsApp subscription', {
+                                error: error?.message || String(error),
+                            });
+                        }
+                    }
                     continue;
                 }
 
@@ -4807,6 +4821,7 @@ app.on('before-quit', () => {
             // Best effort during shutdown.
         }
         whatsappDaemonSubscribed = false;
+        whatsappDaemonSubscriptionDesired = false;
     }
     stopWhatsAppBridge();
     cleanupDiscordClient();

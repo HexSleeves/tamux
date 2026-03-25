@@ -39,6 +39,10 @@ test("agent bridge exit resets daemon WhatsApp subscription state", () => {
   assert.match(src, /bridgeProcess\.on\('exit'[\s\S]*?whatsappDaemonSubscribed\s*=\s*false/);
 });
 
+test("agent bridge ready restores daemon WhatsApp subscription when previously desired", () => {
+  assert.match(src, /if\s*\(whatsappDaemonSubscriptionDesired\s*&&\s*!whatsappDaemonSubscribed\)[\s\S]*?type:\s*'whatsapp-link-subscribe'/);
+});
+
 test("whatsapp gateway send remains functional in daemon mode", () => {
   assert.match(
     src,
