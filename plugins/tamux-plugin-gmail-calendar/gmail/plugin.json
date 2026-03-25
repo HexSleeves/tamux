@@ -42,16 +42,25 @@
       "list_inbox": {
         "method": "GET",
         "path": "/gmail/v1/users/me/messages?maxResults={{default params.max_results \"10\"}}&q={{urlencode (default params.query \"in:inbox\")}}",
+        "headers": {
+          "Authorization": "Bearer {{auth.access_token}}"
+        },
         "response_template": "## Inbox ({{resultSizeEstimate}} messages)\n\n{{#each messages}}Message ID: {{id}} (Thread: {{threadId}})\n{{/each}}"
       },
       "get_message": {
         "method": "GET",
         "path": "/gmail/v1/users/me/messages/{{params.message_id}}?format=METADATA&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date",
+        "headers": {
+          "Authorization": "Bearer {{auth.access_token}}"
+        },
         "response_template": "Snippet: {{snippet}}\n\nHeaders:\n{{#each payload.headers}}- {{name}}: {{value}}\n{{/each}}\n\nLabels: {{join labelIds \", \"}}"
       },
       "search_messages": {
         "method": "GET",
         "path": "/gmail/v1/users/me/messages?maxResults={{default params.max_results \"10\"}}&q={{urlencode params.query}}",
+        "headers": {
+          "Authorization": "Bearer {{auth.access_token}}"
+        },
         "response_template": "## Search Results ({{resultSizeEstimate}} messages)\n\n{{#each messages}}Message ID: {{id}} (Thread: {{threadId}})\n{{/each}}"
       }
     },
