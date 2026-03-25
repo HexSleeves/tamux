@@ -129,18 +129,38 @@ fn message_block_style(msg: &AgentMessage, theme: &ThemeTokens) -> Style {
 fn message_action_targets(
     msg_index: usize,
     msg: &AgentMessage,
-) -> Vec<(&'static str, ChatHitTarget)> {
-    let mut actions = vec![("[Copy]", ChatHitTarget::CopyMessage(msg_index))];
+) -> Vec<(String, ChatHitTarget)> {
+    if !msg.actions.is_empty() {
+        return msg
+            .actions
+            .iter()
+            .enumerate()
+            .map(|(action_index, action)| {
+                (
+                    format!("[{}]", action.label),
+                    ChatHitTarget::MessageAction {
+                        message_index: msg_index,
+                        action_index,
+                    },
+                )
+            })
+            .collect();
+    }
+
+    let mut actions = vec![("[Copy]".to_string(), ChatHitTarget::CopyMessage(msg_index))];
     match msg.role {
         MessageRole::User => {
-            actions.push(("[Resend]", ChatHitTarget::ResendMessage(msg_index)));
+            actions.push(("[Resend]".to_string(), ChatHitTarget::ResendMessage(msg_index)));
         }
         MessageRole::Assistant => {
-            actions.push(("[Regenerate]", ChatHitTarget::RegenerateMessage(msg_index)));
+            actions.push((
+                "[Regenerate]".to_string(),
+                ChatHitTarget::RegenerateMessage(msg_index),
+            ));
         }
         _ => {}
     }
-    actions.push(("[Delete]", ChatHitTarget::DeleteMessage(msg_index)));
+    actions.push(("[Delete]".to_string(), ChatHitTarget::DeleteMessage(msg_index)));
     actions
 }
 
@@ -170,17 +190,16 @@ fn action_hit_target(
     msg: &AgentMessage,
     content_col: usize,
 ) -> Option<ChatHitTarget> {
+    let actions = message_action_targets(msg_index, msg);
     let mut col = 0usize;
-    for (idx, (label, target)) in message_action_targets(msg_index, msg)
-        .into_iter()
-        .enumerate()
-    {
-        let width = UnicodeWidthStr::width(label);
+    let actions_len = actions.len();
+    for (idx, (label, target)) in actions.into_iter().enumerate() {
+        let width = UnicodeWidthStr::width(label.as_str());
         if content_col >= col && content_col < col.saturating_add(width) {
             return Some(target);
         }
         col = col.saturating_add(width);
-        if idx + 1 < message_action_targets(msg_index, msg).len() {
+        if idx + 1 < actions_len {
             col = col.saturating_add(1);
         }
     }
@@ -358,7 +377,7 @@ fn build_rendered_lines(
                 });
             }
 
-            if chat.selected_message() == Some(idx) {
+            if chat.selected_message() == Some(idx) || !msg.actions.is_empty() {
                 if let Some(action_line) = message_action_line(idx, msg, theme) {
                     all_lines.push(RenderedChatLine {
                         line: pad_message_line(action_line, inner_width, block_style),
@@ -456,6 +475,15 @@ fn resolved_scroll(
 
     if chat.scroll_locked() {
         return scroll;
+    }
+
+    if let Some(pin_idx) = chat.pinned_message_top() {
+        if let Some(&(pin_start, _)) = message_line_ranges.get(pin_idx) {
+            scroll = total_lines
+                .saturating_sub(pin_start.saturating_add(inner_height))
+                .min(max_scroll);
+            return scroll;
+        }
     }
 
     if !chat.is_streaming() {

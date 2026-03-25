@@ -2005,8 +2005,18 @@ async fn run_anthropic(
 
     let mut request = client
         .post(&url)
-        .header("Content-Type", "application/json")
-        .header("x-api-key", &config.api_key);
+        .header("Content-Type", "application/json");
+    let auth_method = get_provider_definition(provider)
+        .map(|d| d.auth_method)
+        .unwrap_or(AuthMethod::XApiKey);
+    match auth_method {
+        AuthMethod::Bearer => {
+            request = request.header("Authorization", format!("Bearer {}", config.api_key));
+        }
+        AuthMethod::XApiKey => {
+            request = request.header("x-api-key", &config.api_key);
+        }
+    }
     if !is_dashscope_coding_plan_anthropic_base_url(&config.base_url) {
         request = request.header("anthropic-version", "2023-06-01");
     }

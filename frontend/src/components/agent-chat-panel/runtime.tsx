@@ -214,7 +214,7 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
             ).then(() => {
                 markAgentSettingsSynced();
             });
-        }).catch(() => {});
+        }).catch(() => { });
     }, [agentSettings, agentSettingsHydrated, agentSettingsDirty, markAgentSettingsSynced]);
 
     // Subscribe to daemon agent events when in daemon or external agent mode
@@ -988,8 +988,8 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         setThreadAbortController(currentThreadId, controller);
 
         (async () => {
-        const configuredToolLoops = Number(agentSettings.max_tool_loops ?? 0);
-        const max_tool_loops = Number.isFinite(configuredToolLoops) && configuredToolLoops > 0
+            const configuredToolLoops = Number(agentSettings.max_tool_loops ?? 0);
+            const max_tool_loops = Number.isFinite(configuredToolLoops) && configuredToolLoops > 0
                 ? Math.min(1000, configuredToolLoops)
                 : Infinity;
             let loopCount = 0;
@@ -1494,8 +1494,8 @@ export function AgentChatPanelScaffold({ style, className }: { style?: CSSProper
             }}
             className={className}
         >
-            <AgentChatPanelHeader />
             <AgentChatPanelTabs />
+            <AgentChatPanelHeader />
             <div style={{ flex: 1, overflow: "hidden", position: "relative", display: "flex", flexDirection: "column" }}>
                 <AgentChatPanelCurrentSurface />
             </div>
@@ -1510,10 +1510,14 @@ export function AgentChatPanelHeader() {
     return (
         <div
             style={{
+                display: "flex",
+                flexDirection: "column",
                 padding: "var(--space-4)",
+                paddingBottom: "var(--space-2)",
                 borderBottom: "1px solid var(--border)",
                 flexShrink: 0,
                 background: "var(--bg-secondary)",
+                gap: "var(--space-2)",
             }}
         >
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "var(--space-3)" }}>
@@ -1531,24 +1535,11 @@ export function AgentChatPanelHeader() {
                                 ←
                             </button>
                         )}
-                        <span
-                            className="amux-agent-indicator"
-                            style={{ background: "var(--mission-soft)", borderColor: "var(--mission-glow)", color: "var(--mission)" }}
-                        >
-                            Mission Console
-                        </span>
+
                     </div>
-
-                    <span style={{ fontSize: "var(--text-lg)", fontWeight: 700 }}>
-                        {view === "threads" ? "Live Intelligence Surfaces" : activeThread?.title ?? "Conversation Lane"}
-                    </span>
-
-                    <span style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
-                        Reasoning, execution context, recall memory, and symbols
-                    </span>
                 </div>
 
-                <div style={{ display: "flex", gap: "var(--space-1)" }}>
+                <div style={{ display: "flex", gap: "var(--space-2)" }}>
                     <button
                         onClick={() => {
                             const workspaceId = useWorkspaceStore.getState().activeWorkspaceId;
@@ -1556,15 +1547,21 @@ export function AgentChatPanelHeader() {
                             setChatBackView("threads");
                             setView("chat");
                         }}
-                        style={iconButtonStyle}
+                        style={{ ...iconButtonStyle, minWidth: 120, color: "var(--success)", borderColor: "var(--success-soft)" }}
                         title="New thread"
                     >
-                        +
+                        + New session
                     </button>
-                    <button onClick={togglePanel} style={iconButtonStyle} title="Close">
-                        ✕
+                    <button onClick={togglePanel} style={{ ...iconButtonStyle, minWidth: 40 }} title="Close">
+                        ☰
                     </button>
                 </div>
+            </div>
+
+            <div style={{ justifyContent: "center", display: "flex", alignItems: "center" }}>
+                <span style={{ fontSize: "var(--text-md)", fontWeight: 700 }}>
+                    {view === "threads" ? "Live Intelligence Surfaces" : activeThread?.title ?? "Conversation Lane"}
+                </span>
             </div>
         </div>
     );

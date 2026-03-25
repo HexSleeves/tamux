@@ -35,6 +35,8 @@ pub(super) fn convert_message(m: crate::wire::AgentMessage) -> chat::AgentMessag
         cost: m.cost,
         is_streaming: m.is_streaming,
         timestamp: m.timestamp,
+        actions: Vec::new(),
+        is_concierge_welcome: false,
     }
 }
 

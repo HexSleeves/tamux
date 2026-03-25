@@ -2686,6 +2686,14 @@ fn render_gateway_tab<'a>(
         "whatsapp_phone_id",
         false,
     );
+    lines.push(Line::from(Span::styled(
+        "  QR linking is available in Electron (Settings -> Gateway -> Link Device).",
+        theme.fg_dim,
+    )));
+    lines.push(Line::from(Span::styled(
+        "  In TUI, configure WhatsApp Cloud API token + phone number ID for send tools.",
+        theme.fg_dim,
+    )));
 
     lines
 }
@@ -3346,5 +3354,24 @@ mod tests {
                 Some(tab.tab)
             );
         }
+    }
+
+    #[test]
+    fn gateway_tab_mentions_whatsapp_qr_linking_instructions() {
+        let mut settings = SettingsState::new();
+        settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+            SettingsTab::Gateway,
+        ));
+        let config = ConfigState::new();
+        let lines = render_gateway_tab(&settings, &config, &ThemeTokens::default());
+        let text = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("QR linking is available in Electron"),
+            "Gateway tab should explain where WhatsApp QR linking works"
+        );
     }
 }

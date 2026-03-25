@@ -5,12 +5,21 @@ export function ConciergeToast() {
     const welcome = useAgentStore((s) => s.conciergeWelcome);
     const dismiss = useAgentStore((s) => s.dismissConciergeWelcome);
     const config = useAgentStore((s) => s.conciergeConfig);
+    const threads = useAgentStore((s) => s.threads);
     const setActiveThread = useAgentStore((s) => s.setActiveThread);
     const createThread = useAgentStore((s) => s.createThread);
     const settingsOpen = useWorkspaceStore((s) => s.settingsOpen);
     const toggleSettings = useWorkspaceStore((s) => s.toggleSettings);
 
     if (!welcome || !config.enabled) return null;
+
+    const resolveLocalThreadId = (threadId?: string) => {
+        if (!threadId) return null;
+        const byLocalId = threads.find((thread) => thread.id === threadId);
+        if (byLocalId) return byLocalId.id;
+        const byDaemonId = threads.find((thread) => thread.daemonThreadId === threadId);
+        return byDaemonId?.id ?? null;
+    };
 
     return (
         <div style={{
@@ -39,7 +48,10 @@ export function ConciergeToast() {
                             if (action.action_type === "dismiss" || action.action_type === "dismiss_welcome") {
                                 await dismiss();
                             } else if (action.action_type === "continue_session" && action.thread_id) {
-                                setActiveThread(action.thread_id);
+                                const targetThreadId = resolveLocalThreadId(action.thread_id);
+                                if (targetThreadId) {
+                                    setActiveThread(targetThreadId);
+                                }
                                 await dismiss();
                             } else if (action.action_type === "start_new") {
                                 createThread({});
@@ -50,7 +62,10 @@ export function ConciergeToast() {
                                 await dismiss();
                             } else if (action.action_type === "focus_chat") {
                                 // Focus chat input
-                                setActiveThread("concierge");
+                                const conciergeThreadId = resolveLocalThreadId("concierge");
+                                if (conciergeThreadId) {
+                                    setActiveThread(conciergeThreadId);
+                                }
                                 await dismiss();
                             } else if (action.action_type === "open_settings") {
                                 // Navigate to settings panel
@@ -74,6 +89,23 @@ export function ConciergeToast() {
                         {action.label}
                     </button>
                 ))}
+                {welcome.actions.length === 0 && (
+                    <button
+                        onClick={() => dismiss()}
+                        style={{
+                            background: "rgba(97, 197, 255, 0.1)",
+                            border: "1px solid rgba(97, 197, 255, 0.3)",
+                            color: "var(--accent)",
+                            borderRadius: 4,
+                            padding: "4px 10px",
+                            fontSize: 11,
+                            cursor: "pointer",
+                            fontFamily: "inherit",
+                        }}
+                    >
+                        Dismiss
+                    </button>
+                )}
             </div>
         </div>
     );

@@ -527,7 +527,7 @@ function startWhatsAppBridge() {
     logToFile('info', 'starting WhatsApp bridge sidecar');
     whatsappProcess = spawn(process.execPath, [bridgePath], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env },
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
     });
 
     let buffer = '';

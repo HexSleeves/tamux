@@ -15,8 +15,6 @@
  *   Bridge -> Main:  { "event": "error", "data": "..." }
  */
 
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
-const { Boom } = require('@hapi/boom');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -36,6 +34,19 @@ const logger = pino({ level: 'silent' });
 
 let sock = null;
 let isConnected = false;
+let baileysApi = null;
+
+async function getBaileysApi() {
+    if (baileysApi) return baileysApi;
+    const mod = await import('@whiskeysockets/baileys');
+    baileysApi = {
+        makeWASocket: mod.default,
+        DisconnectReason: mod.DisconnectReason,
+        useMultiFileAuthState: mod.useMultiFileAuthState,
+        makeCacheableSignalKeyStore: mod.makeCacheableSignalKeyStore,
+    };
+    return baileysApi;
+}
 
 // ---------------------------------------------------------------------------
 // JSON-RPC communication
@@ -61,6 +72,12 @@ function sendError(id, error) {
 // ---------------------------------------------------------------------------
 
 async function connectWhatsApp() {
+    const {
+        makeWASocket,
+        DisconnectReason,
+        useMultiFileAuthState,
+        makeCacheableSignalKeyStore,
+    } = await getBaileysApi();
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
     sock = makeWASocket({

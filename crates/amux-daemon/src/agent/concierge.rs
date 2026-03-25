@@ -25,6 +25,7 @@ pub struct ConciergeEngine {
     event_tx: broadcast::Sender<AgentEvent>,
     http_client: reqwest::Client,
     circuit_breakers: Arc<CircuitBreakerRegistry>,
+    welcome_cache: Arc<RwLock<Option<WelcomeCacheEntry>>>,
 }
 
 impl ConciergeEngine {
@@ -39,6 +40,7 @@ impl ConciergeEngine {
             event_tx,
             http_client,
             circuit_breakers,
+            welcome_cache: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -93,7 +95,17 @@ impl ConciergeEngine {
             context.recent_threads.len(),
             context.pending_tasks.len()
         );
-        let (content, actions) = self.compose_welcome(detail_level, &context).await;
+        let welcome_signature = build_welcome_signature(detail_level, &context);
+        let (content, actions) =
+            if let Some(cached) = self.cached_welcome(&welcome_signature).await {
+                tracing::info!("concierge: reusing cached welcome payload");
+                cached
+            } else {
+                let composed = self.compose_welcome(detail_level, &context).await;
+                self.cache_welcome(&welcome_signature, &composed.0, &composed.1)
+                    .await;
+                composed
+            };
 
         if content.is_empty() {
             tracing::warn!("concierge: empty welcome content, skipping emit");
@@ -136,7 +148,17 @@ impl ConciergeEngine {
 
         tracing::info!("concierge: generate_welcome at level {:?}", detail_level);
         let context = self.gather_context(threads, tasks, detail_level).await;
-        let (content, actions) = self.compose_welcome(detail_level, &context).await;
+        let welcome_signature = build_welcome_signature(detail_level, &context);
+        let (content, actions) =
+            if let Some(cached) = self.cached_welcome(&welcome_signature).await {
+                tracing::info!("concierge: generate_welcome reusing cached payload");
+                cached
+            } else {
+                let composed = self.compose_welcome(detail_level, &context).await;
+                self.cache_welcome(&welcome_signature, &composed.0, &composed.1)
+                    .await;
+                composed
+            };
 
         if content.is_empty() {
             return None;
@@ -168,6 +190,7 @@ impl ConciergeEngine {
                 thread.updated_at = super::now_millis();
             }
         }
+        *self.welcome_cache.write().await = None;
     }
 
     async fn replace_welcome_message(
@@ -200,6 +223,31 @@ impl ConciergeEngine {
             });
             thread.updated_at = super::now_millis();
         }
+    }
+
+    async fn cached_welcome(
+        &self,
+        signature: &str,
+    ) -> Option<(String, Vec<ConciergeAction>)> {
+        let cache = self.welcome_cache.read().await;
+        let entry = cache.as_ref()?;
+        if entry.signature != signature {
+            return None;
+        }
+        Some((entry.content.clone(), entry.actions.clone()))
+    }
+
+    async fn cache_welcome(
+        &self,
+        signature: &str,
+        content: &str,
+        actions: &[ConciergeAction],
+    ) {
+        *self.welcome_cache.write().await = Some(WelcomeCacheEntry {
+            signature: signature.to_string(),
+            content: content.to_string(),
+            actions: actions.to_vec(),
+        });
     }
 
     // ── Context Gathering ────────────────────────────────────────────────
@@ -962,6 +1010,13 @@ struct WelcomeContext {
     pending_tasks: Vec<String>,
 }
 
+#[derive(Clone)]
+struct WelcomeCacheEntry {
+    signature: String,
+    content: String,
+    actions: Vec<ConciergeAction>,
+}
+
 struct ThreadSummary {
     id: String,
     title: String,
@@ -1017,6 +1072,22 @@ fn format_timestamp(ts: u64) -> String {
     } else {
         format!("{}d ago", secs / 86400)
     }
+}
+
+fn build_welcome_signature(detail_level: ConciergeDetailLevel, context: &WelcomeContext) -> String {
+    let thread_sig = context
+        .recent_threads
+        .iter()
+        .map(|thread| {
+            format!(
+                "{}|{}|{}|{}",
+                thread.id, thread.title, thread.updated_at, thread.message_count
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(";");
+    let task_sig = context.pending_tasks.join(";");
+    format!("{detail_level:?}::{thread_sig}::{task_sig}")
 }
 
 // ---------------------------------------------------------------------------
@@ -1190,6 +1261,57 @@ mod tests {
         let thread = guard.get(CONCIERGE_THREAD_ID).unwrap();
         assert_eq!(thread.messages.len(), 1);
         assert_eq!(thread.messages[0].content, "hello");
+    }
+
+    #[tokio::test]
+    async fn prune_welcome_messages_clears_welcome_cache() {
+        let config = Arc::new(RwLock::new(AgentConfig::default()));
+        let (event_tx, _) = broadcast::channel(8);
+        let circuit_breakers = Arc::new(CircuitBreakerRegistry::from_provider_keys(
+            std::iter::empty(),
+        ));
+        let engine = ConciergeEngine::new(config, event_tx, reqwest::Client::new(), circuit_breakers);
+        let action = ConciergeAction {
+            label: "Dismiss".to_string(),
+            action_type: ConciergeActionType::DismissWelcome,
+            thread_id: None,
+        };
+        engine.cache_welcome("sig", "cached", &[action]).await;
+        assert!(engine.cached_welcome("sig").await.is_some());
+
+        let threads = RwLock::new(HashMap::<String, AgentThread>::new());
+        engine.prune_welcome_messages(&threads).await;
+
+        assert!(engine.cached_welcome("sig").await.is_none());
+    }
+
+    #[test]
+    fn welcome_signature_changes_when_context_changes() {
+        let base_context = WelcomeContext {
+            recent_threads: vec![ThreadSummary {
+                id: "t1".to_string(),
+                title: "Thread One".to_string(),
+                updated_at: 100,
+                message_count: 3,
+                last_messages: vec!["hello".to_string()],
+            }],
+            pending_tasks: vec!["task-a".to_string()],
+        };
+        let mut changed_context = WelcomeContext {
+            recent_threads: vec![ThreadSummary {
+                id: "t1".to_string(),
+                title: "Thread One".to_string(),
+                updated_at: 100,
+                message_count: 3,
+                last_messages: vec!["hello".to_string()],
+            }],
+            pending_tasks: vec!["task-a".to_string()],
+        };
+        changed_context.pending_tasks.push("task-b".to_string());
+
+        let a = build_welcome_signature(ConciergeDetailLevel::ProactiveTriage, &base_context);
+        let b = build_welcome_signature(ConciergeDetailLevel::ProactiveTriage, &changed_context);
+        assert_ne!(a, b);
     }
 
     #[test]

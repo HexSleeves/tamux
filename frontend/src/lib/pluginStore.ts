@@ -93,9 +93,9 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
     try {
       const bridge = getBridge();
       const result = await bridge?.pluginDaemonList?.();
-      const plugins = (result?.plugins ?? []).map((p) => ({
+      const plugins: PluginInfoItem[] = (result?.plugins ?? []).map((p) => ({
         ...p,
-        auth_status: p.auth_status ?? "not_configured",
+        auth_status: (p.auth_status as string) ?? "not_configured",
       }));
       set({ plugins, loading: false });
     } catch {

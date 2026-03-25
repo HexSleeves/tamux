@@ -297,9 +297,7 @@ impl TuiModel {
     }
 
     fn concierge_banner_visible(&self) -> bool {
-        // Concierge onboarding now renders as a chat message in the concierge
-        // thread instead of a separate overlay banner (D-01/D-02).
-        false
+        self.concierge.loading || self.concierge.welcome_visible
     }
 
     fn concierge_banner_height(&self) -> u16 {
@@ -396,7 +394,27 @@ impl TuiModel {
         let Some(action) = self.concierge.welcome_actions.get(action_index).cloned() else {
             return;
         };
+        self.run_concierge_action(action);
+    }
 
+    fn execute_concierge_message_action(&mut self, message_index: usize, action_index: usize) {
+        let Some(action) = self
+            .chat
+            .active_thread()
+            .and_then(|thread| thread.messages.get(message_index))
+            .and_then(|message| message.actions.get(action_index))
+            .cloned()
+        else {
+            return;
+        };
+        self.run_concierge_action(crate::state::ConciergeActionVm {
+            label: action.label,
+            action_type: action.action_type,
+            thread_id: action.thread_id,
+        });
+    }
+
+    fn run_concierge_action(&mut self, action: crate::state::ConciergeActionVm) {
         match action.action_type.as_str() {
             "continue_session" => {
                 if let Some(thread_id) = action.thread_id {

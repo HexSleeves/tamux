@@ -788,7 +788,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     commandLogOpen: false,
     commandHistoryOpen: false,
     snippetPickerOpen: false,
-    agentPanelOpen: false,
+    agentPanelOpen: true,
     systemMonitorOpen: false,
     fileManagerOpen: false,
     canvasOpen: false,

@@ -30,6 +30,15 @@ pub struct AgentMessage {
     pub cost: Option<f64>,
     pub is_streaming: bool,
     pub timestamp: u64,
+    pub actions: Vec<MessageAction>,
+    pub is_concierge_welcome: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MessageAction {
+    pub label: String,
+    pub action_type: String,
+    pub thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -66,6 +75,10 @@ pub enum ChatHitTarget {
     Message(usize),
     ReasoningToggle(usize),
     ToolToggle(usize),
+    MessageAction {
+        message_index: usize,
+        action_index: usize,
+    },
     CopyMessage(usize),
     ResendMessage(usize),
     RegenerateMessage(usize),
@@ -135,8 +148,13 @@ pub enum ChatAction {
         thread_id: String,
         title: String,
     },
+    AppendMessage {
+        thread_id: String,
+        message: AgentMessage,
+    },
     SelectThread(String),
     ScrollChat(i32),
+    PinMessageTop(usize),
     NewThread,
     SetTranscriptMode(TranscriptMode),
     ResetStreaming,
@@ -157,6 +175,7 @@ pub struct ChatState {
     expanded_reasoning: std::collections::HashSet<usize>,
     selected_message: Option<usize>,
     expanded_tools: std::collections::HashSet<usize>,
+    pinned_message_top: Option<usize>,
 }
 
 impl ChatState {
@@ -173,6 +192,7 @@ impl ChatState {
             transcript_mode: TranscriptMode::Compact,
             selected_message: None,
             expanded_tools: std::collections::HashSet::new(),
+            pinned_message_top: None,
         }
     }
 
@@ -216,6 +236,10 @@ impl ChatState {
 
     pub fn transcript_mode(&self) -> TranscriptMode {
         self.transcript_mode
+    }
+
+    pub fn pinned_message_top(&self) -> Option<usize> {
+        self.pinned_message_top
     }
 
     pub fn is_streaming(&self) -> bool {
@@ -322,6 +346,7 @@ impl ChatState {
     pub fn reduce(&mut self, action: ChatAction) {
         match action {
             ChatAction::Delta { thread_id, content } => {
+                self.pinned_message_top = None;
                 // Set active thread if not set, or if it matches the incoming thread
                 if self.active_thread_id.is_none()
                     || self.active_thread_id.as_deref() == Some(&thread_id)
@@ -335,6 +360,7 @@ impl ChatState {
                 thread_id: _,
                 content,
             } => {
+                self.pinned_message_top = None;
                 self.streaming_reasoning.push_str(&content);
             }
 
@@ -344,6 +370,7 @@ impl ChatState {
                 name,
                 args,
             } => {
+                self.pinned_message_top = None;
                 // Flush any accumulated streaming content as an ASST message first
                 // (the assistant said something before calling the tool)
                 if !self.streaming_content.is_empty() {
@@ -405,6 +432,7 @@ impl ChatState {
                 content,
                 is_error,
             } => {
+                self.pinned_message_top = None;
                 // Update the active tracker
                 if let Some(tc) = self
                     .active_tool_calls
@@ -445,6 +473,7 @@ impl ChatState {
                 tps,
                 generation_ms,
             } => {
+                self.pinned_message_top = None;
                 // Only finalize if this is for the active thread
                 if self.active_thread_id.as_deref() == Some(&thread_id) {
                     // Tool calls are already pushed to thread messages inline
@@ -492,14 +521,20 @@ impl ChatState {
 
             ChatAction::ThreadDetailReceived(incoming) => {
                 if let Some(existing) = self.threads.iter_mut().find(|t| t.id == incoming.id) {
-                    // Merge: keep local user messages, add incoming messages
-                    let local_user_msgs: Vec<AgentMessage> = existing
+                    // Merge: keep local user messages and local messages that carry
+                    // interactive UI actions (e.g. concierge action buttons), then
+                    // add incoming daemon messages.
+                    let local_kept_msgs: Vec<AgentMessage> = existing
                         .messages
                         .iter()
-                        .filter(|m| m.role == MessageRole::User)
+                        .filter(|m| {
+                            m.role == MessageRole::User
+                                || !m.actions.is_empty()
+                                || m.is_concierge_welcome
+                        })
                         .cloned()
                         .collect();
-                    let mut merged = local_user_msgs;
+                    let mut merged = local_kept_msgs;
                     // Add incoming messages that aren't already present
                     for msg in incoming.messages {
                         if !merged
@@ -532,6 +567,7 @@ impl ChatState {
             }
 
             ChatAction::ThreadCreated { thread_id, title } => {
+                self.pinned_message_top = None;
                 // Transfer messages from any local pending thread to the real thread
                 let local_messages = self
                     .active_thread()
@@ -569,11 +605,34 @@ impl ChatState {
                 self.active_thread_id = Some(thread_id);
             }
 
+            ChatAction::AppendMessage { thread_id, message } => {
+                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == thread_id) {
+                    if thread_id == "concierge" && message.is_concierge_welcome {
+                        thread.messages.retain(|msg| !msg.is_concierge_welcome);
+                    }
+                    thread.messages.push(message);
+                } else {
+                    let title = if thread_id == "concierge" {
+                        "Concierge".to_string()
+                    } else {
+                        thread_id.clone()
+                    };
+                    self.threads.push(AgentThread {
+                        id: thread_id.clone(),
+                        title,
+                        messages: vec![message],
+                        ..Default::default()
+                    });
+                }
+            }
+
             ChatAction::SelectThread(thread_id) => {
+                self.pinned_message_top = None;
                 self.active_thread_id = Some(thread_id);
             }
 
             ChatAction::ScrollChat(delta) => {
+                self.pinned_message_top = None;
                 if delta > 0 {
                     self.scroll_offset = self.scroll_offset.saturating_add(delta as usize);
                     self.scroll_locked = true;
@@ -586,7 +645,13 @@ impl ChatState {
                 }
             }
 
+            ChatAction::PinMessageTop(index) => {
+                self.pinned_message_top = Some(index);
+                self.scroll_locked = false;
+            }
+
             ChatAction::NewThread => {
+                self.pinned_message_top = None;
                 self.active_thread_id = None;
             }
 
@@ -794,6 +859,76 @@ mod tests {
         ]));
         state.reduce(ChatAction::SelectThread("t2".into()));
         assert_eq!(state.active_thread_id(), Some("t2"));
+    }
+
+    #[test]
+    fn thread_detail_keeps_local_messages_with_actions() {
+        let mut state = ChatState::new();
+        state.reduce(ChatAction::ThreadCreated {
+            thread_id: "concierge".into(),
+            title: "Concierge".into(),
+        });
+        state.reduce(ChatAction::AppendMessage {
+            thread_id: "concierge".into(),
+            message: AgentMessage {
+                role: MessageRole::Assistant,
+                content: "Welcome".into(),
+                actions: vec![MessageAction {
+                    label: "Continue".into(),
+                    action_type: "continue_session".into(),
+                    thread_id: Some("t1".into()),
+                }],
+                is_concierge_welcome: true,
+                ..Default::default()
+            },
+        });
+
+        state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+            id: "concierge".into(),
+            title: "Concierge".into(),
+            messages: vec![AgentMessage {
+                role: MessageRole::Assistant,
+                content: "Welcome".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+
+        let thread = state.active_thread().expect("concierge thread should exist");
+        assert_eq!(thread.messages.len(), 1);
+        assert_eq!(thread.messages[0].actions.len(), 1);
+    }
+
+    #[test]
+    fn append_message_replaces_previous_concierge_welcome() {
+        let mut state = ChatState::new();
+        state.reduce(ChatAction::ThreadCreated {
+            thread_id: "concierge".into(),
+            title: "Concierge".into(),
+        });
+        state.reduce(ChatAction::AppendMessage {
+            thread_id: "concierge".into(),
+            message: AgentMessage {
+                role: MessageRole::Assistant,
+                content: "Welcome 1".into(),
+                is_concierge_welcome: true,
+                ..Default::default()
+            },
+        });
+        state.reduce(ChatAction::AppendMessage {
+            thread_id: "concierge".into(),
+            message: AgentMessage {
+                role: MessageRole::Assistant,
+                content: "Welcome 2".into(),
+                is_concierge_welcome: true,
+                ..Default::default()
+            },
+        });
+
+        let thread = state.active_thread().expect("concierge thread should exist");
+        assert_eq!(thread.messages.len(), 1);
+        assert_eq!(thread.messages[0].content, "Welcome 2");
+        assert!(thread.messages[0].is_concierge_welcome);
     }
 
     // ── Message selection tests ──────────────────────────────────────────

@@ -400,6 +400,13 @@ impl TuiModel {
                 self.chat.select_message(Some(idx));
                 self.chat.toggle_tool_expansion(idx);
             }
+            Some(chat::ChatHitTarget::MessageAction {
+                message_index,
+                action_index,
+            }) => {
+                self.chat.select_message(Some(message_index));
+                self.execute_concierge_message_action(message_index, action_index);
+            }
             Some(chat::ChatHitTarget::CopyMessage(idx)) => {
                 self.chat.select_message(Some(idx));
                 self.copy_message(idx);

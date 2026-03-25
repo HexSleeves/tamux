@@ -14,7 +14,7 @@ pub struct ConciergeState {
     pub selected_action: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConciergeActionVm {
     pub label: String,
     pub action_type: String,
@@ -58,6 +58,20 @@ pub enum ConciergeAction {
 }
 
 impl ConciergeState {
+    pub fn has_active_welcome(&self) -> bool {
+        self.welcome_visible
+            && self
+                .welcome_content
+                .as_ref()
+                .is_some_and(|content| !content.trim().is_empty())
+    }
+
+    pub fn is_same_welcome(&self, content: &str, actions: &[ConciergeActionVm]) -> bool {
+        self.welcome_visible
+            && self.welcome_content.as_deref() == Some(content)
+            && self.welcome_actions.as_slice() == actions
+    }
+
     pub fn reduce(&mut self, action: ConciergeAction) {
         match action {
             ConciergeAction::ConfigReceived {

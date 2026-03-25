@@ -48,13 +48,18 @@ pub fn render(
 
     if state.loading {
         let spinner_frames = ["⢿", "⣻", "⣽", "⣾", "⣷", "⣯", "⣟", "⡿"];
-        let spinner = spinner_frames[0];
+        let spinner = spinner_frames[(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as usize)
+            .unwrap_or(0)
+            / 120)
+            % spinner_frames.len()];
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(spinner, theme.accent_secondary),
             Span::raw(" "),
             Span::styled(
-                "Preparing your welcome and suggested next actions",
+                "Concierge is writing a message…",
                 theme.fg_dim,
             ),
         ]));
