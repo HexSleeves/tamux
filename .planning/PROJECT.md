@@ -81,6 +81,22 @@ These capabilities exist in the codebase today and are relied upon:
 - ✓ Plugin loader: daemon reads manifests from `~/.tamux/plugins/`, validates, registers — v2.0 Phase 14
 - ✓ Plugin IPC messages for list/get/enable/disable operations — v2.0 Phase 14
 - ✓ SQLite persistence for plugins, plugin settings, and plugin credentials — v2.0 Phase 14
+- ✓ Plugin install from npm, GitHub, and local path with auto-detect — v2.0 Phase 15
+- ✓ Plugin uninstall with full cleanup (daemon + disk + skills) — v2.0 Phase 15
+- ✓ Plugin CLI commands: add, remove, ls, enable, disable — v2.0 Phase 15
+- ✓ Daemon hot-reload registration via IPC (no restart needed) — v2.0 Phase 15
+- ✓ Plugins settings tab in Electron with dynamic form rendering — v2.0 Phase 16
+- ✓ Plugins settings tab in TUI with dynamic form rendering — v2.0 Phase 16
+- ✓ Plugin settings IPC pipeline (get/update/test-connection) — v2.0 Phase 16
+- ✓ API proxy with Handlebars templates, SSRF protection, rate limiting — v2.0 Phase 17
+- ✓ plugin_api_call tool in agent tool executor — v2.0 Phase 17
+- ✓ Plugins bundle YAML skills auto-registered on install, removed on uninstall — v2.0 Phase 19
+- ✓ Plugin command registration: slash commands declared in manifest, dispatched via agent — v2.0 Phase 19
+- ✓ Agent discovers plugin capabilities through standard skill system — v2.0 Phase 19
+- ✓ CLI `tamux plugin commands` lists registered plugin commands — v2.0 Phase 19
+- ✓ OAuth2 authorization code + PKCE flow with encrypted token storage — v2.0 Phase 18
+- ✓ AES-256-GCM credential encryption at rest — v2.0 Phase 18
+- ✓ On-demand token refresh with auth status in UI — v2.0 Phase 18
 
 ### Active
 
@@ -90,7 +106,7 @@ These capabilities exist in the codebase today and are relied upon:
 - [ ] API proxy layer: daemon proxies HTTP requests per plugin API contracts with transformation templates
 - [ ] OAuth2 flow support: authorization code + token refresh for plugins requiring authenticated APIs
 - [ ] Plugin settings storage: per-plugin config persisted in daemon, accessible via IPC
-- [ ] Plugin command registration: slash commands and CLI subcommands declared in manifest
+- [x] Plugin command registration: slash commands and CLI subcommands declared in manifest — Validated in Phase 19
 
 **Plugin Distribution & Install**
 - [ ] `tamux plugin install <source>` CLI command (npm package, GitHub repo, or local path)
@@ -105,9 +121,9 @@ These capabilities exist in the codebase today and are relied upon:
 - [ ] Plugin command palette integration: plugin commands appear alongside built-in commands
 
 **Plugin Skill Bundling**
-- [ ] Plugins can bundle YAML skills that reference plugin API contracts
-- [ ] Bundled skills auto-registered on plugin install, removed on uninstall
-- [ ] Agent discovers plugin capabilities through standard skill system
+- [x] Plugins can bundle YAML skills that reference plugin API contracts — Validated in Phase 19
+- [x] Bundled skills auto-registered on plugin install, removed on uninstall — Validated in Phase 19
+- [x] Agent discovers plugin capabilities through standard skill system — Validated in Phase 19
 
 **Validation: Gmail/Calendar Plugin**
 - [ ] Gmail plugin manifest: read inbox, search, send (via Gmail REST API)
@@ -135,18 +151,13 @@ These capabilities exist in the codebase today and are relied upon:
 - Real-time collaborative editing — the agent collaborates with the operator, not multiple humans simultaneously
 - Browser extension — not an IDE plugin or browser copilot; it's a standalone runtime
 
-## Current Milestone: v2.0 Plugin Ecosystem
+## Current State
 
-**Goal:** Community-friendly declarative plugin system — anyone can extend tamux with JSON manifests that declare commands, settings, API contracts, and bundled skills. Plugins install via CLI/npm and work across TUI and Electron.
+**v1.0 Living Agent** — SHIPPED 2026-03-24. 13 phases, 47 plans. Production foundation, heartbeat, transparency, memory, skills, gateways, distribution, progressive UX.
 
-**Target features:**
-- Declarative plugin manifest format (JSON) with versioned schema
-- Daemon API proxy layer with transformation templates and OAuth2 support
-- Plugin install/uninstall/list CLI commands
-- Plugins settings tab in both TUI and Electron (rendered from manifest)
-- Plugin command registration and skill bundling
-- npm and GitHub distribution
-- Gmail/Calendar integration as validation plugin (proves full loop)
+**v2.0 Plugin Ecosystem** — SHIPPED 2026-03-25. 7 phases, 17 plans. Declarative plugin system with JSON manifests, daemon API proxy, OAuth2 PKCE, cross-surface settings UI, skill bundling, command dispatch. Gmail/Calendar plugin validates full loop with real Google data.
+
+**Next milestone:** Not yet planned. Use `/gsd:new-milestone` to start.
 
 ## Context
 
@@ -217,4 +228,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-24 after Phase 14 (Plugin Manifest & Loader) completion*
+*Last updated: 2026-03-25 after v2.0 Plugin Ecosystem milestone completion*

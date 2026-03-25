@@ -4,7 +4,7 @@
 
 **v1.0 (Complete):** Bridges tamux's engineering depth to user-felt experience — production hardening, heartbeat, transparency, memory consolidation, skill evolution, gateways, distribution, progressive UX.
 
-**v2.0 (Current):** Community-friendly plugin ecosystem — declarative JSON manifests, daemon API proxy, OAuth2, cross-surface settings UI, skill bundling. Gmail/Calendar integration validates the system end-to-end.
+**v2.0 (Complete):** Declarative plugin ecosystem — JSON manifests, daemon API proxy with Handlebars templates, OAuth2 PKCE flow, cross-surface settings UI, skill bundling, command dispatch. Gmail/Calendar plugin validates full loop. [Archive](milestones/v2.0-ROADMAP.md)
 
 ## Phases
 
@@ -28,15 +28,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 12: CLI Polish** - Launch commands, fix stats, hide internals, audit IDs, settings subcommand (completed 2026-03-24)
 - [x] **Phase 13: TUI UX Fixes** - Concierge in conversation, tier settings, feature settings, recent actions (completed 2026-03-24)
 
-### v2.0: Plugin Ecosystem
+### v2.0: Plugin Ecosystem (SHIPPED 2026-03-25)
 
-- [x] **Phase 14: Plugin Manifest & Loader** - JSON Schema definition, manifest validation, daemon loader, SQLite storage (completed 2026-03-24)
-- [x] **Phase 15: Plugin CLI & Install** - Extend plugins.rs for new manifest format, npm/GitHub/local install, daemon IPC registration (completed 2026-03-24)
-- [x] **Phase 16: Plugin Settings UI** - Plugins tab in TUI and Electron, dynamic form rendering from manifest schema (completed 2026-03-24)
-- [x] **Phase 17: API Proxy Layer** - HTTP proxy in daemon, Handlebars templates, SSRF protection, rate limiting (completed 2026-03-24)
-- [x] **Phase 18: OAuth2 Flow** - Authorization code + PKCE, encrypted token storage, refresh lifecycle, UI integration (completed 2026-03-25)
-- [x] **Phase 19: Plugin Skills & Commands** - Bundled skill registration, command namespacing, agent integration (completed 2026-03-24)
-- [ ] **Phase 20: Gmail/Calendar Validation Plugin** - End-to-end proof: manifest, OAuth, API proxy, skills, install, configure, use
+See [v2.0 Archive](milestones/v2.0-ROADMAP.md) for full details. 7 phases, 17 plans, all complete.
 
 ## Phase Details
 
@@ -268,165 +262,11 @@ Plans:
 - [x] 13-02-PLAN.md — TUI Features settings tab with tier, heartbeat, memory, and skills controls
 - [x] 13-03-PLAN.md — Electron StatusBar shadcn re-integration (tier badge, activity, provider health, recent actions)
 
-### Phase 14: Plugin Manifest & Loader
-**Goal**: Define the plugin manifest format and build the daemon-side loader that reads, validates, and registers plugins from disk
-**Depends on**: Nothing (v2.0 foundation)
-**Requirements**: PLUG-01, PLUG-02, PLUG-03, PLUG-04, PLUG-05, PLUG-06, PLUG-07, PLUG-08, PLUG-09
-**Success Criteria** (what must be TRUE):
-  1. A JSON Schema for plugin.json v1 exists and validates all manifest fields (settings, api, commands, skills, auth)
-  2. Daemon loads all valid manifests from `~/.tamux/plugins/*/plugin.json` on startup
-  3. Invalid manifests are rejected with clear error messages (which field, what's wrong)
-  4. Loaded plugins are persisted in SQLite `plugins` table with full metadata
-  5. New IPC messages exist for plugin operations (list, get, enable, disable)
-  6. Manifest size limits enforced (100KB, 50 endpoints, 30 settings)
-**Plans:** 2/2 plans complete
-
-Plans:
-- [x] 14-01-PLAN.md — Plugin manifest serde structs, JSON Schema v1, and IPC message variants
-- [x] 14-02-PLAN.md — Plugin loader, SQLite persistence, PluginManager, and server.rs IPC wiring
-
-### Phase 15: Plugin CLI & Install
-**Goal**: Users can install, uninstall, and manage plugins from the CLI, with the daemon registering plugins via IPC
-**Depends on**: Phase 14
-**Requirements**: INST-01, INST-02, INST-03, INST-04, INST-05, INST-06, INST-07, INST-08
-**Success Criteria** (what must be TRUE):
-  1. `tamux plugin install <npm-package>` fetches from npm, validates manifest, registers with daemon
-  2. `tamux plugin install <github-url>` clones repo, validates manifest, registers with daemon
-  3. `tamux plugin install <local-path>` symlinks/copies, validates manifest, registers with daemon
-  4. `tamux plugin uninstall <name>` removes files, deregisters from daemon, cleans up bundled skills
-  5. `tamux plugin list` shows all installed plugins with status
-  6. Plugin install rejects on command/skill name conflicts with clear error
-**Plans:** 2/2 plans complete
-
-Plans:
-- [x] 15-01-PLAN.md — IPC messages (PluginInstall/Uninstall), PluginManager register/unregister/conflict-check, server handlers
-- [x] 15-02-PLAN.md — CLI plugin add/remove/ls/enable/disable with npm/GitHub/local source detection and daemon IPC
-
-### Phase 16: Plugin Settings UI
-**Goal**: Both TUI and Electron render a Plugins settings tab with dynamic forms generated from plugin manifest schemas
-**Depends on**: Phase 14
-**Requirements**: PSET-01, PSET-02, PSET-03, PSET-04, PSET-05, PSET-06, PSET-07
-**Success Criteria** (what must be TRUE):
-  1. Electron settings panel has a "Plugins" tab listing installed plugins with enable/disable toggle
-  2. TUI settings panel has a "Plugins" tab listing installed plugins with enable/disable toggle
-  3. Selecting a plugin renders its settings form dynamically from manifest schema
-  4. Secret fields are masked in UI, encrypted in storage
-  5. Settings changes flow from UI -> IPC -> daemon SQLite (single source of truth)
-  6. OAuth-enabled plugins show "Connect" / "Connected" / "Reconnect" button
-**Plans:** 3/3 plans complete
-**UI hint**: yes
-
-Plans:
-- [x] 16-01-PLAN.md — IPC protocol messages, daemon persistence/handlers, agent bridge, Electron/TUI client methods
-- [x] 16-02-PLAN.md — Electron PluginsTab: pluginStore, dynamic settings form, auth badges, test connection
-- [x] 16-03-PLAN.md — TUI Plugins tab: SettingsTab::Plugins, render_plugins_tab widget, settings_handlers wiring
-
-### Phase 17: API Proxy Layer
-**Goal**: Daemon proxies HTTP requests for plugins per their API contract definitions, with template rendering and security protections
-**Depends on**: Phase 14
-**Requirements**: APRX-01, APRX-02, APRX-03, APRX-04, APRX-05, APRX-06, APRX-07
-**Success Criteria** (what must be TRUE):
-  1. Daemon makes HTTP requests on behalf of plugins using endpoint definitions from manifest
-  2. Request URLs, params, and headers are rendered via Handlebars templates
-  3. Response bodies are transformed via response templates into agent-friendly text
-  4. Requests to internal IP ranges (127.x, 10.x, 172.16-31.x, 192.168.x, 169.254.x) are blocked
-  5. Template rendering has 1-second timeout and strict mode
-  6. Rate limits from manifest enforced via token bucket
-  7. Errors returned to agent with actionable context
-**Plans:** 2/2 plans complete
-
-Plans:
-- [x] 17-01-PLAN.md — SSRF validation, rate limiter, Handlebars template engine, PluginApiError, IPC protocol messages
-- [x] 17-02-PLAN.md — HTTP execution, PluginManager.api_call() orchestration, tool executor wiring, server.rs IPC handler
-
-### Phase 18: OAuth2 Flow
-**Goal**: Plugins requiring OAuth2 can authenticate users through the daemon, with tokens encrypted at rest and automatically refreshed
-**Depends on**: Phase 17
-**Requirements**: AUTH-01, AUTH-02, AUTH-03, AUTH-04, AUTH-05, AUTH-06, AUTH-07
-**Success Criteria** (what must be TRUE):
-  1. Daemon handles full OAuth2 authorization code + PKCE flow for plugins
-  2. Temporary localhost HTTP listener receives OAuth callback
-  3. Tokens encrypted at rest in SQLite `plugin_credentials` table
-  4. Automatic token refresh at 80% TTL, with user-facing reconnect on failure
-  5. Tokens never appear in agent context or LLM API calls
-  6. Plugin credentials redacted in all daemon logging
-  7. UI shows auth status per plugin: Not Configured / Connected / Token Expired
-**Plans:** 3/3 plans complete
-**UI hint**: yes
-
-Plans:
-- [x] 18-01-PLAN.md — Crypto module, credential persistence, IPC protocol messages, auth_status on PluginInfo
-- [x] 18-02-PLAN.md — OAuth2 flow module, server handler, api_call() token injection and refresh
-- [x] 18-03-PLAN.md — Electron and TUI OAuth Connect wiring, real auth_status display
-
-### Phase 19: Plugin Skills & Commands
-**Goal**: Plugins can bundle YAML skills and register commands that integrate seamlessly with the existing agent system
-**Depends on**: Phase 15
-**Requirements**: PSKL-01, PSKL-02, PSKL-03, PSKL-04, PSKL-05, PSKL-06
-**Success Criteria** (what must be TRUE):
-  1. Bundled YAML skills installed to `~/.tamux/skills/plugins/<plugin-name>/` on plugin install
-  2. Skills removed on plugin uninstall with no orphans
-  3. Skills can reference plugin API endpoints (e.g., `plugin:gmail-calendar:list_events`)
-  4. Plugin commands registered as namespaced slash commands (`/pluginname.command`)
-  5. Agent discovers plugin skills through standard skill system (no special awareness needed)
-**Plans:** 2/2 plans complete
-
-Plans:
-- [x] 19-01-PLAN.md — Skill bundling module, command registry, IPC messages, and agent command dispatch
-- [ ] 19-02-PLAN.md — CLI plugin commands subcommand and agent system prompt plugin skills awareness
-
-### Phase 20: Gmail/Calendar Validation Plugin
-**Goal**: A real Gmail/Calendar plugin that proves the entire plugin ecosystem works end-to-end — from install to agent answering "what's on my calendar?"
-**Depends on**: Phase 14, 15, 16, 17, 18, 19
-**Requirements**: GMAI-01, GMAI-02, GMAI-03, GMAI-04, GMAI-05, GMAI-06, GMAI-07, GMAI-08, GMAI-09
-**Success Criteria** (what must be TRUE):
-  1. Plugin published to npm as `tamux-plugin-gmail-calendar`
-  2. `tamux plugin install tamux-plugin-gmail-calendar` installs and registers successfully
-  3. Google OAuth2 flow completes: user clicks "Connect", authenticates with Google, token stored
-  4. Agent answers "what's on my calendar today?" with real calendar data
-  5. Agent answers "what's in my inbox?" with real email subjects/senders
-  6. `/gmail.inbox` and `/calendar.today` commands work from all surfaces
-  7. Plugin configurable in Plugins tab in both TUI and Electron
-**Plans:** 1/3 plans executed
-**UI hint**: yes
-
-Plans:
-- [ ] 20-01-PLAN.md — Gmail and Calendar plugin manifests, YAML skills, npm package, and README
-- [x] 20-02-PLAN.md — CLI nested plugin detection for multi-plugin npm packages
-- [ ] 20-03-PLAN.md — End-to-end validation: manifest parsing, install, settings, commands
+*(v2.0 phase details archived to [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md))*
 
 ## Progress
 
-**Execution Order:**
-v1.0: Phases 1-13 (complete). v2.0: Phase 14 first, then 15-17 can overlap, 18 after 17, 19 after 15, 20 last.
-
-```
-Phase 14 (Manifest & Loader) ─────┬──► Phase 15 (CLI & Install) ──► Phase 19 (Skills & Commands) ──┐
-                                   ├──► Phase 16 (Settings UI)                                       ├──► Phase 20 (Gmail/Calendar)
-                                   └──► Phase 17 (API Proxy) ──► Phase 18 (OAuth2) ─────────────────┘
-```
-
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| **v1.0** | | | |
-| 1. Production Foundation | 3/3 | Complete | 2026-03-23 |
-| 2. Core Heartbeat | 4/4 | Complete | 2026-03-23 |
-| 3. Transparent Autonomy | 5/5 | Complete | 2026-03-23 |
-| 4. Adaptive Heartbeat | 3/3 | Complete | 2026-03-23 |
-| 5. Memory Consolidation | 4/4 | Complete | 2026-03-23 |
-| 6. Skill Discovery | 3/3 | Complete | 2026-03-23 |
-| 7. Community Skills | 3/3 | Complete | 2026-03-23 |
-| 8. Gateway Completion | 4/4 | Complete | 2026-03-23 |
-| 9. Distribution | 4/4 | Complete | 2026-03-23 |
-| 10. Progressive UX | 5/5 | Complete | 2026-03-24 |
-| 11. Setup Wizard Rewrite | 2/2 | Complete | 2026-03-24 |
-| 12. CLI Polish | 2/2 | Complete | 2026-03-24 |
-| 13. TUI UX Fixes | 3/3 | Complete | 2026-03-24 |
-| **v2.0** | | | |
-| 14. Plugin Manifest & Loader | 2/2 | Complete    | 2026-03-24 |
-| 15. Plugin CLI & Install | 2/2 | Complete    | 2026-03-24 |
-| 16. Plugin Settings UI | 3/3 | Complete    | 2026-03-24 |
-| 17. API Proxy Layer | 2/2 | Complete    | 2026-03-24 |
-| 18. OAuth2 Flow | 3/3 | Complete    | 2026-03-25 |
-| 19. Plugin Skills & Commands | 1/2 | Complete    | 2026-03-24 |
-| 20. Gmail/Calendar Validation | 1/3 | In Progress|  |
+| Milestone | Phases | Plans | Shipped |
+|-----------|--------|-------|---------|
+| v1.0 Living Agent | 13 | 47 | 2026-03-24 |
+| v2.0 Plugin Ecosystem | 7 | 17 | 2026-03-25 |
