@@ -197,7 +197,7 @@ impl WhatsAppLinkRuntime {
     pub async fn subscribe_with_id(&self) -> (u64, broadcast::Receiver<WhatsAppLinkEvent>) {
         let (tx, rx) = broadcast::channel(64);
         let id = self.next_subscriber_id.fetch_add(1, Ordering::Relaxed);
-        let (snapshot, replay_qr, replay_qr_expires_at_ms) = {
+        {
             let inner = self.inner.lock().await;
             let snapshot = WhatsAppLinkStatusSnapshot {
                 state: inner.state.as_str().to_string(),
@@ -215,15 +215,14 @@ impl WhatsAppLinkRuntime {
                 None
             };
             let mut subscribers = self.subscribers.lock().await;
+            let _ = tx.send(WhatsAppLinkEvent::Status(snapshot));
+            if let Some(ascii_qr) = replay_qr {
+                let _ = tx.send(WhatsAppLinkEvent::Qr {
+                    ascii_qr,
+                    expires_at_ms: replay_qr_expires_at_ms,
+                });
+            }
             subscribers.insert(id, tx.clone());
-            (snapshot, replay_qr, replay_qr_expires_at_ms)
-        };
-        let _ = tx.send(WhatsAppLinkEvent::Status(snapshot));
-        if let Some(ascii_qr) = replay_qr {
-            let _ = tx.send(WhatsAppLinkEvent::Qr {
-                ascii_qr,
-                expires_at_ms: replay_qr_expires_at_ms,
-            });
         }
         (id, rx)
     }
@@ -236,6 +235,11 @@ impl WhatsAppLinkRuntime {
     pub async fn unsubscribe(&self, subscriber_id: u64) {
         let mut subscribers = self.subscribers.lock().await;
         subscribers.remove(&subscriber_id);
+    }
+
+    #[cfg(test)]
+    pub async fn subscriber_count(&self) -> usize {
+        self.subscribers.lock().await.len()
     }
 
     pub async fn attach_sidecar_process(&self, child: Child) -> Result<()> {
@@ -612,6 +616,36 @@ mod tests {
             }
             other => panic!("expected qr replay, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn concurrent_broadcasts_do_not_precede_subscribe_replay_status() {
+        let runtime = std::sync::Arc::new(WhatsAppLinkRuntime::new());
+        runtime.start().await.expect("start should succeed");
+
+        let broadcaster = {
+            let runtime = runtime.clone();
+            tokio::spawn(async move {
+                for i in 0..64 {
+                    runtime
+                        .broadcast_error(format!("err-{i}"), true)
+                        .await;
+                    tokio::task::yield_now().await;
+                }
+            })
+        };
+
+        let mut rx = runtime.subscribe().await;
+        let first = timeout(Duration::from_millis(250), rx.recv())
+            .await
+            .expect("first replay event should arrive")
+            .expect("broadcast should be open");
+        assert!(
+            matches!(first, WhatsAppLinkEvent::Status(_)),
+            "first event for a new subscriber must be status replay"
+        );
+
+        broadcaster.await.expect("broadcaster should join");
     }
 
     #[tokio::test]

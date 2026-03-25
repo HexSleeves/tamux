@@ -15,6 +15,43 @@ use crate::agent::skill_community::{export_skill, import_community_skill, prepar
 use crate::agent::skill_registry::{to_community_entry, RegistryClient};
 use crate::session_manager::SessionManager;
 
+struct WhatsAppLinkSubscriberGuard {
+    agent: Arc<AgentEngine>,
+    subscriber_id: Option<u64>,
+}
+
+impl WhatsAppLinkSubscriberGuard {
+    fn new(agent: Arc<AgentEngine>) -> Self {
+        Self {
+            agent,
+            subscriber_id: None,
+        }
+    }
+
+    async fn set(&mut self, subscriber_id: u64) {
+        if let Some(previous) = self.subscriber_id.replace(subscriber_id) {
+            self.agent.whatsapp_link.unsubscribe(previous).await;
+        }
+    }
+
+    async fn clear(&mut self) {
+        if let Some(subscriber_id) = self.subscriber_id.take() {
+            self.agent.whatsapp_link.unsubscribe(subscriber_id).await;
+        }
+    }
+}
+
+impl Drop for WhatsAppLinkSubscriberGuard {
+    fn drop(&mut self) {
+        if let Some(subscriber_id) = self.subscriber_id.take() {
+            let agent = self.agent.clone();
+            tokio::spawn(async move {
+                agent.whatsapp_link.unsubscribe(subscriber_id).await;
+            });
+        }
+    }
+}
+
 fn agent_event_thread_id(event: &crate::agent::types::AgentEvent) -> Option<&str> {
     use crate::agent::types::AgentEvent;
 
@@ -317,6 +354,37 @@ mod tests {
 
         conn.shutdown().await;
     }
+
+    #[tokio::test]
+    async fn whatsapp_link_subscriber_is_cleaned_up_on_disconnect_without_unsubscribe() {
+        let mut conn = spawn_test_connection().await;
+        conn.framed
+            .send(ClientMessage::AgentWhatsAppLinkSubscribe)
+            .await
+            .expect("send subscribe request");
+        assert!(
+            matches!(
+                conn.recv().await,
+                DaemonMessage::AgentWhatsAppLinkStatus { .. }
+            ),
+            "subscribe should replay status snapshot"
+        );
+
+        assert_eq!(
+            conn.agent.whatsapp_link.subscriber_count().await,
+            1,
+            "subscriber should be registered after subscribe"
+        );
+
+        let agent = conn.agent.clone();
+        conn.shutdown().await;
+
+        assert_eq!(
+            agent.whatsapp_link.subscriber_count().await,
+            0,
+            "subscriber should be removed when connection exits"
+        );
+    }
 }
 
 fn should_forward_agent_event(
@@ -587,7 +655,7 @@ where
     let mut whatsapp_link_rx: Option<
         broadcast::Receiver<crate::agent::types::WhatsAppLinkRuntimeEvent>,
     > = None;
-    let mut whatsapp_link_subscriber_id: Option<u64> = None;
+    let mut whatsapp_link_subscriber_guard = WhatsAppLinkSubscriberGuard::new(agent.clone());
     let mut whatsapp_link_snapshot_replayed = false;
 
     loop {
@@ -3493,7 +3561,7 @@ where
                 }
                 ClientMessage::AgentWhatsAppLinkSubscribe => {
                     let (subscriber_id, rx) = agent.whatsapp_link.subscribe_with_id().await;
-                    whatsapp_link_subscriber_id = Some(subscriber_id);
+                    whatsapp_link_subscriber_guard.set(subscriber_id).await;
                     whatsapp_link_rx = Some(rx);
                     whatsapp_link_snapshot_replayed = false;
                     let snapshot = agent.whatsapp_link.status_snapshot().await;
@@ -3507,9 +3575,7 @@ where
                     whatsapp_link_snapshot_replayed = true;
                 }
                 ClientMessage::AgentWhatsAppLinkUnsubscribe => {
-                    if let Some(subscriber_id) = whatsapp_link_subscriber_id.take() {
-                        agent.whatsapp_link.unsubscribe(subscriber_id).await;
-                    }
+                    whatsapp_link_subscriber_guard.clear().await;
                     whatsapp_link_rx = None;
                     whatsapp_link_snapshot_replayed = false;
                 }
