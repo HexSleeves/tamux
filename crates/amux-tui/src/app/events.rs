@@ -70,14 +70,14 @@ impl TuiModel {
                     cols: self.width.max(80),
                     rows: self.height.max(24),
                 });
-                // Concierge welcome last — this may trigger an LLM call
+                // Do NOT request concierge welcome on connect — it triggers an
+                // LLM call that blocks the single-connection handler, preventing
+                // ALL other commands (settings edits, plugin operations, etc.) from
+                // being processed until the LLM finishes. The concierge thread is
+                // loaded via Refresh above and the user can open it manually.
                 if self.concierge.has_active_welcome() {
                     self.concierge
                         .reduce(crate::state::ConciergeAction::WelcomeLoading(false));
-                } else {
-                    self.concierge
-                        .reduce(crate::state::ConciergeAction::WelcomeLoading(true));
-                    self.send_daemon_command(DaemonCommand::RequestConciergeWelcome);
                 }
             }
             ClientEvent::Disconnected => {
