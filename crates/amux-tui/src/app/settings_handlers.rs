@@ -1744,8 +1744,10 @@ impl TuiModel {
                                 });
                             }
                         } else {
-                            // Start editing
-                            self.settings.start_editing(&key, &current_value);
+                            // Start editing — clear buffer for secret fields so user
+                            // doesn't accidentally save the masked "********" string
+                            let edit_value = if field.secret { "" } else { &current_value };
+                            self.settings.start_editing(&key, edit_value);
                         }
                     } else {
                         // Action button pressed

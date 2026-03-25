@@ -93,8 +93,19 @@ impl PluginPersistence {
         self.history
             .conn
             .call(move |conn| {
+                // Use ON CONFLICT DO UPDATE instead of INSERT OR REPLACE.
+                // INSERT OR REPLACE deletes-then-inserts, which triggers
+                // ON DELETE CASCADE on plugin_settings and plugin_credentials,
+                // wiping all saved settings and OAuth tokens on every daemon restart.
                 conn.execute(
-                    "INSERT OR REPLACE INTO plugins (name, version, description, author, manifest_json, install_source, enabled, installed_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    "INSERT INTO plugins (name, version, description, author, manifest_json, install_source, enabled, installed_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+                     ON CONFLICT(name) DO UPDATE SET \
+                       version = excluded.version, \
+                       description = excluded.description, \
+                       author = excluded.author, \
+                       manifest_json = excluded.manifest_json, \
+                       updated_at = excluded.updated_at",
                     params![
                         record.name,
                         record.version,

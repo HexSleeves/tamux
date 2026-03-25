@@ -1,10 +1,9 @@
 # tamux-plugin-gmail-calendar
 
-Gmail and Google Calendar integration for tamux. Read your inbox, search emails, and view today's calendar events -- all through natural conversation with your agent.
+Gmail and Google Calendar integration for tamux. Read, send, and manage emails. View, create, update, and delete calendar events -- all through natural conversation with your agent.
 
-This plugin provides **read-only** access:
-- **Gmail**: List inbox messages, search emails by query
-- **Calendar**: View today's events with times, titles, and locations
+- **Gmail**: Inbox, search, send, trash, label management, thread view
+- **Calendar**: List events, event details, create, update, delete, list calendars
 
 ## Prerequisites
 
@@ -44,13 +43,14 @@ Follow these steps to create the OAuth credentials your plugin needs.
    - **Developer contact email**: your email
 4. Click **Save and Continue**
 5. On the **Scopes** page, click **Add or Remove Scopes** and add:
-   - `https://www.googleapis.com/auth/gmail.readonly`
-   - `https://www.googleapis.com/auth/calendar.readonly`
+   - `https://www.googleapis.com/auth/gmail.modify`
+   - `https://www.googleapis.com/auth/gmail.send`
+   - `https://www.googleapis.com/auth/calendar`
 6. Click **Update**, then **Save and Continue**
 7. On the **Test users** page, click **Add Users** and add your Google email address
 8. Click **Save and Continue**, then **Back to Dashboard**
 
-**Important:** The `gmail.readonly` scope is a **restricted** Google scope. While your OAuth consent screen is in **Testing** mode, only the test users you add (up to 100) can authorize the app. This is fine for personal and development use. Production distribution requires completing Google's OAuth verification review process.
+**Important:** The `gmail.modify` and `gmail.send` scopes are **restricted** Google scopes. While your OAuth consent screen is in **Testing** mode, only the test users you add (up to 100) can authorize the app. This is fine for personal and development use. Production distribution requires completing Google's OAuth verification review process.
 
 ### 5. Create OAuth Credentials
 
