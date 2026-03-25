@@ -155,15 +155,15 @@ Requirements for the "Plugin Ecosystem" milestone. Each maps to roadmap phases 1
 
 ### Validation: Gmail/Calendar Plugin
 
-- [ ] **GMAI-01**: Gmail plugin manifest reads inbox messages via Gmail REST API
-- [ ] **GMAI-02**: Gmail plugin manifest searches emails via Gmail REST API query parameter
-- [ ] **GMAI-03**: Calendar plugin manifest lists today's events via Google Calendar REST API
-- [ ] **GMAI-04**: Google OAuth2 flow completes end-to-end through daemon (authorization → token → stored)
-- [ ] **GMAI-05**: Agent correctly answers "what's on my calendar today?" using plugin skills
-- [ ] **GMAI-06**: Agent correctly answers "what's in my inbox?" using plugin skills
-- [ ] **GMAI-07**: Plugin installable from npm: `tamux plugin install tamux-plugin-gmail-calendar`
-- [ ] **GMAI-08**: Plugin configurable in Plugins settings tab (both TUI and Electron)
-- [ ] **GMAI-09**: `/gmail.inbox` and `/calendar.today` commands work from CLI, TUI, and Electron
+- [x] **GMAI-01**: Gmail plugin manifest reads inbox messages via Gmail REST API
+- [x] **GMAI-02**: Gmail plugin manifest searches emails via Gmail REST API query parameter
+- [x] **GMAI-03**: Calendar plugin manifest lists today's events via Google Calendar REST API
+- [x] **GMAI-04**: Google OAuth2 flow completes end-to-end through daemon (authorization → token → stored)
+- [x] **GMAI-05**: Agent correctly answers "what's on my calendar today?" using plugin skills
+- [x] **GMAI-06**: Agent correctly answers "what's in my inbox?" using plugin skills
+- [x] **GMAI-07**: Plugin installable from npm: `tamux plugin install tamux-plugin-gmail-calendar`
+- [x] **GMAI-08**: Plugin configurable in Plugins settings tab (both TUI and Electron)
+- [x] **GMAI-09**: `/gmail.inbox` and `/calendar.today` commands work from CLI, TUI, and Electron
 
 ## v3 Requirements
 
@@ -332,15 +332,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PSKL-04 | Phase 19 | Complete |
 | PSKL-05 | Phase 19 | Complete |
 | PSKL-06 | Phase 19 | Complete |
-| GMAI-01 | Phase 20 | Pending |
-| GMAI-02 | Phase 20 | Pending |
-| GMAI-03 | Phase 20 | Pending |
-| GMAI-04 | Phase 20 | Pending |
-| GMAI-05 | Phase 20 | Pending |
-| GMAI-06 | Phase 20 | Pending |
-| GMAI-07 | Phase 20 | Pending |
-| GMAI-08 | Phase 20 | Pending |
-| GMAI-09 | Phase 20 | Pending |
+| GMAI-01 | Phase 20 | Complete |
+| GMAI-02 | Phase 20 | Complete |
+| GMAI-03 | Phase 20 | Complete |
+| GMAI-04 | Phase 20 | Complete |
+| GMAI-05 | Phase 20 | Complete |
+| GMAI-06 | Phase 20 | Complete |
+| GMAI-07 | Phase 20 | Complete |
+| GMAI-08 | Phase 20 | Complete |
+| GMAI-09 | Phase 20 | Complete |
 
 **Coverage:**
 - v1 requirements: 56 total (all complete)

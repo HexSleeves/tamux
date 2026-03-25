@@ -387,12 +387,12 @@ Plans:
   5. Agent answers "what's in my inbox?" with real email subjects/senders
   6. `/gmail.inbox` and `/calendar.today` commands work from all surfaces
   7. Plugin configurable in Plugins tab in both TUI and Electron
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 **UI hint**: yes
 
 Plans:
 - [ ] 20-01-PLAN.md — Gmail and Calendar plugin manifests, YAML skills, npm package, and README
-- [ ] 20-02-PLAN.md — CLI nested plugin detection for multi-plugin npm packages
+- [x] 20-02-PLAN.md — CLI nested plugin detection for multi-plugin npm packages
 - [ ] 20-03-PLAN.md — End-to-end validation: manifest parsing, install, settings, commands
 
 ## Progress
@@ -427,6 +427,6 @@ Phase 14 (Manifest & Loader) ─────┬──► Phase 15 (CLI & Install
 | 15. Plugin CLI & Install | 2/2 | Complete    | 2026-03-24 |
 | 16. Plugin Settings UI | 3/3 | Complete    | 2026-03-24 |
 | 17. API Proxy Layer | 2/2 | Complete    | 2026-03-24 |
-| 18. OAuth2 Flow | 3/3 | Complete   | 2026-03-25 |
+| 18. OAuth2 Flow | 3/3 | Complete    | 2026-03-25 |
 | 19. Plugin Skills & Commands | 1/2 | Complete    | 2026-03-24 |
-| 20. Gmail/Calendar Validation | 0/3 | Not started | - |
+| 20. Gmail/Calendar Validation | 1/3 | In Progress|  |

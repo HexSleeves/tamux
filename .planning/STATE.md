@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Plugin Ecosystem
-status: Phase complete — ready for verification
-stopped_at: Completed 18-03-PLAN.md
-last_updated: "2026-03-25T08:11:41.134Z"
+status: Ready to execute
+stopped_at: Completed 20-02-PLAN.md
+last_updated: "2026-03-25T08:28:41.617Z"
 progress:
   total_phases: 20
   completed_phases: 17
   total_plans: 64
-  completed_plans: 59
+  completed_plans: 60
 ---
 
 # Project State
@@ -19,11 +19,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-24)
 
 **Core value:** An agent that feels alive and gets smarter over time -- while remaining simple enough that anyone can understand what it's doing and why.
-**Current focus:** Phase 18 — oauth2-flow
+**Current focus:** Phase 20 — gmail-calendar-validation
 
 ## Current Position
 
-Phase: 18 (oauth2-flow) — EXECUTING
+Phase: 20 (gmail-calendar-validation) — EXECUTING
 Plan: 3 of 3
 
 ## Performance Metrics
@@ -105,6 +105,8 @@ Plan: 3 of 3
 | Phase 18 P01 | 8min | 2 tasks | 9 files |
 | Phase 18 P02 | 13min | 2 tasks | 5 files |
 | Phase 18 P03 | 13min | 2 tasks | 13 files |
+| Phase 20 P01 | 3min | 2 tasks | 6 files |
+| Phase 20 P02 | 6min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -226,6 +228,12 @@ Recent decisions affecting current work:
 - [Phase 18]: 60-second refresh threshold instead of 80% TTL since original TTL not stored; conservative for 3600s tokens
 - [Phase 18]: plugin-oauth-complete sent as dedicated Electron IPC event for clean separation from agent-event stream
 - [Phase 18]: Bridge event resolution uses event.data ?? event fallback for backward compat with wrapped and unwrapped plugin responses
+- [Phase 20]: Response templates avoid eq helper by iterating all headers; agent extracts Subject/From/Date from list
+- [Phase 20]: No Authorization headers in manifest endpoints; OAuth token injected by API proxy layer automatically
+- [Phase 20]: Calendar template uses static header; agent counts events when presenting (Handlebars lacks .length)
+- [Phase 20]: Combined Tasks 1+2 into single commit: binary crate requires plugins.rs and main.rs to compile together
+- [Phase 20]: Root plugin.json always checked before nested scan (Pitfall 5: backward compat)
+- [Phase 20]: detect_nested_plugins() extracted as pure helper for testability without filesystem side effects on ~/.tamux/
 
 ### Pending Todos
 
@@ -239,6 +247,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T08:11:41.132Z
-Stopped at: Completed 18-03-PLAN.md
+Last session: 2026-03-25T08:28:41.614Z
+Stopped at: Completed 20-02-PLAN.md
 Resume file: None
