@@ -1656,15 +1656,35 @@ impl TuiModel {
                         // Confirm edit and save to daemon
                         let value = self.settings.edit_buffer().to_string();
                         if let Some(field_key) = self.settings.editing_field().map(str::to_string) {
-                            if let Some(plugin) = self.plugin_settings.selected_plugin() {
-                                let is_secret = self
+                            // Extract plugin name and secret flag before mutating settings_values
+                            let plugin_name = self
+                                .plugin_settings
+                                .selected_plugin()
+                                .map(|p| p.name.clone());
+                            let is_secret = self
+                                .plugin_settings
+                                .schema_fields
+                                .iter()
+                                .find(|f| f.key == field_key)
+                                .map_or(false, |f| f.secret);
+                            if let Some(pname) = plugin_name {
+                                // Optimistic local update so UI reflects change immediately
+                                if let Some(entry) = self
                                     .plugin_settings
-                                    .schema_fields
-                                    .iter()
-                                    .find(|f| f.key == field_key)
-                                    .map_or(false, |f| f.secret);
+                                    .settings_values
+                                    .iter_mut()
+                                    .find(|(k, _, _)| *k == field_key)
+                                {
+                                    entry.1 = value.clone();
+                                } else {
+                                    self.plugin_settings.settings_values.push((
+                                        field_key.clone(),
+                                        value.clone(),
+                                        is_secret,
+                                    ));
+                                }
                                 self.send_daemon_command(DaemonCommand::PluginUpdateSetting {
-                                    plugin_name: plugin.name.clone(),
+                                    plugin_name: pname,
                                     key: field_key,
                                     value,
                                     is_secret,
