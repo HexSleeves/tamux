@@ -58,7 +58,13 @@
           "Authorization": "Bearer {{auth.access_token}}",
           "Content-Type": "application/json"
         },
-        "body": "{\"summary\": \"{{params.summary}}\", \"start\": {\"dateTime\": \"{{params.start_time}}\"}, \"end\": {\"dateTime\": \"{{params.end_time}}\"}, \"location\": \"{{default params.location \"\"}}\", \"description\": \"{{default params.description \"\"}}\"}",
+        "body": {
+          "summary": "{{params.summary}}",
+          "start": { "dateTime": "{{params.start_time}}" },
+          "end": { "dateTime": "{{params.end_time}}" },
+          "location": "{{default params.location \"\"}}",
+          "description": "{{default params.description \"\"}}"
+        },
         "response_template": "Event created: **{{summary}}**\nID: {{id}}\nStart: {{default start.dateTime start.date}}\nEnd: {{default end.dateTime end.date}}\nLink: {{htmlLink}}"
       },
       "update_event": {
@@ -68,7 +74,13 @@
           "Authorization": "Bearer {{auth.access_token}}",
           "Content-Type": "application/json"
         },
-        "body": "{\"summary\": \"{{params.summary}}\", \"start\": {\"dateTime\": \"{{params.start_time}}\"}, \"end\": {\"dateTime\": \"{{params.end_time}}\"}, \"location\": \"{{default params.location \"\"}}\", \"description\": \"{{default params.description \"\"}}\"}",
+        "body": {
+          "summary": "{{params.summary}}",
+          "start": { "dateTime": "{{params.start_time}}" },
+          "end": { "dateTime": "{{params.end_time}}" },
+          "location": "{{default params.location \"\"}}",
+          "description": "{{default params.description \"\"}}"
+        },
         "response_template": "Event updated: **{{summary}}**\nID: {{id}}\nStart: {{default start.dateTime start.date}}\nEnd: {{default end.dateTime end.date}}"
       },
       "delete_event": {

@@ -73,7 +73,9 @@
           "Authorization": "Bearer {{auth.access_token}}",
           "Content-Type": "application/json"
         },
-        "body": "{\"raw\": \"{{params.raw_base64}}\"}",
+        "body": {
+          "raw": "{{params.raw_base64}}"
+        },
         "response_template": "Message sent. ID: {{id}}, Thread: {{threadId}}"
       },
       "trash_message": {
@@ -95,7 +97,10 @@
           "Authorization": "Bearer {{auth.access_token}}",
           "Content-Type": "application/json"
         },
-        "body": "{\"addLabelIds\": {{json (default params.add_labels \"[]\")}}, \"removeLabelIds\": {{json (default params.remove_labels \"[]\")}}}",
+        "body": {
+          "addLabelIds": "{{json (default params.add_labels \"[]\")}}",
+          "removeLabelIds": "{{json (default params.remove_labels \"[]\")}}"
+        },
         "response_template": "Labels updated. Current labels: {{join labelIds \", \"}}"
       },
       "list_labels": {
