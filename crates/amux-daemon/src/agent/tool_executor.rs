@@ -1078,7 +1078,29 @@ pub async fn execute_tool(
                 .and_then(|tool| activate_generated_tool(agent_data_dir, tool));
             tool
         }
-        "web_search" => execute_web_search(&args, http_client).await,
+        "web_search" => {
+            let config = agent.config.read().await;
+            let search_provider = config
+                .extra
+                .get("search_provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("none")
+                .to_string();
+            let exa_api_key = config
+                .extra
+                .get("exa_api_key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let tavily_api_key = config
+                .extra
+                .get("tavily_api_key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            drop(config);
+            execute_web_search(&args, http_client, &search_provider, &exa_api_key, &tavily_api_key).await
+        }
         "fetch_url" => execute_fetch_url(&args, http_client).await,
         "plugin_api_call" => {
             let plugin_name = match get_string_arg(&args, &["plugin_name"]) {
@@ -2513,6 +2535,9 @@ async fn execute_update_todo(
 async fn execute_web_search(
     args: &serde_json::Value,
     http_client: &reqwest::Client,
+    search_provider: &str,
+    exa_api_key: &str,
+    tavily_api_key: &str,
 ) -> Result<String> {
     let query = args
         .get("query")
@@ -2524,7 +2549,138 @@ async fn execute_web_search(
         .and_then(|v| v.as_u64())
         .unwrap_or(5);
 
-    // Use DuckDuckGo lite as a zero-config fallback
+    match search_provider {
+        "exa" if !exa_api_key.is_empty() => {
+            execute_exa_search(http_client, query, max_results, exa_api_key).await
+        }
+        "tavily" if !tavily_api_key.is_empty() => {
+            execute_tavily_search(http_client, query, max_results, tavily_api_key).await
+        }
+        _ => execute_ddg_search(http_client, query, max_results).await,
+    }
+}
+
+async fn execute_exa_search(
+    http_client: &reqwest::Client,
+    query: &str,
+    max_results: u64,
+    api_key: &str,
+) -> Result<String> {
+    let body = serde_json::json!({
+        "query": query,
+        "numResults": max_results,
+        "type": "auto",
+        "contents": {
+            "text": { "maxCharacters": 1000 },
+            "highlights": { "numSentences": 2 },
+        },
+    });
+
+    let resp = http_client
+        .post("https://api.exa.ai/search")
+        .header("x-api-key", api_key)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Exa API returned {status}: {}", &text[..text.len().min(200)]);
+    }
+
+    let json: serde_json::Value = resp.json().await?;
+    let results = json["results"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|r| {
+                    let title = r["title"].as_str().unwrap_or("(no title)");
+                    let url = r["url"].as_str().unwrap_or("");
+                    let text = r["text"].as_str().unwrap_or("");
+                    let snippet = if text.len() > 300 {
+                        format!("{}...", &text[..300])
+                    } else {
+                        text.to_string()
+                    };
+                    format!("- **{title}**\n  {url}\n  {snippet}")
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if results.is_empty() {
+        Ok(format!("No web results found for: {query}"))
+    } else {
+        Ok(format!(
+            "Web results for \"{query}\":\n\n{}",
+            results.join("\n\n")
+        ))
+    }
+}
+
+async fn execute_tavily_search(
+    http_client: &reqwest::Client,
+    query: &str,
+    max_results: u64,
+    api_key: &str,
+) -> Result<String> {
+    let body = serde_json::json!({
+        "query": query,
+        "max_results": max_results,
+        "search_depth": "basic",
+    });
+
+    let resp = http_client
+        .post("https://api.tavily.com/search")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Tavily API returned {status}: {}", &text[..text.len().min(200)]);
+    }
+
+    let json: serde_json::Value = resp.json().await?;
+    let results = json["results"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|r| {
+                    let title = r["title"].as_str().unwrap_or("(no title)");
+                    let url = r["url"].as_str().unwrap_or("");
+                    let content = r["content"].as_str().unwrap_or("");
+                    let snippet = if content.len() > 300 {
+                        format!("{}...", &content[..300])
+                    } else {
+                        content.to_string()
+                    };
+                    format!("- **{title}**\n  {url}\n  {snippet}")
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if results.is_empty() {
+        Ok(format!("No web results found for: {query}"))
+    } else {
+        Ok(format!(
+            "Web results for \"{query}\":\n\n{}",
+            results.join("\n\n")
+        ))
+    }
+}
+
+async fn execute_ddg_search(
+    http_client: &reqwest::Client,
+    query: &str,
+    max_results: u64,
+) -> Result<String> {
     let url = format!(
         "https://lite.duckduckgo.com/lite/?q={}&kl=us-en",
         urlencoding::encode(query)
@@ -2538,12 +2694,10 @@ async fn execute_web_search(
 
     let text = resp.text().await?;
 
-    // Extract result snippets from DDG lite HTML
     let mut results = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("<a rel=\"nofollow\"") {
-            // Extract URL and text
             if let (Some(href_start), Some(href_end)) =
                 (trimmed.find("href=\""), trimmed.find("\">"))
             {

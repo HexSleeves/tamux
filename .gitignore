@@ -6,6 +6,7 @@
 /frontend/release/
 /dist-release/
 .history
+docs/superpowers/
 tmp
 .claude
 .superpowers

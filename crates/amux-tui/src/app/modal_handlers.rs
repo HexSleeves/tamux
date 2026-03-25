@@ -623,7 +623,32 @@ impl TuiModel {
                         .settings_picker_target
                         .unwrap_or(SettingsPickerTarget::Provider)
                     {
-                        SettingsPickerTarget::Provider => self.apply_provider_selection(def.id),
+                        SettingsPickerTarget::Provider => {
+                            self.apply_provider_selection(def.id);
+                            // Chain into model picker so user can choose a model
+                            // for the newly selected provider.
+                            let models = providers::known_models_for_provider_auth(
+                                &self.config.provider,
+                                &self.config.auth_source,
+                            );
+                            if !models.is_empty() {
+                                self.config
+                                    .reduce(config::ConfigAction::ModelsFetched(models));
+                            }
+                            self.send_daemon_command(DaemonCommand::FetchModels {
+                                provider_id: self.config.provider.clone(),
+                                base_url: self.config.base_url.clone(),
+                                api_key: self.config.api_key.clone(),
+                            });
+                            let count =
+                                widgets::model_picker::available_models(&self.config).len() + 1;
+                            self.settings_picker_target = None;
+                            self.modal.reduce(modal::ModalAction::Pop);
+                            self.modal
+                                .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
+                            self.modal.set_picker_item_count(count);
+                            return;
+                        }
                         SettingsPickerTarget::SubAgentProvider => {
                             if let Some(editor) = self.subagents.editor.as_mut() {
                                 editor.provider = def.id.to_string();

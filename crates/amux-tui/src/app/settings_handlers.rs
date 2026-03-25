@@ -107,11 +107,15 @@ impl TuiModel {
 
         if let Some(raw) = &self.config.agent_config_raw {
             if let Some(provider_config) = raw.get(def.id) {
-                if let Some(saved_base_url) =
-                    TuiModel::provider_field_str(provider_config, "base_url", "base_url")
-                {
-                    if !saved_base_url.is_empty() {
-                        self.config.base_url = saved_base_url.to_string();
+                // For predefined providers, always use the canonical base_url
+                // from the definition — stale DB values must not override it.
+                if def.id == "custom" {
+                    if let Some(saved_base_url) =
+                        TuiModel::provider_field_str(provider_config, "base_url", "base_url")
+                    {
+                        if !saved_base_url.is_empty() {
+                            self.config.base_url = saved_base_url.to_string();
+                        }
                     }
                 }
                 if let Some(key) =

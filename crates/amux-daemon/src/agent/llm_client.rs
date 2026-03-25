@@ -803,29 +803,36 @@ fn is_dashscope_coding_plan_anthropic_base_url(base_url: &str) -> bool {
     lower.contains("dashscope.aliyuncs.com") && lower.contains("/apps/anthropic")
 }
 
+/// Providers whose "coding plan" tiers gate access behind SDK-identification
+/// headers (User-Agent, x-stainless-*).  Without them the gateway returns 405.
+fn needs_coding_plan_sdk_headers(provider: &str) -> bool {
+    matches!(
+        provider,
+        "alibaba-coding-plan" | "minimax" | "minimax-coding-plan"
+    )
+}
+
 fn apply_dashscope_coding_plan_sdk_headers(
     req: reqwest::RequestBuilder,
     provider: &str,
     base_url: &str,
     api_type: ApiType,
 ) -> reqwest::RequestBuilder {
-    if provider != "alibaba-coding-plan" {
+    if !needs_coding_plan_sdk_headers(provider) {
         return req;
     }
 
-    let req = req.header(
-        "User-Agent",
-        match api_type {
-            ApiType::Anthropic => "Anthropic/JS tamux",
-            ApiType::OpenAI => "OpenAI/JS tamux",
-        },
-    );
-    if api_type == ApiType::OpenAI && !is_dashscope_coding_plan_anthropic_base_url(base_url) {
-        req.header("x-stainless-lang", "js")
-            .header("x-stainless-package-version", "tamux")
-    } else {
-        req
-    }
+    let sdk_version = match api_type {
+        ApiType::Anthropic => "0.73.0",
+        ApiType::OpenAI => "4.3.0",
+    };
+    req.header("User-Agent", format!("{} {}", api_type.sdk_user_agent(), sdk_version))
+        .header("x-stainless-lang", "js")
+        .header("x-stainless-package-version", sdk_version)
+        .header("x-stainless-os", std::env::consts::OS)
+        .header("x-stainless-arch", std::env::consts::ARCH)
+        .header("x-stainless-runtime", "node")
+        .header("x-stainless-runtime-version", "v22.0.0")
 }
 
 fn anthropic_thinking_budget(effort: &str) -> Option<u32> {
@@ -854,7 +861,7 @@ fn build_openai_auth_request<'a>(
 }
 
 fn apply_openai_auth_headers(
-    mut req: reqwest::RequestBuilder,
+    req: reqwest::RequestBuilder,
     provider: &str,
     config: &ProviderConfig,
 ) -> reqwest::RequestBuilder {
@@ -862,18 +869,10 @@ fn apply_openai_auth_headers(
         let auth_method = get_provider_definition(provider)
             .map(|d| d.auth_method)
             .unwrap_or(AuthMethod::Bearer);
-
-        match auth_method {
-            AuthMethod::Bearer => {
-                req = req.header("Authorization", format!("Bearer {}", config.api_key));
-            }
-            AuthMethod::XApiKey => {
-                req = req.header("x-api-key", &config.api_key);
-            }
-        }
+        auth_method.apply(req, &config.api_key)
+    } else {
+        req
     }
-
-    req
 }
 
 fn build_native_assistant_base_url(provider: &str, config: &ProviderConfig) -> Option<String> {
@@ -1964,7 +1963,12 @@ async fn run_anthropic(
     tools: &[ToolDefinition],
     tx: &mpsc::Sender<Result<CompletionChunk>>,
 ) -> Result<()> {
-    let url = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
+    let base = config.base_url.trim_end_matches('/');
+    let url = if base.ends_with("/v1") {
+        format!("{}/messages", base)
+    } else {
+        format!("{}/v1/messages", base)
+    };
 
     // Convert messages to Anthropic format
     let anthropic_messages = build_anthropic_messages(messages);
@@ -2003,22 +2007,23 @@ async fn run_anthropic(
         }
     }
 
-    let mut request = client
-        .post(&url)
-        .header("Content-Type", "application/json");
     let auth_method = get_provider_definition(provider)
         .map(|d| d.auth_method)
         .unwrap_or(AuthMethod::XApiKey);
-    match auth_method {
-        AuthMethod::Bearer => {
-            request = request.header("Authorization", format!("Bearer {}", config.api_key));
-        }
-        AuthMethod::XApiKey => {
-            request = request.header("x-api-key", &config.api_key);
-        }
-    }
+    let mut request = auth_method.apply(
+        client
+            .post(&url)
+            .header("Content-Type", "application/json"),
+        &config.api_key,
+    );
     if !is_dashscope_coding_plan_anthropic_base_url(&config.base_url) {
         request = request.header("anthropic-version", "2023-06-01");
+    }
+    if needs_coding_plan_sdk_headers(provider) {
+        request = request.header(
+            "anthropic-beta",
+            "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+        );
     }
     let response = apply_dashscope_coding_plan_sdk_headers(
         request,
@@ -2352,14 +2357,7 @@ pub async fn fetch_models(
 
     if !api_key.is_empty() {
         let auth_method = def.map(|d| d.auth_method).unwrap_or(AuthMethod::Bearer);
-        match auth_method {
-            AuthMethod::Bearer => {
-                req = req.header("Authorization", format!("Bearer {}", api_key));
-            }
-            AuthMethod::XApiKey => {
-                req = req.header("x-api-key", api_key);
-            }
-        }
+        req = auth_method.apply(req, api_key);
     }
 
     let response = req.send().await?;
@@ -2456,41 +2454,38 @@ pub async fn validate_provider_connection(
                 "max_tokens": 1,
                 "stream": false,
             });
-            let mut req = client.post(url).header("Content-Type", "application/json");
-            if !api_key.is_empty() {
-                match def.auth_method {
-                    AuthMethod::Bearer => {
-                        req = req.header("Authorization", format!("Bearer {}", api_key));
-                    }
-                    AuthMethod::XApiKey => {
-                        req = req.header("x-api-key", api_key);
-                    }
-                }
-            }
+            let req = client.post(url).header("Content-Type", "application/json");
+            let req = if !api_key.is_empty() {
+                def.auth_method.apply(req, api_key)
+            } else {
+                req
+            };
             apply_dashscope_coding_plan_sdk_headers(req, provider_id, &resolved_base_url, api_type)
                 .json(&body)
         }
         ApiType::Anthropic => {
-            let url = format!("{}/v1/messages", resolved_base_url.trim_end_matches('/'));
+            let base = resolved_base_url.trim_end_matches('/');
+            let url = if base.ends_with("/v1") {
+                format!("{}/messages", base)
+            } else {
+                format!("{}/v1/messages", base)
+            };
             let body = serde_json::json!({
                 "model": def.default_model,
                 "max_tokens": 1,
                 "messages": [{ "role": "user", "content": "ok" }],
             });
-            let mut req = client.post(url).header("Content-Type", "application/json");
-            if !is_dashscope_coding_plan_anthropic_base_url(&resolved_base_url) {
-                req = req.header("anthropic-version", "2023-06-01");
-            }
-            if !api_key.is_empty() {
-                match def.auth_method {
-                    AuthMethod::Bearer => {
-                        req = req.header("Authorization", format!("Bearer {}", api_key));
-                    }
-                    AuthMethod::XApiKey => {
-                        req = req.header("x-api-key", api_key);
-                    }
-                }
-            }
+            let req = client.post(url).header("Content-Type", "application/json");
+            let req = if !is_dashscope_coding_plan_anthropic_base_url(&resolved_base_url) {
+                req.header("anthropic-version", "2023-06-01")
+            } else {
+                req
+            };
+            let req = if !api_key.is_empty() {
+                def.auth_method.apply(req, api_key)
+            } else {
+                req
+            };
             apply_dashscope_coding_plan_sdk_headers(req, provider_id, &resolved_base_url, api_type)
                 .json(&body)
         }

@@ -231,7 +231,7 @@ impl ConciergeEngine {
     ) -> Option<(String, Vec<ConciergeAction>)> {
         let cache = self.welcome_cache.read().await;
         let entry = cache.as_ref()?;
-        if entry.signature != signature {
+        if entry.signature != signature || entry.created_at.elapsed() > WELCOME_CACHE_TTL {
             return None;
         }
         Some((entry.content.clone(), entry.actions.clone()))
@@ -247,6 +247,7 @@ impl ConciergeEngine {
             signature: signature.to_string(),
             content: content.to_string(),
             actions: actions.to_vec(),
+            created_at: std::time::Instant::now(),
         });
     }
 
@@ -1010,11 +1011,15 @@ struct WelcomeContext {
     pending_tasks: Vec<String>,
 }
 
+/// How long a cached welcome stays valid before being regenerated.
+const WELCOME_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60); // 2 hours
+
 #[derive(Clone)]
 struct WelcomeCacheEntry {
     signature: String,
     content: String,
     actions: Vec<ConciergeAction>,
+    created_at: std::time::Instant,
 }
 
 struct ThreadSummary {

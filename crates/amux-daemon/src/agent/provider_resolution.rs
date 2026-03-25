@@ -40,6 +40,14 @@ pub(super) fn resolve_provider_config_for(
                 resolved.model = def.default_model.to_string();
             }
         }
+        // For predefined providers, always use the canonical base URL from the
+        // provider definition so stale values in the DB config cannot override it.
+        // Only "custom" providers honour a user-supplied base_url.
+        if provider_id != "custom" {
+            if let Some(def) = get_provider_definition(provider_id) {
+                resolved.base_url = get_provider_base_url(provider_id, &resolved.model, def.default_base_url);
+            }
+        }
         if resolved.base_url.is_empty() {
             let inherited_base = if provider_id == config.provider {
                 config.base_url.as_str()

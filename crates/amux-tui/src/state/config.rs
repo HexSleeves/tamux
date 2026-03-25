@@ -1,6 +1,8 @@
 // Local wire type copies (will be replaced by crate::wire imports in Task 9)
 #![allow(dead_code)]
 
+use crate::providers;
+
 #[derive(Debug, Clone, Default)]
 pub struct FetchedModel {
     pub id: String,
@@ -272,6 +274,15 @@ impl ConfigState {
             }
 
             ConfigAction::SetProvider(provider) => {
+                if let Some(def) = providers::find_by_id(&provider) {
+                    self.base_url = def.default_base_url.to_string();
+                    self.model = def.default_model.to_string();
+                    self.custom_model_name = String::new();
+                    self.api_transport =
+                        providers::default_transport_for(&provider).to_string();
+                    self.auth_source =
+                        providers::default_auth_source_for(&provider).to_string();
+                }
                 self.provider = provider;
             }
 
@@ -359,15 +370,18 @@ mod tests {
     }
 
     #[test]
-    fn set_provider_updates_only_provider() {
+    fn set_provider_resets_base_url_and_model_to_definition_defaults() {
         let mut state = ConfigState::new();
         state.reduce(ConfigAction::ConfigReceived(make_snapshot(
             "openai", "gpt-4o",
         )));
-        state.reduce(ConfigAction::SetProvider("anthropic".into()));
-        assert_eq!(state.provider(), "anthropic");
-        // Other fields unchanged
-        assert_eq!(state.model(), "gpt-4o");
+        state.reduce(ConfigAction::SetProvider("minimax-coding-plan".into()));
+        assert_eq!(state.provider(), "minimax-coding-plan");
+        // base_url and model reset to the new provider's defaults
+        let def = providers::find_by_id("minimax-coding-plan").unwrap();
+        assert_eq!(state.base_url(), def.default_base_url);
+        assert_eq!(state.model(), def.default_model);
+        // api_key is preserved (user may have configured it previously)
         assert_eq!(state.api_key(), "sk-test");
     }
 

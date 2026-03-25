@@ -16,6 +16,16 @@ pub enum ApiType {
     Anthropic,
 }
 
+impl ApiType {
+    /// The SDK-style User-Agent string used by coding-plan providers.
+    pub fn sdk_user_agent(self) -> &'static str {
+        match self {
+            Self::Anthropic => "Anthropic/JS tamux",
+            Self::OpenAI => "OpenAI/JS tamux",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiTransport {
@@ -44,6 +54,16 @@ pub enum NativeTransportKind {
 pub enum AuthMethod {
     Bearer,
     XApiKey,
+}
+
+impl AuthMethod {
+    /// Apply the appropriate auth header to a request builder.
+    pub fn apply(self, req: reqwest::RequestBuilder, api_key: &str) -> reqwest::RequestBuilder {
+        match self {
+            Self::Bearer => req.header("Authorization", format!("Bearer {}", api_key)),
+            Self::XApiKey => req.header("x-api-key", api_key),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -761,7 +781,7 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         default_base_url: "https://api.minimax.io/anthropic",
         default_model: "MiniMax-M1-80k",
         api_type: ApiType::Anthropic,
-        auth_method: AuthMethod::Bearer,
+        auth_method: AuthMethod::XApiKey,
         models: MINIMAX_MODELS,
         supports_model_fetch: false,
         anthropic_base_url: None,
@@ -777,7 +797,7 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         default_base_url: "https://api.minimax.io/anthropic",
         default_model: "MiniMax-M2.7",
         api_type: ApiType::Anthropic,
-        auth_method: AuthMethod::Bearer,
+        auth_method: AuthMethod::XApiKey,
         models: MINIMAX_MODELS,
         supports_model_fetch: false,
         anthropic_base_url: None,

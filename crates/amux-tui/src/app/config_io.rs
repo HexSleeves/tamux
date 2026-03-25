@@ -492,11 +492,15 @@ impl TuiModel {
             .map(|v| v.max(1000) as u32);
 
             self.config.provider = provider_id.to_string();
-            self.config.base_url = base_url.map(str::to_string).unwrap_or_else(|| {
+            // For predefined providers, always use the canonical base URL from the
+            // provider definition so stale DB values cannot override it.
+            self.config.base_url = if provider_id != "custom" {
                 providers::find_by_id(provider_id)
                     .map(|def| def.default_base_url.to_string())
-                    .unwrap_or_default()
-            });
+                    .unwrap_or_else(|| base_url.unwrap_or("").to_string())
+            } else {
+                base_url.map(str::to_string).unwrap_or_default()
+            };
             self.config.model = model.map(str::to_string).unwrap_or_else(|| {
                 providers::find_by_id(provider_id)
                     .map(|def| def.default_model.to_string())

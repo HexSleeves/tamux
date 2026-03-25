@@ -3149,6 +3149,11 @@ where
                         }
                     }
                 }
+                ClientMessage::AgentWhatsAppLinkStart
+                | ClientMessage::AgentWhatsAppLinkStop
+                | ClientMessage::AgentWhatsAppLinkStatus
+                | ClientMessage::AgentWhatsAppLinkSubscribe
+                | ClientMessage::AgentWhatsAppLinkUnsubscribe => {}
             }
         }
     }

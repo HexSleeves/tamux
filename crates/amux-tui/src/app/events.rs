@@ -71,15 +71,13 @@ impl TuiModel {
                     cols: self.width.max(80),
                     rows: self.height.max(24),
                 });
-                // Do NOT request concierge welcome on connect — it triggers an
-                // LLM call that blocks the single-connection handler, preventing
-                // ALL other commands (settings edits, plugin operations, etc.) from
-                // being processed until the LLM finishes. The concierge thread is
-                // loaded via Refresh above and the user can open it manually.
-                if self.concierge.has_active_welcome() {
-                    self.concierge
-                        .reduce(crate::state::ConciergeAction::WelcomeLoading(false));
-                }
+                // Request concierge welcome LAST so all other setup commands
+                // (settings, plugins, session spawn) are queued ahead of it.
+                // The LLM call may block the connection handler, but since all
+                // setup is already queued, nothing else is waiting.
+                self.send_daemon_command(DaemonCommand::RequestConciergeWelcome);
+                self.concierge
+                    .reduce(crate::state::ConciergeAction::WelcomeLoading(true));
             }
             ClientEvent::Disconnected => {
                 self.connected = false;
