@@ -467,6 +467,9 @@ impl TuiModel {
                             }
                         } else if cmd == "attach" && !args.is_empty() {
                             self.attach_file(args);
+                        } else if cmd.contains('.') {
+                            // Plugin commands — send as chat message for agent_loop interception
+                            self.submit_prompt(prompt);
                         } else {
                             self.execute_command(cmd);
                         }
