@@ -91,6 +91,11 @@ impl TuiModel {
                         self.chat.navigate_selected_message_action(1, action_count);
                         return false;
                     }
+                    KeyCode::Enter | KeyCode::Char(' ') => {
+                        if self.execute_selected_inline_message_action() {
+                            return false;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -514,7 +519,7 @@ impl TuiModel {
             KeyCode::Delete => {
                 if self.focus == FocusArea::Chat {
                     if let Some(sel) = self.chat.selected_message() {
-                        self.delete_message(sel);
+                        self.request_delete_message(sel);
                     }
                 }
             }
@@ -538,12 +543,7 @@ impl TuiModel {
                 if self.focus == FocusArea::Chat && self.chat.selected_message().is_some() =>
             {
                 if let Some(sel) = self.chat.selected_message() {
-                    if let Some(thread) = self.chat.active_thread() {
-                        if let Some(msg) = thread.messages.get(sel) {
-                            conversion::copy_to_clipboard(&msg.content);
-                            self.status_line = "Copied to clipboard".to_string();
-                        }
-                    }
+                    self.copy_message(sel);
                 }
             }
             KeyCode::Char(c) => {

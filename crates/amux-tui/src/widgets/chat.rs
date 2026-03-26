@@ -136,8 +136,10 @@ fn message_block_style(msg: &AgentMessage, theme: &ThemeTokens) -> Style {
 }
 
 pub(crate) fn message_action_targets(
+    chat: &ChatState,
     msg_index: usize,
     msg: &AgentMessage,
+    current_tick: u64,
 ) -> Vec<(String, ChatHitTarget)> {
     if !msg.actions.is_empty() {
         return msg
@@ -156,7 +158,12 @@ pub(crate) fn message_action_targets(
             .collect();
     }
 
-    let mut actions = vec![("[Copy]".to_string(), ChatHitTarget::CopyMessage(msg_index))];
+    let copy_label = if chat.is_message_recently_copied(msg_index, current_tick) {
+        "[Copied]".to_string()
+    } else {
+        "[Copy]".to_string()
+    };
+    let mut actions = vec![(copy_label, ChatHitTarget::CopyMessage(msg_index))];
     match msg.role {
         MessageRole::User => {
             actions.push((
@@ -180,49 +187,46 @@ pub(crate) fn message_action_targets(
 }
 
 fn message_action_line(
+    chat: &ChatState,
     msg_index: usize,
     msg: &AgentMessage,
     selected_action: usize,
     theme: &ThemeTokens,
+    current_tick: u64,
 ) -> Option<Line<'static>> {
-    let actions = message_action_targets(msg_index, msg);
+    let actions = message_action_targets(chat, msg_index, msg, current_tick);
     if actions.is_empty() {
         return None;
     }
 
     let mut spans = Vec::new();
     for (idx, (label, _)) in actions.into_iter().enumerate() {
-        if idx > 0 {
-            spans.push(Span::raw(" "));
-        }
         let style = if idx == selected_action {
             theme.accent_primary
         } else {
             theme.fg_dim
         };
-        spans.push(Span::styled(label, style));
+        spans.push(Span::styled(format!(" {label} "), style));
     }
 
     Some(Line::from(spans))
 }
 
 fn action_hit_target(
+    chat: &ChatState,
     msg_index: usize,
     msg: &AgentMessage,
     content_col: usize,
+    current_tick: u64,
 ) -> Option<ChatHitTarget> {
-    let actions = message_action_targets(msg_index, msg);
+    let actions = message_action_targets(chat, msg_index, msg, current_tick);
     let mut col = 0usize;
-    let actions_len = actions.len();
-    for (idx, (label, target)) in actions.into_iter().enumerate() {
-        let width = UnicodeWidthStr::width(label.as_str());
+    for (label, target) in actions {
+        let width = UnicodeWidthStr::width(label.as_str()).saturating_add(2);
         if content_col >= col && content_col < col.saturating_add(width) {
             return Some(target);
         }
         col = col.saturating_add(width);
-        if idx + 1 < actions_len {
-            col = col.saturating_add(1);
-        }
     }
     None
 }
@@ -422,32 +426,43 @@ fn build_rendered_lines(
                 });
             }
 
-            for _ in 0..MESSAGE_PADDING_Y {
+            let is_last_actionable = !msg.actions.is_empty()
+                && chat.active_actions().first().map(|a| &a.label)
+                    == msg.actions.first().map(|a| &a.label);
+            let inline_action_line = if chat.selected_message() == Some(idx) && !is_last_actionable
+            {
+                message_action_line(
+                    chat,
+                    idx,
+                    msg,
+                    chat.selected_message_action(),
+                    theme,
+                    current_tick,
+                )
+            } else {
+                None
+            };
+
+            if let Some(action_line) = inline_action_line {
+                all_lines.push(RenderedChatLine {
+                    line: pad_message_line(action_line, inner_width, block_style),
+                    message_index: Some(idx),
+                    kind: RenderedLineKind::ActionBar,
+                });
                 all_lines.push(RenderedChatLine {
                     line: blank_message_line(inner_width, block_style),
                     message_index: Some(idx),
                     kind: RenderedLineKind::Padding,
                 });
-            }
-
-            // Show inline action bar for selected messages, but NOT for messages
-            // whose actions are already rendered in the actions bar widget
-            // (the last message with actions in the thread).
-            let is_last_actionable = !msg.actions.is_empty()
-                && chat.active_actions().first().map(|a| &a.label)
-                    == msg.actions.first().map(|a| &a.label);
-            if chat.selected_message() == Some(idx) && !is_last_actionable {
-                if let Some(action_line) =
-                    message_action_line(idx, msg, chat.selected_message_action(), theme)
-                {
+            } else {
+                for _ in 0..MESSAGE_PADDING_Y {
                     all_lines.push(RenderedChatLine {
-                        line: pad_message_line(action_line, inner_width, block_style),
+                        line: blank_message_line(inner_width, block_style),
                         message_index: Some(idx),
-                        kind: RenderedLineKind::ActionBar,
+                        kind: RenderedLineKind::Padding,
                     });
                 }
             }
-
             let end = all_lines.len();
             message_line_ranges.push((start, end));
         }
@@ -589,6 +604,10 @@ pub fn build_selection_snapshot(
     selection_snapshot(area, chat, theme, current_tick).map(CachedSelectionSnapshot)
 }
 
+pub fn cached_snapshot_matches_area(snapshot: &CachedSelectionSnapshot, area: Rect) -> bool {
+    snapshot.0.inner == content_inner(area)
+}
+
 pub fn selection_point_from_cached_snapshot(
     snapshot: &CachedSelectionSnapshot,
     mouse: Position,
@@ -653,6 +672,115 @@ pub fn selected_text_from_cached_snapshot(
     }
 }
 
+fn apply_selected_message_highlight(
+    all_lines: &mut [RenderedChatLine],
+    selected_msg: Option<usize>,
+) {
+    let Some(sel_idx) = selected_msg else {
+        return;
+    };
+    let sel_style = Style::default().bg(Color::Indexed(238));
+    for rendered in all_lines
+        .iter_mut()
+        .filter(|line| line.message_index == Some(sel_idx))
+    {
+        rendered.line.style = rendered.line.style.patch(sel_style);
+        for span in &mut rendered.line.spans {
+            span.style = span.style.patch(sel_style);
+        }
+    }
+}
+
+fn build_visible_window_from_snapshot(
+    snapshot: &SelectionSnapshot,
+    all_lines: &[RenderedChatLine],
+) -> Vec<RenderedChatLine> {
+    let mut visible = Vec::with_capacity(snapshot.inner.height as usize);
+    for _ in 0..snapshot.padding {
+        visible.push(RenderedChatLine::padding());
+    }
+    visible.extend_from_slice(&all_lines[snapshot.start_idx..snapshot.end_idx]);
+    visible
+}
+
+fn apply_mouse_selection_highlight(
+    snapshot: &SelectionSnapshot,
+    visible_lines: &mut [RenderedChatLine],
+    mouse_selection: Option<(SelectionPoint, SelectionPoint)>,
+) {
+    let Some((start, end)) = mouse_selection else {
+        return;
+    };
+    let (start_point, end_point) =
+        if start.row <= end.row || (start.row == end.row && start.col <= end.col) {
+            (start, end)
+        } else {
+            (end, start)
+        };
+    let highlight = Style::default().bg(Color::Indexed(31));
+    let visible_last = snapshot.end_idx.saturating_sub(1);
+    let range_start = start_point.row.max(snapshot.start_idx);
+    let range_end = end_point.row.min(visible_last);
+
+    if range_start > range_end {
+        return;
+    }
+
+    for absolute_row in range_start..=range_end {
+        let visible_row = snapshot.padding + absolute_row.saturating_sub(snapshot.start_idx);
+        if let Some(line) = visible_lines.get_mut(visible_row) {
+            let rendered = RenderedChatLine {
+                line: line.line.clone(),
+                message_index: line.message_index,
+                kind: line.kind,
+            };
+            let (_, content_start, content_end) = rendered_line_content_bounds(&rendered);
+            let content_width = content_end.saturating_sub(content_start);
+            let from = if absolute_row == start_point.row {
+                content_start.saturating_add(start_point.col.min(content_width))
+            } else {
+                content_start
+            };
+            let to = if absolute_row == end_point.row {
+                content_start
+                    .saturating_add(end_point.col.min(content_width))
+                    .max(from)
+            } else {
+                content_end
+            };
+            highlight_line_range(&mut line.line, from, to, highlight);
+        }
+    }
+}
+
+fn render_snapshot(
+    frame: &mut Frame,
+    snapshot: &SelectionSnapshot,
+    chat: &ChatState,
+    mouse_selection: Option<(SelectionPoint, SelectionPoint)>,
+) {
+    let mut all_lines = snapshot.all_lines.clone();
+    apply_selected_message_highlight(&mut all_lines, chat.selected_message());
+    let mut visible_lines = build_visible_window_from_snapshot(snapshot, &all_lines);
+    apply_mouse_selection_highlight(snapshot, &mut visible_lines, mouse_selection);
+
+    let visible_lines = visible_lines
+        .into_iter()
+        .map(|line| line.line)
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(visible_lines), snapshot.inner);
+}
+
+pub fn render_cached(
+    frame: &mut Frame,
+    _area: Rect,
+    chat: &ChatState,
+    snapshot: &CachedSelectionSnapshot,
+    mouse_selection: Option<(SelectionPoint, SelectionPoint)>,
+) {
+    render_snapshot(frame, &snapshot.0, chat, mouse_selection);
+}
+
 #[cfg(test)]
 pub fn reset_build_rendered_lines_call_count() {
     BUILD_RENDERED_LINES_CALLS.with(|calls| calls.set(0));
@@ -682,23 +810,6 @@ fn resolved_scroll(
                 .saturating_sub(pin_start.saturating_add(inner_height))
                 .min(max_scroll);
             return scroll;
-        }
-    }
-
-    if !chat.is_streaming() {
-        if let Some(sel_idx) = chat.selected_message() {
-            if let Some(&(sel_start, sel_end)) = message_line_ranges.get(sel_idx) {
-                let window_end = total_lines.saturating_sub(scroll);
-                let window_start = window_end.saturating_sub(inner_height);
-
-                if sel_start < window_start {
-                    scroll = total_lines
-                        .saturating_sub(sel_start + inner_height)
-                        .min(max_scroll);
-                } else if sel_end > window_end {
-                    scroll = total_lines.saturating_sub(sel_end).min(max_scroll);
-                }
-            }
         }
     }
 
@@ -862,6 +973,36 @@ fn nearest_content_row(all_lines: &[RenderedChatLine], row: usize) -> Option<usi
             && rendered_line_content_bounds(line).2 > rendered_line_content_bounds(line).1
         {
             return Some(prev);
+        }
+    }
+
+    None
+}
+
+fn nearest_message_content_row(all_lines: &[RenderedChatLine], row: usize) -> Option<usize> {
+    let current = all_lines.get(row)?;
+    let message_index = current.message_index?;
+    if !matches!(current.kind, RenderedLineKind::Padding) {
+        return Some(row);
+    }
+
+    for distance in 1..all_lines.len() {
+        if let Some(prev) = row.checked_sub(distance) {
+            let line = &all_lines[prev];
+            if line.message_index == Some(message_index)
+                && !matches!(line.kind, RenderedLineKind::Padding)
+            {
+                return Some(prev);
+            }
+        }
+
+        let next = row.saturating_add(distance);
+        if let Some(line) = all_lines.get(next) {
+            if line.message_index == Some(message_index)
+                && !matches!(line.kind, RenderedLineKind::Padding)
+            {
+                return Some(next);
+            }
         }
     }
 
@@ -1126,7 +1267,8 @@ pub fn hit_test(
     current_tick: u64,
     mouse: Position,
 ) -> Option<ChatHitTarget> {
-    let (inner, visible) = visible_rendered_lines(area, chat, theme, current_tick)?;
+    let snapshot = selection_snapshot(area, chat, theme, current_tick)?;
+    let inner = snapshot.inner;
 
     if mouse.x < inner.x
         || mouse.y < inner.y
@@ -1135,25 +1277,21 @@ pub fn hit_test(
     {
         return None;
     }
-    let row = mouse.y.saturating_sub(inner.y) as usize;
-    let mut resolved_row = row;
-    if visible
-        .get(resolved_row)
-        .is_some_and(|line| matches!(line.kind, RenderedLineKind::Padding))
-    {
-        if let Some(next) = (resolved_row + 1..visible.len()).find(|idx| {
-            !matches!(visible[*idx].kind, RenderedLineKind::Padding)
-                && visible[*idx].message_index.is_some()
-        }) {
-            resolved_row = next;
-        } else if let Some(prev) = (0..resolved_row).rev().find(|idx| {
-            !matches!(visible[*idx].kind, RenderedLineKind::Padding)
-                && visible[*idx].message_index.is_some()
-        }) {
-            resolved_row = prev;
-        }
+    let rel_row = mouse.y.saturating_sub(inner.y) as usize;
+    if rel_row < snapshot.padding {
+        return None;
     }
-    let hit = visible.get(resolved_row)?;
+    let visible_count = snapshot.end_idx.saturating_sub(snapshot.start_idx).max(1);
+    let absolute_row = snapshot.start_idx
+        + rel_row
+            .saturating_sub(snapshot.padding)
+            .min(visible_count.saturating_sub(1));
+    let resolved_row = match snapshot.all_lines.get(absolute_row) {
+        Some(line) if !matches!(line.kind, RenderedLineKind::Padding) => absolute_row,
+        Some(_) => nearest_message_content_row(&snapshot.all_lines, absolute_row)?,
+        None => return None,
+    };
+    let hit = snapshot.all_lines.get(resolved_row)?;
 
     match hit.kind {
         RenderedLineKind::RetryAction => {
@@ -1196,9 +1334,11 @@ pub fn hit_test(
                 .active_thread()
                 .and_then(|thread| thread.messages.get(message_index))?;
             action_hit_target(
+                chat,
                 message_index,
                 message,
                 content_col.saturating_sub(content_start),
+                current_tick,
             )
         }
         RenderedLineKind::MessageBody
@@ -1227,85 +1367,10 @@ pub fn render(
         super::splash::render(frame, inner, theme);
         return;
     }
-
-    // Render messages
-    let inner_width = inner.width as usize;
-    let inner_height = inner.height as usize;
-    let selected_msg = chat.selected_message();
-    let (mut all_lines, message_line_ranges) =
-        build_rendered_lines(chat, theme, inner_width, current_tick);
-
-    // Apply selection highlight
-    if let Some(sel_idx) = selected_msg {
-        if let Some(&(start, end)) = message_line_ranges.get(sel_idx) {
-            let sel_style = Style::default().bg(Color::Indexed(238));
-
-            for rendered in all_lines.iter_mut().take(end).skip(start) {
-                rendered.line.style = rendered.line.style.patch(sel_style);
-                for span in &mut rendered.line.spans {
-                    span.style = span.style.patch(sel_style);
-                }
-            }
-        }
-    }
-
-    // Apply scroll offset (0 = following tail = show last `height` lines)
-    // Clamp scroll to prevent overscroll past the top of content
-    let scroll = resolved_scroll(chat, all_lines.len(), inner_height, &message_line_ranges);
-    let (padding_rows, start_idx, end_idx) =
-        visible_window_bounds(all_lines.len(), inner_height, scroll);
-    let mut visible_lines = visible_lines(&all_lines, inner_height, scroll);
-
-    if let Some((start, end)) = mouse_selection {
-        let (start_point, end_point) =
-            if start.row <= end.row || (start.row == end.row && start.col <= end.col) {
-                (start, end)
-            } else {
-                (end, start)
-            };
-        let highlight = Style::default().bg(Color::Indexed(31));
-        let visible_last = end_idx.saturating_sub(1);
-        let range_start = start_point.row.max(start_idx);
-        let range_end = end_point.row.min(visible_last);
-
-        if range_start <= range_end {
-            for absolute_row in range_start..=range_end {
-                let visible_row = padding_rows + absolute_row.saturating_sub(start_idx);
-                if let Some(line) = visible_lines.get_mut(visible_row) {
-                    let rendered = RenderedChatLine {
-                        line: line.line.clone(),
-                        message_index: line.message_index,
-                        kind: line.kind,
-                    };
-                    let (_, content_start, content_end) = rendered_line_content_bounds(&rendered);
-                    let content_width = content_end.saturating_sub(content_start);
-                    let from = if absolute_row == start_point.row {
-                        content_start.saturating_add(start_point.col.min(content_width))
-                    } else {
-                        content_start
-                    };
-                    let to = if absolute_row == end_point.row {
-                        content_start
-                            .saturating_add(end_point.col.min(content_width))
-                            .max(from)
-                    } else {
-                        content_end
-                    };
-                    highlight_line_range(&mut line.line, from, to, highlight);
-                }
-            }
-        }
-    }
-
-    let visible_lines = visible_lines
-        .into_iter()
-        .map(|line| line.line)
-        .collect::<Vec<_>>();
-
-    // Do not use .wrap() -- lines are already individual Line objects; wrapping
-    // would re-wrap the manually-sliced visible lines and cause double-wrapping.
-    let paragraph = Paragraph::new(visible_lines);
-    frame.render_widget(paragraph, inner);
+    let Some(snapshot) = selection_snapshot(area, chat, theme, current_tick) else {
+        return;
+    };
+    render_snapshot(frame, &snapshot, chat, mouse_selection);
 }
 
 #[cfg(test)]
@@ -1560,6 +1625,81 @@ mod tests {
     }
 
     #[test]
+    fn hit_test_targets_copy_action_when_clicking_button_padding() {
+        let mut chat = chat_with_messages(vec![AgentMessage {
+            role: MessageRole::Assistant,
+            content: "second".into(),
+            ..Default::default()
+        }]);
+        chat.select_message(Some(0));
+
+        let area = Rect::new(0, 0, 80, 8);
+        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+            .expect("chat should produce visible lines");
+        let action_row = visible
+            .iter()
+            .position(|line| {
+                matches!(line.kind, RenderedLineKind::ActionBar) && line.message_index == Some(0)
+            })
+            .expect("selected message should render an inline action bar");
+        let hit_line = &visible[action_row];
+        let (_, content_start, _) = rendered_line_content_bounds(hit_line);
+        let copy_label_width = UnicodeWidthStr::width("[Copy]");
+        let trailing_padding_col = inner.x + content_start as u16 + copy_label_width as u16 + 1;
+        let hit = hit_test(
+            area,
+            &chat,
+            &ThemeTokens::default(),
+            0,
+            Position::new(trailing_padding_col, inner.y + action_row as u16),
+        );
+
+        assert_eq!(
+            hit,
+            Some(ChatHitTarget::CopyMessage(0)),
+            "clicking padded button space should still resolve to the copy action"
+        );
+    }
+
+    #[test]
+    fn hit_test_targets_copy_action_when_clicking_row_below_action_bar() {
+        let mut chat = chat_with_messages(vec![AgentMessage {
+            role: MessageRole::Assistant,
+            content: "second".into(),
+            ..Default::default()
+        }]);
+        chat.select_message(Some(0));
+
+        let area = Rect::new(0, 0, 80, 9);
+        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+            .expect("chat should produce visible lines");
+        let action_row = visible
+            .iter()
+            .position(|line| {
+                matches!(line.kind, RenderedLineKind::ActionBar) && line.message_index == Some(0)
+            })
+            .expect("selected message should render an inline action bar");
+        let hit_line = &visible[action_row];
+        let (_, content_start, _) = rendered_line_content_bounds(hit_line);
+        let hit = hit_test(
+            area,
+            &chat,
+            &ThemeTokens::default(),
+            0,
+            Position::new(
+                inner.x + content_start as u16 + 1,
+                inner.y + action_row as u16 + 1,
+            ),
+        );
+
+        assert_eq!(
+            hit,
+            Some(ChatHitTarget::CopyMessage(0)),
+            "clicking the padding row below the action bar should resolve to the same button"
+        );
+    }
+
+    #[test]
     fn selected_message_action_bar_highlights_only_primary_action() {
         let mut chat = chat_with_messages(vec![AgentMessage {
             role: MessageRole::User,
@@ -1655,6 +1795,120 @@ mod tests {
         assert!(
             highlighted > 0,
             "mouse selection should paint a visible highlight in the buffer"
+        );
+    }
+
+    #[test]
+    fn hit_test_selects_last_visible_message_instead_of_previous_padding_block() {
+        let chat = chat_with_messages(vec![
+            AgentMessage {
+                role: MessageRole::Assistant,
+                content: "first".into(),
+                ..Default::default()
+            },
+            AgentMessage {
+                role: MessageRole::Tool,
+                tool_name: Some("read_file".into()),
+                tool_status: Some("done".into()),
+                content: "tool output".into(),
+                ..Default::default()
+            },
+            AgentMessage {
+                role: MessageRole::User,
+                content: "continue, also write up your ideas into files".into(),
+                ..Default::default()
+            },
+        ]);
+
+        let area = Rect::new(0, 0, 80, 10);
+        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+            .expect("chat should produce visible lines");
+        let last_message_row = visible
+            .iter()
+            .rposition(|line| {
+                line.message_index == Some(2) && matches!(line.kind, RenderedLineKind::MessageBody)
+            })
+            .expect("last message should be visible");
+        let hit_line = &visible[last_message_row];
+        let (_, content_start, _) = rendered_line_content_bounds(hit_line);
+
+        let hit = hit_test(
+            area,
+            &chat,
+            &ThemeTokens::default(),
+            0,
+            Position::new(
+                inner.x + content_start as u16 + 1,
+                inner.y + last_message_row as u16,
+            ),
+        );
+
+        assert_eq!(hit, Some(ChatHitTarget::Message(2)));
+    }
+
+    #[test]
+    fn selected_message_action_bar_stays_visible_at_bottom_edge() {
+        let mut chat = chat_with_messages(vec![
+            AgentMessage {
+                role: MessageRole::Assistant,
+                content: "older".into(),
+                ..Default::default()
+            },
+            AgentMessage {
+                role: MessageRole::User,
+                content: "latest".into(),
+                ..Default::default()
+            },
+        ]);
+        chat.select_message(Some(1));
+
+        let area = Rect::new(0, 0, 80, 4);
+        let (_, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+            .expect("chat should produce visible lines");
+
+        assert!(
+            visible.iter().any(|line| {
+                matches!(line.kind, RenderedLineKind::ActionBar) && line.message_index == Some(1)
+            }),
+            "selected message should keep its action row visible even when it is the last visible message"
+        );
+    }
+
+    #[test]
+    fn selecting_message_does_not_shift_visible_window() {
+        let mut chat = chat_with_messages(
+            (0..8)
+                .map(|idx| AgentMessage {
+                    role: MessageRole::Assistant,
+                    content: format!("message {idx}"),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        chat.reduce(ChatAction::ScrollChat(4));
+
+        let area = Rect::new(0, 0, 80, 6);
+        let (_, before_visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+            .expect("chat should produce visible lines before selection");
+        let before_last_visible_message = before_visible
+            .iter()
+            .filter_map(|line| line.message_index)
+            .max()
+            .expect("a message should be visible before selection");
+
+        chat.select_message(Some(0));
+
+        let (_, after_visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+            .expect("chat should produce visible lines after selection");
+        let after_last_visible_message = after_visible
+            .iter()
+            .filter_map(|line| line.message_index)
+            .max()
+            .expect("a message should be visible after selection");
+
+        assert_eq!(
+            after_last_visible_message, before_last_visible_message,
+            "message selection should not auto-scroll the transcript window"
         );
     }
 }

@@ -10,6 +10,7 @@ pub enum ModalKind {
     OpenAIAuth,
     ErrorViewer,
     ApprovalOverlay,
+    ChatActionConfirm,
     Settings,
     EffortPicker,
     ToolsPicker,

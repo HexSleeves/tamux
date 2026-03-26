@@ -125,6 +125,13 @@ pub struct RetryStatusVm {
     pub received_at_tick: u64,
 }
 
+#[derive(Debug, Clone)]
+struct CopiedMessageFeedback {
+    thread_id: String,
+    message_index: usize,
+    expires_at_tick: u64,
+}
+
 // ── ChatAction ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -213,6 +220,7 @@ pub struct ChatState {
     selected_message_action: usize,
     expanded_tools: std::collections::HashSet<usize>,
     pinned_message_top: Option<usize>,
+    copied_message_feedback: Option<CopiedMessageFeedback>,
 }
 
 impl ChatState {
@@ -232,6 +240,7 @@ impl ChatState {
             selected_message_action: 0,
             expanded_tools: std::collections::HashSet::new(),
             pinned_message_top: None,
+            copied_message_feedback: None,
         }
     }
 
@@ -431,6 +440,37 @@ impl ChatState {
                 }
             }
         }
+    }
+
+    pub fn mark_message_copied(&mut self, message_index: usize, expires_at_tick: u64) {
+        let Some(thread_id) = self.active_thread_id.clone() else {
+            return;
+        };
+        self.copied_message_feedback = Some(CopiedMessageFeedback {
+            thread_id,
+            message_index,
+            expires_at_tick,
+        });
+    }
+
+    pub fn clear_expired_copy_feedback(&mut self, current_tick: u64) {
+        if self
+            .copied_message_feedback
+            .as_ref()
+            .is_some_and(|feedback| current_tick >= feedback.expires_at_tick)
+        {
+            self.copied_message_feedback = None;
+        }
+    }
+
+    pub fn is_message_recently_copied(&self, message_index: usize, current_tick: u64) -> bool {
+        self.copied_message_feedback
+            .as_ref()
+            .is_some_and(|feedback| {
+                current_tick < feedback.expires_at_tick
+                    && self.active_thread_id.as_deref() == Some(feedback.thread_id.as_str())
+                    && feedback.message_index == message_index
+            })
     }
 
     pub fn reduce(&mut self, action: ChatAction) {
@@ -805,6 +845,7 @@ impl ChatState {
                 self.pinned_message_top = None;
                 self.active_thread_id = None;
                 self.retry_status = None;
+                self.copied_message_feedback = None;
             }
 
             ChatAction::SetTranscriptMode(mode) => {
@@ -975,6 +1016,22 @@ mod tests {
         assert_eq!(status.phase, RetryPhase::Waiting);
         assert_eq!(status.delay_ms, 30_000);
         assert_eq!(status.received_at_tick, 20);
+    }
+
+    #[test]
+    fn copied_message_feedback_expires_after_deadline() {
+        let mut state = ChatState::new();
+        state.reduce(ChatAction::ThreadCreated {
+            thread_id: "t1".into(),
+            title: "Test".into(),
+        });
+        state.mark_message_copied(0, 25);
+
+        assert!(state.is_message_recently_copied(0, 24));
+
+        state.clear_expired_copy_feedback(25);
+
+        assert!(!state.is_message_recently_copied(0, 25));
     }
 
     #[test]

@@ -17,6 +17,37 @@ impl TuiModel {
             return;
         }
 
+        let mouse_selection = self
+            .chat_drag_anchor_point
+            .zip(self.chat_drag_current_point)
+            .or_else(|| {
+                self.chat_drag_anchor.and_then(|anchor| {
+                    self.chat_drag_current.and_then(|current| {
+                        widgets::chat::selection_points_from_mouse(
+                            area,
+                            &self.chat,
+                            &self.theme,
+                            self.tick_counter,
+                            anchor,
+                            current,
+                        )
+                    })
+                })
+            })
+            .filter(|(start, end)| start != end);
+
+        let active_drag_selection = self.chat_drag_anchor.is_some() && mouse_selection.is_some();
+        if active_drag_selection {
+            if let Some(snapshot) = self
+                .chat_selection_snapshot
+                .as_ref()
+                .filter(|snapshot| widgets::chat::cached_snapshot_matches_area(snapshot, area))
+            {
+                widgets::chat::render_cached(frame, area, &self.chat, snapshot, mouse_selection);
+                return;
+            }
+        }
+
         widgets::chat::render(
             frame,
             area,
@@ -24,29 +55,15 @@ impl TuiModel {
             &self.theme,
             self.tick_counter,
             self.focus == FocusArea::Chat,
-            self.chat_drag_anchor_point
-                .zip(self.chat_drag_current_point)
-                .or_else(|| {
-                    self.chat_drag_anchor.and_then(|anchor| {
-                        self.chat_drag_current.and_then(|current| {
-                            widgets::chat::selection_points_from_mouse(
-                                area,
-                                &self.chat,
-                                &self.theme,
-                                self.tick_counter,
-                                anchor,
-                                current,
-                            )
-                        })
-                    })
-                })
-                .filter(|(start, end)| start != end),
+            mouse_selection,
         );
     }
 
-    pub fn render(&self, frame: &mut Frame) {
+    pub fn render(&mut self, frame: &mut Frame) {
         let area = frame.area();
-        let width = area.width;
+        self.width = area.width;
+        self.height = area.height;
+        let layout = self.pane_layout_for_area(area);
         let input_height = self.input_height();
         let anticipatory_height = self.anticipatory_banner_height();
         let concierge_height = self.concierge_banner_height();
@@ -64,23 +81,14 @@ impl TuiModel {
 
         widgets::header::render(frame, chunks[0], &self.config, &self.chat, &self.theme);
 
-        let show_sidebar = self.sidebar_visible();
-        if show_sidebar {
-            let sidebar_pct = if width >= 120 { 33 } else { 28 };
-            let body_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(100 - sidebar_pct),
-                    Constraint::Percentage(sidebar_pct),
-                ])
-                .split(chunks[1]);
+        if let Some(sidebar_area) = layout.sidebar {
             match &self.main_pane_view {
                 MainPaneView::Conversation => {
-                    self.render_conversation_panel(frame, body_chunks[0]);
+                    self.render_conversation_panel(frame, layout.chat);
                 }
                 MainPaneView::Task(target) => widgets::task_view::render(
                     frame,
-                    body_chunks[0],
+                    layout.chat,
                     &self.tasks,
                     target,
                     &self.theme,
@@ -92,36 +100,40 @@ impl TuiModel {
                 ),
                 MainPaneView::WorkContext => widgets::work_context_view::render(
                     frame,
-                    body_chunks[0],
+                    layout.chat,
                     &self.tasks,
                     self.chat.active_thread_id(),
                     self.sidebar.active_tab(),
                     self.sidebar.selected_item(),
                     &self.theme,
                     self.task_view_scroll,
-                    self.work_context_drag_anchor.and_then(|anchor| {
-                        self.work_context_drag_current.and_then(|current| {
-                            widgets::work_context_view::selection_points_from_mouse(
-                                body_chunks[0],
-                                &self.tasks,
-                                self.chat.active_thread_id(),
-                                self.sidebar.active_tab(),
-                                self.sidebar.selected_item(),
-                                &self.theme,
-                                self.task_view_scroll,
-                                anchor,
-                                current,
-                            )
-                        })
-                    }),
+                    self.work_context_drag_anchor_point
+                        .zip(self.work_context_drag_current_point)
+                        .or_else(|| {
+                            self.work_context_drag_anchor.and_then(|anchor| {
+                                self.work_context_drag_current.and_then(|current| {
+                                    widgets::work_context_view::selection_points_from_mouse(
+                                        layout.chat,
+                                        &self.tasks,
+                                        self.chat.active_thread_id(),
+                                        self.sidebar.active_tab(),
+                                        self.sidebar.selected_item(),
+                                        &self.theme,
+                                        self.task_view_scroll,
+                                        anchor,
+                                        current,
+                                    )
+                                })
+                            })
+                        }),
                 ),
                 MainPaneView::GoalComposer => {
-                    render_helpers::render_goal_composer(frame, body_chunks[0], &self.theme)
+                    render_helpers::render_goal_composer(frame, layout.chat, &self.theme)
                 }
             }
             widgets::sidebar::render(
                 frame,
-                body_chunks[1],
+                sidebar_area,
                 &self.sidebar,
                 &self.tasks,
                 self.chat.active_thread_id(),
@@ -134,10 +146,10 @@ impl TuiModel {
             );
         } else {
             match &self.main_pane_view {
-                MainPaneView::Conversation => self.render_conversation_panel(frame, chunks[1]),
+                MainPaneView::Conversation => self.render_conversation_panel(frame, layout.chat),
                 MainPaneView::Task(target) => widgets::task_view::render(
                     frame,
-                    chunks[1],
+                    layout.chat,
                     &self.tasks,
                     target,
                     &self.theme,
@@ -149,31 +161,35 @@ impl TuiModel {
                 ),
                 MainPaneView::WorkContext => widgets::work_context_view::render(
                     frame,
-                    chunks[1],
+                    layout.chat,
                     &self.tasks,
                     self.chat.active_thread_id(),
                     self.sidebar.active_tab(),
                     self.sidebar.selected_item(),
                     &self.theme,
                     self.task_view_scroll,
-                    self.work_context_drag_anchor.and_then(|anchor| {
-                        self.work_context_drag_current.and_then(|current| {
-                            widgets::work_context_view::selection_points_from_mouse(
-                                chunks[1],
-                                &self.tasks,
-                                self.chat.active_thread_id(),
-                                self.sidebar.active_tab(),
-                                self.sidebar.selected_item(),
-                                &self.theme,
-                                self.task_view_scroll,
-                                anchor,
-                                current,
-                            )
-                        })
-                    }),
+                    self.work_context_drag_anchor_point
+                        .zip(self.work_context_drag_current_point)
+                        .or_else(|| {
+                            self.work_context_drag_anchor.and_then(|anchor| {
+                                self.work_context_drag_current.and_then(|current| {
+                                    widgets::work_context_view::selection_points_from_mouse(
+                                        layout.chat,
+                                        &self.tasks,
+                                        self.chat.active_thread_id(),
+                                        self.sidebar.active_tab(),
+                                        self.sidebar.selected_item(),
+                                        &self.theme,
+                                        self.task_view_scroll,
+                                        anchor,
+                                        current,
+                                    )
+                                })
+                            })
+                        }),
                 ),
                 MainPaneView::GoalComposer => {
-                    render_helpers::render_goal_composer(frame, chunks[1], &self.theme)
+                    render_helpers::render_goal_composer(frame, layout.chat, &self.theme)
                 }
             }
         }
@@ -222,6 +238,7 @@ impl TuiModel {
             let overlay_area = match modal_kind {
                 modal::ModalKind::Settings => render_helpers::centered_rect(90, 88, area),
                 modal::ModalKind::ApprovalOverlay => render_helpers::centered_rect(60, 40, area),
+                modal::ModalKind::ChatActionConfirm => render_helpers::centered_rect(48, 28, area),
                 modal::ModalKind::CommandPalette => render_helpers::centered_rect(50, 40, area),
                 modal::ModalKind::ThreadPicker => render_helpers::centered_rect(60, 50, area),
                 modal::ModalKind::GoalPicker => render_helpers::centered_rect(60, 50, area),
@@ -262,6 +279,22 @@ impl TuiModel {
                 }
                 modal::ModalKind::ApprovalOverlay => {
                     widgets::approval::render(frame, overlay_area, &self.approval, &self.theme);
+                }
+                modal::ModalKind::ChatActionConfirm => {
+                    let pending = self.pending_chat_action_confirm.as_ref().map(|pending| {
+                        let action = match pending.action {
+                            PendingChatActionKind::Regenerate => "regenerate",
+                            PendingChatActionKind::Delete => "delete",
+                        };
+                        (action, pending.message_index + 1)
+                    });
+                    render_helpers::render_chat_action_confirm_modal(
+                        frame,
+                        overlay_area,
+                        pending,
+                        self.chat_action_confirm_accept_selected,
+                        &self.theme,
+                    );
                 }
                 modal::ModalKind::Settings => {
                     widgets::settings::render(
@@ -338,6 +371,7 @@ impl TuiModel {
         let rect = match kind {
             modal::ModalKind::Settings => render_helpers::centered_rect(90, 88, area),
             modal::ModalKind::ApprovalOverlay => render_helpers::centered_rect(60, 40, area),
+            modal::ModalKind::ChatActionConfirm => render_helpers::centered_rect(48, 28, area),
             modal::ModalKind::CommandPalette => render_helpers::centered_rect(50, 40, area),
             modal::ModalKind::ThreadPicker => render_helpers::centered_rect(60, 50, area),
             modal::ModalKind::GoalPicker => render_helpers::centered_rect(60, 50, area),

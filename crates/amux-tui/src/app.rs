@@ -53,6 +53,14 @@ struct SidebarFlatItem {
     title: String,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PaneLayout {
+    chat: Rect,
+    sidebar: Option<Rect>,
+    concierge: Rect,
+    input: Rect,
+}
+
 #[derive(Clone, Debug)]
 enum MainPaneView {
     Conversation,
@@ -83,6 +91,18 @@ struct InputNotice {
     kind: InputNoticeKind,
     expires_at_tick: u64,
     dismiss_on_interaction: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingChatActionKind {
+    Regenerate,
+    Delete,
+}
+
+#[derive(Clone, Debug)]
+struct PendingChatActionConfirm {
+    message_index: usize,
+    action: PendingChatActionKind,
 }
 
 pub struct TuiModel {
@@ -152,6 +172,8 @@ pub struct TuiModel {
     pending_stop: bool,
     pending_stop_tick: u64,
     input_notice: Option<InputNotice>,
+    pending_chat_action_confirm: Option<PendingChatActionConfirm>,
+    chat_action_confirm_accept_selected: bool,
     held_key_modifiers: KeyModifiers,
 
     // Pending file attachments (prepended to next submitted message)
@@ -237,6 +259,8 @@ impl TuiModel {
             pending_stop: false,
             pending_stop_tick: 0,
             input_notice: None,
+            pending_chat_action_confirm: None,
+            chat_action_confirm_accept_selected: true,
             held_key_modifiers: KeyModifiers::NONE,
             attachments: Vec::new(),
             queued_prompts: Vec::new(),
@@ -344,6 +368,69 @@ impl TuiModel {
         }
     }
 
+    fn pane_layout_for_area(&self, area: Rect) -> PaneLayout {
+        let input_height = self.input_height().min(area.height.saturating_sub(1));
+        let remaining_after_input = area.height.saturating_sub(input_height + 1);
+        let anticipatory_height = self
+            .anticipatory_banner_height()
+            .min(remaining_after_input.saturating_sub(1));
+        let remaining_after_anticipatory =
+            remaining_after_input.saturating_sub(anticipatory_height);
+        let concierge_height = self
+            .concierge_banner_height()
+            .min(remaining_after_anticipatory.saturating_sub(1));
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(1),
+                Constraint::Length(anticipatory_height),
+                Constraint::Length(concierge_height),
+                Constraint::Length(input_height),
+                Constraint::Length(1),
+            ])
+            .split(area);
+
+        let body = chunks[1];
+        let chat = if self.sidebar_visible() {
+            let sidebar_pct = if self.width >= 120 { 33 } else { 28 };
+            Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(100 - sidebar_pct),
+                    Constraint::Percentage(sidebar_pct),
+                ])
+                .split(body)[0]
+        } else {
+            body
+        };
+        let sidebar = if self.sidebar_visible() {
+            let sidebar_pct = if self.width >= 120 { 33 } else { 28 };
+            Some(
+                Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(100 - sidebar_pct),
+                        Constraint::Percentage(sidebar_pct),
+                    ])
+                    .split(body)[1],
+            )
+        } else {
+            None
+        };
+
+        PaneLayout {
+            chat,
+            sidebar,
+            concierge: chunks[3],
+            input: chunks[4],
+        }
+    }
+
+    fn pane_layout(&self) -> PaneLayout {
+        self.pane_layout_for_area(Rect::new(0, 0, self.width, self.height))
+    }
+
     fn has_configured_provider(&self) -> bool {
         self.auth.entries.iter().any(|entry| entry.authenticated)
     }
@@ -395,6 +482,8 @@ impl TuiModel {
             return;
         }
 
+        self.clear_chat_drag_selection();
+        self.clear_work_context_drag_selection();
         self.ignore_pending_concierge_welcome = true;
         self.concierge
             .reduce(crate::state::ConciergeAction::WelcomeDismissed);
@@ -414,6 +503,8 @@ impl TuiModel {
 
     fn open_thread_conversation(&mut self, thread_id: String) {
         self.cleanup_concierge_on_navigate();
+        self.clear_chat_drag_selection();
+        self.clear_work_context_drag_selection();
         self.chat
             .reduce(chat::ChatAction::SelectThread(thread_id.clone()));
         self.send_daemon_command(DaemonCommand::RequestThread(thread_id));
@@ -423,6 +514,8 @@ impl TuiModel {
 
     fn start_new_thread_view(&mut self) {
         self.cleanup_concierge_on_navigate();
+        self.clear_chat_drag_selection();
+        self.clear_work_context_drag_selection();
         self.chat.reduce(chat::ChatAction::NewThread);
         self.main_pane_view = MainPaneView::Conversation;
         self.focus = FocusArea::Input;
@@ -564,7 +657,13 @@ impl TuiModel {
         if is_last_actionable {
             0
         } else {
-            widgets::chat::message_action_targets(selected_message, message).len()
+            widgets::chat::message_action_targets(
+                &self.chat,
+                selected_message,
+                message,
+                self.tick_counter,
+            )
+            .len()
         }
     }
 
@@ -642,6 +741,109 @@ impl TuiModel {
         }
     }
 
+    fn open_chat_action_confirm(&mut self, message_index: usize, action: PendingChatActionKind) {
+        self.pending_chat_action_confirm = Some(PendingChatActionConfirm {
+            message_index,
+            action,
+        });
+        self.chat_action_confirm_accept_selected = true;
+        if self.modal.top() != Some(modal::ModalKind::ChatActionConfirm) {
+            self.modal.reduce(modal::ModalAction::Push(
+                modal::ModalKind::ChatActionConfirm,
+            ));
+        }
+    }
+
+    fn close_chat_action_confirm(&mut self) {
+        self.pending_chat_action_confirm = None;
+        self.chat_action_confirm_accept_selected = true;
+        if self.modal.top() == Some(modal::ModalKind::ChatActionConfirm) {
+            self.close_top_modal();
+        }
+    }
+
+    fn request_regenerate_message(&mut self, index: usize) {
+        self.open_chat_action_confirm(index, PendingChatActionKind::Regenerate);
+    }
+
+    fn request_delete_message(&mut self, index: usize) {
+        self.open_chat_action_confirm(index, PendingChatActionKind::Delete);
+    }
+
+    fn confirm_pending_chat_action(&mut self) {
+        let Some(pending) = self.pending_chat_action_confirm.take() else {
+            return;
+        };
+        if self.modal.top() == Some(modal::ModalKind::ChatActionConfirm) {
+            self.close_top_modal();
+        }
+        self.chat_action_confirm_accept_selected = true;
+        match pending.action {
+            PendingChatActionKind::Regenerate => {
+                self.regenerate_from_message(pending.message_index)
+            }
+            PendingChatActionKind::Delete => self.delete_message(pending.message_index),
+        }
+    }
+
+    fn execute_selected_inline_message_action(&mut self) -> bool {
+        let Some(message_index) = self.chat.selected_message() else {
+            return false;
+        };
+        let Some(message) = self
+            .chat
+            .active_thread()
+            .and_then(|thread| thread.messages.get(message_index))
+        else {
+            return false;
+        };
+
+        let action_index = self.chat.selected_message_action();
+        let Some((_, target)) = widgets::chat::message_action_targets(
+            &self.chat,
+            message_index,
+            message,
+            self.tick_counter,
+        )
+        .into_iter()
+        .nth(action_index) else {
+            return false;
+        };
+
+        match target {
+            chat::ChatHitTarget::MessageAction {
+                message_index,
+                action_index,
+            } => {
+                self.chat.select_message(Some(message_index));
+                self.chat.select_message_action(action_index);
+                self.execute_concierge_message_action(message_index, action_index);
+                true
+            }
+            chat::ChatHitTarget::CopyMessage(index) => {
+                self.chat.select_message(Some(index));
+                self.copy_message(index);
+                true
+            }
+            chat::ChatHitTarget::ResendMessage(index) => {
+                self.chat.select_message(Some(index));
+                self.resend_message(index);
+                true
+            }
+            chat::ChatHitTarget::RegenerateMessage(index) => {
+                self.chat.select_message(Some(index));
+                self.request_regenerate_message(index);
+                true
+            }
+            chat::ChatHitTarget::DeleteMessage(index) => {
+                self.chat.select_message(Some(index));
+                self.request_delete_message(index);
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn update_held_modifier(&mut self, code: KeyCode, pressed: bool) {
         let modifier = match code {
             KeyCode::Modifier(
@@ -705,6 +907,7 @@ impl TuiModel {
                     )
                 }
                 modal::ModalKind::ApprovalOverlay => "modal:approval".to_string(),
+                modal::ModalKind::ChatActionConfirm => "modal:chat_action_confirm".to_string(),
                 modal::ModalKind::CommandPalette => "modal:command_palette".to_string(),
                 modal::ModalKind::ThreadPicker => "modal:thread_picker".to_string(),
                 modal::ModalKind::GoalPicker => "modal:goal_picker".to_string(),
@@ -830,6 +1033,9 @@ fn target_goal_run_id(model: &TuiModel, target: &SidebarItemTarget) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::conversion;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
     use std::sync::mpsc;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -846,6 +1052,37 @@ mod tests {
             authenticated: false,
             auth_source: "api_key".to_string(),
             model: "gpt-5.4".to_string(),
+        }
+    }
+
+    fn rendered_chat_area(model: &TuiModel) -> Rect {
+        let area = Rect::new(0, 0, model.width, model.height);
+        let input_height = model.input_height();
+        let anticipatory_height = model.anticipatory_banner_height();
+        let concierge_height = model.concierge_banner_height();
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(1),
+                Constraint::Length(anticipatory_height),
+                Constraint::Length(concierge_height),
+                Constraint::Length(input_height),
+                Constraint::Length(1),
+            ])
+            .split(area);
+
+        if model.sidebar_visible() {
+            let sidebar_pct = if model.width >= 120 { 33 } else { 28 };
+            Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(100 - sidebar_pct),
+                    Constraint::Percentage(sidebar_pct),
+                ])
+                .split(chunks[1])[0]
+        } else {
+            chunks[1]
         }
     }
 
@@ -924,6 +1161,451 @@ mod tests {
             !model.should_show_local_landing(),
             "local landing should not hide concierge loading animation"
         );
+    }
+
+    #[test]
+    fn local_landing_full_render_does_not_panic_at_width_100() {
+        let mut model = build_model();
+        model.width = 100;
+        model.height = 40;
+        model.focus = FocusArea::Input;
+
+        let backend = TestBackend::new(model.width, model.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("local landing render should not panic at width 100");
+    }
+
+    #[test]
+    fn local_landing_full_render_does_not_panic_at_width_80() {
+        let mut model = build_model();
+        model.width = 80;
+        model.height = 24;
+        model.focus = FocusArea::Input;
+
+        let backend = TestBackend::new(model.width, model.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("local landing render should not panic at width 80");
+    }
+
+    #[test]
+    fn render_uses_frame_area_even_when_model_size_is_stale() {
+        let mut model = build_model();
+        model.width = 120;
+        model.height = 40;
+        model.focus = FocusArea::Input;
+
+        let backend = TestBackend::new(100, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("render should honor the live frame size, not stale model dimensions");
+    }
+
+    #[test]
+    fn concierge_loading_uses_frame_area_even_when_model_size_is_stale() {
+        let mut model = build_model();
+        model.width = 120;
+        model.height = 40;
+        model.concierge.loading = true;
+        model.focus = FocusArea::Chat;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("concierge loading should render within the live frame size");
+    }
+
+    #[test]
+    fn render_syncs_model_dimensions_to_live_frame_area() {
+        let mut model = build_model();
+        model.width = 120;
+        model.height = 40;
+
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("render should succeed against the live frame area");
+
+        assert_eq!(model.width, 100);
+        assert_eq!(model.height, 24);
+    }
+
+    #[test]
+    fn copy_message_formats_reasoning_and_content_with_separator() {
+        let mut model = build_model();
+        conversion::reset_last_copied_text();
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                reasoning: Some("Private chain".to_string()),
+                content: "Public answer".to_string(),
+                ..Default::default()
+            },
+        });
+
+        model.copy_message(0);
+
+        assert_eq!(
+            conversion::last_copied_text().as_deref(),
+            Some("Reasoning:\nPrivate chain\n\n-------\n\nContent:\nPublic answer")
+        );
+    }
+
+    #[test]
+    fn copy_message_shows_copied_label_until_timeout() {
+        let mut model = build_model();
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "Public answer".to_string(),
+                ..Default::default()
+            },
+        });
+        model.chat.select_message(Some(0));
+
+        model.copy_message(0);
+
+        let copied_actions = widgets::chat::message_action_targets(
+            &model.chat,
+            0,
+            model
+                .chat
+                .active_thread()
+                .and_then(|thread| thread.messages.first())
+                .expect("message should exist"),
+            model.tick_counter,
+        );
+        assert_eq!(copied_actions[0].0, "[Copied]");
+
+        for _ in 0..100 {
+            model.on_tick();
+        }
+
+        let reverted_actions = widgets::chat::message_action_targets(
+            &model.chat,
+            0,
+            model
+                .chat
+                .active_thread()
+                .and_then(|thread| thread.messages.first())
+                .expect("message should exist"),
+            model.tick_counter,
+        );
+        assert_eq!(reverted_actions[0].0, "[Copy]");
+    }
+
+    #[test]
+    fn regenerate_message_requires_confirmation_before_sending() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.connected = true;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::User,
+                content: "Original prompt".to_string(),
+                ..Default::default()
+            },
+        });
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "Answer".to_string(),
+                ..Default::default()
+            },
+        });
+
+        model.request_regenerate_message(1);
+
+        assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+        assert!(
+            cmd_rx.try_recv().is_err(),
+            "regenerate should wait for confirmation"
+        );
+
+        let quit = model.handle_key_modal(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            modal::ModalKind::ChatActionConfirm,
+        );
+        assert!(!quit);
+
+        let mut saw_send = false;
+        while let Ok(command) = cmd_rx.try_recv() {
+            if matches!(command, DaemonCommand::SendMessage { .. }) {
+                saw_send = true;
+                break;
+            }
+        }
+        assert!(
+            saw_send,
+            "confirmation should eventually send the regenerated prompt"
+        );
+    }
+
+    #[test]
+    fn delete_message_requires_confirmation_before_removing_message() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.width = 100;
+        model.height = 40;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                id: Some("m1".to_string()),
+                role: chat::MessageRole::Assistant,
+                content: "Answer".to_string(),
+                ..Default::default()
+            },
+        });
+
+        model.request_delete_message(0);
+
+        assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+        assert_eq!(
+            model
+                .chat
+                .active_thread()
+                .map(|thread| thread.messages.len()),
+            Some(1),
+            "message should remain until deletion is confirmed"
+        );
+        assert!(
+            cmd_rx.try_recv().is_err(),
+            "delete should wait for confirmation"
+        );
+
+        let quit = model.handle_key_modal(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            modal::ModalKind::ChatActionConfirm,
+        );
+        assert!(!quit);
+
+        let sent = cmd_rx
+            .try_recv()
+            .expect("confirmation should send delete command");
+        assert!(matches!(sent, DaemonCommand::DeleteMessages { .. }));
+        assert_eq!(
+            model
+                .chat
+                .active_thread()
+                .map(|thread| thread.messages.len()),
+            Some(0),
+            "message should be removed after deletion is confirmed"
+        );
+    }
+
+    #[test]
+    fn clicking_cancel_in_chat_action_confirm_does_not_delete_message() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.width = 100;
+        model.height = 40;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                id: Some("m1".to_string()),
+                role: chat::MessageRole::Assistant,
+                content: "Answer".to_string(),
+                ..Default::default()
+            },
+        });
+
+        model.request_delete_message(0);
+        let (_, overlay_area) = model
+            .current_modal_area()
+            .expect("chat action confirm modal should be visible");
+        let (_, cancel_rect) = render_helpers::chat_action_confirm_button_bounds(overlay_area)
+            .expect("confirm modal should expose button bounds");
+        let click_col = cancel_rect.x.saturating_add(1);
+        let click_row = cancel_rect.y;
+
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: click_col,
+            row: click_row,
+            modifiers: KeyModifiers::NONE,
+        });
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: click_col,
+            row: click_row,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(
+            model.modal.top(),
+            None,
+            "cancel click should close the modal"
+        );
+        assert_eq!(
+            model
+                .chat
+                .active_thread()
+                .map(|thread| thread.messages.len()),
+            Some(1),
+            "cancel click must not delete the message"
+        );
+        assert!(
+            cmd_rx.try_recv().is_err(),
+            "cancel click must not send a delete command"
+        );
+    }
+
+    #[test]
+    fn clicking_confirm_in_chat_action_confirm_deletes_message() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.width = 100;
+        model.height = 40;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                id: Some("m1".to_string()),
+                role: chat::MessageRole::Assistant,
+                content: "Answer".to_string(),
+                ..Default::default()
+            },
+        });
+
+        model.request_delete_message(0);
+        let (_, overlay_area) = model
+            .current_modal_area()
+            .expect("chat action confirm modal should be visible");
+        let (confirm_rect, _) = render_helpers::chat_action_confirm_button_bounds(overlay_area)
+            .expect("confirm modal should expose button bounds");
+        let click_col = confirm_rect.x.saturating_add(1);
+        let click_row = confirm_rect.y;
+
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: click_col,
+            row: click_row,
+            modifiers: KeyModifiers::NONE,
+        });
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: click_col,
+            row: click_row,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let sent = cmd_rx
+            .try_recv()
+            .expect("confirm click should send a delete command");
+        assert!(matches!(sent, DaemonCommand::DeleteMessages { .. }));
+        assert_eq!(
+            model
+                .chat
+                .active_thread()
+                .map(|thread| thread.messages.len()),
+            Some(0),
+            "confirm click should delete the message"
+        );
+    }
+
+    #[test]
+    fn resize_clears_drag_snapshots() {
+        let mut model = build_model();
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "drag me".to_string(),
+                ..Default::default()
+            },
+        });
+        model.chat_drag_anchor = Some(Position::new(3, 6));
+        model.chat_drag_current = Some(Position::new(8, 9));
+        model.chat_drag_anchor_point = Some(widgets::chat::SelectionPoint { row: 1, col: 1 });
+        model.chat_drag_current_point = Some(widgets::chat::SelectionPoint { row: 2, col: 4 });
+        model.chat_selection_snapshot = widgets::chat::build_selection_snapshot(
+            Rect::new(0, 3, 80, 12),
+            &model.chat,
+            &model.theme,
+            model.tick_counter,
+        );
+        model.work_context_drag_anchor = Some(Position::new(1, 1));
+        model.work_context_drag_current = Some(Position::new(2, 2));
+        model.work_context_drag_anchor_point =
+            Some(widgets::chat::SelectionPoint { row: 0, col: 0 });
+        model.work_context_drag_current_point =
+            Some(widgets::chat::SelectionPoint { row: 0, col: 1 });
+
+        model.handle_resize(100, 24);
+
+        assert!(model.chat_drag_anchor.is_none());
+        assert!(model.chat_drag_current.is_none());
+        assert!(model.chat_drag_anchor_point.is_none());
+        assert!(model.chat_drag_current_point.is_none());
+        assert!(model.chat_selection_snapshot.is_none());
+        assert!(model.work_context_drag_anchor.is_none());
+        assert!(model.work_context_drag_current.is_none());
+        assert!(model.work_context_drag_anchor_point.is_none());
+        assert!(model.work_context_drag_current_point.is_none());
     }
 
     #[test]
@@ -1273,6 +1955,125 @@ mod tests {
     }
 
     #[test]
+    fn pressing_enter_executes_selected_inline_message_action() {
+        let mut model = build_model();
+        model.show_sidebar_override = Some(false);
+        model.focus = FocusArea::Chat;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "second".to_string(),
+                ..Default::default()
+            },
+        });
+        model.chat.select_message(Some(0));
+        model.chat.select_message_action(0);
+        super::conversion::reset_last_copied_text();
+
+        let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+        assert!(!handled);
+        assert_eq!(
+            super::conversion::last_copied_text().as_deref(),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn click_without_drag_uses_press_location_for_message_selection() {
+        let mut model = build_model();
+        model.show_sidebar_override = Some(false);
+        model.focus = FocusArea::Chat;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::User,
+                content: "first".to_string(),
+                ..Default::default()
+            },
+        });
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "second".to_string(),
+                ..Default::default()
+            },
+        });
+
+        let input_start_row = model.height.saturating_sub(model.input_height() + 1);
+        let chat_area = Rect::new(0, 3, model.width, input_start_row.saturating_sub(3));
+        let message1_pos = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .find_map(|row| {
+                (chat_area.x..chat_area.x.saturating_add(chat_area.width)).find_map(|column| {
+                    let pos = Position::new(column, row);
+                    if widgets::chat::hit_test(
+                        chat_area,
+                        &model.chat,
+                        &model.theme,
+                        model.tick_counter,
+                        pos,
+                    ) == Some(chat::ChatHitTarget::Message(1))
+                    {
+                        Some(pos)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .expect("second message should expose a clickable body position");
+        let message0_pos = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .find_map(|row| {
+                (chat_area.x..chat_area.x.saturating_add(chat_area.width)).find_map(|column| {
+                    let pos = Position::new(column, row);
+                    if widgets::chat::hit_test(
+                        chat_area,
+                        &model.chat,
+                        &model.theme,
+                        model.tick_counter,
+                        pos,
+                    ) == Some(chat::ChatHitTarget::Message(0))
+                    {
+                        Some(pos)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .expect("first message should expose a clickable body position");
+
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: message1_pos.x,
+            row: message1_pos.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: message0_pos.x,
+            row: message0_pos.y,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(model.chat.selected_message(), Some(1));
+    }
+
+    #[test]
     fn concierge_mouse_click_executes_visible_action() {
         let (_daemon_tx, daemon_rx) = mpsc::channel();
         let (cmd_tx, mut cmd_rx) = unbounded_channel();
@@ -1520,6 +2321,307 @@ mod tests {
     }
 
     #[test]
+    fn render_during_active_drag_reuses_cached_snapshot_and_shows_highlight() {
+        let mut model = build_model();
+        model.show_sidebar_override = Some(false);
+        model.focus = FocusArea::Chat;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: (1..=80)
+                    .map(|idx| format!("line {idx}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                ..Default::default()
+            },
+        });
+        model.chat.reduce(chat::ChatAction::ScrollChat(8));
+
+        let input_start_row = model.height.saturating_sub(model.input_height() + 1);
+        let chat_area = Rect::new(0, 3, model.width, input_start_row.saturating_sub(3));
+        let row = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .find(|candidate| {
+                widgets::chat::selection_point_from_mouse(
+                    chat_area,
+                    &model.chat,
+                    &model.theme,
+                    model.tick_counter,
+                    Position::new(3, *candidate),
+                )
+                .is_some()
+            })
+            .expect("chat transcript should expose at least one selectable row");
+
+        widgets::chat::reset_build_rendered_lines_call_count();
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 3,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 12,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let backend = TestBackend::new(model.width, model.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("model render should succeed");
+
+        assert_eq!(
+            widgets::chat::build_rendered_lines_call_count(),
+            1,
+            "active drag rendering should reuse the cached transcript snapshot"
+        );
+
+        let buffer = terminal.backend().buffer();
+        let highlighted = (0..model.height)
+            .flat_map(|y| (0..model.width).filter_map(move |x| buffer.cell((x, y))))
+            .filter(|cell| cell.bg == Color::Indexed(31))
+            .count();
+        assert!(
+            highlighted > 0,
+            "active drag should paint a visible selection highlight even while scrolled"
+        );
+    }
+
+    #[test]
+    fn stale_cached_snapshot_is_ignored_after_sidebar_layout_change() {
+        let mut model = build_model();
+        model.show_sidebar_override = Some(false);
+        model.focus = FocusArea::Chat;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "hello world".to_string(),
+                ..Default::default()
+            },
+        });
+
+        let full_width_area = Rect::new(
+            0,
+            3,
+            model.width,
+            model.height.saturating_sub(model.input_height() + 4),
+        );
+        model.chat_selection_snapshot = widgets::chat::build_selection_snapshot(
+            full_width_area,
+            &model.chat,
+            &model.theme,
+            model.tick_counter,
+        );
+        model.chat_drag_anchor = None;
+        model.chat_drag_current = None;
+        model.chat_drag_anchor_point = None;
+        model.chat_drag_current_point = None;
+
+        model.tasks.reduce(task::TaskAction::WorkContextReceived(
+            task::ThreadWorkContext {
+                thread_id: "thread-1".to_string(),
+                entries: vec![task::WorkContextEntry {
+                    path: "/tmp/demo.txt".to_string(),
+                    is_text: true,
+                    ..Default::default()
+                }],
+            },
+        ));
+        model.show_sidebar_override = Some(true);
+
+        widgets::chat::reset_build_rendered_lines_call_count();
+        let backend = TestBackend::new(model.width, model.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("render should fall back to fresh layout instead of using stale snapshot");
+
+        assert_eq!(
+            widgets::chat::build_rendered_lines_call_count(),
+            1,
+            "layout changes should ignore stale cached snapshots and rebuild visible chat rows"
+        );
+    }
+
+    #[test]
+    fn mouse_drag_snapshot_uses_rendered_chat_area_without_sidebar() {
+        let mut model = build_model();
+        model.width = 100;
+        model.height = 40;
+        model.show_sidebar_override = Some(false);
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model
+            .anticipatory
+            .reduce(crate::state::AnticipatoryAction::Replace(vec![
+                crate::wire::AnticipatoryItem {
+                    id: "digest-1".to_string(),
+                    ..Default::default()
+                },
+            ]));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "alpha\nbeta\ngamma\ndelta".to_string(),
+                ..Default::default()
+            },
+        });
+
+        let chat_area = rendered_chat_area(&model);
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: chat_area.x.saturating_add(3),
+            row: chat_area
+                .y
+                .saturating_add(chat_area.height.saturating_sub(2)),
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let snapshot = model
+            .chat_selection_snapshot
+            .as_ref()
+            .expect("mouse down should create a chat selection snapshot");
+        assert!(
+            widgets::chat::cached_snapshot_matches_area(snapshot, chat_area),
+            "drag snapshots must use the exact rendered chat area"
+        );
+    }
+
+    #[test]
+    fn mouse_drag_snapshot_uses_rendered_chat_area_with_sidebar() {
+        let mut model = build_model();
+        model.width = 100;
+        model.height = 40;
+        model.show_sidebar_override = Some(true);
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model
+            .anticipatory
+            .reduce(crate::state::AnticipatoryAction::Replace(vec![
+                crate::wire::AnticipatoryItem {
+                    id: "digest-1".to_string(),
+                    ..Default::default()
+                },
+            ]));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "alpha\nbeta\ngamma\ndelta".to_string(),
+                ..Default::default()
+            },
+        });
+
+        let chat_area = rendered_chat_area(&model);
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: chat_area.x.saturating_add(3),
+            row: chat_area
+                .y
+                .saturating_add(chat_area.height.saturating_sub(2)),
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let snapshot = model
+            .chat_selection_snapshot
+            .as_ref()
+            .expect("mouse down should create a chat selection snapshot");
+        assert!(
+            widgets::chat::cached_snapshot_matches_area(snapshot, chat_area),
+            "sidebar drag snapshots must use the exact rendered chat area"
+        );
+    }
+
+    #[test]
+    fn thread_detail_refresh_clears_active_chat_drag_snapshot() {
+        let (daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, _cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.show_sidebar_override = Some(true);
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "short content".to_string(),
+                ..Default::default()
+            },
+        });
+
+        let chat_area = rendered_chat_area(&model);
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: chat_area.x.saturating_add(3),
+            row: chat_area
+                .y
+                .saturating_add(chat_area.height.saturating_sub(2)),
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(model.chat_selection_snapshot.is_some());
+
+        daemon_tx
+            .send(ClientEvent::ThreadDetail(Some(crate::wire::AgentThread {
+                id: "thread-1".to_string(),
+                title: "Thread".to_string(),
+                messages: vec![crate::wire::AgentMessage {
+                    role: crate::wire::MessageRole::Assistant,
+                    content: (1..=120)
+                        .map(|idx| format!("line {idx}"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })))
+            .expect("thread detail event should send");
+        model.pump_daemon_events();
+
+        assert!(
+            model.chat_selection_snapshot.is_none(),
+            "thread-detail refresh should invalidate stale drag snapshots"
+        );
+        assert!(model.chat_drag_anchor.is_none());
+        assert!(model.chat_drag_current.is_none());
+        assert!(model.chat_drag_anchor_point.is_none());
+        assert!(model.chat_drag_current_point.is_none());
+    }
+
+    #[test]
     fn drag_selection_copies_expected_text_after_autoscroll() {
         let mut model = build_model();
         model.show_sidebar_override = Some(false);
@@ -1604,6 +2706,114 @@ mod tests {
             Some(expected.as_str())
         );
         assert_eq!(model.status_line, "Copied selection to clipboard");
+    }
+
+    #[test]
+    fn work_context_drag_selection_copies_beyond_visible_window() {
+        let mut model = build_model();
+        model.show_sidebar_override = Some(false);
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.tasks.reduce(task::TaskAction::WorkContextReceived(
+            task::ThreadWorkContext {
+                thread_id: "thread-1".to_string(),
+                entries: vec![task::WorkContextEntry {
+                    path: "/tmp/demo.txt".to_string(),
+                    is_text: true,
+                    ..Default::default()
+                }],
+            },
+        ));
+        model
+            .tasks
+            .reduce(task::TaskAction::FilePreviewReceived(task::FilePreview {
+                path: "/tmp/demo.txt".to_string(),
+                content: (1..=80)
+                    .map(|idx| format!("line {idx}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                truncated: false,
+                is_text: true,
+            }));
+        model.tasks.reduce(task::TaskAction::SelectWorkPath {
+            thread_id: "thread-1".to_string(),
+            path: Some("/tmp/demo.txt".to_string()),
+        });
+        model.main_pane_view = MainPaneView::WorkContext;
+        model.focus = FocusArea::Chat;
+
+        let input_start_row = model.height.saturating_sub(model.input_height() + 1);
+        let chat_area = Rect::new(0, 3, model.width, input_start_row.saturating_sub(3));
+        let preferred_row = chat_area.y.saturating_add(chat_area.height / 2);
+        let start_row = (preferred_row..chat_area.y.saturating_add(chat_area.height))
+            .chain(chat_area.y..preferred_row)
+            .find(|row| {
+                widgets::work_context_view::selection_point_from_mouse(
+                    chat_area,
+                    &model.tasks,
+                    model.chat.active_thread_id(),
+                    model.sidebar.active_tab(),
+                    model.sidebar.selected_item(),
+                    &model.theme,
+                    model.task_view_scroll,
+                    Position::new(3, *row),
+                )
+                .is_some()
+            })
+            .expect("work-context preview should expose at least one selectable row");
+
+        super::conversion::reset_last_copied_text();
+
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 3,
+            row: start_row,
+            modifiers: KeyModifiers::NONE,
+        });
+        for _ in 0..4 {
+            model.handle_mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 3,
+                row: start_row,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+
+        let anchor_point = model
+            .work_context_drag_anchor_point
+            .expect("mouse down should capture a preview anchor point");
+        let current_point = model
+            .work_context_drag_current_point
+            .expect("scrolling should extend the preview selection");
+        let expected = widgets::work_context_view::selected_text(
+            chat_area,
+            &model.tasks,
+            model.chat.active_thread_id(),
+            model.sidebar.active_tab(),
+            model.sidebar.selected_item(),
+            &model.theme,
+            model.task_view_scroll,
+            anchor_point,
+            current_point,
+        )
+        .expect("selection should resolve to copied preview text");
+
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 3,
+            row: start_row,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(
+            super::conversion::last_copied_text().as_deref(),
+            Some(expected.as_str())
+        );
     }
 
     #[test]

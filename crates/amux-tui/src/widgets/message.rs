@@ -108,29 +108,11 @@ fn pad_cell(text: &str, width: usize) -> String {
     format!("{text}{}", " ".repeat(width - current))
 }
 
-fn truncate_to_width(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    if UnicodeWidthStr::width(text) <= width {
-        return text.to_string();
-    }
-    if width == 1 {
-        return "…".to_string();
-    }
-
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in text.chars() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + ch_width >= width {
-            break;
-        }
-        out.push(ch);
-        used += ch_width;
-    }
-    out.push('…');
-    out
+fn wrap_table_cell(text: &str, width: usize) -> Vec<String> {
+    wrap_styled_line(Line::from(text.to_string()), width.max(1))
+        .into_iter()
+        .map(|line| line.spans.into_iter().map(|span| span.content).collect())
+        .collect()
 }
 
 fn fit_table_widths(rows: &[Vec<String>], width: usize) -> Vec<usize> {
@@ -207,23 +189,38 @@ fn render_markdown_table(lines: &[&str], width: usize) -> Vec<Line<'static>> {
 
     let mut rendered = Vec::new();
     for (row_idx, row) in rows.iter().enumerate() {
-        let mut spans = Vec::new();
-        for (col_idx, col_width) in col_widths.iter().enumerate() {
-            if col_idx > 0 {
-                spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+        let wrapped_cells = col_widths
+            .iter()
+            .enumerate()
+            .map(|(col_idx, col_width)| {
+                let cell = row.get(col_idx).map(String::as_str).unwrap_or("");
+                wrap_table_cell(cell, *col_width)
+            })
+            .collect::<Vec<_>>();
+        let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
+
+        for visual_row in 0..row_height {
+            let mut spans = Vec::new();
+            for (col_idx, col_width) in col_widths.iter().enumerate() {
+                if col_idx > 0 {
+                    spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+                }
+                let cell_line = wrapped_cells
+                    .get(col_idx)
+                    .and_then(|lines| lines.get(visual_row))
+                    .map(String::as_str)
+                    .unwrap_or("");
+                spans.push(Span::styled(
+                    pad_cell(cell_line, *col_width),
+                    if row_idx == 0 {
+                        header_style
+                    } else {
+                        Style::default()
+                    },
+                ));
             }
-            let cell = row.get(col_idx).map(String::as_str).unwrap_or("");
-            let fitted = pad_cell(&truncate_to_width(cell, *col_width), *col_width);
-            spans.push(Span::styled(
-                fitted,
-                if row_idx == 0 {
-                    header_style
-                } else {
-                    Style::default()
-                },
-            ));
+            rendered.push(Line::from(spans));
         }
-        rendered.push(Line::from(spans));
         if row_idx == 0 {
             rendered.push(Line::from(Span::styled(
                 separator.clone(),
@@ -811,6 +808,42 @@ mod tests {
         assert!(
             plain.iter().all(|line| !line.contains("|---")),
             "Expected markdown separator row to be rendered, got {:?}",
+            plain
+        );
+    }
+
+    #[test]
+    fn markdown_tables_wrap_long_cells_instead_of_truncating() {
+        let lines = render_markdown(
+            "| Spec | Idea | Why |\n|---|---|---|\n| NEGATIVE_KNOWLEDGE | The agent should track negative knowledge explicitly instead of compressing it into binary success and failure states | This preserves the actual content for the operator |",
+            40,
+        );
+        let plain = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            plain.len() > 3,
+            "Expected wrapped multi-line table rows, got {:?}",
+            plain
+        );
+        assert!(
+            plain.iter().all(|line| !line.contains('…')),
+            "Expected wrapped cells without truncation, got {:?}",
+            plain
+        );
+        let joined = plain.join("\n");
+        assert!(
+            joined.contains("The agent")
+                && joined.contains("negative")
+                && joined.contains("states"),
+            "Expected wrapped table output to preserve the long cell content, got {:?}",
             plain
         );
     }

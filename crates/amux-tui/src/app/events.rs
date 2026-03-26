@@ -9,6 +9,7 @@ impl TuiModel {
 
     pub fn on_tick(&mut self) {
         self.tick_counter = self.tick_counter.saturating_add(1);
+        self.chat.clear_expired_copy_feedback(self.tick_counter);
         if self.pending_stop && !self.pending_stop_active() {
             self.pending_stop = false;
         }
@@ -161,6 +162,9 @@ impl TuiModel {
             }
             ClientEvent::ThreadDetail(Some(thread)) => {
                 let thread_id = thread.id.clone();
+                if self.chat.active_thread_id() == Some(thread_id.as_str()) {
+                    self.clear_chat_drag_selection();
+                }
                 self.chat.reduce(chat::ChatAction::ThreadDetailReceived(
                     conversion::convert_thread(thread),
                 ));

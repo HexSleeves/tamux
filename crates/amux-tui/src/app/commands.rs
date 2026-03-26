@@ -483,16 +483,24 @@ impl TuiModel {
             .as_deref()
             .filter(|value| !value.is_empty())
         {
+            text.push_str("Reasoning:\n");
             text.push_str(reasoning);
             if !message.content.is_empty() {
-                text.push_str("\n\n");
+                text.push_str("\n\n-------\n\n");
             }
         }
-        text.push_str(&message.content);
+        if !message.content.is_empty() {
+            if !text.is_empty() {
+                text.push_str("Content:\n");
+            }
+            text.push_str(&message.content);
+        }
         if text.trim().is_empty() {
             return;
         }
         conversion::copy_to_clipboard(&text);
+        self.chat
+            .mark_message_copied(index, self.tick_counter.saturating_add(100));
         self.status_line = "Copied to clipboard".to_string();
     }
 

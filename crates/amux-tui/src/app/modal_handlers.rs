@@ -439,6 +439,34 @@ impl TuiModel {
             }
         }
 
+        if kind == modal::ModalKind::ChatActionConfirm {
+            match code {
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.close_chat_action_confirm();
+                }
+                KeyCode::Left | KeyCode::Char('h') | KeyCode::Tab => {
+                    self.chat_action_confirm_accept_selected =
+                        !self.chat_action_confirm_accept_selected;
+                }
+                KeyCode::Right | KeyCode::Char('l') | KeyCode::BackTab => {
+                    self.chat_action_confirm_accept_selected =
+                        !self.chat_action_confirm_accept_selected;
+                }
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.confirm_pending_chat_action();
+                }
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    if self.chat_action_confirm_accept_selected {
+                        self.confirm_pending_chat_action();
+                    } else {
+                        self.close_chat_action_confirm();
+                    }
+                }
+                _ => {}
+            }
+            return false;
+        }
+
         if kind == modal::ModalKind::ApprovalOverlay {
             match code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {

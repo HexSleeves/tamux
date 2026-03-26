@@ -5,6 +5,8 @@ impl TuiModel {
         self.width = width;
         self.height = height;
         self.show_sidebar_override = None;
+        self.clear_chat_drag_selection();
+        self.clear_work_context_drag_selection();
     }
 
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
@@ -21,44 +23,17 @@ impl TuiModel {
             return;
         }
 
-        let body_start_row: u16 = 3;
-        let actual_input_height = self.input_height();
-        let concierge_height = self.concierge_banner_height();
-        let input_start_row: u16 = self.height.saturating_sub(actual_input_height + 1);
-        let concierge_start_row = input_start_row.saturating_sub(concierge_height);
-        let show_sidebar = self.sidebar_visible();
-        let sidebar_pct: u16 = if self.width >= 120 { 33 } else { 28 };
-        let sidebar_start_col: u16 = if show_sidebar {
-            self.width * (100 - sidebar_pct) / 100
-        } else {
-            self.width
-        };
-        let chat_area = Rect::new(
-            0,
-            body_start_row,
-            sidebar_start_col,
-            input_start_row.saturating_sub(body_start_row),
-        );
-        let sidebar_area = if show_sidebar {
-            Rect::new(
-                sidebar_start_col,
-                body_start_row,
-                self.width.saturating_sub(sidebar_start_col),
-                input_start_row.saturating_sub(body_start_row),
-            )
-        } else {
-            Rect::default()
-        };
-
-        let cursor_in_body = mouse.row >= body_start_row && mouse.row < input_start_row;
+        let layout = self.pane_layout();
+        let chat_area = layout.chat;
+        let sidebar_area = layout.sidebar.unwrap_or_default();
         let cursor_in_concierge =
-            concierge_height > 0 && mouse.row >= concierge_start_row && mouse.row < input_start_row;
-        let cursor_in_sidebar = show_sidebar && cursor_in_body && mouse.column >= sidebar_start_col;
-        let cursor_in_chat =
-            cursor_in_body && mouse.row < concierge_start_row && mouse.column < sidebar_start_col;
-        let cursor_in_input =
-            mouse.row >= input_start_row && mouse.row < self.height.saturating_sub(1);
-        let concierge_area = Rect::new(0, concierge_start_row, self.width, concierge_height);
+            layout.concierge.height > 0 && contains_mouse(layout.concierge, mouse);
+        let cursor_in_sidebar = layout
+            .sidebar
+            .is_some_and(|rect| contains_mouse(rect, mouse));
+        let cursor_in_chat = contains_mouse(chat_area, mouse);
+        let cursor_in_input = contains_mouse(layout.input, mouse);
+        let concierge_area = layout.concierge;
 
         match mouse.kind {
             MouseEventKind::ScrollUp => {
@@ -68,6 +43,23 @@ impl TuiModel {
                         MainPaneView::Task(_) | MainPaneView::WorkContext
                     ) {
                         self.task_view_scroll = self.task_view_scroll.saturating_sub(3);
+                        if self.work_context_drag_anchor.is_some()
+                            && matches!(self.main_pane_view, MainPaneView::WorkContext)
+                        {
+                            let pos = Position::new(mouse.column, mouse.row);
+                            self.work_context_drag_current = Some(pos);
+                            self.work_context_drag_current_point =
+                                widgets::work_context_view::selection_point_from_mouse(
+                                    chat_area,
+                                    &self.tasks,
+                                    self.chat.active_thread_id(),
+                                    self.sidebar.active_tab(),
+                                    self.sidebar.selected_item(),
+                                    &self.theme,
+                                    self.task_view_scroll,
+                                    pos,
+                                );
+                        }
                     } else {
                         self.chat.reduce(chat::ChatAction::ScrollChat(3));
                         if self.chat_drag_anchor.is_some() {
@@ -102,6 +94,23 @@ impl TuiModel {
                         MainPaneView::Task(_) | MainPaneView::WorkContext
                     ) {
                         self.task_view_scroll = self.task_view_scroll.saturating_add(3);
+                        if self.work_context_drag_anchor.is_some()
+                            && matches!(self.main_pane_view, MainPaneView::WorkContext)
+                        {
+                            let pos = Position::new(mouse.column, mouse.row);
+                            self.work_context_drag_current = Some(pos);
+                            self.work_context_drag_current_point =
+                                widgets::work_context_view::selection_point_from_mouse(
+                                    chat_area,
+                                    &self.tasks,
+                                    self.chat.active_thread_id(),
+                                    self.sidebar.active_tab(),
+                                    self.sidebar.selected_item(),
+                                    &self.theme,
+                                    self.task_view_scroll,
+                                    pos,
+                                );
+                        }
                     } else {
                         self.chat.reduce(chat::ChatAction::ScrollChat(-3));
                         if self.chat_drag_anchor.is_some() {
@@ -180,6 +189,18 @@ impl TuiModel {
                         let pos = Position::new(mouse.column, mouse.row);
                         self.work_context_drag_anchor = Some(pos);
                         self.work_context_drag_current = Some(pos);
+                        let point = widgets::work_context_view::selection_point_from_mouse(
+                            chat_area,
+                            &self.tasks,
+                            self.chat.active_thread_id(),
+                            self.sidebar.active_tab(),
+                            self.sidebar.selected_item(),
+                            &self.theme,
+                            self.task_view_scroll,
+                            pos,
+                        );
+                        self.work_context_drag_anchor_point = point;
+                        self.work_context_drag_current_point = point;
                     } else if let MainPaneView::Task(target) = &self.main_pane_view {
                         if let Some(hit) = widgets::task_view::hit_test(
                             chat_area,
@@ -256,7 +277,7 @@ impl TuiModel {
                     self.clear_chat_drag_selection();
                     self.clear_work_context_drag_selection();
                     self.focus = FocusArea::Input;
-                    if let Some(offset) = self.input_offset_from_mouse(input_start_row, mouse) {
+                    if let Some(offset) = self.input_offset_from_mouse(layout.input.y, mouse) {
                         self.input
                             .reduce(input::InputAction::MoveCursorToPos(offset));
                     }
@@ -307,7 +328,19 @@ impl TuiModel {
                     {
                         self.task_view_scroll = self.task_view_scroll.saturating_add(1);
                     }
-                    self.work_context_drag_current = Some(Position::new(mouse.column, mouse.row));
+                    let pos = Position::new(mouse.column, mouse.row);
+                    self.work_context_drag_current = Some(pos);
+                    self.work_context_drag_current_point =
+                        widgets::work_context_view::selection_point_from_mouse(
+                            chat_area,
+                            &self.tasks,
+                            self.chat.active_thread_id(),
+                            self.sidebar.active_tab(),
+                            self.sidebar.selected_item(),
+                            &self.theme,
+                            self.task_view_scroll,
+                            pos,
+                        );
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
@@ -347,15 +380,15 @@ impl TuiModel {
                             self.status_line = "Copied selection to clipboard".to_string();
                         }
                     } else if cursor_in_chat {
-                        self.handle_chat_click(chat_area, Position::new(mouse.column, mouse.row));
+                        self.handle_chat_click(chat_area, anchor);
                     }
                 } else if let Some(anchor) = self.work_context_drag_anchor.take() {
                     let current = self
                         .work_context_drag_current
                         .take()
                         .unwrap_or(Position::new(mouse.column, mouse.row));
-                    let Some((anchor_point, current_point)) =
-                        widgets::work_context_view::selection_points_from_mouse(
+                    let anchor_point = self.work_context_drag_anchor_point.take().or_else(|| {
+                        widgets::work_context_view::selection_point_from_mouse(
                             chat_area,
                             &self.tasks,
                             self.chat.active_thread_id(),
@@ -364,8 +397,21 @@ impl TuiModel {
                             &self.theme,
                             self.task_view_scroll,
                             anchor,
+                        )
+                    });
+                    let current_point = self.work_context_drag_current_point.take().or_else(|| {
+                        widgets::work_context_view::selection_point_from_mouse(
+                            chat_area,
+                            &self.tasks,
+                            self.chat.active_thread_id(),
+                            self.sidebar.active_tab(),
+                            self.sidebar.selected_item(),
+                            &self.theme,
+                            self.task_view_scroll,
                             current,
                         )
+                    });
+                    let Some((anchor_point, current_point)) = anchor_point.zip(current_point)
                     else {
                         return;
                     };
@@ -399,7 +445,7 @@ impl TuiModel {
         }
     }
 
-    fn clear_chat_drag_selection(&mut self) {
+    pub(super) fn clear_chat_drag_selection(&mut self) {
         self.chat_drag_anchor = None;
         self.chat_drag_current = None;
         self.chat_drag_anchor_point = None;
@@ -407,7 +453,7 @@ impl TuiModel {
         self.chat_selection_snapshot = None;
     }
 
-    fn clear_work_context_drag_selection(&mut self) {
+    pub(super) fn clear_work_context_drag_selection(&mut self) {
         self.work_context_drag_anchor = None;
         self.work_context_drag_current = None;
         self.work_context_drag_anchor_point = None;
@@ -502,11 +548,11 @@ impl TuiModel {
             }
             Some(chat::ChatHitTarget::RegenerateMessage(idx)) => {
                 self.chat.select_message(Some(idx));
-                self.regenerate_from_message(idx);
+                self.request_regenerate_message(idx);
             }
             Some(chat::ChatHitTarget::DeleteMessage(idx)) => {
                 self.chat.select_message(Some(idx));
-                self.delete_message(idx);
+                self.request_delete_message(idx);
             }
             None => {}
         }
@@ -572,8 +618,13 @@ impl TuiModel {
                         | modal::ModalKind::OpenAIAuth
                         | modal::ModalKind::ErrorViewer
                         | modal::ModalKind::EffortPicker
+                        | modal::ModalKind::ChatActionConfirm
                 ) {
-                    self.close_top_modal();
+                    if kind == modal::ModalKind::ChatActionConfirm {
+                        self.close_chat_action_confirm();
+                    } else {
+                        self.close_top_modal();
+                    }
                 }
             }
             MouseEventKind::Down(MouseButton::Right) if inside => {
@@ -847,12 +898,47 @@ impl TuiModel {
                         let _ = self.handle_key_modal(key, KeyModifiers::NONE, kind);
                     }
                 }
+                modal::ModalKind::ChatActionConfirm => {
+                    if let Some((confirm_rect, cancel_rect)) =
+                        render_helpers::chat_action_confirm_button_bounds(overlay_area)
+                    {
+                        if contains_mouse(confirm_rect, mouse) {
+                            self.chat_action_confirm_accept_selected = true;
+                        } else if contains_mouse(cancel_rect, mouse) {
+                            self.chat_action_confirm_accept_selected = false;
+                        }
+                    }
+                }
                 modal::ModalKind::Help => {
                     self.close_top_modal();
                 }
                 _ => {}
             },
+            MouseEventKind::Up(MouseButton::Left)
+                if kind == modal::ModalKind::ChatActionConfirm =>
+            {
+                if let Some((confirm_rect, cancel_rect)) =
+                    render_helpers::chat_action_confirm_button_bounds(overlay_area)
+                {
+                    if contains_mouse(confirm_rect, mouse) {
+                        self.chat_action_confirm_accept_selected = true;
+                        self.confirm_pending_chat_action();
+                    } else if contains_mouse(cancel_rect, mouse) {
+                        self.chat_action_confirm_accept_selected = false;
+                        self.close_chat_action_confirm();
+                    }
+                }
+            }
             _ => {}
         }
     }
+}
+
+fn contains_mouse(rect: Rect, mouse: MouseEvent) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && mouse.column >= rect.x
+        && mouse.column < rect.x.saturating_add(rect.width)
+        && mouse.row >= rect.y
+        && mouse.row < rect.y.saturating_add(rect.height)
 }

@@ -406,6 +406,100 @@ pub(super) fn render_openai_auth_modal(
     frame.render_widget(Paragraph::new(hints), layout[1]);
 }
 
+pub(super) fn chat_action_confirm_button_bounds(area: Rect) -> Option<(Rect, Rect)> {
+    use ratatui::widgets::{Block, BorderType, Borders};
+
+    if area.width < 10 || area.height < 3 {
+        return None;
+    }
+
+    let inner = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .inner(area);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let button_row = layout[1];
+    let confirm_width = "[Confirm]".len() as u16 + 2;
+    let cancel_width = "[Cancel]".len() as u16 + 2;
+    let total_width = confirm_width.saturating_add(1).saturating_add(cancel_width);
+    let start_x = button_row
+        .x
+        .saturating_add(button_row.width.saturating_sub(total_width) / 2);
+    let confirm = Rect::new(start_x, button_row.y, confirm_width, 1);
+    let cancel = Rect::new(
+        start_x.saturating_add(confirm_width).saturating_add(1),
+        button_row.y,
+        cancel_width,
+        1,
+    );
+    Some((confirm, cancel))
+}
+
+pub(super) fn render_chat_action_confirm_modal(
+    frame: &mut Frame,
+    area: Rect,
+    pending: Option<(&str, usize)>,
+    accept_selected: bool,
+    theme: &ThemeTokens,
+) {
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
+
+    let block = Block::default()
+        .title(" CONFIRM ACTION ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(theme.accent_secondary);
+
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+
+    let body = if let Some((action, message_number)) = pending {
+        vec![
+            Line::from(format!(
+                "Proceed with {action} for message {message_number}?"
+            )),
+            Line::raw(""),
+            Line::from(Span::styled(
+                "This action requires explicit confirmation to avoid accidental clicks.",
+                theme.fg_dim,
+            )),
+        ]
+    } else {
+        vec![Line::from(Span::styled(
+            "No pending message action.",
+            theme.fg_dim,
+        ))]
+    };
+    frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), layout[0]);
+
+    let confirm_style = if accept_selected {
+        theme.accent_primary
+    } else {
+        theme.fg_dim
+    };
+    let cancel_style = if accept_selected {
+        theme.fg_dim
+    } else {
+        theme.accent_primary
+    };
+    let action_line = Line::from(vec![
+        Span::styled(" [Confirm] ", confirm_style),
+        Span::raw(" "),
+        Span::styled(" [Cancel] ", cancel_style),
+    ]);
+    frame.render_widget(Paragraph::new(action_line), layout[1]);
+}
+
 pub(super) fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)

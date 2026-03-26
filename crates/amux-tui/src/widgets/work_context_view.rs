@@ -450,6 +450,28 @@ pub fn selection_points_from_mouse(
     ))
 }
 
+pub fn selection_point_from_mouse(
+    area: Rect,
+    tasks: &TaskState,
+    thread_id: Option<&str>,
+    active_tab: SidebarTab,
+    selected_index: usize,
+    theme: &ThemeTokens,
+    scroll: usize,
+    mouse: Position,
+) -> Option<SelectionPoint> {
+    let snapshot = selection_snapshot(
+        area,
+        tasks,
+        thread_id,
+        active_tab,
+        selected_index,
+        theme,
+        scroll,
+    )?;
+    selection_point_from_snapshot(&snapshot, mouse)
+}
+
 pub fn selected_text(
     area: Rect,
     tasks: &TaskState,
@@ -650,5 +672,56 @@ mod tests {
         );
 
         assert_eq!(hit, Some(WorkContextHitTarget::ClosePreview));
+    }
+
+    #[test]
+    fn selection_point_tracks_document_row_after_scroll() {
+        let mut tasks = TaskState::new();
+        tasks.reduce(TaskAction::WorkContextReceived(ThreadWorkContext {
+            thread_id: "t1".into(),
+            entries: vec![WorkContextEntry {
+                path: "/tmp/a.txt".into(),
+                is_text: true,
+                ..Default::default()
+            }],
+        }));
+        tasks.reduce(TaskAction::FilePreviewReceived(FilePreview {
+            path: "/tmp/a.txt".into(),
+            content: (1..=40)
+                .map(|idx| format!("line {idx}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            truncated: false,
+            is_text: true,
+        }));
+
+        let area = Rect::new(0, 0, 40, 8);
+        let start = selection_point_from_mouse(
+            area,
+            &tasks,
+            Some("t1"),
+            SidebarTab::Files,
+            0,
+            &ThemeTokens::default(),
+            0,
+            Position::new(0, 7),
+        )
+        .expect("initial visible row should be selectable");
+        let end = selection_point_from_mouse(
+            area,
+            &tasks,
+            Some("t1"),
+            SidebarTab::Files,
+            0,
+            &ThemeTokens::default(),
+            6,
+            Position::new(0, 7),
+        )
+        .expect("later scrolled row should be selectable");
+
+        assert!(
+            end.row > start.row,
+            "same visible coordinate should resolve to a later document row after scrolling"
+        );
     }
 }
