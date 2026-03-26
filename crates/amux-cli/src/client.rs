@@ -242,6 +242,34 @@ enum AgentBridgeCommand {
     WhatsAppLinkStatus,
     WhatsAppLinkSubscribe,
     WhatsAppLinkUnsubscribe,
+    StartOperatorProfileSession {
+        kind: String,
+    },
+    NextOperatorProfileQuestion {
+        session_id: String,
+    },
+    SubmitOperatorProfileAnswer {
+        session_id: String,
+        question_id: String,
+        answer_json: String,
+    },
+    SkipOperatorProfileQuestion {
+        session_id: String,
+        question_id: String,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    DeferOperatorProfileQuestion {
+        session_id: String,
+        question_id: String,
+        #[serde(default)]
+        defer_until_unix_ms: Option<u64>,
+    },
+    GetOperatorProfileSummary,
+    SetOperatorProfileConsent {
+        consent_key: String,
+        granted: bool,
+    },
     Shutdown,
 }
 
@@ -1530,6 +1558,27 @@ pub async fn run_agent_bridge() -> Result<()> {
                             AgentBridgeCommand::WhatsAppLinkUnsubscribe => {
                                 framed.send(ClientMessage::AgentWhatsAppLinkUnsubscribe).await?;
                             }
+                            AgentBridgeCommand::StartOperatorProfileSession { kind } => {
+                                framed.send(ClientMessage::AgentStartOperatorProfileSession { kind }).await?;
+                            }
+                            AgentBridgeCommand::NextOperatorProfileQuestion { session_id } => {
+                                framed.send(ClientMessage::AgentNextOperatorProfileQuestion { session_id }).await?;
+                            }
+                            AgentBridgeCommand::SubmitOperatorProfileAnswer { session_id, question_id, answer_json } => {
+                                framed.send(ClientMessage::AgentSubmitOperatorProfileAnswer { session_id, question_id, answer_json }).await?;
+                            }
+                            AgentBridgeCommand::SkipOperatorProfileQuestion { session_id, question_id, reason } => {
+                                framed.send(ClientMessage::AgentSkipOperatorProfileQuestion { session_id, question_id, reason }).await?;
+                            }
+                            AgentBridgeCommand::DeferOperatorProfileQuestion { session_id, question_id, defer_until_unix_ms } => {
+                                framed.send(ClientMessage::AgentDeferOperatorProfileQuestion { session_id, question_id, defer_until_unix_ms }).await?;
+                            }
+                            AgentBridgeCommand::GetOperatorProfileSummary => {
+                                framed.send(ClientMessage::AgentGetOperatorProfileSummary).await?;
+                            }
+                            AgentBridgeCommand::SetOperatorProfileConsent { consent_key, granted } => {
+                                framed.send(ClientMessage::AgentSetOperatorProfileConsent { consent_key, granted }).await?;
+                            }
                             AgentBridgeCommand::Shutdown => {
                                 framed.send(ClientMessage::AgentUnsubscribe).await?;
                                 break;
@@ -1804,6 +1853,71 @@ pub async fn run_agent_bridge() -> Result<()> {
                         });
                         emit_agent_event(&msg.to_string())?;
                     }
+                    Some(Ok(DaemonMessage::AgentOperatorProfileSessionStarted { session_id, kind })) => {
+                        let msg = serde_json::json!({
+                            "type": "operator-profile-session-started",
+                            "data": { "session_id": session_id, "kind": kind }
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentOperatorProfileQuestion {
+                        session_id,
+                        question_id,
+                        field_key,
+                        prompt,
+                        input_kind,
+                        optional,
+                    })) => {
+                        let msg = serde_json::json!({
+                            "type": "operator-profile-question",
+                            "data": {
+                                "session_id": session_id,
+                                "question_id": question_id,
+                                "field_key": field_key,
+                                "prompt": prompt,
+                                "input_kind": input_kind,
+                                "optional": optional,
+                            }
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentOperatorProfileProgress {
+                        session_id,
+                        answered,
+                        remaining,
+                        completion_ratio,
+                    })) => {
+                        let msg = serde_json::json!({
+                            "type": "operator-profile-progress",
+                            "data": {
+                                "session_id": session_id,
+                                "answered": answered,
+                                "remaining": remaining,
+                                "completion_ratio": completion_ratio,
+                            }
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentOperatorProfileSummary { summary_json })) => {
+                        let msg = serde_json::json!({
+                            "type": "operator-profile-summary",
+                            "data": serde_json::from_str::<serde_json::Value>(&summary_json).unwrap_or_default()
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentOperatorProfileSessionCompleted {
+                        session_id,
+                        updated_fields,
+                    })) => {
+                        let msg = serde_json::json!({
+                            "type": "operator-profile-session-completed",
+                            "data": {
+                                "session_id": session_id,
+                                "updated_fields": updated_fields,
+                            }
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
                     Some(Ok(DaemonMessage::Error { message })) => {
                         let msg = serde_json::json!({"type":"error","message":message});
                         emit_agent_event(&msg.to_string())?;
@@ -1959,4 +2073,138 @@ pub async fn run_db_bridge() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AgentBridgeCommand;
+
+    #[test]
+    fn operator_profile_bridge_commands_deserialize() {
+        let json = r#"{"type":"start-operator-profile-session","kind":"onboarding"}"#;
+        let cmd: AgentBridgeCommand = serde_json::from_str(json)
+            .expect("start-operator-profile-session must deserialize");
+        match cmd {
+            AgentBridgeCommand::StartOperatorProfileSession { kind } => {
+                assert_eq!(kind, "onboarding");
+            }
+            _ => panic!("unexpected variant for start-operator-profile-session"),
+        }
+
+        let json = r#"{"type":"next-operator-profile-question","session_id":"s1"}"#;
+        let cmd: AgentBridgeCommand = serde_json::from_str(json)
+            .expect("next-operator-profile-question must deserialize");
+        match cmd {
+            AgentBridgeCommand::NextOperatorProfileQuestion { session_id } => {
+                assert_eq!(session_id, "s1");
+            }
+            _ => panic!("unexpected variant for next-operator-profile-question"),
+        }
+
+        let json = r#"{"type":"submit-operator-profile-answer","session_id":"s1","question_id":"q1","answer_json":"\"yes\""}"#;
+        let cmd: AgentBridgeCommand = serde_json::from_str(json)
+            .expect("submit-operator-profile-answer must deserialize");
+        match cmd {
+            AgentBridgeCommand::SubmitOperatorProfileAnswer {
+                session_id,
+                question_id,
+                answer_json,
+            } => {
+                assert_eq!(session_id, "s1");
+                assert_eq!(question_id, "q1");
+                assert_eq!(answer_json, "\"yes\"");
+            }
+            _ => panic!("unexpected variant for submit-operator-profile-answer"),
+        }
+
+        let json = r#"{"type":"skip-operator-profile-question","session_id":"s1","question_id":"q1"}"#;
+        let cmd: AgentBridgeCommand = serde_json::from_str(json)
+            .expect("skip-operator-profile-question must deserialize");
+        match cmd {
+            AgentBridgeCommand::SkipOperatorProfileQuestion {
+                session_id,
+                question_id,
+                reason,
+            } => {
+                assert_eq!(session_id, "s1");
+                assert_eq!(question_id, "q1");
+                assert!(reason.is_none());
+            }
+            _ => panic!("unexpected variant for skip-operator-profile-question"),
+        }
+
+        let json = r#"{"type":"defer-operator-profile-question","session_id":"s1","question_id":"q1","defer_until_unix_ms":1700000000000}"#;
+        let cmd: AgentBridgeCommand = serde_json::from_str(json)
+            .expect("defer-operator-profile-question must deserialize");
+        match cmd {
+            AgentBridgeCommand::DeferOperatorProfileQuestion {
+                session_id,
+                question_id,
+                defer_until_unix_ms,
+            } => {
+                assert_eq!(session_id, "s1");
+                assert_eq!(question_id, "q1");
+                assert_eq!(defer_until_unix_ms, Some(1700000000000));
+            }
+            _ => panic!("unexpected variant for defer-operator-profile-question"),
+        }
+
+        let json = r#"{"type":"get-operator-profile-summary"}"#;
+        let cmd: AgentBridgeCommand = serde_json::from_str(json)
+            .expect("get-operator-profile-summary must deserialize");
+        assert!(
+            matches!(cmd, AgentBridgeCommand::GetOperatorProfileSummary),
+            "expected GetOperatorProfileSummary"
+        );
+
+        let json = r#"{"type":"set-operator-profile-consent","consent_key":"analytics","granted":true}"#;
+        let cmd: AgentBridgeCommand = serde_json::from_str(json)
+            .expect("set-operator-profile-consent must deserialize");
+        match cmd {
+            AgentBridgeCommand::SetOperatorProfileConsent {
+                consent_key,
+                granted,
+            } => {
+                assert_eq!(consent_key, "analytics");
+                assert!(granted);
+            }
+            _ => panic!("unexpected variant for set-operator-profile-consent"),
+        }
+    }
+
+    #[test]
+    fn operator_profile_bridge_commands_deserialize_failures() {
+        // Unknown type must fail — no variant matches "not-a-real-command".
+        let result: Result<AgentBridgeCommand, _> =
+            serde_json::from_str(r#"{"type":"not-a-real-operator-command"}"#);
+        assert!(result.is_err(), "unknown type should not deserialize");
+
+        // Missing required field `kind` for StartOperatorProfileSession must fail.
+        let result: Result<AgentBridgeCommand, _> =
+            serde_json::from_str(r#"{"type":"start-operator-profile-session"}"#);
+        assert!(result.is_err(), "missing `kind` should not deserialize");
+
+        // Missing required field `session_id` for NextOperatorProfileQuestion must fail.
+        let result: Result<AgentBridgeCommand, _> =
+            serde_json::from_str(r#"{"type":"next-operator-profile-question"}"#);
+        assert!(result.is_err(), "missing `session_id` should not deserialize");
+
+        // Wrong type for `granted` (string instead of bool) must fail.
+        let result: Result<AgentBridgeCommand, _> = serde_json::from_str(
+            r#"{"type":"set-operator-profile-consent","consent_key":"analytics","granted":"yes"}"#,
+        );
+        assert!(result.is_err(), "wrong field type for `granted` should not deserialize");
+
+        // Missing required field `question_id` for SubmitOperatorProfileAnswer must fail.
+        let result: Result<AgentBridgeCommand, _> = serde_json::from_str(
+            r#"{"type":"submit-operator-profile-answer","session_id":"s1","answer_json":"\"v\""}"#,
+        );
+        assert!(result.is_err(), "missing `question_id` should not deserialize");
+
+        // Wrong type for `defer_until_unix_ms` (string instead of number) must fail.
+        let result: Result<AgentBridgeCommand, _> = serde_json::from_str(
+            r#"{"type":"defer-operator-profile-question","session_id":"s1","question_id":"q1","defer_until_unix_ms":"soon"}"#,
+        );
+        assert!(result.is_err(), "wrong type for `defer_until_unix_ms` should not deserialize");
+    }
 }
