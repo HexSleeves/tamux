@@ -13,6 +13,11 @@ use crate::theme::ThemeTokens;
 const MESSAGE_PADDING_X: usize = 2;
 const MESSAGE_PADDING_Y: usize = 1;
 
+#[cfg(test)]
+thread_local! {
+    static BUILD_RENDERED_LINES_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn render_streaming_markdown(content: &str, width: usize) -> Vec<Line<'static>> {
     super::message::render_markdown_pub(content, width)
 }
@@ -112,7 +117,7 @@ fn pad_message_line(mut line: Line<'static>, width: usize, style: Style) -> Line
     for span in line.spans.drain(..) {
         spans.push(Span::styled(
             span.content.to_string(),
-            span.style.patch(style),
+            style.patch(span.style),
         ));
     }
 
@@ -120,7 +125,7 @@ fn pad_message_line(mut line: Line<'static>, width: usize, style: Style) -> Line
     let right_width = width.saturating_sub(content_width).max(MESSAGE_PADDING_X);
     spans.push(Span::styled(" ".repeat(right_width), style));
 
-    Line::from(spans).style(line.style.patch(style))
+    Line::from(spans).style(style.patch(line.style))
 }
 
 fn message_block_style(msg: &AgentMessage, theme: &ThemeTokens) -> Style {
@@ -130,7 +135,10 @@ fn message_block_style(msg: &AgentMessage, theme: &ThemeTokens) -> Style {
     }
 }
 
-fn message_action_targets(msg_index: usize, msg: &AgentMessage) -> Vec<(String, ChatHitTarget)> {
+pub(crate) fn message_action_targets(
+    msg_index: usize,
+    msg: &AgentMessage,
+) -> Vec<(String, ChatHitTarget)> {
     if !msg.actions.is_empty() {
         return msg
             .actions
@@ -174,6 +182,7 @@ fn message_action_targets(msg_index: usize, msg: &AgentMessage) -> Vec<(String, 
 fn message_action_line(
     msg_index: usize,
     msg: &AgentMessage,
+    selected_action: usize,
     theme: &ThemeTokens,
 ) -> Option<Line<'static>> {
     let actions = message_action_targets(msg_index, msg);
@@ -186,7 +195,12 @@ fn message_action_line(
         if idx > 0 {
             spans.push(Span::raw(" "));
         }
-        spans.push(Span::styled(label, theme.accent_primary));
+        let style = if idx == selected_action {
+            theme.accent_primary
+        } else {
+            theme.fg_dim
+        };
+        spans.push(Span::styled(label, style));
     }
 
     Some(Line::from(spans))
@@ -360,6 +374,9 @@ fn build_rendered_lines(
     inner_width: usize,
     current_tick: u64,
 ) -> (Vec<RenderedChatLine>, Vec<(usize, usize)>) {
+    #[cfg(test)]
+    BUILD_RENDERED_LINES_CALLS.with(|calls| calls.set(calls.get() + 1));
+
     let mut all_lines = Vec::new();
     let mut message_line_ranges = Vec::new();
     let mode = chat.transcript_mode();
@@ -419,10 +436,10 @@ fn build_rendered_lines(
             let is_last_actionable = !msg.actions.is_empty()
                 && chat.active_actions().first().map(|a| &a.label)
                     == msg.actions.first().map(|a| &a.label);
-            if (chat.selected_message() == Some(idx) || !msg.actions.is_empty())
-                && !is_last_actionable
-            {
-                if let Some(action_line) = message_action_line(idx, msg, theme) {
+            if chat.selected_message() == Some(idx) && !is_last_actionable {
+                if let Some(action_line) =
+                    message_action_line(idx, msg, chat.selected_message_action(), theme)
+                {
                     all_lines.push(RenderedChatLine {
                         line: pad_message_line(action_line, inner_width, block_style),
                         message_index: Some(idx),
@@ -559,6 +576,91 @@ fn build_rendered_lines(
     }
 
     (all_lines, message_line_ranges)
+}
+
+pub struct CachedSelectionSnapshot(SelectionSnapshot);
+
+pub fn build_selection_snapshot(
+    area: Rect,
+    chat: &ChatState,
+    theme: &ThemeTokens,
+    current_tick: u64,
+) -> Option<CachedSelectionSnapshot> {
+    selection_snapshot(area, chat, theme, current_tick).map(CachedSelectionSnapshot)
+}
+
+pub fn selection_point_from_cached_snapshot(
+    snapshot: &CachedSelectionSnapshot,
+    mouse: Position,
+) -> Option<SelectionPoint> {
+    selection_point_from_snapshot(&snapshot.0, mouse)
+}
+
+pub fn selected_text_from_cached_snapshot(
+    snapshot: &CachedSelectionSnapshot,
+    start: SelectionPoint,
+    end: SelectionPoint,
+) -> Option<String> {
+    let all_lines = &snapshot.0.all_lines;
+    if all_lines.is_empty() {
+        return None;
+    }
+
+    let (start_point, end_point) =
+        if start.row <= end.row || (start.row == end.row && start.col <= end.col) {
+            (start, end)
+        } else {
+            (end, start)
+        };
+    let start_row = start_point.row.min(all_lines.len().saturating_sub(1));
+    let end_row = end_point.row.min(all_lines.len().saturating_sub(1));
+    let start_col = start_point.col;
+    let end_col = end_point.col;
+
+    if start_row == end_row && start_col == end_col {
+        return None;
+    }
+
+    let mut lines = Vec::new();
+
+    for row in start_row..=end_row {
+        let rendered = all_lines.get(row)?;
+        let (plain, content_start, content_end) = rendered_line_content_bounds(rendered);
+        let content_width = content_end.saturating_sub(content_start);
+        let from = if row == start_row {
+            start_col.min(content_width)
+        } else {
+            0
+        };
+        let to = if row == end_row {
+            end_col.min(content_width).max(from)
+        } else {
+            content_width
+        };
+
+        lines.push(display_slice(
+            &plain,
+            content_start.saturating_add(from),
+            content_start.saturating_add(to),
+        ));
+    }
+
+    let text = lines.join("\n");
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+#[cfg(test)]
+pub fn reset_build_rendered_lines_call_count() {
+    BUILD_RENDERED_LINES_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+pub fn build_rendered_lines_call_count() -> usize {
+    BUILD_RENDERED_LINES_CALLS.with(std::cell::Cell::get)
 }
 
 fn resolved_scroll(
@@ -1210,6 +1312,8 @@ pub fn render(
 mod tests {
     use super::*;
     use crate::state::chat::{AgentThread, ChatAction, MessageRole};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
 
     fn chat_with_messages(messages: Vec<AgentMessage>) -> ChatState {
         let mut chat = ChatState::new();
@@ -1412,5 +1516,145 @@ mod tests {
             Position::new(no_x, no_y),
         );
         assert_eq!(hit, Some(ChatHitTarget::RetryStop));
+    }
+
+    #[test]
+    fn hit_test_targets_copy_action_for_selected_message_bar() {
+        let mut chat = chat_with_messages(vec![
+            AgentMessage {
+                role: MessageRole::User,
+                content: "first".into(),
+                ..Default::default()
+            },
+            AgentMessage {
+                role: MessageRole::Assistant,
+                content: "second".into(),
+                ..Default::default()
+            },
+        ]);
+        chat.select_message(Some(1));
+
+        let area = Rect::new(0, 0, 80, 10);
+        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+            .expect("chat should produce visible lines");
+        let action_row = visible
+            .iter()
+            .position(|line| {
+                matches!(line.kind, RenderedLineKind::ActionBar) && line.message_index == Some(1)
+            })
+            .expect("selected message should render an inline action bar");
+        let hit_line = &visible[action_row];
+        let (_, content_start, _) = rendered_line_content_bounds(hit_line);
+        let hit = hit_test(
+            area,
+            &chat,
+            &ThemeTokens::default(),
+            0,
+            Position::new(
+                inner.x + content_start as u16 + 1,
+                inner.y + action_row as u16,
+            ),
+        );
+
+        assert_eq!(hit, Some(ChatHitTarget::CopyMessage(1)));
+    }
+
+    #[test]
+    fn selected_message_action_bar_highlights_only_primary_action() {
+        let mut chat = chat_with_messages(vec![AgentMessage {
+            role: MessageRole::User,
+            content: "first".into(),
+            ..Default::default()
+        }]);
+        chat.select_message(Some(0));
+
+        let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0);
+        let action_line = lines
+            .iter()
+            .find(|line| matches!(line.kind, RenderedLineKind::ActionBar))
+            .expect("selected message should render an action bar");
+
+        let copy_span = action_line
+            .line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("[Copy]"))
+            .expect("copy action should be present");
+        let resend_span = action_line
+            .line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("[Resend]"))
+            .expect("resend action should be present");
+
+        assert_eq!(copy_span.style.fg, ThemeTokens::default().accent_primary.fg);
+        assert_eq!(copy_span.style.bg, Some(Color::Indexed(236)));
+        assert_eq!(resend_span.style.fg, ThemeTokens::default().fg_dim.fg);
+        assert_eq!(resend_span.style.bg, Some(Color::Indexed(236)));
+    }
+
+    #[test]
+    fn render_draws_highlight_for_mouse_selection() {
+        let chat = chat_with_messages(vec![AgentMessage {
+            role: MessageRole::User,
+            content: "alpha beta gamma".into(),
+            ..Default::default()
+        }]);
+        let area = Rect::new(0, 0, 40, 8);
+        let row = (0..area.height)
+            .find(|candidate| {
+                selection_point_from_mouse(
+                    area,
+                    &chat,
+                    &ThemeTokens::default(),
+                    0,
+                    Position::new(4, *candidate),
+                )
+                .is_some()
+            })
+            .expect("chat should expose a selectable row");
+        let start = selection_point_from_mouse(
+            area,
+            &chat,
+            &ThemeTokens::default(),
+            0,
+            Position::new(4, row),
+        )
+        .expect("selection start should resolve");
+        let end = selection_point_from_mouse(
+            area,
+            &chat,
+            &ThemeTokens::default(),
+            0,
+            Position::new(10, row),
+        )
+        .expect("selection end should resolve");
+
+        let backend = TestBackend::new(area.width, area.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    area,
+                    &chat,
+                    &ThemeTokens::default(),
+                    0,
+                    true,
+                    Some((start, end)),
+                );
+            })
+            .expect("chat render should succeed");
+
+        let buffer = terminal.backend().buffer();
+        let highlighted = (0..area.height)
+            .flat_map(|y| (0..area.width).filter_map(move |x| buffer.cell((x, y))))
+            .filter(|cell| cell.bg == Color::Indexed(31))
+            .count();
+
+        assert!(
+            highlighted > 0,
+            "mouse selection should paint a visible highlight in the buffer"
+        );
     }
 }

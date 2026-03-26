@@ -76,6 +76,26 @@ impl TuiModel {
             }
         }
 
+        if self.focus == FocusArea::Chat
+            && matches!(self.main_pane_view, MainPaneView::Conversation)
+            && self.chat.selected_message().is_some()
+        {
+            let action_count = self.selected_inline_message_action_count();
+            if action_count > 0 {
+                match code {
+                    KeyCode::Left => {
+                        self.chat.navigate_selected_message_action(-1, action_count);
+                        return false;
+                    }
+                    KeyCode::Right => {
+                        self.chat.navigate_selected_message_action(1, action_count);
+                        return false;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         if code == KeyCode::Enter
             && !modifiers
                 .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::CONTROL)

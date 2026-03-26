@@ -210,6 +210,7 @@ pub struct ChatState {
     transcript_mode: TranscriptMode,
     expanded_reasoning: std::collections::HashSet<usize>,
     selected_message: Option<usize>,
+    selected_message_action: usize,
     expanded_tools: std::collections::HashSet<usize>,
     pinned_message_top: Option<usize>,
 }
@@ -228,6 +229,7 @@ impl ChatState {
             retry_status: None,
             transcript_mode: TranscriptMode::Compact,
             selected_message: None,
+            selected_message_action: 0,
             expanded_tools: std::collections::HashSet::new(),
             pinned_message_top: None,
         }
@@ -324,15 +326,39 @@ impl ChatState {
         self.selected_message
     }
 
+    pub fn selected_message_action(&self) -> usize {
+        self.selected_message_action
+    }
+
+    pub fn select_message_action(&mut self, index: usize) {
+        self.selected_message_action = index;
+    }
+
+    pub fn navigate_selected_message_action(&mut self, delta: i32, action_count: usize) {
+        if action_count == 0 {
+            self.selected_message_action = 0;
+        } else if delta > 0 {
+            self.selected_message_action =
+                (self.selected_message_action + delta as usize).min(action_count - 1);
+        } else {
+            self.selected_message_action = self
+                .selected_message_action
+                .saturating_sub((-delta) as usize);
+        }
+    }
+
     pub fn select_message(&mut self, index: Option<usize>) {
         self.selected_message = index;
+        self.selected_message_action = 0;
     }
 
     pub fn toggle_message_selection(&mut self, index: usize) {
         if self.selected_message == Some(index) {
             self.selected_message = None;
+            self.selected_message_action = 0;
         } else {
             self.selected_message = Some(index);
+            self.selected_message_action = 0;
         }
     }
 
@@ -341,13 +367,18 @@ impl ChatState {
         let count = self.active_thread().map(|t| t.messages.len()).unwrap_or(0);
         if count == 0 {
             self.selected_message = None;
+            self.selected_message_action = 0;
             return;
         }
         match self.selected_message {
-            None => self.selected_message = Some(0),
+            None => {
+                self.selected_message = Some(0);
+                self.selected_message_action = 0;
+            }
             Some(idx) => {
                 if idx + 1 < count {
                     self.selected_message = Some(idx + 1);
+                    self.selected_message_action = 0;
                 }
             }
         }
@@ -361,10 +392,14 @@ impl ChatState {
                 let count = self.active_thread().map(|t| t.messages.len()).unwrap_or(0);
                 if count > 0 {
                     self.selected_message = Some(count - 1);
+                    self.selected_message_action = 0;
                 }
             }
             Some(0) => {} // already at top
-            Some(idx) => self.selected_message = Some(idx - 1),
+            Some(idx) => {
+                self.selected_message = Some(idx - 1);
+                self.selected_message_action = 0;
+            }
         }
     }
 

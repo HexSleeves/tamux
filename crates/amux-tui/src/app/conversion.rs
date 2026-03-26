@@ -206,9 +206,38 @@ pub(super) fn convert_heartbeat(h: crate::wire::HeartbeatItem) -> task::Heartbea
     }
 }
 
-pub(super) fn copy_to_clipboard(text: &str) {
-    use base64::Engine;
+#[cfg(test)]
+static LAST_COPIED_TEXT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-    let encoded = base64::engine::general_purpose::STANDARD.encode(text);
-    print!("\x1b]52;c;{}\x07", encoded);
+#[cfg(test)]
+pub(super) fn reset_last_copied_text() {
+    *LAST_COPIED_TEXT
+        .lock()
+        .expect("clipboard test mutex poisoned") = None;
+}
+
+#[cfg(test)]
+pub(super) fn last_copied_text() -> Option<String> {
+    LAST_COPIED_TEXT
+        .lock()
+        .expect("clipboard test mutex poisoned")
+        .clone()
+}
+
+pub(super) fn copy_to_clipboard(text: &str) {
+    #[cfg(test)]
+    {
+        *LAST_COPIED_TEXT
+            .lock()
+            .expect("clipboard test mutex poisoned") = Some(text.to_string());
+        return;
+    }
+
+    #[cfg(not(test))]
+    {
+        use base64::Engine;
+
+        let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+        print!("\x1b]52;c;{}\x07", encoded);
+    }
 }

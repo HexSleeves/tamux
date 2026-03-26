@@ -177,6 +177,7 @@ pub struct TuiModel {
     chat_drag_current: Option<Position>,
     chat_drag_anchor_point: Option<widgets::chat::SelectionPoint>,
     chat_drag_current_point: Option<widgets::chat::SelectionPoint>,
+    chat_selection_snapshot: Option<widgets::chat::CachedSelectionSnapshot>,
 
     // Active mouse drag selection in the work-context preview pane
     work_context_drag_anchor: Option<Position>,
@@ -247,6 +248,7 @@ impl TuiModel {
             chat_drag_current: None,
             chat_drag_anchor_point: None,
             chat_drag_current_point: None,
+            chat_selection_snapshot: None,
             work_context_drag_anchor: None,
             work_context_drag_current: None,
             work_context_drag_anchor_point: None,
@@ -539,6 +541,31 @@ impl TuiModel {
             return;
         };
         self.run_concierge_action(action);
+    }
+
+    fn selected_inline_message_action_count(&self) -> usize {
+        let Some(selected_message) = self.chat.selected_message() else {
+            return 0;
+        };
+        let Some(message) = self
+            .chat
+            .active_thread()
+            .and_then(|thread| thread.messages.get(selected_message))
+        else {
+            return 0;
+        };
+        let is_last_actionable = !message.actions.is_empty()
+            && self
+                .chat
+                .active_actions()
+                .first()
+                .map(|action| &action.label)
+                == message.actions.first().map(|action| &action.label);
+        if is_last_actionable {
+            0
+        } else {
+            widgets::chat::message_action_targets(selected_message, message).len()
+        }
     }
 
     fn execute_concierge_message_action(&mut self, message_index: usize, action_index: usize) {
@@ -1145,6 +1172,107 @@ mod tests {
     }
 
     #[test]
+    fn selected_message_arrow_keys_navigate_inline_actions() {
+        let mut model = build_model();
+        model.focus = FocusArea::Chat;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::User,
+                content: "first".to_string(),
+                ..Default::default()
+            },
+        });
+        model.chat.select_message(Some(0));
+        model.chat.select_message_action(0);
+
+        let handled = model.handle_key(KeyCode::Right, KeyModifiers::NONE);
+
+        assert!(!handled);
+        assert_eq!(model.chat.selected_message_action(), 1);
+    }
+
+    #[test]
+    fn clicking_selected_message_copy_action_copies_that_message() {
+        let mut model = build_model();
+        model.show_sidebar_override = Some(false);
+        model.focus = FocusArea::Chat;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::User,
+                content: "first".to_string(),
+                ..Default::default()
+            },
+        });
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "second".to_string(),
+                ..Default::default()
+            },
+        });
+        model.chat.select_message(Some(1));
+
+        let input_start_row = model.height.saturating_sub(model.input_height() + 1);
+        let chat_area = Rect::new(0, 3, model.width, input_start_row.saturating_sub(3));
+        let copy_pos = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .find_map(|row| {
+                (chat_area.x..chat_area.x.saturating_add(chat_area.width)).find_map(|column| {
+                    let pos = Position::new(column, row);
+                    if widgets::chat::hit_test(
+                        chat_area,
+                        &model.chat,
+                        &model.theme,
+                        model.tick_counter,
+                        pos,
+                    ) == Some(chat::ChatHitTarget::CopyMessage(1))
+                    {
+                        Some(pos)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .expect("selected message should expose a clickable copy action");
+
+        super::conversion::reset_last_copied_text();
+
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: copy_pos.x,
+            row: copy_pos.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: copy_pos.x,
+            row: copy_pos.y,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(
+            super::conversion::last_copied_text().as_deref(),
+            Some("second")
+        );
+    }
+
+    #[test]
     fn concierge_mouse_click_executes_visible_action() {
         let (_daemon_tx, daemon_rx) = mpsc::channel();
         let (cmd_tx, mut cmd_rx) = unbounded_channel();
@@ -1326,6 +1454,156 @@ mod tests {
             current_point.row < anchor_point.row,
             "dragging upward with autoscroll should extend the selection into older transcript rows: anchor={anchor_point:?} current={current_point:?}"
         );
+    }
+
+    #[test]
+    fn drag_selection_does_not_rebuild_full_transcript_for_every_mouse_event() {
+        let mut model = build_model();
+        model.show_sidebar_override = Some(false);
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::User,
+                content: "alpha beta gamma".to_string(),
+                ..Default::default()
+            },
+        });
+
+        let input_start_row = model.height.saturating_sub(model.input_height() + 1);
+        let chat_area = Rect::new(0, 3, model.width, input_start_row.saturating_sub(3));
+        let row = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .find(|candidate| {
+                widgets::chat::selection_point_from_mouse(
+                    chat_area,
+                    &model.chat,
+                    &model.theme,
+                    model.tick_counter,
+                    Position::new(3, *candidate),
+                )
+                .is_some()
+            })
+            .expect("chat transcript should expose a selectable row");
+
+        widgets::chat::reset_build_rendered_lines_call_count();
+
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 3,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 12,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 12,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(
+            widgets::chat::build_rendered_lines_call_count(),
+            1,
+            "dragging a static selection should reuse one transcript snapshot"
+        );
+    }
+
+    #[test]
+    fn drag_selection_copies_expected_text_after_autoscroll() {
+        let mut model = build_model();
+        model.show_sidebar_override = Some(false);
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::User,
+                content: (1..=80)
+                    .map(|idx| format!("line {idx}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                ..Default::default()
+            },
+        });
+
+        let input_start_row = model.height.saturating_sub(model.input_height() + 1);
+        let chat_area = Rect::new(0, 3, model.width, input_start_row.saturating_sub(3));
+        let preferred_row = chat_area.y.saturating_add(chat_area.height / 2);
+        let start_row = (preferred_row..chat_area.y.saturating_add(chat_area.height))
+            .chain(chat_area.y..preferred_row)
+            .find(|row| {
+                widgets::chat::selection_point_from_mouse(
+                    chat_area,
+                    &model.chat,
+                    &model.theme,
+                    model.tick_counter,
+                    Position::new(3, *row),
+                )
+                .is_some()
+            })
+            .expect("chat transcript should expose at least one selectable row");
+
+        super::conversion::reset_last_copied_text();
+
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 3,
+            row: start_row,
+            modifiers: KeyModifiers::NONE,
+        });
+        for _ in 0..4 {
+            model.handle_mouse(MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                column: 3,
+                row: start_row,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+
+        let anchor_point = model
+            .chat_drag_anchor_point
+            .expect("mouse down should capture a document anchor point");
+        let current_point = model
+            .chat_drag_current_point
+            .expect("autoscroll should extend the current drag point");
+        let expected = widgets::chat::selected_text(
+            chat_area,
+            &model.chat,
+            &model.theme,
+            model.tick_counter,
+            anchor_point,
+            current_point,
+        )
+        .expect("selection should resolve to copied text");
+
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 3,
+            row: start_row,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(
+            super::conversion::last_copied_text().as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(model.status_line, "Copied selection to clipboard");
     }
 
     #[test]
