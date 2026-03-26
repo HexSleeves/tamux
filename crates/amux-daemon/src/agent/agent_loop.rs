@@ -154,7 +154,11 @@ impl AgentEngine {
         let learned_patterns = {
             let hs = self.heuristic_store.read().await;
             let patterns = build_learned_patterns_section(&hs);
-            if patterns.is_empty() { None } else { Some(patterns) }
+            if patterns.is_empty() {
+                None
+            } else {
+                Some(patterns)
+            }
         };
         let mut system_prompt = build_system_prompt(
             &config,
@@ -433,7 +437,8 @@ impl AgentEngine {
                     thread_id: tid.clone(),
                     message: error_msg.clone(),
                 });
-                self.finish_stream_cancellation(&tid, stream_generation).await;
+                self.finish_stream_cancellation(&tid, stream_generation)
+                    .await;
                 return Err(e.context(error_msg));
             }
             let llm_started_at = Instant::now();
@@ -458,7 +463,8 @@ impl AgentEngine {
 
             // Timeout for individual chunk reads — if a provider stops sending
             // data mid-stream, we don't hang forever. The agent retries automatically.
-            const LLM_STREAM_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+            const LLM_STREAM_CHUNK_TIMEOUT: std::time::Duration =
+                std::time::Duration::from_secs(120);
             const MAX_STREAM_TIMEOUTS: u32 = 3;
             let mut stream_timed_out = false;
 
@@ -634,7 +640,8 @@ impl AgentEngine {
                         message: msg.clone(),
                         details: None,
                     });
-                    self.finish_stream_cancellation(&tid, stream_generation).await;
+                    self.finish_stream_cancellation(&tid, stream_generation)
+                        .await;
                     return Err(anyhow::anyhow!("{}", msg));
                 }
                 let msg = format!(
@@ -754,10 +761,11 @@ impl AgentEngine {
                         let ack = match tool_names.as_slice() {
                             [single] => format!("On it \u{2014} using {single}..."),
                             names if names.len() <= 3 => {
-                                format!("Working on it \u{2014} using {}...",
-                                    names.join(", "))
+                                format!("Working on it \u{2014} using {}...", names.join(", "))
                             }
-                            names => format!("Working on it \u{2014} running {} tools...", names.len()),
+                            names => {
+                                format!("Working on it \u{2014} running {} tools...", names.len())
+                            }
                         };
                         let _ = self.event_tx.send(AgentEvent::WorkflowNotice {
                             thread_id: tid.clone(),
@@ -787,7 +795,7 @@ impl AgentEngine {
                         if let Some(thread) = threads.get_mut(&tid) {
                             thread.messages.push(AgentMessage {
                                 id: generate_message_id(),
-                                    role: MessageRole::Assistant,
+                                role: MessageRole::Assistant,
                                 content: msg_content,
                                 tool_calls: Some(tool_calls.clone()),
                                 tool_call_id: None,
@@ -849,7 +857,7 @@ impl AgentEngine {
                                     if let Some(thread) = threads.get_mut(&tid) {
                                         thread.messages.push(AgentMessage {
                                             id: generate_message_id(),
-                                    role: MessageRole::Tool,
+                                            role: MessageRole::Tool,
                                             content: denied_content,
                                             tool_calls: None,
                                             tool_call_id: Some(tc.id.clone()),
@@ -1243,19 +1251,23 @@ impl AgentEngine {
                     crate::agent::learning::traces::TraceOutcome::Partial { .. } => "partial",
                     crate::agent::learning::traces::TraceOutcome::Cancelled => "cancelled",
                 };
-                if let Err(e) = self.history.insert_execution_trace(
-                    &trace.trace_id,
-                    None,
-                    task_id,
-                    &trace.task_type,
-                    outcome_str,
-                    trace.quality_score,
-                    &tool_seq_json,
-                    &metrics_json,
-                    trace.total_duration_ms,
-                    trace.total_tokens_used,
-                    trace.created_at,
-                ).await {
+                if let Err(e) = self
+                    .history
+                    .insert_execution_trace(
+                        &trace.trace_id,
+                        None,
+                        task_id,
+                        &trace.task_type,
+                        outcome_str,
+                        trace.quality_score,
+                        &tool_seq_json,
+                        &metrics_json,
+                        trace.total_duration_ms,
+                        trace.total_tokens_used,
+                        trace.created_at,
+                    )
+                    .await
+                {
                     tracing::warn!(task_id, "failed to persist execution trace: {e}");
                 }
             }
@@ -1311,8 +1323,7 @@ impl AgentEngine {
                     let mut results = Vec::new();
                     let mut matched = std::collections::HashSet::new();
                     let mut j = i + 1;
-                    while j < thread.messages.len()
-                        && thread.messages[j].role == MessageRole::Tool
+                    while j < thread.messages.len() && thread.messages[j].role == MessageRole::Tool
                     {
                         if thread.messages[j]
                             .tool_call_id
@@ -1382,7 +1393,7 @@ impl AgentEngine {
         if let Some(thread) = threads.get_mut(thread_id) {
             thread.messages.push(AgentMessage {
                 id: generate_message_id(),
-                                    role: MessageRole::Assistant,
+                role: MessageRole::Assistant,
                 content: content.into(),
                 tool_calls: None,
                 tool_call_id: None,
@@ -1653,7 +1664,11 @@ mod tests {
         assert_eq!(thread.messages[1].content, "continue");
         drop(live);
 
-        let persisted = engine.history.list_messages(thread_id, Some(10)).await.unwrap();
+        let persisted = engine
+            .history
+            .list_messages(thread_id, Some(10))
+            .await
+            .unwrap();
         assert_eq!(persisted.len(), 2);
         assert_eq!(persisted[0].content, "start");
         assert_eq!(persisted[1].content, "continue");

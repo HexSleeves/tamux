@@ -915,7 +915,8 @@ impl SnapshotStore {
         )?;
 
         self.history
-            .upsert_snapshot_index(&encode_snapshot(&snapshot)).await?;
+            .upsert_snapshot_index(&encode_snapshot(&snapshot))
+            .await?;
 
         // Enforce retention limits after creating a new snapshot
         if retention.auto_cleanup {

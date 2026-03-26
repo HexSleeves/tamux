@@ -155,6 +155,7 @@ pub enum ChatAction {
     ClearThread {
         thread_id: String,
     },
+    DismissConciergeWelcome,
     SelectThread(String),
     ScrollChat(i32),
     PinMessageTop(usize),
@@ -633,6 +634,14 @@ impl ChatState {
                 }
             }
 
+            ChatAction::DismissConciergeWelcome => {
+                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == "concierge") {
+                    thread
+                        .messages
+                        .retain(|message| !message.is_concierge_welcome);
+                }
+            }
+
             ChatAction::AppendMessage { thread_id, message } => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == thread_id) {
                     if thread_id == "concierge" && message.is_concierge_welcome {
@@ -961,6 +970,41 @@ mod tests {
         assert_eq!(thread.messages.len(), 1);
         assert_eq!(thread.messages[0].content, "Welcome 2");
         assert!(thread.messages[0].is_concierge_welcome);
+    }
+
+    #[test]
+    fn dismiss_concierge_welcome_removes_only_welcome_messages() {
+        let mut state = ChatState::new();
+        state.reduce(ChatAction::ThreadCreated {
+            thread_id: "concierge".into(),
+            title: "Concierge".into(),
+        });
+        state.reduce(ChatAction::AppendMessage {
+            thread_id: "concierge".into(),
+            message: AgentMessage {
+                role: MessageRole::Assistant,
+                content: "Welcome".into(),
+                is_concierge_welcome: true,
+                ..Default::default()
+            },
+        });
+        state.reduce(ChatAction::AppendMessage {
+            thread_id: "concierge".into(),
+            message: AgentMessage {
+                role: MessageRole::Assistant,
+                content: "Follow-up".into(),
+                ..Default::default()
+            },
+        });
+
+        state.reduce(ChatAction::DismissConciergeWelcome);
+
+        let thread = state
+            .active_thread()
+            .expect("concierge thread should exist");
+        assert_eq!(thread.messages.len(), 1);
+        assert_eq!(thread.messages[0].content, "Follow-up");
+        assert!(!thread.messages[0].is_concierge_welcome);
     }
 
     // ── Message selection tests ──────────────────────────────────────────

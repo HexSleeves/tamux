@@ -426,7 +426,9 @@ pub fn install_from_npm(package_spec: &str) -> Result<Vec<(String, String)>> {
         .arg(&root)
         .arg(package_spec)
         .status()
-        .with_context(|| "failed to launch npm; ensure Node.js and npm are installed and on PATH")?;
+        .with_context(|| {
+            "failed to launch npm; ensure Node.js and npm are installed and on PATH"
+        })?;
 
     if !status.success() {
         bail!("npm install failed for '{}'", package_spec);
@@ -447,8 +449,8 @@ pub fn install_from_npm(package_spec: &str) -> Result<Vec<(String, String)>> {
     if plugin_json.exists() {
         // Single plugin at root (existing behavior, now returns Vec with one item)
         let manifest_bytes = std::fs::read(&plugin_json)?;
-        let manifest_value: serde_json::Value =
-            serde_json::from_slice(&manifest_bytes).with_context(|| "invalid JSON in plugin.json")?;
+        let manifest_value: serde_json::Value = serde_json::from_slice(&manifest_bytes)
+            .with_context(|| "invalid JSON in plugin.json")?;
         let plugin_name = manifest_value
             .get("name")
             .and_then(|v| v.as_str())
@@ -457,8 +459,12 @@ pub fn install_from_npm(package_spec: &str) -> Result<Vec<(String, String)>> {
 
         let target_dir = root.join(&plugin_name);
         if target_dir.exists() && target_dir != installed_dir {
-            std::fs::remove_dir_all(&target_dir)
-                .with_context(|| format!("failed to remove existing plugin at {}", target_dir.display()))?;
+            std::fs::remove_dir_all(&target_dir).with_context(|| {
+                format!(
+                    "failed to remove existing plugin at {}",
+                    target_dir.display()
+                )
+            })?;
         }
         if installed_dir != target_dir {
             copy_dir_recursive(&installed_dir, &target_dir)?;
@@ -494,8 +500,12 @@ pub fn install_from_npm(package_spec: &str) -> Result<Vec<(String, String)>> {
     for (subdir, plugin_name) in &nested_plugins {
         let target_dir = root.join(plugin_name);
         if target_dir.exists() {
-            std::fs::remove_dir_all(&target_dir)
-                .with_context(|| format!("failed to remove existing plugin at {}", target_dir.display()))?;
+            std::fs::remove_dir_all(&target_dir).with_context(|| {
+                format!(
+                    "failed to remove existing plugin at {}",
+                    target_dir.display()
+                )
+            })?;
         }
         copy_dir_recursive(subdir, &target_dir)?;
         installed.push((plugin_name.clone(), plugin_name.clone()));
@@ -817,8 +827,9 @@ pub fn remove_plugin_files(name: &str) -> Result<()> {
     let root = plugins_root()?;
     let plugin_dir = root.join(name);
     if plugin_dir.exists() {
-        std::fs::remove_dir_all(&plugin_dir)
-            .with_context(|| format!("failed to remove plugin directory {}", plugin_dir.display()))?;
+        std::fs::remove_dir_all(&plugin_dir).with_context(|| {
+            format!("failed to remove plugin directory {}", plugin_dir.display())
+        })?;
     }
 
     // Also clean up bundled skills (Phase 19 will populate these)
@@ -827,8 +838,9 @@ pub fn remove_plugin_files(name: &str) -> Result<()> {
         .join("plugins")
         .join(name);
     if skills_dir.exists() {
-        std::fs::remove_dir_all(&skills_dir)
-            .with_context(|| format!("failed to remove plugin skills at {}", skills_dir.display()))?;
+        std::fs::remove_dir_all(&skills_dir).with_context(|| {
+            format!("failed to remove plugin skills at {}", skills_dir.display())
+        })?;
     }
 
     Ok(())
@@ -840,10 +852,7 @@ pub fn plugin_commands(commands: &[amux_protocol::PluginCommandInfo]) {
         println!("No plugin commands registered.");
         return;
     }
-    println!(
-        "{:<30} {:<20} {}",
-        "COMMAND", "PLUGIN", "DESCRIPTION"
-    );
+    println!("{:<30} {:<20} {}", "COMMAND", "PLUGIN", "DESCRIPTION");
     for cmd in commands {
         println!(
             "{:<30} {:<20} {}",

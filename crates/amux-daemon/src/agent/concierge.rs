@@ -1546,7 +1546,12 @@ mod tests {
         }
     }
 
-    fn sample_task_for_thread(id: &str, title: &str, created_at: u64, thread_id: &str) -> AgentTask {
+    fn sample_task_for_thread(
+        id: &str,
+        title: &str,
+        created_at: u64,
+        thread_id: &str,
+    ) -> AgentTask {
         let mut task = sample_task(id, title, created_at);
         task.thread_id = Some(thread_id.to_string());
         task

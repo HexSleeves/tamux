@@ -10,7 +10,9 @@ pub enum PluginApiError {
     #[error("SSRF blocked: request to {url} targets an internal/private IP range")]
     SsrfBlocked { url: String },
 
-    #[error("Rate limited: plugin '{plugin}' exceeded rate limit. Retry after {retry_after_secs}s")]
+    #[error(
+        "Rate limited: plugin '{plugin}' exceeded rate limit. Retry after {retry_after_secs}s"
+    )]
     RateLimited {
         plugin: String,
         retry_after_secs: u64,
@@ -68,12 +70,13 @@ pub async fn execute_request(
     http_client: &reqwest::Client,
     rendered: &RenderedRequest,
 ) -> Result<serde_json::Value, PluginApiError> {
-    let method: reqwest::Method = rendered
-        .method
-        .parse()
-        .map_err(|e| PluginApiError::TemplateError {
-            detail: format!("invalid HTTP method '{}': {e}", rendered.method),
-        })?;
+    let method: reqwest::Method =
+        rendered
+            .method
+            .parse()
+            .map_err(|e| PluginApiError::TemplateError {
+                detail: format!("invalid HTTP method '{}': {e}", rendered.method),
+            })?;
 
     let mut builder = http_client.request(method, &rendered.url);
 

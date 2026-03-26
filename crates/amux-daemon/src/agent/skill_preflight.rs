@@ -21,7 +21,8 @@ impl AgentEngine {
         let skills_root = skills_dir(&self.data_dir);
         sync_skill_catalog(&skills_root, &self.history).await?;
         let context_tags = resolve_skill_context_tags(&self.session_manager, session_id).await;
-        let matches = select_skill_matches(&self.history, &skills_root, content, &context_tags).await?;
+        let matches =
+            select_skill_matches(&self.history, &skills_root, content, &context_tags).await?;
         if matches.is_empty() {
             return Ok(None);
         }

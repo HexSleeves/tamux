@@ -133,7 +133,9 @@ pub(super) fn compact_messages_for_request(
         let model_window = model_context_window(
             &config.provider,
             &provider_config.model,
-            provider_config.context_window_tokens.max(config.context_window_tokens),
+            provider_config
+                .context_window_tokens
+                .max(config.context_window_tokens),
         ) as usize;
         let current = estimate_message_tokens(messages);
         if current > model_window {

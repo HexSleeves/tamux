@@ -40,10 +40,7 @@ pub fn render(
     let actions = chat.active_actions();
     let has_actions = !actions.is_empty();
 
-    if area.height == 0
-        || area.width < 8
-        || (!concierge.loading && !has_actions)
-    {
+    if area.height == 0 || area.width < 8 || (!concierge.loading && !has_actions) {
         return;
     }
 
@@ -51,7 +48,10 @@ pub fn render(
 
     if concierge.loading {
         // Single line: "Concierge ⣻ working…"
-        let spinner_frames = ["\u{28bf}", "\u{28fb}", "\u{28fd}", "\u{28fe}", "\u{28f7}", "\u{28ef}", "\u{28df}", "\u{287f}"];
+        let spinner_frames = [
+            "\u{28bf}", "\u{28fb}", "\u{28fd}", "\u{28fe}", "\u{28f7}", "\u{28ef}", "\u{28df}",
+            "\u{287f}",
+        ];
         let spinner = spinner_frames[(std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_millis() as usize)
@@ -88,7 +88,7 @@ pub fn render(
 pub fn hit_test(
     area: Rect,
     actions: &[MessageAction],
-    selected_action: usize,
+    _selected_action: usize,
     mouse: Position,
 ) -> Option<ConciergeHitTarget> {
     if actions.is_empty()

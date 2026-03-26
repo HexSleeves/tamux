@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use amux_protocol::CommunitySkillEntry;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::skill_community::PublishMetadata;
@@ -76,16 +76,14 @@ impl RegistryClient {
 
     pub(crate) async fn refresh_index(&self) -> Result<()> {
         let url = format!("{}/index.json", self.registry_url);
-        let bytes = tokio::time::timeout(
-            std::time::Duration::from_secs(SEARCH_TIMEOUT_SECS),
-            async {
+        let bytes =
+            tokio::time::timeout(std::time::Duration::from_secs(SEARCH_TIMEOUT_SECS), async {
                 let response = self.http.get(&url).send().await?;
                 let response = response.error_for_status()?;
                 response.bytes().await
-            },
-        )
-        .await
-        .context("registry index request timed out")??;
+            })
+            .await
+            .context("registry index request timed out")??;
 
         if let Some(parent) = self.index_path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -105,16 +103,14 @@ impl RegistryClient {
 
         let url = format!("{}/skills/{}.tar.gz", self.registry_url, name);
         let output_path = self.cache_dir.join(format!("{}.tar.gz", name));
-        let bytes = tokio::time::timeout(
-            std::time::Duration::from_secs(FETCH_TIMEOUT_SECS),
-            async {
+        let bytes =
+            tokio::time::timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS), async {
                 let response = self.http.get(&url).send().await?;
                 let response = response.error_for_status()?;
                 response.bytes().await
-            },
-        )
-        .await
-        .context("registry skill download timed out")??;
+            })
+            .await
+            .context("registry skill download timed out")??;
 
         tokio::fs::write(&output_path, bytes)
             .await
@@ -133,7 +129,8 @@ impl RegistryClient {
         let tarball_bytes = tokio::fs::read(tarball_path)
             .await
             .with_context(|| format!("read tarball {}", tarball_path.display()))?;
-        let metadata_json = serde_json::to_string(metadata).context("serialize publish metadata")?;
+        let metadata_json =
+            serde_json::to_string(metadata).context("serialize publish metadata")?;
         let filename = tarball_path
             .file_name()
             .and_then(|name| name.to_str())
@@ -150,20 +147,17 @@ impl RegistryClient {
             .text("metadata", metadata_json);
 
         let url = format!("{}/skills", self.registry_url);
-        tokio::time::timeout(
-            std::time::Duration::from_secs(FETCH_TIMEOUT_SECS),
-            async {
-                let response = self
-                    .http
-                    .post(&url)
-                    .bearer_auth(token)
-                    .multipart(form)
-                    .send()
-                    .await?;
-                response.error_for_status()?;
-                Ok::<(), anyhow::Error>(())
-            },
-        )
+        tokio::time::timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS), async {
+            let response = self
+                .http
+                .post(&url)
+                .bearer_auth(token)
+                .multipart(form)
+                .send()
+                .await?;
+            response.error_for_status()?;
+            Ok::<(), anyhow::Error>(())
+        })
         .await
         .context("registry publish request timed out")??;
         Ok(())
@@ -256,7 +250,11 @@ mod tests {
         let index = RegistryIndex {
             version: 1,
             updated_at: 42,
-            skills: vec![sample_entry("git-helper", "Git workflow assistant", &["git"])],
+            skills: vec![sample_entry(
+                "git-helper",
+                "Git workflow assistant",
+                &["git"],
+            )],
         };
 
         let encoded = serde_json::to_string(&index).expect("encode index");

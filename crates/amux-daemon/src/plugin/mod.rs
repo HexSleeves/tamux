@@ -215,10 +215,7 @@ impl PluginManager {
     /// Returns Ok(()) if no conflicts, Err with conflict details if any found.
     /// Namespace convention: commands are namespaced as /pluginname.command per PSKL-05.
     /// Conflicts happen when two different plugins declare the same command key or skill path.
-    pub async fn check_conflicts(
-        &self,
-        new_manifest: &manifest::PluginManifest,
-    ) -> Result<()> {
+    pub async fn check_conflicts(&self, new_manifest: &manifest::PluginManifest) -> Result<()> {
         let plugins = self.plugins.read().await;
         let mut conflicts: Vec<String> = Vec::new();
 
@@ -450,11 +447,12 @@ impl PluginManager {
     ) -> Result<String, api_proxy::PluginApiError> {
         // (a) Look up plugin in loaded map
         let plugins = self.plugins.read().await;
-        let plugin = plugins
-            .get(plugin_name)
-            .ok_or_else(|| api_proxy::PluginApiError::PluginNotFound {
-                name: plugin_name.to_string(),
-            })?;
+        let plugin =
+            plugins
+                .get(plugin_name)
+                .ok_or_else(|| api_proxy::PluginApiError::PluginNotFound {
+                    name: plugin_name.to_string(),
+                })?;
 
         // (b) Check enabled state from persistence
         if !self.check_plugin_enabled(plugin_name).await? {
@@ -464,21 +462,18 @@ impl PluginManager {
         }
 
         // (c) Get API section and endpoint from manifest
-        let api = plugin
-            .manifest
-            .api
-            .as_ref()
-            .ok_or_else(|| api_proxy::PluginApiError::EndpointNotFound {
+        let api = plugin.manifest.api.as_ref().ok_or_else(|| {
+            api_proxy::PluginApiError::EndpointNotFound {
                 plugin: plugin_name.to_string(),
                 endpoint: endpoint_name.to_string(),
-            })?;
-        let endpoint = api
-            .endpoints
-            .get(endpoint_name)
-            .ok_or_else(|| api_proxy::PluginApiError::EndpointNotFound {
+            }
+        })?;
+        let endpoint = api.endpoints.get(endpoint_name).ok_or_else(|| {
+            api_proxy::PluginApiError::EndpointNotFound {
                 plugin: plugin_name.to_string(),
                 endpoint: endpoint_name.to_string(),
-            })?;
+            }
+        })?;
 
         // Clone what we need before dropping the read lock
         let api_clone = api.clone();
@@ -552,20 +547,19 @@ impl PluginManager {
         ssrf::validate_url(&rendered.url, false).await?;
 
         // (i) Execute HTTP request
-        let response_json =
-            match api_proxy::execute_request(&self.http_client, &rendered).await {
-                Ok(json) => json,
-                Err(api_proxy::PluginApiError::RateLimited {
-                    retry_after_secs, ..
-                }) => {
-                    // Fill in plugin name for upstream 429 errors
-                    return Err(api_proxy::PluginApiError::RateLimited {
-                        plugin: plugin_name.to_string(),
-                        retry_after_secs,
-                    });
-                }
-                Err(e) => return Err(e),
-            };
+        let response_json = match api_proxy::execute_request(&self.http_client, &rendered).await {
+            Ok(json) => json,
+            Err(api_proxy::PluginApiError::RateLimited {
+                retry_after_secs, ..
+            }) => {
+                // Fill in plugin name for upstream 429 errors
+                return Err(api_proxy::PluginApiError::RateLimited {
+                    plugin: plugin_name.to_string(),
+                    retry_after_secs,
+                });
+            }
+            Err(e) => return Err(e),
+        };
 
         // (j) Render response
         let rendered_text =
@@ -576,10 +570,7 @@ impl PluginManager {
     }
 
     /// Check if a plugin is enabled via persistence. Returns true if enabled.
-    async fn check_plugin_enabled(
-        &self,
-        name: &str,
-    ) -> Result<bool, api_proxy::PluginApiError> {
+    async fn check_plugin_enabled(&self, name: &str) -> Result<bool, api_proxy::PluginApiError> {
         match self.persistence.get_plugin(name).await {
             Ok(Some(record)) => Ok(record.enabled),
             Ok(None) => Err(api_proxy::PluginApiError::PluginNotFound {
@@ -669,7 +660,11 @@ impl PluginManager {
         drop(plugins);
 
         // Get client_id and client_secret from plugin settings
-        let settings = self.persistence.get_settings(plugin_name).await.unwrap_or_default();
+        let settings = self
+            .persistence
+            .get_settings(plugin_name)
+            .await
+            .unwrap_or_default();
         let client_id = settings
             .iter()
             .find(|(k, _, _)| k == "client_id")
@@ -713,17 +708,14 @@ impl PluginManager {
         let result = oauth2::exchange_code(state, &code).await?;
 
         // Load encryption key
-        let data_dir = self
-            .plugins_dir
-            .parent()
-            .unwrap_or(Path::new("."));
+        let data_dir = self.plugins_dir.parent().unwrap_or(Path::new("."));
         let key = crypto::load_or_create_key(data_dir)?;
 
         // Encrypt and store access_token
         let encrypted_access = crypto::encrypt(&key, result.access_token.as_bytes())?;
-        let expires_at = result.expires_in.map(|secs| {
-            (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339()
-        });
+        let expires_at = result
+            .expires_in
+            .map(|secs| (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339());
         self.persistence
             .upsert_credential(
                 plugin_name,
@@ -810,8 +802,8 @@ impl PluginManager {
                         // Check if within 80% of TTL
                         let remaining = (expiry_utc - now).num_seconds();
                         remaining < 60 // Refresh if less than 60 seconds remaining
-                        // (conservative: most tokens have 3600s TTL, 80% = 720s, but we use 60s
-                        //  as a safe threshold since we don't track original TTL)
+                                       // (conservative: most tokens have 3600s TTL, 80% = 720s, but we use 60s
+                                       //  as a safe threshold since we don't track original TTL)
                     }
                 }
                 Err(_) => false, // Unparseable expiry, assume ok
@@ -877,13 +869,11 @@ impl PluginManager {
             }
         };
 
-        let access_token = String::from_utf8(
-            crypto::decrypt(&key, &final_blob).map_err(|_| {
-                api_proxy::PluginApiError::AuthExpired {
-                    plugin: plugin_name.to_string(),
-                }
-            })?,
-        )
+        let access_token = String::from_utf8(crypto::decrypt(&key, &final_blob).map_err(|_| {
+            api_proxy::PluginApiError::AuthExpired {
+                plugin: plugin_name.to_string(),
+            }
+        })?)
         .map_err(|_| api_proxy::PluginApiError::AuthExpired {
             plugin: plugin_name.to_string(),
         })?;
@@ -929,11 +919,10 @@ impl PluginManager {
             .get_credential(plugin_name, "refresh_token")
             .await?;
 
-        let (rt_blob, _) =
-            rt_cred.ok_or_else(|| anyhow::anyhow!("no refresh token stored for '{}'", plugin_name))?;
+        let (rt_blob, _) = rt_cred
+            .ok_or_else(|| anyhow::anyhow!("no refresh token stored for '{}'", plugin_name))?;
 
-        let refresh_token_str =
-            String::from_utf8(crypto::decrypt(key, &rt_blob)?)?;
+        let refresh_token_str = String::from_utf8(crypto::decrypt(key, &rt_blob)?)?;
 
         let auth = manifest_auth
             .as_ref()
@@ -967,9 +956,9 @@ impl PluginManager {
 
         // Re-encrypt and store new access token per D-10
         let encrypted_access = crypto::encrypt(key, result.access_token.as_bytes())?;
-        let expires_at = result.expires_in.map(|secs| {
-            (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339()
-        });
+        let expires_at = result
+            .expires_in
+            .map(|secs| (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339());
         self.persistence
             .upsert_credential(
                 plugin_name,

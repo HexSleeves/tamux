@@ -253,6 +253,9 @@ impl SessionManager {
         let mut infos = Vec::with_capacity(sessions.len());
         for (id, session) in sessions {
             let s = session.lock().await;
+            if s.is_dead() {
+                continue;
+            }
             let workspace_id = s.workspace_id().map(ToOwned::to_owned);
 
             if let Some(filter) = workspace_filter {
@@ -333,6 +336,9 @@ impl SessionManager {
             .get(&id)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("session not found: {id}"))?;
+        if session.lock().await.is_dead() {
+            anyhow::bail!("session is not alive: {id}");
+        }
 
         let workspace_id = session.lock().await.workspace_id().map(ToOwned::to_owned);
         let execution_id = format!("exec_{}", Uuid::new_v4());
@@ -341,13 +347,15 @@ impl SessionManager {
             PolicyDecision::Allow => {
                 let snapshot = {
                     let session = session.lock().await;
-                    self.snapshots.create_snapshot(
-                        workspace_id.clone(),
-                        Some(id),
-                        request.cwd.as_deref().or_else(|| session.cwd()),
-                        Some(&request.command),
-                        "pre-execution checkpoint",
-                    ).await?
+                    self.snapshots
+                        .create_snapshot(
+                            workspace_id.clone(),
+                            Some(id),
+                            request.cwd.as_deref().or_else(|| session.cwd()),
+                            Some(&request.command),
+                            "pre-execution checkpoint",
+                        )
+                        .await?
                 };
                 let position = session.lock().await.queue_managed_command(
                     execution_id.clone(),
@@ -413,13 +421,15 @@ impl SessionManager {
             .ok_or_else(|| anyhow::anyhow!("session not found: {}", pending.session_id))?;
         let snapshot = {
             let session = session.lock().await;
-            self.snapshots.create_snapshot(
-                pending.workspace_id.clone(),
-                Some(pending.session_id),
-                pending.request.cwd.as_deref().or_else(|| session.cwd()),
-                Some(&pending.request.command),
-                "approved pre-execution checkpoint",
-            ).await?
+            self.snapshots
+                .create_snapshot(
+                    pending.workspace_id.clone(),
+                    Some(pending.session_id),
+                    pending.request.cwd.as_deref().or_else(|| session.cwd()),
+                    Some(&pending.request.command),
+                    "approved pre-execution checkpoint",
+                )
+                .await?
         };
         let position = session.lock().await.queue_managed_command(
             pending.execution_id.clone(),
@@ -462,7 +472,8 @@ impl SessionManager {
         duration_ms: Option<i64>,
     ) -> Result<()> {
         self.history
-            .complete_command_log(id, exit_code, duration_ms).await
+            .complete_command_log(id, exit_code, duration_ms)
+            .await
     }
 
     pub async fn query_command_log(
@@ -471,7 +482,9 @@ impl SessionManager {
         pane_id: Option<&str>,
         limit: Option<usize>,
     ) -> Result<Vec<CommandLogEntry>> {
-        self.history.query_command_log(workspace_id, pane_id, limit).await
+        self.history
+            .query_command_log(workspace_id, pane_id, limit)
+            .await
     }
 
     pub async fn clear_command_log(&self) -> Result<()> {
@@ -538,7 +551,9 @@ impl SessionManager {
         pane_id: Option<&str>,
         limit: Option<usize>,
     ) -> Result<Vec<AgentEventRow>> {
-        self.history.list_agent_events(category, pane_id, limit).await
+        self.history
+            .list_agent_events(category, pane_id, limit)
+            .await
     }
 
     pub fn find_symbol_matches(
@@ -599,5 +614,51 @@ impl SessionManager {
         if let Err(error) = save_state(&self.state_path, &state) {
             tracing::error!(error = %error, path = %self.state_path.display(), "failed to persist daemon state");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_omits_dead_sessions_and_managed_execution_rejects_them() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let (session_id, _rx) = manager
+            .spawn(Some("/bin/true".to_string()), None, None, None, 80, 24)
+            .await
+            .expect("spawn test session");
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        assert!(
+            manager
+                .list()
+                .await
+                .into_iter()
+                .all(|session| session.id != session_id),
+            "dead sessions should not be offered as active choices"
+        );
+
+        let error = manager
+            .execute_managed_command(
+                session_id,
+                ManagedCommandRequest {
+                    command: "echo hello".to_string(),
+                    rationale: "test".to_string(),
+                    allow_network: false,
+                    sandbox_enabled: false,
+                    security_level: amux_protocol::SecurityLevel::Lowest,
+                    cwd: None,
+                    language_hint: None,
+                    source: amux_protocol::ManagedCommandSource::Agent,
+                },
+            )
+            .await
+            .expect_err("dead sessions must be rejected for managed execution");
+
+        assert!(error.to_string().contains("not alive"));
     }
 }

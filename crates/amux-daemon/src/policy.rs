@@ -169,7 +169,11 @@ mod tests {
 
     #[test]
     fn lowest_requires_approval_for_targeted_rm_rf_paths() {
-        let req = request("rm -rf /home/mkurman/to_remove", SecurityLevel::Lowest, false);
+        let req = request(
+            "rm -rf /home/mkurman/to_remove",
+            SecurityLevel::Lowest,
+            false,
+        );
         let decision = evaluate_command("exec_2b".to_string(), &req, None);
         match decision {
             PolicyDecision::RequireApproval(payload) => {

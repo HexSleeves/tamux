@@ -142,13 +142,11 @@ fn parse_callback_request(raw: &str) -> Result<(String, String)> {
 /// and returns the authorization code.
 pub async fn await_callback(state: &mut OAuthFlowState) -> Result<String> {
     // 5-minute timeout per D-06
-    let (mut stream, _addr) = tokio::time::timeout(
-        Duration::from_secs(300),
-        state.listener.accept(),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("OAuth callback timed out after 5 minutes"))?
-    .context("failed to accept OAuth callback connection")?;
+    let (mut stream, _addr) =
+        tokio::time::timeout(Duration::from_secs(300), state.listener.accept())
+            .await
+            .map_err(|_| anyhow::anyhow!("OAuth callback timed out after 5 minutes"))?
+            .context("failed to accept OAuth callback connection")?;
 
     // Read the HTTP request (4096 bytes is plenty for a callback GET)
     let mut buf = vec![0u8; 4096];
@@ -167,7 +165,11 @@ pub async fn await_callback(state: &mut OAuthFlowState) -> Result<String> {
         let error_response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n\r\n<html><body><h2>Authentication failed</h2><p>State mismatch. Please try again.</p></body></html>";
         let _ = stream.write_all(error_response.as_bytes()).await;
         let _ = stream.shutdown().await;
-        anyhow::bail!("OAuth state mismatch: expected {}, got {}", state.csrf_state, received_state);
+        anyhow::bail!(
+            "OAuth state mismatch: expected {}, got {}",
+            state.csrf_state,
+            received_state
+        );
     }
 
     // Send success response
@@ -181,10 +183,7 @@ pub async fn await_callback(state: &mut OAuthFlowState) -> Result<String> {
 /// Exchange an authorization code for access and refresh tokens.
 ///
 /// Uses a no-redirect HTTP client for SSRF prevention per Pitfall 4.
-pub async fn exchange_code(
-    state: &OAuthFlowState,
-    code: &str,
-) -> Result<OAuthFlowResult> {
+pub async fn exchange_code(state: &OAuthFlowState, code: &str) -> Result<OAuthFlowResult> {
     let config = &state.config;
     let client_id = ClientId::new(config.client_id.clone());
     let token_url = TokenUrl::new(config.token_url.clone()).context("invalid token_url")?;
@@ -203,8 +202,7 @@ pub async fn exchange_code(
         .build()
         .context("failed to build HTTP client for token exchange")?;
 
-    let mut token_request = client
-        .exchange_code(AuthorizationCode::new(code.to_string()));
+    let mut token_request = client.exchange_code(AuthorizationCode::new(code.to_string()));
     token_request = token_request.set_redirect_uri(std::borrow::Cow::Owned(redirect));
 
     // Attach PKCE verifier if applicable

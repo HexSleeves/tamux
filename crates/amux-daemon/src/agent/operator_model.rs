@@ -432,7 +432,8 @@ impl AgentEngine {
                 "confirmation_like": confirmation_like,
                 "revision_signal": format!("{revision_kind:?}").to_ascii_lowercase(),
             }),
-        ).await?;
+        )
+        .await?;
 
         Ok(())
     }
@@ -479,7 +480,8 @@ impl AgentEngine {
                 "command": pending_approval.command,
                 "risk_level": pending_approval.risk_level,
             }),
-        ).await?;
+        )
+        .await?;
         Ok(())
     }
 
@@ -531,7 +533,8 @@ impl AgentEngine {
                 "from_error": from_error,
                 "to_error": to_error,
             }),
-        ).await?;
+        )
+        .await?;
         Ok(())
     }
 
@@ -562,7 +565,8 @@ impl AgentEngine {
             serde_json::json!({
                 "surface": normalized,
             }),
-        ).await?;
+        )
+        .await?;
         Ok(())
     }
 
@@ -631,7 +635,8 @@ impl AgentEngine {
             serde_json::json!({
                 "decision": format!("{decision:?}").to_ascii_lowercase(),
             }),
-        ).await?;
+        )
+        .await?;
         Ok(())
     }
 }

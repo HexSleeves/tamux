@@ -5,6 +5,7 @@ mod history;
 mod lsp_client;
 mod network;
 mod osc;
+pub mod plugin;
 mod policy;
 mod policy_external;
 mod pty_session;
@@ -15,7 +16,6 @@ mod session_manager;
 mod snapshot;
 mod state;
 mod validation;
-pub mod plugin;
 
 use anyhow::Result;
 use tracing_subscriber::EnvFilter;

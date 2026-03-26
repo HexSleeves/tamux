@@ -78,10 +78,7 @@ pub fn validate_manifest(
             .iter()
             .map(|e| format!("{}: {}", e.instance_path(), e))
             .collect();
-        return Err(anyhow!(
-            "manifest validation failed:\n{}",
-            msgs.join("\n")
-        ));
+        return Err(anyhow!("manifest validation failed:\n{}", msgs.join("\n")));
     }
 
     // Deserialize into typed struct
@@ -101,11 +98,7 @@ pub fn validate_manifest(
         ));
     }
 
-    let settings_count = manifest
-        .settings
-        .as_ref()
-        .map(|s| s.len())
-        .unwrap_or(0);
+    let settings_count = manifest.settings.as_ref().map(|s| s.len()).unwrap_or(0);
     if settings_count > MAX_SETTINGS {
         return Err(anyhow!(
             "manifest has {} settings (max {})",
@@ -175,10 +168,9 @@ pub fn scan_plugins_dir(
 
         let manifest_path = path.join("plugin.json");
         if !manifest_path.exists() {
-            result.skipped.push((
-                dir_name.clone(),
-                "no plugin.json found".to_string(),
-            ));
+            result
+                .skipped
+                .push((dir_name.clone(), "no plugin.json found".to_string()));
             tracing::warn!(plugin = %dir_name, "skipping plugin directory: no plugin.json found");
             continue;
         }
@@ -249,7 +241,10 @@ mod tests {
         let json = r#"{"name":"../escape","version":"1.0.0","schema_version":1}"#;
         let err = validate_manifest(json.as_bytes(), &validator).unwrap_err();
         assert!(
-            err.to_string().contains("escape") || err.to_string().contains("..") || err.to_string().contains("pattern") || err.to_string().contains("validation failed"),
+            err.to_string().contains("escape")
+                || err.to_string().contains("..")
+                || err.to_string().contains("pattern")
+                || err.to_string().contains("validation failed"),
             "error should mention invalid name: {}",
             err
         );
@@ -382,11 +377,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let plugin_dir = tmp.path().join("my-plugin");
         std::fs::create_dir_all(&plugin_dir).unwrap();
-        std::fs::write(
-            plugin_dir.join("plugin.json"),
-            minimal_manifest_json(),
-        )
-        .unwrap();
+        std::fs::write(plugin_dir.join("plugin.json"), minimal_manifest_json()).unwrap();
 
         let validator = make_validator();
         let result = scan_plugins_dir(tmp.path(), &validator);
@@ -460,7 +451,10 @@ mod tests {
         assert_eq!(manifest.schema_version, 1);
 
         // Auth: OAuth2
-        let auth = manifest.auth.as_ref().expect("gmail should have auth section");
+        let auth = manifest
+            .auth
+            .as_ref()
+            .expect("gmail should have auth section");
         assert_eq!(auth.auth_type, "oauth2");
         assert!(auth.pkce);
         assert!(auth.authorization_url.is_some());
@@ -468,7 +462,10 @@ mod tests {
         assert_eq!(auth.scopes.as_ref().unwrap().len(), 1);
 
         // Endpoints: exactly 3 (list_inbox, get_message, search_messages)
-        let api = manifest.api.as_ref().expect("gmail should have api section");
+        let api = manifest
+            .api
+            .as_ref()
+            .expect("gmail should have api section");
         assert_eq!(
             api.endpoints.len(),
             3,

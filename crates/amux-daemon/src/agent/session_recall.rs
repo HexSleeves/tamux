@@ -90,8 +90,9 @@ async fn recall_from_threads(
 
     let mut groups = Vec::new();
     for thread in threads {
-        let messages =
-            session_manager.list_agent_messages(&thread.id, Some(MAX_MESSAGES_PER_THREAD)).await?;
+        let messages = session_manager
+            .list_agent_messages(&thread.id, Some(MAX_MESSAGES_PER_THREAD))
+            .await?;
         let mut score = match_score(&thread.title, tokens);
         let mut snippets = Vec::new();
         let mut role_hits = Vec::new();
@@ -178,8 +179,9 @@ async fn recall_from_agent_events(
     session_manager: &SessionManager,
     tokens: &[String],
 ) -> Result<Vec<RecallGroup>> {
-    let events =
-        session_manager.list_agent_events(Some("behavioral"), None, Some(MAX_EVENT_SCAN)).await?;
+    let events = session_manager
+        .list_agent_events(Some("behavioral"), None, Some(MAX_EVENT_SCAN))
+        .await?;
     let mut groups = Vec::new();
     for event in events {
         let score = match_score(&event.payload_json, tokens) + match_score(&event.kind, tokens);

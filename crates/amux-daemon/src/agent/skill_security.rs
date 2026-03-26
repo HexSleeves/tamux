@@ -195,6 +195,20 @@ pub fn scan_skill_content(
 
     let pattern_verdict = compute_verdict(&pattern_findings);
     let structural_verdict = compute_verdict(&structural_findings);
+    let llm_findings = if skip_llm_tier {
+        Vec::new()
+    } else {
+        vec![ScanFinding {
+            tier: ScanTier::LlmReview,
+            severity: FindingSeverity::Suspicious,
+            line: None,
+            pattern: Some("semantic_review_unavailable".to_string()),
+            message: "Tier-3 semantic LLM review unavailable; import requires --force for unverified publishers.".to_string(),
+        }]
+    };
+    findings.extend(llm_findings.clone());
+
+    let llm_verdict = compute_verdict(&llm_findings);
     let llm_tier = if skip_llm_tier {
         TierResult {
             tier: ScanTier::LlmReview,
@@ -204,11 +218,9 @@ pub fn scan_skill_content(
         }
     } else {
         TierResult {
-            // D-06: tier 3 LLM review is a no-op in v1; keeping the branch wired
-            // lets verified publishers skip it as soon as the tier becomes active.
             tier: ScanTier::LlmReview,
-            verdict: ScanVerdict::Pass,
-            findings_count: 0,
+            verdict: llm_verdict,
+            findings_count: llm_findings.len() as u32,
             skipped: false,
         }
     };
@@ -403,6 +415,10 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.tier == ScanTier::StructuralValidation));
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding.tier == ScanTier::LlmReview));
     }
 
     #[test]
@@ -417,5 +433,26 @@ mod tests {
             .tier_results
             .iter()
             .any(|tier| tier.tier == ScanTier::LlmReview && tier.skipped));
+    }
+
+    #[test]
+    fn scan_skill_content_warns_when_llm_tier_unavailable_for_unverified() {
+        let report = scan_skill_content(
+            "Use `read_file` before replying.",
+            &whitelist(&["read_file"]),
+            false,
+        );
+
+        assert_eq!(report.verdict, ScanVerdict::Warn);
+        assert!(report
+            .tier_results
+            .iter()
+            .any(|tier| tier.tier == ScanTier::LlmReview
+                && !tier.skipped
+                && tier.verdict == ScanVerdict::Warn));
+        assert!(report.findings.iter().any(|finding| {
+            finding.tier == ScanTier::LlmReview
+                && finding.pattern.as_deref() == Some("semantic_review_unavailable")
+        }));
     }
 }

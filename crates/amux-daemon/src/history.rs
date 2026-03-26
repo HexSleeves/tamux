@@ -9,16 +9,18 @@ use amux_protocol::{
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
-use tokio_rusqlite;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio_rusqlite;
 
 /// Helper trait to convert any error into `tokio_rusqlite::Error` inside `.call()` closures.
 trait IntoCallError<T> {
     fn call_err(self) -> std::result::Result<T, tokio_rusqlite::Error>;
 }
 
-impl<T, E: std::error::Error + Send + Sync + 'static> IntoCallError<T> for std::result::Result<T, E> {
+impl<T, E: std::error::Error + Send + Sync + 'static> IntoCallError<T>
+    for std::result::Result<T, E>
+{
     fn call_err(self) -> std::result::Result<T, tokio_rusqlite::Error> {
         self.map_err(|e| tokio_rusqlite::Error::Other(Box::new(e)))
     }
@@ -339,9 +341,7 @@ pub struct AgentMessagePatch {
 
 impl HistoryStore {
     pub fn data_dir(&self) -> &Path {
-        self.skill_dir
-            .parent()
-            .unwrap_or(self.skill_dir.as_path())
+        self.skill_dir.parent().unwrap_or(self.skill_dir.as_path())
     }
 
     pub async fn new() -> Result<Self> {
@@ -405,7 +405,10 @@ impl HistoryStore {
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    pub async fn replace_agent_config_items(&self, items: &[(String, serde_json::Value)]) -> Result<()> {
+    pub async fn replace_agent_config_items(
+        &self,
+        items: &[(String, serde_json::Value)],
+    ) -> Result<()> {
         let items: Vec<(String, String)> = items
             .iter()
             .map(|(k, v)| Ok((k.clone(), serde_json::to_string(v)?)))
@@ -538,7 +541,8 @@ impl HistoryStore {
                 "duration_ms": record.duration_ms,
                 "snapshot": record.snapshot_path,
             }),
-        ).await?;
+        )
+        .await?;
         self.append_telemetry(
             "cognitive",
             json!({
@@ -547,7 +551,8 @@ impl HistoryStore {
                 "source": record.source,
                 "rationale": record.rationale,
             }),
-        ).await?;
+        )
+        .await?;
 
         let mut system = System::new_all();
         system.refresh_memory();
@@ -561,12 +566,17 @@ impl HistoryStore {
                 "used_memory": system.used_memory(),
                 "cpu_usage": system.global_cpu_info().cpu_usage(),
             }),
-        ).await?;
+        )
+        .await?;
 
         Ok(())
     }
 
-    pub async fn search(&self, query: &str, limit: usize) -> Result<(String, Vec<HistorySearchHit>)> {
+    pub async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<(String, Vec<HistorySearchHit>)> {
         let query = query.to_string();
         let query = query.to_string();
         self.conn.call(move |conn| {
@@ -822,10 +832,7 @@ impl HistoryStore {
     }
 
     /// Retrieve a single skill variant by its `variant_id`.
-    pub async fn get_skill_variant(
-        &self,
-        variant_id: &str,
-    ) -> Result<Option<SkillVariantRecord>> {
+    pub async fn get_skill_variant(&self, variant_id: &str) -> Result<Option<SkillVariantRecord>> {
         let variant_id = variant_id.to_string();
         self.conn
             .call(move |conn| {
@@ -873,7 +880,11 @@ impl HistoryStore {
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    pub async fn record_skill_variant_use(&self, variant_id: &str, outcome: Option<bool>) -> Result<()> {
+    pub async fn record_skill_variant_use(
+        &self,
+        variant_id: &str,
+        outcome: Option<bool>,
+    ) -> Result<()> {
         let variant_id = variant_id.to_string();
         let variant_id = variant_id.to_string();
         self.conn.call(move |conn| {
@@ -956,7 +967,8 @@ impl HistoryStore {
                 "goal_run_id": record.goal_run_id,
                 "context_tags": context_tags_owned,
             }),
-        ).await?;
+        )
+        .await?;
         Ok(())
     }
 
@@ -1069,7 +1081,8 @@ impl HistoryStore {
                 "outcome": normalized_outcome,
                 "count": pending_len,
             }),
-        ).await?;
+        )
+        .await?;
 
         for skill_name in skill_names {
             let _ = self.rebalance_skill_variants(&skill_name).await;
@@ -1081,7 +1094,10 @@ impl HistoryStore {
         Ok(pending_len)
     }
 
-    pub async fn rebalance_skill_variants(&self, skill_name: &str) -> Result<Vec<SkillVariantRecord>> {
+    pub async fn rebalance_skill_variants(
+        &self,
+        skill_name: &str,
+    ) -> Result<Vec<SkillVariantRecord>> {
         let skill_name = skill_name.to_string();
         let skill_name = skill_name.to_string();
         self.conn.call(move |conn| {
@@ -1134,7 +1150,10 @@ impl HistoryStore {
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    pub async fn maybe_branch_skill_variants(&self, skill_name: &str) -> Result<Vec<SkillVariantRecord>> {
+    pub async fn maybe_branch_skill_variants(
+        &self,
+        skill_name: &str,
+    ) -> Result<Vec<SkillVariantRecord>> {
         let skill_name_owned = skill_name.to_string();
         let skill_name = skill_name.to_string();
         let candidates = self.conn.call(move |conn| {
@@ -1199,7 +1218,10 @@ impl HistoryStore {
             }) {
                 continue;
             }
-            if let Some(record) = self.create_branched_skill_variant(&skill_name, &candidate).await? {
+            if let Some(record) = self
+                .create_branched_skill_variant(&skill_name, &candidate)
+                .await?
+            {
                 created.push(record);
             }
         }
@@ -1210,7 +1232,10 @@ impl HistoryStore {
         Ok(created)
     }
 
-    pub async fn maybe_merge_skill_variants(&self, skill_name: &str) -> Result<Vec<SkillVariantRecord>> {
+    pub async fn maybe_merge_skill_variants(
+        &self,
+        skill_name: &str,
+    ) -> Result<Vec<SkillVariantRecord>> {
         let skill_name_owned = skill_name.to_string();
         let skill_name = skill_name.to_string();
         let variants = self.conn.call(move |conn| {
@@ -1313,7 +1338,8 @@ impl HistoryStore {
                 "variant_ids": merged_ids,
                 "merged_count": merged_notes_len,
             }),
-        ).await?;
+        )
+        .await?;
 
         self.list_skill_variants(Some(&skill_name), 200).await
     }
@@ -1403,13 +1429,16 @@ impl HistoryStore {
         duration_ms: Option<i64>,
     ) -> Result<()> {
         let id = id.to_string();
-        self.conn.call(move |conn| {
-        conn.execute(
-            "UPDATE command_log SET exit_code = ?2, duration_ms = ?3 WHERE id = ?1",
-            params![id, exit_code, duration_ms],
-        )?;
-        Ok(())
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "UPDATE command_log SET exit_code = ?2, duration_ms = ?3 WHERE id = ?1",
+                    params![id, exit_code, duration_ms],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn query_command_log(
@@ -1464,10 +1493,13 @@ impl HistoryStore {
     }
 
     pub async fn clear_command_log(&self) -> Result<()> {
-        self.conn.call(move |conn| {
-        conn.execute("DELETE FROM command_log", [])?;
-        Ok(())
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+        self.conn
+            .call(move |conn| {
+                conn.execute("DELETE FROM command_log", [])?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn create_thread(&self, thread: &AgentDbThread) -> Result<()> {
@@ -1498,10 +1530,13 @@ impl HistoryStore {
 
     pub async fn delete_thread(&self, id: &str) -> Result<()> {
         let id = id.to_string();
-        self.conn.call(move |conn| {
-        conn.execute("DELETE FROM agent_threads WHERE id = ?1", params![id])?;
-        Ok(())
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+        self.conn
+            .call(move |conn| {
+                conn.execute("DELETE FROM agent_threads WHERE id = ?1", params![id])?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn list_threads(&self) -> Result<Vec<AgentDbThread>> {
@@ -1561,21 +1596,22 @@ impl HistoryStore {
     pub async fn update_message(&self, id: &str, patch: &AgentMessagePatch) -> Result<()> {
         let id = id.to_string();
         let patch = patch.clone();
-        self.conn.call(move |conn| {
-        let thread_id: Option<String> = conn
-            .query_row(
-                "SELECT thread_id FROM agent_messages WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .optional()?;
+        self.conn
+            .call(move |conn| {
+                let thread_id: Option<String> = conn
+                    .query_row(
+                        "SELECT thread_id FROM agent_messages WHERE id = ?1",
+                        params![id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
 
-        if thread_id.is_none() {
-            return Ok(());
-        }
+                if thread_id.is_none() {
+                    return Ok(());
+                }
 
-        conn.execute(
-            "UPDATE agent_messages SET
+                conn.execute(
+                    "UPDATE agent_messages SET
                 content = COALESCE(?2, content),
                 provider = COALESCE(?3, provider),
                 model = COALESCE(?4, model),
@@ -1586,25 +1622,27 @@ impl HistoryStore {
                 tool_calls_json = COALESCE(?9, tool_calls_json),
                 metadata_json = COALESCE(?10, metadata_json)
              WHERE id = ?1",
-            params![
-                id,
-                patch.content.as_deref(),
-                flatten_option_str(&patch.provider),
-                flatten_option_str(&patch.model),
-                flatten_option_i64(&patch.input_tokens),
-                flatten_option_i64(&patch.output_tokens),
-                flatten_option_i64(&patch.total_tokens),
-                flatten_option_str(&patch.reasoning),
-                flatten_option_str(&patch.tool_calls_json),
-                flatten_option_str(&patch.metadata_json),
-            ],
-        )?;
+                    params![
+                        id,
+                        patch.content.as_deref(),
+                        flatten_option_str(&patch.provider),
+                        flatten_option_str(&patch.model),
+                        flatten_option_i64(&patch.input_tokens),
+                        flatten_option_i64(&patch.output_tokens),
+                        flatten_option_i64(&patch.total_tokens),
+                        flatten_option_str(&patch.reasoning),
+                        flatten_option_str(&patch.tool_calls_json),
+                        flatten_option_str(&patch.metadata_json),
+                    ],
+                )?;
 
-        if let Some(thread_id) = thread_id {
-            refresh_thread_stats(conn, &thread_id)?;
-        }
-        Ok(())
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+                if let Some(thread_id) = thread_id {
+                    refresh_thread_stats(conn, &thread_id)?;
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     /// Delete specific messages from a thread by their IDs.
@@ -1614,22 +1652,27 @@ impl HistoryStore {
         }
         let thread_id = thread_id.to_string();
         let message_ids: Vec<String> = message_ids.iter().map(|s| s.to_string()).collect();
-        self.conn.call(move |conn| {
-        let placeholders: Vec<String> = message_ids.iter().map(|_| "?".to_string()).collect();
-        let sql = format!(
-            "DELETE FROM agent_messages WHERE thread_id = ? AND id IN ({})",
-            placeholders.join(", ")
-        );
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        params.push(Box::new(thread_id.to_string()));
-        for id in message_ids {
-            params.push(Box::new(id.to_string()));
-        }
-        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-        let count = conn.execute(&sql, refs.as_slice())?;
-        refresh_thread_stats(conn, &thread_id)?;
-        Ok(count)
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+        self.conn
+            .call(move |conn| {
+                let placeholders: Vec<String> =
+                    message_ids.iter().map(|_| "?".to_string()).collect();
+                let sql = format!(
+                    "DELETE FROM agent_messages WHERE thread_id = ? AND id IN ({})",
+                    placeholders.join(", ")
+                );
+                let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+                params.push(Box::new(thread_id.to_string()));
+                for id in message_ids {
+                    params.push(Box::new(id.to_string()));
+                }
+                let refs: Vec<&dyn rusqlite::types::ToSql> =
+                    params.iter().map(|p| p.as_ref()).collect();
+                let count = conn.execute(&sql, refs.as_slice())?;
+                refresh_thread_stats(conn, &thread_id)?;
+                Ok(count)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn list_messages(
@@ -1652,21 +1695,24 @@ impl HistoryStore {
     pub async fn get_worm_chain_tip(&self, kind: &str) -> Result<Option<WormChainTip>> {
         let kind = kind.to_string();
         let kind = kind.to_string();
-        self.conn.call(move |conn| {
-            conn.query_row(
-                "SELECT kind, seq, hash FROM worm_chain_tip WHERE kind = ?1",
-                params![kind],
-                |row| {
-                    Ok(WormChainTip {
-                        kind: row.get(0)?,
-                        seq: row.get(1)?,
-                        hash: row.get(2)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(Into::into)
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+        self.conn
+            .call(move |conn| {
+                conn.query_row(
+                    "SELECT kind, seq, hash FROM worm_chain_tip WHERE kind = ?1",
+                    params![kind],
+                    |row| {
+                        Ok(WormChainTip {
+                            kind: row.get(0)?,
+                            seq: row.get(1)?,
+                            hash: row.get(2)?,
+                        })
+                    },
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn set_worm_chain_tip(&self, kind: &str, seq: i64, hash: &str) -> Result<()> {
@@ -1674,14 +1720,17 @@ impl HistoryStore {
         let hash = hash.to_string();
         let kind = kind.to_string();
         let hash = hash.to_string();
-        self.conn.call(move |conn| {
-            conn.execute(
-                "INSERT INTO worm_chain_tip (kind, seq, hash) VALUES (?1, ?2, ?3) \
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT INTO worm_chain_tip (kind, seq, hash) VALUES (?1, ?2, ?3) \
                  ON CONFLICT(kind) DO UPDATE SET seq = excluded.seq, hash = excluded.hash",
-                params![kind, seq, hash],
-            )?;
-            Ok(())
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+                    params![kind, seq, hash],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn upsert_transcript_index(&self, entry: &TranscriptIndexEntry) -> Result<()> {
@@ -1732,24 +1781,27 @@ impl HistoryStore {
 
     pub async fn upsert_snapshot_index(&self, entry: &SnapshotIndexEntry) -> Result<()> {
         let entry = entry.clone();
-        self.conn.call(move |conn| {
-        conn.execute(
-            "INSERT OR REPLACE INTO snapshot_index \
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO snapshot_index \
              (snapshot_id, workspace_id, session_id, kind, label, path, created_at, details_json) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                entry.snapshot_id,
-                entry.workspace_id,
-                entry.session_id,
-                entry.kind,
-                entry.label,
-                entry.path,
-                entry.created_at,
-                entry.details_json,
-            ],
-        )?;
-        Ok(())
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+                    params![
+                        entry.snapshot_id,
+                        entry.workspace_id,
+                        entry.session_id,
+                        entry.kind,
+                        entry.label,
+                        entry.path,
+                        entry.created_at,
+                        entry.details_json,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn list_snapshot_index(
@@ -1775,7 +1827,10 @@ impl HistoryStore {
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    pub async fn get_snapshot_index(&self, snapshot_id: &str) -> Result<Option<SnapshotIndexEntry>> {
+    pub async fn get_snapshot_index(
+        &self,
+        snapshot_id: &str,
+    ) -> Result<Option<SnapshotIndexEntry>> {
         let snapshot_id = snapshot_id.to_string();
         self.conn.call(move |conn| {
         conn
@@ -1792,13 +1847,16 @@ impl HistoryStore {
 
     pub async fn delete_snapshot_index(&self, snapshot_id: &str) -> Result<bool> {
         let snapshot_id = snapshot_id.to_string();
-        self.conn.call(move |conn| {
-        let affected = conn.execute(
-            "DELETE FROM snapshot_index WHERE snapshot_id = ?1",
-            params![snapshot_id],
-        )?;
-        Ok(affected > 0)
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+        self.conn
+            .call(move |conn| {
+                let affected = conn.execute(
+                    "DELETE FROM snapshot_index WHERE snapshot_id = ?1",
+                    params![snapshot_id],
+                )?;
+                Ok(affected > 0)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn upsert_agent_event(&self, entry: &AgentEventRow) -> Result<()> {
@@ -1953,10 +2011,13 @@ impl HistoryStore {
 
     pub async fn delete_agent_task(&self, task_id: &str) -> Result<()> {
         let task_id = task_id.to_string();
-        self.conn.call(move |conn| {
-        conn.execute("DELETE FROM agent_tasks WHERE id = ?1", params![task_id])?;
-        Ok(())
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+        self.conn
+            .call(move |conn| {
+                conn.execute("DELETE FROM agent_tasks WHERE id = ?1", params![task_id])?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn list_agent_tasks(&self) -> Result<Vec<AgentTask>> {
@@ -2891,16 +2952,22 @@ impl HistoryStore {
 
     pub async fn delete_expired_tombstones(&self, max_age_ms: u64, now: u64) -> Result<usize> {
         let cutoff = (now as i64) - (max_age_ms as i64);
-        self.conn.call(move |conn| {
-            let count = conn.execute(
-                "DELETE FROM memory_tombstones WHERE created_at < ?1",
-                params![cutoff],
-            )?;
-            Ok(count)
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+        self.conn
+            .call(move |conn| {
+                let count = conn.execute(
+                    "DELETE FROM memory_tombstones WHERE created_at < ?1",
+                    params![cutoff],
+                )?;
+                Ok(count)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    pub async fn restore_tombstone(&self, tombstone_id: &str) -> Result<Option<MemoryTombstoneRow>> {
+    pub async fn restore_tombstone(
+        &self,
+        tombstone_id: &str,
+    ) -> Result<Option<MemoryTombstoneRow>> {
         let tombstone_id = tombstone_id.to_string();
         self.conn.call(move |conn| {
             let row: Option<MemoryTombstoneRow> = conn.query_row(
@@ -2931,14 +2998,19 @@ impl HistoryStore {
 
     pub async fn get_consolidation_state(&self, key: &str) -> Result<Option<String>> {
         let key = key.to_string();
-        self.conn.call(move |conn| {
-            let value: Option<String> = conn.query_row(
-                "SELECT value FROM consolidation_state WHERE key = ?1",
-                params![key],
-                |row| row.get(0),
-            ).optional()?;
-            Ok(value)
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+        self.conn
+            .call(move |conn| {
+                let value: Option<String> = conn
+                    .query_row(
+                        "SELECT value FROM consolidation_state WHERE key = ?1",
+                        params![key],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                Ok(value)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn set_consolidation_state(&self, key: &str, value: &str, now: u64) -> Result<()> {
@@ -2961,9 +3033,8 @@ impl HistoryStore {
         let like = format!("{}%", prefix);
         self.conn
             .call(move |conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT key, value FROM consolidation_state WHERE key LIKE ?1",
-                )?;
+                let mut stmt =
+                    conn.prepare("SELECT key, value FROM consolidation_state WHERE key LIKE ?1")?;
                 let rows = stmt.query_map(params![like], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
                 })?;
@@ -3057,56 +3128,61 @@ impl HistoryStore {
     /// Detect sequences of 3+ consecutive successful managed commands
     /// that completed within a 5-minute window.
     pub async fn detect_skill_candidates(&self) -> Result<Vec<(String, Vec<HistorySearchHit>)>> {
-        self.conn.call(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, kind, title, excerpt, path, timestamp FROM history_entries \
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, kind, title, excerpt, path, timestamp FROM history_entries \
              WHERE kind = 'managed-command' \
              ORDER BY timestamp DESC LIMIT 20",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(HistorySearchHit {
-                id: row.get(0)?,
-                kind: row.get(1)?,
-                title: row.get(2)?,
-                excerpt: row.get(3)?,
-                path: row.get(4)?,
-                timestamp: row.get::<_, i64>(5)? as u64,
-                score: 0.0,
-            })
-        })?;
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(HistorySearchHit {
+                        id: row.get(0)?,
+                        kind: row.get(1)?,
+                        title: row.get(2)?,
+                        excerpt: row.get(3)?,
+                        path: row.get(4)?,
+                        timestamp: row.get::<_, i64>(5)? as u64,
+                        score: 0.0,
+                    })
+                })?;
 
-        let hits: Vec<_> = rows.filter_map(|r| r.ok()).collect();
-        let mut candidates = Vec::new();
+                let hits: Vec<_> = rows.filter_map(|r| r.ok()).collect();
+                let mut candidates = Vec::new();
 
-        // Find runs of 3+ successful commands within 5-minute windows
-        let mut run: Vec<HistorySearchHit> = Vec::new();
-        for hit in &hits {
-            // Check if excerpt indicates success (exit=Some(0))
-            if hit.excerpt.contains("exit=Some(0)") {
-                if run.is_empty() || (run.last().unwrap().timestamp.abs_diff(hit.timestamp) < 300) {
-                    run.push(hit.clone());
-                } else {
-                    if run.len() >= 3 {
-                        let title = format!("Workflow: {}", run.first().unwrap().title);
-                        candidates.push((title, run.clone()));
+                // Find runs of 3+ successful commands within 5-minute windows
+                let mut run: Vec<HistorySearchHit> = Vec::new();
+                for hit in &hits {
+                    // Check if excerpt indicates success (exit=Some(0))
+                    if hit.excerpt.contains("exit=Some(0)") {
+                        if run.is_empty()
+                            || (run.last().unwrap().timestamp.abs_diff(hit.timestamp) < 300)
+                        {
+                            run.push(hit.clone());
+                        } else {
+                            if run.len() >= 3 {
+                                let title = format!("Workflow: {}", run.first().unwrap().title);
+                                candidates.push((title, run.clone()));
+                            }
+                            run = vec![hit.clone()];
+                        }
+                    } else {
+                        if run.len() >= 3 {
+                            let title = format!("Workflow: {}", run.first().unwrap().title);
+                            candidates.push((title, run.clone()));
+                        }
+                        run.clear();
                     }
-                    run = vec![hit.clone()];
                 }
-            } else {
                 if run.len() >= 3 {
                     let title = format!("Workflow: {}", run.first().unwrap().title);
-                    candidates.push((title, run.clone()));
+                    candidates.push((title, run));
                 }
-                run.clear();
-            }
-        }
-        if run.len() >= 3 {
-            let title = format!("Workflow: {}", run.first().unwrap().title);
-            candidates.push((title, run));
-        }
 
-        Ok(candidates)
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+                Ok(candidates)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     /// Verify the hash-chain integrity of all WORM telemetry ledger files.
@@ -3194,7 +3270,10 @@ impl HistoryStore {
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    pub async fn record_memory_provenance(&self, record: &MemoryProvenanceRecord<'_>) -> Result<()> {
+    pub async fn record_memory_provenance(
+        &self,
+        record: &MemoryProvenanceRecord<'_>,
+    ) -> Result<()> {
         let fact_keys_json = serde_json::to_string(record.fact_keys)?;
         let id = record.id.to_string();
         let target = record.target.to_string();
@@ -3241,7 +3320,8 @@ impl HistoryStore {
                 "goal_run_id": record.goal_run_id,
                 "fact_keys": fact_keys_owned,
             }),
-        ).await?;
+        )
+        .await?;
         Ok(())
     }
 
@@ -3370,7 +3450,8 @@ impl HistoryStore {
             compliance_mode: record.compliance_mode.to_string(),
         };
 
-        self.append_telemetry("provenance", serde_json::to_value(entry)?).await?;
+        self.append_telemetry("provenance", serde_json::to_value(entry)?)
+            .await?;
         Ok(())
     }
 
@@ -3591,16 +3672,18 @@ impl HistoryStore {
     /// Load a single checkpoint by ID.
     pub async fn get_checkpoint(&self, id: &str) -> Result<Option<String>> {
         let id = id.to_string();
-        self.conn.call(move |conn| {
-        conn
-            .query_row(
-                "SELECT state_json FROM agent_checkpoints WHERE id = ?1",
-                params![id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(Into::into)
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+        self.conn
+            .call(move |conn| {
+                conn.query_row(
+                    "SELECT state_json FROM agent_checkpoints WHERE id = ?1",
+                    params![id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     /// Delete checkpoints by their IDs.
@@ -3609,19 +3692,22 @@ impl HistoryStore {
             return Ok(0);
         }
         let ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
-        self.conn.call(move |conn| {
-        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
-        let sql = format!(
-            "DELETE FROM agent_checkpoints WHERE id IN ({})",
-            placeholders.join(", ")
-        );
-        let params: Vec<&dyn rusqlite::types::ToSql> = ids
-            .iter()
-            .map(|id| id as &dyn rusqlite::types::ToSql)
-            .collect();
-        let deleted = conn.execute(&sql, params.as_slice())?;
-        Ok(deleted)
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+        self.conn
+            .call(move |conn| {
+                let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+                let sql = format!(
+                    "DELETE FROM agent_checkpoints WHERE id IN ({})",
+                    placeholders.join(", ")
+                );
+                let params: Vec<&dyn rusqlite::types::ToSql> = ids
+                    .iter()
+                    .map(|id| id as &dyn rusqlite::types::ToSql)
+                    .collect();
+                let deleted = conn.execute(&sql, params.as_slice())?;
+                Ok(deleted)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     // -- Health log --
@@ -3900,18 +3986,21 @@ impl HistoryStore {
         limit: u32,
     ) -> Result<Vec<String>> {
         let option_type = option_type.to_string();
-        self.conn.call(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT outcome_json
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT outcome_json
              FROM causal_traces
              WHERE json_extract(selected_json, '$.option_type') = ?1
              ORDER BY created_at DESC
              LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![option_type, limit], |row| row.get(0))?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+                )?;
+                let rows = stmt.query_map(params![option_type, limit], |row| row.get(0))?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn list_recent_causal_trace_records(
@@ -3920,25 +4009,28 @@ impl HistoryStore {
         limit: u32,
     ) -> Result<Vec<CausalTraceRecord>> {
         let option_type = option_type.to_string();
-        self.conn.call(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT selected_json, causal_factors_json, outcome_json, created_at
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT selected_json, causal_factors_json, outcome_json, created_at
              FROM causal_traces
              WHERE json_extract(selected_json, '$.option_type') = ?1
              ORDER BY created_at DESC
              LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![option_type, limit], |row| {
-            Ok(CausalTraceRecord {
-                selected_json: row.get(0)?,
-                causal_factors_json: row.get(1)?,
-                outcome_json: row.get(2)?,
-                created_at: row.get::<_, i64>(3)? as u64,
+                )?;
+                let rows = stmt.query_map(params![option_type, limit], |row| {
+                    Ok(CausalTraceRecord {
+                        selected_json: row.get(0)?,
+                        causal_factors_json: row.get(1)?,
+                        outcome_json: row.get(2)?,
+                        created_at: row.get::<_, i64>(3)? as u64,
+                    })
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
             })
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn settle_skill_selection_causal_traces(
@@ -3952,9 +4044,10 @@ impl HistoryStore {
         let task_id = task_id.map(str::to_string);
         let goal_run_id = goal_run_id.map(str::to_string);
         let outcome_json = outcome_json.to_string();
-        self.conn.call(move |conn| {
-        let updated = conn.execute(
-            "UPDATE causal_traces
+        self.conn
+            .call(move |conn| {
+                let updated = conn.execute(
+                    "UPDATE causal_traces
              SET outcome_json = ?4
              WHERE decision_type = 'skill_selection'
                AND json_extract(outcome_json, '$.type') = 'unresolved'
@@ -3963,10 +4056,12 @@ impl HistoryStore {
                     (?2 IS NOT NULL AND goal_run_id = ?2) OR
                     (?3 IS NOT NULL AND task_id IS NULL AND goal_run_id IS NULL AND thread_id = ?3)
                )",
-            params![task_id, goal_run_id, thread_id, outcome_json],
-        )?;
-        Ok(updated)
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+                    params![task_id, goal_run_id, thread_id, outcome_json],
+                )?;
+                Ok(updated)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     /// Persist a heartbeat cycle result to SQLite. Per D-12.
@@ -4003,27 +4098,32 @@ impl HistoryStore {
 
     /// List recent heartbeat history entries. Per D-12.
     pub async fn list_heartbeat_history(&self, limit: usize) -> Result<Vec<HeartbeatHistoryRow>> {
-        self.conn.call(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, cycle_timestamp, checks_json, synthesis_json, actionable, \
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, cycle_timestamp, checks_json, synthesis_json, actionable, \
                  digest_text, llm_tokens_used, duration_ms, status \
-                 FROM heartbeat_history ORDER BY cycle_timestamp DESC LIMIT ?1"
-            )?;
-            let rows = stmt.query_map([limit as i64], |row| {
-                Ok(HeartbeatHistoryRow {
-                    id: row.get(0)?,
-                    cycle_timestamp: row.get(1)?,
-                    checks_json: row.get(2)?,
-                    synthesis_json: row.get(3)?,
-                    actionable: row.get::<_, i32>(4)? != 0,
-                    digest_text: row.get(5)?,
-                    llm_tokens_used: row.get(6)?,
-                    duration_ms: row.get(7)?,
-                    status: row.get(8)?,
-                })
-            })?.collect::<std::result::Result<Vec<_>, _>>()?;
-            Ok(rows)
-        }).await.map_err(|e| anyhow::anyhow!("list_heartbeat_history: {e}"))
+                 FROM heartbeat_history ORDER BY cycle_timestamp DESC LIMIT ?1",
+                )?;
+                let rows = stmt
+                    .query_map([limit as i64], |row| {
+                        Ok(HeartbeatHistoryRow {
+                            id: row.get(0)?,
+                            cycle_timestamp: row.get(1)?,
+                            checks_json: row.get(2)?,
+                            synthesis_json: row.get(3)?,
+                            actionable: row.get::<_, i32>(4)? != 0,
+                            digest_text: row.get(5)?,
+                            llm_tokens_used: row.get(6)?,
+                            duration_ms: row.get(7)?,
+                            status: row.get(8)?,
+                        })
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("list_heartbeat_history: {e}"))
     }
 
     // -----------------------------------------------------------------------
@@ -4066,187 +4166,230 @@ impl HistoryStore {
         limit: usize,
     ) -> Result<Vec<AuditEntryRow>> {
         let action_types = action_types.map(|a| a.to_vec());
-        self.conn.call(move |conn| {
-            let mut sql = String::from(
-                "SELECT id, timestamp, action_type, summary, explanation, confidence, \
+        self.conn
+            .call(move |conn| {
+                let mut sql = String::from(
+                    "SELECT id, timestamp, action_type, summary, explanation, confidence, \
                  confidence_band, causal_trace_id, thread_id, goal_run_id, task_id, raw_data_json \
-                 FROM action_audit"
-            );
-            let mut conditions: Vec<String> = Vec::new();
+                 FROM action_audit",
+                );
+                let mut conditions: Vec<String> = Vec::new();
 
-            if let Some(ref types) = action_types {
-                if !types.is_empty() {
-                    let placeholders: Vec<String> = types.iter().enumerate()
-                        .map(|(i, _)| format!("?{}", i + 100))
-                        .collect();
-                    conditions.push(format!("action_type IN ({})", placeholders.join(",")));
-                }
-            }
-            if since.is_some() {
-                conditions.push("timestamp >= ?50".to_string());
-            }
-            if !conditions.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&conditions.join(" AND "));
-            }
-            sql.push_str(" ORDER BY timestamp DESC LIMIT ?99");
-
-            let mut stmt = conn.prepare(&sql)?;
-
-            // Bind parameters dynamically
-            let mut param_idx = 1;
-            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-
-            // Rewrite: use a simpler approach with raw SQL and named params
-            drop(stmt);
-            drop(params);
-
-            // Build the query more simply
-            let mut where_parts: Vec<String> = Vec::new();
-            let mut bind_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-
-            if let Some(ref types) = action_types {
-                if !types.is_empty() {
-                    let placeholders: Vec<String> = (0..types.len())
-                        .map(|i| format!("?{}", i + 1))
-                        .collect();
-                    where_parts.push(format!("action_type IN ({})", placeholders.join(",")));
-                    for t in types {
-                        bind_values.push(Box::new(t.clone()));
+                if let Some(ref types) = action_types {
+                    if !types.is_empty() {
+                        let placeholders: Vec<String> = types
+                            .iter()
+                            .enumerate()
+                            .map(|(i, _)| format!("?{}", i + 100))
+                            .collect();
+                        conditions.push(format!("action_type IN ({})", placeholders.join(",")));
                     }
                 }
-            }
-            let since_idx = bind_values.len() + 1;
-            if let Some(ts) = since {
-                where_parts.push(format!("timestamp >= ?{}", since_idx));
-                bind_values.push(Box::new(ts));
-            }
-            let limit_idx = bind_values.len() + 1;
-            bind_values.push(Box::new(limit as i64));
+                if since.is_some() {
+                    conditions.push("timestamp >= ?50".to_string());
+                }
+                if !conditions.is_empty() {
+                    sql.push_str(" WHERE ");
+                    sql.push_str(&conditions.join(" AND "));
+                }
+                sql.push_str(" ORDER BY timestamp DESC LIMIT ?99");
 
-            let mut final_sql = String::from(
-                "SELECT id, timestamp, action_type, summary, explanation, confidence, \
+                let mut stmt = conn.prepare(&sql)?;
+
+                // Bind parameters dynamically
+                let mut param_idx = 1;
+                let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+                // Rewrite: use a simpler approach with raw SQL and named params
+                drop(stmt);
+                drop(params);
+
+                // Build the query more simply
+                let mut where_parts: Vec<String> = Vec::new();
+                let mut bind_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+                if let Some(ref types) = action_types {
+                    if !types.is_empty() {
+                        let placeholders: Vec<String> =
+                            (0..types.len()).map(|i| format!("?{}", i + 1)).collect();
+                        where_parts.push(format!("action_type IN ({})", placeholders.join(",")));
+                        for t in types {
+                            bind_values.push(Box::new(t.clone()));
+                        }
+                    }
+                }
+                let since_idx = bind_values.len() + 1;
+                if let Some(ts) = since {
+                    where_parts.push(format!("timestamp >= ?{}", since_idx));
+                    bind_values.push(Box::new(ts));
+                }
+                let limit_idx = bind_values.len() + 1;
+                bind_values.push(Box::new(limit as i64));
+
+                let mut final_sql = String::from(
+                    "SELECT id, timestamp, action_type, summary, explanation, confidence, \
                  confidence_band, causal_trace_id, thread_id, goal_run_id, task_id, raw_data_json \
-                 FROM action_audit"
-            );
-            if !where_parts.is_empty() {
-                final_sql.push_str(" WHERE ");
-                final_sql.push_str(&where_parts.join(" AND "));
-            }
-            final_sql.push_str(&format!(" ORDER BY timestamp DESC LIMIT ?{}", limit_idx));
+                 FROM action_audit",
+                );
+                if !where_parts.is_empty() {
+                    final_sql.push_str(" WHERE ");
+                    final_sql.push_str(&where_parts.join(" AND "));
+                }
+                final_sql.push_str(&format!(" ORDER BY timestamp DESC LIMIT ?{}", limit_idx));
 
-            let mut stmt = conn.prepare(&final_sql)?;
-            let params_ref: Vec<&dyn rusqlite::types::ToSql> = bind_values.iter().map(|b| b.as_ref()).collect();
-            let rows = stmt.query_map(params_ref.as_slice(), |row| {
-                Ok(AuditEntryRow {
-                    id: row.get(0)?,
-                    timestamp: row.get(1)?,
-                    action_type: row.get(2)?,
-                    summary: row.get(3)?,
-                    explanation: row.get(4)?,
-                    confidence: row.get(5)?,
-                    confidence_band: row.get(6)?,
-                    causal_trace_id: row.get(7)?,
-                    thread_id: row.get(8)?,
-                    goal_run_id: row.get(9)?,
-                    task_id: row.get(10)?,
-                    raw_data_json: row.get(11)?,
-                })
-            })?.collect::<std::result::Result<Vec<_>, _>>()?;
-            Ok(rows)
-        }).await.map_err(|e| anyhow::anyhow!("list_action_audit: {e}"))
+                let mut stmt = conn.prepare(&final_sql)?;
+                let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+                    bind_values.iter().map(|b| b.as_ref()).collect();
+                let rows = stmt
+                    .query_map(params_ref.as_slice(), |row| {
+                        Ok(AuditEntryRow {
+                            id: row.get(0)?,
+                            timestamp: row.get(1)?,
+                            action_type: row.get(2)?,
+                            summary: row.get(3)?,
+                            explanation: row.get(4)?,
+                            confidence: row.get(5)?,
+                            confidence_band: row.get(6)?,
+                            causal_trace_id: row.get(7)?,
+                            thread_id: row.get(8)?,
+                            goal_run_id: row.get(9)?,
+                            task_id: row.get(10)?,
+                            raw_data_json: row.get(11)?,
+                        })
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("list_action_audit: {e}"))
     }
 
     /// Delete oldest audit entries exceeding retention limits. Returns count deleted.
-    pub async fn cleanup_action_audit(&self, max_entries: usize, max_age_days: u32) -> Result<usize> {
-        self.conn.call(move |conn| {
-            let mut deleted = 0usize;
-            // Delete by age
-            if max_age_days > 0 {
-                let cutoff = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as i64
-                    - (max_age_days as i64 * 86_400 * 1000);
-                deleted += conn.execute(
-                    "DELETE FROM action_audit WHERE timestamp < ?1",
-                    [cutoff],
-                )? as usize;
-            }
-            // Delete excess entries (keep newest max_entries)
-            if max_entries > 0 {
-                deleted += conn.execute(
-                    "DELETE FROM action_audit WHERE id NOT IN \
+    pub async fn cleanup_action_audit(
+        &self,
+        max_entries: usize,
+        max_age_days: u32,
+    ) -> Result<usize> {
+        self.conn
+            .call(move |conn| {
+                let mut deleted = 0usize;
+                // Delete by age
+                if max_age_days > 0 {
+                    let cutoff = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64
+                        - (max_age_days as i64 * 86_400 * 1000);
+                    deleted += conn
+                        .execute("DELETE FROM action_audit WHERE timestamp < ?1", [cutoff])?
+                        as usize;
+                }
+                // Delete excess entries (keep newest max_entries)
+                if max_entries > 0 {
+                    deleted += conn.execute(
+                        "DELETE FROM action_audit WHERE id NOT IN \
                      (SELECT id FROM action_audit ORDER BY timestamp DESC LIMIT ?1)",
-                    [max_entries as i64],
-                )? as usize;
-            }
-            Ok(deleted)
-        }).await.map_err(|e| anyhow::anyhow!("cleanup_action_audit: {e}"))
+                        [max_entries as i64],
+                    )? as usize;
+                }
+                Ok(deleted)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("cleanup_action_audit: {e}"))
     }
 
     /// Mark an audit entry as dismissed by the user. Per BEAT-09/D-04.
     pub async fn dismiss_audit_entry(&self, entry_id: &str) -> Result<()> {
         let entry_id = entry_id.to_string();
-        self.conn.call(move |conn| {
-            conn.execute(
-                "UPDATE action_audit SET user_action = 'dismissed' WHERE id = ?1",
-                [&entry_id],
-            )?;
-            Ok(())
-        }).await.map_err(|e| anyhow::anyhow!("dismiss_audit_entry: {e}"))
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "UPDATE action_audit SET user_action = 'dismissed' WHERE id = ?1",
+                    [&entry_id],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("dismiss_audit_entry: {e}"))
     }
 
     /// Count dismissed audit entries per action_type since a given timestamp (ms).
-    pub async fn count_dismissals_by_type(&self, since_timestamp: i64) -> Result<std::collections::HashMap<String, u64>> {
+    pub async fn count_dismissals_by_type(
+        &self,
+        since_timestamp: i64,
+    ) -> Result<std::collections::HashMap<String, u64>> {
         let since = since_timestamp;
-        self.conn.call(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT action_type, COUNT(*) FROM action_audit \
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT action_type, COUNT(*) FROM action_audit \
                  WHERE user_action = 'dismissed' AND timestamp >= ?1 \
-                 GROUP BY action_type"
-            )?;
-            let rows = stmt.query_map([since], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
-            })?.collect::<std::result::Result<Vec<_>, _>>()?;
-            Ok(rows.into_iter().collect())
-        }).await.map_err(|e| anyhow::anyhow!("count_dismissals_by_type: {e}"))
+                 GROUP BY action_type",
+                )?;
+                let rows = stmt
+                    .query_map([since], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(rows.into_iter().collect())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("count_dismissals_by_type: {e}"))
     }
 
     /// Count total audit entries per action_type since a given timestamp (ms).
-    pub async fn count_shown_by_type(&self, since_timestamp: i64) -> Result<std::collections::HashMap<String, u64>> {
+    pub async fn count_shown_by_type(
+        &self,
+        since_timestamp: i64,
+    ) -> Result<std::collections::HashMap<String, u64>> {
         let since = since_timestamp;
-        self.conn.call(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT action_type, COUNT(*) FROM action_audit \
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT action_type, COUNT(*) FROM action_audit \
                  WHERE timestamp >= ?1 \
-                 GROUP BY action_type"
-            )?;
-            let rows = stmt.query_map([since], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
-            })?.collect::<std::result::Result<Vec<_>, _>>()?;
-            Ok(rows.into_iter().collect())
-        }).await.map_err(|e| anyhow::anyhow!("count_shown_by_type: {e}"))
+                 GROUP BY action_type",
+                )?;
+                let rows = stmt
+                    .query_map([since], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(rows.into_iter().collect())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("count_shown_by_type: {e}"))
     }
 
     /// Count audit entries where user acted on them, per action_type since a given timestamp (ms).
-    pub async fn count_acted_on_by_type(&self, since_timestamp: i64) -> Result<std::collections::HashMap<String, u64>> {
+    pub async fn count_acted_on_by_type(
+        &self,
+        since_timestamp: i64,
+    ) -> Result<std::collections::HashMap<String, u64>> {
         let since = since_timestamp;
-        self.conn.call(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT action_type, COUNT(*) FROM action_audit \
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT action_type, COUNT(*) FROM action_audit \
                  WHERE user_action = 'acted_on' AND timestamp >= ?1 \
-                 GROUP BY action_type"
-            )?;
-            let rows = stmt.query_map([since], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
-            })?.collect::<std::result::Result<Vec<_>, _>>()?;
-            Ok(rows.into_iter().collect())
-        }).await.map_err(|e| anyhow::anyhow!("count_acted_on_by_type: {e}"))
+                 GROUP BY action_type",
+                )?;
+                let rows = stmt
+                    .query_map([since], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(rows.into_iter().collect())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("count_acted_on_by_type: {e}"))
     }
 }
 
-fn refresh_thread_stats(connection: &Connection, thread_id: &str) -> std::result::Result<(), rusqlite::Error> {
+fn refresh_thread_stats(
+    connection: &Connection,
+    thread_id: &str,
+) -> std::result::Result<(), rusqlite::Error> {
     let (message_count, total_tokens, last_preview, updated_at): (i64, i64, String, i64) = connection.query_row(
         "SELECT
             COUNT(*),
@@ -5254,7 +5397,11 @@ fn ensure_column(
     Ok(())
 }
 
-fn table_has_column(connection: &Connection, table: &str, column: &str) -> std::result::Result<bool, rusqlite::Error> {
+fn table_has_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> std::result::Result<bool, rusqlite::Error> {
     let pragma = format!("PRAGMA table_info({table})");
     let mut stmt = connection.prepare(&pragma)?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -5412,7 +5559,8 @@ mod tests {
 
         store.upsert_goal_run(&goal_run).await?;
         let loaded = store
-            .get_goal_run("goal-1").await?
+            .get_goal_run("goal-1")
+            .await?
             .expect("goal run should exist after upsert");
 
         assert_eq!(loaded.events.len(), 1);
@@ -5430,18 +5578,20 @@ mod tests {
         store.init_schema().await?;
 
         let fact_keys = vec!["shell".to_string(), "editor".to_string()];
-        store.record_memory_provenance(&MemoryProvenanceRecord {
-            id: "mem-1",
-            target: "USER.md",
-            mode: "append",
-            source_kind: "tool",
-            content: "- shell: bash",
-            fact_keys: &fact_keys,
-            thread_id: Some("thread-1"),
-            task_id: Some("task-1"),
-            goal_run_id: None,
-            created_at: 42,
-        }).await?;
+        store
+            .record_memory_provenance(&MemoryProvenanceRecord {
+                id: "mem-1",
+                target: "USER.md",
+                mode: "append",
+                source_kind: "tool",
+                content: "- shell: bash",
+                fact_keys: &fact_keys,
+                thread_id: Some("thread-1"),
+                task_id: Some("task-1"),
+                goal_run_id: None,
+                created_at: 42,
+            })
+            .await?;
 
         let row = store.conn.call(|conn| {
             conn.query_row(
@@ -5474,30 +5624,34 @@ mod tests {
             .unwrap_or_default()
             .as_millis() as u64;
 
-        store.record_memory_provenance(&MemoryProvenanceRecord {
-            id: "recent",
-            target: "USER.md",
-            mode: "append",
-            source_kind: "tool",
-            content: "- shell: bash",
-            fact_keys: &recent_keys,
-            thread_id: None,
-            task_id: None,
-            goal_run_id: None,
-            created_at: now_ms,
-        }).await?;
-        store.record_memory_provenance(&MemoryProvenanceRecord {
-            id: "old",
-            target: "MEMORY.md",
-            mode: "append",
-            source_kind: "goal_reflection",
-            content: "- editor: helix",
-            fact_keys: &old_keys,
-            thread_id: None,
-            task_id: None,
-            goal_run_id: None,
-            created_at: now_ms.saturating_sub(40 * 86_400_000),
-        }).await?;
+        store
+            .record_memory_provenance(&MemoryProvenanceRecord {
+                id: "recent",
+                target: "USER.md",
+                mode: "append",
+                source_kind: "tool",
+                content: "- shell: bash",
+                fact_keys: &recent_keys,
+                thread_id: None,
+                task_id: None,
+                goal_run_id: None,
+                created_at: now_ms,
+            })
+            .await?;
+        store
+            .record_memory_provenance(&MemoryProvenanceRecord {
+                id: "old",
+                target: "MEMORY.md",
+                mode: "append",
+                source_kind: "goal_reflection",
+                content: "- editor: helix",
+                fact_keys: &old_keys,
+                thread_id: None,
+                task_id: None,
+                goal_run_id: None,
+                created_at: now_ms.saturating_sub(40 * 86_400_000),
+            })
+            .await?;
 
         let report = store.memory_provenance_report(None, 10).await?;
         assert_eq!(report.total_entries, 2);
@@ -5512,11 +5666,13 @@ mod tests {
     async fn collaboration_session_round_trips() -> Result<()> {
         let (store, root) = make_test_store().await?;
         store.init_schema().await?;
-        store.upsert_collaboration_session(
-            "task-parent",
-            r#"{"id":"c1","parent_task_id":"task-parent"}"#,
-            42,
-        ).await?;
+        store
+            .upsert_collaboration_session(
+                "task-parent",
+                r#"{"id":"c1","parent_task_id":"task-parent"}"#,
+                42,
+            )
+            .await?;
 
         let rows = store.list_collaboration_sessions().await?;
         assert_eq!(rows.len(), 1);
@@ -5534,34 +5690,38 @@ mod tests {
         store.init_schema().await?;
         let first = serde_json::json!({"step": 1});
         let second = serde_json::json!({"step": 2});
-        store.record_provenance_event(&ProvenanceEventRecord {
-            event_type: "goal_created",
-            summary: "goal created",
-            details: &first,
-            agent_id: "test-agent",
-            goal_run_id: Some("goal-1"),
-            task_id: None,
-            thread_id: Some("thread-1"),
-            approval_id: None,
-            causal_trace_id: None,
-            compliance_mode: "soc2",
-            sign: true,
-            created_at: 1_000,
-        }).await?;
-        store.record_provenance_event(&ProvenanceEventRecord {
-            event_type: "step_completed",
-            summary: "step completed",
-            details: &second,
-            agent_id: "test-agent",
-            goal_run_id: Some("goal-1"),
-            task_id: Some("task-1"),
-            thread_id: Some("thread-1"),
-            approval_id: None,
-            causal_trace_id: None,
-            compliance_mode: "soc2",
-            sign: true,
-            created_at: 2_000,
-        }).await?;
+        store
+            .record_provenance_event(&ProvenanceEventRecord {
+                event_type: "goal_created",
+                summary: "goal created",
+                details: &first,
+                agent_id: "test-agent",
+                goal_run_id: Some("goal-1"),
+                task_id: None,
+                thread_id: Some("thread-1"),
+                approval_id: None,
+                causal_trace_id: None,
+                compliance_mode: "soc2",
+                sign: true,
+                created_at: 1_000,
+            })
+            .await?;
+        store
+            .record_provenance_event(&ProvenanceEventRecord {
+                event_type: "step_completed",
+                summary: "step completed",
+                details: &second,
+                agent_id: "test-agent",
+                goal_run_id: Some("goal-1"),
+                task_id: Some("task-1"),
+                thread_id: Some("thread-1"),
+                approval_id: None,
+                causal_trace_id: None,
+                compliance_mode: "soc2",
+                sign: true,
+                created_at: 2_000,
+            })
+            .await?;
 
         let report = store.provenance_report(10)?;
         assert_eq!(report.total_entries, 2);
@@ -5609,13 +5769,17 @@ mod tests {
         let canonical_record = store.register_skill_document(&canonical).await?;
         let frontend_record = store.register_skill_document(&frontend).await?;
         let resolved = store
-            .resolve_skill_variant("build-pipeline", &["frontend".to_string()]).await?
+            .resolve_skill_variant("build-pipeline", &["frontend".to_string()])
+            .await?
             .expect("variant should resolve");
         assert_eq!(resolved.variant_id, frontend_record.variant_id);
 
-        store.record_skill_variant_use(&frontend_record.variant_id, Some(true)).await?;
+        store
+            .record_skill_variant_use(&frontend_record.variant_id, Some(true))
+            .await?;
         let refreshed = store
-            .resolve_skill_variant("build-pipeline", &["frontend".to_string()]).await?
+            .resolve_skill_variant("build-pipeline", &["frontend".to_string()])
+            .await?
             .expect("variant should still resolve");
         assert_eq!(refreshed.use_count, 1);
         assert_eq!(refreshed.success_count, 1);
@@ -5637,35 +5801,37 @@ mod tests {
 
         let frontend_record = store.register_skill_document(&frontend).await?;
         let tags = vec!["frontend".to_string()];
-        store.record_skill_variant_consultation(&SkillVariantConsultationRecord {
-            usage_id: "usage-1",
-            variant_id: &frontend_record.variant_id,
-            thread_id: Some("thread-1"),
-            task_id: Some("task-1"),
-            goal_run_id: Some("goal-1"),
-            context_tags: &tags,
-            consulted_at: 100,
-        }).await?;
+        store
+            .record_skill_variant_consultation(&SkillVariantConsultationRecord {
+                usage_id: "usage-1",
+                variant_id: &frontend_record.variant_id,
+                thread_id: Some("thread-1"),
+                task_id: Some("task-1"),
+                goal_run_id: Some("goal-1"),
+                context_tags: &tags,
+                consulted_at: 100,
+            })
+            .await?;
 
-        let pending = store.settle_skill_variant_usage(
-            Some("thread-1"),
-            Some("task-1"),
-            Some("goal-1"),
-            "success",
-        ).await?;
+        let pending = store
+            .settle_skill_variant_usage(Some("thread-1"), Some("task-1"), Some("goal-1"), "success")
+            .await?;
         assert_eq!(pending, 1);
         assert_eq!(
-            store.settle_skill_variant_usage(
-                Some("thread-1"),
-                Some("task-1"),
-                Some("goal-1"),
-                "success",
-            ).await?,
+            store
+                .settle_skill_variant_usage(
+                    Some("thread-1"),
+                    Some("task-1"),
+                    Some("goal-1"),
+                    "success",
+                )
+                .await?,
             0
         );
 
         let refreshed = store
-            .resolve_skill_variant("build-pipeline", &["frontend".to_string()]).await?
+            .resolve_skill_variant("build-pipeline", &["frontend".to_string()])
+            .await?
             .expect("variant should resolve");
         assert_eq!(refreshed.use_count, 1);
         assert_eq!(refreshed.success_count, 1);
@@ -5706,7 +5872,8 @@ mod tests {
             .find(|variant| variant.variant_id == weak_record.variant_id)
             .expect("weak variant should exist");
         let resolved = store
-            .resolve_skill_variant("build-pipeline", &["legacy".to_string()]).await?
+            .resolve_skill_variant("build-pipeline", &["legacy".to_string()])
+            .await?
             .expect("canonical should still resolve");
 
         assert_eq!(weak_variant.status, "archived");
@@ -5754,7 +5921,8 @@ mod tests {
             .find(|variant| variant.variant_id == canonical_record.variant_id)
             .expect("canonical variant should exist");
         let resolved = store
-            .resolve_skill_variant("build-pipeline", &[]).await?
+            .resolve_skill_variant("build-pipeline", &[])
+            .await?
             .expect("promoted variant should resolve");
 
         assert_eq!(promoted.status, "promoted-to-canonical");
@@ -5781,24 +5949,30 @@ mod tests {
         for index in 0..3 {
             let usage_id = format!("usage-{index}");
             let task_id = format!("task-{index}");
-            store.record_skill_variant_consultation(&SkillVariantConsultationRecord {
-                usage_id: &usage_id,
-                variant_id: &canonical_record.variant_id,
-                thread_id: Some("thread-1"),
-                task_id: Some(&task_id),
-                goal_run_id: Some("goal-1"),
-                context_tags: &branch_tags,
-                consulted_at: 100 + index,
-            }).await?;
-            store.settle_skill_variant_usage(
-                Some("thread-1"),
-                Some(&task_id),
-                Some("goal-1"),
-                "success",
-            ).await?;
+            store
+                .record_skill_variant_consultation(&SkillVariantConsultationRecord {
+                    usage_id: &usage_id,
+                    variant_id: &canonical_record.variant_id,
+                    thread_id: Some("thread-1"),
+                    task_id: Some(&task_id),
+                    goal_run_id: Some("goal-1"),
+                    context_tags: &branch_tags,
+                    consulted_at: 100 + index,
+                })
+                .await?;
+            store
+                .settle_skill_variant_usage(
+                    Some("thread-1"),
+                    Some(&task_id),
+                    Some("goal-1"),
+                    "success",
+                )
+                .await?;
         }
 
-        let variants = store.list_skill_variants(Some("build-pipeline"), 10).await?;
+        let variants = store
+            .list_skill_variants(Some("build-pipeline"), 10)
+            .await?;
         let branched = variants
             .iter()
             .find(|variant| {
@@ -5850,7 +6024,8 @@ mod tests {
             .expect("frontend variant should still exist after merge");
         let canonical_content = fs::read_to_string(&canonical)?;
         let resolved = store
-            .resolve_skill_variant("build-pipeline", &["frontend".to_string()]).await?
+            .resolve_skill_variant("build-pipeline", &["frontend".to_string()])
+            .await?
             .expect("canonical should resolve once branch is merged");
 
         assert_eq!(merged.status, "merged");
@@ -5880,10 +6055,14 @@ mod tests {
     #[tokio::test]
     async fn wal_mode_enabled() -> Result<()> {
         let (store, root) = make_test_store().await?;
-        let mode: String = store.conn.call(|conn| {
-            conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))
-                .map_err(Into::into)
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mode: String = store
+            .conn
+            .call(|conn| {
+                conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))
+                    .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         assert_eq!(mode.to_lowercase(), "wal");
         fs::remove_dir_all(root)?;
         Ok(())
@@ -5893,14 +6072,29 @@ mod tests {
     #[tokio::test]
     async fn wal_pragmas_applied() -> Result<()> {
         let (store, root) = make_test_store().await?;
-        let pragmas = store.conn.call(|conn| {
-            let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
-            let synchronous: i64 = conn.query_row("PRAGMA synchronous", [], |row| row.get(0))?;
-            let foreign_keys: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
-            let wal_autocheckpoint: i64 = conn.query_row("PRAGMA wal_autocheckpoint", [], |row| row.get(0))?;
-            let busy_timeout: i64 = conn.query_row("PRAGMA busy_timeout", [], |row| row.get(0))?;
-            Ok((journal_mode, synchronous, foreign_keys, wal_autocheckpoint, busy_timeout))
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let pragmas = store
+            .conn
+            .call(|conn| {
+                let journal_mode: String =
+                    conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+                let synchronous: i64 =
+                    conn.query_row("PRAGMA synchronous", [], |row| row.get(0))?;
+                let foreign_keys: i64 =
+                    conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+                let wal_autocheckpoint: i64 =
+                    conn.query_row("PRAGMA wal_autocheckpoint", [], |row| row.get(0))?;
+                let busy_timeout: i64 =
+                    conn.query_row("PRAGMA busy_timeout", [], |row| row.get(0))?;
+                Ok((
+                    journal_mode,
+                    synchronous,
+                    foreign_keys,
+                    wal_autocheckpoint,
+                    busy_timeout,
+                ))
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         assert_eq!(pragmas.0.to_lowercase(), "wal");
         assert_eq!(pragmas.1, 1); // NORMAL
         assert_eq!(pragmas.2, 1); // ON
@@ -5981,9 +6175,11 @@ mod tests {
     async fn ensure_column_adds_user_action_to_action_audit() -> Result<()> {
         let (store, root) = make_test_store().await?;
         // Verify the column exists by inserting and querying
-        let has = store.conn.call(|conn| {
-            Ok(table_has_column(conn, "action_audit", "user_action")?)
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let has = store
+            .conn
+            .call(|conn| Ok(table_has_column(conn, "action_audit", "user_action")?))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         assert!(has, "user_action column should exist after init_schema");
         fs::remove_dir_all(root)?;
         Ok(())
@@ -6009,13 +6205,18 @@ mod tests {
         store.insert_action_audit(&entry).await?;
         store.dismiss_audit_entry("test-dismiss-1").await?;
 
-        let user_action: Option<String> = store.conn.call(|conn| {
-            conn.query_row(
-                "SELECT user_action FROM action_audit WHERE id = ?1",
-                ["test-dismiss-1"],
-                |row| row.get(0),
-            ).map_err(|e| e.into())
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let user_action: Option<String> = store
+            .conn
+            .call(|conn| {
+                conn.query_row(
+                    "SELECT user_action FROM action_audit WHERE id = ?1",
+                    ["test-dismiss-1"],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.into())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         assert_eq!(user_action.as_deref(), Some("dismissed"));
         fs::remove_dir_all(root)?;
         Ok(())
@@ -6081,14 +6282,30 @@ mod tests {
     async fn memory_tombstone_insert_and_list_round_trips() -> Result<()> {
         let (store, root) = make_test_store().await?;
 
-        store.insert_memory_tombstone(
-            "t-1", "soul", "old fact about rust", Some("rust_version"),
-            Some("Rust 1.80"), "consolidation", None, 1000,
-        ).await?;
-        store.insert_memory_tombstone(
-            "t-2", "memory", "stale project note", None,
-            None, "decay", Some("prov-1"), 2000,
-        ).await?;
+        store
+            .insert_memory_tombstone(
+                "t-1",
+                "soul",
+                "old fact about rust",
+                Some("rust_version"),
+                Some("Rust 1.80"),
+                "consolidation",
+                None,
+                1000,
+            )
+            .await?;
+        store
+            .insert_memory_tombstone(
+                "t-2",
+                "memory",
+                "stale project note",
+                None,
+                None,
+                "decay",
+                Some("prov-1"),
+                2000,
+            )
+            .await?;
 
         // List all
         let all = store.list_memory_tombstones(None, 10).await?;
@@ -6112,12 +6329,12 @@ mod tests {
     async fn memory_tombstone_delete_expired() -> Result<()> {
         let (store, root) = make_test_store().await?;
 
-        store.insert_memory_tombstone(
-            "old", "soul", "ancient", None, None, "decay", None, 100,
-        ).await?;
-        store.insert_memory_tombstone(
-            "new", "soul", "recent", None, None, "decay", None, 5000,
-        ).await?;
+        store
+            .insert_memory_tombstone("old", "soul", "ancient", None, None, "decay", None, 100)
+            .await?;
+        store
+            .insert_memory_tombstone("new", "soul", "recent", None, None, "decay", None, 5000)
+            .await?;
 
         // Delete tombstones older than 4000ms as of now=6000
         let deleted = store.delete_expired_tombstones(4000, 6000).await?;
@@ -6135,10 +6352,18 @@ mod tests {
     async fn memory_tombstone_restore() -> Result<()> {
         let (store, root) = make_test_store().await?;
 
-        store.insert_memory_tombstone(
-            "t-restore", "memory", "fact to restore", None,
-            None, "decay", None, 3000,
-        ).await?;
+        store
+            .insert_memory_tombstone(
+                "t-restore",
+                "memory",
+                "fact to restore",
+                None,
+                None,
+                "decay",
+                None,
+                3000,
+            )
+            .await?;
 
         let restored = store.restore_tombstone("t-restore").await?;
         assert!(restored.is_some());
@@ -6168,12 +6393,16 @@ mod tests {
         assert!(val.is_none());
 
         // Set and get
-        store.set_consolidation_state("last_watermark", "12345", 1000).await?;
+        store
+            .set_consolidation_state("last_watermark", "12345", 1000)
+            .await?;
         let val = store.get_consolidation_state("last_watermark").await?;
         assert_eq!(val.as_deref(), Some("12345"));
 
         // Overwrite
-        store.set_consolidation_state("last_watermark", "99999", 2000).await?;
+        store
+            .set_consolidation_state("last_watermark", "99999", 2000)
+            .await?;
         let val = store.get_consolidation_state("last_watermark").await?;
         assert_eq!(val.as_deref(), Some("99999"));
 
@@ -6188,18 +6417,51 @@ mod tests {
         let (store, root) = make_test_store().await?;
 
         // Insert traces with different outcomes
-        store.insert_execution_trace(
-            "tr-1", None, Some("task-1"), "research", "success",
-            Some(0.9), "[]", "{}", 100, 50, 1000,
-        ).await?;
-        store.insert_execution_trace(
-            "tr-2", None, Some("task-2"), "coding", "failure",
-            Some(0.3), "[]", "{}", 200, 80, 2000,
-        ).await?;
-        store.insert_execution_trace(
-            "tr-3", None, Some("task-3"), "research", "success",
-            Some(0.8), "[]", "{}", 150, 60, 3000,
-        ).await?;
+        store
+            .insert_execution_trace(
+                "tr-1",
+                None,
+                Some("task-1"),
+                "research",
+                "success",
+                Some(0.9),
+                "[]",
+                "{}",
+                100,
+                50,
+                1000,
+            )
+            .await?;
+        store
+            .insert_execution_trace(
+                "tr-2",
+                None,
+                Some("task-2"),
+                "coding",
+                "failure",
+                Some(0.3),
+                "[]",
+                "{}",
+                200,
+                80,
+                2000,
+            )
+            .await?;
+        store
+            .insert_execution_trace(
+                "tr-3",
+                None,
+                Some("task-3"),
+                "research",
+                "success",
+                Some(0.8),
+                "[]",
+                "{}",
+                150,
+                60,
+                3000,
+            )
+            .await?;
 
         // Query after watermark=1500 should only return tr-3 (success after watermark)
         let traces = store.list_recent_successful_traces(1500, 100).await?;
@@ -6236,7 +6498,9 @@ mod tests {
         assert_eq!(record.status, "active");
 
         // Update status to "testing"
-        store.update_skill_variant_status(&record.variant_id, "testing").await?;
+        store
+            .update_skill_variant_status(&record.variant_id, "testing")
+            .await?;
 
         // Verify the status changed
         let updated = store.get_skill_variant(&record.variant_id).await?;
@@ -6266,10 +6530,16 @@ mod tests {
         let (store, root) = make_test_store().await?;
         store.init_schema().await?;
 
-        let skill_dir = root.join("skills").join("generated").join("retrieval-skill");
+        let skill_dir = root
+            .join("skills")
+            .join("generated")
+            .join("retrieval-skill");
         fs::create_dir_all(&skill_dir)?;
         let skill_path = skill_dir.join("canonical.md");
-        fs::write(&skill_path, "# Retrieval Skill\nA skill for retrieval test.")?;
+        fs::write(
+            &skill_path,
+            "# Retrieval Skill\nA skill for retrieval test.",
+        )?;
         let record = store.register_skill_document(&skill_path).await?;
 
         let fetched = store.get_skill_variant(&record.variant_id).await?;

@@ -420,12 +420,9 @@ async fn main() -> Result<()> {
     let _log_guard = init_logging(log_file_name)?;
     tracing::info!(command = ?cli.command, "tamux-cli starting");
 
-    // If no subcommand provided, check for first-run setup via IPC with legacy fallback
+    // If no subcommand provided, check first-run setup via daemon IPC/DB state only.
     if cli.command.is_none() {
-        // Two-phase detection: try IPC first (daemon reachable), fall back to
-        // legacy config.json existence check (first-ever run, daemon not started yet).
-        let needs = setup_wizard::needs_setup_via_ipc().await
-            || setup_wizard::needs_setup_legacy();
+        let needs = setup_wizard::needs_setup_via_ipc().await;
 
         if needs {
             println!("Welcome to tamux! Running first-time setup...\n");
@@ -724,10 +721,8 @@ async fn main() -> Result<()> {
                                 .get("can_execute")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(true);
-                            let trips = info
-                                .get("trip_count")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
+                            let trips =
+                                info.get("trip_count").and_then(|v| v.as_u64()).unwrap_or(0);
                             let health = if can_exec { "healthy" } else { "tripped" };
                             if trips > 0 {
                                 println!("  {} - {} (trips: {})", name, health, trips);
@@ -766,15 +761,9 @@ async fn main() -> Result<()> {
                     for a in actions.iter().take(5) {
                         let action_type =
                             a.get("action_type").and_then(|v| v.as_str()).unwrap_or("");
-                        let summary =
-                            a.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+                        let summary = a.get("summary").and_then(|v| v.as_str()).unwrap_or("");
                         let ts = a.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
-                        println!(
-                            "  {} [{}] {}",
-                            format_timestamp(ts),
-                            action_type,
-                            summary
-                        );
+                        println!("  {} [{}] {}", format_timestamp(ts), action_type, summary);
                     }
                 }
             }
@@ -1006,15 +995,13 @@ async fn main() -> Result<()> {
                     std::process::exit(1);
                 }
             }
-            PluginAction::Commands => {
-                match client::send_plugin_list_commands().await {
-                    Ok(commands) => plugins::plugin_commands(&commands),
-                    Err(e) => {
-                        eprintln!("Could not reach daemon: {}", e);
-                        std::process::exit(1);
-                    }
+            PluginAction::Commands => match client::send_plugin_list_commands().await {
+                Ok(commands) => plugins::plugin_commands(&commands),
+                Err(e) => {
+                    eprintln!("Could not reach daemon: {}", e);
+                    std::process::exit(1);
                 }
-            }
+            },
         },
 
         Commands::Install { target } => match target {

@@ -53,7 +53,7 @@ impl AgentEngine {
                 thread.updated_at = now_millis();
                 thread.messages.push(AgentMessage {
                     id: generate_message_id(),
-                                    role: MessageRole::System,
+                    role: MessageRole::System,
                     content: format!(
                         "Restored goal run {} from checkpoint {} at step {}.",
                         goal_run_id, checkpoint.id, restored_step_index
@@ -95,15 +95,18 @@ impl AgentEngine {
             "context_restored": outcome.context_restored,
         })
         .to_string();
-        let _ = self.history.insert_health_log(
-            &format!("health_{}", Uuid::new_v4()),
-            "goal_run",
-            &outcome.goal_run_id,
-            "healthy",
-            Some(&indicators_json),
-            Some("restore_checkpoint"),
-            now_millis(),
-        ).await;
+        let _ = self
+            .history
+            .insert_health_log(
+                &format!("health_{}", Uuid::new_v4()),
+                "goal_run",
+                &outcome.goal_run_id,
+                "healthy",
+                Some(&indicators_json),
+                Some("restore_checkpoint"),
+                now_millis(),
+            )
+            .await;
 
         Ok(outcome)
     }

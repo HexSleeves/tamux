@@ -113,8 +113,7 @@ impl TuiModel {
                             Position::new(mouse.column, mouse.row),
                         )
                     {
-                        self.concierge
-                            .reduce(crate::state::ConciergeAction::SelectAction(index));
+                        self.select_visible_concierge_action(index);
                         self.execute_concierge_action(index);
                     } else if self.chat.active_thread_id() == Some("concierge") {
                         self.focus = FocusArea::Chat;
@@ -126,6 +125,21 @@ impl TuiModel {
                         self.chat_drag_anchor = Some(pos);
                         self.chat_drag_current = Some(pos);
                     } else if matches!(self.main_pane_view, MainPaneView::WorkContext) {
+                        if let Some(
+                            widgets::work_context_view::WorkContextHitTarget::ClosePreview,
+                        ) = widgets::work_context_view::hit_test(
+                            chat_area,
+                            &self.tasks,
+                            self.chat.active_thread_id(),
+                            self.sidebar.active_tab(),
+                            self.sidebar.selected_item(),
+                            Position::new(mouse.column, mouse.row),
+                            &self.theme,
+                        ) {
+                            self.set_main_pane_conversation(FocusArea::Chat);
+                            self.status_line = "Closed preview".to_string();
+                            return;
+                        }
                         let pos = Position::new(mouse.column, mouse.row);
                         self.work_context_drag_anchor = Some(pos);
                         self.work_context_drag_current = Some(pos);

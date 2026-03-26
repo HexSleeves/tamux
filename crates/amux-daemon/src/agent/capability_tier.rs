@@ -191,8 +191,7 @@ impl DisclosureQueue {
 
     /// Mark a feature as disclosed and update the session watermark.
     pub fn mark_disclosed(&mut self, feature_id: &str, current_session: u64) {
-        self.pending_features
-            .retain(|f| f.feature_id != feature_id);
+        self.pending_features.retain(|f| f.feature_id != feature_id);
         if !self.disclosed_features.iter().any(|id| id == feature_id) {
             self.disclosed_features.push(feature_id.to_string());
         }
@@ -268,8 +267,7 @@ impl AgentEngine {
     pub async fn get_status_snapshot(&self) -> DaemonMessage {
         let tier = self.compute_current_tier().await;
         let flags = tier_features_visible(tier);
-        let feature_flags_json =
-            serde_json::to_string(&flags).unwrap_or_else(|_| "{}".to_string());
+        let feature_flags_json = serde_json::to_string(&flags).unwrap_or_else(|_| "{}".to_string());
 
         // Activity state
         let goal_runs = self.goal_runs.lock().await;
@@ -320,18 +318,27 @@ impl AgentEngine {
             let gw = self.gateway_state.lock().await;
             if let Some(ref state) = *gw {
                 let mut statuses = serde_json::Map::new();
-                statuses.insert("slack".to_string(), serde_json::json!({
-                    "status": format!("{:?}", state.slack_health.status),
-                    "consecutive_failures": state.slack_health.consecutive_failure_count,
-                }));
-                statuses.insert("discord".to_string(), serde_json::json!({
-                    "status": format!("{:?}", state.discord_health.status),
-                    "consecutive_failures": state.discord_health.consecutive_failure_count,
-                }));
-                statuses.insert("telegram".to_string(), serde_json::json!({
-                    "status": format!("{:?}", state.telegram_health.status),
-                    "consecutive_failures": state.telegram_health.consecutive_failure_count,
-                }));
+                statuses.insert(
+                    "slack".to_string(),
+                    serde_json::json!({
+                        "status": format!("{:?}", state.slack_health.status),
+                        "consecutive_failures": state.slack_health.consecutive_failure_count,
+                    }),
+                );
+                statuses.insert(
+                    "discord".to_string(),
+                    serde_json::json!({
+                        "status": format!("{:?}", state.discord_health.status),
+                        "consecutive_failures": state.discord_health.consecutive_failure_count,
+                    }),
+                );
+                statuses.insert(
+                    "telegram".to_string(),
+                    serde_json::json!({
+                        "status": format!("{:?}", state.telegram_health.status),
+                        "consecutive_failures": state.telegram_health.consecutive_failure_count,
+                    }),
+                );
                 serde_json::to_string(&statuses).unwrap_or_else(|_| "{}".to_string())
             } else {
                 "{}".to_string()
@@ -432,7 +439,11 @@ impl AgentEngine {
             self.persist_config().await;
 
             // Announce tier transition via concierge (D-12)
-            if let Err(e) = self.concierge.announce_tier_transition(&previous_tier_str, &new_tier_str).await {
+            if let Err(e) = self
+                .concierge
+                .announce_tier_transition(&previous_tier_str, &new_tier_str)
+                .await
+            {
                 tracing::warn!("tier transition announcement failed: {e}");
             }
 
@@ -457,9 +468,7 @@ impl AgentEngine {
         let features = tier_disclosure_features(new_tier);
         let mut queue = self.disclosure_queue.write().await;
         for feature in features {
-            if !queue
-                .disclosed_features
-                .contains(&feature.feature_id)
+            if !queue.disclosed_features.contains(&feature.feature_id)
                 && !queue
                     .pending_features
                     .iter()

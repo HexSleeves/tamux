@@ -106,7 +106,8 @@ mod tests {
             ]),
         );
 
-        let count = install_bundled_skills(&plugins_dir, "my-plugin", &manifest, &skills_root).unwrap();
+        let count =
+            install_bundled_skills(&plugins_dir, "my-plugin", &manifest, &skills_root).unwrap();
         assert_eq!(count, 2);
 
         let target_dir = skills_root.join("plugins").join("my-plugin");
@@ -121,7 +122,8 @@ mod tests {
         let skills_root = tmp.path().join("skills");
 
         let manifest = make_manifest("my-plugin", None);
-        let count = install_bundled_skills(&plugins_dir, "my-plugin", &manifest, &skills_root).unwrap();
+        let count =
+            install_bundled_skills(&plugins_dir, "my-plugin", &manifest, &skills_root).unwrap();
         assert_eq!(count, 0);
     }
 
@@ -132,7 +134,8 @@ mod tests {
         let skills_root = tmp.path().join("skills");
 
         let manifest = make_manifest("my-plugin", Some(vec![]));
-        let count = install_bundled_skills(&plugins_dir, "my-plugin", &manifest, &skills_root).unwrap();
+        let count =
+            install_bundled_skills(&plugins_dir, "my-plugin", &manifest, &skills_root).unwrap();
         assert_eq!(count, 0);
     }
 

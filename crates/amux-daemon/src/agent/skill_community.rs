@@ -387,7 +387,6 @@ fn build_scan_report(
     tool_whitelist: &[String],
     publisher_verified: bool,
 ) -> ScanReport {
-    // D-06: tier 3 LLM review is a no-op in v1; this branch will have effect when tier 3 is enabled.
     let skip_llm_tier = publisher_verified;
     scan_skill_content(skill_content, tool_whitelist, skip_llm_tier)
 }
@@ -404,7 +403,9 @@ fn scan_report_summary(report: &ScanReport) -> String {
     let critical = report
         .findings
         .iter()
-        .filter(|finding| finding.severity == crate::agent::skill_security::FindingSeverity::Critical)
+        .filter(|finding| {
+            finding.severity == crate::agent::skill_security::FindingSeverity::Critical
+        })
         .count();
     let suspicious = report
         .findings
@@ -494,10 +495,22 @@ mod tests {
 
     #[test]
     fn decide_import_blocks_warns_and_passes() {
-        assert_eq!(decide_import(ScanVerdict::Block, false), ImportDecision::Blocked);
-        assert_eq!(decide_import(ScanVerdict::Warn, false), ImportDecision::NeedsForce);
-        assert_eq!(decide_import(ScanVerdict::Warn, true), ImportDecision::Import);
-        assert_eq!(decide_import(ScanVerdict::Pass, false), ImportDecision::Import);
+        assert_eq!(
+            decide_import(ScanVerdict::Block, false),
+            ImportDecision::Blocked
+        );
+        assert_eq!(
+            decide_import(ScanVerdict::Warn, false),
+            ImportDecision::NeedsForce
+        );
+        assert_eq!(
+            decide_import(ScanVerdict::Warn, true),
+            ImportDecision::Import
+        );
+        assert_eq!(
+            decide_import(ScanVerdict::Pass, false),
+            ImportDecision::Import
+        );
     }
 
     #[test]
@@ -509,6 +522,18 @@ mod tests {
             .tier_results
             .iter()
             .any(|tier| tier.tier == ScanTier::LlmReview && tier.skipped));
+    }
+
+    #[test]
+    fn build_scan_report_warns_unverified_when_llm_review_unavailable() {
+        let report = build_scan_report("Use `read_file`.", &["read_file".to_string()], false);
+        assert_eq!(report.verdict, ScanVerdict::Warn);
+        assert!(report
+            .tier_results
+            .iter()
+            .any(|tier| tier.tier == ScanTier::LlmReview
+                && !tier.skipped
+                && tier.verdict == ScanVerdict::Warn));
     }
 
     #[test]
@@ -557,8 +582,8 @@ mod tests {
             updated_at: 456,
         };
 
-        let (tarball, metadata) = prepare_publish(&skill_dir, &variant, "machine-123")
-            .expect("prepare publish succeeds");
+        let (tarball, metadata) =
+            prepare_publish(&skill_dir, &variant, "machine-123").expect("prepare publish succeeds");
 
         assert!(tarball.exists());
         let encoded = serde_json::to_string(&metadata).expect("serialize metadata");
@@ -593,7 +618,10 @@ mod tests {
 
     #[test]
     fn sanitize_name_for_agentskills_normalizes_variant_suffix_and_separators() {
-        assert_eq!(sanitize_name_for_agentskills("debug_rust--async"), "debug-rust-async");
+        assert_eq!(
+            sanitize_name_for_agentskills("debug_rust--async"),
+            "debug-rust-async"
+        );
     }
 
     #[test]

@@ -384,8 +384,11 @@ fn build_rendered_lines(
             // whose actions are already rendered in the actions bar widget
             // (the last message with actions in the thread).
             let is_last_actionable = !msg.actions.is_empty()
-                && chat.active_actions().first().map(|a| &a.label) == msg.actions.first().map(|a| &a.label);
-            if (chat.selected_message() == Some(idx) || !msg.actions.is_empty()) && !is_last_actionable {
+                && chat.active_actions().first().map(|a| &a.label)
+                    == msg.actions.first().map(|a| &a.label);
+            if (chat.selected_message() == Some(idx) || !msg.actions.is_empty())
+                && !is_last_actionable
+            {
                 if let Some(action_line) = message_action_line(idx, msg, theme) {
                     all_lines.push(RenderedChatLine {
                         line: pad_message_line(action_line, inner_width, block_style),

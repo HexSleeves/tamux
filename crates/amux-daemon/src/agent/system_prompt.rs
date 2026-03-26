@@ -147,11 +147,20 @@ pub(super) fn build_system_prompt(
 
     prompt.push_str(
         "\n\n## Terminal Session Discipline\n\
-         - Before running file or command actions, call `list_terminals` to discover current session IDs and CWD.\n\
-         - Pick a target session and reuse that `session` value across related tool calls so all actions stay in one terminal context.\n\
+         - Before running actions that truly need an existing terminal, call `list_terminals` to discover current live session IDs and CWD.\n\
+         - Do not force a `session` argument in normal TUI chat or goal-run turns just because a previous frontend session existed. Omit `session` unless you intentionally target a known live terminal or the operator explicitly asked you to reuse one.\n\
+         - When you do target a live terminal, reuse that `session` value across related tool calls so all actions stay in one terminal context.\n\
          - If a command is still running, timed out while still active, or is waiting for interactive completion, treat that terminal as occupied and switch to another terminal/session before continuing other work.\n\
          - If you need another terminal in the same agent workspace, call `allocate_terminal`, then continue with the returned session ID.\n\
          - If the operator asks to use another terminal, call `list_terminals` again and switch explicitly.\n",
+    );
+
+    prompt.push_str(
+        "\n\n## Large File Writes\n\
+         - Avoid giant JSON file payloads when content is large or heavily escaped.\n\
+         - Prefer multipart-style `create_file` inputs when available.\n\
+         - If you must write through a terminal, prefer a minimal Python writer over brittle shell heredocs.\n\
+         - Before executing generated Python, inspect it for unintended side effects. It should only perform the intended file operation and should not add unrelated process, network, or shell behavior.\n",
     );
 
     prompt.push_str(

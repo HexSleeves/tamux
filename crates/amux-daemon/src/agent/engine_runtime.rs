@@ -155,22 +155,26 @@ impl AgentEngine {
             + failure_ratio * 0.3
             + ((stats.consecutive_errors.min(5) as f64) / 5.0) * 0.2;
 
-        if let Err(e) = self.history.upsert_subagent_metrics(
-            &stats.task_id,
-            stats.parent_task_id.as_deref(),
-            stats.thread_id.as_deref(),
-            stats.tool_calls_total as i64,
-            stats.tool_calls_succeeded as i64,
-            stats.tool_calls_failed as i64,
-            stats.tokens_consumed as i64,
-            stats.context_budget_tokens.map(|v| v as i64),
-            progress_rate,
-            stats.last_progress_at,
-            stuck_score,
-            subagent_health_label(stats.health_state),
-            stats.created_at,
-            stats.updated_at,
-        ).await {
+        if let Err(e) = self
+            .history
+            .upsert_subagent_metrics(
+                &stats.task_id,
+                stats.parent_task_id.as_deref(),
+                stats.thread_id.as_deref(),
+                stats.tool_calls_total as i64,
+                stats.tool_calls_succeeded as i64,
+                stats.tool_calls_failed as i64,
+                stats.tokens_consumed as i64,
+                stats.context_budget_tokens.map(|v| v as i64),
+                progress_rate,
+                stats.last_progress_at,
+                stuck_score,
+                subagent_health_label(stats.health_state),
+                stats.created_at,
+                stats.updated_at,
+            )
+            .await
+        {
             tracing::warn!(task_id = %stats.task_id, "failed to persist subagent metrics: {e}");
         }
     }

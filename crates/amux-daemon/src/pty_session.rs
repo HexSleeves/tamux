@@ -492,17 +492,21 @@ fn pty_reader_loop(
                                         .as_ref()
                                         .map(|snapshot| snapshot.path.clone()),
                                 };
-                                if let Err(error) = rt_handle.block_on(history.record_managed_finish(&record)) {
+                                if let Err(error) =
+                                    rt_handle.block_on(history.record_managed_finish(&record))
+                                {
                                     tracing::error!(%id, error = %error, cwd = ?cwd, "failed to persist managed history");
                                 }
 
                                 // Auto-generate skill if a successful workflow pattern is detected
                                 if record.exit_code == Some(0) {
-                                    if let Ok(candidates) = rt_handle.block_on(history.detect_skill_candidates()) {
+                                    if let Ok(candidates) =
+                                        rt_handle.block_on(history.detect_skill_candidates())
+                                    {
                                         for (title, _hits) in candidates.iter().take(1) {
-                                            if let Ok((_title, path)) =
-                                                rt_handle.block_on(history.generate_skill(Some(title), Some(title)))
-                                            {
+                                            if let Ok((_title, path)) = rt_handle.block_on(
+                                                history.generate_skill(Some(title), Some(title)),
+                                            ) {
                                                 tracing::info!(skill_path = %path, "auto-generated skill from workflow pattern");
                                             }
                                         }

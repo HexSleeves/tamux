@@ -619,6 +619,7 @@ impl TuiModel {
                     self.ignore_pending_concierge_welcome = false;
                     self.concierge
                         .reduce(crate::state::ConciergeAction::WelcomeDismissed);
+                    self.chat.reduce(chat::ChatAction::DismissConciergeWelcome);
                     return;
                 }
                 if self.concierge.is_same_welcome(&content, &actions) {
@@ -698,6 +699,7 @@ impl TuiModel {
             ClientEvent::ConciergeWelcomeDismissed => {
                 self.concierge
                     .reduce(crate::state::ConciergeAction::WelcomeDismissed);
+                self.chat.reduce(chat::ChatAction::DismissConciergeWelcome);
                 self.send_daemon_command(DaemonCommand::RequestThread("concierge".to_string()));
             }
             // Plugin settings events (Plan 16-03)

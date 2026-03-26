@@ -197,7 +197,9 @@ enum AgentBridgeCommand {
     },
     DismissConciergeWelcome,
     RequestConciergeWelcome,
-    AuditDismiss { entry_id: String },
+    AuditDismiss {
+        entry_id: String,
+    },
     GetStatus,
     SetTierOverride {
         tier: Option<String>,
@@ -205,13 +207,21 @@ enum AgentBridgeCommand {
     #[serde(rename = "plugin-list")]
     PluginList,
     #[serde(rename = "plugin-get")]
-    PluginGetDetail { name: String },
+    PluginGetDetail {
+        name: String,
+    },
     #[serde(rename = "plugin-enable")]
-    PluginEnableCmd { name: String },
+    PluginEnableCmd {
+        name: String,
+    },
     #[serde(rename = "plugin-disable")]
-    PluginDisableCmd { name: String },
+    PluginDisableCmd {
+        name: String,
+    },
     #[serde(rename = "plugin-get-settings")]
-    PluginGetSettings { name: String },
+    PluginGetSettings {
+        name: String,
+    },
     #[serde(rename = "plugin-update-settings")]
     PluginUpdateSettings {
         plugin_name: String,
@@ -220,9 +230,13 @@ enum AgentBridgeCommand {
         is_secret: bool,
     },
     #[serde(rename = "plugin-test-connection")]
-    PluginTestConnection { name: String },
+    PluginTestConnection {
+        name: String,
+    },
     #[serde(rename = "plugin-oauth-start")]
-    PluginOAuthStart { name: String },
+    PluginOAuthStart {
+        name: String,
+    },
     WhatsAppLinkStart,
     WhatsAppLinkStop,
     WhatsAppLinkStatus,
@@ -626,7 +640,12 @@ pub async fn send_config_get() -> Result<serde_json::Value> {
 }
 
 pub async fn send_config_set(key_path: String, value_json: String) -> Result<()> {
-    match roundtrip(ClientMessage::AgentSetConfigItem { key_path, value_json }).await? {
+    match roundtrip(ClientMessage::AgentSetConfigItem {
+        key_path,
+        value_json,
+    })
+    .await?
+    {
         DaemonMessage::AgentConfigResponse { .. } => Ok(()),
         DaemonMessage::Error { message } => anyhow::bail!("daemon error: {message}"),
         other => anyhow::bail!("unexpected response: {other:?}"),

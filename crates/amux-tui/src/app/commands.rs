@@ -201,10 +201,11 @@ impl TuiModel {
             self.status_line = "Not connected to daemon".to_string();
             return;
         }
+        self.cleanup_concierge_on_navigate();
         self.send_daemon_command(DaemonCommand::StartGoalRun {
             goal,
             thread_id: None,
-            session_id: self.default_session_id.clone(),
+            session_id: None,
         });
         self.status_line = "Starting goal run...".to_string();
     }
@@ -340,6 +341,8 @@ impl TuiModel {
             return;
         }
 
+        self.cleanup_concierge_on_navigate();
+
         let final_content = if self.attachments.is_empty() {
             prompt.clone()
         } else {
@@ -384,7 +387,7 @@ impl TuiModel {
         self.send_daemon_command(DaemonCommand::SendMessage {
             thread_id,
             content: final_content,
-            session_id: self.default_session_id.clone(),
+            session_id: None,
         });
 
         self.main_pane_view = MainPaneView::Conversation;
@@ -432,6 +435,12 @@ impl TuiModel {
             return;
         };
 
+        if self.should_toggle_work_context_from_sidebar(&thread_id) {
+            self.set_main_pane_conversation(FocusArea::Sidebar);
+            self.status_line = "Closed preview".to_string();
+            return;
+        }
+
         match self.sidebar.active_tab() {
             sidebar::SidebarTab::Files => {
                 let Some(path) = self
@@ -444,6 +453,7 @@ impl TuiModel {
                 };
                 self.main_pane_view = MainPaneView::WorkContext;
                 self.task_view_scroll = 0;
+                self.focus = FocusArea::Chat;
                 self.tasks.reduce(task::TaskAction::SelectWorkPath {
                     thread_id: thread_id.clone(),
                     path: Some(path.clone()),
@@ -454,6 +464,7 @@ impl TuiModel {
             sidebar::SidebarTab::Todos => {
                 self.main_pane_view = MainPaneView::WorkContext;
                 self.task_view_scroll = 0;
+                self.focus = FocusArea::Chat;
                 self.status_line = "Todo details".to_string();
             }
         }

@@ -285,10 +285,8 @@ impl AgentEngine {
                 && should_run_check(effective_unreplied_weight, cycle_count)
             {
                 check_results.push(
-                    self.check_unreplied_messages(
-                        checks_config.unreplied_message_threshold_hours,
-                    )
-                    .await,
+                    self.check_unreplied_messages(checks_config.unreplied_message_threshold_hours)
+                        .await,
                 );
             }
             if checks_config.repo_changes_enabled
@@ -337,7 +335,11 @@ impl AgentEngine {
                     };
                     format!(
                         "- [{}] ({}) {} (confidence: {:.2}): {}{}",
-                        item.kind, priority_hint, item.title, item.confidence, item.summary,
+                        item.kind,
+                        priority_hint,
+                        item.title,
+                        item.confidence,
+                        item.summary,
                         bullets_text
                     )
                 })
@@ -546,13 +548,7 @@ impl AgentEngine {
                 }
                 Err(e) => {
                     tracing::error!("heartbeat LLM synthesis failed: {e}");
-                    (
-                        None,
-                        false,
-                        format!("Synthesis failed: {e}"),
-                        vec![],
-                        0u64,
-                    )
+                    (None, false, format!("Synthesis failed: {e}"), vec![], 0u64)
                 }
             };
 
@@ -612,7 +608,11 @@ impl AgentEngine {
                     ExplanationResult::NeedsLlm => parts.push(item.title.clone()),
                 }
             }
-            Some(format!("Found {} items: {}", digest_items.len(), parts.join("; ")))
+            Some(format!(
+                "Found {} items: {}",
+                digest_items.len(),
+                parts.join("; ")
+            ))
         };
 
         // Only broadcast when actionable OR LLM had something to say (per D-14: silent by default)
@@ -748,7 +748,10 @@ impl AgentEngine {
         let check_types = [
             (HeartbeatCheckType::StaleTodos, "stale_todo"),
             (HeartbeatCheckType::StuckGoalRuns, "stuck_goal"),
-            (HeartbeatCheckType::UnrepliedGatewayMessages, "unreplied_message"),
+            (
+                HeartbeatCheckType::UnrepliedGatewayMessages,
+                "unreplied_message",
+            ),
             (HeartbeatCheckType::RepoChanges, "repo_change"),
         ];
 
@@ -792,9 +795,7 @@ impl AgentEngine {
 
         // --- Phase 10: Memory consolidation (MEMO-01 through MEMO-08) ---
         // Per D-03: consolidation runs as a heartbeat sub-phase during idle periods.
-        let consolidation_budget = std::time::Duration::from_secs(
-            config.consolidation.budget_secs,
-        );
+        let consolidation_budget = std::time::Duration::from_secs(config.consolidation.budget_secs);
         let consolidation_result = self
             .maybe_run_consolidation_if_idle(consolidation_budget)
             .await;
@@ -1171,7 +1172,7 @@ mod tests {
     fn custom_item_due_when_interval_elapsed() {
         let now = 100_000_000;
         let last = now - (16 * 60 * 1000); // 16 minutes ago
-        // item_interval=15min → 15*60*1000=900_000 < 960_000 elapsed → due
+                                           // item_interval=15min → 15*60*1000=900_000 < 960_000 elapsed → due
         assert!(is_custom_item_due(now, Some(last), 15, 30));
     }
 
@@ -1179,7 +1180,7 @@ mod tests {
     fn custom_item_not_due_when_interval_not_elapsed() {
         let now = 100_000_000;
         let last = now - (10 * 60 * 1000); // 10 minutes ago
-        // item_interval=15min → not enough time elapsed → not due
+                                           // item_interval=15min → not enough time elapsed → not due
         assert!(!is_custom_item_due(now, Some(last), 15, 30));
     }
 
@@ -1187,7 +1188,7 @@ mod tests {
     fn custom_item_uses_global_interval_when_item_interval_zero() {
         let now = 100_000_000;
         let last = now - (31 * 60 * 1000); // 31 minutes ago
-        // item_interval=0, global=30min → 30*60*1000=1_800_000 < 1_860_000 elapsed → due
+                                           // item_interval=0, global=30min → 30*60*1000=1_800_000 < 1_860_000 elapsed → due
         assert!(is_custom_item_due(now, Some(last), 0, 30));
     }
 
@@ -1195,7 +1196,7 @@ mod tests {
     fn custom_item_not_due_with_global_interval() {
         let now = 100_000_000;
         let last = now - (20 * 60 * 1000); // 20 minutes ago
-        // item_interval=0, global=30min → not enough time elapsed → not due
+                                           // item_interval=0, global=30min → not enough time elapsed → not due
         assert!(!is_custom_item_due(now, Some(last), 0, 30));
     }
 
@@ -1272,8 +1273,7 @@ ITEMS:
 
     #[test]
     fn parse_digest_items_handles_camelcase_types() {
-        let response =
-            "- PRIORITY:2 TYPE:StuckGoalRuns TITLE:Goal stuck SUGGESTION:Cancel it";
+        let response = "- PRIORITY:2 TYPE:StuckGoalRuns TITLE:Goal stuck SUGGESTION:Cancel it";
         let items = parse_digest_items(response);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].check_type, HeartbeatCheckType::StuckGoalRuns);
@@ -1312,9 +1312,9 @@ ITEMS:
 
     #[test]
     fn should_run_check_weight_quarter_every_fourth_cycle() {
-        assert!(should_run_check(0.25, 4));  // 4 % 4 == 0
-        assert!(should_run_check(0.25, 8));  // 8 % 4 == 0
-        assert!(should_run_check(0.25, 0));  // 0 % 4 == 0
+        assert!(should_run_check(0.25, 4)); // 4 % 4 == 0
+        assert!(should_run_check(0.25, 8)); // 8 % 4 == 0
+        assert!(should_run_check(0.25, 0)); // 0 % 4 == 0
     }
 
     #[test]

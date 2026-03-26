@@ -127,20 +127,24 @@ impl AgentEngine {
         let rejected_json = serde_json::to_string(&trace.rejected_options).unwrap_or_default();
         let factors_json = serde_json::to_string(&trace.causal_factors).unwrap_or_default();
         let outcome_json = serde_json::to_string(&trace.outcome).unwrap_or_default();
-        if let Err(error) = self.history.insert_causal_trace(
-            &trace.trace_id,
-            trace.thread_id.as_deref(),
-            trace.goal_run_id.as_deref(),
-            trace.task_id.as_deref(),
-            "skill_selection",
-            &selected_json,
-            &rejected_json,
-            &trace.context_hash,
-            &factors_json,
-            &outcome_json,
-            trace.model_used.as_deref(),
-            trace.created_at,
-        ).await {
+        if let Err(error) = self
+            .history
+            .insert_causal_trace(
+                &trace.trace_id,
+                trace.thread_id.as_deref(),
+                trace.goal_run_id.as_deref(),
+                trace.task_id.as_deref(),
+                "skill_selection",
+                &selected_json,
+                &rejected_json,
+                &trace.context_hash,
+                &factors_json,
+                &outcome_json,
+                trace.model_used.as_deref(),
+                trace.created_at,
+            )
+            .await
+        {
             tracing::warn!(thread_id = %thread_id, skill = %selected_variant.skill_name, variant = %selected_variant.variant_name, "failed to persist skill-selection causal trace: {error}");
         }
 
@@ -324,20 +328,24 @@ impl AgentEngine {
         let rejected_json = serde_json::to_string(&trace.rejected_options).unwrap_or_default();
         let factors_json = serde_json::to_string(&trace.causal_factors).unwrap_or_default();
         let outcome_json = serde_json::to_string(&trace.outcome).unwrap_or_default();
-        if let Err(error) = self.history.insert_causal_trace(
-            &trace.trace_id,
-            trace.thread_id.as_deref(),
-            trace.goal_run_id.as_deref(),
-            trace.task_id.as_deref(),
-            "recovery",
-            &selected_json,
-            &rejected_json,
-            &trace.context_hash,
-            &factors_json,
-            &outcome_json,
-            trace.model_used.as_deref(),
-            trace.created_at,
-        ).await {
+        if let Err(error) = self
+            .history
+            .insert_causal_trace(
+                &trace.trace_id,
+                trace.thread_id.as_deref(),
+                trace.goal_run_id.as_deref(),
+                trace.task_id.as_deref(),
+                "recovery",
+                &selected_json,
+                &rejected_json,
+                &trace.context_hash,
+                &factors_json,
+                &outcome_json,
+                trace.model_used.as_deref(),
+                trace.created_at,
+            )
+            .await
+        {
             tracing::warn!(goal_run_id = %goal_run.id, task_id = %failed_task.id, "failed to persist recovery near-miss trace: {error}");
         }
     }
@@ -627,20 +635,24 @@ impl AgentEngine {
         let rejected_json = serde_json::to_string(&trace.rejected_options).unwrap_or_default();
         let factors_json = serde_json::to_string(&trace.causal_factors).unwrap_or_default();
         let outcome_json = serde_json::to_string(&trace.outcome).unwrap_or_default();
-        if let Err(error) = self.history.insert_causal_trace(
-            &trace.trace_id,
-            trace.thread_id.as_deref(),
-            trace.goal_run_id.as_deref(),
-            trace.task_id.as_deref(),
-            decision_label,
-            &selected_json,
-            &rejected_json,
-            &trace.context_hash,
-            &factors_json,
-            &outcome_json,
-            trace.model_used.as_deref(),
-            trace.created_at,
-        ).await {
+        if let Err(error) = self
+            .history
+            .insert_causal_trace(
+                &trace.trace_id,
+                trace.thread_id.as_deref(),
+                trace.goal_run_id.as_deref(),
+                trace.task_id.as_deref(),
+                decision_label,
+                &selected_json,
+                &rejected_json,
+                &trace.context_hash,
+                &factors_json,
+                &outcome_json,
+                trace.model_used.as_deref(),
+                trace.created_at,
+            )
+            .await
+        {
             tracing::warn!(goal_run_id = %goal_run.id, trace = %decision_label, "failed to persist goal plan causal trace: {error}");
         }
     }
@@ -777,20 +789,24 @@ impl AgentEngine {
         let rejected_json = serde_json::to_string(&trace.rejected_options).unwrap_or_default();
         let factors_json = serde_json::to_string(&trace.causal_factors).unwrap_or_default();
         let outcome_json = serde_json::to_string(&trace.outcome).unwrap_or_default();
-        if let Err(error) = self.history.insert_causal_trace(
-            &trace.trace_id,
-            trace.thread_id.as_deref(),
-            trace.goal_run_id.as_deref(),
-            trace.task_id.as_deref(),
-            "tool_selection",
-            &selected_json,
-            &rejected_json,
-            &trace.context_hash,
-            &factors_json,
-            &outcome_json,
-            trace.model_used.as_deref(),
-            trace.created_at,
-        ).await {
+        if let Err(error) = self
+            .history
+            .insert_causal_trace(
+                &trace.trace_id,
+                trace.thread_id.as_deref(),
+                trace.goal_run_id.as_deref(),
+                trace.task_id.as_deref(),
+                "tool_selection",
+                &selected_json,
+                &rejected_json,
+                &trace.context_hash,
+                &factors_json,
+                &outcome_json,
+                trace.model_used.as_deref(),
+                trace.created_at,
+            )
+            .await
+        {
             tracing::warn!(thread_id = %thread_id, tool = %tool_call.function.name, "failed to persist causal trace: {error}");
         }
 
@@ -846,7 +862,8 @@ impl AgentEngine {
     ) -> Result<serde_json::Value> {
         let rows = self
             .history
-            .list_causal_traces_for_option(option_type, limit.max(1)).await?;
+            .list_causal_traces_for_option(option_type, limit.max(1))
+            .await?;
 
         let mut success = 0u32;
         let mut failure = 0u32;
@@ -914,7 +931,8 @@ impl AgentEngine {
         let normalized_family = command_family(family_hint);
         let records = self
             .history
-            .list_recent_causal_trace_records(option_type, limit.max(1)).await?;
+            .list_recent_causal_trace_records(option_type, limit.max(1))
+            .await?;
         let mut success = 0u32;
         let mut failure = 0u32;
         let mut near_miss = 0u32;

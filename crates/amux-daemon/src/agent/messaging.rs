@@ -3,7 +3,11 @@
 use super::*;
 
 impl AgentEngine {
-    pub async fn delete_thread_messages(&self, thread_id: &str, message_ids: &[String]) -> Result<usize> {
+    pub async fn delete_thread_messages(
+        &self,
+        thread_id: &str,
+        message_ids: &[String],
+    ) -> Result<usize> {
         if message_ids.is_empty() {
             return Ok(0);
         }
@@ -15,11 +19,14 @@ impl AgentEngine {
             let mut threads = self.threads.write().await;
             if let Some(thread) = threads.get_mut(thread_id) {
                 let before = thread.messages.len();
-                thread.messages.retain(|msg| !id_set.contains(msg.id.as_str()));
+                thread
+                    .messages
+                    .retain(|msg| !id_set.contains(msg.id.as_str()));
                 let removed = before.saturating_sub(thread.messages.len());
                 if removed > 0 {
                     thread.updated_at = now_millis();
-                    thread.total_input_tokens = thread.messages.iter().map(|m| m.input_tokens).sum();
+                    thread.total_input_tokens =
+                        thread.messages.iter().map(|m| m.input_tokens).sum();
                     thread.total_output_tokens =
                         thread.messages.iter().map(|m| m.output_tokens).sum();
                 }
@@ -31,13 +38,22 @@ impl AgentEngine {
 
         // Also delete from SQLite (by synthetic ID or direct ID).
         let id_refs: Vec<&str> = message_ids.iter().map(String::as_str).collect();
-        let db_removed = self.history.delete_messages(thread_id, &id_refs).await.unwrap_or(0);
+        let db_removed = self
+            .history
+            .delete_messages(thread_id, &id_refs)
+            .await
+            .unwrap_or(0);
 
         let total = removed.max(db_removed);
         if total > 0 {
             // Re-persist the thread to sync SQLite with in-memory state.
             self.persist_thread_by_id(thread_id).await;
-            tracing::info!(thread_id, in_memory = removed, sqlite = db_removed, "deleted messages and persisted");
+            tracing::info!(
+                thread_id,
+                in_memory = removed,
+                sqlite = db_removed,
+                "deleted messages and persisted"
+            );
         }
         Ok(total)
     }
@@ -182,7 +198,11 @@ impl AgentEngine {
     /// Attempt to restore a thread and its messages from the SQLite history database.
     async fn restore_thread_from_db(&self, thread_id: &str) -> Option<AgentThread> {
         let db_thread = self.history.get_thread(thread_id).await.ok().flatten()?;
-        let db_messages = self.history.list_messages(thread_id, Some(500)).await.ok()?;
+        let db_messages = self
+            .history
+            .list_messages(thread_id, Some(500))
+            .await
+            .ok()?;
         let thread_metadata = parse_thread_metadata(db_thread.metadata_json.as_deref());
 
         let messages: Vec<AgentMessage> = db_messages
@@ -345,7 +365,11 @@ mod tests {
         assert_eq!(thread.messages[1].content, "third");
         drop(live);
 
-        let persisted = engine.history.list_messages(thread_id, Some(10)).await.unwrap();
+        let persisted = engine
+            .history
+            .list_messages(thread_id, Some(10))
+            .await
+            .unwrap();
         assert_eq!(persisted.len(), 2);
         assert_eq!(persisted[0].content, "first");
         assert_eq!(persisted[1].content, "third");

@@ -10,9 +10,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::broadcast;
 use tokio_util::codec::Framed;
 
-use crate::agent::AgentEngine;
-use crate::agent::skill_community::{export_skill, import_community_skill, prepare_publish, unpack_skill, ImportResult};
+use crate::agent::skill_community::{
+    export_skill, import_community_skill, prepare_publish, unpack_skill, ImportResult,
+};
 use crate::agent::skill_registry::{to_community_entry, RegistryClient};
+use crate::agent::AgentEngine;
 use crate::session_manager::SessionManager;
 
 struct WhatsAppLinkSubscriberGuard {
@@ -83,10 +85,10 @@ fn agent_event_thread_id(event: &crate::agent::types::AgentEvent) -> Option<&str
 #[cfg(test)]
 mod tests {
     use super::{concierge_welcome_fingerprint, handle_connection};
+    use crate::agent::types::AgentConfig;
     use crate::agent::types::{
         AgentEvent, ConciergeAction, ConciergeActionType, ConciergeDetailLevel,
     };
-    use crate::agent::types::AgentConfig;
     use crate::agent::AgentEngine;
     use crate::history::HistoryStore;
     use crate::plugin::PluginManager;
@@ -184,7 +186,10 @@ mod tests {
         let root = std::env::current_dir()
             .expect("cwd")
             .join("tmp")
-            .join(format!("server-whatsapp-link-test-{}", uuid::Uuid::new_v4()));
+            .join(format!(
+                "server-whatsapp-link-test-{}",
+                uuid::Uuid::new_v4()
+            ));
         std::fs::create_dir_all(&root).expect("create test root");
 
         let history = Arc::new(
@@ -193,7 +198,11 @@ mod tests {
                 .expect("create test history"),
         );
         let manager = SessionManager::new_with_history(history.clone(), 64);
-        let agent = AgentEngine::new_with_shared_history(manager.clone(), AgentConfig::default(), history.clone());
+        let agent = AgentEngine::new_with_shared_history(
+            manager.clone(),
+            AgentConfig::default(),
+            history.clone(),
+        );
         let plugin_manager = Arc::new(PluginManager::new(history, root.join("plugins")));
 
         let (client_stream, server_stream) = tokio::io::duplex(128 * 1024);
@@ -441,10 +450,8 @@ pub async fn run() -> Result<()> {
         .await
         .unwrap_or_default();
 
-    let manager = SessionManager::new_with_history(
-        history.clone(),
-        agent_config.pty_channel_capacity,
-    );
+    let manager =
+        SessionManager::new_with_history(history.clone(), agent_config.pty_channel_capacity);
     let reaper_manager = manager.clone();
 
     tokio::spawn(async move {
@@ -456,20 +463,24 @@ pub async fn run() -> Result<()> {
     });
 
     // Start agent engine
-    let agent = AgentEngine::new_with_shared_history(
-        manager.clone(),
-        agent_config,
-        history.clone(),
-    );
+    let agent =
+        AgentEngine::new_with_shared_history(manager.clone(), agent_config, history.clone());
 
     // Initialize plugin manager
     let plugins_dir = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".tamux")
         .join("plugins");
-    let plugin_manager = Arc::new(crate::plugin::PluginManager::new(history.clone(), plugins_dir));
+    let plugin_manager = Arc::new(crate::plugin::PluginManager::new(
+        history.clone(),
+        plugins_dir,
+    ));
     let (pm_loaded, pm_skipped) = plugin_manager.load_all_from_disk().await;
-    tracing::info!(loaded = pm_loaded, skipped = pm_skipped, "plugin loader complete");
+    tracing::info!(
+        loaded = pm_loaded,
+        skipped = pm_skipped,
+        "plugin loader complete"
+    );
 
     // Wire plugin manager into agent engine for tool executor access (Phase 17)
     let _ = agent.plugin_manager.set(plugin_manager.clone());
@@ -506,7 +517,11 @@ pub async fn run() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 #[cfg(unix)]
-async fn run_unix(manager: Arc<SessionManager>, agent: Arc<AgentEngine>, plugin_manager: Arc<crate::plugin::PluginManager>) -> Result<()> {
+async fn run_unix(
+    manager: Arc<SessionManager>,
+    agent: Arc<AgentEngine>,
+    plugin_manager: Arc<crate::plugin::PluginManager>,
+) -> Result<()> {
     use tokio::net::UnixListener;
 
     let path = socket_path();
@@ -547,7 +562,8 @@ async fn accept_loop_unix(
                 let agent = agent.clone();
                 let plugin_manager = plugin_manager.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, manager, agent, plugin_manager).await {
+                    if let Err(e) = handle_connection(stream, manager, agent, plugin_manager).await
+                    {
                         tracing::error!(error = %e, "client connection error");
                     }
                 });
@@ -564,7 +580,11 @@ async fn accept_loop_unix(
 // ---------------------------------------------------------------------------
 
 #[cfg(windows)]
-async fn run_windows(manager: Arc<SessionManager>, agent: Arc<AgentEngine>, plugin_manager: Arc<crate::plugin::PluginManager>) -> Result<()> {
+async fn run_windows(
+    manager: Arc<SessionManager>,
+    agent: Arc<AgentEngine>,
+    plugin_manager: Arc<crate::plugin::PluginManager>,
+) -> Result<()> {
     let addr = amux_protocol::default_tcp_addr();
     tracing::info!(%addr, "daemon listening on TCP");
     run_tcp_fallback(manager, agent, plugin_manager).await
@@ -572,7 +592,11 @@ async fn run_windows(manager: Arc<SessionManager>, agent: Arc<AgentEngine>, plug
 
 /// TCP server used for Windows IPC.
 #[allow(dead_code)]
-async fn run_tcp_fallback(manager: Arc<SessionManager>, agent: Arc<AgentEngine>, plugin_manager: Arc<crate::plugin::PluginManager>) -> Result<()> {
+async fn run_tcp_fallback(
+    manager: Arc<SessionManager>,
+    agent: Arc<AgentEngine>,
+    plugin_manager: Arc<crate::plugin::PluginManager>,
+) -> Result<()> {
     use tokio::net::TcpListener;
 
     let addr = amux_protocol::default_tcp_addr();
@@ -616,7 +640,8 @@ async fn accept_loop_tcp(
                 let agent = agent.clone();
                 let plugin_manager = plugin_manager.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, manager, agent, plugin_manager).await {
+                    if let Err(e) = handle_connection(stream, manager, agent, plugin_manager).await
+                    {
                         tracing::error!(%addr, error = %e, "client connection error");
                     }
                 });
@@ -1072,7 +1097,10 @@ where
                 }
 
                 ClientMessage::SearchHistory { query, limit } => {
-                    match manager.search_history(&query, limit.unwrap_or(8).max(1)).await {
+                    match manager
+                        .search_history(&query, limit.unwrap_or(8).max(1))
+                        .await
+                    {
                         Ok((summary, hits)) => {
                             framed
                                 .send(DaemonMessage::HistorySearchResult {
@@ -1120,7 +1148,10 @@ where
                     id,
                     exit_code,
                     duration_ms,
-                } => match manager.complete_command_log(&id, exit_code, duration_ms).await {
+                } => match manager
+                    .complete_command_log(&id, exit_code, duration_ms)
+                    .await
+                {
                     Ok(()) => {
                         framed.send(DaemonMessage::CommandLogAck).await?;
                     }
@@ -1137,11 +1168,10 @@ where
                     workspace_id,
                     pane_id,
                     limit,
-                } => match manager.query_command_log(
-                    workspace_id.as_deref(),
-                    pane_id.as_deref(),
-                    limit,
-                ).await {
+                } => match manager
+                    .query_command_log(workspace_id.as_deref(), pane_id.as_deref(), limit)
+                    .await
+                {
                     Ok(entries) => {
                         let entries_json = serde_json::to_string(&entries).unwrap_or_default();
                         framed
@@ -1276,25 +1306,23 @@ where
                 ClientMessage::DeleteAgentMessages {
                     thread_id,
                     message_ids,
-                } => {
-                    match agent.delete_thread_messages(&thread_id, &message_ids).await {
-                        Ok(deleted) => {
-                            tracing::info!(
-                                thread_id = %thread_id,
-                                deleted,
-                                "deleted agent messages"
-                            );
-                            framed.send(DaemonMessage::AgentDbMessageAck).await?;
-                        }
-                        Err(e) => {
-                            framed
-                                .send(DaemonMessage::Error {
-                                    message: e.to_string(),
-                                })
-                                .await?;
-                        }
+                } => match agent.delete_thread_messages(&thread_id, &message_ids).await {
+                    Ok(deleted) => {
+                        tracing::info!(
+                            thread_id = %thread_id,
+                            deleted,
+                            "deleted agent messages"
+                        );
+                        framed.send(DaemonMessage::AgentDbMessageAck).await?;
                     }
-                }
+                    Err(e) => {
+                        framed
+                            .send(DaemonMessage::Error {
+                                message: e.to_string(),
+                            })
+                            .await?;
+                    }
+                },
 
                 ClientMessage::ListAgentMessages { thread_id, limit } => {
                     match manager.list_agent_messages(&thread_id, limit).await {
@@ -1433,7 +1461,8 @@ where
                     pane_id,
                     limit,
                 } => {
-                    match manager.list_agent_events(category.as_deref(), pane_id.as_deref(), limit)
+                    match manager
+                        .list_agent_events(category.as_deref(), pane_id.as_deref(), limit)
                         .await
                     {
                         Ok(events) => {
@@ -1453,7 +1482,10 @@ where
                 }
 
                 ClientMessage::GenerateSkill { query, title } => {
-                    match manager.generate_skill(query.as_deref(), title.as_deref()).await {
+                    match manager
+                        .generate_skill(query.as_deref(), title.as_deref())
+                        .await
+                    {
                         Ok((title, path)) => {
                             framed
                                 .send(DaemonMessage::SkillGenerated { title, path })
@@ -2014,23 +2046,26 @@ where
                 }
 
                 ClientMessage::AgentListCheckpoints { goal_run_id } => {
-                    let checkpoints_json =
-                        match agent.history.list_checkpoints_for_goal_run(&goal_run_id).await {
-                            Ok(jsons) => {
-                                let summaries =
-                                    crate::agent::liveness::checkpoint::checkpoint_list(&jsons);
-                                serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".into())
-                            }
-                            Err(e) => {
-                                framed
-                                    .send(DaemonMessage::AgentError {
-                                        message: format!("failed to list checkpoints: {e}"),
-                                    })
-                                    .await
-                                    .ok();
-                                continue;
-                            }
-                        };
+                    let checkpoints_json = match agent
+                        .history
+                        .list_checkpoints_for_goal_run(&goal_run_id)
+                        .await
+                    {
+                        Ok(jsons) => {
+                            let summaries =
+                                crate::agent::liveness::checkpoint::checkpoint_list(&jsons);
+                            serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".into())
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!("failed to list checkpoints: {e}"),
+                                })
+                                .await
+                                .ok();
+                            continue;
+                        }
+                    };
                     framed
                         .send(DaemonMessage::AgentCheckpointList { checkpoints_json })
                         .await
@@ -2067,20 +2102,21 @@ where
                 }
 
                 ClientMessage::AgentListHealthLog { limit } => {
-                    let entries_json = match agent.health_log_entries(limit.unwrap_or(50).max(1)).await {
-                        Ok(entries) => {
-                            serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into())
-                        }
-                        Err(e) => {
-                            framed
-                                .send(DaemonMessage::AgentError {
-                                    message: format!("failed to list health log: {e}"),
-                                })
-                                .await
-                                .ok();
-                            continue;
-                        }
-                    };
+                    let entries_json =
+                        match agent.health_log_entries(limit.unwrap_or(50).max(1)).await {
+                            Ok(entries) => {
+                                serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into())
+                            }
+                            Err(e) => {
+                                framed
+                                    .send(DaemonMessage::AgentError {
+                                        message: format!("failed to list health log: {e}"),
+                                    })
+                                    .await
+                                    .ok();
+                                continue;
+                            }
+                        };
                     framed
                         .send(DaemonMessage::AgentHealthLog { entries_json })
                         .await
@@ -2151,11 +2187,10 @@ where
                     option_type,
                     command_family,
                     limit,
-                } => match agent.counterfactual_report(
-                    &option_type,
-                    &command_family,
-                    limit.unwrap_or(20),
-                ).await {
+                } => match agent
+                    .counterfactual_report(&option_type, &command_family, limit.unwrap_or(20))
+                    .await
+                {
                     Ok(report) => {
                         let report_json =
                             serde_json::to_string(&report).unwrap_or_else(|_| "{}".into());
@@ -2601,14 +2636,22 @@ where
                     let (onboarding_done, tier) = {
                         let cfg = agent.config.read().await;
                         let done = cfg.tier.onboarding_completed;
-                        let t = cfg.tier.user_self_assessment
+                        let t = cfg
+                            .tier
+                            .user_self_assessment
                             .unwrap_or(crate::agent::capability_tier::CapabilityTier::Newcomer);
                         (done, t)
                     };
                     let mut onboarding_just_delivered = false;
                     if !onboarding_done {
-                        if let Err(e) = agent.concierge.deliver_onboarding(tier, &agent.threads).await {
-                            tracing::warn!("onboarding delivery failed, falling back to generic welcome: {e}");
+                        if let Err(e) = agent
+                            .concierge
+                            .deliver_onboarding(tier, &agent.threads)
+                            .await
+                        {
+                            tracing::warn!(
+                                "onboarding delivery failed, falling back to generic welcome: {e}"
+                            );
                         } else {
                             onboarding_just_delivered = true;
                             agent
@@ -2760,11 +2803,14 @@ where
                         thread_id: Some(thread_id.clone()),
                         goal_run_id: None,
                         task_id: None,
-                        raw_data_json: Some(serde_json::json!({
-                            "action": "cancel",
-                            "thread_id": thread_id,
-                            "outcome": "cancelled_by_user",
-                        }).to_string()),
+                        raw_data_json: Some(
+                            serde_json::json!({
+                                "action": "cancel",
+                                "thread_id": thread_id,
+                                "outcome": "cancelled_by_user",
+                            })
+                            .to_string(),
+                        ),
                     };
 
                     if let Err(e) = agent.history.insert_action_audit(&audit_entry).await {
@@ -2772,20 +2818,22 @@ where
                     }
 
                     // Broadcast EscalationUpdate event so all clients see the cancel.
-                    let _ = agent.event_tx.send(
-                        crate::agent::types::AgentEvent::EscalationUpdate {
-                            thread_id: thread_id.clone(),
-                            from_level: "unknown".to_string(),
-                            to_level: "L0".to_string(),
-                            reason: "User took over (I'll handle this)".to_string(),
-                            attempts: 0,
-                            audit_id: Some(audit_id.clone()),
-                        },
-                    );
+                    let _ =
+                        agent
+                            .event_tx
+                            .send(crate::agent::types::AgentEvent::EscalationUpdate {
+                                thread_id: thread_id.clone(),
+                                from_level: "unknown".to_string(),
+                                to_level: "L0".to_string(),
+                                reason: "User took over (I'll handle this)".to_string(),
+                                attempts: 0,
+                                audit_id: Some(audit_id.clone()),
+                            });
 
                     // Broadcast AuditAction event.
-                    let _ = agent.event_tx.send(
-                        crate::agent::types::AgentEvent::AuditAction {
+                    let _ = agent
+                        .event_tx
+                        .send(crate::agent::types::AgentEvent::AuditAction {
                             id: audit_id,
                             timestamp: now_ms as u64,
                             action_type: "escalation".to_string(),
@@ -2795,8 +2843,7 @@ where
                             confidence_band: None,
                             causal_trace_id: None,
                             thread_id: Some(thread_id.clone()),
-                        },
-                    );
+                        });
 
                     framed
                         .send(DaemonMessage::EscalationCancelResult {
@@ -2851,7 +2898,11 @@ where
                         Ok(Some(v)) => Some(v),
                         _ => {
                             // Search by skill name
-                            match agent.history.list_skill_variants(Some(&identifier), 1).await {
+                            match agent
+                                .history
+                                .list_skill_variants(Some(&identifier), 1)
+                                .await
+                            {
                                 Ok(variants) => variants.into_iter().next(),
                                 Err(_) => None,
                             }
@@ -2860,7 +2911,8 @@ where
 
                     let (public, content) = if let Some(ref v) = variant {
                         // Read SKILL.md content from disk
-                        let skill_path = agent.data_dir
+                        let skill_path = agent
+                            .data_dir
                             .parent()
                             .unwrap_or(std::path::Path::new("."))
                             .join("skills")
@@ -2897,7 +2949,11 @@ where
                     let variant = match agent.history.get_skill_variant(&identifier).await {
                         Ok(Some(v)) => Some(v),
                         _ => {
-                            match agent.history.list_skill_variants(Some(&identifier), 1).await {
+                            match agent
+                                .history
+                                .list_skill_variants(Some(&identifier), 1)
+                                .await
+                            {
                                 Ok(variants) => variants.into_iter().next(),
                                 Err(_) => None,
                             }
@@ -2916,7 +2972,8 @@ where
                             }
                         } else {
                             // Delete the SKILL.md file from disk
-                            let skill_path = agent.data_dir
+                            let skill_path = agent
+                                .data_dir
                                 .parent()
                                 .unwrap_or(std::path::Path::new("."))
                                 .join("skills")
@@ -2924,10 +2981,17 @@ where
                             let _ = tokio::fs::remove_file(&skill_path).await;
 
                             // Update status to archived
-                            match agent.history.update_skill_variant_status(&v.variant_id, "archived").await {
+                            match agent
+                                .history
+                                .update_skill_variant_status(&v.variant_id, "archived")
+                                .await
+                            {
                                 Ok(()) => DaemonMessage::SkillActionResult {
                                     success: true,
-                                    message: format!("Rejected and archived skill '{}'.", v.skill_name),
+                                    message: format!(
+                                        "Rejected and archived skill '{}'.",
+                                        v.skill_name
+                                    ),
                                 },
                                 Err(e) => DaemonMessage::SkillActionResult {
                                     success: false,
@@ -2944,9 +3008,18 @@ where
                     framed.send(msg).await?;
                 }
 
-                ClientMessage::SkillPromote { identifier, target_status } => {
+                ClientMessage::SkillPromote {
+                    identifier,
+                    target_status,
+                } => {
                     // Validate target status
-                    let valid_statuses = ["draft", "testing", "active", "proven", "promoted_to_canonical"];
+                    let valid_statuses = [
+                        "draft",
+                        "testing",
+                        "active",
+                        "proven",
+                        "promoted_to_canonical",
+                    ];
                     if !valid_statuses.contains(&target_status.as_str()) {
                         framed
                             .send(DaemonMessage::SkillActionResult {
@@ -2963,7 +3036,11 @@ where
                         let variant = match agent.history.get_skill_variant(&identifier).await {
                             Ok(Some(v)) => Some(v),
                             _ => {
-                                match agent.history.list_skill_variants(Some(&identifier), 1).await {
+                                match agent
+                                    .history
+                                    .list_skill_variants(Some(&identifier), 1)
+                                    .await
+                                {
                                     Ok(variants) => variants.into_iter().next(),
                                     Err(_) => None,
                                 }
@@ -2971,24 +3048,34 @@ where
                         };
 
                         let msg = if let Some(v) = variant {
-                            match agent.history.update_skill_variant_status(&v.variant_id, &target_status).await {
+                            match agent
+                                .history
+                                .update_skill_variant_status(&v.variant_id, &target_status)
+                                .await
+                            {
                                 Ok(()) => {
                                     // Record provenance
-                                    agent.record_provenance_event(
-                                        "skill_lifecycle_promotion",
-                                        &format!(
-                                            "Skill '{}' fast-promoted {} -> {} via CLI",
-                                            v.skill_name, v.status, target_status
-                                        ),
-                                        serde_json::json!({
-                                            "variant_id": v.variant_id,
-                                            "skill_name": v.skill_name,
-                                            "from_status": v.status,
-                                            "to_status": target_status,
-                                            "trigger": "cli_promote",
-                                        }),
-                                        None, None, None, None, None,
-                                    ).await;
+                                    agent
+                                        .record_provenance_event(
+                                            "skill_lifecycle_promotion",
+                                            &format!(
+                                                "Skill '{}' fast-promoted {} -> {} via CLI",
+                                                v.skill_name, v.status, target_status
+                                            ),
+                                            serde_json::json!({
+                                                "variant_id": v.variant_id,
+                                                "skill_name": v.skill_name,
+                                                "from_status": v.status,
+                                                "to_status": target_status,
+                                                "trigger": "cli_promote",
+                                            }),
+                                            None,
+                                            None,
+                                            None,
+                                            None,
+                                            None,
+                                        )
+                                        .await;
 
                                     DaemonMessage::SkillActionResult {
                                         success: true,
@@ -3024,13 +3111,14 @@ where
                     drop(config);
 
                     let client = RegistryClient::new(registry_url, agent.history.data_dir());
-                    let entries: Vec<amux_protocol::CommunitySkillEntry> = match client.search(&query).await {
-                        Ok(entries) => entries
-                            .into_iter()
-                            .map(|entry| to_community_entry(&entry))
-                            .collect(),
-                        Err(_) => Vec::new(),
-                    };
+                    let entries: Vec<amux_protocol::CommunitySkillEntry> =
+                        match client.search(&query).await {
+                            Ok(entries) => entries
+                                .into_iter()
+                                .map(|entry| to_community_entry(&entry))
+                                .collect(),
+                            Err(_) => Vec::new(),
+                        };
                     framed
                         .send(DaemonMessage::SkillSearchResult { entries })
                         .await?;
@@ -3119,7 +3207,9 @@ where
                                 scan_verdict,
                             }) => DaemonMessage::SkillImportResult {
                                 success: true,
-                                message: format!("Imported community skill '{skill_name}' as draft."),
+                                message: format!(
+                                    "Imported community skill '{skill_name}' as draft."
+                                ),
                                 variant_id: Some(variant_id),
                                 scan_verdict: Some(scan_verdict),
                                 findings_count: 0,
@@ -3171,14 +3261,22 @@ where
                 } => {
                     let variant = match agent.history.get_skill_variant(&identifier).await {
                         Ok(Some(v)) => Some(v),
-                        _ => match agent.history.list_skill_variants(Some(&identifier), 1).await {
+                        _ => match agent
+                            .history
+                            .list_skill_variants(Some(&identifier), 1)
+                            .await
+                        {
                             Ok(variants) => variants.into_iter().next(),
                             Err(_) => None,
                         },
                     };
 
                     let msg = if let Some(v) = variant {
-                        let skill_path = agent.history.data_dir().join("skills").join(&v.relative_path);
+                        let skill_path = agent
+                            .history
+                            .data_dir()
+                            .join("skills")
+                            .join(&v.relative_path);
                         match tokio::fs::read_to_string(&skill_path).await {
                             Ok(content) => match export_skill(
                                 &content,
@@ -3188,7 +3286,10 @@ where
                             ) {
                                 Ok(path) => DaemonMessage::SkillExportResult {
                                     success: true,
-                                    message: format!("Exported skill '{}' to {}.", v.skill_name, path),
+                                    message: format!(
+                                        "Exported skill '{}' to {}.",
+                                        v.skill_name, path
+                                    ),
                                     output_path: Some(path),
                                 },
                                 Err(e) => DaemonMessage::SkillExportResult {
@@ -3216,7 +3317,11 @@ where
                 ClientMessage::SkillPublish { identifier } => {
                     let variant = match agent.history.get_skill_variant(&identifier).await {
                         Ok(Some(v)) => Some(v),
-                        _ => match agent.history.list_skill_variants(Some(&identifier), 1).await {
+                        _ => match agent
+                            .history
+                            .list_skill_variants(Some(&identifier), 1)
+                            .await
+                        {
                             Ok(variants) => variants.into_iter().next(),
                             Err(_) => None,
                         },
@@ -3241,15 +3346,16 @@ where
                                 .to_string();
                             drop(config);
 
-                            let skill_dir = agent
-                                .history
-                                .data_dir()
-                                .join("skills")
-                                .join(Path::new(&v.relative_path).parent().unwrap_or(Path::new(".")));
+                            let skill_dir = agent.history.data_dir().join("skills").join(
+                                Path::new(&v.relative_path)
+                                    .parent()
+                                    .unwrap_or(Path::new(".")),
+                            );
                             let machine_id = agent.history.data_dir().to_string_lossy().to_string();
                             match prepare_publish(&skill_dir, &v, &machine_id) {
                                 Ok((tarball, metadata)) => {
-                                    let client = RegistryClient::new(registry_url, agent.history.data_dir());
+                                    let client =
+                                        RegistryClient::new(registry_url, agent.history.data_dir());
                                     match client.publish_skill(&tarball, &metadata).await {
                                         Ok(()) => DaemonMessage::SkillPublishResult {
                                             success: true,
@@ -3309,26 +3415,24 @@ where
                         .send(DaemonMessage::PluginListResult { plugins })
                         .await?;
                 }
-                ClientMessage::PluginGet { name } => {
-                    match plugin_manager.get_plugin(&name).await {
-                        Some((info, settings_schema)) => {
-                            framed
-                                .send(DaemonMessage::PluginGetResult {
-                                    plugin: Some(info),
-                                    settings_schema,
-                                })
-                                .await?;
-                        }
-                        None => {
-                            framed
-                                .send(DaemonMessage::PluginGetResult {
-                                    plugin: None,
-                                    settings_schema: None,
-                                })
-                                .await?;
-                        }
+                ClientMessage::PluginGet { name } => match plugin_manager.get_plugin(&name).await {
+                    Some((info, settings_schema)) => {
+                        framed
+                            .send(DaemonMessage::PluginGetResult {
+                                plugin: Some(info),
+                                settings_schema,
+                            })
+                            .await?;
                     }
-                }
+                    None => {
+                        framed
+                            .send(DaemonMessage::PluginGetResult {
+                                plugin: None,
+                                settings_schema: None,
+                            })
+                            .await?;
+                    }
+                },
                 ClientMessage::PluginEnable { name } => {
                     let result = plugin_manager.set_enabled(&name, true).await;
                     let (success, message) = match result {
@@ -3349,10 +3453,21 @@ where
                         .send(DaemonMessage::PluginActionResult { success, message })
                         .await?;
                 }
-                ClientMessage::PluginInstall { dir_name, install_source } => {
-                    let result = plugin_manager.register_plugin(&dir_name, &install_source).await;
+                ClientMessage::PluginInstall {
+                    dir_name,
+                    install_source,
+                } => {
+                    let result = plugin_manager
+                        .register_plugin(&dir_name, &install_source)
+                        .await;
                     let (success, message) = match result {
-                        Ok(info) => (true, format!("Plugin '{}' v{} registered successfully", info.name, info.version)),
+                        Ok(info) => (
+                            true,
+                            format!(
+                                "Plugin '{}' v{} registered successfully",
+                                info.name, info.version
+                            ),
+                        ),
                         Err(e) => (false, format!("Failed to register plugin: {}", e)),
                     };
                     framed
@@ -3363,7 +3478,10 @@ where
                     let result = plugin_manager.unregister_plugin(&name).await;
                     let (success, message) = match result {
                         Ok(()) => (true, format!("Plugin '{}' unregistered", name)),
-                        Err(e) => (false, format!("Failed to unregister plugin '{}': {}", name, e)),
+                        Err(e) => (
+                            false,
+                            format!("Failed to unregister plugin '{}': {}", name, e),
+                        ),
                     };
                     framed
                         .send(DaemonMessage::PluginActionResult { success, message })
@@ -3392,10 +3510,7 @@ where
                     let (success, message) = match result {
                         Ok(()) => (
                             true,
-                            format!(
-                                "Setting '{}' updated for plugin '{}'",
-                                key, plugin_name
-                            ),
+                            format!("Setting '{}' updated for plugin '{}'", key, plugin_name),
                         ),
                         Err(e) => (false, format!("Failed to update setting: {}", e)),
                     };
@@ -3436,7 +3551,10 @@ where
                                 .await?;
 
                             // Await callback and complete the flow (up to 5 min timeout)
-                            match plugin_manager.complete_oauth_flow(&name, &mut flow_state).await {
+                            match plugin_manager
+                                .complete_oauth_flow(&name, &mut flow_state)
+                                .await
+                            {
                                 Ok(()) => {
                                     framed
                                         .send(DaemonMessage::PluginOAuthComplete {
@@ -3479,7 +3597,10 @@ where
                 } => {
                     let params_json: serde_json::Value = serde_json::from_str(&params)
                         .unwrap_or(serde_json::Value::Object(Default::default()));
-                    match plugin_manager.api_call(&plugin_name, &endpoint_name, params_json).await {
+                    match plugin_manager
+                        .api_call(&plugin_name, &endpoint_name, params_json)
+                        .await
+                    {
                         Ok(result_text) => {
                             framed
                                 .send(DaemonMessage::PluginApiCallResult {
@@ -3497,10 +3618,18 @@ where
                                 crate::plugin::PluginApiError::RateLimited { .. } => "rate_limited",
                                 crate::plugin::PluginApiError::Timeout => "timeout",
                                 crate::plugin::PluginApiError::HttpError { .. } => "http_error",
-                                crate::plugin::PluginApiError::TemplateError { .. } => "template_error",
-                                crate::plugin::PluginApiError::EndpointNotFound { .. } => "endpoint_not_found",
-                                crate::plugin::PluginApiError::PluginNotFound { .. } => "plugin_not_found",
-                                crate::plugin::PluginApiError::PluginDisabled { .. } => "plugin_disabled",
+                                crate::plugin::PluginApiError::TemplateError { .. } => {
+                                    "template_error"
+                                }
+                                crate::plugin::PluginApiError::EndpointNotFound { .. } => {
+                                    "endpoint_not_found"
+                                }
+                                crate::plugin::PluginApiError::PluginNotFound { .. } => {
+                                    "plugin_not_found"
+                                }
+                                crate::plugin::PluginApiError::PluginDisabled { .. } => {
+                                    "plugin_disabled"
+                                }
                                 crate::plugin::PluginApiError::AuthExpired { .. } => "auth_expired",
                             };
                             framed
@@ -3515,28 +3644,26 @@ where
                         }
                     }
                 }
-                ClientMessage::AgentWhatsAppLinkStart => {
-                    match agent.whatsapp_link.start().await {
-                        Ok(()) => {
-                            let snapshot = agent.whatsapp_link.status_snapshot().await;
-                            framed
-                                .send(DaemonMessage::AgentWhatsAppLinkStatus {
-                                    state: snapshot.state,
-                                    phone: snapshot.phone,
-                                    last_error: snapshot.last_error,
-                                })
-                                .await?;
-                        }
-                        Err(e) => {
-                            framed
-                                .send(DaemonMessage::AgentWhatsAppLinkError {
-                                    message: e.to_string(),
-                                    recoverable: false,
-                                })
-                                .await?;
-                        }
+                ClientMessage::AgentWhatsAppLinkStart => match agent.whatsapp_link.start().await {
+                    Ok(()) => {
+                        let snapshot = agent.whatsapp_link.status_snapshot().await;
+                        framed
+                            .send(DaemonMessage::AgentWhatsAppLinkStatus {
+                                state: snapshot.state,
+                                phone: snapshot.phone,
+                                last_error: snapshot.last_error,
+                            })
+                            .await?;
                     }
-                }
+                    Err(e) => {
+                        framed
+                            .send(DaemonMessage::AgentWhatsAppLinkError {
+                                message: e.to_string(),
+                                recoverable: false,
+                            })
+                            .await?;
+                    }
+                },
                 ClientMessage::AgentWhatsAppLinkStop => {
                     match agent
                         .whatsapp_link

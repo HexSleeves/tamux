@@ -7,9 +7,7 @@
 //! `params` and `settings` keys. Rendering is capped at 1 second via
 //! tokio timeout.
 
-use handlebars::{
-    Context, Handlebars, Helper, HelperResult, Output, RenderContext, RenderError,
-};
+use handlebars::{Context, Handlebars, Helper, HelperResult, Output, RenderContext, RenderError};
 
 use super::api_proxy::{PluginApiError, RenderedRequest};
 use super::manifest::{ApiSection, EndpointDef};
@@ -72,9 +70,7 @@ pub async fn render_request(
 
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(1),
-        tokio::task::spawn_blocking(move || {
-            render_request_sync(&reg, &api, &endpoint, &ctx)
-        }),
+        tokio::task::spawn_blocking(move || render_request_sync(&reg, &api, &endpoint, &ctx)),
     )
     .await;
 
@@ -103,37 +99,32 @@ fn render_request_sync(
         .map_err(|e| PluginApiError::TemplateError {
             detail: format!("path template: {e}"),
         })?;
-    let url = format!(
-        "{}{}",
-        base.trim_end_matches('/'),
-        path_rendered
-    );
+    let url = format!("{}{}", base.trim_end_matches('/'), path_rendered);
 
     // Render headers
     let mut headers = Vec::new();
     if let Some(ref header_map) = endpoint.headers {
         for (key, value_tpl) in header_map {
-            let rendered = registry
-                .render_template(value_tpl, context)
-                .map_err(|e| PluginApiError::TemplateError {
+            let rendered = registry.render_template(value_tpl, context).map_err(|e| {
+                PluginApiError::TemplateError {
                     detail: format!("header '{key}' template: {e}"),
-                })?;
+                }
+            })?;
             headers.push((key.clone(), rendered));
         }
     }
 
     // Render body
     let body = if let Some(ref body_map) = endpoint.body {
-        let body_json = serde_json::to_string(body_map).map_err(|e| {
-            PluginApiError::TemplateError {
+        let body_json =
+            serde_json::to_string(body_map).map_err(|e| PluginApiError::TemplateError {
                 detail: format!("body serialization: {e}"),
+            })?;
+        let rendered = registry.render_template(&body_json, context).map_err(|e| {
+            PluginApiError::TemplateError {
+                detail: format!("body template: {e}"),
             }
         })?;
-        let rendered = registry
-            .render_template(&body_json, context)
-            .map_err(|e| PluginApiError::TemplateError {
-                detail: format!("body template: {e}"),
-            })?;
         Some(rendered)
     } else {
         None
@@ -162,11 +153,11 @@ pub fn render_response(
             .map_err(|e| PluginApiError::TemplateError {
                 detail: format!("response template: {e}"),
             }),
-        None => serde_json::to_string_pretty(response_json).map_err(|e| {
-            PluginApiError::TemplateError {
+        None => {
+            serde_json::to_string_pretty(response_json).map_err(|e| PluginApiError::TemplateError {
                 detail: format!("response JSON serialization: {e}"),
-            }
-        }),
+            })
+        }
     }
 }
 
@@ -248,12 +239,12 @@ fn helper_truncate(
     let param = h
         .param(0)
         .ok_or_else(|| RenderError::new("truncate: missing parameter"))?;
-    let max_len = h
-        .param(1)
-        .ok_or_else(|| RenderError::new("truncate: missing length parameter"))?
-        .value()
-        .as_u64()
-        .ok_or_else(|| RenderError::new("truncate: length must be a number"))? as usize;
+    let max_len =
+        h.param(1)
+            .ok_or_else(|| RenderError::new("truncate: missing length parameter"))?
+            .value()
+            .as_u64()
+            .ok_or_else(|| RenderError::new("truncate: length must be a number"))? as usize;
 
     let param_str = param.value().to_string();
     let s = param.value().as_str().unwrap_or(&param_str);
@@ -314,7 +305,10 @@ mod tests {
         let reg = create_registry();
         // Strict mode rejects undefined variables
         let result = reg.render_template("{{undefined_var}}", &serde_json::json!({}));
-        assert!(result.is_err(), "strict mode should reject undefined variables");
+        assert!(
+            result.is_err(),
+            "strict mode should reject undefined variables"
+        );
     }
 
     #[test]
@@ -333,10 +327,7 @@ mod tests {
     fn json_helper_serializes_object() {
         let reg = create_registry();
         let result = reg
-            .render_template(
-                "{{json obj}}",
-                &serde_json::json!({"obj": {"key": "val"}}),
-            )
+            .render_template("{{json obj}}", &serde_json::json!({"obj": {"key": "val"}}))
             .unwrap();
         assert_eq!(result, r#"{"key":"val"}"#);
     }
@@ -407,7 +398,11 @@ mod tests {
             serde_json::json!({"query": "test"}),
             vec![
                 ("api_key".to_string(), "secret123".to_string(), true),
-                ("base_url".to_string(), "https://api.example.com".to_string(), false),
+                (
+                    "base_url".to_string(),
+                    "https://api.example.com".to_string(),
+                    false,
+                ),
             ],
             None,
         );
@@ -428,12 +423,14 @@ mod tests {
             method: "POST".to_string(),
             path: "/v1/users/{{params.user_id}}/messages".to_string(),
             params: None,
-            headers: Some(HashMap::from([
-                ("Authorization".to_string(), "Bearer {{settings.api_key}}".to_string()),
-            ])),
-            body: Some(HashMap::from([
-                ("content".to_string(), serde_json::json!("{{params.message}}")),
-            ])),
+            headers: Some(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer {{settings.api_key}}".to_string(),
+            )])),
+            body: Some(HashMap::from([(
+                "content".to_string(),
+                serde_json::json!("{{params.message}}"),
+            )])),
             response_template: None,
         };
         let ctx = build_context(
@@ -445,7 +442,10 @@ mod tests {
         let req = render_request(&reg, &api, &endpoint, &ctx).await.unwrap();
         assert_eq!(req.method, "POST");
         assert_eq!(req.url, "https://api.example.com/v1/users/123/messages");
-        assert!(req.headers.iter().any(|(k, v)| k == "Authorization" && v == "Bearer tok_abc"));
+        assert!(req
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Authorization" && v == "Bearer tok_abc"));
         assert!(req.body.is_some());
     }
 
@@ -491,10 +491,8 @@ mod tests {
     #[test]
     fn strict_mode_rejects_undefined_variables() {
         let reg = create_registry();
-        let result = reg.render_template(
-            "{{undefined_var}}",
-            &serde_json::json!({"other": "value"}),
-        );
+        let result =
+            reg.render_template("{{undefined_var}}", &serde_json::json!({"other": "value"}));
         assert!(result.is_err());
     }
 }

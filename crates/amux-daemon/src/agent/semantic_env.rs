@@ -819,7 +819,9 @@ async fn render_conventions(
     limit: usize,
 ) -> Result<String> {
     let target_tokens = target.map(tokenize_convention_query).unwrap_or_default();
-    let report = history.memory_provenance_report(None, limit.saturating_mul(4).max(20)).await?;
+    let report = history
+        .memory_provenance_report(None, limit.saturating_mul(4).max(20))
+        .await?;
     let mut matching_entries = report
         .entries
         .into_iter()
@@ -901,7 +903,8 @@ async fn render_temporal(
 ) -> Result<String> {
     let normalized_target = target.map(normalize_convention_text);
     let commands = history
-        .query_command_log(None, None, Some(limit.saturating_mul(12).max(40))).await?
+        .query_command_log(None, None, Some(limit.saturating_mul(12).max(40)))
+        .await?
         .into_iter()
         .filter(|entry| {
             entry
@@ -932,7 +935,8 @@ async fn render_temporal(
 
     let transcripts = if normalized_target.is_some() {
         history
-            .list_transcript_index(None).await?
+            .list_transcript_index(None)
+            .await?
             .into_iter()
             .filter(|entry| {
                 normalized_target.as_ref().is_some_and(|target| {
@@ -951,7 +955,8 @@ async fn render_temporal(
 
     let memory_matches = if normalized_target.is_some() {
         history
-            .memory_provenance_report(target, limit.saturating_mul(2).max(12)).await?
+            .memory_provenance_report(target, limit.saturating_mul(2).max(12))
+            .await?
             .entries
             .into_iter()
             .filter(|entry| entry.mode != "remove" && entry.status != "retracted")
@@ -1430,18 +1435,20 @@ export * from "../shared/types";
     async fn render_temporal_summarizes_recent_workspace_history() -> Result<()> {
         let root = make_temp_dir()?;
         let store = HistoryStore::new_test_store(&root).await?;
-        store.append_command_log(&amux_protocol::CommandLogEntry {
-            id: "cmd-1".to_string(),
-            command: "deploy staging".to_string(),
-            timestamp: 123,
-            path: None,
-            cwd: Some(root.display().to_string()),
-            workspace_id: None,
-            surface_id: None,
-            pane_id: None,
-            exit_code: Some(1),
-            duration_ms: Some(50),
-        }).await?;
+        store
+            .append_command_log(&amux_protocol::CommandLogEntry {
+                id: "cmd-1".to_string(),
+                command: "deploy staging".to_string(),
+                timestamp: 123,
+                path: None,
+                cwd: Some(root.display().to_string()),
+                workspace_id: None,
+                surface_id: None,
+                pane_id: None,
+                exit_code: Some(1),
+                duration_ms: Some(50),
+            })
+            .await?;
 
         let rendered = render_temporal(&root, &store, Some("deploy"), 5).await?;
         assert!(rendered.contains("deploy staging"));
@@ -1462,30 +1469,34 @@ export * from "../shared/types";
         ));
         fs::create_dir_all(&sibling)?;
         let store = HistoryStore::new_test_store(&root).await?;
-        store.append_command_log(&amux_protocol::CommandLogEntry {
-            id: "cmd-in".to_string(),
-            command: "cargo test".to_string(),
-            timestamp: 1,
-            path: None,
-            cwd: Some(root.display().to_string()),
-            workspace_id: None,
-            surface_id: None,
-            pane_id: None,
-            exit_code: Some(0),
-            duration_ms: Some(10),
-        }).await?;
-        store.append_command_log(&amux_protocol::CommandLogEntry {
-            id: "cmd-out".to_string(),
-            command: "cargo build".to_string(),
-            timestamp: 2,
-            path: None,
-            cwd: Some(sibling.display().to_string()),
-            workspace_id: None,
-            surface_id: None,
-            pane_id: None,
-            exit_code: Some(0),
-            duration_ms: Some(10),
-        }).await?;
+        store
+            .append_command_log(&amux_protocol::CommandLogEntry {
+                id: "cmd-in".to_string(),
+                command: "cargo test".to_string(),
+                timestamp: 1,
+                path: None,
+                cwd: Some(root.display().to_string()),
+                workspace_id: None,
+                surface_id: None,
+                pane_id: None,
+                exit_code: Some(0),
+                duration_ms: Some(10),
+            })
+            .await?;
+        store
+            .append_command_log(&amux_protocol::CommandLogEntry {
+                id: "cmd-out".to_string(),
+                command: "cargo build".to_string(),
+                timestamp: 2,
+                path: None,
+                cwd: Some(sibling.display().to_string()),
+                workspace_id: None,
+                surface_id: None,
+                pane_id: None,
+                exit_code: Some(0),
+                duration_ms: Some(10),
+            })
+            .await?;
 
         let rendered = render_temporal(&root, &store, None, 10).await?;
         assert!(rendered.contains("cargo test"));

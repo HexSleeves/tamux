@@ -51,10 +51,7 @@ impl AgentEngine {
     }
 
     /// Check for goal runs stuck in Running/Planning/AwaitingApproval longer than threshold. Per D-02/BEAT-02.
-    pub(super) async fn check_stuck_goal_runs(
-        &self,
-        threshold_hours: u64,
-    ) -> HeartbeatCheckResult {
+    pub(super) async fn check_stuck_goal_runs(&self, threshold_hours: u64) -> HeartbeatCheckResult {
         let now = now_millis();
         let threshold_ms = threshold_hours * 3600 * 1000;
         let goal_runs = self.goal_runs.lock().await;
@@ -326,12 +323,7 @@ mod tests {
         }
     }
 
-    fn make_goal_run(
-        id: &str,
-        title: &str,
-        status: GoalRunStatus,
-        updated_at: u64,
-    ) -> GoalRun {
+    fn make_goal_run(id: &str, title: &str, status: GoalRunStatus, updated_at: u64) -> GoalRun {
         GoalRun {
             id: id.to_string(),
             title: title.to_string(),

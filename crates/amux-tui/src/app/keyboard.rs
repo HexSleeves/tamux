@@ -55,19 +55,17 @@ impl TuiModel {
             return self.handle_key_modal(code, modifiers, modal_kind);
         }
 
-        if self.concierge.welcome_visible
+        if !self.chat.active_actions().is_empty()
             && self.chat.active_thread_id() == Some("concierge")
             && self.focus == FocusArea::Chat
         {
             match code {
                 KeyCode::Left | KeyCode::Up => {
-                    self.concierge
-                        .reduce(crate::state::ConciergeAction::NavigateAction(-1));
+                    self.navigate_visible_concierge_action(-1);
                     return false;
                 }
                 KeyCode::Right | KeyCode::Down => {
-                    self.concierge
-                        .reduce(crate::state::ConciergeAction::NavigateAction(1));
+                    self.navigate_visible_concierge_action(1);
                     return false;
                 }
                 KeyCode::Enter | KeyCode::Char(' ') => {
@@ -168,6 +166,10 @@ impl TuiModel {
                 }
             }
             KeyCode::Esc => {
+                if self.dismiss_active_main_pane(FocusArea::Chat) {
+                    self.clear_pending_stop();
+                    return false;
+                }
                 if self.assistant_busy() {
                     if self.pending_stop_active() {
                         self.cancelled_thread_id = self.chat.active_thread_id().map(String::from);
@@ -196,26 +198,9 @@ impl TuiModel {
                     self.clear_pending_stop();
                     if self.focus == FocusArea::Chat {
                         match &self.main_pane_view {
-                            MainPaneView::Task(target) => {
-                                if let Some(thread_id) = self.target_thread_id(target) {
-                                    if self.tasks.selected_work_path(&thread_id).is_some() {
-                                        self.tasks.reduce(task::TaskAction::SelectWorkPath {
-                                            thread_id,
-                                            path: None,
-                                        });
-                                        return false;
-                                    }
-                                }
-                                self.main_pane_view = MainPaneView::Conversation;
-                                self.task_view_scroll = 0;
-                            }
-                            MainPaneView::WorkContext => {
-                                self.main_pane_view = MainPaneView::Conversation;
-                                self.task_view_scroll = 0;
-                            }
-                            MainPaneView::GoalComposer => {
-                                self.main_pane_view = MainPaneView::Conversation;
-                            }
+                            MainPaneView::Task(_)
+                            | MainPaneView::WorkContext
+                            | MainPaneView::GoalComposer => {}
                             MainPaneView::Conversation => {
                                 if self.chat.selected_message().is_some() {
                                     self.chat.select_message(None);

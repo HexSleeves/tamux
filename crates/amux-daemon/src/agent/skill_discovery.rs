@@ -149,7 +149,8 @@ impl AgentEngine {
 
             last_created_at = last_created_at.max(trace.created_at as u64);
 
-            let tool_sequence = extract_tool_sequence_from_json(trace.tool_sequence_json.as_deref());
+            let tool_sequence =
+                extract_tool_sequence_from_json(trace.tool_sequence_json.as_deref());
             if tool_sequence.is_empty() {
                 continue;
             }
@@ -216,11 +217,7 @@ impl AgentEngine {
         if last_created_at > watermark {
             if let Err(e) = self
                 .history
-                .set_consolidation_state(
-                    "skill_draft_watermark",
-                    &last_created_at.to_string(),
-                    now,
-                )
+                .set_consolidation_state("skill_draft_watermark", &last_created_at.to_string(), now)
                 .await
             {
                 tracing::warn!(error = %e, "failed to update skill draft watermark");
@@ -271,10 +268,7 @@ impl AgentEngine {
             }
         };
 
-        let pending: Vec<_> = candidates
-            .iter()
-            .filter(|(_, v)| v == "pending")
-            .collect();
+        let pending: Vec<_> = candidates.iter().filter(|(_, v)| v == "pending").collect();
 
         if pending.is_empty() {
             return 0;
@@ -282,16 +276,10 @@ impl AgentEngine {
 
         // Process at most ONE candidate per tick
         let (key, _) = &pending[0];
-        let trace_id = key
-            .strip_prefix("skill_draft_candidate:")
-            .unwrap_or(key);
+        let trace_id = key.strip_prefix("skill_draft_candidate:").unwrap_or(key);
 
         // Extract tool sequence from the trace (look it up again)
-        let traces = match self
-            .history
-            .list_recent_successful_traces(0, 500)
-            .await
-        {
+        let traces = match self.history.list_recent_successful_traces(0, 500).await {
             Ok(t) => t,
             Err(_) => return 0,
         };
@@ -365,7 +353,8 @@ impl AgentEngine {
             .unwrap_or_else(|| format!("skill_{}", &trace_id[..8.min(trace_id.len())]));
 
         // Create drafts directory (Pitfall 3)
-        let drafts_dir = self.data_dir
+        let drafts_dir = self
+            .data_dir
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .join("skills")
@@ -488,7 +477,8 @@ impl AgentEngine {
         let draft = &drafts[0];
 
         // Read SKILL.md content from disk
-        let skill_path = self.data_dir
+        let skill_path = self
+            .data_dir
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .join("skills")
@@ -613,7 +603,11 @@ impl AgentEngine {
         for (status, next_status, threshold) in [
             ("testing", "active", thresholds.testing_to_active),
             ("active", "proven", thresholds.active_to_proven),
-            ("proven", "promoted_to_canonical", thresholds.proven_to_canonical),
+            (
+                "proven",
+                "promoted_to_canonical",
+                thresholds.proven_to_canonical,
+            ),
         ] {
             let variants = match self
                 .history
@@ -647,8 +641,11 @@ impl AgentEngine {
                         "skill_lifecycle_promotion",
                         &format!(
                             "Skill '{}' promoted {} -> {} (success_count {} >= threshold {})",
-                            variant.skill_name, status, next_status,
-                            variant.success_count, threshold
+                            variant.skill_name,
+                            status,
+                            next_status,
+                            variant.success_count,
+                            threshold
                         ),
                         serde_json::json!({
                             "variant_id": variant.variant_id,
@@ -761,14 +758,26 @@ mod tests {
     #[test]
     fn skill_discovery_complexity_returns_false_when_outcome_not_success() {
         let cfg = default_config();
-        assert!(!meets_complexity_threshold(20, 2, Some(0.95), "failure", &cfg));
+        assert!(!meets_complexity_threshold(
+            20,
+            2,
+            Some(0.95),
+            "failure",
+            &cfg
+        ));
     }
 
     #[test]
     fn skill_discovery_complexity_returns_false_when_tool_count_at_threshold() {
         let cfg = default_config();
         // tool_count == min_tool_count (8), not >, so false
-        assert!(!meets_complexity_threshold(8, 2, Some(0.95), "success", &cfg));
+        assert!(!meets_complexity_threshold(
+            8,
+            2,
+            Some(0.95),
+            "success",
+            &cfg
+        ));
     }
 
     #[test]
@@ -782,14 +791,26 @@ mod tests {
     fn skill_discovery_complexity_returns_true_with_quality() {
         let cfg = default_config();
         // tool_count > 8, replan_count=0, quality > 0.8, outcome success
-        assert!(meets_complexity_threshold(10, 0, Some(0.85), "success", &cfg));
+        assert!(meets_complexity_threshold(
+            10,
+            0,
+            Some(0.85),
+            "success",
+            &cfg
+        ));
     }
 
     #[test]
     fn skill_discovery_complexity_returns_false_no_replan_no_quality() {
         let cfg = default_config();
         // tool_count > 8, replan_count=0, quality <= 0.8
-        assert!(!meets_complexity_threshold(10, 0, Some(0.8), "success", &cfg));
+        assert!(!meets_complexity_threshold(
+            10,
+            0,
+            Some(0.8),
+            "success",
+            &cfg
+        ));
         assert!(!meets_complexity_threshold(10, 0, None, "success", &cfg));
     }
 
@@ -902,12 +923,16 @@ mod tests {
 
     #[test]
     fn skill_discovery_mental_test_returns_zero_for_invalid_response() {
-        assert_eq!(parse_mental_test_results("I cannot evaluate this skill."), 0);
+        assert_eq!(
+            parse_mental_test_results("I cannot evaluate this skill."),
+            0
+        );
     }
 
     #[test]
     fn skill_discovery_mental_test_fallback_counts_would_help() {
-        let response = r#"Some text "would_help": true and "would_help":true but "would_help": false"#;
+        let response =
+            r#"Some text "would_help": true and "would_help":true but "would_help": false"#;
         assert_eq!(parse_mental_test_results(response), 2);
     }
 }

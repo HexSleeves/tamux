@@ -586,9 +586,7 @@ pub fn messages_to_api_format(messages: &[super::types::AgentMessage]) -> Vec<Ap
                             let normalized_id = if tc.id.trim().is_empty() {
                                 format!(
                                     "synthetic_tool_call_{}_{}_{}",
-                                    m.timestamp,
-                                    index,
-                                    tc.function.name
+                                    m.timestamp, index, tc.function.name
                                 )
                             } else {
                                 tc.id.clone()
@@ -610,8 +608,10 @@ pub fn messages_to_api_format(messages: &[super::types::AgentMessage]) -> Vec<Ap
 
             let mut normalized_tool_call_id = m.tool_call_id.clone();
             if matches!(m.role, super::types::MessageRole::Tool) {
-                let resolved_tool_call_id = if let Some(tool_call_id) =
-                    m.tool_call_id.as_ref().filter(|value| !value.trim().is_empty())
+                let resolved_tool_call_id = if let Some(tool_call_id) = m
+                    .tool_call_id
+                    .as_ref()
+                    .filter(|value| !value.trim().is_empty())
                 {
                     let position = pending_tool_results
                         .iter()
@@ -828,13 +828,16 @@ fn apply_dashscope_coding_plan_sdk_headers(
         ApiType::Anthropic => "0.73.0",
         ApiType::OpenAI => "4.3.0",
     };
-    req.header("User-Agent", format!("{} {}", api_type.sdk_user_agent(), sdk_version))
-        .header("x-stainless-lang", "js")
-        .header("x-stainless-package-version", sdk_version)
-        .header("x-stainless-os", std::env::consts::OS)
-        .header("x-stainless-arch", std::env::consts::ARCH)
-        .header("x-stainless-runtime", "node")
-        .header("x-stainless-runtime-version", "v22.0.0")
+    req.header(
+        "User-Agent",
+        format!("{} {}", api_type.sdk_user_agent(), sdk_version),
+    )
+    .header("x-stainless-lang", "js")
+    .header("x-stainless-package-version", sdk_version)
+    .header("x-stainless-os", std::env::consts::OS)
+    .header("x-stainless-arch", std::env::consts::ARCH)
+    .header("x-stainless-runtime", "node")
+    .header("x-stainless-runtime-version", "v22.0.0")
 }
 
 fn anthropic_thinking_budget(effort: &str) -> Option<u32> {
@@ -1308,7 +1311,12 @@ fn messages_to_responses_input(messages: &[ApiMessage]) -> Vec<serde_json::Value
 }
 
 fn build_anthropic_message_content(message: &ApiMessage) -> serde_json::Value {
-    if message.role == "assistant" && message.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty()) {
+    if message.role == "assistant"
+        && message
+            .tool_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty())
+    {
         let mut blocks = Vec::new();
         if let ApiContent::Text(text) = &message.content {
             if !text.is_empty() {
@@ -1320,12 +1328,13 @@ fn build_anthropic_message_content(message: &ApiMessage) -> serde_json::Value {
         }
         if let Some(tool_calls) = &message.tool_calls {
             for tool_call in tool_calls {
-                let input = serde_json::from_str::<serde_json::Value>(&tool_call.function.arguments)
-                    .unwrap_or_else(|_| {
-                        serde_json::json!({
-                            "_raw_arguments": tool_call.function.arguments,
-                        })
-                    });
+                let input =
+                    serde_json::from_str::<serde_json::Value>(&tool_call.function.arguments)
+                        .unwrap_or_else(|_| {
+                            serde_json::json!({
+                                "_raw_arguments": tool_call.function.arguments,
+                            })
+                        });
                 blocks.push(serde_json::json!({
                     "type": "tool_use",
                     "id": tool_call.id,
@@ -2084,9 +2093,7 @@ async fn run_anthropic(
         .map(|d| d.auth_method)
         .unwrap_or(AuthMethod::XApiKey);
     let mut request = auth_method.apply(
-        client
-            .post(&url)
-            .header("Content-Type", "application/json"),
+        client.post(&url).header("Content-Type", "application/json"),
         &config.api_key,
     );
     if !is_dashscope_coding_plan_anthropic_base_url(&config.base_url) {
@@ -2838,7 +2845,10 @@ mod tests {
             .map(|call| call.id.clone())
             .expect("assistant tool call should have normalized id");
         assert!(!assistant_tool_id.is_empty());
-        assert_eq!(api_messages[1].tool_call_id.as_deref(), Some(assistant_tool_id.as_str()));
+        assert_eq!(
+            api_messages[1].tool_call_id.as_deref(),
+            Some(assistant_tool_id.as_str())
+        );
     }
 
     #[test]

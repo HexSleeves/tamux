@@ -31,10 +31,7 @@ pub fn is_blocked_ip(ip: IpAddr) -> bool {
 
 /// Check if an IPv4 address is in a blocked range.
 fn is_blocked_ipv4(v4: &Ipv4Addr) -> bool {
-    v4.is_loopback()
-        || v4.is_private()
-        || v4.is_link_local()
-        || is_cloud_metadata_v4(v4)
+    v4.is_loopback() || v4.is_private() || v4.is_link_local() || is_cloud_metadata_v4(v4)
 }
 
 /// Check for cloud metadata endpoint (169.254.169.254).
@@ -79,19 +76,22 @@ pub async fn validate_url(url: &str, allow_local: bool) -> Result<(), PluginApiE
         url: format!("{url} (invalid URL: {e})"),
     })?;
 
-    let host = parsed.host_str().ok_or_else(|| PluginApiError::SsrfBlocked {
-        url: format!("{url} (no host)"),
-    })?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| PluginApiError::SsrfBlocked {
+            url: format!("{url} (no host)"),
+        })?;
 
     let port = parsed.port_or_known_default().unwrap_or(443);
     let addr_str = format!("{host}:{port}");
 
     // Resolve DNS and check all addresses
-    let addrs = tokio::net::lookup_host(&addr_str)
-        .await
-        .map_err(|e| PluginApiError::SsrfBlocked {
-            url: format!("{url} (DNS resolution failed: {e})"),
-        })?;
+    let addrs =
+        tokio::net::lookup_host(&addr_str)
+            .await
+            .map_err(|e| PluginApiError::SsrfBlocked {
+                url: format!("{url} (DNS resolution failed: {e})"),
+            })?;
 
     for addr in addrs {
         if is_blocked_ip(addr.ip()) {

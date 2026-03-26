@@ -284,10 +284,7 @@ impl AgentEngine {
                 Ok(json) => match serde_json::from_str(&json) {
                     Ok(store) => {
                         *self.pattern_store.write().await = store;
-                        tracing::info!(
-                            "restored pattern store from {}",
-                            pattern_path.display()
-                        );
+                        tracing::info!("restored pattern store from {}", pattern_path.display());
                     }
                     Err(e) => tracing::warn!(
                         error = %e,
@@ -602,10 +599,7 @@ impl AgentEngine {
     /// Check if a continuity acknowledgment is pending for the given thread.
     /// Returns the acknowledgment message if one should be injected, and clears
     /// the flag. Per D-10: "Resuming from where we left off -- last working on [topic]."
-    pub(super) async fn take_continuity_acknowledgment(
-        &self,
-        thread_id: &str,
-    ) -> Option<String> {
+    pub(super) async fn take_continuity_acknowledgment(&self, thread_id: &str) -> Option<String> {
         let stored_id = self
             .history
             .get_consolidation_state("continuity_thread_id")

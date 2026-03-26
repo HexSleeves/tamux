@@ -544,9 +544,7 @@ pub enum ClientMessage {
     AgentStatusQuery,
 
     /// Set capability tier override (from settings UI). None clears override.
-    AgentSetTierOverride {
-        tier: Option<String>,
-    },
+    AgentSetTierOverride { tier: Option<String> },
 
     /// List all installed plugins. Per PLUG-09.
     PluginList {},
@@ -1065,9 +1063,7 @@ pub enum DaemonMessage {
     },
 
     /// Response to PluginListCommands. Per PSKL-05.
-    PluginCommandsResult {
-        commands: Vec<PluginCommandInfo>,
-    },
+    PluginCommandsResult { commands: Vec<PluginCommandInfo> },
 
     /// OAuth2 authorization URL for client to open in browser. Per D-13.
     PluginOAuthUrl { name: String, url: String },
@@ -1102,10 +1098,7 @@ pub enum DaemonMessage {
     },
 
     /// WhatsApp link error notification.
-    AgentWhatsAppLinkError {
-        message: String,
-        recoverable: bool,
-    },
+    AgentWhatsAppLinkError { message: String, recoverable: bool },
 
     /// WhatsApp link disconnected notification.
     AgentWhatsAppLinkDisconnected {

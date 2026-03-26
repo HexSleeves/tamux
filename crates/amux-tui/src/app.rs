@@ -384,6 +384,7 @@ impl TuiModel {
         self.ignore_pending_concierge_welcome = true;
         self.concierge
             .reduce(crate::state::ConciergeAction::WelcomeDismissed);
+        self.chat.reduce(chat::ChatAction::DismissConciergeWelcome);
         self.send_daemon_command(DaemonCommand::DismissConciergeWelcome);
 
         if self.chat.active_thread_id() == Some("concierge") && self.assistant_busy() {
@@ -411,10 +412,117 @@ impl TuiModel {
         self.chat.reduce(chat::ChatAction::NewThread);
         self.main_pane_view = MainPaneView::Conversation;
         self.focus = FocusArea::Input;
+        self.request_concierge_welcome();
+    }
+
+    fn request_concierge_welcome(&mut self) {
+        self.ignore_pending_concierge_welcome = false;
+        self.concierge
+            .reduce(crate::state::ConciergeAction::WelcomeLoading(true));
+        self.send_daemon_command(DaemonCommand::RequestConciergeWelcome);
+    }
+
+    fn set_main_pane_conversation(&mut self, focus: FocusArea) {
+        self.main_pane_view = MainPaneView::Conversation;
+        self.task_view_scroll = 0;
+        self.focus = focus;
+    }
+
+    fn dismiss_active_main_pane(&mut self, focus: FocusArea) -> bool {
+        match &self.main_pane_view {
+            MainPaneView::Task(target) => {
+                if let Some(thread_id) = self.target_thread_id(target) {
+                    if self.tasks.selected_work_path(&thread_id).is_some() {
+                        self.tasks.reduce(task::TaskAction::SelectWorkPath {
+                            thread_id,
+                            path: None,
+                        });
+                        self.focus = focus;
+                        return true;
+                    }
+                }
+                self.set_main_pane_conversation(focus);
+                true
+            }
+            MainPaneView::WorkContext | MainPaneView::GoalComposer => {
+                self.set_main_pane_conversation(focus);
+                true
+            }
+            MainPaneView::Conversation => false,
+        }
+    }
+
+    fn should_toggle_work_context_from_sidebar(&self, thread_id: &str) -> bool {
+        if !matches!(self.main_pane_view, MainPaneView::WorkContext) {
+            return false;
+        }
+
+        match self.sidebar.active_tab() {
+            SidebarTab::Files => self
+                .tasks
+                .work_context_for_thread(thread_id)
+                .and_then(|context| context.entries.get(self.sidebar.selected_item()))
+                .is_some_and(|entry| {
+                    self.tasks.selected_work_path(thread_id) == Some(entry.path.as_str())
+                }),
+            SidebarTab::Todos => self
+                .tasks
+                .todos_for_thread(thread_id)
+                .get(self.sidebar.selected_item())
+                .is_some(),
+        }
+    }
+
+    fn visible_concierge_action_count(&self) -> usize {
+        let active_actions = self.chat.active_actions();
+        if !active_actions.is_empty() {
+            active_actions.len()
+        } else {
+            self.concierge.welcome_actions.len()
+        }
+    }
+
+    fn select_visible_concierge_action(&mut self, action_index: usize) {
+        let action_count = self.visible_concierge_action_count();
+        self.concierge.selected_action = if action_count == 0 {
+            0
+        } else {
+            action_index.min(action_count - 1)
+        };
+    }
+
+    fn navigate_visible_concierge_action(&mut self, delta: i32) {
+        let action_count = self.visible_concierge_action_count();
+        if action_count == 0 {
+            self.concierge.selected_action = 0;
+        } else if delta > 0 {
+            self.concierge.selected_action =
+                (self.concierge.selected_action + delta as usize).min(action_count - 1);
+        } else {
+            self.concierge.selected_action = self
+                .concierge
+                .selected_action
+                .saturating_sub((-delta) as usize);
+        }
+    }
+
+    fn resolve_visible_concierge_action(
+        &self,
+        action_index: usize,
+    ) -> Option<crate::state::ConciergeActionVm> {
+        self.chat
+            .active_actions()
+            .get(action_index)
+            .map(|action| crate::state::ConciergeActionVm {
+                label: action.label.clone(),
+                action_type: action.action_type.clone(),
+                thread_id: action.thread_id.clone(),
+            })
+            .or_else(|| self.concierge.welcome_actions.get(action_index).cloned())
     }
 
     fn execute_concierge_action(&mut self, action_index: usize) {
-        let Some(action) = self.concierge.welcome_actions.get(action_index).cloned() else {
+        let Some(action) = self.resolve_visible_concierge_action(action_index) else {
             return;
         };
         self.run_concierge_action(action);
@@ -743,12 +851,401 @@ mod tests {
             .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
         assert!(!model.should_show_concierge_hero_loading());
 
-        model.chat.reduce(chat::ChatAction::SelectThread(String::new()));
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread(String::new()));
         model.chat.reduce(chat::ChatAction::ResetStreaming);
-        model.chat.reduce(chat::ChatAction::ThreadListReceived(Vec::new()));
+        model
+            .chat
+            .reduce(chat::ChatAction::ThreadListReceived(Vec::new()));
         model.concierge.welcome_visible = true;
         model.concierge.welcome_content = Some("ready".to_string());
         assert!(!model.should_show_concierge_hero_loading());
+    }
+
+    #[test]
+    fn cleanup_concierge_on_navigate_hides_local_welcome_message() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "concierge".to_string(),
+            title: "Concierge".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("concierge".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "concierge".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "Welcome".to_string(),
+                is_concierge_welcome: true,
+                ..Default::default()
+            },
+        });
+        model
+            .concierge
+            .reduce(crate::state::ConciergeAction::WelcomeReceived {
+                content: "Welcome".to_string(),
+                actions: vec![crate::state::ConciergeActionVm {
+                    label: "Dismiss".to_string(),
+                    action_type: "dismiss".to_string(),
+                    thread_id: None,
+                }],
+            });
+
+        model.cleanup_concierge_on_navigate();
+
+        assert!(!model.concierge.welcome_visible);
+        assert!(model.ignore_pending_concierge_welcome);
+        assert!(
+            model.chat.active_actions().is_empty(),
+            "dismissed concierge welcome should not leave actionable buttons behind"
+        );
+        match cmd_rx.try_recv() {
+            Ok(DaemonCommand::DismissConciergeWelcome) => {}
+            other => panic!("expected dismiss command, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn submit_prompt_dismisses_concierge_and_avoids_session_binding() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.connected = true;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "concierge".to_string(),
+            title: "Concierge".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("concierge".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "concierge".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "Welcome".to_string(),
+                actions: vec![chat::MessageAction {
+                    label: "Dismiss".to_string(),
+                    action_type: "dismiss".to_string(),
+                    thread_id: None,
+                }],
+                is_concierge_welcome: true,
+                ..Default::default()
+            },
+        });
+        model
+            .concierge
+            .reduce(crate::state::ConciergeAction::WelcomeReceived {
+                content: "Welcome".to_string(),
+                actions: vec![crate::state::ConciergeActionVm {
+                    label: "Dismiss".to_string(),
+                    action_type: "dismiss".to_string(),
+                    thread_id: None,
+                }],
+            });
+        model.default_session_id = Some("stale-session".to_string());
+
+        model.submit_prompt("hello".to_string());
+
+        match cmd_rx.try_recv() {
+            Ok(DaemonCommand::DismissConciergeWelcome) => {}
+            other => panic!("expected dismiss command first, got {:?}", other),
+        }
+        match cmd_rx.try_recv() {
+            Ok(DaemonCommand::SendMessage {
+                thread_id,
+                content,
+                session_id,
+            }) => {
+                assert_eq!(thread_id.as_deref(), Some("concierge"));
+                assert_eq!(content, "hello");
+                assert_eq!(session_id, None);
+            }
+            other => panic!("expected send-message command, got {:?}", other),
+        }
+        assert!(
+            model.chat.active_actions().is_empty(),
+            "submitting a prompt should hide concierge welcome actions"
+        );
+    }
+
+    #[test]
+    fn start_goal_run_dismisses_concierge_and_avoids_session_binding() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.connected = true;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "concierge".to_string(),
+            title: "Concierge".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("concierge".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "concierge".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "Welcome".to_string(),
+                actions: vec![chat::MessageAction {
+                    label: "Goal".to_string(),
+                    action_type: "start_goal_run".to_string(),
+                    thread_id: None,
+                }],
+                is_concierge_welcome: true,
+                ..Default::default()
+            },
+        });
+        model
+            .concierge
+            .reduce(crate::state::ConciergeAction::WelcomeReceived {
+                content: "Welcome".to_string(),
+                actions: vec![crate::state::ConciergeActionVm {
+                    label: "Goal".to_string(),
+                    action_type: "start_goal_run".to_string(),
+                    thread_id: None,
+                }],
+            });
+        model.default_session_id = Some("stale-session".to_string());
+
+        model.start_goal_run_from_prompt("ship it".to_string());
+
+        match cmd_rx.try_recv() {
+            Ok(DaemonCommand::DismissConciergeWelcome) => {}
+            other => panic!("expected dismiss command first, got {:?}", other),
+        }
+        match cmd_rx.try_recv() {
+            Ok(DaemonCommand::StartGoalRun {
+                goal,
+                thread_id,
+                session_id,
+            }) => {
+                assert_eq!(goal, "ship it");
+                assert_eq!(thread_id, None);
+                assert_eq!(session_id, None);
+            }
+            other => panic!("expected start-goal-run command, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn start_new_thread_requests_concierge_welcome_and_shows_loading() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.concierge.loading = false;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "concierge".to_string(),
+            title: "Concierge".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("concierge".to_string()));
+        model
+            .concierge
+            .reduce(crate::state::ConciergeAction::WelcomeReceived {
+                content: "Welcome".to_string(),
+                actions: vec![crate::state::ConciergeActionVm {
+                    label: "Search".to_string(),
+                    action_type: "search".to_string(),
+                    thread_id: None,
+                }],
+            });
+
+        model.start_new_thread_view();
+
+        assert!(model.should_show_concierge_hero_loading());
+        assert_eq!(model.chat.active_thread_id(), None);
+        match cmd_rx.try_recv() {
+            Ok(DaemonCommand::DismissConciergeWelcome) => {}
+            other => panic!("expected dismiss command first, got {:?}", other),
+        }
+        match cmd_rx.try_recv() {
+            Ok(DaemonCommand::RequestConciergeWelcome) => {}
+            other => panic!("expected concierge welcome request, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn concierge_arrow_keys_navigate_visible_actions() {
+        let mut model = build_model();
+        model.focus = FocusArea::Chat;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "concierge".to_string(),
+            title: "Concierge".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("concierge".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "concierge".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "Welcome".to_string(),
+                actions: vec![
+                    chat::MessageAction {
+                        label: "One".to_string(),
+                        action_type: "dismiss".to_string(),
+                        thread_id: None,
+                    },
+                    chat::MessageAction {
+                        label: "Two".to_string(),
+                        action_type: "dismiss".to_string(),
+                        thread_id: None,
+                    },
+                ],
+                is_concierge_welcome: true,
+                ..Default::default()
+            },
+        });
+
+        let handled = model.handle_key(KeyCode::Right, KeyModifiers::NONE);
+
+        assert!(!handled);
+        assert_eq!(model.concierge.selected_action, 1);
+    }
+
+    #[test]
+    fn concierge_mouse_click_executes_visible_action() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.focus = FocusArea::Chat;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "concierge".to_string(),
+            title: "Concierge".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("concierge".to_string()));
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "concierge".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "Welcome".to_string(),
+                actions: vec![
+                    chat::MessageAction {
+                        label: "One".to_string(),
+                        action_type: "dismiss".to_string(),
+                        thread_id: None,
+                    },
+                    chat::MessageAction {
+                        label: "Two".to_string(),
+                        action_type: "start_goal_run".to_string(),
+                        thread_id: None,
+                    },
+                ],
+                is_concierge_welcome: true,
+                ..Default::default()
+            },
+        });
+
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 8,
+            row: 35,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        match cmd_rx.try_recv() {
+            Ok(DaemonCommand::DismissConciergeWelcome) => {}
+            other => panic!("expected dismiss command first, got {:?}", other),
+        }
+        match cmd_rx.try_recv() {
+            Ok(DaemonCommand::RequestThread(thread_id)) => {
+                assert_eq!(thread_id, "concierge");
+            }
+            other => panic!("expected thread request command, got {:?}", other),
+        }
+        assert_eq!(model.focus, FocusArea::Input);
+        assert_eq!(model.input.buffer(), "/goal ");
+        assert!(model.chat.active_actions().is_empty());
+    }
+
+    #[test]
+    fn esc_closes_work_context_even_from_input_focus() {
+        let mut model = build_model();
+        model.focus = FocusArea::Input;
+        model.main_pane_view = MainPaneView::WorkContext;
+
+        let handled = model.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+
+        assert!(!handled);
+        assert!(matches!(model.main_pane_view, MainPaneView::Conversation));
+        assert_eq!(model.focus, FocusArea::Chat);
+    }
+
+    #[test]
+    fn reselecting_same_sidebar_file_closes_work_context() {
+        let mut model = build_model();
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.tasks.reduce(task::TaskAction::WorkContextReceived(
+            task::ThreadWorkContext {
+                thread_id: "thread-1".to_string(),
+                entries: vec![task::WorkContextEntry {
+                    path: "/tmp/demo.txt".to_string(),
+                    is_text: true,
+                    ..Default::default()
+                }],
+            },
+        ));
+        model.tasks.reduce(task::TaskAction::SelectWorkPath {
+            thread_id: "thread-1".to_string(),
+            path: Some("/tmp/demo.txt".to_string()),
+        });
+        model
+            .sidebar
+            .reduce(SidebarAction::SwitchTab(SidebarTab::Files));
+        model.main_pane_view = MainPaneView::WorkContext;
+        model.focus = FocusArea::Sidebar;
+
+        model.handle_sidebar_enter();
+
+        assert!(matches!(model.main_pane_view, MainPaneView::Conversation));
+        assert_eq!(model.focus, FocusArea::Sidebar);
+    }
+
+    #[test]
+    fn reselecting_same_sidebar_todo_closes_work_context() {
+        let mut model = build_model();
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.tasks.reduce(task::TaskAction::ThreadTodosReceived {
+            thread_id: "thread-1".to_string(),
+            items: vec![task::TodoItem {
+                id: "todo-1".to_string(),
+                content: "todo".to_string(),
+                status: Some(task::TodoStatus::Pending),
+                position: 0,
+                step_index: None,
+                created_at: 0,
+                updated_at: 0,
+            }],
+        });
+        model
+            .sidebar
+            .reduce(SidebarAction::SwitchTab(SidebarTab::Todos));
+        model.main_pane_view = MainPaneView::WorkContext;
+        model.focus = FocusArea::Sidebar;
+
+        model.handle_sidebar_enter();
+
+        assert!(matches!(model.main_pane_view, MainPaneView::Conversation));
+        assert_eq!(model.focus, FocusArea::Sidebar);
     }
 
     #[test]

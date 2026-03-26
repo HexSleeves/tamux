@@ -70,11 +70,13 @@ pub(super) struct Consensus {
 impl AgentEngine {
     async fn persist_collaboration_session(&self, session: &CollaborationSession) -> Result<()> {
         let session_json = serde_json::to_string(session)?;
-        self.history.upsert_collaboration_session(
-            &session.parent_task_id,
-            &session_json,
-            session.updated_at,
-        ).await
+        self.history
+            .upsert_collaboration_session(
+                &session.parent_task_id,
+                &session_json,
+                session.updated_at,
+            )
+            .await
     }
 
     pub(super) async fn register_subagent_collaboration(

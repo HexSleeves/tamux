@@ -96,13 +96,13 @@ pub fn get_available_tools(
     if config.tools.bash {
         tools.push(tool_def(
             "bash_command",
-            "Execute a shell command through a tamux-managed terminal session. This does not run as a daemon-native headless subprocess.",
+            "Execute a shell command through a tamux-managed terminal session. This does not run as a daemon-native headless subprocess. Omit `session` in normal TUI/chat turns unless you intentionally target a known live terminal. For large or awkward file writes, prefer a minimal Python writer over fragile shell escaping, but inspect the Python carefully so it only performs the intended write.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "Shell command to execute in a managed terminal session" },
                     "rationale": { "type": "string", "description": "Why this command should run" },
-                    "session": { "type": "string", "description": "Optional terminal session ID or unique substring" },
+                    "session": { "type": "string", "description": "Optional terminal session ID or unique substring. Leave this unset in normal TUI/chat turns unless you deliberately target a currently live session." },
                     "cwd": { "type": "string", "description": "Optional working directory" },
                     "allow_network": { "type": "boolean", "description": "Whether network access is expected" },
                     "sandbox_enabled": { "type": "boolean", "description": "Whether sandboxing should be requested" },
@@ -146,13 +146,13 @@ pub fn get_available_tools(
 
         tools.push(tool_def(
             "write_file",
-            "Write content to a file through an existing terminal session managed by tamux. This runs in the terminal's environment, not in a daemon-native filesystem context.",
+            "Write content to a file through an existing terminal session managed by tamux. This runs in the terminal's environment, not in a daemon-native filesystem context. For complex or large content, prefer the built-in Python-based writer instead of shell heredocs or heavy escaping.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "File path to write" },
                     "content": { "type": "string", "description": "File content to write" },
-                    "session": { "type": "string", "description": "Optional terminal session ID or unique substring" },
+                    "session": { "type": "string", "description": "Optional terminal session ID or unique substring. Leave this unset in normal TUI/chat turns unless you deliberately target a currently live session." },
                     "timeout_seconds": { "type": "integer", "description": "Max time to wait for completion (default: 30, max: 600)" }
                 },
                 "required": ["path", "content"]
@@ -161,15 +161,17 @@ pub fn get_available_tools(
 
         tools.push(tool_def(
             "create_file",
-            "Create a new file directly from the daemon filesystem context. Fails if the file already exists unless overwrite=true.",
+            "Create a new file directly from the daemon filesystem context. Supports JSON args or a multipart-style payload with filename/cwd/file parts. Fails if the file already exists unless overwrite=true. Prefer multipart-style payloads for larger content instead of giant JSON strings.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "File path to create" },
+                    "filename": { "type": "string", "description": "Filename to create when combined with cwd" },
+                    "cwd": { "type": "string", "description": "Base directory used with filename/path for daemon-native writes" },
                     "content": { "type": "string", "description": "Initial file content" },
                     "overwrite": { "type": "boolean", "description": "Allow replacing an existing file (default: false)" }
                 },
-                "required": ["path", "content"]
+                "required": ["content"]
             }),
         ));
 
@@ -1125,7 +1127,14 @@ pub async fn execute_tool(
                 .unwrap_or("")
                 .to_string();
             drop(config);
-            execute_web_search(&args, http_client, &search_provider, &exa_api_key, &tavily_api_key).await
+            execute_web_search(
+                &args,
+                http_client,
+                &search_provider,
+                &exa_api_key,
+                &tavily_api_key,
+            )
+            .await
         }
         "fetch_url" => {
             let config = agent.config.read().await;
@@ -1138,29 +1147,31 @@ pub async fn execute_tool(
             drop(config);
             execute_fetch_url(&args, http_client, &browse_provider).await
         }
-        "setup_web_browsing" => {
-            execute_setup_web_browsing(&args, agent).await
-        }
+        "setup_web_browsing" => execute_setup_web_browsing(&args, agent).await,
         "plugin_api_call" => {
             let plugin_name = match get_string_arg(&args, &["plugin_name"]) {
                 Some(name) => name.to_string(),
-                None => return ToolResult {
-                    tool_call_id: tool_call.id.clone(),
-                    name: tool_call.function.name.clone(),
-                    content: "Error: missing 'plugin_name' argument".to_string(),
-                    is_error: true,
-                    pending_approval: None,
-                },
+                None => {
+                    return ToolResult {
+                        tool_call_id: tool_call.id.clone(),
+                        name: tool_call.function.name.clone(),
+                        content: "Error: missing 'plugin_name' argument".to_string(),
+                        is_error: true,
+                        pending_approval: None,
+                    }
+                }
             };
             let endpoint_name = match get_string_arg(&args, &["endpoint_name"]) {
                 Some(name) => name.to_string(),
-                None => return ToolResult {
-                    tool_call_id: tool_call.id.clone(),
-                    name: tool_call.function.name.clone(),
-                    content: "Error: missing 'endpoint_name' argument".to_string(),
-                    is_error: true,
-                    pending_approval: None,
-                },
+                None => {
+                    return ToolResult {
+                        tool_call_id: tool_call.id.clone(),
+                        name: tool_call.function.name.clone(),
+                        content: "Error: missing 'endpoint_name' argument".to_string(),
+                        is_error: true,
+                        pending_approval: None,
+                    }
+                }
             };
             let params = args
                 .get("params")
@@ -1227,6 +1238,11 @@ fn parse_tool_args(
     tool_name: &str,
     raw_arguments: &str,
 ) -> std::result::Result<serde_json::Value, String> {
+    if tool_name == "create_file" {
+        if let Ok(args) = parse_create_file_multipart_args(raw_arguments) {
+            return Ok(args);
+        }
+    }
     serde_json::from_str(raw_arguments).map_err(|error| {
         let preview: String = raw_arguments.chars().take(240).collect();
         format!(
@@ -1236,6 +1252,111 @@ fn parse_tool_args(
             if raw_arguments.chars().count() > 240 { "..." } else { "" }
         )
     })
+}
+
+fn parse_create_file_multipart_args(raw_arguments: &str) -> Result<serde_json::Value> {
+    let trimmed = raw_arguments.trim();
+    if trimmed.is_empty() || trimmed.starts_with('{') {
+        anyhow::bail!("not a multipart payload");
+    }
+
+    let boundary = if let Some(header) = trimmed.lines().next() {
+        if header
+            .to_ascii_lowercase()
+            .starts_with("content-type: multipart/form-data;")
+        {
+            header
+                .split("boundary=")
+                .nth(1)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.trim_matches('"').to_string())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("multipart boundary missing from Content-Type header")
+                })?
+        } else if let Some(rest) = trimmed.strip_prefix("--") {
+            rest.lines()
+                .next()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("multipart boundary missing from body"))?
+                .to_string()
+        } else {
+            anyhow::bail!("not a multipart payload");
+        }
+    } else {
+        anyhow::bail!("not a multipart payload");
+    };
+
+    let body = if trimmed
+        .to_ascii_lowercase()
+        .starts_with("content-type: multipart/form-data;")
+    {
+        trimmed
+            .split_once("\n\n")
+            .map(|(_, value)| value)
+            .ok_or_else(|| anyhow::anyhow!("multipart payload missing body"))?
+    } else {
+        trimmed
+    };
+
+    let delimiter = format!("--{boundary}");
+    let mut fields = serde_json::Map::new();
+
+    for chunk in body.split(&delimiter).skip(1) {
+        let part = chunk.trim_start_matches('\r').trim_start_matches('\n');
+        if part.is_empty() || part == "--" {
+            continue;
+        }
+        let part = part.strip_suffix("--").unwrap_or(part).trim();
+        if part.is_empty() {
+            continue;
+        }
+
+        let (headers, value) = part
+            .split_once("\n\n")
+            .or_else(|| part.split_once("\r\n\r\n"))
+            .ok_or_else(|| anyhow::anyhow!("multipart part missing header/body separator"))?;
+        let mut name = None;
+        let mut filename = None;
+
+        for header in headers.lines() {
+            let lower = header.to_ascii_lowercase();
+            if !lower.starts_with("content-disposition:") {
+                continue;
+            }
+            for segment in header.split(';').skip(1) {
+                let segment = segment.trim();
+                if let Some(value) = segment.strip_prefix("name=") {
+                    name = Some(value.trim_matches('"').to_string());
+                } else if let Some(value) = segment.strip_prefix("filename=") {
+                    filename = Some(value.trim_matches('"').to_string());
+                }
+            }
+        }
+
+        let name = name.ok_or_else(|| anyhow::anyhow!("multipart part missing name"))?;
+        let value = value
+            .trim_end_matches('\r')
+            .trim_end_matches('\n')
+            .to_string();
+        if name == "file" || name == "content" {
+            fields.insert("content".to_string(), serde_json::Value::String(value));
+            if let Some(filename) = filename {
+                fields
+                    .entry("filename".to_string())
+                    .or_insert_with(|| serde_json::Value::String(filename));
+            }
+        } else {
+            fields.insert(name, serde_json::Value::String(value));
+        }
+    }
+
+    if !fields.contains_key("content") {
+        anyhow::bail!("multipart payload missing file/content part");
+    }
+
+    Ok(serde_json::Value::Object(fields))
 }
 
 fn get_string_arg<'a>(args: &'a serde_json::Value, names: &[&str]) -> Option<&'a str> {
@@ -1319,24 +1440,34 @@ async fn execute_read_file(args: &serde_json::Value) -> Result<String> {
 }
 
 async fn execute_create_file(args: &serde_json::Value) -> Result<String> {
-    let path = get_file_path_arg(args).ok_or_else(|| anyhow::anyhow!("missing 'path' argument"))?;
-    validate_write_path(path)?;
+    let raw_path = get_file_path_arg(args)
+        .ok_or_else(|| anyhow::anyhow!("missing 'path' or 'filename' argument"))?;
+    validate_write_path(raw_path)?;
     let content = get_file_content_arg(args)?;
     let overwrite = args
         .get("overwrite")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let cwd = args
+        .get("cwd")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
 
-    let target = std::path::Path::new(path);
+    let target = resolve_tool_path(raw_path, cwd.map(Path::new));
     if target.exists() && !overwrite {
-        anyhow::bail!("file already exists: {path}");
+        anyhow::bail!("file already exists: {}", target.display());
     }
 
     if let Some(parent) = target.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
     tokio::fs::write(target, &content).await?;
-    Ok(format!("Created file {path} ({} bytes)", content.len()))
+    Ok(format!(
+        "Created file {} ({} bytes)",
+        resolve_tool_path(raw_path, cwd.map(Path::new)).display(),
+        content.len()
+    ))
 }
 
 async fn execute_append_to_file(args: &serde_json::Value) -> Result<String> {
@@ -1651,6 +1782,7 @@ fn daemon_message_kind(msg: &DaemonMessage) -> &'static str {
     }
 }
 
+#[derive(Debug)]
 enum ManagedCommandWaitOutcome {
     Finished {
         exit_code: Option<i32>,
@@ -1774,6 +1906,12 @@ async fn wait_for_managed_command_outcome(
                 && (rejected_id.as_deref() == Some(execution_id) || rejected_id.is_none()) =>
             {
                 return Ok(ManagedCommandWaitOutcome::Rejected { message });
+            }
+            DaemonMessage::SessionExited { id, exit_code } if id == session_id => {
+                return Err(anyhow::anyhow!(
+                    "terminal session exited while waiting for managed command result (exit_code: {:?})",
+                    exit_code
+                ));
             }
             _ => {}
         }
@@ -2626,7 +2764,10 @@ async fn execute_exa_search(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Exa API returned {status}: {}", &text[..text.len().min(200)]);
+        anyhow::bail!(
+            "Exa API returned {status}: {}",
+            &text[..text.len().min(200)]
+        );
     }
 
     let json: serde_json::Value = resp.json().await?;
@@ -2682,7 +2823,10 @@ async fn execute_tavily_search(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Tavily API returned {status}: {}", &text[..text.len().min(200)]);
+        anyhow::bail!(
+            "Tavily API returned {status}: {}",
+            &text[..text.len().min(200)]
+        );
     }
 
     let json: serde_json::Value = resp.json().await?;
@@ -2986,15 +3130,13 @@ async fn execute_fetch_url(
 
     // Try headless browser for JS-rendered content, fall back to raw HTTP.
     let raw_html = match resolve_browser(browse_provider) {
-        Some(browser) => {
-            match fetch_with_headless_browser(&browser, url).await {
-                Ok(html) => html,
-                Err(e) => {
-                    tracing::warn!("headless browser fetch failed, falling back to HTTP: {e}");
-                    fetch_raw_http(http_client, url).await?
-                }
+        Some(browser) => match fetch_with_headless_browser(&browser, url).await {
+            Ok(html) => html,
+            Err(e) => {
+                tracing::warn!("headless browser fetch failed, falling back to HTTP: {e}");
+                fetch_raw_http(http_client, url).await?
             }
-        }
+        },
         None => fetch_raw_http(http_client, url).await?,
     };
 
@@ -3234,7 +3376,10 @@ async fn execute_setup_web_browsing(
                 }
             ))
         }
-        _ => anyhow::bail!("Unknown action '{}'. Use detect, install, or configure.", action),
+        _ => anyhow::bail!(
+            "Unknown action '{}'. Use detect, install, or configure.",
+            action
+        ),
     }
 }
 
@@ -3448,11 +3593,7 @@ fn command_matches_policy_risk(command: &str) -> bool {
         source: ManagedCommandSource::Agent,
     };
     matches!(
-        crate::policy::evaluate_command(
-            "tool-exec-routing-check".to_string(),
-            &request,
-            None
-        ),
+        crate::policy::evaluate_command("tool-exec-routing-check".to_string(), &request, None),
         crate::policy::PolicyDecision::RequireApproval(_)
     )
 }
@@ -3929,8 +4070,9 @@ async fn execute_managed_command(
             }
         }
         DaemonMessage::ApprovalRequired { mut approval, .. } => {
-            if let Some(advisory) =
-                agent.command_blast_radius_advisory("execute_managed_command", command).await
+            if let Some(advisory) = agent
+                .command_blast_radius_advisory("execute_managed_command", command)
+                .await
             {
                 approval
                     .reasons
@@ -5050,8 +5192,9 @@ async fn execute_gateway_message(
                 .or_else(|| {
                     let gw_lock = agent.gateway_state.try_lock().ok()?;
                     let gw = gw_lock.as_ref()?;
-                    let ctx =
-                        gw.reply_contexts.get(&format!("Discord:{target_channel}"))?;
+                    let ctx = gw
+                        .reply_contexts
+                        .get(&format!("Discord:{target_channel}"))?;
                     ctx.discord_message_id.clone()
                 });
 
@@ -5180,11 +5323,7 @@ async fn execute_gateway_message(
                     }
                 }
 
-                let resp = http_client
-                    .post(&url)
-                    .json(&payload)
-                    .send()
-                    .await?;
+                let resp = http_client.post(&url).json(&payload).send().await?;
                 let body: serde_json::Value = resp.json().await?;
 
                 if body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
@@ -5213,15 +5352,11 @@ async fn execute_gateway_message(
                             });
                             if j == 0 {
                                 if let Some(mid) = reply_to_id {
-                                    plain_payload["reply_to_message_id"] =
-                                        serde_json::json!(mid);
+                                    plain_payload["reply_to_message_id"] = serde_json::json!(mid);
                                 }
                             }
-                            let retry_resp = http_client
-                                .post(&url)
-                                .json(&plain_payload)
-                                .send()
-                                .await?;
+                            let retry_resp =
+                                http_client.post(&url).json(&plain_payload).send().await?;
                             let retry_body: serde_json::Value = retry_resp.json().await?;
                             if retry_body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
                                 let retry_desc = retry_body
@@ -5499,16 +5634,15 @@ mod tests {
         build_list_files_script, build_write_file_command, build_write_file_script,
         command_looks_interactive, command_matches_policy_risk, command_requires_managed_state,
         execute_headless_shell_command, get_available_tools, managed_alias_args,
-        parse_capture_output, resolve_skill_path, should_use_managed_execution, validate_read_path,
-        validate_write_path, wait_for_managed_command_outcome,
+        parse_capture_output, parse_tool_args, resolve_skill_path, should_use_managed_execution,
+        validate_read_path, validate_write_path, wait_for_managed_command_outcome,
     };
     use crate::agent::types::AgentConfig;
     use crate::history::SkillVariantRecord;
     use crate::session_manager::SessionManager;
-    use amux_protocol::SessionId;
+    use amux_protocol::{DaemonMessage, SessionId};
     use base64::Engine;
     use std::fs;
-    use std::sync::Arc;
     use tokio::sync::broadcast;
     use tokio_util::sync::CancellationToken;
 
@@ -5568,6 +5702,28 @@ mod tests {
         let script = build_list_files_script("L3RtcA==", "tok123");
         assert!(script.contains("\ntry:\n    rows = []\n    for entry in sorted("));
         assert!(script.contains("\nexcept Exception as exc:\n    payload = f'Error: {exc}'"));
+    }
+
+    #[test]
+    fn create_file_multipart_args_parse_filename_cwd_and_content() {
+        let args = parse_tool_args(
+            "create_file",
+            "Content-Type: multipart/form-data; boundary=BOUNDARY\n\n--BOUNDARY\nContent-Disposition: form-data; name=\"filename\"\n\nnotes.md\n--BOUNDARY\nContent-Disposition: form-data; name=\"cwd\"\n\n/tmp/work\n--BOUNDARY\nContent-Disposition: form-data; name=\"file\"; filename=\"notes.md\"\nContent-Type: text/plain\n\nhello world\n--BOUNDARY--\n",
+        )
+        .expect("multipart payload should parse");
+
+        assert_eq!(
+            args.get("filename").and_then(|value| value.as_str()),
+            Some("notes.md")
+        );
+        assert_eq!(
+            args.get("cwd").and_then(|value| value.as_str()),
+            Some("/tmp/work")
+        );
+        assert_eq!(
+            args.get("content").and_then(|value| value.as_str()),
+            Some("hello world")
+        );
     }
 
     #[test]
@@ -5640,7 +5796,9 @@ mod tests {
 
     #[test]
     fn managed_execution_routes_policy_risky_commands_to_managed_path() {
-        assert!(command_matches_policy_risk("rm -rf /home/mkurman/to_remove"));
+        assert!(command_matches_policy_risk(
+            "rm -rf /home/mkurman/to_remove"
+        ));
         assert!(should_use_managed_execution(&serde_json::json!({
             "command": "rm -rf /home/mkurman/to_remove"
         })));
@@ -5660,6 +5818,22 @@ mod tests {
                 .expect("managed wait should abort when cancellation is requested");
 
         assert!(error.to_string().contains("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn managed_command_wait_fails_when_session_exits() {
+        let (tx, mut rx) = broadcast::channel(4);
+        tx.send(DaemonMessage::SessionExited {
+            id: SessionId::nil(),
+            exit_code: Some(1),
+        })
+        .expect("session exit should broadcast");
+
+        let error = wait_for_managed_command_outcome(&mut rx, SessionId::nil(), "exec-1", 30, None)
+            .await
+            .expect_err("managed wait should fail when the session exits");
+
+        assert!(error.to_string().contains("session exited"));
     }
 
     #[tokio::test]
@@ -5751,23 +5925,17 @@ mod tests {
         let config = AgentConfig::default();
 
         let no_topology = get_available_tools(&config, std::path::Path::new("/tmp"), false);
-        assert!(
-            no_topology
-                .iter()
-                .all(|tool| tool.function.name != "list_sessions")
-        );
-        assert!(
-            no_topology
-                .iter()
-                .any(|tool| tool.function.name == "list_terminals")
-        );
+        assert!(no_topology
+            .iter()
+            .all(|tool| tool.function.name != "list_sessions"));
+        assert!(no_topology
+            .iter()
+            .any(|tool| tool.function.name == "list_terminals"));
 
         let with_topology = get_available_tools(&config, std::path::Path::new("/tmp"), true);
-        assert!(
-            with_topology
-                .iter()
-                .any(|tool| tool.function.name == "list_sessions")
-        );
+        assert!(with_topology
+            .iter()
+            .any(|tool| tool.function.name == "list_sessions"));
     }
 
     #[test]

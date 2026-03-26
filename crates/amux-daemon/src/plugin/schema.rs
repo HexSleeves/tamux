@@ -105,8 +105,7 @@ pub fn plugin_schema_v1() -> serde_json::Value {
 
 /// Compile the embedded schema v1 into a reusable validator.
 pub fn compile_schema_v1() -> jsonschema::Validator {
-    jsonschema::validator_for(&plugin_schema_v1())
-        .expect("built-in schema must be valid")
+    jsonschema::validator_for(&plugin_schema_v1()).expect("built-in schema must be valid")
 }
 
 #[cfg(test)]

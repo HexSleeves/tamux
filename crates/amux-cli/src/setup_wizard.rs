@@ -14,7 +14,6 @@ use crossterm::style::{self, Stylize};
 use crossterm::terminal;
 use futures::{SinkExt, StreamExt};
 use std::io::{self, Write};
-use std::path::Path;
 use tokio_util::codec::Framed;
 
 // ---------------------------------------------------------------------------
@@ -130,7 +129,9 @@ async fn validate_provider_on_stream(
 
 async fn read_config_key(key: &str) -> Option<String> {
     let mut conn = wizard_connect().await.ok()?;
-    wizard_send(&mut conn, ClientMessage::AgentGetConfig).await.ok()?;
+    wizard_send(&mut conn, ClientMessage::AgentGetConfig)
+        .await
+        .ok()?;
     match wizard_recv(&mut conn).await.ok()? {
         DaemonMessage::AgentConfigResponse { config_json } => {
             let val: serde_json::Value = serde_json::from_str(&config_json).ok()?;
@@ -174,9 +175,7 @@ async fn ensure_daemon_running() -> Result<()> {
     }
 
     if let Err(e) = cmd.spawn() {
-        anyhow::bail!(
-            "Could not start daemon: {e}\nPlease start it manually with: tamux-daemon"
-        );
+        anyhow::bail!("Could not start daemon: {e}\nPlease start it manually with: tamux-daemon");
     }
 
     // Poll for daemon socket up to 5 seconds
@@ -261,7 +260,10 @@ fn select_list(
             stdout.flush()?;
 
             // Read key (blocking — runs on tokio blocking thread via spawn_blocking caller)
-            if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+            if let Event::Key(KeyEvent {
+                code, modifiers, ..
+            }) = event::read()?
+            {
                 match code {
                     KeyCode::Up => {
                         if selected == 0 {
@@ -278,17 +280,11 @@ fn select_list(
                     }
                     KeyCode::Enter => {
                         // Print final selection and exit
-                        execute!(
-                            stdout,
-                            style::SetForegroundColor(style::Color::Reset),
-                        )?;
+                        execute!(stdout, style::SetForegroundColor(style::Color::Reset),)?;
                         return Ok(Some(selected));
                     }
                     KeyCode::Esc if allow_esc => {
-                        execute!(
-                            stdout,
-                            style::SetForegroundColor(style::Color::Reset),
-                        )?;
+                        execute!(stdout, style::SetForegroundColor(style::Color::Reset),)?;
                         return Ok(None);
                     }
                     KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
@@ -334,7 +330,10 @@ fn text_input(prompt_text: &str, default: &str, masked: bool) -> Result<Option<S
     let result = (|| -> Result<Option<String>> {
         let mut input = String::new();
         loop {
-            if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+            if let Event::Key(KeyEvent {
+                code, modifiers, ..
+            }) = event::read()?
+            {
                 match code {
                     KeyCode::Enter => {
                         execute!(stdout, style::Print("\r\n"))?;
@@ -422,10 +421,10 @@ fn whatsapp_timeout_retry_selected(index: usize) -> bool {
 }
 
 fn poll_for_setup_cancel_key() -> Result<bool> {
-    if event::poll(std::time::Duration::from_millis(0)).context("Failed to poll keyboard input")?
-    {
-        if let Event::Key(KeyEvent { code, modifiers, .. }) =
-            event::read().context("Failed to read keyboard input")?
+    if event::poll(std::time::Duration::from_millis(0)).context("Failed to poll keyboard input")? {
+        if let Event::Key(KeyEvent {
+            code, modifiers, ..
+        }) = event::read().context("Failed to read keyboard input")?
         {
             match code {
                 KeyCode::Esc => return Ok(true),
@@ -517,10 +516,7 @@ async fn run_whatsapp_link_attempt(
             }
             DaemonMessage::AgentWhatsAppLinked { phone } => {
                 whatsapp_link_unsubscribe(framed).await?;
-                println!(
-                    "WhatsApp linked: {}",
-                    phone.as_deref().unwrap_or("device")
-                );
+                println!("WhatsApp linked: {}", phone.as_deref().unwrap_or("device"));
                 return Ok(WhatsAppLinkAttemptOutcome::Linked(phone));
             }
             DaemonMessage::AgentWhatsAppLinkStatus {
@@ -530,10 +526,7 @@ async fn run_whatsapp_link_attempt(
             } => {
                 if state == "connected" {
                     whatsapp_link_unsubscribe(framed).await?;
-                    println!(
-                        "WhatsApp linked: {}",
-                        phone.as_deref().unwrap_or("device")
-                    );
+                    println!("WhatsApp linked: {}", phone.as_deref().unwrap_or("device"));
                     return Ok(WhatsAppLinkAttemptOutcome::Linked(phone));
                 }
                 if last_status.as_deref() != Some(state.as_str()) {
@@ -704,33 +697,6 @@ pub async fn needs_setup_via_ipc() -> bool {
     }
 }
 
-/// Legacy check: inspect config.json on disk.
-/// Used only as fallback when daemon is not running yet (first-ever run).
-pub fn needs_setup_legacy() -> bool {
-    let config_path = amux_protocol::amux_data_dir()
-        .join("agent")
-        .join("config.json");
-    needs_setup_at(&config_path)
-}
-
-/// Check whether setup is needed for a specific config path (legacy file check).
-fn needs_setup_at(config_path: &Path) -> bool {
-    let data = match std::fs::read_to_string(config_path) {
-        Ok(d) => d,
-        Err(_) => return true,
-    };
-
-    let value: serde_json::Value = match serde_json::from_str(&data) {
-        Ok(v) => v,
-        Err(_) => return true,
-    };
-
-    match value.get("provider").and_then(|v| v.as_str()) {
-        Some(s) if !s.is_empty() => false,
-        _ => true,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Main wizard entry point
 // ---------------------------------------------------------------------------
@@ -748,10 +714,7 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
 
     // Step 1: Welcome banner
     println!();
-    println!(
-        "{}",
-        "tamux -- The Agent That Lives".bold()
-    );
+    println!("{}", "tamux -- The Agent That Lives".bold());
     println!("First-time setup");
     println!();
 
@@ -832,10 +795,7 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
         println!("Local provider -- no API key needed.");
     } else if selected_provider.authenticated {
         // Provider already has a key — ask whether to replace
-        println!(
-            "{} is already authenticated.",
-            provider_name.clone().bold()
-        );
+        println!("{} is already authenticated.", provider_name.clone().bold());
         let replace_idx = select_list(
             "Replace API key?",
             &[("No, keep existing key", ""), ("Yes, enter a new key", "")],
@@ -848,17 +808,19 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
             println!("Keeping existing API key.");
             api_key_saved = "(existing)".to_string();
         } else {
-            let api_key = text_input(
-                &format!("Enter new API key for {provider_name}"),
-                "",
-                true,
-            )?
-            .unwrap_or_default();
+            let api_key = text_input(&format!("Enter new API key for {provider_name}"), "", true)?
+                .unwrap_or_default();
             if !api_key.is_empty() {
                 api_key_saved = api_key.clone();
                 for (key, val) in [
-                    ("provider", serde_json::to_string(&provider_id).unwrap_or_default()),
-                    ("api_key", serde_json::to_string(&api_key).unwrap_or_default()),
+                    (
+                        "provider",
+                        serde_json::to_string(&provider_id).unwrap_or_default(),
+                    ),
+                    (
+                        "api_key",
+                        serde_json::to_string(&api_key).unwrap_or_default(),
+                    ),
                 ] {
                     wizard_send(
                         &mut framed,
@@ -875,12 +837,8 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
             }
         }
     } else {
-        let api_key = text_input(
-            &format!("Enter API key for {provider_name}"),
-            "",
-            true,
-        )?
-        .unwrap_or_default();
+        let api_key = text_input(&format!("Enter API key for {provider_name}"), "", true)?
+            .unwrap_or_default();
 
         if api_key.is_empty() {
             println!("No API key entered. You can set it later with `tamux setup`.");
@@ -890,10 +848,22 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
             // Send provider config via AgentSetConfigItem (fire-and-forget — daemon
             // sends NO response on success, only DaemonMessage::Error on failure).
             for (key, val) in [
-                ("provider", serde_json::to_string(&provider_id).unwrap_or_default()),
-                ("api_key", serde_json::to_string(&api_key).unwrap_or_default()),
-                ("base_url", serde_json::to_string(&base_url).unwrap_or_default()),
-                ("model", serde_json::to_string(&default_model).unwrap_or_default()),
+                (
+                    "provider",
+                    serde_json::to_string(&provider_id).unwrap_or_default(),
+                ),
+                (
+                    "api_key",
+                    serde_json::to_string(&api_key).unwrap_or_default(),
+                ),
+                (
+                    "base_url",
+                    serde_json::to_string(&base_url).unwrap_or_default(),
+                ),
+                (
+                    "model",
+                    serde_json::to_string(&default_model).unwrap_or_default(),
+                ),
             ] {
                 wizard_send(
                     &mut framed,
@@ -937,13 +907,13 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
     // Check if a model is already configured
     let existing_model = read_config_key("model").await;
     let user_wants_replace = if let Some(ref model) = existing_model {
-        println!(
-            "Model is already configured ({}).",
-            model.clone().bold()
-        );
+        println!("Model is already configured ({}).", model.clone().bold());
         match select_list(
             "Replace model?",
-            &[("No, keep existing model", ""), ("Yes, choose a new model", "")],
+            &[
+                ("No, keep existing model", ""),
+                ("Yes, choose a new model", ""),
+            ],
             false,
             0,
         )? {
@@ -959,8 +929,8 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
     };
 
     // Show model picker when: user explicitly chose to replace, OR first-time setup for Familiar+ tier.
-    let show_model_picker = user_wants_replace
-        || (existing_model.is_none() && tier_shows_step(&tier_string, "model"));
+    let show_model_picker =
+        user_wants_replace || (existing_model.is_none() && tier_shows_step(&tier_string, "model"));
 
     if show_model_picker {
         println!("Fetching available models...");
@@ -978,14 +948,11 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
 
         match wizard_recv(&mut framed).await? {
             DaemonMessage::AgentModelsResponse { models_json } => {
-                let models: Vec<String> =
-                    serde_json::from_str(&models_json).unwrap_or_default();
+                let models: Vec<String> = serde_json::from_str(&models_json).unwrap_or_default();
 
                 if !models.is_empty() {
-                    let model_items: Vec<(&str, &str)> = models
-                        .iter()
-                        .map(|m| (m.as_str(), ""))
-                        .collect();
+                    let model_items: Vec<(&str, &str)> =
+                        models.iter().map(|m| (m.as_str(), "")).collect();
 
                     match select_list("Select default model:", &model_items, true, 0)? {
                         Some(idx) => {
@@ -1085,10 +1052,7 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
         println!("Testing connection to {provider_name}...");
         match validate_provider_on_stream(&mut framed, &provider_id, &auth_source).await {
             Ok(true) => {
-                println!(
-                    "{}",
-                    "Connection successful!".with(style::Color::Green)
-                );
+                println!("{}", "Connection successful!".with(style::Color::Green));
             }
             Ok(false) => {
                 println!("Provider validation returned invalid. You can retry with `tamux setup`.");
@@ -1157,7 +1121,10 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
                 0,
             )? {
                 Some(1) => true,
-                _ => { summary_web_search = Some(provider.to_string()); false }
+                _ => {
+                    summary_web_search = Some(provider.to_string());
+                    false
+                }
             }
         } else {
             true
@@ -1179,46 +1146,42 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
             )? {
                 Some(idx) if idx < 3 => {
                     let (provider_label, key_name) = web_search_items[idx];
-                    match text_input(
-                        &format!("Enter {provider_label} API key"),
-                        "",
-                        true,
-                    )? {
+                    match text_input(&format!("Enter {provider_label} API key"), "", true)? {
                         Some(key) if !key.is_empty() => {
-                        // Enable web_search tool
-                        wizard_send(
-                            &mut framed,
-                            ClientMessage::AgentSetConfigItem {
-                                key_path: "/tools/web_search".to_string(),
-                                value_json: "true".to_string(),
-                            },
-                        )
-                        .await
-                        .context("Failed to enable web search")?;
+                            // Enable web_search tool
+                            wizard_send(
+                                &mut framed,
+                                ClientMessage::AgentSetConfigItem {
+                                    key_path: "/tools/web_search".to_string(),
+                                    value_json: "true".to_string(),
+                                },
+                            )
+                            .await
+                            .context("Failed to enable web search")?;
 
-                        // Set the API key
-                        wizard_send(
-                            &mut framed,
-                            ClientMessage::AgentSetConfigItem {
-                                key_path: format!("/{key_name}"),
-                                value_json: format!("\"{}\"", key),
-                            },
-                        )
-                        .await
-                        .context("Failed to set web search API key")?;
+                            // Set the API key
+                            wizard_send(
+                                &mut framed,
+                                ClientMessage::AgentSetConfigItem {
+                                    key_path: format!("/{key_name}"),
+                                    value_json: format!("\"{}\"", key),
+                                },
+                            )
+                            .await
+                            .context("Failed to set web search API key")?;
 
-                        summary_web_search = Some(provider_label.to_string());
-                        println!("Web search configured with {provider_label}.");
-                    }
-                    _ => {
-                        println!("Skipped -- you can add web search later with `tamux setup`.");
+                            summary_web_search = Some(provider_label.to_string());
+                            println!("Web search configured with {provider_label}.");
+                        }
+                        _ => {
+                            println!("Skipped -- you can add web search later with `tamux setup`.");
+                        }
                     }
                 }
+                _ => {
+                    println!("Skipped -- you can add web search later with `tamux setup`.");
+                }
             }
-            _ => {
-                println!("Skipped -- you can add web search later with `tamux setup`.");
-            }
-        }
         } // end if should_configure
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1248,7 +1211,10 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
                 0,
             )? {
                 Some(1) => true,
-                _ => { summary_gateway = Some(platform.to_string()); false }
+                _ => {
+                    summary_gateway = Some(platform.to_string());
+                    false
+                }
             }
         } else {
             true
@@ -1402,13 +1368,6 @@ mod tests {
     }
 
     #[test]
-    fn test_needs_setup_legacy_returns_true_when_no_config() {
-        let tmp = tempfile::tempdir().unwrap();
-        let config_path = tmp.path().join("agent").join("config.json");
-        assert!(needs_setup_at(&config_path));
-    }
-
-    #[test]
     fn test_is_local_provider() {
         assert!(is_local_provider("ollama"));
         assert!(is_local_provider("lmstudio"));
@@ -1449,11 +1408,23 @@ mod tests {
             security_level_from_index(0),
             ("highest", "Approve risky actions")
         );
-        assert_eq!(security_level_from_index(1), ("moderate", "Approve risky actions"));
-        assert_eq!(security_level_from_index(2), ("lowest", "Approve destructive only"));
-        assert_eq!(security_level_from_index(3), ("yolo", "Minimize interruptions"));
+        assert_eq!(
+            security_level_from_index(1),
+            ("moderate", "Approve risky actions")
+        );
+        assert_eq!(
+            security_level_from_index(2),
+            ("lowest", "Approve destructive only")
+        );
+        assert_eq!(
+            security_level_from_index(3),
+            ("yolo", "Minimize interruptions")
+        );
         // Out of range falls back to moderate
-        assert_eq!(security_level_from_index(99), ("moderate", "Approve risky actions"));
+        assert_eq!(
+            security_level_from_index(99),
+            ("moderate", "Approve risky actions")
+        );
     }
 
     #[test]

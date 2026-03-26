@@ -194,11 +194,17 @@ mod tests {
             Some("https://gmail.googleapis.com")
         );
         assert_eq!(api.endpoints.len(), 1);
-        assert_eq!(api.rate_limit.as_ref().unwrap().requests_per_minute, Some(60));
+        assert_eq!(
+            api.rate_limit.as_ref().unwrap().requests_per_minute,
+            Some(60)
+        );
 
         let commands = manifest.commands.as_ref().unwrap();
         assert_eq!(commands.len(), 1);
-        assert_eq!(commands["/gmail-inbox"].description, "Show recent inbox messages");
+        assert_eq!(
+            commands["/gmail-inbox"].description,
+            "Show recent inbox messages"
+        );
 
         let skills = manifest.skills.as_ref().unwrap();
         assert_eq!(skills, &["gmail-search", "gmail-send"]);
@@ -264,14 +270,8 @@ mod tests {
             auth.authorization_url.as_deref(),
             Some("https://example.com/auth")
         );
-        assert_eq!(
-            auth.token_url.as_deref(),
-            Some("https://example.com/token")
-        );
-        assert_eq!(
-            auth.scopes.as_ref().unwrap(),
-            &["read", "write"]
-        );
+        assert_eq!(auth.token_url.as_deref(), Some("https://example.com/token"));
+        assert_eq!(auth.scopes.as_ref().unwrap(), &["read", "write"]);
         assert!(auth.pkce);
     }
 }

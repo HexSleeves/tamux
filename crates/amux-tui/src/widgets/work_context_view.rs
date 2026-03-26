@@ -13,6 +13,12 @@ use crate::widgets::message::{render_markdown_pub, wrap_text};
 #[derive(Clone)]
 struct RenderedWorkLine {
     line: Line<'static>,
+    close_preview: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkContextHitTarget {
+    ClosePreview,
 }
 
 struct SelectionSnapshot {
@@ -88,9 +94,17 @@ fn build_lines(
                 push_wrapped(&mut lines, "No thread selected.", theme.fg_dim, width, 0);
                 return lines
                     .into_iter()
-                    .map(|line| RenderedWorkLine { line })
+                    .map(|line| RenderedWorkLine {
+                        line,
+                        close_preview: false,
+                    })
                     .collect();
             };
+            lines.push(Line::from(vec![
+                Span::styled("[x]", theme.accent_danger),
+                Span::raw(" "),
+                Span::styled("Close preview", theme.fg_dim),
+            ]));
             let Some(context) = tasks.work_context_for_thread(thread_id) else {
                 push_wrapped(
                     &mut lines,
@@ -101,7 +115,10 @@ fn build_lines(
                 );
                 return lines
                     .into_iter()
-                    .map(|line| RenderedWorkLine { line })
+                    .map(|line| RenderedWorkLine {
+                        line,
+                        close_preview: false,
+                    })
                     .collect();
             };
             let Some(entry) = context.entries.get(selected_index) else {
@@ -114,7 +131,10 @@ fn build_lines(
                 );
                 return lines
                     .into_iter()
-                    .map(|line| RenderedWorkLine { line })
+                    .map(|line| RenderedWorkLine {
+                        line,
+                        close_preview: false,
+                    })
                     .collect();
             };
 
@@ -184,9 +204,17 @@ fn build_lines(
                 push_wrapped(&mut lines, "No thread selected.", theme.fg_dim, width, 0);
                 return lines
                     .into_iter()
-                    .map(|line| RenderedWorkLine { line })
+                    .map(|line| RenderedWorkLine {
+                        line,
+                        close_preview: false,
+                    })
                     .collect();
             };
+            lines.push(Line::from(vec![
+                Span::styled("[x]", theme.accent_danger),
+                Span::raw(" "),
+                Span::styled("Close preview", theme.fg_dim),
+            ]));
             let todos = tasks.todos_for_thread(thread_id);
             if todos.is_empty() {
                 push_wrapped(
@@ -198,7 +226,10 @@ fn build_lines(
                 );
                 return lines
                     .into_iter()
-                    .map(|line| RenderedWorkLine { line })
+                    .map(|line| RenderedWorkLine {
+                        line,
+                        close_preview: false,
+                    })
                     .collect();
             }
 
@@ -249,7 +280,11 @@ fn build_lines(
 
     lines
         .into_iter()
-        .map(|line| RenderedWorkLine { line })
+        .enumerate()
+        .map(|(index, line)| RenderedWorkLine {
+            line,
+            close_preview: index == 1,
+        })
         .collect()
 }
 
@@ -471,6 +506,31 @@ pub fn selected_text(
     }
 }
 
+pub fn hit_test(
+    area: Rect,
+    tasks: &TaskState,
+    thread_id: Option<&str>,
+    active_tab: SidebarTab,
+    selected_index: usize,
+    mouse: Position,
+    theme: &ThemeTokens,
+) -> Option<WorkContextHitTarget> {
+    if !area.contains(mouse) {
+        return None;
+    }
+
+    let row_index = mouse.y.saturating_sub(area.y) as usize;
+    build_lines(area, tasks, thread_id, active_tab, selected_index, theme)
+        .get(row_index)
+        .and_then(|line| {
+            if line.close_preview {
+                Some(WorkContextHitTarget::ClosePreview)
+            } else {
+                None
+            }
+        })
+}
+
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -555,9 +615,40 @@ mod tests {
             0,
             &ThemeTokens::default(),
             0,
-            SelectionPoint { row: 5, col: 0 },
-            SelectionPoint { row: 5, col: 5 },
+            SelectionPoint { row: 6, col: 0 },
+            SelectionPoint { row: 6, col: 5 },
         );
         assert_eq!(text.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn hit_test_detects_close_preview_row() {
+        let mut tasks = TaskState::new();
+        tasks.reduce(TaskAction::WorkContextReceived(ThreadWorkContext {
+            thread_id: "t1".into(),
+            entries: vec![WorkContextEntry {
+                path: "/tmp/a.txt".into(),
+                is_text: true,
+                ..Default::default()
+            }],
+        }));
+        tasks.reduce(TaskAction::FilePreviewReceived(FilePreview {
+            path: "/tmp/a.txt".into(),
+            content: "hello world".into(),
+            truncated: false,
+            is_text: true,
+        }));
+
+        let hit = hit_test(
+            Rect::new(0, 0, 40, 10),
+            &tasks,
+            Some("t1"),
+            SidebarTab::Files,
+            0,
+            Position::new(2, 1),
+            &ThemeTokens::default(),
+        );
+
+        assert_eq!(hit, Some(WorkContextHitTarget::ClosePreview));
     }
 }

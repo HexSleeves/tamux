@@ -182,9 +182,7 @@ pub async fn poll_telegram(state: &mut GatewayState) -> Result<Vec<IncomingMessa
 
                 // Extract thread context: message_id for reply-to, and check
                 // reply_to_message for existing thread context
-                let telegram_message_id = msg
-                    .get("message_id")
-                    .and_then(|v| v.as_i64());
+                let telegram_message_id = msg.get("message_id").and_then(|v| v.as_i64());
                 let reply_msg_id = msg
                     .get("reply_to_message")
                     .and_then(|r| r.get("message_id"))
@@ -214,7 +212,10 @@ pub async fn poll_telegram(state: &mut GatewayState) -> Result<Vec<IncomingMessa
 // Slack: poll conversations.history
 // ---------------------------------------------------------------------------
 
-pub async fn poll_slack(state: &mut GatewayState, channels: &[String]) -> Result<Vec<IncomingMessage>> {
+pub async fn poll_slack(
+    state: &mut GatewayState,
+    channels: &[String],
+) -> Result<Vec<IncomingMessage>> {
     let token = &state.config.slack_token;
     if token.is_empty() {
         return Ok(vec![]);
@@ -363,7 +364,9 @@ pub async fn poll_discord(
             .timeout(std::time::Duration::from_secs(5))
             .send()
             .await
-            .with_context(|| format!("discord poll: HTTP request failed for channel {channel_id}"))?;
+            .with_context(|| {
+                format!("discord poll: HTTP request failed for channel {channel_id}")
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -373,10 +376,9 @@ pub async fn poll_discord(
             );
         }
 
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .with_context(|| format!("discord poll: failed to parse JSON for channel {channel_id}"))?;
+        let body: serde_json::Value = resp.json().await.with_context(|| {
+            format!("discord poll: failed to parse JSON for channel {channel_id}")
+        })?;
 
         let msgs = match body.as_array() {
             Some(a) => a,

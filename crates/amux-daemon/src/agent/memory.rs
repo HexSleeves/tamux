@@ -231,7 +231,8 @@ pub(super) async fn append_goal_memory_note(
             task_id: None,
             goal_run_id,
         },
-    ).await?;
+    )
+    .await?;
     Ok(())
 }
 
@@ -326,22 +327,24 @@ async fn record_memory_provenance(
         .into_iter()
         .map(|candidate| candidate.key)
         .collect::<Vec<_>>();
-    history.record_memory_provenance(&MemoryProvenanceRecord {
-        id: &format!("memprov_{}", Uuid::new_v4()),
-        target: target.label(),
-        mode: match mode {
-            MemoryUpdateMode::Replace => "replace",
-            MemoryUpdateMode::Append => "append",
-            MemoryUpdateMode::Remove => "remove",
-        },
-        source_kind: context.source_kind,
-        content,
-        fact_keys: &fact_keys,
-        thread_id: context.thread_id,
-        task_id: context.task_id,
-        goal_run_id: context.goal_run_id,
-        created_at: now_millis(),
-    }).await
+    history
+        .record_memory_provenance(&MemoryProvenanceRecord {
+            id: &format!("memprov_{}", Uuid::new_v4()),
+            target: target.label(),
+            mode: match mode {
+                MemoryUpdateMode::Replace => "replace",
+                MemoryUpdateMode::Append => "append",
+                MemoryUpdateMode::Remove => "remove",
+            },
+            source_kind: context.source_kind,
+            content,
+            fact_keys: &fact_keys,
+            thread_id: context.thread_id,
+            task_id: context.task_id,
+            goal_run_id: context.goal_run_id,
+            created_at: now_millis(),
+        })
+        .await
 }
 
 pub(super) fn extract_memory_fact_candidates(content: &str) -> Vec<MemoryFactCandidate> {

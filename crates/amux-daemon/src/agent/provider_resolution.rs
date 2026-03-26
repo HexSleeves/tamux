@@ -45,7 +45,8 @@ pub(super) fn resolve_provider_config_for(
         // Only "custom" providers honour a user-supplied base_url.
         if provider_id != "custom" {
             if let Some(def) = get_provider_definition(provider_id) {
-                resolved.base_url = get_provider_base_url(provider_id, &resolved.model, def.default_base_url);
+                resolved.base_url =
+                    get_provider_base_url(provider_id, &resolved.model, def.default_base_url);
             }
         }
         if resolved.base_url.is_empty() {
@@ -130,12 +131,9 @@ mod tests {
             },
         );
 
-        let resolved = resolve_provider_config_for(
-            &config,
-            "alibaba-coding-plan",
-            Some("qwen3.5-plus"),
-        )
-        .expect("provider should resolve");
+        let resolved =
+            resolve_provider_config_for(&config, "alibaba-coding-plan", Some("qwen3.5-plus"))
+                .expect("provider should resolve");
 
         assert_eq!(
             resolved.base_url,
@@ -154,6 +152,8 @@ mod tests {
         let mut config = AgentConfig::default();
         config.provider = "openai".to_string();
         let err = resolve_provider_config_for(&config, "groq", None).unwrap_err();
-        assert!(err.to_string().contains("No credentials configured for provider 'groq'"));
+        assert!(err
+            .to_string()
+            .contains("No credentials configured for provider 'groq'"));
     }
 }

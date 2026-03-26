@@ -29,27 +29,28 @@ impl AgentEngine {
         if !config.enabled {
             return;
         }
-        if let Err(error) =
-            self.history
-                .record_provenance_event(&crate::history::ProvenanceEventRecord {
-                    event_type,
-                    summary,
-                    details: &details,
-                    agent_id: "tamux-daemon",
-                    goal_run_id,
-                    task_id,
-                    thread_id,
-                    approval_id,
-                    causal_trace_id,
-                    compliance_mode: match config.compliance.mode {
-                        ComplianceMode::Standard => "standard",
-                        ComplianceMode::Soc2 => "soc2",
-                        ComplianceMode::Hipaa => "hipaa",
-                        ComplianceMode::Fedramp => "fedramp",
-                    },
-                    sign: config.compliance.sign_all_events,
-                    created_at: now_millis(),
-                }).await
+        if let Err(error) = self
+            .history
+            .record_provenance_event(&crate::history::ProvenanceEventRecord {
+                event_type,
+                summary,
+                details: &details,
+                agent_id: "tamux-daemon",
+                goal_run_id,
+                task_id,
+                thread_id,
+                approval_id,
+                causal_trace_id,
+                compliance_mode: match config.compliance.mode {
+                    ComplianceMode::Standard => "standard",
+                    ComplianceMode::Soc2 => "soc2",
+                    ComplianceMode::Hipaa => "hipaa",
+                    ComplianceMode::Fedramp => "fedramp",
+                },
+                sign: config.compliance.sign_all_events,
+                created_at: now_millis(),
+            })
+            .await
         {
             tracing::warn!(event_type, error = %error, "failed to record provenance event");
         }

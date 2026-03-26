@@ -603,7 +603,10 @@ impl AgentEngine {
                     Ok(slack_msgs) => {
                         gw.slack_health.on_success(now_ms);
                         if !slack_msgs.is_empty() {
-                            tracing::info!(count = slack_msgs.len(), "gateway: slack messages received");
+                            tracing::info!(
+                                count = slack_msgs.len(),
+                                "gateway: slack messages received"
+                            );
                         }
                         for msg in &slack_msgs {
                             if let Some(ref tc) = msg.thread_context {
@@ -697,7 +700,8 @@ impl AgentEngine {
             });
 
             // D-05: Emit HeartbeatDigest on connected/disconnected transitions
-            let is_connect_disconnect = status == "connected" || status == "disconnected" || status == "error";
+            let is_connect_disconnect =
+                status == "connected" || status == "disconnected" || status == "error";
             if is_connect_disconnect {
                 let description = match (status.as_str(), last_error) {
                     ("connected", _) => format!("{platform} reconnected"),
@@ -742,11 +746,14 @@ impl AgentEngine {
                     thread_id: None,
                     goal_run_id: None,
                     task_id: None,
-                    raw_data_json: Some(serde_json::json!({
-                        "platform": platform,
-                        "new_status": status,
-                        "consecutive_failures": consecutive_failures,
-                    }).to_string()),
+                    raw_data_json: Some(
+                        serde_json::json!({
+                            "platform": platform,
+                            "new_status": status,
+                            "consecutive_failures": consecutive_failures,
+                        })
+                        .to_string(),
+                    ),
                 };
                 if let Err(e) = self.history.insert_action_audit(&audit_entry).await {
                     tracing::warn!(platform = %platform, "gateway: failed to persist health audit: {e}");

@@ -270,7 +270,10 @@ impl AgentEngine {
             let was_half_open = breaker.state() == CircuitState::HalfOpen;
             breaker.record_success(now);
             if was_half_open && breaker.state() == CircuitState::Closed {
-                tracing::info!(provider, "circuit breaker recovered — provider is healthy again");
+                tracing::info!(
+                    provider,
+                    "circuit breaker recovered — provider is healthy again"
+                );
                 let _ = self.event_tx.send(AgentEvent::ProviderCircuitRecovered {
                     provider: provider.to_string(),
                 });
@@ -293,7 +296,10 @@ impl AgentEngine {
     }
 
     /// Suggest an alternative healthy provider when the requested one is unavailable.
-    pub(super) async fn suggest_alternative_provider(&self, failed_provider: &str) -> Option<String> {
+    pub(super) async fn suggest_alternative_provider(
+        &self,
+        failed_provider: &str,
+    ) -> Option<String> {
         let config = self.config.read().await;
         for (name, _pconfig) in &config.providers {
             if name != failed_provider {

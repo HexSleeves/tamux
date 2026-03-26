@@ -303,7 +303,8 @@ impl WhatsAppLinkRuntime {
             inner.active_qr = None;
             inner.active_qr_expires_at_ms = None;
         }
-        self.broadcast_event(WhatsAppLinkEvent::Linked { phone }).await;
+        self.broadcast_event(WhatsAppLinkEvent::Linked { phone })
+            .await;
         self.broadcast_status().await;
     }
 
@@ -339,7 +340,8 @@ impl WhatsAppLinkRuntime {
 
     async fn broadcast_status(&self) {
         let snapshot = self.status_snapshot().await;
-        self.broadcast_event(WhatsAppLinkEvent::Status(snapshot)).await;
+        self.broadcast_event(WhatsAppLinkEvent::Status(snapshot))
+            .await;
     }
 
     async fn broadcast_event(&self, event: WhatsAppLinkEvent) {
@@ -400,9 +402,7 @@ pub fn build_sidecar_launch_spec(node_bin: &str, bridge_path: &Path) -> Result<S
         "node" | "node.exe" | "electron" | "electron.exe"
     );
     if !node_compatible {
-        bail!(
-            "whatsapp sidecar launcher must be node-compatible (node/electron), got: {program}"
-        );
+        bail!("whatsapp sidecar launcher must be node-compatible (node/electron), got: {program}");
     }
     let bridge = bridge_path.to_string_lossy().to_string();
     if bridge.trim().is_empty() {
@@ -514,7 +514,9 @@ mod tests {
         let runtime = WhatsAppLinkRuntime::new();
         let mut rx = runtime.subscribe().await;
         runtime.start().await.expect("start should succeed");
-        runtime.broadcast_linked(Some("+123456789".to_string())).await;
+        runtime
+            .broadcast_linked(Some("+123456789".to_string()))
+            .await;
 
         assert_eq!(
             recv_until_linked(&mut rx).await.flatten().as_deref(),
@@ -530,7 +532,9 @@ mod tests {
         let runtime = WhatsAppLinkRuntime::new();
         let mut rx = runtime.subscribe().await;
         runtime.start().await.expect("start should succeed");
-        runtime.broadcast_linked(Some("+123456789".to_string())).await;
+        runtime
+            .broadcast_linked(Some("+123456789".to_string()))
+            .await;
         runtime
             .stop(Some("operator_cancelled".to_string()))
             .await
@@ -549,7 +553,9 @@ mod tests {
     async fn new_subscriber_gets_immediate_latest_status_snapshot() {
         let runtime = WhatsAppLinkRuntime::new();
         runtime.start().await.expect("start should succeed");
-        runtime.broadcast_linked(Some("+123456789".to_string())).await;
+        runtime
+            .broadcast_linked(Some("+123456789".to_string()))
+            .await;
         let mut rx = runtime.subscribe().await;
         let event = timeout(Duration::from_millis(250), rx.recv())
             .await
@@ -567,7 +573,9 @@ mod tests {
     #[tokio::test]
     async fn subscribe_snapshot_is_not_broadcast_to_existing_subscribers() {
         let runtime = WhatsAppLinkRuntime::new();
-        runtime.broadcast_linked(Some("+123456789".to_string())).await;
+        runtime
+            .broadcast_linked(Some("+123456789".to_string()))
+            .await;
 
         let mut existing = runtime.subscribe().await;
         let _ = timeout(Duration::from_millis(250), existing.recv())
@@ -583,14 +591,19 @@ mod tests {
         assert!(matches!(newcomer_event, WhatsAppLinkEvent::Status(_)));
 
         let duplicate = timeout(Duration::from_millis(75), existing.recv()).await;
-        assert!(duplicate.is_err(), "existing subscriber got duplicate status");
+        assert!(
+            duplicate.is_err(),
+            "existing subscriber got duplicate status"
+        );
     }
 
     #[tokio::test]
     async fn new_subscriber_replays_qr_after_status_snapshot() {
         let runtime = WhatsAppLinkRuntime::new();
         runtime.start().await.expect("start should succeed");
-        runtime.broadcast_qr("QR-REPLAY".to_string(), Some(4242)).await;
+        runtime
+            .broadcast_qr("QR-REPLAY".to_string(), Some(4242))
+            .await;
 
         let mut rx = runtime.subscribe().await;
         let first = timeout(Duration::from_millis(250), rx.recv())
@@ -627,9 +640,7 @@ mod tests {
             let runtime = runtime.clone();
             tokio::spawn(async move {
                 for i in 0..64 {
-                    runtime
-                        .broadcast_error(format!("err-{i}"), true)
-                        .await;
+                    runtime.broadcast_error(format!("err-{i}"), true).await;
                     tokio::task::yield_now().await;
                 }
             })
@@ -740,7 +751,9 @@ mod tests {
     async fn stop_kill_failure_emits_error_without_disconnected_and_preserves_process() {
         let runtime = WhatsAppLinkRuntime::new();
         runtime.start().await.expect("start should succeed");
-        runtime.broadcast_linked(Some("+123456789".to_string())).await;
+        runtime
+            .broadcast_linked(Some("+123456789".to_string()))
+            .await;
         let mut rx = runtime.subscribe().await;
         let _ = timeout(Duration::from_millis(250), rx.recv())
             .await
@@ -816,7 +829,9 @@ mod tests {
                 .expect("process handle should be retained after kill failure")
         };
         assert_eq!(
-            retained.id().expect("retained process should still have pid"),
+            retained
+                .id()
+                .expect("retained process should still have pid"),
             expected_pid
         );
         retained
@@ -839,11 +854,9 @@ mod tests {
 
     #[test]
     fn sidecar_launcher_enforces_node_mode_and_esm_safe_bridge_startup_behavior() {
-        let spec = build_sidecar_launch_spec(
-            "node",
-            Path::new("frontend/electron/whatsapp-bridge.cjs"),
-        )
-        .expect("launch spec should be generated");
+        let spec =
+            build_sidecar_launch_spec("node", Path::new("frontend/electron/whatsapp-bridge.cjs"))
+                .expect("launch spec should be generated");
         assert_eq!(spec.program, "node");
         assert_eq!(spec.args, vec!["frontend/electron/whatsapp-bridge.cjs"]);
         assert_eq!(spec.env.get("ELECTRON_RUN_AS_NODE"), Some(&"1".to_string()));
@@ -851,11 +864,9 @@ mod tests {
 
     #[test]
     fn sidecar_launcher_rejects_non_node_compatible_programs() {
-        let err = build_sidecar_launch_spec(
-            "python",
-            Path::new("frontend/electron/whatsapp-bridge.cjs"),
-        )
-        .expect_err("non-node-compatible launchers must be rejected");
+        let err =
+            build_sidecar_launch_spec("python", Path::new("frontend/electron/whatsapp-bridge.cjs"))
+                .expect_err("non-node-compatible launchers must be rejected");
         assert!(
             err.to_string().contains("node-compatible"),
             "unexpected error: {err}"
@@ -864,14 +875,9 @@ mod tests {
 
     #[test]
     fn sidecar_launcher_rejects_non_cjs_entrypoints() {
-        let err = build_sidecar_launch_spec(
-            "node",
-            Path::new("frontend/electron/whatsapp-bridge.mjs"),
-        )
-        .expect_err("non-cjs bridge paths must be rejected");
-        assert!(
-            err.to_string().contains(".cjs"),
-            "unexpected error: {err}"
-        );
+        let err =
+            build_sidecar_launch_spec("node", Path::new("frontend/electron/whatsapp-bridge.mjs"))
+                .expect_err("non-cjs bridge paths must be rejected");
+        assert!(err.to_string().contains(".cjs"), "unexpected error: {err}");
     }
 }

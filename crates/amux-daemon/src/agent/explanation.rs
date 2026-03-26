@@ -126,10 +126,7 @@ pub fn generate_explanation(action_type: &str, data: &serde_json::Value) -> Expl
         "tool_execution" => {
             let tool_name = data["tool_name"].as_str().unwrap_or("unknown");
             let session_id = data["session_id"].as_str().unwrap_or("unknown");
-            ExplanationResult::Template(format!(
-                "Executed {} in session {}",
-                tool_name, session_id
-            ))
+            ExplanationResult::Template(format!("Executed {} in session {}", tool_name, session_id))
         }
         "escalation" => {
             let factors = data["causal_factors"]
@@ -308,8 +305,7 @@ mod tests {
 
     #[test]
     fn explain_escalation_simple() {
-        let data =
-            json!({"from_level": "L0", "to_level": "L1", "reason": "timeout", "causal_factors": [1]});
+        let data = json!({"from_level": "L0", "to_level": "L1", "reason": "timeout", "causal_factors": [1]});
         let result = generate_explanation("escalation", &data);
         match &result {
             ExplanationResult::Template(s) => {

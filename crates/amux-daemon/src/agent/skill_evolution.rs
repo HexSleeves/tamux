@@ -13,17 +13,18 @@ impl AgentEngine {
     ) {
         let (goal_run_id, _, _) = self.goal_context_for_task(task_id).await;
         let usage_id = format!("skill_usage_{}", Uuid::new_v4());
-        if let Err(error) =
-            self.history
-                .record_skill_variant_consultation(&SkillVariantConsultationRecord {
-                    usage_id: &usage_id,
-                    variant_id: &variant.variant_id,
-                    thread_id: Some(thread_id),
-                    task_id,
-                    goal_run_id: goal_run_id.as_deref(),
-                    context_tags,
-                    consulted_at: now_millis(),
-                }).await
+        if let Err(error) = self
+            .history
+            .record_skill_variant_consultation(&SkillVariantConsultationRecord {
+                usage_id: &usage_id,
+                variant_id: &variant.variant_id,
+                thread_id: Some(thread_id),
+                task_id,
+                goal_run_id: goal_run_id.as_deref(),
+                context_tags,
+                consulted_at: now_millis(),
+            })
+            .await
         {
             tracing::warn!(
                 thread_id,
@@ -134,7 +135,11 @@ impl AgentEngine {
         let (current, next, threshold) = match variant.status.as_str() {
             "testing" => ("testing", "active", thresholds.testing_to_active),
             "active" => ("active", "proven", thresholds.active_to_proven),
-            "proven" => ("proven", "promoted_to_canonical", thresholds.proven_to_canonical),
+            "proven" => (
+                "proven",
+                "promoted_to_canonical",
+                thresholds.proven_to_canonical,
+            ),
             _ => return None,
         };
 
@@ -188,12 +193,7 @@ impl AgentEngine {
         );
 
         // Announce promotion via HeartbeatDigest (and WorkflowNotice for canonical)
-        self.announce_skill_promotion(
-            &variant.skill_name,
-            current,
-            next,
-            variant.success_count,
-        );
+        self.announce_skill_promotion(&variant.skill_name, current, next, variant.success_count);
 
         Some(next.to_string())
     }

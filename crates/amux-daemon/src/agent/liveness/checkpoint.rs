@@ -57,17 +57,19 @@ pub async fn checkpoint_store(
     let state_json =
         serde_json::to_string(checkpoint).context("failed to serialise checkpoint to JSON")?;
 
-    history.upsert_checkpoint(
-        &checkpoint.id,
-        &checkpoint.goal_run_id,
-        checkpoint.thread_id.as_deref(),
-        // Derive task_id from the goal run's active task, if any.
-        checkpoint.goal_run.active_task_id.as_deref(),
-        checkpoint.checkpoint_type,
-        &state_json,
-        checkpoint.context_summary.as_deref(),
-        checkpoint.created_at,
-    ).await
+    history
+        .upsert_checkpoint(
+            &checkpoint.id,
+            &checkpoint.goal_run_id,
+            checkpoint.thread_id.as_deref(),
+            // Derive task_id from the goal run's active task, if any.
+            checkpoint.goal_run.active_task_id.as_deref(),
+            checkpoint.checkpoint_type,
+            &state_json,
+            checkpoint.context_summary.as_deref(),
+            checkpoint.created_at,
+        )
+        .await
 }
 
 /// Deserialise a [`CheckpointData`] from JSON, validating the schema version.

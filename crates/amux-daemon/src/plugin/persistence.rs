@@ -436,19 +436,21 @@ mod tests {
         persistence.upsert_plugin(&record).await.unwrap();
 
         // Disable
-        persistence
-            .set_enabled("test-plugin", false)
+        persistence.set_enabled("test-plugin", false).await.unwrap();
+        let plugin = persistence
+            .get_plugin("test-plugin")
             .await
+            .unwrap()
             .unwrap();
-        let plugin = persistence.get_plugin("test-plugin").await.unwrap().unwrap();
         assert!(!plugin.enabled);
 
         // Re-enable
-        persistence
-            .set_enabled("test-plugin", true)
+        persistence.set_enabled("test-plugin", true).await.unwrap();
+        let plugin = persistence
+            .get_plugin("test-plugin")
             .await
+            .unwrap()
             .unwrap();
-        let plugin = persistence.get_plugin("test-plugin").await.unwrap().unwrap();
         assert!(plugin.enabled);
     }
 

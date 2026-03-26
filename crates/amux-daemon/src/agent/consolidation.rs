@@ -135,8 +135,9 @@ impl AgentEngine {
 
         // Sub-task 6: Draft flagged candidates into SKILL.md (SKIL-01, per D-03)
         if std::time::Instant::now() < deadline {
-            result.skills_drafted =
-                self.draft_flagged_skill_candidates(&config, &deadline).await;
+            result.skills_drafted = self
+                .draft_flagged_skill_candidates(&config, &deadline)
+                .await;
         }
 
         // Sub-task 7: Run mental tests on Draft skills (SKIL-04, per D-05)
@@ -243,10 +244,7 @@ impl AgentEngine {
                 continue;
             }
 
-            let task_type = trace
-                .task_type
-                .as_deref()
-                .unwrap_or("unknown");
+            let task_type = trace.task_type.as_deref().unwrap_or("unknown");
 
             let duration_ms = trace.duration_ms.unwrap_or(0) as u64;
 
@@ -325,18 +323,13 @@ impl AgentEngine {
     /// Decay stale memory facts and tombstone those below the configurable threshold
     /// (MEMO-02). Facts with confidence below `fact_decay_supersede_threshold` are
     /// actually tombstoned via `supersede_memory_fact`, not just counted.
-    async fn apply_fact_decay(
-        &self,
-        config: &AgentConfig,
-        deadline: &std::time::Instant,
-    ) -> usize {
+    async fn apply_fact_decay(&self, config: &AgentConfig, deadline: &std::time::Instant) -> usize {
         let half_life = config.consolidation.memory_decay_half_life_hours;
         let threshold = config.consolidation.fact_decay_supersede_threshold;
         let now = now_millis();
 
         // Read MEMORY.md content
-        let memory_path = active_memory_dir(&self.data_dir)
-            .join(MemoryTarget::Memory.file_name());
+        let memory_path = active_memory_dir(&self.data_dir).join(MemoryTarget::Memory.file_name());
         let content = match tokio::fs::read_to_string(&memory_path).await {
             Ok(c) => c,
             Err(_) => return 0,
@@ -441,7 +434,11 @@ impl AgentEngine {
         let max_age_ms = config.consolidation.tombstone_ttl_days * 24 * 60 * 60 * 1000;
         let now = now_millis();
 
-        match self.history.delete_expired_tombstones(max_age_ms, now).await {
+        match self
+            .history
+            .delete_expired_tombstones(max_age_ms, now)
+            .await
+        {
             Ok(count) => {
                 if count > 0 {
                     tracing::debug!(
@@ -481,8 +478,7 @@ impl AgentEngine {
         }
 
         // 3. Read MEMORY.md content
-        let memory_path = active_memory_dir(&self.data_dir)
-            .join(MemoryTarget::Memory.file_name());
+        let memory_path = active_memory_dir(&self.data_dir).join(MemoryTarget::Memory.file_name());
         let content = match tokio::fs::read_to_string(&memory_path).await {
             Ok(c) => c,
             Err(_) => return 0,
@@ -505,7 +501,10 @@ impl AgentEngine {
                 .push(candidate);
         }
 
-        let conflicting: Vec<_> = key_groups.values().filter(|group| group.len() > 1).collect();
+        let conflicting: Vec<_> = key_groups
+            .values()
+            .filter(|group| group.len() > 1)
+            .collect();
 
         if conflicting.is_empty() {
             return 0; // No contradictions found
