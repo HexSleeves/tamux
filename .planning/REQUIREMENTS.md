@@ -66,10 +66,10 @@ Requirements for v3.0 release. Each maps to roadmap phases.
 
 ### Embodied Metadata
 
-- [ ] **EMBD-01**: Scalar dimensions tracked per action: difficulty (retries, error rate), familiarity (pattern match to prior sessions), trajectory (converging/diverging from goal)
-- [ ] **EMBD-02**: Temperature dimension: urgency signals from operator messages
-- [ ] **EMBD-03**: Weight dimension: conceptual mass distinguishing light suggestions from heavy architectural commitments
-- [ ] **EMBD-04**: Embodied metadata feeds into uncertainty scoring (unfamiliar + high difficulty -> lower confidence)
+- [x] **EMBD-01**: Scalar dimensions tracked per action: difficulty (retries, error rate), familiarity (pattern match to prior sessions), trajectory (converging/diverging from goal)
+- [x] **EMBD-02**: Temperature dimension: urgency signals from operator messages
+- [x] **EMBD-03**: Weight dimension: conceptual mass distinguishing light suggestions from heavy architectural commitments
+- [x] **EMBD-04**: Embodied metadata feeds into uncertainty scoring (unfamiliar + high difficulty -> lower confidence)
 
 ### Situational Awareness (Frustration Proxy)
 
@@ -172,10 +172,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AWAR-03 | Phase 2 | Complete |
 | AWAR-04 | Phase 2 | Complete |
 | AWAR-05 | Phase 2 | Complete |
-| EMBD-01 | Phase 2 | Pending |
-| EMBD-02 | Phase 2 | Pending |
-| EMBD-03 | Phase 2 | Pending |
-| EMBD-04 | Phase 2 | Pending |
+| EMBD-01 | Phase 2 | Complete |
+| EMBD-02 | Phase 2 | Complete |
+| EMBD-03 | Phase 2 | Complete |
+| EMBD-04 | Phase 2 | Complete |
 | UNCR-01 | Phase 2 | Pending |
 | UNCR-02 | Phase 4 | Pending |
 | UNCR-03 | Phase 4 | Pending |

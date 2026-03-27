@@ -50,7 +50,7 @@ Plans:
 
 Plans:
 - [x] 02-01-PLAN.md -- Situational awareness: per-entity failure tracking, sliding windows, trajectory, mode shifts with counter-who guard
-- [ ] 02-02-PLAN.md -- Embodied metadata: 5 scalar dimensions (difficulty, familiarity, trajectory, temperature, weight)
+- [x] 02-02-PLAN.md -- Embodied metadata: 5 scalar dimensions (difficulty, familiarity, trajectory, temperature, weight)
 - [ ] 02-03-PLAN.md -- Uncertainty quantification: structural confidence scoring, domain escalation, calibration, plan annotation, approval routing
 
 ### Phase 3: Multi-Agent Orchestration

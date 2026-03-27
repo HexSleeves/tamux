@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: milestone
-status: In progress
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-03-27T07:38:19Z"
+status: Ready to execute
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-03-27T07:45:57.679Z"
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 5
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-26)
 ## Current Position
 
 Phase: 02
-Plan: 01 of 3 complete
+Plan: 2 of 3 complete
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Plan: 01 of 3 complete
 | Phase 01 P02 | 7min | 2 tasks | 7 files |
 | Phase 01 P03 | 9min | 2 tasks | 9 files |
 | Phase 02 P01 | 11min | 2 tasks | 9 files |
+| Phase 02 P02 | 3min | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -71,6 +72,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Counter-who consulted before ALL mode shifts (AWAR-03 locked decision)
 - [Phase 02]: Progress heuristic: non-error results with >50 chars content = new information gained
 - [Phase 02]: aggregate_short_term_success_rate returns 0.8 when no windows (healthy default for confidence scoring)
+- [Phase 02]: Embodied dimensions as pure functions with no I/O -- composable and testable in isolation
+- [Phase 02]: Weight classification via static tool-name match table (0.2/0.5/0.8 tiers)
+- [Phase 02]: Temperature uses frequency+pacing dual signal (0.6/0.4) instead of sentiment parsing
 
 ### Pending Todos
 
@@ -83,6 +87,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-27T07:38:19Z
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-03-27T07:45:57.677Z
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None
