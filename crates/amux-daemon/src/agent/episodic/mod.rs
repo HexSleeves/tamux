@@ -3,6 +3,7 @@
 
 pub mod counter_who;
 pub mod links;
+pub mod negative_knowledge;
 pub mod privacy;
 pub mod retrieval;
 pub mod schema;

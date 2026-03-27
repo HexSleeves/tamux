@@ -251,7 +251,17 @@ impl AgentEngine {
             expires_at: None,
         };
 
-        self.record_episode(episode).await
+        let episode_ref = episode.clone();
+        self.record_episode(episode).await?;
+
+        // Auto-create negative knowledge constraint from failed episodes (NKNO-01, NKNO-02)
+        if outcome == EpisodeOutcome::Failure {
+            if let Err(e) = self.record_negative_knowledge_from_episode(&episode_ref).await {
+                tracing::warn!("Failed to record negative knowledge from episode: {e}");
+            }
+        }
+
+        Ok(())
     }
 
     /// Record an episode when a session ends (EPIS-08).
@@ -377,6 +387,31 @@ impl AgentEngine {
         file.flush().await?;
 
         Ok(())
+    }
+
+    /// Expire (delete) old episodes past their TTL (EPIS-09).
+    /// Rebuilds FTS5 index after deletion to remove stale entries.
+    pub(crate) async fn expire_old_episodes(&self) -> Result<usize> {
+        let now_ms = super::super::now_millis() as i64;
+        self.history
+            .conn
+            .call(move |conn| {
+                let deleted = conn.execute(
+                    "DELETE FROM episodes WHERE expires_at IS NOT NULL AND expires_at <= ?1",
+                    rusqlite::params![now_ms],
+                )?;
+                if deleted > 0 {
+                    // Rebuild FTS5 index to remove stale entries
+                    conn.execute(
+                        "INSERT INTO episodes_fts(episodes_fts) VALUES('rebuild')",
+                        [],
+                    )
+                    .ok();
+                }
+                Ok(deleted)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 }
 

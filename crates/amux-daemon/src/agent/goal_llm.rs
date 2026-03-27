@@ -41,6 +41,19 @@ impl AgentEngine {
             prompt.push_str("\nConsider the above past experiences when planning. Avoid approaches that previously failed unless circumstances have changed.\n");
         }
 
+        // Surface negative knowledge constraints before planning (Phase 1: Memory Foundation - NKNO-03)
+        let negative_constraints_text = match self.query_active_constraints(Some(&goal_run.goal)).await {
+            Ok(constraints) if !constraints.is_empty() => {
+                let now_ms = super::now_millis();
+                super::episodic::negative_knowledge::format_negative_constraints(&constraints, now_ms)
+            }
+            _ => String::new(),
+        };
+        if !negative_constraints_text.is_empty() {
+            prompt.push_str("\n\n");
+            prompt.push_str(&negative_constraints_text);
+        }
+
         let mut plan = self
             .run_goal_structured::<GoalPlanResponse>(&prompt)
             .await?;

@@ -1,0 +1,356 @@
+//! Negative knowledge constraint graph: tracks ruled-out approaches,
+//! impossible combinations, and known limitations with TTL expiry.
+
+use super::{ConstraintType, Episode, EpisodeOutcome, NegativeConstraint};
+use crate::agent::engine::AgentEngine;
+
+use anyhow::Result;
+use rusqlite::params;
+
+// ---------------------------------------------------------------------------
+// Pure functions
+// ---------------------------------------------------------------------------
+
+/// Check if a constraint is still active (not expired).
+pub fn is_constraint_active(constraint: &NegativeConstraint, now_ms: u64) -> bool {
+    match constraint.valid_until {
+        None => true,
+        Some(expiry) => expiry > now_ms,
+    }
+}
+
+/// Format active negative constraints for system prompt injection.
+/// Filters to active only, caps at 10, produces "DO NOT attempt" labels.
+pub fn format_negative_constraints(constraints: &[NegativeConstraint], now_ms: u64) -> String {
+    let active: Vec<&NegativeConstraint> = constraints
+        .iter()
+        .filter(|c| is_constraint_active(c, now_ms))
+        .collect();
+
+    if active.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    out.push_str("## Ruled-Out Approaches (Negative Knowledge)\n");
+
+    let display_count = active.len().min(10);
+    for constraint in active.iter().take(display_count) {
+        let constraint_type_str = match constraint.constraint_type {
+            ConstraintType::RuledOut => "ruled_out",
+            ConstraintType::ImpossibleCombination => "impossible_combination",
+            ConstraintType::KnownLimitation => "known_limitation",
+        };
+
+        out.push_str(&format!("DO NOT attempt: {}\n", constraint.subject));
+        out.push_str(&format!("  Reason: {}\n", constraint.description));
+        out.push_str(&format!(
+            "  Type: {} (confidence: {:.0}%)\n",
+            constraint_type_str,
+            constraint.confidence * 100.0
+        ));
+
+        if let Some(ref sc) = constraint.solution_class {
+            out.push_str(&format!("  Solution class: {sc}\n"));
+        }
+
+        match constraint.valid_until {
+            Some(expiry) => {
+                // Format as human-readable date
+                let days_remaining = expiry.saturating_sub(now_ms) / (86400 * 1000);
+                out.push_str(&format!("  Expires: in {days_remaining} days\n"));
+            }
+            None => {
+                out.push_str("  Expires: never\n");
+            }
+        }
+
+        out.push('\n');
+    }
+
+    if active.len() > 10 {
+        let remaining = active.len() - 10;
+        out.push_str(&format!("({remaining} more constraints not shown)\n"));
+    }
+
+    out
+}
+
+// ---------------------------------------------------------------------------
+// AgentEngine integration methods
+// ---------------------------------------------------------------------------
+
+fn constraint_type_to_str(ct: &ConstraintType) -> &'static str {
+    match ct {
+        ConstraintType::RuledOut => "ruled_out",
+        ConstraintType::ImpossibleCombination => "impossible_combination",
+        ConstraintType::KnownLimitation => "known_limitation",
+    }
+}
+
+fn str_to_constraint_type(s: &str) -> ConstraintType {
+    match s {
+        "impossible_combination" => ConstraintType::ImpossibleCombination,
+        "known_limitation" => ConstraintType::KnownLimitation,
+        _ => ConstraintType::RuledOut,
+    }
+}
+
+impl AgentEngine {
+    /// Add a negative knowledge constraint (NKNO-01).
+    pub(crate) async fn add_negative_constraint(
+        &self,
+        constraint: NegativeConstraint,
+    ) -> Result<()> {
+        let c = constraint.clone();
+        let ct_str = constraint_type_to_str(&c.constraint_type).to_string();
+
+        self.history
+            .conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO negative_knowledge
+                     (id, episode_id, constraint_type, subject, solution_class,
+                      description, confidence, valid_until, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        c.id,
+                        c.episode_id,
+                        ct_str,
+                        c.subject,
+                        c.solution_class,
+                        c.description,
+                        c.confidence,
+                        c.valid_until.map(|v| v as i64),
+                        c.created_at as i64,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        // Update cached constraints
+        let mut store = self.episodic_store.write().await;
+        store.cached_constraints.push(constraint.clone());
+
+        tracing::info!(subject = %constraint.subject, "Added negative knowledge constraint");
+
+        Ok(())
+    }
+
+    /// Record negative knowledge from a failed episode (NKNO-02).
+    /// Only creates a constraint when the episode is a failure with a root cause.
+    pub(crate) async fn record_negative_knowledge_from_episode(
+        &self,
+        episode: &Episode,
+    ) -> Result<()> {
+        // Only process failures with root causes
+        if episode.outcome != EpisodeOutcome::Failure || episode.root_cause.is_none() {
+            return Ok(());
+        }
+
+        let config = self.config.read().await;
+        let constraint_ttl_days = config.episodic.constraint_ttl_days;
+        drop(config);
+
+        let now_ms = super::super::now_millis();
+        let valid_until = now_ms + constraint_ttl_days * 86400 * 1000;
+
+        let subject = if episode.summary.len() > 200 {
+            format!("{}...", &episode.summary[..197])
+        } else {
+            episode.summary.clone()
+        };
+
+        let constraint = NegativeConstraint {
+            id: format!("nc_{}", uuid::Uuid::new_v4()),
+            episode_id: Some(episode.id.clone()),
+            constraint_type: ConstraintType::RuledOut,
+            subject,
+            solution_class: episode.solution_class.clone(),
+            description: episode.root_cause.clone().unwrap_or_default(),
+            confidence: episode.confidence.unwrap_or(0.7),
+            valid_until: Some(valid_until),
+            created_at: now_ms,
+        };
+
+        self.add_negative_constraint(constraint).await
+    }
+
+    /// Query active (non-expired) constraints, optionally filtered by entity (NKNO-03).
+    pub(crate) async fn query_active_constraints(
+        &self,
+        entity_filter: Option<&str>,
+    ) -> Result<Vec<NegativeConstraint>> {
+        let now_ms = super::super::now_millis() as i64;
+        let filter = entity_filter.map(|s| format!("%{s}%"));
+
+        self.history
+            .conn
+            .call(move |conn| {
+                if let Some(ref pattern) = filter {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, episode_id, constraint_type, subject, solution_class,
+                                description, confidence, valid_until, created_at
+                         FROM negative_knowledge
+                         WHERE (valid_until IS NULL OR valid_until > ?1)
+                         AND (subject LIKE ?2 OR solution_class LIKE ?2)
+                         ORDER BY created_at DESC
+                         LIMIT 20",
+                    )?;
+                    let rows = stmt.query_map(params![now_ms, pattern], row_to_constraint)?;
+                    let mut constraints = Vec::new();
+                    for row in rows {
+                        constraints.push(row?);
+                    }
+                    Ok(constraints)
+                } else {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, episode_id, constraint_type, subject, solution_class,
+                                description, confidence, valid_until, created_at
+                         FROM negative_knowledge
+                         WHERE (valid_until IS NULL OR valid_until > ?1)
+                         ORDER BY created_at DESC
+                         LIMIT 20",
+                    )?;
+                    let rows = stmt.query_map(params![now_ms], row_to_constraint)?;
+                    let mut constraints = Vec::new();
+                    for row in rows {
+                        constraints.push(row?);
+                    }
+                    Ok(constraints)
+                }
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// Expire (delete) constraints past their TTL (NKNO-04).
+    pub(crate) async fn expire_negative_constraints(&self) -> Result<usize> {
+        let now_ms = super::super::now_millis() as i64;
+
+        let deleted = self
+            .history
+            .conn
+            .call(move |conn| {
+                let count = conn.execute(
+                    "DELETE FROM negative_knowledge WHERE valid_until IS NOT NULL AND valid_until <= ?1",
+                    params![now_ms],
+                )?;
+                Ok(count)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        // Update cached constraints: filter out expired
+        if deleted > 0 {
+            let now_ms = super::super::now_millis();
+            let mut store = self.episodic_store.write().await;
+            store
+                .cached_constraints
+                .retain(|c| is_constraint_active(c, now_ms));
+        }
+
+        Ok(deleted)
+    }
+
+    /// Refresh the in-memory constraint cache from the database.
+    pub(crate) async fn refresh_constraint_cache(&self) -> Result<()> {
+        let constraints = self.query_active_constraints(None).await?;
+        let mut store = self.episodic_store.write().await;
+        store.cached_constraints = constraints;
+        Ok(())
+    }
+}
+
+fn row_to_constraint(row: &rusqlite::Row<'_>) -> rusqlite::Result<NegativeConstraint> {
+    let ct_str: String = row.get(2)?;
+    Ok(NegativeConstraint {
+        id: row.get(0)?,
+        episode_id: row.get(1)?,
+        constraint_type: str_to_constraint_type(&ct_str),
+        subject: row.get(3)?,
+        solution_class: row.get(4)?,
+        description: row.get(5)?,
+        confidence: row.get(6)?,
+        valid_until: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+        created_at: row.get::<_, i64>(8)? as u64,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_constraint(subject: &str, valid_until: Option<u64>) -> NegativeConstraint {
+        NegativeConstraint {
+            id: format!("nc-{subject}"),
+            episode_id: Some("ep-001".to_string()),
+            constraint_type: ConstraintType::RuledOut,
+            subject: subject.to_string(),
+            solution_class: Some("test-class".to_string()),
+            description: format!("Reason for {subject}"),
+            confidence: 0.85,
+            valid_until,
+            created_at: 1_000_000_000,
+        }
+    }
+
+    #[test]
+    fn format_negative_constraints_empty_returns_empty() {
+        assert!(format_negative_constraints(&[], 1_000_000_000).is_empty());
+    }
+
+    #[test]
+    fn format_negative_constraints_with_two_constraints() {
+        let constraints = vec![
+            make_constraint("npm install approach", Some(2_000_000_000)),
+            make_constraint("yarn install approach", None),
+        ];
+        let result = format_negative_constraints(&constraints, 1_000_000_000);
+        assert!(result.contains("DO NOT attempt: npm install approach"));
+        assert!(result.contains("DO NOT attempt: yarn install approach"));
+        assert!(result.contains("Ruled-Out Approaches"));
+        assert!(result.contains("Reason: Reason for npm install approach"));
+        assert!(result.contains("confidence: 85%"));
+    }
+
+    #[test]
+    fn format_negative_constraints_includes_solution_class() {
+        let constraints = vec![make_constraint("bad approach", Some(2_000_000_000))];
+        let result = format_negative_constraints(&constraints, 1_000_000_000);
+        assert!(result.contains("Solution class: test-class"));
+    }
+
+    #[test]
+    fn format_negative_constraints_includes_expiry() {
+        let now_ms = 1_000_000_000u64;
+        let in_10_days = now_ms + 10 * 86400 * 1000;
+        let constraints = vec![make_constraint("approach", Some(in_10_days))];
+        let result = format_negative_constraints(&constraints, now_ms);
+        assert!(result.contains("Expires: in 10 days"));
+    }
+
+    #[test]
+    fn is_constraint_active_no_valid_until_returns_true() {
+        let c = make_constraint("test", None);
+        assert!(is_constraint_active(&c, 9_999_999_999));
+    }
+
+    #[test]
+    fn is_constraint_active_future_valid_until_returns_true() {
+        let c = make_constraint("test", Some(2_000_000_000));
+        assert!(is_constraint_active(&c, 1_000_000_000));
+    }
+
+    #[test]
+    fn is_constraint_active_past_valid_until_returns_false() {
+        let c = make_constraint("test", Some(500_000_000));
+        assert!(!is_constraint_active(&c, 1_000_000_000));
+    }
+}

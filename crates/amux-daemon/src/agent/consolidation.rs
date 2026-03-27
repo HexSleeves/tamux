@@ -150,6 +150,26 @@ impl AgentEngine {
             result.skills_promoted = self.check_skill_promotions(&config, &deadline).await;
         }
 
+        // Sub-task 9: Expire stale negative knowledge constraints (Phase 1: Memory Foundation - NKNO-04)
+        if std::time::Instant::now() < deadline {
+            match self.expire_negative_constraints().await {
+                Ok(n) if n > 0 => {
+                    tracing::info!(expired = n, "Expired negative knowledge constraints during consolidation");
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!("Failed to expire negative knowledge constraints: {e}");
+                }
+            }
+        }
+
+        // Sub-task 10: Expire old episodes past TTL (Phase 1: Memory Foundation - EPIS-09)
+        if std::time::Instant::now() < deadline {
+            if let Err(e) = self.expire_old_episodes().await {
+                tracing::warn!("Failed to expire old episodes: {e}");
+            }
+        }
+
         // Persist learning stores after consolidation updates (D-10)
         if result.traces_reviewed > 0 {
             self.persist_learning_stores().await;
