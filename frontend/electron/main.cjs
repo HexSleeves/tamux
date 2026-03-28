@@ -3738,7 +3738,7 @@ function registerIpcHandlers() {
 
     async function ensureDaemonWhatsAppSubscribed() {
         if (whatsappDaemonSubscribed) return;
-        sendAgentCommand({ type: 'whatsapp-link-subscribe' });
+        sendAgentCommand({ type: 'whats-app-link-subscribe' });
         whatsappDaemonSubscribed = true;
         whatsappDaemonSubscriptionDesired = true;
     }
@@ -3753,7 +3753,7 @@ function registerIpcHandlers() {
                 return { ok: true };
             }
             await ensureDaemonWhatsAppSubscribed();
-            sendAgentCommand({ type: 'whatsapp-link-start' });
+            sendAgentCommand({ type: 'whats-app-link-start' });
             return { ok: true };
         } catch (err) {
             return { ok: false, error: err.message };
@@ -3769,9 +3769,9 @@ function registerIpcHandlers() {
                 stopWhatsAppBridge();
                 return { ok: true };
             }
-            sendAgentCommand({ type: 'whatsapp-link-stop' });
+            sendAgentCommand({ type: 'whats-app-link-stop' });
             if (whatsappDaemonSubscribed) {
-                sendAgentCommand({ type: 'whatsapp-link-unsubscribe' });
+                sendAgentCommand({ type: 'whats-app-link-unsubscribe' });
                 whatsappDaemonSubscribed = false;
             }
             whatsappDaemonSubscriptionDesired = false;
@@ -3787,7 +3787,7 @@ function registerIpcHandlers() {
                 if (!whatsappProcess) return { status: 'disconnected', phone: null };
                 return await whatsappRpc('status');
             }
-            const status = await sendAgentQuery({ type: 'whatsapp-link-status' }, 'whatsapp-link-status');
+            const status = await sendAgentQuery({ type: 'whats-app-link-status' }, 'whatsapp-link-status');
             return {
                 status: status?.status ?? 'disconnected',
                 phone: status?.phone ?? null,
@@ -3865,7 +3865,7 @@ function registerIpcHandlers() {
                     logToFile('info', 'agent bridge ready');
                     if (whatsappDaemonSubscriptionDesired && !whatsappDaemonSubscribed) {
                         try {
-                            sendAgentCommand({ type: 'whatsapp-link-subscribe' });
+                            sendAgentCommand({ type: 'whats-app-link-subscribe' });
                             whatsappDaemonSubscribed = true;
                             logToFile('info', 'restored daemon WhatsApp subscription after bridge ready');
                         } catch (error) {
@@ -4991,7 +4991,7 @@ app.on('before-quit', () => {
     stopAllTerminalBridges(true, true);
     if (whatsappDaemonSubscribed && sendAgentCommandFn) {
         try {
-            sendAgentCommandFn({ type: 'whatsapp-link-unsubscribe' });
+            sendAgentCommandFn({ type: 'whats-app-link-unsubscribe' });
         } catch {
             // Best effort during shutdown.
         }
