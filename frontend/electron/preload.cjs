@@ -276,6 +276,9 @@ const bridgeApi = {
     agentListGoalRuns: () => ipcRenderer.invoke('agent-list-goal-runs'),
     agentGetGoalRun: (goalRunId) => ipcRenderer.invoke('agent-get-goal-run', goalRunId),
     agentControlGoalRun: (goalRunId, action, stepIndex) => ipcRenderer.invoke('agent-control-goal-run', goalRunId, action, stepIndex),
+    agentExplainAction: (actionId, stepIndex) => ipcRenderer.invoke('agent-explain-action', actionId, stepIndex),
+    agentStartDivergentSession: (payload) => ipcRenderer.invoke('agent-start-divergent-session', payload),
+    agentGetDivergentSession: (sessionId) => ipcRenderer.invoke('agent-get-divergent-session', sessionId),
     agentGetConfig: () => ipcRenderer.invoke('agent-get-config'),
     agentGetStatus: () => ipcRenderer.invoke('agent-get-status'),
     agentSetConfigItem: (keyPath, value) => ipcRenderer.invoke('agent-set-config-item', keyPath, value),
@@ -300,6 +303,13 @@ const bridgeApi = {
     agentDismissConciergeWelcome: () => ipcRenderer.invoke('agent-dismiss-concierge-welcome'),
     agentRequestConciergeWelcome: () => ipcRenderer.invoke('agent-request-concierge-welcome'),
     dismissAuditEntry: (entryId) => ipcRenderer.invoke('dismiss-audit-entry', entryId),
+    agentStartOperatorProfileSession: (kind) => ipcRenderer.invoke('agent-start-operator-profile-session', kind),
+    agentNextOperatorProfileQuestion: (sessionId) => ipcRenderer.invoke('agent-next-operator-profile-question', sessionId),
+    agentSubmitOperatorProfileAnswer: (sessionId, questionId, answerJson) => ipcRenderer.invoke('agent-submit-operator-profile-answer', sessionId, questionId, answerJson),
+    agentSkipOperatorProfileQuestion: (sessionId, questionId, reason) => ipcRenderer.invoke('agent-skip-operator-profile-question', sessionId, questionId, reason),
+    agentDeferOperatorProfileQuestion: (sessionId, questionId, deferUntilUnixMs) => ipcRenderer.invoke('agent-defer-operator-profile-question', sessionId, questionId, deferUntilUnixMs),
+    agentGetOperatorProfileSummary: () => ipcRenderer.invoke('agent-get-operator-profile-summary'),
+    agentSetOperatorProfileConsent: (consentKey, granted) => ipcRenderer.invoke('agent-set-operator-profile-consent', consentKey, granted),
     onAgentEvent: (cb) => {
         const listener = (_event, data) => cb(data);
         ipcRenderer.on('agent-event', listener);

@@ -28,6 +28,12 @@ interface RecentAction {
     timestamp: number;
 }
 
+interface StatusDiagnostics {
+    operatorProfileSyncState: string;
+    operatorProfileSyncDirty: boolean;
+    operatorProfileSchedulerFallback: boolean;
+}
+
 interface StatusState {
     activity: AgentActivityState;
     activeThreadId: string | null;
@@ -36,6 +42,7 @@ interface StatusState {
     providerHealth: ProviderHealth[];
     gatewayStatuses: GatewayStatus[];
     recentActions: RecentAction[];
+    diagnostics: StatusDiagnostics;
     lastUpdated: number;
     updateStatus: (data: Partial<Omit<StatusState, "updateStatus">>) => void;
 }
@@ -48,6 +55,11 @@ export const useStatusStore = create<StatusState>((set) => ({
     providerHealth: [],
     gatewayStatuses: [],
     recentActions: [],
+    diagnostics: {
+        operatorProfileSyncState: "clean",
+        operatorProfileSyncDirty: false,
+        operatorProfileSchedulerFallback: false,
+    },
     lastUpdated: 0,
     updateStatus: (data) => set({ ...data, lastUpdated: Date.now() }),
 }));
@@ -111,6 +123,20 @@ async function pollStatus(): Promise<void> {
                 timestamp: a.timestamp,
             }))
             : [];
+        const diagnosticsRaw =
+            status.diagnostics && typeof status.diagnostics === "object"
+                ? (status.diagnostics as Record<string, unknown>)
+                : {};
+        const diagnostics: StatusDiagnostics = {
+            operatorProfileSyncState:
+                typeof diagnosticsRaw.operator_profile_sync_state === "string"
+                    ? diagnosticsRaw.operator_profile_sync_state
+                    : "clean",
+            operatorProfileSyncDirty:
+                diagnosticsRaw.operator_profile_sync_dirty === true,
+            operatorProfileSchedulerFallback:
+                diagnosticsRaw.operator_profile_scheduler_fallback === true,
+        };
 
         updateStatus({
             activity,
@@ -120,6 +146,7 @@ async function pollStatus(): Promise<void> {
             providerHealth,
             gatewayStatuses,
             recentActions,
+            diagnostics,
         });
     } catch (e) {
         console.warn("[status] poll failed:", e);

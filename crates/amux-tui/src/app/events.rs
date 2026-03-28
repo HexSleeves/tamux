@@ -51,6 +51,7 @@ impl TuiModel {
                 self.connected = true;
                 self.agent_config_loaded = false;
                 self.ignore_pending_concierge_welcome = false;
+                self.operator_profile.loading = false;
                 self.status_line = "Connected to daemon".to_string();
                 // Fetch fast data first so UI is responsive immediately.
                 // Concierge welcome triggers an LLM call on the daemon which blocks
@@ -87,6 +88,8 @@ impl TuiModel {
                 self.last_attention_surface = None;
                 self.default_session_id = None;
                 self.agent_activity = None;
+                self.operator_profile.visible = false;
+                self.operator_profile.loading = false;
                 self.concierge
                     .reduce(crate::state::ConciergeAction::WelcomeLoading(false));
                 self.chat.reduce(chat::ChatAction::ResetStreaming);
@@ -98,6 +101,8 @@ impl TuiModel {
                 self.last_attention_surface = None;
                 self.default_session_id = None;
                 self.agent_activity = None;
+                self.operator_profile.visible = false;
+                self.operator_profile.loading = false;
                 self.concierge
                     .reduce(crate::state::ConciergeAction::WelcomeLoading(false));
                 self.chat.reduce(chat::ChatAction::ResetStreaming);
@@ -707,6 +712,117 @@ impl TuiModel {
                 self.chat.reduce(chat::ChatAction::DismissConciergeWelcome);
                 self.send_daemon_command(DaemonCommand::RequestThread("concierge".to_string()));
             }
+            ClientEvent::OperatorProfileSessionStarted { session_id, kind } => {
+                self.operator_profile.visible = true;
+                self.operator_profile.loading = true;
+                self.operator_profile.session_id = Some(session_id);
+                self.operator_profile.session_kind = Some(kind);
+                self.operator_profile.question = None;
+                self.operator_profile.warning = None;
+                self.set_main_pane_conversation(FocusArea::Input);
+                self.status_line = "Operator profile onboarding started".to_string();
+                self.send_daemon_command(DaemonCommand::GetOperatorProfileSummary);
+            }
+            ClientEvent::OperatorProfileQuestion {
+                session_id,
+                question_id,
+                field_key,
+                prompt,
+                input_kind,
+                optional,
+            } => {
+                self.operator_profile.visible = true;
+                self.operator_profile.loading = false;
+                self.operator_profile.session_id = Some(session_id.clone());
+                self.operator_profile.question = Some(super::OperatorProfileQuestionVm {
+                    session_id,
+                    question_id,
+                    field_key,
+                    prompt,
+                    input_kind,
+                    optional,
+                });
+                self.operator_profile.warning = None;
+                self.set_main_pane_conversation(FocusArea::Input);
+                self.input.reduce(input::InputAction::Clear);
+                if let Some(options) = self.current_operator_profile_select_options() {
+                    if let Some(first) = options.first() {
+                        self.input.set_text(first);
+                    }
+                }
+                self.status_line = "Operator profile question ready".to_string();
+                self.show_input_notice(
+                    "Answer then Enter • Ctrl+S skip • Ctrl+D defer",
+                    InputNoticeKind::Success,
+                    120,
+                    true,
+                );
+            }
+            ClientEvent::OperatorProfileProgress {
+                session_id,
+                answered,
+                remaining,
+                completion_ratio,
+            } => {
+                self.operator_profile.visible = true;
+                self.operator_profile.loading = true;
+                self.operator_profile.session_id = Some(session_id.clone());
+                self.operator_profile.progress = Some(super::OperatorProfileProgressVm {
+                    answered,
+                    remaining,
+                    completion_ratio,
+                });
+                self.send_daemon_command(DaemonCommand::NextOperatorProfileQuestion { session_id });
+                self.status_line = format!(
+                    "Operator profile progress: {} answered, {} remaining",
+                    answered, remaining
+                );
+            }
+            ClientEvent::OperatorProfileSummary { summary_json } => {
+                self.operator_profile.summary_json = Some(summary_json.clone());
+                if self.operator_profile.progress.is_none() {
+                    if let Ok(summary) = serde_json::from_str::<serde_json::Value>(&summary_json) {
+                        let answered = summary
+                            .get("field_count")
+                            .and_then(|value| value.as_u64())
+                            .unwrap_or(0) as u32;
+                        self.operator_profile.progress = Some(super::OperatorProfileProgressVm {
+                            answered,
+                            remaining: self
+                                .operator_profile
+                                .question
+                                .as_ref()
+                                .map(|_| 1u32)
+                                .unwrap_or(0),
+                            completion_ratio: 0.0,
+                        });
+                    }
+                }
+            }
+            ClientEvent::OperatorProfileSessionCompleted {
+                session_id,
+                updated_fields,
+            } => {
+                self.operator_profile.loading = false;
+                self.operator_profile.question = None;
+                self.operator_profile.warning = None;
+                self.operator_profile.visible = false;
+                self.operator_profile.session_id = Some(session_id);
+                self.operator_profile.progress = Some(super::OperatorProfileProgressVm {
+                    answered: updated_fields.len() as u32,
+                    remaining: 0,
+                    completion_ratio: 1.0,
+                });
+                self.input.reduce(input::InputAction::Clear);
+                self.status_line = "Operator profile onboarding complete".to_string();
+                self.show_input_notice(
+                    "Operator profile updated",
+                    InputNoticeKind::Success,
+                    120,
+                    true,
+                );
+                self.send_daemon_command(DaemonCommand::RequestConciergeWelcome);
+            }
             // Plugin settings events (Plan 16-03)
             ClientEvent::PluginList(plugins) => {
                 self.plugin_settings.plugins = plugins
@@ -904,8 +1020,9 @@ impl TuiModel {
                 message,
                 details,
             } => {
+                let details_ref = details.as_deref();
                 if kind == "transport-fallback" {
-                    if let Some(details) = details.as_deref() {
+                    if let Some(details) = details_ref {
                         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(details) {
                             if let Some(to) = parsed.get("to").and_then(|value| value.as_str()) {
                                 self.config.api_transport = to.to_string();
@@ -913,11 +1030,127 @@ impl TuiModel {
                         }
                     }
                 }
-                self.status_line = if let Some(details) = details {
+                self.status_line = if let Some(details) = details_ref {
                     format!("{message} ({details})")
                 } else {
-                    message
+                    message.clone()
                 };
+                if kind == "operator-profile-warning" {
+                    let warning = if let Some(details) = details_ref {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(details) {
+                            parsed
+                                .get("error")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_string)
+                                .unwrap_or_else(|| message.clone())
+                        } else {
+                            details.to_string()
+                        }
+                    } else {
+                        message.clone()
+                    };
+                    self.operator_profile.warning = Some(warning);
+                    self.operator_profile.loading = false;
+                    self.show_input_notice(
+                        "operator profile warning (Ctrl+R to retry)",
+                        InputNoticeKind::Warning,
+                        120,
+                        false,
+                    );
+                }
+            }
+            ClientEvent::StatusDiagnostics {
+                operator_profile_sync_state,
+                operator_profile_sync_dirty,
+                operator_profile_scheduler_fallback,
+            } => {
+                if operator_profile_sync_dirty {
+                    self.status_line = format!(
+                        "Operator profile sync state: {} (retry with Ctrl+R)",
+                        operator_profile_sync_state
+                    );
+                    self.show_input_notice(
+                        format!(
+                            "operator profile sync={} (Ctrl+R to retry)",
+                            operator_profile_sync_state
+                        ),
+                        InputNoticeKind::Warning,
+                        120,
+                        false,
+                    );
+                } else if operator_profile_scheduler_fallback {
+                    self.status_line =
+                        "Operator profile scheduler fallback active (contextual-only)".to_string();
+                    self.show_input_notice(
+                        "operator profile scheduler fallback active",
+                        InputNoticeKind::Warning,
+                        120,
+                        false,
+                    );
+                }
+            }
+            ClientEvent::AgentExplanation(payload) => {
+                let thread_id = self
+                    .chat
+                    .active_thread_id()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "local-explain".to_string());
+                let content = serde_json::to_string_pretty(&payload)
+                    .unwrap_or_else(|_| payload.to_string());
+                self.chat.reduce(chat::ChatAction::AppendMessage {
+                    thread_id,
+                    message: chat::AgentMessage {
+                        role: chat::MessageRole::System,
+                        content: format!("Explainability\n\n{}", content),
+                        ..Default::default()
+                    },
+                });
+                self.status_line = "Explainability result received".to_string();
+            }
+            ClientEvent::DivergentSessionStarted(payload) => {
+                let session_id = payload
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let thread_id = self
+                    .chat
+                    .active_thread_id()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "local-divergent".to_string());
+                self.chat.reduce(chat::ChatAction::AppendMessage {
+                    thread_id,
+                    message: chat::AgentMessage {
+                        role: chat::MessageRole::System,
+                        content: if session_id.is_empty() {
+                            "Divergent session started".to_string()
+                        } else {
+                            format!(
+                                "Divergent session started: `{}`\nUse `/diverge-get {}` to fetch results.",
+                                session_id, session_id
+                            )
+                        },
+                        ..Default::default()
+                    },
+                });
+                self.status_line = "Divergent session started".to_string();
+            }
+            ClientEvent::DivergentSession(payload) => {
+                let thread_id = self
+                    .chat
+                    .active_thread_id()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "local-divergent".to_string());
+                let content = serde_json::to_string_pretty(&payload)
+                    .unwrap_or_else(|_| payload.to_string());
+                self.chat.reduce(chat::ChatAction::AppendMessage {
+                    thread_id,
+                    message: chat::AgentMessage {
+                        role: chat::MessageRole::System,
+                        content: format!("Divergent session payload\n\n{}", content),
+                        ..Default::default()
+                    },
+                });
+                self.status_line = "Divergent session payload received".to_string();
             }
         }
     }
@@ -991,5 +1224,93 @@ mod tests {
             .whatsapp_link()
             .status_text()
             .contains("socket closed"));
+    }
+
+    #[test]
+    fn operator_profile_workflow_warning_surfaces_retry_notice() {
+        let mut model = make_model();
+        model.handle_client_event(ClientEvent::WorkflowNotice {
+            kind: "operator-profile-warning".to_string(),
+            message: "Operator profile operation failed".to_string(),
+            details: Some("{\"retry_action\":\"request_concierge_welcome\"}".to_string()),
+        });
+        let rendered = model
+            .input_notice_style()
+            .expect("warning should be visible");
+        assert!(
+            rendered.0.contains("Ctrl+R"),
+            "warning notice should include retry hint"
+        );
+    }
+
+    #[test]
+    fn status_diagnostics_warning_mentions_sync_state() {
+        let mut model = make_model();
+        model.handle_client_event(ClientEvent::StatusDiagnostics {
+            operator_profile_sync_state: "dirty".to_string(),
+            operator_profile_sync_dirty: true,
+            operator_profile_scheduler_fallback: false,
+        });
+        assert!(
+            model.status_line.contains("sync state: dirty"),
+            "status line should expose dirty sync diagnostics"
+        );
+    }
+
+    #[test]
+    fn operator_profile_question_event_shows_onboarding_notice() {
+        let mut model = make_model();
+        model.handle_client_event(ClientEvent::OperatorProfileSessionStarted {
+            session_id: "sess-1".to_string(),
+            kind: "first_run_onboarding".to_string(),
+        });
+        model.handle_client_event(ClientEvent::OperatorProfileQuestion {
+            session_id: "sess-1".to_string(),
+            question_id: "name".to_string(),
+            field_key: "name".to_string(),
+            prompt: "What should I call you?".to_string(),
+            input_kind: "text".to_string(),
+            optional: false,
+        });
+
+        assert!(model.should_show_operator_profile_onboarding());
+        assert_eq!(
+            model
+                .operator_profile
+                .question
+                .as_ref()
+                .map(|q| q.field_key.as_str()),
+            Some("name")
+        );
+    }
+
+    #[test]
+    fn operator_profile_progress_requests_next_question() {
+        let (_event_tx, event_rx) = std::sync::mpsc::channel();
+        let (daemon_tx, mut daemon_rx) = unbounded_channel();
+        let mut model = TuiModel::new(event_rx, daemon_tx);
+        model.handle_client_event(ClientEvent::OperatorProfileSessionStarted {
+            session_id: "sess-1".to_string(),
+            kind: "first_run_onboarding".to_string(),
+        });
+
+        model.handle_client_event(ClientEvent::OperatorProfileProgress {
+            session_id: "sess-1".to_string(),
+            answered: 1,
+            remaining: 2,
+            completion_ratio: 0.33,
+        });
+
+        let mut found_next = false;
+        while let Ok(command) = daemon_rx.try_recv() {
+            if matches!(
+                command,
+                crate::state::DaemonCommand::NextOperatorProfileQuestion { .. }
+            ) {
+                found_next = true;
+                break;
+            }
+        }
+        assert!(found_next, "progress should trigger next-question command");
     }
 }

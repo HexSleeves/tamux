@@ -127,6 +127,8 @@ Expected flow:
 - **agent_query_memory tool** for targeted long-term memory lookups during legacy frontend agent runs.
 - **Procedural skills ecosystem** -- the daemon can generate reusable SKILL.md documents from successful execution trajectories, including completed goal runs.
 - **Semantic symbol search** powered by tree-sitter AST indexing.
+- **Daemon-first operator profile onboarding/check-ins** -- concierge onboarding interview sessions and follow-up check-ins are orchestrated in the daemon, then surfaced to clients.
+- **Consent-gated profile automation** -- passive learning, weekly check-ins, and proactive profile suggestions are controlled by operator-profile consent flags.
 
 ### Self-Orchestrating Agent
 
@@ -177,7 +179,7 @@ The daemon agent is a **self-orchestrating system** that goes beyond simple prom
 - **SQLite-backed operational state** for command logs, agent threads/messages, agent task queue state/dependencies/logs, goal-run state/steps/events, transcript metadata, mission events, WORM tips, and snapshot indexes.
 - **Single daemon-owned source of truth** shared by the Rust daemon, CLI bridge, Electron shell, and frontend stores.
 - **Transcript log files preserved on disk** while their searchable index lives in SQLite.
-- **Agent mission MEMORY.md and USER.md preserved as editable markdown files** alongside SQLite-backed structured events, reflections, and generated skills.
+- **Agent mission MEMORY.md preserved as editable markdown; USER.md synchronized from SQLite-backed operator profile** so profile answers/check-ins have a single daemon-owned source of truth.
 
 ### MCP Server
 
@@ -320,7 +322,7 @@ Switch providers at any time from the Settings panel. Each provider's base URL, 
 
 tamux now stores high-churn UI and agent state in the daemon's SQLite database instead of scattered JSON indexes. That includes command logs, agent threads and messages, AJQ task records with dependency edges and task logs, goal-run records with steps and lifecycle events, transcript indexes, mission-control event streams, WORM cache tips, and snapshot indexes. The goal is one durable store that survives UI restarts and can be shared consistently across Electron, the CLI bridge, and daemon-side agents.
 
-Transcript bodies still live as plain `.log` files under the data directory, and agent mission notes still keep `MEMORY.md` and `USER.md` as editable text. Goal runs can append durable learnings to memory and generate reusable skills, while their structured history stays searchable in SQLite.
+Transcript bodies still live as plain `.log` files under the data directory, and mission notes still keep editable markdown. `MEMORY.md` remains directly editable, while `USER.md` is synchronized from the daemon's SQLite-backed operator profile (instead of freeform-only file writes) so onboarding and check-in data stays consistent across clients. Goal runs can append durable learnings to memory and generate reusable skills, while their structured history stays searchable in SQLite.
 
 The AJQ scheduler runs inside the daemon and dispatches work across execution lanes. Session-bound tasks use dedicated `session:<id>` lanes, generic daemon work stays on `daemon-main`, and tasks that are waiting on dependencies, lane availability, or a workspace lock surface that state in the UI instead of silently stalling. Goal runners sit above that queue: they plan work, spawn child tasks, watch approvals and failures, and replan when needed.
 

@@ -2,6 +2,35 @@ use super::*;
 
 impl TuiModel {
     fn render_conversation_panel(&self, frame: &mut Frame, area: Rect) {
+        if self.should_show_operator_profile_onboarding() {
+            let question = self.operator_profile.question.as_ref().map(|question| {
+                widgets::operator_profile_onboarding::OperatorProfileQuestionView {
+                    field_key: question.field_key.as_str(),
+                    prompt: question.prompt.as_str(),
+                    input_kind: question.input_kind.as_str(),
+                    optional: question.optional,
+                }
+            });
+            let progress = self.operator_profile.progress.as_ref().map(|progress| {
+                widgets::operator_profile_onboarding::OperatorProfileProgressView {
+                    answered: progress.answered,
+                    remaining: progress.remaining,
+                    completion_ratio: progress.completion_ratio,
+                }
+            });
+            let view = widgets::operator_profile_onboarding::OperatorProfileOnboardingView {
+                session_kind: self.operator_profile.session_kind.as_deref(),
+                question,
+                progress,
+                loading: self.operator_profile.loading,
+                warning: self.operator_profile.warning.as_deref(),
+                input_value: self.input.buffer(),
+                select_options: self.current_operator_profile_select_options(),
+            };
+            widgets::operator_profile_onboarding::render(frame, area, &view, &self.theme);
+            return;
+        }
+
         if self.should_show_provider_onboarding() {
             widgets::onboarding::render(frame, area, &self.config, &self.theme);
             return;

@@ -214,6 +214,26 @@ fn start_daemon_bridge(
                             } => {
                                 let _ = client.start_goal_run(goal, thread_id, session_id);
                             }
+                            DaemonCommand::ExplainAction {
+                                action_id,
+                                step_index,
+                            } => {
+                                let _ = client.explain_action(action_id, step_index);
+                            }
+                            DaemonCommand::StartDivergentSession {
+                                problem_statement,
+                                thread_id,
+                                goal_run_id,
+                            } => {
+                                let _ = client.start_divergent_session(
+                                    problem_statement,
+                                    thread_id,
+                                    goal_run_id,
+                                );
+                            }
+                            DaemonCommand::GetDivergentSession { session_id } => {
+                                let _ = client.get_divergent_session(session_id);
+                            }
                             DaemonCommand::RequestGitDiff { repo_path, file_path } => {
                                 let _ = client.request_git_diff(repo_path, file_path);
                             }
@@ -279,6 +299,57 @@ fn start_daemon_bridge(
                             }
                             DaemonCommand::RequestConciergeWelcome => {
                                 let _ = client.request_concierge_welcome();
+                            }
+                            DaemonCommand::RetryOperatorProfile => {
+                                let _ = client.request_concierge_welcome();
+                            }
+                            DaemonCommand::StartOperatorProfileSession { kind } => {
+                                let _ = client.start_operator_profile_session(kind);
+                            }
+                            DaemonCommand::NextOperatorProfileQuestion { session_id } => {
+                                let _ = client.next_operator_profile_question(session_id);
+                            }
+                            DaemonCommand::SubmitOperatorProfileAnswer {
+                                session_id,
+                                question_id,
+                                answer_json,
+                            } => {
+                                let _ = client.submit_operator_profile_answer(
+                                    session_id,
+                                    question_id,
+                                    answer_json,
+                                );
+                            }
+                            DaemonCommand::SkipOperatorProfileQuestion {
+                                session_id,
+                                question_id,
+                                reason,
+                            } => {
+                                let _ = client.skip_operator_profile_question(
+                                    session_id,
+                                    question_id,
+                                    reason,
+                                );
+                            }
+                            DaemonCommand::DeferOperatorProfileQuestion {
+                                session_id,
+                                question_id,
+                                defer_until_unix_ms,
+                            } => {
+                                let _ = client.defer_operator_profile_question(
+                                    session_id,
+                                    question_id,
+                                    defer_until_unix_ms,
+                                );
+                            }
+                            DaemonCommand::GetOperatorProfileSummary => {
+                                let _ = client.get_operator_profile_summary();
+                            }
+                            DaemonCommand::SetOperatorProfileConsent {
+                                consent_key,
+                                granted,
+                            } => {
+                                let _ = client.set_operator_profile_consent(consent_key, granted);
                             }
                             DaemonCommand::DismissConciergeWelcome => {
                                 let _ = client.dismiss_concierge_welcome();

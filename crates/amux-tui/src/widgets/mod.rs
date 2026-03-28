@@ -13,6 +13,7 @@ pub mod landing;
 pub mod message;
 pub mod model_picker;
 pub mod onboarding;
+pub mod operator_profile_onboarding;
 pub mod provider_picker;
 pub mod reasoning;
 pub mod settings;

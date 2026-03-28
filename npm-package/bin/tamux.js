@@ -7,6 +7,10 @@ var fs = require("fs");
 var path = require("path");
 var child_process = require("child_process");
 
+var installMeta = require("../install");
+var GITHUB_OWNER = installMeta.GITHUB_OWNER;
+var GITHUB_REPO = installMeta.GITHUB_REPO;
+
 var binaryName = process.platform === "win32" ? "tamux.exe" : "tamux";
 var binaryPath = path.join(__dirname, binaryName);
 
@@ -17,11 +21,10 @@ var binaryPath = path.join(__dirname, binaryName);
 function tryFallbackDownload() {
   console.log("tamux: binary not found, attempting download...");
   try {
-    require("../install"); // side-effect: triggers async download
-    // install() returns a promise -- we need to wait synchronously here
-    // since the module's top-level main().catch() already runs on require.
-    // After require completes, the download has been initiated.
-    // Give the async download a moment by checking existence in a callback.
+    var install = require("../install");
+    install().catch(function (err) {
+      console.error("tamux: fallback download failed: " + err.message);
+    });
   } catch (err) {
     console.error(
       "tamux: fallback download failed: " + err.message
@@ -79,7 +82,7 @@ if (fs.existsSync(binaryPath)) {
       clearInterval(timer);
       console.error(
         "tamux: could not download binary for your platform. " +
-          "Visit https://gitlab.com/anthropic/tamux/-/releases for manual download."
+          "Visit https://github.com/" + GITHUB_OWNER + "/" + GITHUB_REPO + "/releases for manual download."
       );
       process.exit(1);
     }

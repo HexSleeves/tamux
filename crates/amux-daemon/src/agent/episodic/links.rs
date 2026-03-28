@@ -65,10 +65,7 @@ impl AgentEngine {
     }
 
     /// Get all links involving a specific episode (as source or target).
-    pub(crate) async fn get_episode_links(
-        &self,
-        episode_id: &str,
-    ) -> Result<Vec<EpisodeLink>> {
+    pub(crate) async fn get_episode_links(&self, episode_id: &str) -> Result<Vec<EpisodeLink>> {
         let episode_id = episode_id.to_string();
         self.history
             .conn

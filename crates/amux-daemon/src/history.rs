@@ -81,6 +81,57 @@ pub struct CollaborationSessionRow {
     pub updated_at: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct OperatorProfileSessionRow {
+    pub session_id: String,
+    pub kind: String,
+    pub session_json: String,
+    pub updated_at: u64,
+}
+
+/// A single learned or answered profile field for the operator.
+#[derive(Debug, Clone)]
+pub struct OperatorProfileFieldRow {
+    pub field_key: String,
+    pub field_value_json: String,
+    pub confidence: f64,
+    pub source: String,
+    pub updated_at: i64,
+}
+
+/// Consent record for a specific data-collection or behaviour consent key.
+#[derive(Debug, Clone)]
+pub struct OperatorProfileConsentRow {
+    pub consent_key: String,
+    pub granted: bool,
+    pub updated_at: i64,
+}
+
+/// An event in the operator-profile event log (answer, inference, prompt, skip, deferral).
+#[derive(Debug, Clone)]
+pub struct OperatorProfileEventRow {
+    pub id: String,
+    pub event_type: String,
+    pub field_key: Option<String>,
+    pub value_json: Option<String>,
+    pub source: String,
+    pub metadata_json: Option<String>,
+    pub created_at: i64,
+}
+
+/// A scheduled check-in for the operator profile questionnaire flow.
+#[derive(Debug, Clone)]
+pub struct OperatorProfileCheckinRow {
+    pub id: String,
+    pub kind: String,
+    pub scheduled_at: i64,
+    pub shown_at: Option<i64>,
+    pub status: String,
+    pub response_json: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 /// Row type for heartbeat_history table. Per D-12.
 #[derive(Debug, Clone)]
 pub struct HeartbeatHistoryRow {
@@ -1692,6 +1743,28 @@ impl HistoryStore {
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
 
+    pub async fn list_recent_messages(
+        &self,
+        thread_id: &str,
+        limit: usize,
+    ) -> Result<Vec<AgentDbMessage>> {
+        let thread_id = thread_id.to_string();
+        self.conn
+            .call(move |conn| {
+                let limit = limit.clamp(1, 1000) as i64;
+                let mut stmt = conn.prepare(
+                    "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, reasoning, tool_calls_json, metadata_json \
+                     FROM agent_messages WHERE thread_id = ?1 ORDER BY created_at DESC LIMIT ?2",
+                )?;
+                let rows = stmt.query_map(params![thread_id, limit], map_agent_message)?;
+                let mut messages: Vec<AgentDbMessage> = rows.filter_map(|row| row.ok()).collect();
+                messages.reverse();
+                Ok(messages)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     pub async fn get_worm_chain_tip(&self, kind: &str) -> Result<Option<WormChainTip>> {
         let kind = kind.to_string();
         let kind = kind.to_string();
@@ -2193,7 +2266,7 @@ impl HistoryStore {
                     step.position as i64,
                     &step.title,
                     &step.instructions,
-                    goal_run_step_kind_to_str(step.kind),
+                    goal_run_step_kind_to_str(&step.kind),
                     &step.success_criteria,
                     &step.session_id,
                     goal_run_step_status_to_str(step.status),
@@ -2331,6 +2404,11 @@ impl HistoryStore {
                 approval_count: 0,
                 steps: Vec::new(),
                 events: Vec::new(),
+                total_prompt_tokens: 0,
+                total_completion_tokens: 0,
+                estimated_cost_usd: None,
+                autonomy_level: Default::default(),
+                authorship_tag: None,
             })
         })?;
 
@@ -2385,6 +2463,406 @@ impl HistoryStore {
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    // ── Operator Profile: fields ────────────────────────────────────────
+
+    pub async fn upsert_profile_field(
+        &self,
+        field_key: &str,
+        field_value_json: &str,
+        confidence: f64,
+        source: &str,
+    ) -> Result<()> {
+        let field_key = field_key.to_string();
+        let field_value_json = field_value_json.to_string();
+        let source = source.to_string();
+        let now = now_ts() as i64;
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO operator_profile_fields \
+                     (field_key, field_value_json, confidence, source, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![field_key, field_value_json, confidence, source, now],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn get_profile_field(
+        &self,
+        field_key: &str,
+    ) -> Result<Option<OperatorProfileFieldRow>> {
+        let field_key = field_key.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.query_row(
+                    "SELECT field_key, field_value_json, confidence, source, updated_at \
+                     FROM operator_profile_fields WHERE field_key = ?1",
+                    params![field_key],
+                    |row| {
+                        Ok(OperatorProfileFieldRow {
+                            field_key: row.get(0)?,
+                            field_value_json: row.get(1)?,
+                            confidence: row.get(2)?,
+                            source: row.get(3)?,
+                            updated_at: row.get(4)?,
+                        })
+                    },
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn list_profile_fields(&self) -> Result<Vec<OperatorProfileFieldRow>> {
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT field_key, field_value_json, confidence, source, updated_at \
+                     FROM operator_profile_fields ORDER BY updated_at DESC",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(OperatorProfileFieldRow {
+                        field_key: row.get(0)?,
+                        field_value_json: row.get(1)?,
+                        confidence: row.get(2)?,
+                        source: row.get(3)?,
+                        updated_at: row.get(4)?,
+                    })
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    // ── Operator Profile: consents ──────────────────────────────────────
+
+    pub async fn upsert_profile_consent(&self, consent_key: &str, granted: bool) -> Result<()> {
+        let consent_key = consent_key.to_string();
+        let now = now_ts() as i64;
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO operator_profile_consents \
+                     (consent_key, granted, updated_at) VALUES (?1, ?2, ?3)",
+                    params![consent_key, granted as i64, now],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn get_profile_consent(
+        &self,
+        consent_key: &str,
+    ) -> Result<Option<OperatorProfileConsentRow>> {
+        let consent_key = consent_key.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.query_row(
+                    "SELECT consent_key, granted, updated_at \
+                     FROM operator_profile_consents WHERE consent_key = ?1",
+                    params![consent_key],
+                    |row| {
+                        Ok(OperatorProfileConsentRow {
+                            consent_key: row.get(0)?,
+                            granted: row.get::<_, i64>(1)? != 0,
+                            updated_at: row.get(2)?,
+                        })
+                    },
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn list_profile_consents(&self) -> Result<Vec<OperatorProfileConsentRow>> {
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT consent_key, granted, updated_at \
+                     FROM operator_profile_consents ORDER BY consent_key ASC",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(OperatorProfileConsentRow {
+                        consent_key: row.get(0)?,
+                        granted: row.get::<_, i64>(1)? != 0,
+                        updated_at: row.get(2)?,
+                    })
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    // ── Operator Profile: events ────────────────────────────────────────
+
+    pub async fn append_profile_event(
+        &self,
+        id: &str,
+        event_type: &str,
+        field_key: Option<&str>,
+        value_json: Option<&str>,
+        source: &str,
+        metadata_json: Option<&str>,
+    ) -> Result<()> {
+        let id = id.to_string();
+        let event_type = event_type.to_string();
+        let field_key = field_key.map(str::to_string);
+        let value_json = value_json.map(str::to_string);
+        let source = source.to_string();
+        let metadata_json = metadata_json.map(str::to_string);
+        let now = now_ts() as i64;
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT INTO operator_profile_events \
+                     (id, event_type, field_key, value_json, source, metadata_json, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![id, event_type, field_key, value_json, source, metadata_json, now],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn list_profile_events(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<OperatorProfileEventRow>> {
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, event_type, field_key, value_json, source, metadata_json, created_at \
+                     FROM operator_profile_events ORDER BY created_at DESC LIMIT ?1",
+                )?;
+                let rows = stmt.query_map(params![limit as i64], |row| {
+                    Ok(OperatorProfileEventRow {
+                        id: row.get(0)?,
+                        event_type: row.get(1)?,
+                        field_key: row.get(2)?,
+                        value_json: row.get(3)?,
+                        source: row.get(4)?,
+                        metadata_json: row.get(5)?,
+                        created_at: row.get(6)?,
+                    })
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    // ── Operator Profile: checkins ──────────────────────────────────────
+
+    pub async fn upsert_profile_checkin(&self, row: OperatorProfileCheckinRow) -> Result<()> {
+        let now = now_ts() as i64;
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT INTO operator_profile_checkins \
+                     (id, kind, scheduled_at, shown_at, status, response_json, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+                     ON CONFLICT(id) DO UPDATE SET \
+                       kind         = excluded.kind, \
+                       scheduled_at = excluded.scheduled_at, \
+                       shown_at     = excluded.shown_at, \
+                       status       = excluded.status, \
+                       response_json = excluded.response_json, \
+                       updated_at   = excluded.updated_at",
+                    params![
+                        row.id,
+                        row.kind,
+                        row.scheduled_at,
+                        row.shown_at,
+                        row.status,
+                        row.response_json,
+                        row.created_at,
+                        now,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn get_profile_checkin(
+        &self,
+        id: &str,
+    ) -> Result<Option<OperatorProfileCheckinRow>> {
+        let id = id.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.query_row(
+                    "SELECT id, kind, scheduled_at, shown_at, status, response_json, created_at, updated_at \
+                     FROM operator_profile_checkins WHERE id = ?1",
+                    params![id],
+                    |row| {
+                        Ok(OperatorProfileCheckinRow {
+                            id: row.get(0)?,
+                            kind: row.get(1)?,
+                            scheduled_at: row.get(2)?,
+                            shown_at: row.get(3)?,
+                            status: row.get(4)?,
+                            response_json: row.get(5)?,
+                            created_at: row.get(6)?,
+                            updated_at: row.get(7)?,
+                        })
+                    },
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn list_profile_checkins(&self) -> Result<Vec<OperatorProfileCheckinRow>> {
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, kind, scheduled_at, shown_at, status, response_json, created_at, updated_at \
+                     FROM operator_profile_checkins ORDER BY scheduled_at ASC",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(OperatorProfileCheckinRow {
+                        id: row.get(0)?,
+                        kind: row.get(1)?,
+                        scheduled_at: row.get(2)?,
+                        shown_at: row.get(3)?,
+                        status: row.get(4)?,
+                        response_json: row.get(5)?,
+                        created_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                    })
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn upsert_gateway_thread_binding(
+        &self,
+        channel_key: &str,
+        thread_id: &str,
+        updated_at: u64,
+    ) -> Result<()> {
+        let channel_key = channel_key.to_string();
+        let thread_id = thread_id.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO gateway_threads (channel_key, thread_id, updated_at) VALUES (?1, ?2, ?3)",
+                    params![channel_key, thread_id, updated_at as i64],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn delete_gateway_thread_binding(&self, channel_key: &str) -> Result<()> {
+        let channel_key = channel_key.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "DELETE FROM gateway_threads WHERE channel_key = ?1",
+                    params![channel_key],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn list_gateway_thread_bindings(&self) -> Result<Vec<(String, String)>> {
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT channel_key, thread_id FROM gateway_threads ORDER BY updated_at DESC",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                Ok(rows.filter_map(|r| r.ok()).collect())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn upsert_operator_profile_session(
+        &self,
+        session_id: &str,
+        kind: &str,
+        session_json: &str,
+        updated_at: u64,
+    ) -> Result<()> {
+        let session_id = session_id.to_string();
+        let kind = kind.to_string();
+        let session_json = session_json.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO operator_profile_sessions (session_id, kind, session_json, updated_at) VALUES (?1, ?2, ?3, ?4)",
+                    params![session_id, kind, session_json, updated_at as i64],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn delete_operator_profile_session(&self, session_id: &str) -> Result<()> {
+        let session_id = session_id.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "DELETE FROM operator_profile_sessions WHERE session_id = ?1",
+                    params![session_id],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn list_operator_profile_sessions(&self) -> Result<Vec<OperatorProfileSessionRow>> {
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT session_id, kind, session_json, updated_at FROM operator_profile_sessions ORDER BY updated_at DESC",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(OperatorProfileSessionRow {
+                        session_id: row.get(0)?,
+                        kind: row.get(1)?,
+                        session_json: row.get(2)?,
+                        updated_at: row.get::<_, i64>(3)? as u64,
+                    })
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     async fn init_schema(&self) -> Result<()> {
@@ -2739,6 +3217,21 @@ impl HistoryStore {
             );
             CREATE INDEX IF NOT EXISTS idx_collaboration_sessions_updated ON collaboration_sessions(updated_at DESC);
 
+            CREATE TABLE IF NOT EXISTS gateway_threads (
+                channel_key TEXT PRIMARY KEY,
+                thread_id   TEXT NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_gateway_threads_updated ON gateway_threads(updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS operator_profile_sessions (
+                session_id   TEXT PRIMARY KEY,
+                kind         TEXT NOT NULL,
+                session_json TEXT NOT NULL,
+                updated_at   INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_operator_profile_sessions_updated ON operator_profile_sessions(updated_at DESC);
+
             CREATE TABLE IF NOT EXISTS agent_config_items (
                 key_path   TEXT PRIMARY KEY,
                 value_json TEXT NOT NULL,
@@ -2837,6 +3330,46 @@ impl HistoryStore {
                 PRIMARY KEY (plugin_name, credential_type),
                 FOREIGN KEY (plugin_name) REFERENCES plugins(name) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS operator_profile_fields (
+                field_key        TEXT PRIMARY KEY,
+                field_value_json TEXT NOT NULL,
+                confidence       REAL NOT NULL DEFAULT 0.0,
+                source           TEXT NOT NULL DEFAULT 'unknown',
+                updated_at       INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_op_profile_fields_updated ON operator_profile_fields(updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS operator_profile_consents (
+                consent_key TEXT PRIMARY KEY,
+                granted     INTEGER NOT NULL DEFAULT 0,
+                updated_at  INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS operator_profile_events (
+                id            TEXT PRIMARY KEY,
+                event_type    TEXT NOT NULL,
+                field_key     TEXT,
+                value_json    TEXT,
+                source        TEXT NOT NULL DEFAULT 'unknown',
+                metadata_json TEXT,
+                created_at    INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_op_profile_events_created ON operator_profile_events(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_op_profile_events_field ON operator_profile_events(field_key, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS operator_profile_checkins (
+                id            TEXT PRIMARY KEY,
+                kind          TEXT NOT NULL,
+                scheduled_at  INTEGER NOT NULL,
+                shown_at      INTEGER,
+                status        TEXT NOT NULL DEFAULT 'pending',
+                response_json TEXT,
+                created_at    INTEGER NOT NULL,
+                updated_at    INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_op_profile_checkins_scheduled ON operator_profile_checkins(scheduled_at ASC);
+            CREATE INDEX IF NOT EXISTS idx_op_profile_checkins_status ON operator_profile_checkins(status, scheduled_at ASC);
             ",
         )?;
         // FTS5 virtual table for context archive full-text search.
@@ -2871,6 +3404,9 @@ impl HistoryStore {
         )?;
         // Episodic memory schema (Phase v3.0).
         crate::agent::episodic::schema::init_episodic_schema(connection)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+        // Handoff broker schema (Phase v3.0: HAND-09).
+        crate::agent::handoff::schema::init_handoff_schema(connection)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
         Ok(())
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
@@ -3098,7 +3634,11 @@ impl HistoryStore {
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    async fn append_telemetry(&self, kind: &str, payload: serde_json::Value) -> Result<()> {
+    pub(crate) async fn append_telemetry(
+        &self,
+        kind: &str,
+        payload: serde_json::Value,
+    ) -> Result<()> {
         let line = serde_json::to_string(&payload)?;
         let telemetry_dir = self.telemetry_dir.clone();
         let worm_dir = self.worm_dir.clone();
@@ -3190,7 +3730,13 @@ impl HistoryStore {
 
     /// Verify the hash-chain integrity of all WORM telemetry ledger files.
     pub fn verify_worm_integrity(&self) -> Result<Vec<WormIntegrityResult>> {
-        let ledger_kinds = ["operational", "cognitive", "contextual", "provenance", "episodic"];
+        let ledger_kinds = [
+            "operational",
+            "cognitive",
+            "contextual",
+            "provenance",
+            "episodic",
+        ];
         let mut results = Vec::with_capacity(ledger_kinds.len());
 
         for kind in &ledger_kinds {
@@ -4036,6 +4582,48 @@ impl HistoryStore {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
+    /// Query causal traces for a given goal_run_id, ordered by creation time descending.
+    /// Used by the explainability handler (EXPL-01, EXPL-02).
+    pub async fn list_causal_traces_for_goal_run(
+        &self,
+        goal_run_id: &str,
+        limit: u32,
+    ) -> Result<Vec<CausalTraceFullRecord>> {
+        let goal_run_id = goal_run_id.to_string();
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, thread_id, goal_run_id, task_id, decision_type,
+                            selected_json, rejected_options_json, context_hash,
+                            causal_factors_json, outcome_json, model_used, created_at
+                     FROM causal_traces
+                     WHERE goal_run_id = ?1
+                     ORDER BY created_at DESC
+                     LIMIT ?2",
+                )?;
+                let rows = stmt.query_map(params![goal_run_id, limit], |row| {
+                    Ok(CausalTraceFullRecord {
+                        id: row.get(0)?,
+                        thread_id: row.get(1)?,
+                        goal_run_id: row.get(2)?,
+                        task_id: row.get(3)?,
+                        decision_type: row.get(4)?,
+                        selected_json: row.get(5)?,
+                        rejected_options_json: row.get(6)?,
+                        context_hash: row.get(7)?,
+                        causal_factors_json: row.get(8)?,
+                        outcome_json: row.get(9)?,
+                        model_used: row.get(10)?,
+                        created_at: row.get::<_, i64>(11)? as u64,
+                    })
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     pub async fn settle_skill_selection_causal_traces(
         &self,
         thread_id: Option<&str>,
@@ -4419,6 +5007,23 @@ pub struct CausalTraceRecord {
     pub created_at: u64,
 }
 
+/// Full causal trace record for explainability queries (EXPL-01, EXPL-02).
+#[derive(Debug, Clone)]
+pub struct CausalTraceFullRecord {
+    pub id: String,
+    pub thread_id: Option<String>,
+    pub goal_run_id: Option<String>,
+    pub task_id: Option<String>,
+    pub decision_type: String,
+    pub selected_json: String,
+    pub rejected_options_json: String,
+    pub context_hash: String,
+    pub causal_factors_json: String,
+    pub outcome_json: String,
+    pub model_used: Option<String>,
+    pub created_at: u64,
+}
+
 fn map_command_log_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommandLogEntry> {
     Ok(CommandLogEntry {
         id: row.get(0)?,
@@ -4604,23 +5209,29 @@ fn parse_goal_run_status(value: &str) -> GoalRunStatus {
     }
 }
 
-fn goal_run_step_kind_to_str(value: GoalRunStepKind) -> &'static str {
+fn goal_run_step_kind_to_str(value: &GoalRunStepKind) -> String {
     match value {
-        GoalRunStepKind::Reason => "reason",
-        GoalRunStepKind::Command => "command",
-        GoalRunStepKind::Research => "research",
-        GoalRunStepKind::Memory => "memory",
-        GoalRunStepKind::Skill => "skill",
-        GoalRunStepKind::Unknown => "reason",
+        GoalRunStepKind::Reason => "reason".to_string(),
+        GoalRunStepKind::Command => "command".to_string(),
+        GoalRunStepKind::Research => "research".to_string(),
+        GoalRunStepKind::Memory => "memory".to_string(),
+        GoalRunStepKind::Skill => "skill".to_string(),
+        GoalRunStepKind::Specialist(role) => format!("specialist:{role}"),
+        GoalRunStepKind::Divergent => "divergent".to_string(),
+        GoalRunStepKind::Unknown => "reason".to_string(),
     }
 }
 
 fn parse_goal_run_step_kind(value: &str) -> GoalRunStepKind {
+    if let Some(role) = value.strip_prefix("specialist:") {
+        return GoalRunStepKind::Specialist(role.to_string());
+    }
     match value {
         "reason" => GoalRunStepKind::Reason,
         "command" => GoalRunStepKind::Command,
         "memory" => GoalRunStepKind::Memory,
         "skill" => GoalRunStepKind::Skill,
+        "divergent" => GoalRunStepKind::Divergent,
         _ => GoalRunStepKind::Research,
     }
 }
@@ -5558,6 +6169,11 @@ mod tests {
                     updated_at: 3,
                 }],
             }],
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            estimated_cost_usd: None,
+            autonomy_level: Default::default(),
+            authorship_tag: None,
         };
 
         store.upsert_goal_run(&goal_run).await?;
@@ -6380,6 +6996,92 @@ mod tests {
         // Restoring non-existent returns None
         let none = store.restore_tombstone("t-restore").await?;
         assert!(none.is_none());
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn gateway_thread_bindings_round_trip() -> Result<()> {
+        let (store, root) = make_test_store().await?;
+
+        store
+            .upsert_gateway_thread_binding("Slack:C123", "thread_a", 1000)
+            .await?;
+        store
+            .upsert_gateway_thread_binding("Discord:999", "thread_b", 1100)
+            .await?;
+        // overwrite existing binding
+        store
+            .upsert_gateway_thread_binding("Slack:C123", "thread_c", 1200)
+            .await?;
+
+        let bindings = store.list_gateway_thread_bindings().await?;
+        let map: std::collections::HashMap<String, String> = bindings.into_iter().collect();
+        assert_eq!(map.get("Slack:C123").map(String::as_str), Some("thread_c"));
+        assert_eq!(map.get("Discord:999").map(String::as_str), Some("thread_b"));
+
+        store.delete_gateway_thread_binding("Discord:999").await?;
+        let bindings = store.list_gateway_thread_bindings().await?;
+        let map: std::collections::HashMap<String, String> = bindings.into_iter().collect();
+        assert_eq!(map.get("Slack:C123").map(String::as_str), Some("thread_c"));
+        assert!(!map.contains_key("Discord:999"));
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn operator_profile_sessions_round_trip() -> Result<()> {
+        let (store, root) = make_test_store().await?;
+
+        store
+            .upsert_operator_profile_session(
+                "sess-a",
+                "onboarding",
+                r#"{"session_id":"sess-a","kind":"onboarding"}"#,
+                1000,
+            )
+            .await?;
+        store
+            .upsert_operator_profile_session(
+                "sess-b",
+                "retrospective",
+                r#"{"session_id":"sess-b","kind":"retrospective"}"#,
+                1100,
+            )
+            .await?;
+        store
+            .upsert_operator_profile_session(
+                "sess-a",
+                "onboarding",
+                r#"{"session_id":"sess-a","kind":"onboarding","state":"updated"}"#,
+                1200,
+            )
+            .await?;
+
+        let rows = store.list_operator_profile_sessions().await?;
+        let mut by_id = std::collections::HashMap::new();
+        for row in rows {
+            by_id.insert(row.session_id.clone(), row);
+        }
+        assert_eq!(
+            by_id.get("sess-a").map(|row| row.kind.as_str()),
+            Some("onboarding")
+        );
+        assert_eq!(
+            by_id.get("sess-a").map(|row| row.updated_at),
+            Some(1200)
+        );
+        assert_eq!(
+            by_id.get("sess-b").map(|row| row.kind.as_str()),
+            Some("retrospective")
+        );
+
+        store.delete_operator_profile_session("sess-b").await?;
+        let rows = store.list_operator_profile_sessions().await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].session_id, "sess-a");
 
         fs::remove_dir_all(root)?;
         Ok(())

@@ -67,7 +67,7 @@ impl AgentEngine {
                 .collect();
             current.current_step_index = 0;
             current.current_step_title = current.steps.first().map(|step| step.title.clone());
-            current.current_step_kind = current.steps.first().map(|step| step.kind);
+            current.current_step_kind = current.steps.first().map(|step| step.kind.clone());
             current.status = GoalRunStatus::Running;
             current.updated_at = now;
             current.last_error = None;
@@ -98,7 +98,83 @@ impl AgentEngine {
             None,
         )
         .await;
+
+        // Check plan confidence and route to approval if needed (UNCR-08)
+        let gate_action = self.plan_confidence_gate(&updated).await;
+        if gate_action == super::uncertainty::PlanConfidenceAction::RequireApproval {
+            let mut goal_runs = self.goal_runs.lock().await;
+            if let Some(current) = goal_runs.iter_mut().find(|item| item.id == goal_run_id) {
+                current.status = GoalRunStatus::AwaitingApproval;
+                current.updated_at = now_millis();
+                current.events.push(make_goal_run_event(
+                    "confidence_gate",
+                    "plan requires operator approval due to LOW-confidence steps",
+                    None,
+                ));
+            }
+            drop(goal_runs);
+            self.persist_goal_runs().await;
+            self.emit_goal_run_update(
+                &updated,
+                Some("Plan awaiting approval: LOW-confidence steps detected".into()),
+            );
+        }
+
         Ok(())
+    }
+
+    /// Check plan confidence and route to appropriate approval flow (UNCR-08).
+    ///
+    /// All HIGH -> proceed autonomously.
+    /// Any MEDIUM -> inform operator via WorkflowNotice.
+    /// Any LOW -> require operator approval before proceeding.
+    async fn plan_confidence_gate(
+        &self,
+        goal_run: &GoalRun,
+    ) -> super::uncertainty::PlanConfidenceAction {
+        let config = self.config.read().await;
+        if !config.uncertainty.enabled {
+            return super::uncertainty::PlanConfidenceAction::Proceed;
+        }
+        drop(config);
+
+        let mut has_medium = false;
+        let mut has_low = false;
+        let mut low_steps = Vec::new();
+
+        for (i, step) in goal_run.steps.iter().enumerate() {
+            if step.title.starts_with("[LOW]") {
+                has_low = true;
+                low_steps.push(format!("Step {}: {}", i + 1, step.title));
+            } else if step.title.starts_with("[MEDIUM]") {
+                has_medium = true;
+            }
+        }
+
+        if has_low {
+            let thread_id = goal_run.thread_id.clone().unwrap_or_default();
+            let _ = self.event_tx.send(AgentEvent::ConfidenceWarning {
+                thread_id: thread_id.clone(),
+                action_type: "plan_step".to_string(),
+                band: "low".to_string(),
+                evidence: low_steps.join("; "),
+                domain: "mixed".to_string(),
+                blocked: true,
+            });
+            super::uncertainty::PlanConfidenceAction::RequireApproval
+        } else if has_medium {
+            let thread_id = goal_run.thread_id.clone().unwrap_or_default();
+            let _ = self.event_tx.send(AgentEvent::WorkflowNotice {
+                thread_id,
+                kind: "confidence".to_string(),
+                message: "Plan contains MEDIUM-confidence steps. Proceeding with monitoring."
+                    .to_string(),
+                details: None,
+            });
+            super::uncertainty::PlanConfidenceAction::Proceed
+        } else {
+            super::uncertainty::PlanConfidenceAction::Proceed
+        }
     }
 
     pub(super) async fn enqueue_goal_run_step(&self, goal_run_id: &str) -> Result<()> {
@@ -128,8 +204,125 @@ impl AgentEngine {
         }
 
         let step = snapshot.steps[snapshot.current_step_index].clone();
-        let task = self
-            .enqueue_task(
+
+        // If this is a Specialist step, route through the handoff broker
+        // instead of the normal task enqueue path.
+        let task = if let GoalRunStepKind::Specialist(ref role) = step.kind {
+            let thread_id = snapshot.thread_id.clone().unwrap_or_default();
+            match self
+                .route_handoff(
+                    &step.instructions,
+                    &[role.clone()],
+                    None, // parent_task_id
+                    Some(&snapshot.id),
+                    &thread_id,
+                    &step.success_criteria,
+                    0, // depth starts at 0 for goal-originated handoffs
+                )
+                .await
+            {
+                Ok(handoff_result) => {
+                    // Find the task that was created by route_handoff
+                    let tasks = self.tasks.lock().await;
+                    tasks
+                        .iter()
+                        .find(|t| t.id == handoff_result.task_id)
+                        .cloned()
+                        .expect("handoff-created task missing from queue")
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "specialist handoff failed for step '{}': {e} — falling back to normal enqueue",
+                        step.title
+                    );
+                    self.enqueue_task(
+                        step.title.clone(),
+                        step.instructions.clone(),
+                        task_priority_to_str(snapshot.priority),
+                        None,
+                        step.session_id
+                            .clone()
+                            .or_else(|| snapshot.session_id.clone()),
+                        Vec::new(),
+                        None,
+                        "goal_run",
+                        Some(snapshot.id.clone()),
+                        None,
+                        snapshot.thread_id.clone(),
+                        None,
+                    )
+                    .await
+                }
+            }
+        } else if step.kind == GoalRunStepKind::Divergent {
+            // Route Divergent steps through start_divergent_session (DIVR-03).
+            // The step instructions become the problem statement for parallel framings.
+            let thread_id = snapshot.thread_id.clone().unwrap_or_default();
+            match self
+                .start_divergent_session(
+                    &step.instructions,
+                    None, // use default framings (analytical + pragmatic)
+                    &thread_id,
+                    Some(&snapshot.id),
+                )
+                .await
+            {
+                Ok(session_id) => {
+                    tracing::info!(
+                        session_id = %session_id,
+                        step = step.title.as_str(),
+                        "divergent session started for goal step"
+                    );
+                    // The divergent session enqueues its own tasks internally.
+                    // Create a placeholder task so the goal runner can track the step.
+                    self.enqueue_task(
+                        format!("Divergent: {}", step.title),
+                        format!(
+                            "Divergent session {} started for: {}\n\n\
+                             Monitor the parallel framings and synthesize tensions when complete.",
+                            session_id, step.instructions
+                        ),
+                        task_priority_to_str(snapshot.priority),
+                        None,
+                        step.session_id
+                            .clone()
+                            .or_else(|| snapshot.session_id.clone()),
+                        Vec::new(),
+                        None,
+                        "divergent",
+                        Some(snapshot.id.clone()),
+                        None,
+                        snapshot.thread_id.clone(),
+                        None,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "divergent session failed for step '{}': {e} — falling back to normal enqueue",
+                        step.title
+                    );
+                    self.enqueue_task(
+                        step.title.clone(),
+                        step.instructions.clone(),
+                        task_priority_to_str(snapshot.priority),
+                        None,
+                        step.session_id
+                            .clone()
+                            .or_else(|| snapshot.session_id.clone()),
+                        Vec::new(),
+                        None,
+                        "goal_run",
+                        Some(snapshot.id.clone()),
+                        None,
+                        snapshot.thread_id.clone(),
+                        None,
+                    )
+                    .await
+                }
+            }
+        } else {
+            self.enqueue_task(
                 step.title.clone(),
                 step.instructions.clone(),
                 task_priority_to_str(snapshot.priority),
@@ -145,8 +338,16 @@ impl AgentEngine {
                 snapshot.thread_id.clone(),
                 None,
             )
-            .await;
+            .await
+        };
 
+        let requires_ack = super::autonomy::requires_acknowledgment(snapshot.autonomy_level);
+        let autonomy_acknowledgment_id = requires_ack.then(|| {
+            format!(
+                "autonomy-ack:{}:{}:{}",
+                snapshot.id, snapshot.current_step_index, step.id
+            )
+        });
         let updated = {
             let mut goal_runs = self.goal_runs.lock().await;
             let mut tasks = self.tasks.lock().await;
@@ -154,6 +355,20 @@ impl AgentEngine {
                 current_task.goal_run_title = Some(snapshot.title.clone());
                 current_task.goal_step_id = Some(step.id.clone());
                 current_task.goal_step_title = Some(step.title.clone());
+                if let Some(ack_id) = autonomy_acknowledgment_id.as_ref() {
+                    current_task.status = TaskStatus::AwaitingApproval;
+                    current_task.awaiting_approval_id = Some(ack_id.clone());
+                    current_task.blocked_reason =
+                        Some("awaiting supervised step acknowledgment".to_string());
+                    current_task.started_at = None;
+                    current_task.logs.push(make_task_log_entry(
+                        current_task.retry_count,
+                        TaskLogLevel::Info,
+                        "autonomy_acknowledgment",
+                        "supervised step queued and gated pending explicit acknowledgment",
+                        Some(ack_id.clone()),
+                    ));
+                }
             }
             let Some(goal_run) = goal_runs.iter_mut().find(|item| item.id == goal_run_id) else {
                 anyhow::bail!("goal run disappeared after task enqueue");
@@ -167,17 +382,31 @@ impl AgentEngine {
                 goal_run.child_task_ids.push(task.id.clone());
             }
             goal_run.child_task_count = goal_run.child_task_ids.len() as u32;
-            goal_run.status = GoalRunStatus::Running;
+            goal_run.status = if autonomy_acknowledgment_id.is_some() {
+                GoalRunStatus::AwaitingApproval
+            } else {
+                GoalRunStatus::Running
+            };
             goal_run.updated_at = now_millis();
             goal_run.current_step_title = Some(step.title.clone());
-            goal_run.current_step_kind = Some(step.kind);
+            goal_run.current_step_kind = Some(step.kind.clone());
             goal_run.active_task_id = Some(task.id.clone());
-            goal_run.awaiting_approval_id = None;
+            goal_run.awaiting_approval_id = autonomy_acknowledgment_id.clone();
             goal_run.events.push(make_goal_run_event(
                 "execution",
                 "queued child task for goal step",
                 Some(format!("{} -> {}", step.title, task.id)),
             ));
+            if let Some(ack_id) = autonomy_acknowledgment_id.as_ref() {
+                goal_run.events.push(make_goal_run_event(
+                    "autonomy_acknowledgment",
+                    &format!(
+                        "supervised mode: step queued and awaiting explicit acknowledgment: {}",
+                        step.title
+                    ),
+                    Some(ack_id.clone()),
+                ));
+            }
             goal_run.clone()
         };
 
@@ -200,6 +429,7 @@ impl AgentEngine {
             None,
         )
         .await;
+
         Ok(())
     }
 
@@ -253,6 +483,70 @@ impl AgentEngine {
         goal_run_id: &str,
         task: &AgentTask,
     ) -> Result<()> {
+        // Validate specialist output gate before accepting handoff-sourced step completion
+        // (HAND-05 fail-closed behavior).
+        if task.source == "handoff" {
+            let snapshot = self
+                .get_goal_run(goal_run_id)
+                .await
+                .context("goal run missing during specialist validation")?;
+            let current_step = snapshot.steps.get(snapshot.current_step_index);
+            if let Some(step) = current_step {
+                if let GoalRunStepKind::Specialist(_) = &step.kind {
+                    let criteria = super::handoff::AcceptanceCriteria {
+                        description: step.success_criteria.clone(),
+                        structural_checks: vec!["non_empty".to_string()],
+                        require_llm_validation: false,
+                    };
+
+                    let validation_failure_reason =
+                        match self.resolve_handoff_log_id_by_task_id(&task.id).await {
+                            Ok(Some(handoff_log_id)) => {
+                                match self
+                                    .validate_specialist_output(&handoff_log_id, &task.id, &criteria)
+                                    .await
+                                {
+                                    Ok(result) if result.passed => None,
+                                    Ok(result) => Some(format!(
+                                        "specialist output validation failed: {}",
+                                        if result.failures.is_empty() {
+                                            "unknown validation failure".to_string()
+                                        } else {
+                                            result.failures.join("; ")
+                                        }
+                                    )),
+                                    Err(e) => Some(format!(
+                                        "specialist output validation error: {e}"
+                                    )),
+                                }
+                            }
+                            Ok(None) => Some(format!(
+                                "specialist validation blocked: no persisted handoff_log linkage for task {}",
+                                task.id
+                            )),
+                            Err(e) => Some(format!(
+                                "specialist validation blocked: failed to resolve handoff linkage: {e}"
+                            )),
+                        };
+
+                    if let Some(reason) = validation_failure_reason {
+                        tracing::warn!(
+                            task_id = task.id.as_str(),
+                            goal_run_id,
+                            reason = %reason,
+                            "specialist validation gate failed; routing through failure handler"
+                        );
+                        let mut failed_task = task.clone();
+                        failed_task.last_error = Some(reason.clone());
+                        failed_task.error = Some(reason);
+                        self.handle_goal_run_step_failure(goal_run_id, &failed_task)
+                            .await?;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
         let now = now_millis();
         let thread_summary = match task.thread_id.as_deref() {
             Some(thread_id) => self.goal_thread_summary(thread_id).await,
@@ -276,7 +570,7 @@ impl AgentEngine {
             goal_run.current_step_index = goal_run.current_step_index.saturating_add(1);
             let next_step = goal_run.steps.get(goal_run.current_step_index);
             goal_run.current_step_title = next_step.map(|step| step.title.clone());
-            goal_run.current_step_kind = next_step.map(|step| step.kind);
+            goal_run.current_step_kind = next_step.map(|step| step.kind.clone());
             goal_run.status = GoalRunStatus::Running;
             goal_run.updated_at = now;
             goal_run.last_error = None;
@@ -341,6 +635,69 @@ impl AgentEngine {
             .or_else(|| task.error.clone())
             .unwrap_or_else(|| format!("child task {} failed", task.id));
 
+        // Evaluate escalation triggers for specialist steps (HAND-04)
+        if let Some(step) = snapshot.steps.get(snapshot.current_step_index) {
+            if let GoalRunStepKind::Specialist(ref role) = step.kind {
+                let broker = self.handoff_broker.read().await;
+                if let Some(profile) = broker.profiles.iter().find(|p| p.role == *role) {
+                    if !profile.escalation_chain.is_empty() {
+                        let consecutive_failures = task.retry_count;
+                        let elapsed_secs = task
+                            .started_at
+                            .map(|started| {
+                                let now = now_millis();
+                                now.saturating_sub(started) / 1000
+                            })
+                            .unwrap_or(0);
+                        // Extract confidence band from step title prefix
+                        let confidence_band = if step.title.starts_with("[HIGH]") {
+                            "high"
+                        } else if step.title.starts_with("[MEDIUM]") {
+                            "medium"
+                        } else if step.title.starts_with("[LOW]") {
+                            "low"
+                        } else {
+                            "medium"
+                        };
+
+                        if let Some(action) =
+                            super::handoff::escalation::evaluate_escalation_triggers(
+                                &profile.escalation_chain,
+                                consecutive_failures,
+                                elapsed_secs,
+                                confidence_band,
+                            )
+                        {
+                            tracing::info!(
+                                goal_run_id = snapshot.id.as_str(),
+                                role,
+                                ?action,
+                                "escalation trigger fired for specialist step"
+                            );
+                            self.record_provenance_event(
+                                "escalation_triggered",
+                                &format!("specialist escalation: {:?}", action),
+                                serde_json::json!({
+                                    "goal_run_id": snapshot.id,
+                                    "specialist_role": role,
+                                    "action": format!("{:?}", action),
+                                    "consecutive_failures": consecutive_failures,
+                                    "elapsed_secs": elapsed_secs,
+                                }),
+                                Some(snapshot.id.as_str()),
+                                Some(task.id.as_str()),
+                                snapshot.thread_id.as_deref(),
+                                None,
+                                None,
+                            )
+                            .await;
+                        }
+                    }
+                }
+                drop(broker);
+            }
+        }
+
         if snapshot.replan_count < snapshot.max_replans
             && snapshot.current_step_index < snapshot.steps.len()
         {
@@ -386,7 +743,7 @@ impl AgentEngine {
                 goal_run.current_step_index = insert_at;
                 let next_step = goal_run.steps.get(goal_run.current_step_index);
                 goal_run.current_step_title = next_step.map(|step| step.title.clone());
-                goal_run.current_step_kind = next_step.map(|step| step.kind);
+                goal_run.current_step_kind = next_step.map(|step| step.kind.clone());
                 goal_run.replan_count = goal_run.replan_count.saturating_add(1);
                 goal_run.status = GoalRunStatus::Running;
                 goal_run.updated_at = now_millis();
@@ -491,6 +848,12 @@ impl AgentEngine {
             None
         };
 
+        // Finalize cost summary (COST-04) — read accumulated cost before locking goal_runs
+        let cost_summary = {
+            let trackers = self.cost_trackers.lock().await;
+            trackers.get(goal_run_id).map(|t| t.summary().clone())
+        };
+
         let updated = {
             let mut goal_runs = self.goal_runs.lock().await;
             let Some(goal_run) = goal_runs.iter_mut().find(|item| item.id == goal_run_id) else {
@@ -510,6 +873,15 @@ impl AgentEngine {
             if let Some(path) = generated_skill_path {
                 goal_run.generated_skill_path = Some(path);
             }
+            // Write accumulated cost data to goal run (COST-04)
+            if let Some(ref summary) = cost_summary {
+                goal_run.total_prompt_tokens = summary.total_prompt_tokens;
+                goal_run.total_completion_tokens = summary.total_completion_tokens;
+                goal_run.estimated_cost_usd = summary.estimated_cost_usd;
+            }
+            // Set authorship tag (AUTH-01): all completed goal runs involve operator
+            // input (the goal text) and agent synthesis (the plan execution).
+            goal_run.authorship_tag = Some(super::authorship::classify_authorship(true, true));
             goal_run.events.push(make_goal_run_event(
                 "reflection",
                 "goal run completed",
@@ -545,13 +917,51 @@ impl AgentEngine {
             .record_goal_episode(&updated, super::episodic::EpisodeOutcome::Success)
             .await
         {
-            tracing::warn!("Failed to record episodic memory for completed goal {}: {e}", goal_run_id);
+            tracing::warn!(
+                "Failed to record episodic memory for completed goal {}: {e}",
+                goal_run_id
+            );
         }
+
+        // Record calibration observation: goal succeeded (UNCR-07)
+        {
+            let predicted_band = updated.steps.first().and_then(|step| {
+                if step.title.starts_with("[HIGH]") {
+                    Some(crate::agent::explanation::ConfidenceBand::Confident)
+                } else if step.title.starts_with("[MEDIUM]") {
+                    Some(crate::agent::explanation::ConfidenceBand::Likely)
+                } else if step.title.starts_with("[LOW]") {
+                    Some(crate::agent::explanation::ConfidenceBand::Uncertain)
+                } else {
+                    None
+                }
+            });
+            if let Some(band) = predicted_band {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                self.calibration_tracker
+                    .write()
+                    .await
+                    .record_observation(band, true, now_ms);
+                tracing::debug!(goal_run_id, "calibration: recorded successful observation");
+            }
+        }
+
+        // Clean up cost tracker for completed goal run
+        self.cost_trackers.lock().await.remove(goal_run_id);
 
         Ok(())
     }
 
     pub(super) async fn fail_goal_run(&self, goal_run_id: &str, error: &str, phase: &str) {
+        // Finalize cost summary on failure (COST-04)
+        let cost_summary = {
+            let trackers = self.cost_trackers.lock().await;
+            trackers.get(goal_run_id).map(|t| t.summary().clone())
+        };
+
         let mut maybe_updated = None;
         {
             let mut goal_runs = self.goal_runs.lock().await;
@@ -563,6 +973,12 @@ impl AgentEngine {
                 goal_run.failure_cause = Some(error.to_string());
                 goal_run.awaiting_approval_id = None;
                 goal_run.active_task_id = None;
+                // Write accumulated cost data even on failure (COST-04)
+                if let Some(ref summary) = cost_summary {
+                    goal_run.total_prompt_tokens = summary.total_prompt_tokens;
+                    goal_run.total_completion_tokens = summary.total_completion_tokens;
+                    goal_run.estimated_cost_usd = summary.estimated_cost_usd;
+                }
                 goal_run.events.push(make_goal_run_event(
                     phase,
                     "goal run failed",
@@ -597,9 +1013,44 @@ impl AgentEngine {
                 .record_goal_episode(&updated, super::episodic::EpisodeOutcome::Failure)
                 .await
             {
-                tracing::warn!("Failed to record episodic memory for failed goal {}: {e}", goal_run_id);
+                tracing::warn!(
+                    "Failed to record episodic memory for failed goal {}: {e}",
+                    goal_run_id
+                );
+            }
+
+            // Record calibration observation: goal failed (UNCR-07)
+            {
+                let predicted_band = updated.steps.first().and_then(|step| {
+                    if step.title.starts_with("[HIGH]") {
+                        Some(crate::agent::explanation::ConfidenceBand::Confident)
+                    } else if step.title.starts_with("[MEDIUM]") {
+                        Some(crate::agent::explanation::ConfidenceBand::Likely)
+                    } else if step.title.starts_with("[LOW]") {
+                        Some(crate::agent::explanation::ConfidenceBand::Uncertain)
+                    } else {
+                        None
+                    }
+                });
+                if let Some(band) = predicted_band {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    self.calibration_tracker
+                        .write()
+                        .await
+                        .record_observation(band, false, now_ms);
+                    tracing::debug!(
+                        goal_run_id = updated.id.as_str(),
+                        "calibration: recorded failed observation"
+                    );
+                }
             }
         }
+
+        // Clean up cost tracker for failed goal run
+        self.cost_trackers.lock().await.remove(goal_run_id);
     }
 
     pub(super) async fn requeue_goal_run_step(&self, goal_run_id: &str, reason: &str) {
@@ -676,5 +1127,112 @@ impl AgentEngine {
             checkpoint_type: label.to_string(),
             step_index,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_manager::SessionManager;
+    use tempfile::tempdir;
+
+    fn sample_goal_run(goal_run_id: &str) -> GoalRun {
+        GoalRun {
+            id: goal_run_id.to_string(),
+            title: "supervised goal".to_string(),
+            goal: "validate supervised gating".to_string(),
+            client_request_id: None,
+            status: GoalRunStatus::Running,
+            priority: TaskPriority::Normal,
+            created_at: now_millis(),
+            updated_at: now_millis(),
+            started_at: Some(now_millis()),
+            completed_at: None,
+            thread_id: None,
+            session_id: None,
+            current_step_index: 0,
+            current_step_title: Some("step-1".to_string()),
+            current_step_kind: Some(GoalRunStepKind::Command),
+            replan_count: 0,
+            max_replans: 2,
+            plan_summary: Some("plan".to_string()),
+            reflection_summary: None,
+            memory_updates: Vec::new(),
+            generated_skill_path: None,
+            last_error: None,
+            failure_cause: None,
+            child_task_ids: Vec::new(),
+            child_task_count: 0,
+            approval_count: 0,
+            awaiting_approval_id: None,
+            active_task_id: None,
+            duration_ms: None,
+            steps: vec![GoalRunStep {
+                id: "step-1".to_string(),
+                position: 0,
+                title: "step-1".to_string(),
+                instructions: "do supervised work".to_string(),
+                kind: GoalRunStepKind::Command,
+                success_criteria: "done".to_string(),
+                session_id: None,
+                status: GoalRunStepStatus::Pending,
+                task_id: None,
+                summary: None,
+                error: None,
+                started_at: None,
+                completed_at: None,
+            }],
+            events: Vec::new(),
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            estimated_cost_usd: None,
+            autonomy_level: super::autonomy::AutonomyLevel::Supervised,
+            authorship_tag: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn enqueue_goal_run_step_marks_supervised_task_as_awaiting_approval_before_dispatch() {
+        let root = tempdir().expect("temp dir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let goal_run_id = "goal-supervised";
+
+        engine
+            .goal_runs
+            .lock()
+            .await
+            .push_back(sample_goal_run(goal_run_id));
+
+        engine
+            .enqueue_goal_run_step(goal_run_id)
+            .await
+            .expect("enqueue should succeed");
+
+        let goal = engine
+            .get_goal_run(goal_run_id)
+            .await
+            .expect("goal should exist");
+        let tasks = engine.tasks.lock().await;
+        let step_task_id = goal.steps[0]
+            .task_id
+            .clone()
+            .expect("step should be linked to a task");
+        let step_task = tasks
+            .iter()
+            .find(|task| task.id == step_task_id)
+            .cloned()
+            .expect("step task should exist");
+
+        assert_eq!(goal.status, GoalRunStatus::AwaitingApproval);
+        assert!(
+            goal.awaiting_approval_id.is_some(),
+            "supervised gate should assign an approval id on goal run"
+        );
+        assert_eq!(step_task.status, TaskStatus::AwaitingApproval);
+        assert_eq!(
+            step_task.awaiting_approval_id, goal.awaiting_approval_id,
+            "task and goal should share the same gate identifier"
+        );
     }
 }

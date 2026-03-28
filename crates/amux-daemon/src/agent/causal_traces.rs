@@ -607,6 +607,19 @@ impl AgentEngine {
             )),
         };
 
+        // Build rejected options from plan's rejected_alternatives (EXPL-03)
+        let rejected_options: Vec<crate::agent::learning::traces::DecisionOption> = plan
+            .rejected_alternatives
+            .iter()
+            .map(|alt| crate::agent::learning::traces::DecisionOption {
+                option_type: "plan_alternative".to_string(),
+                reasoning: alt.clone(),
+                rejection_reason: None,
+                estimated_success_prob: None,
+                arguments_hash: None,
+            })
+            .collect();
+
         let context_hash = crate::agent::learning::traces::hash_context_blob(&format!(
             "{}|{}|{}|{}",
             goal_run.goal,
@@ -623,7 +636,7 @@ impl AgentEngine {
             task_id: goal_run.active_task_id.clone(),
             decision_type,
             selected,
-            rejected_options: Vec::new(),
+            rejected_options,
             context_hash,
             causal_factors: factors,
             outcome,

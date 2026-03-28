@@ -82,16 +82,14 @@ mod tests {
 
     #[test]
     fn no_shift_when_counter_who_does_not_confirm() {
-        let decision =
-            evaluate_mode_shift(Some("stuck on same pattern".to_string()), false);
+        let decision = evaluate_mode_shift(Some("stuck on same pattern".to_string()), false);
         assert!(!decision.should_shift);
         assert!(decision.reason.contains("Suppressed"));
     }
 
     #[test]
     fn shift_when_both_awareness_and_counter_who_agree() {
-        let decision =
-            evaluate_mode_shift(Some("3+ same tool calls".to_string()), true);
+        let decision = evaluate_mode_shift(Some("3+ same tool calls".to_string()), true);
         assert!(decision.should_shift);
         assert!(!decision.suggested_strategy.is_empty());
     }

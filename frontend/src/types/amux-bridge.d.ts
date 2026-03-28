@@ -253,6 +253,14 @@ declare global {
         agentListGoalRuns?: () => Promise<AmuxGoalRun[] | unknown>;
         agentGetGoalRun?: (goalRunId: string) => Promise<AmuxGoalRun | unknown>;
         agentControlGoalRun?: (goalRunId: string, action: AmuxGoalRunControlAction, stepIndex?: number | null) => Promise<boolean | { ok?: boolean; success?: boolean } | unknown>;
+        agentExplainAction?: (actionId: string, stepIndex?: number | null) => Promise<unknown>;
+        agentStartDivergentSession?: (payload: {
+            problemStatement: string;
+            threadId: string;
+            goalRunId?: string | null;
+            customFramingsJson?: string | null;
+        }) => Promise<unknown>;
+        agentGetDivergentSession?: (sessionId: string) => Promise<unknown>;
         dbUpsertTranscriptIndex?: (entry: unknown) => Promise<boolean>;
         dbListTranscriptIndex?: (workspaceId?: string | null) => Promise<unknown[]>;
         dbUpsertSnapshotIndex?: (entry: unknown) => Promise<boolean>;
@@ -320,6 +328,11 @@ declare global {
             provider_health: Record<string, { can_execute: boolean; trip_count: number }>;
             gateway_statuses: Record<string, { status: string; consecutive_failures: number }>;
             recent_actions: Array<{ id: number; timestamp: number; action_type: string; summary: string }>;
+            diagnostics?: {
+                operator_profile_sync_state?: string;
+                operator_profile_sync_dirty?: boolean;
+                operator_profile_scheduler_fallback?: boolean;
+            };
         } | null>;
         agentSetConfigItem?: (keyPath: string, value: unknown) => Promise<unknown>;
         agentSetTierOverride?: (tier: string | null) => Promise<unknown>;
@@ -390,6 +403,13 @@ declare global {
         onDiscordMessage?: (cb: (event: any) => void) => (() => void) | void;
         onTelegramMessage?: (cb: (event: any) => void) => (() => void) | void;
         onWhatsAppMessage?: (cb: (event: any) => void) => (() => void) | void;
+        agentStartOperatorProfileSession?: (kind: string) => Promise<{ session_id: string; kind: string } | { error?: string }>;
+        agentNextOperatorProfileQuestion?: (sessionId: string) => Promise<{ session_id: string; question_id: string; field_key: string; prompt: string; input_kind: string; optional: boolean } | { error?: string }>;
+        agentSubmitOperatorProfileAnswer?: (sessionId: string, questionId: string, answerJson: string) => Promise<{ session_id: string; answered: number; remaining: number; completion_ratio: number } | { error?: string }>;
+        agentSkipOperatorProfileQuestion?: (sessionId: string, questionId: string, reason?: string | null) => Promise<{ session_id: string; answered: number; remaining: number; completion_ratio: number } | { error?: string }>;
+        agentDeferOperatorProfileQuestion?: (sessionId: string, questionId: string, deferUntilUnixMs?: number | null) => Promise<{ session_id: string; answered: number; remaining: number; completion_ratio: number } | { error?: string }>;
+        agentGetOperatorProfileSummary?: () => Promise<unknown>;
+        agentSetOperatorProfileConsent?: (consentKey: string, granted: boolean) => Promise<{ ok?: boolean; error?: string }>;
     };
 
     interface Window {

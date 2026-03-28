@@ -3914,6 +3914,9 @@ function registerIpcHandlers() {
                     'plugin-action-result',
                     'plugin-test-connection-result',
                     'plugin-oauth-url',
+                    'agent-explanation',
+                    'agent-divergent-session-started',
+                    'agent-divergent-session',
                 ].includes(event.type)) {
                     let oldest = null;
                     for (const [reqId, handler] of agentBridge.pending.entries()) {
@@ -3928,6 +3931,26 @@ function registerIpcHandlers() {
                         agentBridge.pending.delete(oldest.reqId);
                     }
                     continue;
+                }
+
+                if (event.type === 'error') {
+                    // Match daemon query errors to the oldest pending request (FIFO),
+                    // mirroring normal query response correlation behavior.
+                    let oldest = null;
+                    for (const [reqId, handler] of agentBridge.pending.entries()) {
+                        if (!oldest || handler.ts < oldest.ts) {
+                            oldest = { reqId, handler, ts: handler.ts };
+                        }
+                    }
+                    if (oldest) {
+                        const msg = event.message
+                            || event.data?.message
+                            || (typeof event.data === 'string' ? event.data : null)
+                            || 'agent bridge error';
+                        oldest.handler.reject(new Error(msg));
+                        agentBridge.pending.delete(oldest.reqId);
+                        continue;
+                    }
                 }
 
                 // Forward PluginOAuthComplete as a dedicated event to renderer (Plan 18-03)
@@ -4460,6 +4483,45 @@ function registerIpcHandlers() {
             }, 'goal-run-controlled');
         } catch {
             return { ok: false };
+        }
+    });
+
+    ipcMain.handle('agent-explain-action', async (_event, actionId, stepIndex) => {
+        try {
+            return await sendAgentQuery({
+                type: 'explain-action',
+                action_id: actionId,
+                step_index: Number.isFinite(stepIndex) ? Math.trunc(stepIndex) : null,
+            }, 'agent-explanation');
+        } catch (err) {
+            return { ok: false, error: err?.message || String(err) };
+        }
+    });
+
+    ipcMain.handle('agent-start-divergent-session', async (_event, payload) => {
+        try {
+            return await sendAgentQuery({
+                type: 'start-divergent-session',
+                problem_statement: payload?.problemStatement,
+                thread_id: payload?.threadId,
+                goal_run_id: typeof payload?.goalRunId === 'string' && payload.goalRunId.trim() ? payload.goalRunId.trim() : null,
+                custom_framings_json: typeof payload?.customFramingsJson === 'string' && payload.customFramingsJson.trim()
+                    ? payload.customFramingsJson
+                    : null,
+            }, 'agent-divergent-session-started');
+        } catch (err) {
+            return { ok: false, error: err?.message || String(err) };
+        }
+    });
+
+    ipcMain.handle('agent-get-divergent-session', async (_event, sessionId) => {
+        try {
+            return await sendAgentQuery({
+                type: 'get-divergent-session',
+                session_id: sessionId,
+            }, 'agent-divergent-session');
+        } catch (err) {
+            return { ok: false, error: err?.message || String(err) };
         }
     });
 

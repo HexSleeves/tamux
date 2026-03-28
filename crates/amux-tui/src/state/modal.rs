@@ -363,6 +363,14 @@ fn default_command_items() -> Vec<CommandItem> {
             command: "help".into(),
             description: "Show keyboard shortcuts".into(),
         },
+        CommandItem {
+            command: "explain".into(),
+            description: "Explain latest goal-run decision".into(),
+        },
+        CommandItem {
+            command: "diverge".into(),
+            description: "Seed divergent session command".into(),
+        },
     ]
 }
 

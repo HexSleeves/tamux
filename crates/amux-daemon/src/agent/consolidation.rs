@@ -154,7 +154,10 @@ impl AgentEngine {
         if std::time::Instant::now() < deadline {
             match self.expire_negative_constraints().await {
                 Ok(n) if n > 0 => {
-                    tracing::info!(expired = n, "Expired negative knowledge constraints during consolidation");
+                    tracing::info!(
+                        expired = n,
+                        "Expired negative knowledge constraints during consolidation"
+                    );
                 }
                 Ok(_) => {}
                 Err(e) => {

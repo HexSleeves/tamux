@@ -825,6 +825,16 @@ impl AgentEngine {
                     let (generation_ms, tps) =
                         compute_generation_stats(generation_secs, output_tokens);
 
+                    // Cost accumulation (COST-01) — no-tool-call path
+                    self.accumulate_goal_run_cost(
+                        &tid,
+                        input_tokens,
+                        output_tokens,
+                        &config.provider,
+                        &provider_config.model,
+                    )
+                    .await;
+
                     let _ = self.event_tx.send(AgentEvent::Done {
                         thread_id: tid.clone(),
                         input_tokens,
@@ -915,6 +925,16 @@ impl AgentEngine {
                             thread.total_output_tokens += output_tokens.unwrap_or(0);
                         }
                     }
+                    // Cost accumulation (COST-01) — tool-call path
+                    self.accumulate_goal_run_cost(
+                        &tid,
+                        input_tokens.unwrap_or(0),
+                        output_tokens.unwrap_or(0),
+                        &config.provider,
+                        &provider_config.model,
+                    )
+                    .await;
+
                     self.persist_thread_by_id(&tid).await;
                     self.update_thread_upstream_state(
                         &tid,
@@ -1134,21 +1154,35 @@ impl AgentEngine {
 
                         // Update counter-who self-model with tool result (Phase 1: Memory Foundation - CWHO-01)
                         {
-                            let args_summary: String = tc.function.arguments.chars().take(100).collect();
-                            self.update_counter_who_on_tool_result(&tid, &tc.function.name, &args_summary, !result.is_error).await;
+                            let args_summary: String =
+                                tc.function.arguments.chars().take(100).collect();
+                            self.update_counter_who_on_tool_result(
+                                &tid,
+                                &tc.function.name,
+                                &args_summary,
+                                !result.is_error,
+                            )
+                            .await;
                         }
 
                         // Record outcome for situational awareness (Phase 2: AWAR-01)
                         {
-                            let args_summary: String = tc.function.arguments.chars().take(100).collect();
+                            let args_summary: String =
+                                tc.function.arguments.chars().take(100).collect();
                             let args_hash = super::episodic::counter_who::compute_approach_hash(
-                                &tc.function.name, &args_summary
+                                &tc.function.name,
+                                &args_summary,
                             );
                             let is_progress = !result.is_error && result.content.len() > 50;
                             self.record_awareness_outcome(
-                                &tid, "thread", &tc.function.name, &args_hash,
-                                !result.is_error, is_progress,
-                            ).await;
+                                &tid,
+                                "thread",
+                                &tc.function.name,
+                                &args_hash,
+                                !result.is_error,
+                                is_progress,
+                            )
+                            .await;
                             // Check for mode shift (AWAR-02 + AWAR-03)
                             self.check_awareness_mode_shift(&tid, &tid).await;
                         }
@@ -1618,6 +1652,69 @@ impl AgentEngine {
             entry.plugin_name,
             args_part,
         ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cost accumulation helpers (COST-01 through COST-03)
+// ---------------------------------------------------------------------------
+
+impl AgentEngine {
+    /// Find a running goal run that is using the given thread_id.
+    pub(super) async fn find_active_goal_run_for_thread(&self, thread_id: &str) -> Option<String> {
+        let goal_runs = self.goal_runs.lock().await;
+        goal_runs
+            .iter()
+            .find(|gr| {
+                matches!(gr.status, GoalRunStatus::Running | GoalRunStatus::Planning)
+                    && gr.thread_id.as_deref() == Some(thread_id)
+            })
+            .map(|gr| gr.id.clone())
+    }
+
+    /// Accumulate cost for a goal run after an LLM API call.
+    ///
+    /// Called from exactly two places in `send_message_inner`:
+    /// 1. After `CompletionChunk::Done` (no tool calls)
+    /// 2. After `CompletionChunk::ToolCalls` (has tool calls)
+    ///
+    /// This is the ONLY cost accumulation point to prevent double-counting.
+    pub(super) async fn accumulate_goal_run_cost(
+        &self,
+        thread_id: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        provider: &str,
+        model: &str,
+    ) {
+        let goal_run_id = match self.find_active_goal_run_for_thread(thread_id).await {
+            Some(id) => id,
+            None => return,
+        };
+
+        let config = self.config.read().await;
+        if !config.cost.enabled {
+            return;
+        }
+        let rate_cards = config.cost.rate_cards.clone();
+        let threshold = config.cost.budget_alert_threshold_usd;
+        drop(config);
+
+        let mut trackers = self.cost_trackers.lock().await;
+        let tracker = trackers
+            .entry(goal_run_id.clone())
+            .or_insert_with(super::cost::CostTracker::new);
+        tracker.accumulate(input_tokens, output_tokens, provider, model, &rate_cards);
+
+        if tracker.budget_alert_needed(threshold) {
+            if let Some(cost) = tracker.summary().estimated_cost_usd {
+                let _ = self.event_tx.send(AgentEvent::BudgetAlert {
+                    goal_run_id: goal_run_id.clone(),
+                    current_cost_usd: cost,
+                    threshold_usd: threshold.unwrap_or(0.0),
+                });
+            }
+        }
     }
 }
 

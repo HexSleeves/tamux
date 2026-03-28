@@ -22,14 +22,16 @@ impl AgentEngine {
         let mut prompt = format!(
             "You are planning a durable autonomous goal runner inside tamux.\n\
              Produce strict JSON only with the shape:\n\
-             {{\"title\":\"...\",\"summary\":\"...\",\"steps\":[{{\"title\":\"...\",\"instructions\":\"...\",\"kind\":\"reason|command|research|memory|skill\",\"success_criteria\":\"...\",\"session_id\":null}}]}}\n\
+             {{\"title\":\"...\",\"summary\":\"...\",\"steps\":[{{\"title\":\"...\",\"instructions\":\"...\",\"kind\":\"reason|command|research|memory|skill|divergent\",\"success_criteria\":\"...\",\"session_id\":null}}],\"rejected_alternatives\":[\"...\"]}}\n\
              Requirements:\n\
              - 2 to 6 steps.\n\
              - Keep each step actionable and narrow.\n\
              - Use kind=command only when the step should execute via the daemon task queue.\n\
+             - Use kind=divergent when a step involves exploring multiple perspectives or tradeoff analysis.\n\
              - Use skill only only if a reusable workflow artifact should be generated at the end.\n\
              - Prefer one terminal session unless the goal clearly requires otherwise.\n\
              - All work should be done inside the workspace directory. Do not cd above it.\n\
+             - Also include \"rejected_alternatives\": a list of 1-3 alternative approaches you considered but rejected, each with a brief reason why it was not chosen.\n\
              Goal title: {}\n\
              Goal:\n{}",
             goal_run.title, goal_run.goal
@@ -42,13 +44,17 @@ impl AgentEngine {
         }
 
         // Surface negative knowledge constraints before planning (Phase 1: Memory Foundation - NKNO-03)
-        let negative_constraints_text = match self.query_active_constraints(Some(&goal_run.goal)).await {
-            Ok(constraints) if !constraints.is_empty() => {
-                let now_ms = super::now_millis();
-                super::episodic::negative_knowledge::format_negative_constraints(&constraints, now_ms)
-            }
-            _ => String::new(),
-        };
+        let negative_constraints_text =
+            match self.query_active_constraints(Some(&goal_run.goal)).await {
+                Ok(constraints) if !constraints.is_empty() => {
+                    let now_ms = super::now_millis();
+                    super::episodic::negative_knowledge::format_negative_constraints(
+                        &constraints,
+                        now_ms,
+                    )
+                }
+                _ => String::new(),
+            };
         if !negative_constraints_text.is_empty() {
             prompt.push_str("\n\n");
             prompt.push_str(&negative_constraints_text);
@@ -90,7 +96,202 @@ impl AgentEngine {
         }
 
         apply_plan_defaults(&mut plan);
+
+        // Annotate plan steps with confidence labels (UNCR-01, Phase v3.0)
+        self.annotate_plan_steps_with_confidence(
+            &mut plan.steps,
+            &goal_run.goal,
+            goal_run.thread_id.as_deref(),
+        )
+        .await;
+
         Ok(plan)
+    }
+
+    /// Annotate each plan step with a confidence label [HIGH/MEDIUM/LOW] (UNCR-01).
+    ///
+    /// Uses structural signals only (UNCR-06): tool success rate from awareness,
+    /// episodic familiarity from FTS5 hit count, blast radius from step kind domain,
+    /// approach novelty from counter-who.
+    async fn annotate_plan_steps_with_confidence(
+        &self,
+        steps: &mut Vec<GoalPlanStepResponse>,
+        goal_text: &str,
+        thread_id: Option<&str>,
+    ) {
+        let config = self.config.read().await;
+        if !config.uncertainty.enabled {
+            return;
+        }
+        let thresholds = config.uncertainty.domain_thresholds.clone();
+        drop(config);
+
+        // 1. Tool success rate from awareness window (AWAR-01 signal)
+        let tool_success_rate = {
+            let monitor = self.awareness.read().await;
+            monitor.aggregate_short_term_success_rate()
+        };
+
+        // Compute operator urgency from real thread pacing signals (EMBD-02).
+        let (recent_message_count, avg_gap_secs) = if let Some(thread_id) = thread_id {
+            let now = super::now_millis();
+            let window_ms = 5 * 60 * 1000;
+            let threads = self.threads.read().await;
+            if let Some(thread) = threads.get(thread_id) {
+                let recent_message_count = thread
+                    .messages
+                    .iter()
+                    .filter(|m| {
+                        matches!(m.role, MessageRole::User)
+                            && now.saturating_sub(m.timestamp) <= window_ms
+                    })
+                    .count() as u32;
+
+                let mut last_user_timestamps: Vec<u64> = thread
+                    .messages
+                    .iter()
+                    .filter(|m| matches!(m.role, MessageRole::User))
+                    .rev()
+                    .take(5)
+                    .map(|m| m.timestamp)
+                    .collect();
+                last_user_timestamps.reverse();
+
+                let avg_gap_secs = if last_user_timestamps.len() < 2 {
+                    0
+                } else {
+                    let gap_sum_ms: u64 = last_user_timestamps
+                        .windows(2)
+                        .map(|pair| pair[1].saturating_sub(pair[0]))
+                        .sum();
+                    let avg_gap_ms = gap_sum_ms / (last_user_timestamps.len() as u64 - 1);
+                    avg_gap_ms / 1000
+                };
+
+                (recent_message_count, avg_gap_secs)
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        };
+        let temperature =
+            super::embodied::dimensions::compute_temperature(recent_message_count, avg_gap_secs);
+
+        for step in steps.iter_mut() {
+            // 2. Episodic familiarity: count FTS5 hits for step instructions
+            let episodic_familiarity = {
+                let query = &step.instructions;
+                match self.retrieve_relevant_episodes(query, 5).await {
+                    Ok(episodes) => {
+                        super::embodied::dimensions::compute_familiarity(episodes.len())
+                    }
+                    Err(_) => 0.5, // default to moderate familiarity on error
+                }
+            };
+
+            // Compute difficulty from awareness window error rate (EMBD-01)
+            let difficulty = {
+                let monitor = self.awareness.read().await;
+                let error_rate = 1.0 - monitor.aggregate_short_term_success_rate();
+                super::embodied::dimensions::compute_difficulty(error_rate, 0)
+            };
+
+            // Compute weight from step kind (EMBD-03)
+            // GoalRunStepKind variants: Reason, Command, Research, Memory, Skill, Specialist, Unknown
+            let weight = {
+                let tool_name = match &step.kind {
+                    GoalRunStepKind::Command => "execute_command",
+                    GoalRunStepKind::Research => "web_search",
+                    GoalRunStepKind::Reason => "read_file",
+                    GoalRunStepKind::Memory => "read_file",
+                    GoalRunStepKind::Skill => "execute_command",
+                    GoalRunStepKind::Specialist(_) => "execute_command",
+                    GoalRunStepKind::Divergent => "read_file",
+                    GoalRunStepKind::Unknown => "unknown",
+                };
+                super::embodied::dimensions::compute_weight(tool_name)
+            };
+
+            tracing::trace!(
+                difficulty,
+                weight,
+                temperature,
+                recent_message_count,
+                avg_gap_secs,
+                "embodied dimensions computed for step"
+            );
+
+            // 3. Domain classification + blast radius from step kind
+            let domain = super::uncertainty::domains::classify_step_kind(&step.kind);
+            let blast_radius_score = {
+                let domain_score = match domain {
+                    super::uncertainty::domains::DomainClassification::Safety => 0.8,
+                    super::uncertainty::domains::DomainClassification::Reliability => 0.5,
+                    _ => 0.2,
+                };
+                // Blend domain classification with embodied weight (EMBD-04),
+                // then adjust with operator urgency temperature (EMBD-02).
+                let base_blast_radius = 0.6 * domain_score + 0.4 * weight;
+                (0.85 * base_blast_radius + 0.15 * temperature).clamp(0.0, 1.0)
+            };
+
+            // 4. Approach novelty: check counter-who for similar approaches
+            let approach_novelty = {
+                let store = self.episodic_store.read().await;
+                let kind_str = format!("{:?}", step.kind);
+                let hash = super::episodic::counter_who::compute_approach_hash(
+                    &kind_str,
+                    &step.instructions.chars().take(100).collect::<String>(),
+                );
+                let matching = store
+                    .counter_who
+                    .tried_approaches
+                    .iter()
+                    .filter(|a| a.approach_hash == hash)
+                    .count();
+                super::uncertainty::confidence::approach_novelty_score(matching)
+            };
+
+            let signals = super::uncertainty::confidence::ConfidenceSignals {
+                tool_success_rate,
+                episodic_familiarity,
+                blast_radius_score,
+                approach_novelty,
+            };
+
+            let assessment = super::uncertainty::confidence::compute_step_confidence(
+                &signals,
+                domain,
+                &thresholds,
+            );
+
+            // Apply calibration adjustment (UNCR-07)
+            let calibrated_band = {
+                let tracker = self.calibration_tracker.read().await;
+                tracker.get_calibrated_band(assessment.band)
+            };
+            let calibrated_label =
+                super::uncertainty::confidence::confidence_label(calibrated_band);
+
+            // Prepend confidence label to step title (locked decision: "[HIGH] Step title")
+            step.title = format!("[{}] {}", calibrated_label, step.title);
+
+            // Add confidence evidence to step instructions if not HIGH
+            if calibrated_label != "HIGH" && !assessment.evidence.is_empty() {
+                step.instructions = format!(
+                    "{}\n\nConfidence note: {}",
+                    step.instructions,
+                    assessment.evidence.join("; ")
+                );
+            }
+        }
+
+        tracing::debug!(
+            steps = steps.len(),
+            goal = goal_text.chars().take(50).collect::<String>(),
+            "annotated plan steps with confidence labels"
+        );
     }
 
     pub(super) async fn request_goal_replan(

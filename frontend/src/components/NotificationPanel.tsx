@@ -72,6 +72,16 @@ export function NotificationPanel({ style, className }: NotificationPanelProps =
     clearCanvasPanelStatus(paneId);
   };
 
+  const handleNotificationAction = (notification: TerminalNotification, actionId: string) => {
+    if (actionId === "request_concierge_welcome") {
+      const bridge = getBridge();
+      void bridge?.agentRequestConciergeWelcome?.();
+      markRead(notification.id);
+      return;
+    }
+    markRead(notification.id);
+  };
+
   if (!open) return null;
 
   const unread = notifications.filter((n) => !n.isRead);
@@ -122,6 +132,7 @@ export function NotificationPanel({ style, className }: NotificationPanelProps =
           onDenyNotification={(notification) => {
             void reactToApprovalNotification(notification, "deny");
           }}
+          onNotificationAction={handleNotificationAction}
         />
       </div>
     </div>

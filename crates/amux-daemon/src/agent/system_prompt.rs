@@ -193,7 +193,8 @@ pub(super) fn build_system_prompt(
         );
     }
     prompt.push_str(
-        "         - tamux caps active subagents per parent, so queue additional children only when they materially advance the task.\n",
+        "         - tamux caps active subagents per parent, so queue additional children only when they materially advance the task.\n\
+         - For tasks requiring domain expertise, prefer `route_to_specialist` over `spawn_subagent`. The handoff broker matches capability tags to specialist profiles, assembles context bundles with episodic memory and negative constraints, and records a WORM audit trail.\n",
     );
 
     super::task_prompt::append_sub_agent_registry(&mut prompt, sub_agents);

@@ -364,6 +364,8 @@ impl AgentEngine {
             Err(_) => "[]".to_string(),
         };
 
+        let diagnostics_json = self.operator_profile_diagnostics_snapshot().to_string();
+
         DaemonMessage::AgentStatusResponse {
             tier: tier.to_string(),
             feature_flags_json,
@@ -374,6 +376,7 @@ impl AgentEngine {
             provider_health_json,
             gateway_statuses_json,
             recent_actions_json,
+            diagnostics_json,
         }
     }
 

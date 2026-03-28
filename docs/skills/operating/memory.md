@@ -7,7 +7,7 @@
 - **Use the right file for the right purpose:**
   - `SOUL.md` — agent identity, personality, tone (rarely changed)
   - `MEMORY.md` — accumulated facts, learned patterns, project knowledge (frequently updated)
-  - `USER.md` — operator profile, preferences, constraints (occasionally updated)
+  - `USER.md` — operator profile snapshot synchronized from SQLite-backed operator profile fields/check-ins (daemon-managed)
 - **Keep memory entries concise** — memory is embedded in every agent prompt, so bloat degrades performance
 - **Don't duplicate information available elsewhere** — don't store file paths or git history that can be derived
 - **Memory is markdown** — use headings, bullets, and structure for scannability
@@ -26,7 +26,7 @@ Note: This tool is available to the tamux daemon's built-in agent. External agen
 |---|---|---|
 | `SOUL.md` | Agent identity and behavioral guidelines | Rarely — set once, refined occasionally |
 | `MEMORY.md` | Learned facts, operator preferences, project knowledge | Frequently — after every meaningful learning |
-| `USER.md` | Operator profile, role, preferences, constraints | Occasionally — when user info changes |
+| `USER.md` | SQLite-synchronized operator profile summary (onboarding answers, check-ins, constraints) | Automatically reconciled after profile updates/check-ins |
 
 **How memory is used:**
 
@@ -34,6 +34,10 @@ Note: This tool is available to the tamux daemon's built-in agent. External agen
 2. Memory content is embedded in the system prompt for every LLM call
 3. When `update_memory` is called, the target file is rewritten and the cache refreshed
 4. Goal runs can generate memory updates as part of their reflection phase
+
+`USER.md` note: append updates are staged through the operator profile reconciliation path. The daemon persists profile signals to SQLite and regenerates/synchronizes `USER.md`, rather than relying on freeform-only file appends as the source of truth.
+
+Operator profile onboarding/check-ins are daemon-first flows and can be consent-gated (for passive learning, weekly check-ins, and proactive suggestions).
 
 **Memory directory structure:**
 
@@ -92,3 +96,4 @@ I am tamux's built-in agent. I help operators manage terminals, execute tasks, a
 - External MCP agents cannot call `update_memory` directly — use the daemon chat or goal runners
 - Goal run reflections can append to MEMORY.md — review periodically to prune stale entries
 - Memory files are plain markdown — no frontmatter, no special syntax required
+- `USER.md` is synchronized from SQLite profile state; if you append to `USER.md`, expect daemon reconciliation to normalize content to the structured profile view

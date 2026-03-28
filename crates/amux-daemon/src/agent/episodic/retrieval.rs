@@ -23,7 +23,10 @@ pub fn format_fts5_query(raw: &str) -> String {
         .filter(|c| !matches!(c, '"' | '(' | ')' | '*' | '{' | '}' | '[' | ']' | ':' | '^'))
         .collect();
 
-    let terms: Vec<&str> = cleaned.split_whitespace().filter(|t| !t.is_empty()).collect();
+    let terms: Vec<&str> = cleaned
+        .split_whitespace()
+        .filter(|t| !t.is_empty())
+        .collect();
 
     if terms.is_empty() {
         return "*".to_string();

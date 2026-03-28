@@ -41,6 +41,52 @@ const ONECONTEXT_TOOL_TIMEOUT_SECS: u64 = 8;
 const SESSION_SEARCH_OUTPUT_MAX_CHARS: usize = 12_000;
 
 // ---------------------------------------------------------------------------
+// Source authority classification for web search results (UNCR-03)
+// ---------------------------------------------------------------------------
+
+/// Classify URL source authority for web search/read results (UNCR-03).
+/// Uses URL domain pattern matching -- deterministic, zero-latency.
+fn classify_source_authority(url: &str) -> &'static str {
+    let lower = url.to_lowercase();
+    if lower.contains("docs.")
+        || lower.contains("/docs/")
+        || lower.contains("developer.")
+        || lower.contains(".readthedocs.")
+        || lower.contains("man7.org")
+        || lower.contains("cppreference.com")
+        || lower.contains(".github.io/")
+        || lower.contains("spec.")
+        || lower.contains("rfc-editor.org")
+        || lower.contains("w3.org")
+    {
+        "official"
+    } else if lower.contains("stackoverflow.com")
+        || lower.contains("reddit.com")
+        || lower.contains("medium.com")
+        || lower.contains("dev.to")
+        || lower.contains("blog.")
+        || lower.contains("forum.")
+        || lower.contains("discuss.")
+        || lower.contains("news.ycombinator.com")
+    {
+        "community"
+    } else {
+        "unknown"
+    }
+}
+
+/// Format a single search result line with source authority label prepended.
+fn format_result_with_authority(title: &str, url: &str, snippet: &str) -> String {
+    format!(
+        "- [{}] **{}**\n  {}\n  {}",
+        classify_source_authority(url),
+        title,
+        url,
+        snippet
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Tool reordering by learned heuristic effectiveness (D-08)
 // ---------------------------------------------------------------------------
 
@@ -274,6 +320,16 @@ pub fn get_available_tools(
                 "limit": { "type": "integer", "description": "Max results (default: 20)" }
             },
             "required": ["query"]
+        }),
+    ));
+    tools.push(tool_def(
+        "fetch_gateway_history",
+        "Fetch recent messages from the current gateway conversation thread. Use this when handling platform messages and you need additional prior context.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "count": { "type": "integer", "description": "Number of recent messages to fetch (default: 10, max: 100)" }
+            }
         }),
     ));
     tools.push(tool_def(
@@ -586,6 +642,41 @@ pub fn get_available_tools(
             "parent_thread_id": { "type": "string", "description": "Override parent thread scope" },
             "limit": { "type": "integer", "description": "Maximum subagents to return (default: 20)" }
         }
+    })));
+    tools.push(tool_def("route_to_specialist", "Route a task to a specialist subagent with structured handoff. The broker matches capability tags to specialist profiles, assembles a context bundle with episodic refs and negative constraints, and dispatches the work.", serde_json::json!({
+        "type": "object",
+        "properties": {
+            "task_description": { "type": "string", "description": "Detailed description of the work to hand off to a specialist" },
+            "capability_tags": { "type": "array", "items": { "type": "string" }, "description": "Required capability tags for specialist matching (e.g., [\"rust\", \"backend\", \"api-design\"])" },
+            "acceptance_criteria": { "type": "string", "description": "Structural checks for output validation (e.g., \"non_empty\", \"min_length:100\"). Defaults to \"non_empty\"." }
+        },
+        "required": ["task_description", "capability_tags"]
+    })));
+    tools.push(tool_def("run_divergent", "Start a divergent session: spawn 2-3 parallel framings of the same problem with different perspectives, detect disagreements, and surface tensions as the valuable output. Returns a session ID and framing labels. Use this when a problem benefits from multiple viewpoints (e.g., architectural decisions, tradeoff analysis).", serde_json::json!({
+        "type": "object",
+        "properties": {
+            "problem_statement": { "type": "string", "description": "The problem to analyze from multiple perspectives" },
+            "custom_framings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": { "type": "string", "description": "Short name for this perspective (e.g., 'performance-lens')" },
+                        "system_prompt_override": { "type": "string", "description": "System prompt directing this framing's perspective" }
+                    },
+                    "required": ["label", "system_prompt_override"]
+                },
+                "description": "Optional custom framings (2-3). If omitted, default analytical + pragmatic lenses are used."
+            }
+        },
+        "required": ["problem_statement"]
+    })));
+    tools.push(tool_def("get_divergent_session", "Fetch divergent session status and output payload (framing progress, tensions markdown, mediator prompt, optional mediation result). Use this after run_divergent to retrieve completion artifacts.", serde_json::json!({
+        "type": "object",
+        "properties": {
+            "session_id": { "type": "string", "description": "Divergent session ID returned by run_divergent" }
+        },
+        "required": ["session_id"]
     })));
     if config.collaboration.enabled {
         tools.push(tool_def("broadcast_contribution", "Publish a structured subagent contribution into the shared collaboration session for the current parent task.", serde_json::json!({
@@ -924,6 +1015,35 @@ pub async fn execute_tool(
         };
     }
 
+    // UNCR-02: Pre-execution confidence warning for Safety-domain tools.
+    // Emits a ConfidenceWarning event so clients can display blast-radius
+    // uncertainty before the tool runs. Does NOT block -- existing policy.rs
+    // approval flow handles blocking for dangerous commands.
+    {
+        let tool_domain =
+            crate::agent::uncertainty::domains::classify_domain(tool_call.function.name.as_str());
+        if tool_domain == crate::agent::uncertainty::domains::DomainClassification::Safety {
+            let evidence = format!(
+                "Safety-domain tool '{}' with blast-radius uncertainty. Args: {}",
+                tool_call.function.name,
+                tool_call
+                    .function
+                    .arguments
+                    .chars()
+                    .take(200)
+                    .collect::<String>()
+            );
+            let _ = event_tx.send(AgentEvent::ConfidenceWarning {
+                thread_id: thread_id.to_string(),
+                action_type: "tool_call".to_string(),
+                band: "medium".to_string(),
+                evidence,
+                domain: "safety".to_string(),
+                blocked: false,
+            });
+        }
+    }
+
     let mut pending_approval = None;
 
     let result = match tool_call.function.name.as_str() {
@@ -984,6 +1104,11 @@ pub async fn execute_tool(
             .await
         }
         "list_subagents" => execute_list_subagents(&args, agent, thread_id, task_id).await,
+        "route_to_specialist" => {
+            execute_route_to_specialist(&args, agent, thread_id, task_id).await
+        }
+        "run_divergent" => execute_run_divergent(&args, agent, thread_id, task_id).await,
+        "get_divergent_session" => execute_get_divergent_session(&args, agent).await,
         "broadcast_contribution" => {
             execute_broadcast_contribution(&args, agent, thread_id, task_id).await
         }
@@ -1052,6 +1177,7 @@ pub async fn execute_tool(
         "get_system_info" => execute_system_info().await,
         "list_processes" => execute_list_processes(&args).await,
         "search_history" => execute_search_history(&args, session_manager).await,
+        "fetch_gateway_history" => execute_fetch_gateway_history(&args, agent, thread_id).await,
         "session_search" => execute_session_search(&args, session_manager).await,
         "agent_query_memory" => execute_agent_query_memory(&args, agent).await,
         "onecontext_search" => execute_onecontext_search(&args).await,
@@ -2250,6 +2376,40 @@ async fn execute_search_history(
     }
 }
 
+async fn execute_fetch_gateway_history(
+    args: &serde_json::Value,
+    agent: &AgentEngine,
+    thread_id: &str,
+) -> Result<String> {
+    let count = args
+        .get("count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10)
+        .clamp(1, 100) as usize;
+
+    let messages = agent.history.list_recent_messages(thread_id, count).await?;
+    if messages.is_empty() {
+        return Ok("No prior messages found for this gateway thread.".to_string());
+    }
+
+    let mut lines = Vec::with_capacity(messages.len() + 1);
+    lines.push(format!(
+        "Recent gateway thread history ({} messages):",
+        messages.len()
+    ));
+    for msg in messages {
+        let role = msg.role;
+        let content = msg
+            .content
+            .replace('\n', " ")
+            .chars()
+            .take(240)
+            .collect::<String>();
+        lines.push(format!("- {role}: {content}"));
+    }
+    Ok(lines.join("\n"))
+}
+
 async fn execute_session_search(
     args: &serde_json::Value,
     session_manager: &Arc<SessionManager>,
@@ -2784,7 +2944,7 @@ async fn execute_exa_search(
                     } else {
                         text.to_string()
                     };
-                    format!("- **{title}**\n  {url}\n  {snippet}")
+                    format_result_with_authority(title, url, &snippet)
                 })
                 .collect::<Vec<_>>()
         })
@@ -2843,7 +3003,7 @@ async fn execute_tavily_search(
                     } else {
                         content.to_string()
                     };
-                    format!("- **{title}**\n  {url}\n  {snippet}")
+                    format_result_with_authority(title, url, &snippet)
                 })
                 .collect::<Vec<_>>()
         })
@@ -2888,7 +3048,10 @@ async fn execute_ddg_search(
                 let text_start = href_end + 2;
                 if let Some(text_end) = trimmed[text_start..].find("</a>") {
                     let title = &trimmed[text_start..text_start + text_end];
-                    results.push(format!("- {title}\n  {url}"));
+                    results.push(format!(
+                        "- [{}] {title}\n  {url}",
+                        classify_source_authority(url)
+                    ));
                 }
             }
         }
@@ -4451,6 +4614,158 @@ async fn execute_spawn_subagent(
     ))
 }
 
+async fn execute_route_to_specialist(
+    args: &serde_json::Value,
+    agent: &AgentEngine,
+    thread_id: &str,
+    task_id: Option<&str>,
+) -> Result<String> {
+    let task_description = args
+        .get("task_description")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'task_description' argument"))?
+        .to_string();
+    let capability_tags: Vec<String> = args
+        .get("capability_tags")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    if capability_tags.is_empty() {
+        anyhow::bail!("'capability_tags' must be a non-empty array of strings");
+    }
+    let acceptance_criteria = args
+        .get("acceptance_criteria")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("non_empty")
+        .to_string();
+    let current_depth: u8 = args
+        .get("current_depth")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u8;
+
+    match agent
+        .route_handoff(
+            &task_description,
+            &capability_tags,
+            task_id,
+            None, // goal_run_id
+            thread_id,
+            &acceptance_criteria,
+            current_depth,
+        )
+        .await
+    {
+        Ok(result) => {
+            let response = serde_json::json!({
+                "status": "dispatched",
+                "task_id": result.task_id,
+                "specialist_name": result.specialist_name,
+                "specialist_profile_id": result.specialist_profile_id,
+                "handoff_log_id": result.handoff_log_id,
+                "context_bundle_tokens": result.context_bundle_tokens,
+            });
+            Ok(serde_json::to_string_pretty(&response).unwrap_or_else(|_| "{}".to_string()))
+        }
+        Err(e) => Ok(format!("Handoff failed: {e}")),
+    }
+}
+
+async fn execute_run_divergent(
+    args: &serde_json::Value,
+    agent: &AgentEngine,
+    thread_id: &str,
+    task_id: Option<&str>,
+) -> Result<String> {
+    let problem_statement = args
+        .get("problem_statement")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'problem_statement' argument"))?
+        .to_string();
+
+    // Parse optional custom framings
+    let custom_framings = args
+        .get("custom_framings")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let label = item.get("label")?.as_str()?.trim().to_string();
+                    let prompt = item
+                        .get("system_prompt_override")?
+                        .as_str()?
+                        .trim()
+                        .to_string();
+                    if label.is_empty() || prompt.is_empty() {
+                        return None;
+                    }
+                    Some(super::handoff::divergent::Framing {
+                        label,
+                        system_prompt_override: prompt,
+                        task_id: None,
+                        contribution_id: None,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|v| v.len() >= 2);
+
+    // Derive goal_run_id from context if available
+    let goal_run_id = task_id.and_then(|_tid| {
+        // Convention: goal-sourced tasks have source "goal_run"
+        // but we don't have direct access here; pass None
+        // and let start_divergent_session work without it
+        None::<&str>
+    });
+
+    match agent
+        .start_divergent_session(&problem_statement, custom_framings, thread_id, goal_run_id)
+        .await
+    {
+        Ok(session_id) => {
+            let response = serde_json::json!({
+                "status": "started",
+                "session_id": session_id,
+                "problem_statement": problem_statement,
+                "message": "Divergent session started. Parallel framings are being processed. Use get_divergent_session with this session_id to retrieve progress, tensions, and mediator output."
+            });
+            Ok(serde_json::to_string_pretty(&response).unwrap_or_else(|_| "{}".to_string()))
+        }
+        Err(e) => Ok(format!("Divergent session failed: {e}")),
+    }
+}
+
+async fn execute_get_divergent_session(
+    args: &serde_json::Value,
+    agent: &AgentEngine,
+) -> Result<String> {
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'session_id' argument"))?;
+
+    match agent.get_divergent_session(session_id).await {
+        Ok(payload) => Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string())),
+        Err(error) => Ok(format!("Failed to fetch divergent session: {error}")),
+    }
+}
+
 async fn execute_list_subagents(
     args: &serde_json::Value,
     agent: &AgentEngine,
@@ -5633,16 +5948,18 @@ mod tests {
     use super::{
         build_list_files_script, build_write_file_command, build_write_file_script,
         command_looks_interactive, command_matches_policy_risk, command_requires_managed_state,
-        execute_headless_shell_command, get_available_tools, managed_alias_args,
-        parse_capture_output, parse_tool_args, resolve_skill_path, should_use_managed_execution,
-        validate_read_path, validate_write_path, wait_for_managed_command_outcome,
+        execute_get_divergent_session, execute_headless_shell_command, get_available_tools,
+        managed_alias_args, parse_capture_output, parse_tool_args, resolve_skill_path,
+        should_use_managed_execution, validate_read_path, validate_write_path,
+        wait_for_managed_command_outcome,
     };
-    use crate::agent::types::AgentConfig;
+    use crate::agent::{types::AgentConfig, AgentEngine};
     use crate::history::SkillVariantRecord;
     use crate::session_manager::SessionManager;
     use amux_protocol::{DaemonMessage, SessionId};
     use base64::Engine;
     use std::fs;
+    use tempfile::tempdir;
     use tokio::sync::broadcast;
     use tokio_util::sync::CancellationToken;
 
@@ -5945,5 +6262,180 @@ mod tests {
         assert!(!scrubbed.contains("sk-live-secret"));
         assert!(!scrubbed.contains("abc123secret"));
         assert!(scrubbed.contains("***REDACTED***"));
+    }
+
+    #[tokio::test]
+    async fn divergent_tool_get_session_serializes_completion_fields() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let session_id = engine
+            .start_divergent_session("pick caching strategy", None, "thread-tool-div", None)
+            .await
+            .expect("start divergent session");
+        let labels = {
+            let sessions = engine.divergent_sessions.read().await;
+            sessions
+                .get(&session_id)
+                .expect("session exists")
+                .framings
+                .iter()
+                .map(|f| f.label.clone())
+                .collect::<Vec<_>>()
+        };
+        for (idx, label) in labels.iter().enumerate() {
+            engine
+                .record_divergent_contribution(
+                    &session_id,
+                    label,
+                    if idx == 0 {
+                        "Prefer deterministic correctness-first approach"
+                    } else {
+                        "Prefer lower-latency pragmatic approach"
+                    },
+                )
+                .await
+                .expect("record contribution");
+        }
+        engine
+            .complete_divergent_session(&session_id)
+            .await
+            .expect("complete divergent session");
+
+        let response = execute_get_divergent_session(
+            &serde_json::json!({ "session_id": session_id }),
+            &engine,
+        )
+        .await
+        .expect("tool execution should succeed");
+        let payload: serde_json::Value =
+            serde_json::from_str(&response).expect("tool payload should be valid JSON");
+        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("complete"));
+        assert!(
+            payload
+                .get("tensions_markdown")
+                .and_then(|v| v.as_str())
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert!(
+            payload
+                .get("mediator_prompt")
+                .and_then(|v| v.as_str())
+                .is_some_and(|value| !value.is_empty())
+        );
+    }
+
+    #[tokio::test]
+    async fn divergent_tool_get_session_in_progress_omits_completion_output() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let session_id = engine
+            .start_divergent_session("evaluate rollout sequence", None, "thread-tool-div-2", None)
+            .await
+            .expect("start divergent session");
+
+        let response = execute_get_divergent_session(
+            &serde_json::json!({ "session_id": session_id }),
+            &engine,
+        )
+        .await
+        .expect("tool execution should succeed");
+        let payload: serde_json::Value =
+            serde_json::from_str(&response).expect("tool payload should be valid JSON");
+        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("running"));
+        assert!(
+            payload.get("tensions_markdown").is_some_and(|v| v.is_null()),
+            "in-progress session should not report tensions output"
+        );
+        assert!(
+            payload.get("mediator_prompt").is_some_and(|v| v.is_null()),
+            "in-progress session should not report mediator output"
+        );
+        let progress = payload
+            .get("framing_progress")
+            .expect("framing_progress should exist");
+        assert_eq!(progress.get("completed").and_then(|v| v.as_u64()), Some(0));
+    }
+
+    // -----------------------------------------------------------------------
+    // Source authority classification tests (UNCR-03)
+    // -----------------------------------------------------------------------
+
+    use super::{classify_source_authority, format_result_with_authority};
+
+    #[test]
+    fn classify_source_authority_official_rust_docs() {
+        assert_eq!(
+            classify_source_authority("https://docs.rust-lang.org/book/"),
+            "official"
+        );
+    }
+
+    #[test]
+    fn classify_source_authority_community_stackoverflow() {
+        assert_eq!(
+            classify_source_authority("https://stackoverflow.com/questions/123"),
+            "community"
+        );
+    }
+
+    #[test]
+    fn classify_source_authority_unknown_random_site() {
+        assert_eq!(
+            classify_source_authority("https://random-site.example.com"),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn classify_source_authority_official_mdn() {
+        assert_eq!(
+            classify_source_authority("https://developer.mozilla.org/en-US/docs"),
+            "official"
+        );
+    }
+
+    #[test]
+    fn classify_source_authority_community_reddit() {
+        assert_eq!(
+            classify_source_authority("https://reddit.com/r/rust"),
+            "community"
+        );
+    }
+
+    #[test]
+    fn classify_source_authority_community_medium() {
+        assert_eq!(
+            classify_source_authority("https://medium.com/@author/article"),
+            "community"
+        );
+    }
+
+    #[test]
+    fn classify_source_authority_official_cppreference() {
+        assert_eq!(
+            classify_source_authority("https://cppreference.com/w/cpp"),
+            "official"
+        );
+    }
+
+    #[test]
+    fn classify_source_authority_empty_string_no_panic() {
+        // Should return "unknown" without panicking.
+        assert_eq!(classify_source_authority(""), "unknown");
+    }
+
+    #[test]
+    fn format_result_with_authority_prepends_official_tag() {
+        let result = format_result_with_authority(
+            "Rust Book",
+            "https://docs.rust-lang.org/book/",
+            "The Rust Programming Language",
+        );
+        assert!(result.starts_with("- [official]"));
+        assert!(result.contains("**Rust Book**"));
+        assert!(result.contains("https://docs.rust-lang.org/book/"));
+        assert!(result.contains("The Rust Programming Language"));
     }
 }

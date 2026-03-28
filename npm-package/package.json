@@ -6,7 +6,7 @@
   "homepage": "https://tamux.app",
   "repository": {
     "type": "git",
-    "url": "https://gitlab.com/anthropic/tamux"
+    "url": "https://github.com/mkurman/tamux"
   },
   "bin": {
     "tamux": "bin/tamux.js"

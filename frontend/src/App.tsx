@@ -8,6 +8,7 @@ import { TitleBar } from "./components/TitleBar";
 import { AgentApprovalOverlay } from "./components/AgentApprovalOverlay";
 // ConciergeToast is rendered inline below — no separate import needed.
 import { SetupOnboardingPanel } from "./components/SetupOnboardingPanel";
+import { OperatorProfileOnboardingPanel } from "./components/OperatorProfileOnboardingPanel";
 import { useAgentMissionStore } from "./lib/agentMissionStore";
 import { clearThreadAbortController, setThreadAbortController, useAgentStore } from "./lib/agentStore";
 import type { AgentProviderConfig } from "./lib/agentStore";
@@ -148,6 +149,22 @@ export default function App() {
       if (event?.type === "concierge_welcome") {
         console.log("[concierge] ConciergeWelcome event! content length:", event.content?.length, "actions:", event.actions?.length);
         applyConciergeWelcome(event);
+        void useAgentStore.getState().maybeStartOperatorProfileOnboarding();
+      }
+      if (event?.type === "operator-profile-session-started") {
+        useAgentStore.getState().applyOperatorProfileSessionStarted(event.data ?? event);
+      }
+      if (event?.type === "operator-profile-question") {
+        useAgentStore.getState().applyOperatorProfileQuestion(event.data ?? event);
+      }
+      if (event?.type === "operator-profile-progress") {
+        useAgentStore.getState().applyOperatorProfileProgress(event.data ?? event);
+      }
+      if (event?.type === "operator-profile-session-completed") {
+        useAgentStore.getState().applyOperatorProfileSessionCompleted(event.data ?? event);
+      }
+      if (event?.type === "operator-profile-summary") {
+        useAgentStore.getState().getOperatorProfileSummary().catch(() => {});
       }
       if (event?.type === "heartbeat_digest" && event.actionable === true) {
         const items = Array.isArray(event.items) ? event.items : [];
@@ -214,13 +231,17 @@ export default function App() {
 
     void useAgentStore.getState().refreshConciergeConfig?.();
 
-    const requestWelcome = () => {
+    const requestWelcome = async () => {
+      const profileState = useAgentStore.getState().operatorProfile;
+      if (profileState.sessionId || profileState.question || profileState.panelOpen) {
+        return;
+      }
       if (!amux.agentRequestConciergeWelcome) {
         console.warn("[concierge] agentRequestConciergeWelcome not available on bridge");
         return;
       }
       console.log("[concierge] sending agentRequestConciergeWelcome");
-      amux.agentRequestConciergeWelcome().catch((e: any) => {
+      await amux.agentRequestConciergeWelcome().catch((e: any) => {
         console.error("[concierge] request failed:", e);
       });
     };
@@ -989,6 +1010,7 @@ export default function App() {
       </Suspense>
 
       <SetupOnboardingPanel />
+      <OperatorProfileOnboardingPanel />
       <AgentApprovalOverlay />
       <ConciergeToast />
     </div>

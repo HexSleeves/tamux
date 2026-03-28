@@ -119,6 +119,7 @@ impl AgentEngine {
         session_id: Option<String>,
         priority: Option<&str>,
         client_request_id: Option<String>,
+        autonomy_level: Option<String>,
     ) -> GoalRun {
         let normalized_goal_key = normalize_goal_key(&goal);
         let normalized_request_id = client_request_id
@@ -197,6 +198,14 @@ impl AgentEngine {
             approval_count: 0,
             steps: Vec::new(),
             events: vec![make_goal_run_event("queue", "goal run created", None)],
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            estimated_cost_usd: None,
+            autonomy_level: autonomy_level
+                .as_deref()
+                .map(super::autonomy::AutonomyLevel::from_str_or_default)
+                .unwrap_or_default(),
+            authorship_tag: None,
         };
 
         self.goal_runs.lock().await.push_back(goal_run.clone());
@@ -303,6 +312,7 @@ impl AgentEngine {
     ) -> bool {
         let mut changed_goal: Option<GoalRun> = None;
         let mut task_to_cancel: Option<String> = None;
+        let mut task_to_release: Option<(String, Option<String>)> = None;
         {
             let mut goal_runs = self.goal_runs.lock().await;
             let Some(goal_run) = goal_runs.iter_mut().find(|item| item.id == goal_run_id) else {
@@ -342,6 +352,30 @@ impl AgentEngine {
                             None,
                         ));
                         changed_goal = Some(goal_run.clone());
+                    }
+                }
+                "acknowledge" | "ack" => {
+                    if goal_run.status == GoalRunStatus::AwaitingApproval {
+                        let current_task_id = goal_run
+                            .steps
+                            .get(goal_run.current_step_index)
+                            .and_then(|step| step.task_id.clone());
+                        let current_ack = goal_run.awaiting_approval_id.clone();
+                        let has_steps = !goal_run.steps.is_empty();
+                        goal_run.status = if has_steps {
+                            GoalRunStatus::Running
+                        } else {
+                            GoalRunStatus::Queued
+                        };
+                        goal_run.updated_at = now_millis();
+                        goal_run.awaiting_approval_id = None;
+                        goal_run.events.push(make_goal_run_event(
+                            "autonomy_acknowledgment",
+                            "supervised acknowledgment received; approval gate cleared",
+                            current_ack.clone(),
+                        ));
+                        changed_goal = Some(goal_run.clone());
+                        task_to_release = current_task_id.map(|task_id| (task_id, current_ack));
                     }
                 }
                 "retry_step" | "retry-step" => {
@@ -403,6 +437,38 @@ impl AgentEngine {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        if let Some((task_id, ack_id)) = task_to_release {
+            let released_task = {
+                let mut tasks = self.tasks.lock().await;
+                if let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) {
+                    if task.status == TaskStatus::AwaitingApproval {
+                        task.status = TaskStatus::Queued;
+                        task.started_at = None;
+                        task.awaiting_approval_id = None;
+                        task.blocked_reason = None;
+                        task.logs.push(make_task_log_entry(
+                            task.retry_count,
+                            TaskLogLevel::Info,
+                            "autonomy_acknowledgment",
+                            "supervised acknowledgment received; task released to queue",
+                            ack_id,
+                        ));
+                        task.progress = task.progress.max(5);
+                        Some(task.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
+            if let Some(task) = released_task {
+                self.persist_tasks().await;
+                self.emit_task_update(&task, Some(status_message(&task).into()));
             }
         }
 
@@ -695,7 +761,8 @@ impl AgentEngine {
         if matches!(decision, amux_protocol::ApprovalDecision::Deny) {
             let correction_desc = format!("Denied approval for task: {}", updated.title);
             let thread_id = updated.thread_id.clone().unwrap_or_default();
-            self.update_counter_who_on_correction(&thread_id, &correction_desc).await;
+            self.update_counter_who_on_correction(&thread_id, &correction_desc)
+                .await;
         }
 
         true
@@ -736,5 +803,202 @@ impl AgentEngine {
         project_task_runs(&tasks, &sessions)
             .into_iter()
             .find(|run| run.id == run_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_manager::SessionManager;
+    use tempfile::tempdir;
+
+    fn sample_supervised_goal_run(goal_run_id: &str, task_id: &str, approval_id: &str) -> GoalRun {
+        GoalRun {
+            id: goal_run_id.to_string(),
+            title: "supervised goal".to_string(),
+            goal: "verify explicit acknowledgment".to_string(),
+            client_request_id: None,
+            status: GoalRunStatus::AwaitingApproval,
+            priority: TaskPriority::Normal,
+            created_at: now_millis(),
+            updated_at: now_millis(),
+            started_at: Some(now_millis()),
+            completed_at: None,
+            thread_id: None,
+            session_id: None,
+            current_step_index: 0,
+            current_step_title: Some("step-1".to_string()),
+            current_step_kind: Some(GoalRunStepKind::Command),
+            replan_count: 0,
+            max_replans: 2,
+            plan_summary: Some("plan".to_string()),
+            reflection_summary: None,
+            memory_updates: Vec::new(),
+            generated_skill_path: None,
+            last_error: None,
+            failure_cause: None,
+            child_task_ids: vec![task_id.to_string()],
+            child_task_count: 1,
+            approval_count: 0,
+            awaiting_approval_id: Some(approval_id.to_string()),
+            active_task_id: Some(task_id.to_string()),
+            duration_ms: None,
+            steps: vec![GoalRunStep {
+                id: "step-1".to_string(),
+                position: 0,
+                title: "step-1".to_string(),
+                instructions: "do supervised work".to_string(),
+                kind: GoalRunStepKind::Command,
+                success_criteria: "done".to_string(),
+                session_id: None,
+                status: GoalRunStepStatus::InProgress,
+                task_id: Some(task_id.to_string()),
+                summary: None,
+                error: None,
+                started_at: Some(now_millis()),
+                completed_at: None,
+            }],
+            events: Vec::new(),
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            estimated_cost_usd: None,
+            autonomy_level: super::autonomy::AutonomyLevel::Supervised,
+            authorship_tag: None,
+        }
+    }
+
+    async fn sample_awaiting_task(
+        engine: &AgentEngine,
+        goal_run_id: &str,
+        task_id: &str,
+        approval_id: &str,
+    ) {
+        engine.tasks.lock().await.push_back(AgentTask {
+            id: task_id.to_string(),
+            title: "step task".to_string(),
+            description: "goal step work".to_string(),
+            status: TaskStatus::AwaitingApproval,
+            priority: TaskPriority::Normal,
+            progress: 30,
+            created_at: now_millis(),
+            started_at: Some(now_millis()),
+            completed_at: None,
+            error: None,
+            result: None,
+            thread_id: None,
+            source: "goal_run".to_string(),
+            notify_on_complete: false,
+            notify_channels: Vec::new(),
+            dependencies: Vec::new(),
+            command: None,
+            session_id: None,
+            goal_run_id: Some(goal_run_id.to_string()),
+            goal_run_title: Some("supervised goal".to_string()),
+            goal_step_id: Some("step-1".to_string()),
+            goal_step_title: Some("step-1".to_string()),
+            parent_task_id: None,
+            parent_thread_id: None,
+            runtime: "daemon".to_string(),
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            scheduled_at: None,
+            blocked_reason: Some("awaiting supervised acknowledgment".to_string()),
+            awaiting_approval_id: Some(approval_id.to_string()),
+            lane_id: None,
+            last_error: None,
+            logs: Vec::new(),
+            tool_whitelist: None,
+            tool_blacklist: None,
+            context_budget_tokens: None,
+            context_overflow_action: None,
+            termination_conditions: None,
+            success_criteria: None,
+            max_duration_secs: None,
+            supervisor_config: None,
+            override_provider: None,
+            override_model: None,
+            override_system_prompt: None,
+            sub_agent_def_id: None,
+        });
+    }
+
+    #[tokio::test]
+    async fn resume_does_not_clear_supervised_awaiting_approval_gate() {
+        let root = tempdir().expect("temp dir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let goal_run_id = "goal-supervised";
+        let task_id = "task-supervised";
+        let approval_id = "autonomy-ack-1";
+
+        engine.goal_runs.lock().await.push_back(sample_supervised_goal_run(
+            goal_run_id,
+            task_id,
+            approval_id,
+        ));
+        sample_awaiting_task(&engine, goal_run_id, task_id, approval_id).await;
+
+        let changed = engine.control_goal_run(goal_run_id, "resume", None).await;
+        assert!(
+            !changed,
+            "resume should not mutate awaiting-approval supervised runs"
+        );
+
+        let goal = engine
+            .get_goal_run(goal_run_id)
+            .await
+            .expect("goal should exist");
+        assert_eq!(goal.status, GoalRunStatus::AwaitingApproval);
+        assert_eq!(goal.awaiting_approval_id.as_deref(), Some(approval_id));
+
+        let task = engine
+            .tasks
+            .lock()
+            .await
+            .iter()
+            .find(|task| task.id == task_id)
+            .cloned()
+            .expect("task should exist");
+        assert_eq!(task.status, TaskStatus::AwaitingApproval);
+        assert_eq!(task.awaiting_approval_id.as_deref(), Some(approval_id));
+    }
+
+    #[tokio::test]
+    async fn explicit_acknowledgment_unblocks_goal_and_current_step_task() {
+        let root = tempdir().expect("temp dir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let goal_run_id = "goal-supervised";
+        let task_id = "task-supervised";
+        let approval_id = "autonomy-ack-2";
+
+        engine.goal_runs.lock().await.push_back(sample_supervised_goal_run(
+            goal_run_id,
+            task_id,
+            approval_id,
+        ));
+        sample_awaiting_task(&engine, goal_run_id, task_id, approval_id).await;
+
+        let changed = engine.control_goal_run(goal_run_id, "acknowledge", None).await;
+        assert!(changed, "acknowledge should clear supervised gate");
+
+        let goal = engine
+            .get_goal_run(goal_run_id)
+            .await
+            .expect("goal should exist");
+        assert_eq!(goal.status, GoalRunStatus::Running);
+        assert!(goal.awaiting_approval_id.is_none());
+
+        let task = engine
+            .tasks
+            .lock()
+            .await
+            .iter()
+            .find(|task| task.id == task_id)
+            .cloned()
+            .expect("task should exist");
+        assert_eq!(task.status, TaskStatus::Queued);
+        assert!(task.awaiting_approval_id.is_none());
     }
 }

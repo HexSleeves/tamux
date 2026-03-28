@@ -2,6 +2,18 @@
 
 use super::*;
 
+/// Map a `GoalRunStatus` to an event-kind string for autonomy-level filtering.
+fn goal_run_status_to_event_kind(status: GoalRunStatus) -> &'static str {
+    match status {
+        GoalRunStatus::Completed => "completed",
+        GoalRunStatus::Failed | GoalRunStatus::Cancelled => "failed",
+        GoalRunStatus::Planning => "planning",
+        GoalRunStatus::Running => "step_started",
+        GoalRunStatus::AwaitingApproval => "step_started",
+        GoalRunStatus::Queued | GoalRunStatus::Paused => "step_detail",
+    }
+}
+
 impl AgentEngine {
     pub(super) fn emit_task_update(&self, task: &AgentTask, message: Option<String>) {
         let _ = self.event_tx.send(AgentEvent::TaskUpdate {
@@ -14,6 +26,10 @@ impl AgentEngine {
     }
 
     pub(super) fn emit_goal_run_update(&self, goal_run: &GoalRun, message: Option<String>) {
+        let event_kind = goal_run_status_to_event_kind(goal_run.status);
+        if !super::autonomy::should_emit_event(goal_run.autonomy_level, event_kind) {
+            return;
+        }
         let _ = self.event_tx.send(AgentEvent::GoalRunUpdate {
             goal_run_id: goal_run.id.clone(),
             status: goal_run.status,

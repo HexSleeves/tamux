@@ -130,6 +130,7 @@ enum AgentBridgeCommand {
         session_id: Option<String>,
         priority: Option<String>,
         client_request_id: Option<String>,
+        autonomy_level: Option<String>,
     },
     ListGoalRuns,
     GetGoalRun {
@@ -269,6 +270,22 @@ enum AgentBridgeCommand {
     SetOperatorProfileConsent {
         consent_key: String,
         granted: bool,
+    },
+    ExplainAction {
+        action_id: String,
+        #[serde(default)]
+        step_index: Option<usize>,
+    },
+    StartDivergentSession {
+        problem_statement: String,
+        thread_id: String,
+        #[serde(default)]
+        goal_run_id: Option<String>,
+        #[serde(default)]
+        custom_framings_json: Option<String>,
+    },
+    GetDivergentSession {
+        session_id: String,
     },
     Shutdown,
 }
@@ -1392,6 +1409,7 @@ pub async fn run_agent_bridge() -> Result<()> {
                                 session_id,
                                 priority,
                                 client_request_id,
+                                autonomy_level,
                             } => {
                                 framed.send(ClientMessage::AgentStartGoalRun {
                                     goal,
@@ -1400,6 +1418,7 @@ pub async fn run_agent_bridge() -> Result<()> {
                                     session_id,
                                     priority,
                                     client_request_id,
+                                    autonomy_level,
                                 }).await?;
                             }
                             AgentBridgeCommand::ListGoalRuns => {
@@ -1579,6 +1598,37 @@ pub async fn run_agent_bridge() -> Result<()> {
                             AgentBridgeCommand::SetOperatorProfileConsent { consent_key, granted } => {
                                 framed.send(ClientMessage::AgentSetOperatorProfileConsent { consent_key, granted }).await?;
                             }
+                            AgentBridgeCommand::ExplainAction {
+                                action_id,
+                                step_index,
+                            } => {
+                                framed
+                                    .send(ClientMessage::AgentExplainAction {
+                                        action_id,
+                                        step_index,
+                                    })
+                                    .await?;
+                            }
+                            AgentBridgeCommand::StartDivergentSession {
+                                problem_statement,
+                                thread_id,
+                                goal_run_id,
+                                custom_framings_json,
+                            } => {
+                                framed
+                                    .send(ClientMessage::AgentStartDivergentSession {
+                                        problem_statement,
+                                        thread_id,
+                                        goal_run_id,
+                                        custom_framings_json,
+                                    })
+                                    .await?;
+                            }
+                            AgentBridgeCommand::GetDivergentSession { session_id } => {
+                                framed
+                                    .send(ClientMessage::AgentGetDivergentSession { session_id })
+                                    .await?;
+                            }
                             AgentBridgeCommand::Shutdown => {
                                 framed.send(ClientMessage::AgentUnsubscribe).await?;
                                 break;
@@ -1716,6 +1766,7 @@ pub async fn run_agent_bridge() -> Result<()> {
                         tier, feature_flags_json, activity,
                         active_thread_id, active_goal_run_id, active_goal_run_title,
                         provider_health_json, gateway_statuses_json, recent_actions_json,
+                        diagnostics_json,
                     })) => {
                         let msg = serde_json::json!({
                             "type": "status-response",
@@ -1729,7 +1780,29 @@ pub async fn run_agent_bridge() -> Result<()> {
                                 "provider_health": serde_json::from_str::<serde_json::Value>(&provider_health_json).unwrap_or_default(),
                                 "gateway_statuses": serde_json::from_str::<serde_json::Value>(&gateway_statuses_json).unwrap_or_default(),
                                 "recent_actions": serde_json::from_str::<serde_json::Value>(&recent_actions_json).unwrap_or_default(),
+                                "diagnostics": serde_json::from_str::<serde_json::Value>(&diagnostics_json).unwrap_or_default(),
                             }
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentExplanation { explanation_json })) => {
+                        let msg = serde_json::json!({
+                            "type": "agent-explanation",
+                            "data": serde_json::from_str::<serde_json::Value>(&explanation_json).unwrap_or_default(),
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentDivergentSessionStarted { session_json })) => {
+                        let msg = serde_json::json!({
+                            "type": "agent-divergent-session-started",
+                            "data": serde_json::from_str::<serde_json::Value>(&session_json).unwrap_or_default(),
+                        });
+                        emit_agent_event(&msg.to_string())?;
+                    }
+                    Some(Ok(DaemonMessage::AgentDivergentSession { session_json })) => {
+                        let msg = serde_json::json!({
+                            "type": "agent-divergent-session",
+                            "data": serde_json::from_str::<serde_json::Value>(&session_json).unwrap_or_default(),
                         });
                         emit_agent_event(&msg.to_string())?;
                     }
@@ -1922,6 +1995,10 @@ pub async fn run_agent_bridge() -> Result<()> {
                         let msg = serde_json::json!({"type":"error","message":message});
                         emit_agent_event(&msg.to_string())?;
                     }
+                    Some(Ok(DaemonMessage::AgentError { message })) => {
+                        let msg = serde_json::json!({"type":"error","message":message});
+                        emit_agent_event(&msg.to_string())?;
+                    }
                     Some(Ok(_)) => {} // Ignore non-agent messages
                     Some(Err(error)) => return Err(error.into()),
                     None => {
@@ -2082,8 +2159,8 @@ mod tests {
     #[test]
     fn operator_profile_bridge_commands_deserialize() {
         let json = r#"{"type":"start-operator-profile-session","kind":"onboarding"}"#;
-        let cmd: AgentBridgeCommand = serde_json::from_str(json)
-            .expect("start-operator-profile-session must deserialize");
+        let cmd: AgentBridgeCommand =
+            serde_json::from_str(json).expect("start-operator-profile-session must deserialize");
         match cmd {
             AgentBridgeCommand::StartOperatorProfileSession { kind } => {
                 assert_eq!(kind, "onboarding");
@@ -2092,8 +2169,8 @@ mod tests {
         }
 
         let json = r#"{"type":"next-operator-profile-question","session_id":"s1"}"#;
-        let cmd: AgentBridgeCommand = serde_json::from_str(json)
-            .expect("next-operator-profile-question must deserialize");
+        let cmd: AgentBridgeCommand =
+            serde_json::from_str(json).expect("next-operator-profile-question must deserialize");
         match cmd {
             AgentBridgeCommand::NextOperatorProfileQuestion { session_id } => {
                 assert_eq!(session_id, "s1");
@@ -2102,8 +2179,8 @@ mod tests {
         }
 
         let json = r#"{"type":"submit-operator-profile-answer","session_id":"s1","question_id":"q1","answer_json":"\"yes\""}"#;
-        let cmd: AgentBridgeCommand = serde_json::from_str(json)
-            .expect("submit-operator-profile-answer must deserialize");
+        let cmd: AgentBridgeCommand =
+            serde_json::from_str(json).expect("submit-operator-profile-answer must deserialize");
         match cmd {
             AgentBridgeCommand::SubmitOperatorProfileAnswer {
                 session_id,
@@ -2117,9 +2194,10 @@ mod tests {
             _ => panic!("unexpected variant for submit-operator-profile-answer"),
         }
 
-        let json = r#"{"type":"skip-operator-profile-question","session_id":"s1","question_id":"q1"}"#;
-        let cmd: AgentBridgeCommand = serde_json::from_str(json)
-            .expect("skip-operator-profile-question must deserialize");
+        let json =
+            r#"{"type":"skip-operator-profile-question","session_id":"s1","question_id":"q1"}"#;
+        let cmd: AgentBridgeCommand =
+            serde_json::from_str(json).expect("skip-operator-profile-question must deserialize");
         match cmd {
             AgentBridgeCommand::SkipOperatorProfileQuestion {
                 session_id,
@@ -2134,8 +2212,8 @@ mod tests {
         }
 
         let json = r#"{"type":"defer-operator-profile-question","session_id":"s1","question_id":"q1","defer_until_unix_ms":1700000000000}"#;
-        let cmd: AgentBridgeCommand = serde_json::from_str(json)
-            .expect("defer-operator-profile-question must deserialize");
+        let cmd: AgentBridgeCommand =
+            serde_json::from_str(json).expect("defer-operator-profile-question must deserialize");
         match cmd {
             AgentBridgeCommand::DeferOperatorProfileQuestion {
                 session_id,
@@ -2150,16 +2228,17 @@ mod tests {
         }
 
         let json = r#"{"type":"get-operator-profile-summary"}"#;
-        let cmd: AgentBridgeCommand = serde_json::from_str(json)
-            .expect("get-operator-profile-summary must deserialize");
+        let cmd: AgentBridgeCommand =
+            serde_json::from_str(json).expect("get-operator-profile-summary must deserialize");
         assert!(
             matches!(cmd, AgentBridgeCommand::GetOperatorProfileSummary),
             "expected GetOperatorProfileSummary"
         );
 
-        let json = r#"{"type":"set-operator-profile-consent","consent_key":"analytics","granted":true}"#;
-        let cmd: AgentBridgeCommand = serde_json::from_str(json)
-            .expect("set-operator-profile-consent must deserialize");
+        let json =
+            r#"{"type":"set-operator-profile-consent","consent_key":"analytics","granted":true}"#;
+        let cmd: AgentBridgeCommand =
+            serde_json::from_str(json).expect("set-operator-profile-consent must deserialize");
         match cmd {
             AgentBridgeCommand::SetOperatorProfileConsent {
                 consent_key,
@@ -2187,24 +2266,36 @@ mod tests {
         // Missing required field `session_id` for NextOperatorProfileQuestion must fail.
         let result: Result<AgentBridgeCommand, _> =
             serde_json::from_str(r#"{"type":"next-operator-profile-question"}"#);
-        assert!(result.is_err(), "missing `session_id` should not deserialize");
+        assert!(
+            result.is_err(),
+            "missing `session_id` should not deserialize"
+        );
 
         // Wrong type for `granted` (string instead of bool) must fail.
         let result: Result<AgentBridgeCommand, _> = serde_json::from_str(
             r#"{"type":"set-operator-profile-consent","consent_key":"analytics","granted":"yes"}"#,
         );
-        assert!(result.is_err(), "wrong field type for `granted` should not deserialize");
+        assert!(
+            result.is_err(),
+            "wrong field type for `granted` should not deserialize"
+        );
 
         // Missing required field `question_id` for SubmitOperatorProfileAnswer must fail.
         let result: Result<AgentBridgeCommand, _> = serde_json::from_str(
             r#"{"type":"submit-operator-profile-answer","session_id":"s1","answer_json":"\"v\""}"#,
         );
-        assert!(result.is_err(), "missing `question_id` should not deserialize");
+        assert!(
+            result.is_err(),
+            "missing `question_id` should not deserialize"
+        );
 
         // Wrong type for `defer_until_unix_ms` (string instead of number) must fail.
         let result: Result<AgentBridgeCommand, _> = serde_json::from_str(
             r#"{"type":"defer-operator-profile-question","session_id":"s1","question_id":"q1","defer_until_unix_ms":"soon"}"#,
         );
-        assert!(result.is_err(), "wrong type for `defer_until_unix_ms` should not deserialize");
+        assert!(
+            result.is_err(),
+            "wrong type for `defer_until_unix_ms` should not deserialize"
+        );
     }
 }

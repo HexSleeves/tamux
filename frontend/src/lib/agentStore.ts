@@ -280,6 +280,7 @@ const OPENAI_CHATGPT_SUBSCRIPTION_MODELS: ModelDefinition[] = [
 ];
 
 const ZAI_MODELS: ModelDefinition[] = [
+  { id: "glm-5.1", name: "GLM-5.1", contextWindow: 204800 },
   { id: "glm-5", name: "GLM-5", contextWindow: 128000 },
   { id: "glm-4-plus", name: "GLM-4 Plus", contextWindow: 128000 },
   { id: "glm-4", name: "GLM-4", contextWindow: 128000 },
@@ -778,6 +779,32 @@ export interface AgentState {
   updateConciergeConfig: (config: Record<string, unknown>) => Promise<void>;
   dismissConciergeWelcome: () => Promise<void>;
 
+  // Operator profile onboarding
+  operatorProfile: {
+    panelOpen: boolean;
+    loading: boolean;
+    error: string | null;
+    sessionId: string | null;
+    sessionKind: string | null;
+    question: OperatorProfileQuestion | null;
+    progress: OperatorProfileProgress | null;
+    summary: OperatorProfileSummary | null;
+    lastCompletedAt: number | null;
+  };
+  setOperatorProfilePanelOpen: (open: boolean) => void;
+  applyOperatorProfileSessionStarted: (event: OperatorProfileSessionStarted) => void;
+  applyOperatorProfileQuestion: (question: OperatorProfileQuestion) => void;
+  applyOperatorProfileProgress: (progress: OperatorProfileProgress) => void;
+  applyOperatorProfileSessionCompleted: (completed: OperatorProfileSessionCompleted) => void;
+  startOperatorProfileSession: (kind?: string) => Promise<OperatorProfileQuestion | null>;
+  fetchNextOperatorProfileQuestion: (sessionId?: string) => Promise<OperatorProfileQuestion | null>;
+  submitOperatorProfileAnswer: (answer: unknown) => Promise<void>;
+  skipOperatorProfileQuestion: (reason?: string | null) => Promise<void>;
+  deferOperatorProfileQuestion: (deferUntilUnixMs?: number | null) => Promise<void>;
+  getOperatorProfileSummary: () => Promise<OperatorProfileSummary | null>;
+  setOperatorProfileConsent: (consentKey: string, granted: boolean) => Promise<boolean>;
+  maybeStartOperatorProfileOnboarding: () => Promise<void>;
+
   // Gateway status
   gatewayStatuses: Record<string, { status: string; lastError?: string; consecutiveFailures?: number; updatedAt: number }>;
   setGatewayStatus: (platform: string, status: string, lastError?: string, consecutiveFailures?: number) => void;
@@ -945,6 +972,59 @@ type AgentDbApi = {
   dbAddMessage?: (message: AgentDbMessageRecord) => Promise<boolean>;
   dbDeleteMessage?: (threadId: string, messageId: string) => Promise<boolean>;
   dbListMessages?: (threadId: string, limit?: number | null) => Promise<AgentDbMessageRecord[]>;
+};
+
+export interface OperatorProfileQuestion {
+  session_id: string;
+  question_id: string;
+  field_key: string;
+  prompt: string;
+  input_kind: string;
+  optional: boolean;
+}
+
+export interface OperatorProfileProgress {
+  session_id: string;
+  answered: number;
+  remaining: number;
+  completion_ratio: number;
+}
+
+export interface OperatorProfileConsent {
+  consent_key: string;
+  granted: boolean;
+  updated_at: number;
+}
+
+export interface OperatorProfileCheckin {
+  id: string;
+  kind: string;
+  status: string;
+  scheduled_at: number | null;
+  shown_at: number | null;
+  response_json: string | null;
+}
+
+export interface OperatorProfileSummary {
+  field_count: number;
+  fields: Record<string, {
+    value: unknown;
+    confidence: number;
+    source: string;
+    updated_at: number;
+  }>;
+  consents: OperatorProfileConsent[];
+  checkins: OperatorProfileCheckin[];
+}
+
+type OperatorProfileSessionStarted = {
+  session_id: string;
+  kind?: string;
+};
+
+type OperatorProfileSessionCompleted = {
+  session_id: string;
+  updated_fields?: string[];
 };
 
 type RemoteAgentMessageRecord = {
@@ -1255,6 +1335,122 @@ function isValidProviderAuthStates(value: unknown): value is ProviderAuthState[]
       && typeof (entry as ProviderAuthState).provider_name === "string");
 }
 
+function isOperatorProfileError(value: unknown): value is { error: string } {
+  return Boolean(
+    value
+    && typeof value === "object"
+    && typeof (value as { error?: unknown }).error === "string",
+  );
+}
+
+function isOperatorProfileSessionStarted(
+  value: unknown,
+): value is OperatorProfileSessionStarted {
+  return Boolean(
+    value
+    && typeof value === "object"
+    && typeof (value as OperatorProfileSessionStarted).session_id === "string",
+  );
+}
+
+function isOperatorProfileQuestion(value: unknown): value is OperatorProfileQuestion {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const question = value as Partial<OperatorProfileQuestion>;
+  return (
+    typeof question.session_id === "string"
+    && typeof question.question_id === "string"
+    && typeof question.field_key === "string"
+    && typeof question.prompt === "string"
+    && typeof question.input_kind === "string"
+    && typeof question.optional === "boolean"
+  );
+}
+
+function isOperatorProfileProgress(value: unknown): value is OperatorProfileProgress {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const progress = value as Partial<OperatorProfileProgress>;
+  return (
+    typeof progress.session_id === "string"
+    && typeof progress.answered === "number"
+    && typeof progress.remaining === "number"
+    && typeof progress.completion_ratio === "number"
+  );
+}
+
+function isOperatorProfileSessionCompleted(
+  value: unknown,
+): value is OperatorProfileSessionCompleted {
+  return Boolean(
+    value
+    && typeof value === "object"
+    && typeof (value as OperatorProfileSessionCompleted).session_id === "string",
+  );
+}
+
+function parseOperatorProfileSummary(value: unknown): OperatorProfileSummary | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const field_count = typeof record.field_count === "number" ? record.field_count : 0;
+  const rawFields = record.fields;
+  const fields = (rawFields && typeof rawFields === "object" && !Array.isArray(rawFields))
+    ? rawFields as Record<string, { value: unknown; confidence?: number; source?: string; updated_at?: number }>
+    : {};
+  const normalizedFields: OperatorProfileSummary["fields"] = {};
+  for (const [key, entry] of Object.entries(fields)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    normalizedFields[key] = {
+      value: entry.value,
+      confidence: typeof entry.confidence === "number" ? entry.confidence : 0,
+      source: typeof entry.source === "string" ? entry.source : "unknown",
+      updated_at: typeof entry.updated_at === "number" ? entry.updated_at : 0,
+    };
+  }
+  const consents = Array.isArray(record.consents)
+    ? record.consents
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => {
+        const consent = entry as Record<string, unknown>;
+        return {
+          consent_key: typeof consent.consent_key === "string" ? consent.consent_key : "",
+          granted: consent.granted === true,
+          updated_at: typeof consent.updated_at === "number" ? consent.updated_at : 0,
+        } satisfies OperatorProfileConsent;
+      })
+      .filter((entry) => entry.consent_key.length > 0)
+    : [];
+  const checkins = Array.isArray(record.checkins)
+    ? record.checkins
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => {
+        const checkin = entry as Record<string, unknown>;
+        return {
+          id: typeof checkin.id === "string" ? checkin.id : "",
+          kind: typeof checkin.kind === "string" ? checkin.kind : "unknown",
+          status: typeof checkin.status === "string" ? checkin.status : "unknown",
+          scheduled_at: typeof checkin.scheduled_at === "number" ? checkin.scheduled_at : null,
+          shown_at: typeof checkin.shown_at === "number" ? checkin.shown_at : null,
+          response_json: typeof checkin.response_json === "string" ? checkin.response_json : null,
+        } satisfies OperatorProfileCheckin;
+      })
+      .filter((entry) => entry.id.length > 0)
+    : [];
+
+  return {
+    field_count,
+    fields: normalizedFields,
+    consents,
+    checkins,
+  };
+}
+
 function syncChatCounters(chat: AgentChatState) {
   let maxThread = 0;
   let maxMessage = 0;
@@ -1286,6 +1482,17 @@ function persistDaemonThreadMap(threads: AgentThread[]) {
       .map((thread) => [thread.id, thread.daemonThreadId]),
   );
   scheduleJsonWrite(AGENT_DAEMON_THREAD_MAP_FILE, mapping);
+}
+
+const OPERATOR_PROFILE_REQUIRED_FIELDS = ["name", "role", "primary_language"] as const;
+
+function hasRequiredOperatorProfileFields(summary: OperatorProfileSummary | null): boolean {
+  if (!summary) {
+    return false;
+  }
+  return OPERATOR_PROFILE_REQUIRED_FIELDS.every((fieldKey) =>
+    Object.prototype.hasOwnProperty.call(summary.fields, fieldKey),
+  );
 }
 
 function serializeThread(thread: AgentThread): AgentDbThreadRecord {
@@ -1865,6 +2072,586 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         }
       }
     } catch { /* ignore */ }
+  },
+  operatorProfile: {
+    panelOpen: false,
+    loading: false,
+    error: null,
+    sessionId: null,
+    sessionKind: null,
+    question: null,
+    progress: null,
+    summary: null,
+    lastCompletedAt: null,
+  },
+  setOperatorProfilePanelOpen: (open) => {
+    set((state) => ({
+      operatorProfile: {
+        ...state.operatorProfile,
+        panelOpen: open,
+      },
+    }));
+  },
+  applyOperatorProfileSessionStarted: (event) => {
+    if (!event?.session_id) {
+      return;
+    }
+    set((state) => ({
+      operatorProfile: {
+        ...state.operatorProfile,
+        panelOpen: true,
+        loading: false,
+        error: null,
+        sessionId: event.session_id,
+        sessionKind: typeof event.kind === "string" ? event.kind : state.operatorProfile.sessionKind,
+      },
+    }));
+  },
+  applyOperatorProfileQuestion: (question) => {
+    if (!isOperatorProfileQuestion(question)) {
+      return;
+    }
+    set((state) => ({
+      operatorProfile: {
+        ...state.operatorProfile,
+        panelOpen: true,
+        loading: false,
+        error: null,
+        sessionId: question.session_id,
+        question,
+      },
+    }));
+  },
+  applyOperatorProfileProgress: (progress) => {
+    if (!isOperatorProfileProgress(progress)) {
+      return;
+    }
+    set((state) => ({
+      operatorProfile: {
+        ...state.operatorProfile,
+        loading: false,
+        error: null,
+        sessionId: progress.session_id,
+        progress,
+      },
+    }));
+  },
+  applyOperatorProfileSessionCompleted: (completed) => {
+    if (!completed?.session_id) {
+      return;
+    }
+    set((state) => ({
+      operatorProfile: {
+        ...state.operatorProfile,
+        panelOpen: false,
+        loading: false,
+        error: null,
+        sessionId: null,
+        sessionKind: null,
+        question: null,
+        lastCompletedAt: Date.now(),
+      },
+    }));
+    void get().getOperatorProfileSummary();
+  },
+  startOperatorProfileSession: async (kind = "first_run_onboarding") => {
+    const bridge = getBridge();
+    if (!bridge?.agentStartOperatorProfileSession) {
+      set((state) => ({
+        operatorProfile: {
+          ...state.operatorProfile,
+          loading: false,
+          error: "Operator profile bridge not available",
+        },
+      }));
+      return null;
+    }
+    set((state) => ({
+      operatorProfile: {
+        ...state.operatorProfile,
+        panelOpen: true,
+        loading: true,
+        error: null,
+      },
+    }));
+    try {
+      const started = await bridge.agentStartOperatorProfileSession(kind);
+      if (isOperatorProfileError(started)) {
+        set((state) => ({
+          operatorProfile: {
+            ...state.operatorProfile,
+            loading: false,
+            error: started.error,
+          },
+        }));
+        return null;
+      }
+      if (!isOperatorProfileSessionStarted(started)) {
+        set((state) => ({
+          operatorProfile: {
+            ...state.operatorProfile,
+            loading: false,
+            error: "Unexpected operator profile session start response",
+          },
+        }));
+        return null;
+      }
+      set((state) => ({
+        operatorProfile: {
+          ...state.operatorProfile,
+          panelOpen: true,
+          loading: false,
+          error: null,
+          sessionId: started.session_id,
+          sessionKind: typeof started.kind === "string" ? started.kind : kind,
+          question: null,
+        },
+      }));
+      return await get().fetchNextOperatorProfileQuestion(started.session_id);
+    } catch (error) {
+      set((state) => ({
+        operatorProfile: {
+          ...state.operatorProfile,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
+      return null;
+    }
+  },
+  fetchNextOperatorProfileQuestion: async (sessionId) => {
+    const bridge = getBridge();
+    const resolvedSessionId = sessionId ?? get().operatorProfile.sessionId;
+    if (!resolvedSessionId || !bridge?.agentNextOperatorProfileQuestion) {
+      return null;
+    }
+    set((state) => ({
+      operatorProfile: {
+        ...state.operatorProfile,
+        loading: true,
+        error: null,
+      },
+    }));
+    try {
+      const response = await bridge.agentNextOperatorProfileQuestion(resolvedSessionId);
+      if (isOperatorProfileError(response)) {
+        set((state) => ({
+          operatorProfile: {
+            ...state.operatorProfile,
+            loading: false,
+            error: response.error,
+          },
+        }));
+        return null;
+      }
+      if (isOperatorProfileSessionCompleted(response)) {
+        set((state) => ({
+          operatorProfile: {
+            ...state.operatorProfile,
+            loading: false,
+            panelOpen: false,
+            sessionId: null,
+            sessionKind: null,
+            question: null,
+            lastCompletedAt: Date.now(),
+          },
+        }));
+        void get().getOperatorProfileSummary();
+        return null;
+      }
+      if (!isOperatorProfileQuestion(response)) {
+        set((state) => ({
+          operatorProfile: {
+            ...state.operatorProfile,
+            loading: false,
+            error: "Unexpected operator profile question response",
+          },
+        }));
+        return null;
+      }
+      set((state) => ({
+        operatorProfile: {
+          ...state.operatorProfile,
+          loading: false,
+          panelOpen: true,
+          error: null,
+          sessionId: response.session_id,
+          question: response,
+        },
+      }));
+      return response;
+    } catch (error) {
+      set((state) => ({
+        operatorProfile: {
+          ...state.operatorProfile,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
+      return null;
+    }
+  },
+  submitOperatorProfileAnswer: async (answer) => {
+    const bridge = getBridge();
+    const state = get().operatorProfile;
+    if (!state.sessionId || !state.question || !bridge?.agentSubmitOperatorProfileAnswer) {
+      return;
+    }
+    set((prev) => ({
+      operatorProfile: {
+        ...prev.operatorProfile,
+        loading: true,
+        error: null,
+      },
+    }));
+    try {
+      const response = await bridge.agentSubmitOperatorProfileAnswer(
+        state.sessionId,
+        state.question.question_id,
+        JSON.stringify(answer ?? null),
+      );
+      if (isOperatorProfileError(response)) {
+        set((prev) => ({
+          operatorProfile: {
+            ...prev.operatorProfile,
+            loading: false,
+            error: response.error,
+          },
+        }));
+        return;
+      }
+      if (isOperatorProfileSessionCompleted(response)) {
+        set((prev) => ({
+          operatorProfile: {
+            ...prev.operatorProfile,
+            loading: false,
+            panelOpen: false,
+            sessionId: null,
+            sessionKind: null,
+            question: null,
+            lastCompletedAt: Date.now(),
+          },
+        }));
+        await get().getOperatorProfileSummary();
+        return;
+      }
+      if (!isOperatorProfileProgress(response)) {
+        set((prev) => ({
+          operatorProfile: {
+            ...prev.operatorProfile,
+            loading: false,
+            error: "Unexpected operator profile progress response",
+          },
+        }));
+        return;
+      }
+      set((prev) => ({
+        operatorProfile: {
+          ...prev.operatorProfile,
+          loading: false,
+          progress: response,
+        },
+      }));
+      await get().fetchNextOperatorProfileQuestion(response.session_id);
+    } catch (error) {
+      set((prev) => ({
+        operatorProfile: {
+          ...prev.operatorProfile,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
+    }
+  },
+  skipOperatorProfileQuestion: async (reason) => {
+    const bridge = getBridge();
+    const state = get().operatorProfile;
+    if (!state.sessionId || !state.question || !bridge?.agentSkipOperatorProfileQuestion) {
+      return;
+    }
+    set((prev) => ({
+      operatorProfile: {
+        ...prev.operatorProfile,
+        loading: true,
+        error: null,
+      },
+    }));
+    try {
+      const response = await bridge.agentSkipOperatorProfileQuestion(
+        state.sessionId,
+        state.question.question_id,
+        reason,
+      );
+      if (isOperatorProfileError(response)) {
+        set((prev) => ({
+          operatorProfile: {
+            ...prev.operatorProfile,
+            loading: false,
+            error: response.error,
+          },
+        }));
+        return;
+      }
+      if (isOperatorProfileSessionCompleted(response)) {
+        set((prev) => ({
+          operatorProfile: {
+            ...prev.operatorProfile,
+            loading: false,
+            panelOpen: false,
+            sessionId: null,
+            sessionKind: null,
+            question: null,
+            lastCompletedAt: Date.now(),
+          },
+        }));
+        await get().getOperatorProfileSummary();
+        return;
+      }
+      if (!isOperatorProfileProgress(response)) {
+        set((prev) => ({
+          operatorProfile: {
+            ...prev.operatorProfile,
+            loading: false,
+            error: "Unexpected operator profile progress response",
+          },
+        }));
+        return;
+      }
+      set((prev) => ({
+        operatorProfile: {
+          ...prev.operatorProfile,
+          loading: false,
+          progress: response,
+        },
+      }));
+      await get().fetchNextOperatorProfileQuestion(response.session_id);
+    } catch (error) {
+      set((prev) => ({
+        operatorProfile: {
+          ...prev.operatorProfile,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
+    }
+  },
+  deferOperatorProfileQuestion: async (deferUntilUnixMs) => {
+    const bridge = getBridge();
+    const state = get().operatorProfile;
+    if (!state.sessionId || !state.question || !bridge?.agentDeferOperatorProfileQuestion) {
+      return;
+    }
+    set((prev) => ({
+      operatorProfile: {
+        ...prev.operatorProfile,
+        loading: true,
+        error: null,
+      },
+    }));
+    try {
+      const response = await bridge.agentDeferOperatorProfileQuestion(
+        state.sessionId,
+        state.question.question_id,
+        deferUntilUnixMs,
+      );
+      if (isOperatorProfileError(response)) {
+        set((prev) => ({
+          operatorProfile: {
+            ...prev.operatorProfile,
+            loading: false,
+            error: response.error,
+          },
+        }));
+        return;
+      }
+      if (isOperatorProfileSessionCompleted(response)) {
+        set((prev) => ({
+          operatorProfile: {
+            ...prev.operatorProfile,
+            loading: false,
+            panelOpen: false,
+            sessionId: null,
+            sessionKind: null,
+            question: null,
+            lastCompletedAt: Date.now(),
+          },
+        }));
+        await get().getOperatorProfileSummary();
+        return;
+      }
+      if (!isOperatorProfileProgress(response)) {
+        set((prev) => ({
+          operatorProfile: {
+            ...prev.operatorProfile,
+            loading: false,
+            error: "Unexpected operator profile progress response",
+          },
+        }));
+        return;
+      }
+      set((prev) => ({
+        operatorProfile: {
+          ...prev.operatorProfile,
+          loading: false,
+          progress: response,
+        },
+      }));
+      await get().fetchNextOperatorProfileQuestion(response.session_id);
+    } catch (error) {
+      set((prev) => ({
+        operatorProfile: {
+          ...prev.operatorProfile,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
+    }
+  },
+  getOperatorProfileSummary: async () => {
+    const bridge = getBridge();
+    if (!bridge?.agentGetOperatorProfileSummary) {
+      return null;
+    }
+    set((state) => ({
+      operatorProfile: {
+        ...state.operatorProfile,
+        loading: state.operatorProfile.panelOpen ? true : state.operatorProfile.loading,
+        error: null,
+      },
+    }));
+    try {
+      const response = await bridge.agentGetOperatorProfileSummary();
+      if (isOperatorProfileError(response)) {
+        set((state) => ({
+          operatorProfile: {
+            ...state.operatorProfile,
+            loading: false,
+            error: response.error,
+          },
+        }));
+        return null;
+      }
+      const summary = parseOperatorProfileSummary(response);
+      if (!summary) {
+        set((state) => ({
+          operatorProfile: {
+            ...state.operatorProfile,
+            loading: false,
+            error: "Unexpected operator profile summary response",
+          },
+        }));
+        return null;
+      }
+      set((state) => ({
+        operatorProfile: {
+          ...state.operatorProfile,
+          loading: false,
+          summary,
+        },
+      }));
+      return summary;
+    } catch (error) {
+      set((state) => ({
+        operatorProfile: {
+          ...state.operatorProfile,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
+      return null;
+    }
+  },
+  setOperatorProfileConsent: async (consentKey, granted) => {
+    const trimmedKey = consentKey.trim();
+    if (!trimmedKey) {
+      return false;
+    }
+    const bridge = getBridge();
+    if (!bridge?.agentSetOperatorProfileConsent) {
+      set((state) => ({
+        operatorProfile: {
+          ...state.operatorProfile,
+          error: "Operator profile bridge not available",
+        },
+      }));
+      return false;
+    }
+    try {
+      const result = await bridge.agentSetOperatorProfileConsent(trimmedKey, granted);
+      const consentError = typeof result?.error === "string" && result.error.trim().length > 0
+        ? result.error
+        : null;
+      if (consentError) {
+        set((state) => ({
+          operatorProfile: {
+            ...state.operatorProfile,
+            error: consentError,
+          },
+        }));
+        return false;
+      }
+      set((state) => {
+        const previousSummary = state.operatorProfile.summary;
+        if (!previousSummary) {
+          return {};
+        }
+        const nextConsents = [...previousSummary.consents];
+        const existingIndex = nextConsents.findIndex((entry) => entry.consent_key === trimmedKey);
+        const updatedAt = Date.now();
+        if (existingIndex >= 0) {
+          nextConsents[existingIndex] = {
+            ...nextConsents[existingIndex],
+            granted,
+            updated_at: updatedAt,
+          };
+        } else {
+          nextConsents.push({
+            consent_key: trimmedKey,
+            granted,
+            updated_at: updatedAt,
+          });
+        }
+        return {
+          operatorProfile: {
+            ...state.operatorProfile,
+            summary: {
+              ...previousSummary,
+              consents: nextConsents,
+            },
+          },
+        };
+      });
+      return true;
+    } catch (error) {
+      set((state) => ({
+        operatorProfile: {
+          ...state.operatorProfile,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
+      return false;
+    }
+  },
+  maybeStartOperatorProfileOnboarding: async () => {
+    const current = get().operatorProfile;
+    if (current.sessionId || current.question) {
+      return;
+    }
+    const bridge = getBridge();
+    if (!bridge?.agentStartOperatorProfileSession || !bridge?.agentGetOperatorProfileSummary) {
+      return;
+    }
+    const summary = await get().getOperatorProfileSummary();
+    if (hasRequiredOperatorProfileFields(summary)) {
+      set((state) => ({
+        operatorProfile: {
+          ...state.operatorProfile,
+          panelOpen: false,
+        },
+      }));
+      return;
+    }
+    await get().startOperatorProfileSession("first_run_onboarding");
   },
   gatewayStatuses: {},
   setGatewayStatus: (platform, status, lastError, consecutiveFailures) => {

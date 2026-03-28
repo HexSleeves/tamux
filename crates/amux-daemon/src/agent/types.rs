@@ -270,6 +270,12 @@ pub const QWEN_MODELS: &[ModelDefinition] = &[
 
 pub const ZAI_MODELS: &[ModelDefinition] = &[
     ModelDefinition {
+        id: "glm-5.1",
+        name: "GLM-5.1",
+        context_window: 204800,
+        modalities: TEXT_ONLY,
+    },
+    ModelDefinition {
         id: "glm-5",
         name: "GLM-5",
         context_window: 128000,
@@ -1246,6 +1252,12 @@ pub struct AgentConfig {
     /// Episodic memory configuration (Phase v3.0).
     #[serde(default)]
     pub episodic: super::episodic::EpisodicConfig,
+    /// Uncertainty quantification configuration (Phase v3.0: UNCR-01 through UNCR-08).
+    #[serde(default)]
+    pub uncertainty: super::uncertainty::UncertaintyConfig,
+    /// Cost tracking configuration (Phase v3.0: COST-01 through COST-04).
+    #[serde(default)]
+    pub cost: super::cost::CostConfig,
     /// Additional persisted agent settings used by richer frontends and the TUI.
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -1809,6 +1821,8 @@ impl Default for AgentConfig {
             skill_promotion: SkillPromotionConfig::default(),
             tier: TierConfig::default(),
             episodic: super::episodic::EpisodicConfig::default(),
+            uncertainty: super::uncertainty::UncertaintyConfig::default(),
+            cost: super::cost::CostConfig::default(),
             extra: HashMap::new(),
         }
     }
@@ -2328,6 +2342,12 @@ pub enum AgentEvent {
         domain: String,
         blocked: bool,
     },
+    /// Budget alert: cumulative goal run cost crossed the operator-defined threshold (COST-03).
+    BudgetAlert {
+        goal_run_id: String,
+        current_cost_usd: f64,
+        threshold_usd: f64,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -2842,7 +2862,7 @@ pub enum GoalRunStatus {
     Cancelled,
 }
 
-#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalRunStepKind {
     #[default]
@@ -2851,6 +2871,12 @@ pub enum GoalRunStepKind {
     Research,
     Memory,
     Skill,
+    /// Route this step to a specialist subagent via the handoff broker.
+    /// The String is the specialist role name (e.g., "backend-developer").
+    Specialist(String),
+    /// Spawn a divergent session with parallel framings for this step.
+    /// The step instructions become the problem statement.
+    Divergent,
     /// Fallback for unknown/empty kind values from LLM output.
     #[serde(other)]
     Unknown,
@@ -2957,6 +2983,21 @@ pub struct GoalRun {
     pub steps: Vec<GoalRunStep>,
     #[serde(default)]
     pub events: Vec<GoalRunEvent>,
+    /// Total prompt tokens consumed across all LLM calls in this goal run (COST-01).
+    #[serde(default)]
+    pub total_prompt_tokens: u64,
+    /// Total completion tokens consumed across all LLM calls in this goal run (COST-01).
+    #[serde(default)]
+    pub total_completion_tokens: u64,
+    /// Estimated cost in USD based on provider rate cards (COST-02).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cost_usd: Option<f64>,
+    /// Per-goal autonomy dial: autonomous / aware / supervised (AUTO-01).
+    #[serde(default)]
+    pub autonomy_level: super::autonomy::AutonomyLevel,
+    /// Attribution tag for goal-run output (AUTH-01).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorship_tag: Option<super::authorship::AuthorshipTag>,
 }
 
 // ---------------------------------------------------------------------------

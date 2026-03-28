@@ -40,6 +40,18 @@ pub enum DaemonCommand {
         thread_id: Option<String>,
         session_id: Option<String>,
     },
+    ExplainAction {
+        action_id: String,
+        step_index: Option<usize>,
+    },
+    StartDivergentSession {
+        problem_statement: String,
+        thread_id: String,
+        goal_run_id: Option<String>,
+    },
+    GetDivergentSession {
+        session_id: String,
+    },
     RequestGitDiff {
         repo_path: String,
         file_path: Option<String>,
@@ -92,6 +104,33 @@ pub enum DaemonCommand {
     GetConciergeConfig,
     SetConciergeConfig(String), // config_json
     RequestConciergeWelcome,
+    RetryOperatorProfile,
+    StartOperatorProfileSession {
+        kind: String,
+    },
+    NextOperatorProfileQuestion {
+        session_id: String,
+    },
+    SubmitOperatorProfileAnswer {
+        session_id: String,
+        question_id: String,
+        answer_json: String,
+    },
+    SkipOperatorProfileQuestion {
+        session_id: String,
+        question_id: String,
+        reason: Option<String>,
+    },
+    DeferOperatorProfileQuestion {
+        session_id: String,
+        question_id: String,
+        defer_until_unix_ms: Option<u64>,
+    },
+    GetOperatorProfileSummary,
+    SetOperatorProfileConsent {
+        consent_key: String,
+        granted: bool,
+    },
     DismissConciergeWelcome,
     WhatsAppLinkStart,
     WhatsAppLinkStop,

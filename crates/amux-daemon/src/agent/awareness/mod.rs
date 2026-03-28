@@ -68,12 +68,7 @@ impl AwarenessMonitor {
             if let Some(oldest_id) = self
                 .windows
                 .iter()
-                .min_by_key(|(_, w)| {
-                    w.recent_outcomes
-                        .back()
-                        .map(|e| e.timestamp)
-                        .unwrap_or(0)
-                })
+                .min_by_key(|(_, w)| w.recent_outcomes.back().map(|e| e.timestamp).unwrap_or(0))
                 .map(|(id, _)| id.clone())
             {
                 self.windows.remove(&oldest_id);
@@ -149,7 +144,11 @@ impl AwarenessMonitor {
         if self.windows.is_empty() {
             return 0.8;
         }
-        let sum: f64 = self.windows.values().map(|w| w.short_term_success_rate).sum();
+        let sum: f64 = self
+            .windows
+            .values()
+            .map(|w| w.short_term_success_rate)
+            .sum();
         sum / self.windows.len() as f64
     }
 }
@@ -174,7 +173,15 @@ impl AgentEngine {
     ) {
         let now = super::now_millis();
         let mut monitor = self.awareness.write().await;
-        monitor.record_outcome(entity_id, entity_type, tool_name, args_hash, success, is_progress, now);
+        monitor.record_outcome(
+            entity_id,
+            entity_type,
+            tool_name,
+            args_hash,
+            success,
+            is_progress,
+            now,
+        );
     }
 
     /// Check for diminishing returns and evaluate mode shift (AWAR-02 + AWAR-03).
@@ -194,7 +201,8 @@ impl AgentEngine {
         let counter_who_confirms = {
             let store = self.episodic_store.read().await;
             super::episodic::counter_who::detect_repeated_approaches(
-                &store.counter_who.tried_approaches, 3
+                &store.counter_who.tried_approaches,
+                3,
             )
             .is_some()
         };
@@ -235,7 +243,15 @@ mod tests {
     #[test]
     fn record_outcome_creates_window_for_unseen_entity() {
         let mut monitor = AwarenessMonitor::new();
-        monitor.record_outcome("thread-1", "thread", "read_file", "abc123", true, false, 1000);
+        monitor.record_outcome(
+            "thread-1",
+            "thread",
+            "read_file",
+            "abc123",
+            true,
+            false,
+            1000,
+        );
         assert_eq!(monitor.window_count(), 1);
         assert!(monitor.get_window("thread-1").is_some());
     }
@@ -243,8 +259,24 @@ mod tests {
     #[test]
     fn record_outcome_appends_to_existing_window() {
         let mut monitor = AwarenessMonitor::new();
-        monitor.record_outcome("thread-1", "thread", "read_file", "abc123", true, false, 1000);
-        monitor.record_outcome("thread-1", "thread", "write_file", "def456", true, true, 2000);
+        monitor.record_outcome(
+            "thread-1",
+            "thread",
+            "read_file",
+            "abc123",
+            true,
+            false,
+            1000,
+        );
+        monitor.record_outcome(
+            "thread-1",
+            "thread",
+            "write_file",
+            "def456",
+            true,
+            true,
+            2000,
+        );
         assert_eq!(monitor.window_count(), 1);
         let w = monitor.get_window("thread-1").unwrap();
         assert_eq!(w.recent_outcomes.len(), 2);
@@ -254,7 +286,15 @@ mod tests {
     fn window_caps_at_max_outcomes() {
         let mut monitor = AwarenessMonitor::new();
         for i in 0..250 {
-            monitor.record_outcome("e1", "thread", "tool", &format!("h{i}"), true, false, i as u64);
+            monitor.record_outcome(
+                "e1",
+                "thread",
+                "tool",
+                &format!("h{i}"),
+                true,
+                false,
+                i as u64,
+            );
         }
         let w = monitor.get_window("e1").unwrap();
         assert_eq!(w.recent_outcomes.len(), MAX_OUTCOMES_PER_WINDOW);
@@ -341,7 +381,15 @@ mod tests {
         }
         // Entity 2: all failures -> 0.0
         for i in 0..5 {
-            monitor.record_outcome("e2", "thread", "tool", &format!("h{i}"), false, false, 100 + i);
+            monitor.record_outcome(
+                "e2",
+                "thread",
+                "tool",
+                &format!("h{i}"),
+                false,
+                false,
+                100 + i,
+            );
         }
         let avg = monitor.aggregate_short_term_success_rate();
         // (1.0 + 0.0) / 2 = 0.5

@@ -67,8 +67,12 @@ pub fn compute_temperature(recent_message_count: u32, avg_gap_secs: u64) -> f64 
 pub fn compute_weight(tool_name: &str) -> f64 {
     match tool_name {
         // Heavy actions (state-changing, destructive)
-        "execute_command" | "execute_managed_command" | "write_file" | "delete_file"
-        | "deploy" | "create_session" => 0.8,
+        "execute_command"
+        | "execute_managed_command"
+        | "write_file"
+        | "delete_file"
+        | "deploy"
+        | "create_session" => 0.8,
         // Medium actions (state-changing but bounded)
         "edit_file" | "create_file" | "install_package" => 0.5,
         // Light actions (read-only)
@@ -101,7 +105,10 @@ mod tests {
     fn difficulty_intermediate_value() {
         // 0.6 * 0.5 + 0.4 * (2/5) = 0.3 + 0.16 = 0.46
         let result = compute_difficulty(0.5, 2);
-        assert!((result - 0.46).abs() < 0.001, "expected ~0.46, got {result}");
+        assert!(
+            (result - 0.46).abs() < 0.001,
+            "expected ~0.46, got {result}"
+        );
     }
 
     // -----------------------------------------------------------------------

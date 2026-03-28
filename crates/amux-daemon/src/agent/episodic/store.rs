@@ -220,12 +220,13 @@ impl AgentEngine {
             .collect();
 
         // Duration
-        let duration_ms = goal_run.duration_ms.or_else(|| {
-            match (goal_run.started_at, goal_run.completed_at) {
-                (Some(start), Some(end)) => Some(end.saturating_sub(start)),
-                _ => None,
-            }
-        });
+        let duration_ms =
+            goal_run
+                .duration_ms
+                .or_else(|| match (goal_run.started_at, goal_run.completed_at) {
+                    (Some(start), Some(end)) => Some(end.saturating_sub(start)),
+                    _ => None,
+                });
 
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -256,7 +257,10 @@ impl AgentEngine {
 
         // Auto-create negative knowledge constraint from failed episodes (NKNO-01, NKNO-02)
         if outcome == EpisodeOutcome::Failure {
-            if let Err(e) = self.record_negative_knowledge_from_episode(&episode_ref).await {
+            if let Err(e) = self
+                .record_negative_knowledge_from_episode(&episode_ref)
+                .await
+            {
                 tracing::warn!("Failed to record negative knowledge from episode: {e}");
             }
         }

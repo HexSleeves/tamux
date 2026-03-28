@@ -15,6 +15,8 @@ pub mod types;
 
 mod agent_loop;
 mod anticipatory;
+mod authorship;
+mod autonomy;
 mod behavioral_events;
 pub(crate) mod capability_tier;
 mod causal_traces;
@@ -26,6 +28,7 @@ mod consolidation;
 mod dispatcher;
 mod engine;
 mod engine_runtime;
+mod explainability;
 mod explanation;
 mod external_messaging;
 mod gateway_format;
@@ -67,12 +70,16 @@ mod work_context;
 pub mod awareness;
 pub mod concierge;
 pub mod context;
+pub mod cost;
 pub mod embodied;
 pub mod episodic;
+pub mod handoff;
 pub mod learning;
 pub mod liveness;
 pub mod metacognitive;
+pub mod operator_profile;
 pub mod subagent;
+pub mod uncertainty;
 
 // Re-exports from extracted modules — keeps everything accessible across
 // sibling submodules via `use super::*;`.
@@ -185,6 +192,11 @@ mod tests {
                 },
             ],
             events: Vec::new(),
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            estimated_cost_usd: None,
+            autonomy_level: Default::default(),
+            authorship_tag: None,
         }
     }
 
@@ -325,6 +337,7 @@ mod tests {
                 success_criteria: "Done".to_string(),
                 session_id: None,
             }],
+            rejected_alternatives: Vec::new(),
         };
 
         assert!(!collect_plan_issues(&plan).is_empty());

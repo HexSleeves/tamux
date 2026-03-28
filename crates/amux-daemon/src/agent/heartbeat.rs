@@ -296,6 +296,33 @@ impl AgentEngine {
             }
         }
 
+        // --- Phase 1.5: Emit trajectory updates for active goal runs (AWAR-04) ---
+        {
+            let goal_runs = self.goal_runs.lock().await;
+            let running: Vec<_> = goal_runs
+                .iter()
+                .filter(|g| g.status == GoalRunStatus::Running)
+                .map(|g| (g.id.clone(), g.goal.clone()))
+                .collect();
+            drop(goal_runs);
+
+            for (gr_id, gr_goal) in &running {
+                if let Some(traj) = self.get_awareness_trajectory(gr_id).await {
+                    let _ = self.event_tx.send(AgentEvent::TrajectoryUpdate {
+                        goal_run_id: gr_id.clone(),
+                        direction: traj.label.to_string(),
+                        progress_ratio: traj.progress_ratio,
+                        message: format!(
+                            "Goal '{}' trajectory: {} ({:.0}% progress ratio)",
+                            gr_goal.chars().take(50).collect::<String>(),
+                            traj.label,
+                            traj.progress_ratio * 100.0,
+                        ),
+                    });
+                }
+            }
+        }
+
         // --- Phase 2: Run custom HeartbeatItem checks (per D-03) ---
         let custom_items = self.heartbeat_items.read().await.clone();
         let mut custom_summaries: Vec<String> = Vec::new();

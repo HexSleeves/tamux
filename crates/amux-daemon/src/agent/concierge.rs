@@ -1367,6 +1367,56 @@ fn build_welcome_signature(detail_level: ConciergeDetailLevel, context: &Welcome
 }
 
 // ---------------------------------------------------------------------------
+// Profile interview decision helper for the AgentRequestConciergeWelcome path
+// ---------------------------------------------------------------------------
+
+/// Decision returned by [`profile_interview_decision`].
+#[derive(Debug, PartialEq)]
+pub enum WelcomeProfileDecision {
+    /// All required profile fields are answered — fall through to the standard welcome.
+    StandardWelcome,
+    /// The next unanswered required (or optional) field to ask.
+    EmitProfileQuestion {
+        field_key: String,
+        prompt: String,
+        input_kind: String,
+        /// `true` when the field may be skipped without penalty.
+        optional: bool,
+    },
+}
+
+/// Determine what the concierge welcome path should do regarding the operator
+/// profile interview.
+///
+/// Returns [`WelcomeProfileDecision::StandardWelcome`] when all **required**
+/// fields have been answered (`is_complete` is true). Otherwise returns
+/// [`WelcomeProfileDecision::EmitProfileQuestion`] for the next unanswered
+/// field so the caller can start a profile session and emit the question.
+pub fn profile_interview_decision(
+    specs: &[crate::agent::operator_profile::ProfileFieldSpec],
+    answered: &std::collections::HashMap<
+        String,
+        crate::agent::operator_profile::ProfileFieldValue,
+    >,
+    session: &crate::agent::operator_profile::InterviewSession,
+    now_ms: u64,
+) -> WelcomeProfileDecision {
+    // Required-fields-only completion check aligns with server.rs's `is_complete` gate.
+    if crate::agent::operator_profile::is_complete(specs, answered) {
+        return WelcomeProfileDecision::StandardWelcome;
+    }
+    match crate::agent::operator_profile::next_question(specs, answered, session, now_ms) {
+        Some(spec) => WelcomeProfileDecision::EmitProfileQuestion {
+            field_key: spec.field_key.clone(),
+            prompt: spec.prompt.clone(),
+            input_kind: spec.input_kind.clone(),
+            optional: !spec.required,
+        },
+        None => WelcomeProfileDecision::StandardWelcome,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Skill announcement helpers on AgentEngine (Phase 6 Plan 03)
 // ---------------------------------------------------------------------------
 
@@ -2212,5 +2262,123 @@ mod tests {
             .await
             .expect("welcome should be returned");
         assert_ne!(result.0, "persisted welcome");
+    }
+
+    // ── Profile interview decision sequencing ────────────────────────────
+
+    use crate::agent::operator_profile;
+
+    fn make_answered(
+        keys: &[&str],
+    ) -> HashMap<String, operator_profile::ProfileFieldValue> {
+        keys.iter()
+            .map(|k| {
+                (
+                    k.to_string(),
+                    operator_profile::ProfileFieldValue {
+                        value_json: "\"test\"".to_string(),
+                        confidence: 1.0,
+                        source: "test".to_string(),
+                        updated_at: 0,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Scenario 1 proxy: onboarding just completed + profile empty →
+    /// the decision function selects the first required field.
+    #[test]
+    fn profile_decision_with_empty_profile_emits_first_required_question() {
+        let specs = operator_profile::default_field_specs();
+        let answered = HashMap::new();
+        let session = operator_profile::InterviewSession::new("sess-1", "first_run_onboarding");
+
+        let decision = profile_interview_decision(&specs, &answered, &session, 0);
+
+        match decision {
+            WelcomeProfileDecision::EmitProfileQuestion {
+                field_key, optional, ..
+            } => {
+                // "name" is the first required field in the canonical spec list.
+                assert_eq!(field_key, "name");
+                assert!(!optional, "name is required");
+            }
+            WelcomeProfileDecision::StandardWelcome => {
+                panic!("expected EmitProfileQuestion but got StandardWelcome");
+            }
+        }
+    }
+
+    /// Scenario 2: tier already done, profile incomplete →
+    /// decision returns a question (not standard welcome).
+    #[test]
+    fn profile_decision_with_tier_done_but_profile_incomplete_emits_question() {
+        let specs = operator_profile::default_field_specs();
+        // Answer only optional fields — leave required fields empty.
+        let optional_keys: Vec<&str> = specs
+            .iter()
+            .filter(|s| !s.required)
+            .map(|s| s.field_key.as_str())
+            .collect();
+        let answered = make_answered(&optional_keys);
+        let session = operator_profile::InterviewSession::new("sess-2", "first_run_onboarding");
+
+        let decision = profile_interview_decision(&specs, &answered, &session, 0);
+
+        assert!(
+            matches!(decision, WelcomeProfileDecision::EmitProfileQuestion { .. }),
+            "should emit a profile question when required fields are unanswered"
+        );
+    }
+
+    /// Scenario 3: both tier onboarding and profile complete →
+    /// decision returns StandardWelcome.
+    #[test]
+    fn profile_decision_with_all_required_answered_returns_standard_welcome() {
+        let specs = operator_profile::default_field_specs();
+        let required_keys: Vec<&str> = specs
+            .iter()
+            .filter(|s| s.required)
+            .map(|s| s.field_key.as_str())
+            .collect();
+        let answered = make_answered(&required_keys);
+        let session = operator_profile::InterviewSession::new("sess-3", "first_run_onboarding");
+
+        let decision = profile_interview_decision(&specs, &answered, &session, 0);
+
+        assert_eq!(
+            decision,
+            WelcomeProfileDecision::StandardWelcome,
+            "fully answered profile should produce StandardWelcome"
+        );
+    }
+
+    /// When all required fields are answered the decision returns StandardWelcome,
+    /// even though optional fields are still unanswered. The profile interview
+    /// only gates on required completion, consistent with `is_complete`.
+    #[test]
+    fn profile_decision_standard_welcome_when_only_optional_fields_remain() {
+        let specs = operator_profile::default_field_specs();
+        // Answer required fields only; leave optional fields unanswered.
+        let required_keys: Vec<&str> = specs
+            .iter()
+            .filter(|s| s.required)
+            .map(|s| s.field_key.as_str())
+            .collect();
+        let answered = make_answered(&required_keys);
+        let session = operator_profile::InterviewSession::new("sess-4", "first_run_onboarding");
+
+        // is_complete is true (required fields answered)...
+        assert!(operator_profile::is_complete(&specs, &answered));
+
+        // ...so decision returns StandardWelcome — optional fields do not block
+        // the flow here (they can be collected through a separate session).
+        let decision = profile_interview_decision(&specs, &answered, &session, 0);
+        assert_eq!(
+            decision,
+            WelcomeProfileDecision::StandardWelcome,
+            "should be StandardWelcome when only optional fields remain"
+        );
     }
 }

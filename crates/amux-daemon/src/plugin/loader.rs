@@ -447,7 +447,7 @@ mod tests {
 
         // Name
         assert_eq!(manifest.name, "gmail");
-        assert_eq!(manifest.version, "1.0.0");
+        assert_eq!(manifest.version, "1.1.0");
         assert_eq!(manifest.schema_version, 1);
 
         // Auth: OAuth2
@@ -459,32 +459,30 @@ mod tests {
         assert!(auth.pkce);
         assert!(auth.authorization_url.is_some());
         assert!(auth.token_url.is_some());
-        assert_eq!(auth.scopes.as_ref().unwrap().len(), 1);
+        assert_eq!(auth.scopes.as_ref().unwrap().len(), 2);
 
-        // Endpoints: exactly 3 (list_inbox, get_message, search_messages)
+        // Endpoints: must include core gmail actions used by command aliases.
         let api = manifest
             .api
             .as_ref()
             .expect("gmail should have api section");
-        assert_eq!(
-            api.endpoints.len(),
-            3,
-            "gmail should have exactly 3 endpoints, got: {:?}",
+        assert!(
+            api.endpoints.len() >= 3,
+            "gmail should have at least 3 endpoints, got: {:?}",
             api.endpoints.keys().collect::<Vec<_>>()
         );
         assert!(api.endpoints.contains_key("list_inbox"));
         assert!(api.endpoints.contains_key("get_message"));
         assert!(api.endpoints.contains_key("search_messages"));
 
-        // Commands: exactly 2 (inbox, search)
+        // Commands: must include core inbox/search aliases.
         let commands = manifest
             .commands
             .as_ref()
             .expect("gmail should have commands");
-        assert_eq!(
-            commands.len(),
-            2,
-            "gmail should have exactly 2 commands, got: {:?}",
+        assert!(
+            commands.len() >= 2,
+            "gmail should have at least 2 commands, got: {:?}",
             commands.keys().collect::<Vec<_>>()
         );
         assert!(commands.contains_key("inbox"));
@@ -507,7 +505,7 @@ mod tests {
 
         // Name
         assert_eq!(manifest.name, "calendar");
-        assert_eq!(manifest.version, "1.0.0");
+        assert_eq!(manifest.version, "1.1.0");
         assert_eq!(manifest.schema_version, 1);
 
         // Auth: OAuth2
@@ -521,28 +519,26 @@ mod tests {
         assert!(auth.token_url.is_some());
         assert_eq!(auth.scopes.as_ref().unwrap().len(), 1);
 
-        // Endpoints: exactly 1 (list_events_today)
+        // Endpoints: must include the default list events action.
         let api = manifest
             .api
             .as_ref()
             .expect("calendar should have api section");
-        assert_eq!(
-            api.endpoints.len(),
-            1,
-            "calendar should have exactly 1 endpoint, got: {:?}",
+        assert!(
+            !api.endpoints.is_empty(),
+            "calendar should have at least 1 endpoint, got: {:?}",
             api.endpoints.keys().collect::<Vec<_>>()
         );
-        assert!(api.endpoints.contains_key("list_events_today"));
+        assert!(api.endpoints.contains_key("list_events"));
 
-        // Commands: exactly 1 (today)
+        // Commands: must include the default today alias.
         let commands = manifest
             .commands
             .as_ref()
             .expect("calendar should have commands");
-        assert_eq!(
-            commands.len(),
-            1,
-            "calendar should have exactly 1 command, got: {:?}",
+        assert!(
+            !commands.is_empty(),
+            "calendar should have at least 1 command, got: {:?}",
             commands.keys().collect::<Vec<_>>()
         );
         assert!(commands.contains_key("today"));

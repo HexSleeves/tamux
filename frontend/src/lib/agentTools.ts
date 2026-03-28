@@ -1443,11 +1443,10 @@ function executeCreateSnippet(callId: string, name: string, args: Record<string,
     tags,
   });
 
-  const created = useSnippetStore.getState().snippets.at(-1);
   return {
     toolCallId: callId,
     name,
-    content: `Created assistant snippet \"${snippetName}\"${created ? ` [${created.id}]` : ""}.`,
+    content: `Created assistant snippet \"${snippetName}\".`,
   };
 }
 

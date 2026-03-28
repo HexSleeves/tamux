@@ -105,6 +105,35 @@ struct PendingChatActionConfirm {
     action: PendingChatActionKind,
 }
 
+#[derive(Clone, Debug)]
+struct OperatorProfileQuestionVm {
+    session_id: String,
+    question_id: String,
+    field_key: String,
+    prompt: String,
+    input_kind: String,
+    optional: bool,
+}
+
+#[derive(Clone, Debug)]
+struct OperatorProfileProgressVm {
+    answered: u32,
+    remaining: u32,
+    completion_ratio: f64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct OperatorProfileOnboardingState {
+    visible: bool,
+    loading: bool,
+    session_id: Option<String>,
+    session_kind: Option<String>,
+    question: Option<OperatorProfileQuestionVm>,
+    progress: Option<OperatorProfileProgressVm>,
+    summary_json: Option<String>,
+    warning: Option<String>,
+}
+
 pub struct TuiModel {
     // State modules
     chat: chat::ChatState,
@@ -181,6 +210,8 @@ pub struct TuiModel {
 
     // Queue of prompts submitted while streaming (auto-sent after TurnDone)
     queued_prompts: Vec<String>,
+
+    operator_profile: OperatorProfileOnboardingState,
 
     // Thread ID whose stream was cancelled via double-Esc (ignore further events)
     cancelled_thread_id: Option<String>,
@@ -264,6 +295,7 @@ impl TuiModel {
             held_key_modifiers: KeyModifiers::NONE,
             attachments: Vec::new(),
             queued_prompts: Vec::new(),
+            operator_profile: OperatorProfileOnboardingState::default(),
             cancelled_thread_id: None,
             ignore_pending_concierge_welcome: false,
             gateway_statuses: Vec::new(),
@@ -326,6 +358,9 @@ impl TuiModel {
         if self.should_show_local_landing() {
             return false;
         }
+        if self.should_show_operator_profile_onboarding() {
+            return false;
+        }
 
         self.concierge.loading || !self.chat.active_actions().is_empty()
     }
@@ -339,6 +374,7 @@ impl TuiModel {
             && self.chat.active_thread().is_none()
             && !self.chat.is_streaming()
             && !self.concierge.loading
+            && !self.should_show_operator_profile_onboarding()
             && !self.should_show_provider_onboarding()
     }
 
@@ -347,6 +383,7 @@ impl TuiModel {
             && matches!(self.main_pane_view, MainPaneView::Conversation)
             && self.chat.active_thread().is_none()
             && self.chat.streaming_content().is_empty()
+            && !self.should_show_operator_profile_onboarding()
             && !self.concierge.has_active_welcome()
     }
 
@@ -442,6 +479,142 @@ impl TuiModel {
             && matches!(self.main_pane_view, MainPaneView::Conversation)
             && self.chat.active_thread().is_none()
             && self.chat.streaming_content().is_empty()
+            && !self.should_show_operator_profile_onboarding()
+    }
+
+    fn should_show_operator_profile_onboarding(&self) -> bool {
+        self.operator_profile.visible
+            && matches!(self.main_pane_view, MainPaneView::Conversation)
+            && self.chat.streaming_content().is_empty()
+    }
+
+    fn operator_profile_select_options(field_key: &str) -> Option<&'static [&'static str]> {
+        match field_key {
+            "notification_preference" => Some(&["minimal", "balanced", "proactive"]),
+            _ => None,
+        }
+    }
+
+    fn current_operator_profile_select_options(&self) -> Option<&'static [&'static str]> {
+        self.operator_profile
+            .question
+            .as_ref()
+            .and_then(|question| Self::operator_profile_select_options(&question.field_key))
+    }
+
+    fn submit_operator_profile_answer(&mut self) -> bool {
+        let Some(question) = self.operator_profile.question.clone() else {
+            return false;
+        };
+        let answer = self.input.buffer().trim();
+        if answer.is_empty() && !question.optional {
+            self.show_input_notice(
+                "Answer required (Ctrl+S to skip, Ctrl+D to defer)",
+                InputNoticeKind::Warning,
+                80,
+                true,
+            );
+            return true;
+        }
+
+        let answer_json = if answer.is_empty() && question.optional {
+            "null".to_string()
+        } else {
+            match question.input_kind.as_str() {
+                "bool" => match answer.to_ascii_lowercase().as_str() {
+                    "true" | "t" | "yes" | "y" | "1" => "true".to_string(),
+                    "false" | "f" | "no" | "n" | "0" => "false".to_string(),
+                    _ => {
+                        self.show_input_notice(
+                            "Use true/false (or yes/no) for this question",
+                            InputNoticeKind::Warning,
+                            80,
+                            true,
+                        );
+                        return true;
+                    }
+                },
+                "select" => {
+                    let normalized = answer.to_ascii_lowercase();
+                    if let Some(options) = Self::operator_profile_select_options(&question.field_key) {
+                        if !options.iter().any(|option| *option == normalized) {
+                            self.show_input_notice(
+                                format!(
+                                    "Pick one: {}",
+                                    options
+                                        .iter()
+                                        .map(|option| option.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                ),
+                                InputNoticeKind::Warning,
+                                100,
+                                true,
+                            );
+                            return true;
+                        }
+                    }
+                    match serde_json::to_string(&normalized) {
+                        Ok(json) => json,
+                        Err(_) => return false,
+                    }
+                }
+                _ => match serde_json::to_string(answer) {
+                    Ok(json) => json,
+                    Err(_) => return false,
+                },
+            }
+        };
+
+        self.operator_profile.loading = true;
+        self.operator_profile.question = None;
+        self.operator_profile.warning = None;
+        self.send_daemon_command(DaemonCommand::SubmitOperatorProfileAnswer {
+            session_id: question.session_id,
+            question_id: question.question_id,
+            answer_json,
+        });
+        self.input.reduce(input::InputAction::Clear);
+        self.status_line = "Submitting operator profile answer…".to_string();
+        true
+    }
+
+    fn skip_operator_profile_question(&mut self) -> bool {
+        let Some(question) = self.operator_profile.question.clone() else {
+            return false;
+        };
+        self.operator_profile.loading = true;
+        self.operator_profile.question = None;
+        self.operator_profile.warning = None;
+        self.send_daemon_command(DaemonCommand::SkipOperatorProfileQuestion {
+            session_id: question.session_id,
+            question_id: question.question_id,
+            reason: Some("tui_skip_shortcut".to_string()),
+        });
+        self.input.reduce(input::InputAction::Clear);
+        self.status_line = "Skipping operator profile question…".to_string();
+        true
+    }
+
+    fn defer_operator_profile_question(&mut self) -> bool {
+        let Some(question) = self.operator_profile.question.clone() else {
+            return false;
+        };
+        let defer_until_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_millis() as u64 + 24 * 60 * 60 * 1_000);
+        self.operator_profile.loading = true;
+        self.operator_profile.question = None;
+        self.operator_profile.warning = None;
+        self.send_daemon_command(DaemonCommand::DeferOperatorProfileQuestion {
+            session_id: question.session_id,
+            question_id: question.question_id,
+            defer_until_unix_ms,
+        });
+        self.input.reduce(input::InputAction::Clear);
+        self.status_line = "Deferring operator profile question for 24h…".to_string();
+        true
     }
 
     fn open_settings_tab(&mut self, tab: SettingsTab) {
@@ -736,6 +909,22 @@ impl TuiModel {
             "open_settings" => {
                 self.cleanup_concierge_on_navigate();
                 self.open_settings_tab(SettingsTab::Auth);
+            }
+            "operator_profile_skip" => {
+                let _ = self.skip_operator_profile_question();
+            }
+            "operator_profile_defer" => {
+                let _ = self.defer_operator_profile_question();
+            }
+            "operator_profile_retry" => {
+                self.send_daemon_command(DaemonCommand::RetryOperatorProfile);
+                self.status_line = "Retrying operator profile operation…".to_string();
+                self.show_input_notice(
+                    "Retrying operator profile operation…",
+                    InputNoticeKind::Success,
+                    40,
+                    true,
+                );
             }
             _ => {}
         }
@@ -2945,5 +3134,221 @@ mod tests {
         assert_eq!(surface, "conversation:sidebar:todos");
         assert_eq!(thread_id.as_deref(), Some("thread_1"));
         assert_eq!(goal_run_id, None);
+    }
+
+    #[test]
+    fn operator_profile_onboarding_takes_precedence_over_provider_onboarding() {
+        let mut model = build_model();
+        model.connected = true;
+        model.auth.loaded = true;
+        model.auth.entries = vec![unauthenticated_entry()];
+        model.operator_profile.visible = true;
+        model.operator_profile.question = Some(OperatorProfileQuestionVm {
+            session_id: "sess-1".to_string(),
+            question_id: "name".to_string(),
+            field_key: "name".to_string(),
+            prompt: "What should I call you?".to_string(),
+            input_kind: "text".to_string(),
+            optional: false,
+        });
+
+        assert!(
+            model.should_show_operator_profile_onboarding(),
+            "operator profile onboarding should be active"
+        );
+        assert!(
+            !model.should_show_provider_onboarding(),
+            "provider onboarding should not mask operator profile onboarding"
+        );
+    }
+
+    #[test]
+    fn submit_operator_profile_answer_sends_command_and_clears_input() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.operator_profile.visible = true;
+        model.operator_profile.question = Some(OperatorProfileQuestionVm {
+            session_id: "sess-1".to_string(),
+            question_id: "name".to_string(),
+            field_key: "name".to_string(),
+            prompt: "What should I call you?".to_string(),
+            input_kind: "text".to_string(),
+            optional: false,
+        });
+        model.input.set_text("Milan");
+
+        assert!(model.submit_operator_profile_answer());
+        assert_eq!(model.input.buffer(), "");
+        assert!(
+            model.operator_profile.question.is_none(),
+            "question should clear when submission starts"
+        );
+
+        let sent = cmd_rx
+            .try_recv()
+            .expect("submitting answer should emit daemon command");
+        match sent {
+            DaemonCommand::SubmitOperatorProfileAnswer {
+                session_id,
+                question_id,
+                answer_json,
+            } => {
+                assert_eq!(session_id, "sess-1");
+                assert_eq!(question_id, "name");
+                assert_eq!(answer_json, "\"Milan\"");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn submit_operator_profile_answer_allows_empty_input_when_question_is_optional() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.operator_profile.visible = true;
+        model.operator_profile.question = Some(OperatorProfileQuestionVm {
+            session_id: "sess-1".to_string(),
+            question_id: "nickname".to_string(),
+            field_key: "nickname".to_string(),
+            prompt: "Nickname?".to_string(),
+            input_kind: "text".to_string(),
+            optional: true,
+        });
+
+        assert!(model.submit_operator_profile_answer());
+        assert!(
+            model.operator_profile.loading,
+            "optional empty answer should begin submission"
+        );
+        assert!(
+            model.operator_profile.question.is_none(),
+            "question should clear when submission starts"
+        );
+
+        let sent = cmd_rx
+            .try_recv()
+            .expect("submitting optional empty answer should emit daemon command");
+        match sent {
+            DaemonCommand::SubmitOperatorProfileAnswer {
+                session_id,
+                question_id,
+                answer_json,
+            } => {
+                assert_eq!(session_id, "sess-1");
+                assert_eq!(question_id, "nickname");
+                assert_eq!(answer_json, "null");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn submit_operator_profile_answer_blocks_empty_input_when_question_is_required() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.operator_profile.visible = true;
+        model.operator_profile.question = Some(OperatorProfileQuestionVm {
+            session_id: "sess-1".to_string(),
+            question_id: "name".to_string(),
+            field_key: "name".to_string(),
+            prompt: "What should I call you?".to_string(),
+            input_kind: "text".to_string(),
+            optional: false,
+        });
+
+        assert!(model.submit_operator_profile_answer());
+        assert!(
+            !model.operator_profile.loading,
+            "required empty answer should not start submission"
+        );
+        assert!(
+            model.operator_profile.question.is_some(),
+            "question should remain while awaiting required answer"
+        );
+        assert!(
+            cmd_rx.try_recv().is_err(),
+            "required empty answer should not emit daemon command"
+        );
+    }
+
+    #[test]
+    fn skip_operator_profile_question_clears_stale_question_immediately() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.operator_profile.visible = true;
+        model.operator_profile.question = Some(OperatorProfileQuestionVm {
+            session_id: "sess-1".to_string(),
+            question_id: "name".to_string(),
+            field_key: "name".to_string(),
+            prompt: "What should I call you?".to_string(),
+            input_kind: "text".to_string(),
+            optional: false,
+        });
+
+        assert!(model.skip_operator_profile_question());
+        assert!(model.operator_profile.loading);
+        assert!(
+            model.operator_profile.question.is_none(),
+            "question should clear when skip starts"
+        );
+
+        let sent = cmd_rx
+            .try_recv()
+            .expect("skip should emit daemon command");
+        match sent {
+            DaemonCommand::SkipOperatorProfileQuestion {
+                session_id,
+                question_id,
+                reason,
+            } => {
+                assert_eq!(session_id, "sess-1");
+                assert_eq!(question_id, "name");
+                assert_eq!(reason.as_deref(), Some("tui_skip_shortcut"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn defer_operator_profile_question_clears_stale_question_immediately() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.operator_profile.visible = true;
+        model.operator_profile.question = Some(OperatorProfileQuestionVm {
+            session_id: "sess-1".to_string(),
+            question_id: "name".to_string(),
+            field_key: "name".to_string(),
+            prompt: "What should I call you?".to_string(),
+            input_kind: "text".to_string(),
+            optional: false,
+        });
+
+        assert!(model.defer_operator_profile_question());
+        assert!(model.operator_profile.loading);
+        assert!(
+            model.operator_profile.question.is_none(),
+            "question should clear when defer starts"
+        );
+
+        let sent = cmd_rx
+            .try_recv()
+            .expect("defer should emit daemon command");
+        match sent {
+            DaemonCommand::DeferOperatorProfileQuestion {
+                session_id,
+                question_id,
+                defer_until_unix_ms,
+            } => {
+                assert_eq!(session_id, "sess-1");
+                assert_eq!(question_id, "name");
+                assert!(defer_until_unix_ms.is_some());
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

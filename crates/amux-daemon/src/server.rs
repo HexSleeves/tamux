@@ -68,7 +68,10 @@ fn agent_event_thread_id(event: &crate::agent::types::AgentEvent) -> Option<&str
         | AgentEvent::TodoUpdate { thread_id, .. }
         | AgentEvent::WorkContextUpdate { thread_id, .. }
         | AgentEvent::RetryStatus { thread_id, .. }
-        | AgentEvent::WorkflowNotice { thread_id, .. } => Some(thread_id.as_str()),
+        | AgentEvent::WorkflowNotice { thread_id, .. }
+        | AgentEvent::ModeShift { thread_id, .. }
+        | AgentEvent::ConfidenceWarning { thread_id, .. }
+        | AgentEvent::CounterWhoAlert { thread_id, .. } => Some(thread_id.as_str()),
         AgentEvent::TaskUpdate {
             task: Some(task), ..
         } => task
@@ -395,6 +398,72 @@ mod tests {
             "subscriber should be removed when connection exits"
         );
     }
+
+    #[tokio::test]
+    async fn divergent_ipc_get_session_returns_completion_payload() {
+        let mut conn = spawn_test_connection().await;
+        let thread_id = "thread-divergent-server";
+        let session_id = conn
+            .agent
+            .start_divergent_session("evaluate rollout strategy", None, thread_id, None)
+            .await
+            .expect("start divergent session");
+
+        // Record contributions and complete session to synthesize retrieval payload.
+        let framing_labels = vec![
+            "analytical-lens".to_string(),
+            "pragmatic-lens".to_string(),
+        ];
+        for (idx, label) in framing_labels.iter().enumerate() {
+            conn.agent
+                .record_divergent_contribution(
+                    &session_id,
+                    label,
+                    if idx == 0 {
+                        "Prefer conservative phased rollout"
+                    } else {
+                        "Prefer fast rollout with rollback hooks"
+                    },
+                )
+                .await
+                .expect("contribution recording should succeed");
+        }
+        conn.agent
+            .complete_divergent_session(&session_id)
+            .await
+            .expect("session completion should succeed");
+
+        conn.framed
+            .send(ClientMessage::AgentGetDivergentSession {
+                session_id: session_id.clone(),
+            })
+            .await
+            .expect("send retrieval request");
+
+        let payload = match conn.recv().await {
+            DaemonMessage::AgentDivergentSession { session_json } => {
+                serde_json::from_str::<serde_json::Value>(&session_json)
+                    .expect("session payload should decode")
+            }
+            other => panic!("expected AgentDivergentSession, got {other:?}"),
+        };
+        assert_eq!(payload.get("session_id").and_then(|v| v.as_str()), Some(session_id.as_str()));
+        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("complete"));
+        assert!(
+            payload
+                .get("tensions_markdown")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| !v.is_empty())
+        );
+        assert!(
+            payload
+                .get("mediator_prompt")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| !v.is_empty())
+        );
+
+        conn.shutdown().await;
+    }
 }
 
 fn should_forward_agent_event(
@@ -415,6 +484,9 @@ fn should_forward_agent_event(
                 | crate::agent::types::AgentEvent::AuditAction { .. }
                 | crate::agent::types::AgentEvent::EscalationUpdate { .. }
                 | crate::agent::types::AgentEvent::GatewayStatus { .. }
+                | crate::agent::types::AgentEvent::BudgetAlert { .. }
+                | crate::agent::types::AgentEvent::TrajectoryUpdate { .. }
+                | crate::agent::types::AgentEvent::EpisodeRecorded { .. }
         ),
     }
 }
@@ -927,6 +999,19 @@ where
                     attached_rxs.retain(|(sid, _)| *sid != id);
                     match manager.kill(id).await {
                         Ok(()) => {
+                            // Record session-end episode (EPIS-08)
+                            let session_id_str = id.to_string();
+                            let session_summary = format!("Session {} ended", session_id_str);
+                            if let Err(e) = agent
+                                .record_session_end_episode(
+                                    &session_id_str,
+                                    &session_summary,
+                                    vec![format!("session:{}", session_id_str)],
+                                )
+                                .await
+                            {
+                                tracing::warn!(session_id = %session_id_str, error = %e, "failed to record session end episode");
+                            }
                             framed.send(DaemonMessage::SessionKilled { id }).await?;
                         }
                         Err(e) => {
@@ -1824,6 +1909,7 @@ where
                     session_id,
                     priority,
                     client_request_id,
+                    autonomy_level,
                 } => {
                     let goal_run = agent
                         .start_goal_run(
@@ -1833,6 +1919,7 @@ where
                             session_id,
                             priority.as_deref(),
                             client_request_id,
+                            autonomy_level,
                         )
                         .await;
                     if let Some(thread_id) = goal_run.thread_id.clone() {
@@ -2124,6 +2211,421 @@ where
                         .ok();
                 }
 
+                ClientMessage::AgentStartOperatorProfileSession { kind } => {
+                    match agent.start_operator_profile_session(&kind).await {
+                        Ok(started) => {
+                            framed
+                                .send(DaemonMessage::AgentOperatorProfileSessionStarted {
+                                    session_id: started.session_id.clone(),
+                                    kind: started.kind.clone(),
+                                })
+                                .await
+                                .ok();
+                            match agent
+                                .next_operator_profile_question_for_session(&started.session_id)
+                                .await
+                            {
+                                Ok((question, progress)) => {
+                                    if let Some(question) = question {
+                                        framed
+                                            .send(DaemonMessage::AgentOperatorProfileQuestion {
+                                                session_id: question.session_id,
+                                                question_id: question.question_id,
+                                                field_key: question.field_key,
+                                                prompt: question.prompt,
+                                                input_kind: question.input_kind,
+                                                optional: question.optional,
+                                            })
+                                            .await
+                                            .ok();
+                                        framed
+                                            .send(DaemonMessage::AgentOperatorProfileProgress {
+                                                session_id: progress.session_id,
+                                                answered: progress.answered,
+                                                remaining: progress.remaining,
+                                                completion_ratio: progress.completion_ratio,
+                                            })
+                                            .await
+                                            .ok();
+                                    } else {
+                                        match agent
+                                            .complete_operator_profile_session(&started.session_id)
+                                            .await
+                                        {
+                                            Ok(done) => {
+                                                framed
+                                                    .send(DaemonMessage::AgentOperatorProfileSessionCompleted {
+                                                        session_id: done.session_id,
+                                                        updated_fields: done.updated_fields,
+                                                    })
+                                                    .await
+                                                    .ok();
+                                            }
+                                            Err(error) => {
+                                                framed
+                                                    .send(DaemonMessage::AgentError {
+                                                        message: format!(
+                                                            "failed to complete operator profile session: {error}"
+                                                        ),
+                                                    })
+                                                    .await
+                                                    .ok();
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(error) => {
+                                    framed
+                                        .send(DaemonMessage::AgentError {
+                                            message: format!(
+                                                "failed to fetch operator profile question: {error}"
+                                            ),
+                                        })
+                                        .await
+                                        .ok();
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!(
+                                        "failed to start operator profile session: {error}"
+                                    ),
+                                })
+                                .await
+                                .ok();
+                        }
+                    }
+                }
+
+                ClientMessage::AgentNextOperatorProfileQuestion { session_id } => {
+                    match agent
+                        .next_operator_profile_question_for_session(&session_id)
+                        .await
+                    {
+                        Ok((question, progress)) => {
+                            if let Some(question) = question {
+                                framed
+                                    .send(DaemonMessage::AgentOperatorProfileQuestion {
+                                        session_id: question.session_id,
+                                        question_id: question.question_id,
+                                        field_key: question.field_key,
+                                        prompt: question.prompt,
+                                        input_kind: question.input_kind,
+                                        optional: question.optional,
+                                    })
+                                    .await
+                                    .ok();
+                                framed
+                                    .send(DaemonMessage::AgentOperatorProfileProgress {
+                                        session_id: progress.session_id,
+                                        answered: progress.answered,
+                                        remaining: progress.remaining,
+                                        completion_ratio: progress.completion_ratio,
+                                    })
+                                    .await
+                                    .ok();
+                            } else {
+                                match agent.complete_operator_profile_session(&session_id).await {
+                                    Ok(done) => {
+                                        framed
+                                            .send(DaemonMessage::AgentOperatorProfileSessionCompleted {
+                                                session_id: done.session_id,
+                                                updated_fields: done.updated_fields,
+                                            })
+                                            .await
+                                            .ok();
+                                    }
+                                    Err(error) => {
+                                        framed
+                                            .send(DaemonMessage::AgentError {
+                                                message: format!(
+                                                    "failed to complete operator profile session: {error}"
+                                                ),
+                                            })
+                                            .await
+                                            .ok();
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!(
+                                        "failed to fetch operator profile question: {error}"
+                                    ),
+                                })
+                                .await
+                                .ok();
+                        }
+                    }
+                }
+
+                ClientMessage::AgentSubmitOperatorProfileAnswer {
+                    session_id,
+                    question_id,
+                    answer_json,
+                } => {
+                    match agent
+                        .submit_operator_profile_answer(&session_id, &question_id, &answer_json)
+                        .await
+                    {
+                        Ok((question, progress)) => {
+                            if let Some(question) = question {
+                                framed
+                                    .send(DaemonMessage::AgentOperatorProfileQuestion {
+                                        session_id: question.session_id,
+                                        question_id: question.question_id,
+                                        field_key: question.field_key,
+                                        prompt: question.prompt,
+                                        input_kind: question.input_kind,
+                                        optional: question.optional,
+                                    })
+                                    .await
+                                    .ok();
+                                framed
+                                    .send(DaemonMessage::AgentOperatorProfileProgress {
+                                        session_id: progress.session_id,
+                                        answered: progress.answered,
+                                        remaining: progress.remaining,
+                                        completion_ratio: progress.completion_ratio,
+                                    })
+                                    .await
+                                    .ok();
+                            } else {
+                                match agent.complete_operator_profile_session(&session_id).await {
+                                    Ok(done) => {
+                                        framed
+                                            .send(DaemonMessage::AgentOperatorProfileSessionCompleted {
+                                                session_id: done.session_id,
+                                                updated_fields: done.updated_fields,
+                                            })
+                                            .await
+                                            .ok();
+                                    }
+                                    Err(error) => {
+                                        framed
+                                            .send(DaemonMessage::AgentError {
+                                                message: format!(
+                                                    "failed to complete operator profile session: {error}"
+                                                ),
+                                            })
+                                            .await
+                                            .ok();
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!(
+                                        "failed to submit operator profile answer: {error}"
+                                    ),
+                                })
+                                .await
+                                .ok();
+                        }
+                    }
+                }
+
+                ClientMessage::AgentSkipOperatorProfileQuestion {
+                    session_id,
+                    question_id,
+                    reason,
+                } => {
+                    match agent
+                        .skip_operator_profile_question(
+                            &session_id,
+                            &question_id,
+                            reason.as_deref(),
+                        )
+                        .await
+                    {
+                        Ok((question, progress)) => {
+                            if let Some(question) = question {
+                                framed
+                                    .send(DaemonMessage::AgentOperatorProfileQuestion {
+                                        session_id: question.session_id,
+                                        question_id: question.question_id,
+                                        field_key: question.field_key,
+                                        prompt: question.prompt,
+                                        input_kind: question.input_kind,
+                                        optional: question.optional,
+                                    })
+                                    .await
+                                    .ok();
+                                framed
+                                    .send(DaemonMessage::AgentOperatorProfileProgress {
+                                        session_id: progress.session_id,
+                                        answered: progress.answered,
+                                        remaining: progress.remaining,
+                                        completion_ratio: progress.completion_ratio,
+                                    })
+                                    .await
+                                    .ok();
+                            } else {
+                                match agent.complete_operator_profile_session(&session_id).await {
+                                    Ok(done) => {
+                                        framed
+                                            .send(DaemonMessage::AgentOperatorProfileSessionCompleted {
+                                                session_id: done.session_id,
+                                                updated_fields: done.updated_fields,
+                                            })
+                                            .await
+                                            .ok();
+                                    }
+                                    Err(error) => {
+                                        framed
+                                            .send(DaemonMessage::AgentError {
+                                                message: format!(
+                                                    "failed to complete operator profile session: {error}"
+                                                ),
+                                            })
+                                            .await
+                                            .ok();
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!(
+                                        "failed to skip operator profile question: {error}"
+                                    ),
+                                })
+                                .await
+                                .ok();
+                        }
+                    }
+                }
+
+                ClientMessage::AgentDeferOperatorProfileQuestion {
+                    session_id,
+                    question_id,
+                    defer_until_unix_ms,
+                } => {
+                    match agent
+                        .defer_operator_profile_question(
+                            &session_id,
+                            &question_id,
+                            defer_until_unix_ms,
+                        )
+                        .await
+                    {
+                        Ok((question, progress)) => {
+                            if let Some(question) = question {
+                                framed
+                                    .send(DaemonMessage::AgentOperatorProfileQuestion {
+                                        session_id: question.session_id,
+                                        question_id: question.question_id,
+                                        field_key: question.field_key,
+                                        prompt: question.prompt,
+                                        input_kind: question.input_kind,
+                                        optional: question.optional,
+                                    })
+                                    .await
+                                    .ok();
+                                framed
+                                    .send(DaemonMessage::AgentOperatorProfileProgress {
+                                        session_id: progress.session_id,
+                                        answered: progress.answered,
+                                        remaining: progress.remaining,
+                                        completion_ratio: progress.completion_ratio,
+                                    })
+                                    .await
+                                    .ok();
+                            } else {
+                                match agent.complete_operator_profile_session(&session_id).await {
+                                    Ok(done) => {
+                                        framed
+                                            .send(DaemonMessage::AgentOperatorProfileSessionCompleted {
+                                                session_id: done.session_id,
+                                                updated_fields: done.updated_fields,
+                                            })
+                                            .await
+                                            .ok();
+                                    }
+                                    Err(error) => {
+                                        framed
+                                            .send(DaemonMessage::AgentError {
+                                                message: format!(
+                                                    "failed to complete operator profile session: {error}"
+                                                ),
+                                            })
+                                            .await
+                                            .ok();
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!(
+                                        "failed to defer operator profile question: {error}"
+                                    ),
+                                })
+                                .await
+                                .ok();
+                        }
+                    }
+                }
+
+                ClientMessage::AgentGetOperatorProfileSummary => {
+                    match agent.get_operator_profile_summary_json().await {
+                        Ok(summary_json) => {
+                            framed
+                                .send(DaemonMessage::AgentOperatorProfileSummary { summary_json })
+                                .await
+                                .ok();
+                        }
+                        Err(error) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!(
+                                        "failed to build operator profile summary: {error}"
+                                    ),
+                                })
+                                .await
+                                .ok();
+                        }
+                    }
+                }
+
+                ClientMessage::AgentSetOperatorProfileConsent {
+                    consent_key,
+                    granted,
+                } => {
+                    match agent
+                        .set_operator_profile_consent(&consent_key, granted)
+                        .await
+                    {
+                        Ok(updated_fields) => {
+                            framed
+                                .send(DaemonMessage::AgentOperatorProfileSessionCompleted {
+                                    session_id: "consent-update".to_string(),
+                                    updated_fields,
+                                })
+                                .await
+                                .ok();
+                        }
+                        Err(error) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!(
+                                        "failed to set operator profile consent: {error}"
+                                    ),
+                                })
+                                .await
+                                .ok();
+                        }
+                    }
+                }
+
                 ClientMessage::AgentGetOperatorModel => match agent.operator_model_json().await {
                     Ok(model_json) => {
                         framed
@@ -2299,6 +2801,29 @@ where
                                 .send(DaemonMessage::AgentError {
                                     message: format!(
                                         "failed to read collaboration sessions: {error}"
+                                    ),
+                                })
+                                .await
+                                .ok();
+                        }
+                    }
+                }
+
+                ClientMessage::AgentGetDivergentSession { session_id } => {
+                    match agent.get_divergent_session(&session_id).await {
+                        Ok(session_payload) => {
+                            framed
+                                .send(DaemonMessage::AgentDivergentSession {
+                                    session_json: session_payload.to_string(),
+                                })
+                                .await
+                                .ok();
+                        }
+                        Err(error) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!(
+                                        "failed to read divergent session {session_id}: {error}"
                                     ),
                                 })
                                 .await
@@ -3640,6 +4165,76 @@ where
                                     success: false,
                                     result: e.to_string(),
                                     error_type: Some(error_type.to_string()),
+                                })
+                                .await?;
+                        }
+                    }
+                }
+                ClientMessage::AgentExplainAction {
+                    action_id,
+                    step_index,
+                } => {
+                    let explanation = agent.handle_explain_action(&action_id, step_index).await;
+                    let json = serde_json::to_string(&explanation).unwrap_or_default();
+                    framed
+                        .send(DaemonMessage::AgentExplanation {
+                            explanation_json: json,
+                        })
+                        .await?;
+                }
+                ClientMessage::AgentStartDivergentSession {
+                    problem_statement,
+                    thread_id,
+                    goal_run_id,
+                    custom_framings_json,
+                } => {
+                    // Parse optional custom framings from JSON
+                    let custom_framings = custom_framings_json
+                        .as_deref()
+                        .and_then(|json| serde_json::from_str::<Vec<serde_json::Value>>(json).ok())
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|item| {
+                                    let label = item.get("label")?.as_str()?.to_string();
+                                    let prompt =
+                                        item.get("system_prompt_override")?.as_str()?.to_string();
+                                    Some(crate::agent::handoff::divergent::Framing {
+                                        label,
+                                        system_prompt_override: prompt,
+                                        task_id: None,
+                                        contribution_id: None,
+                                    })
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .filter(|v| v.len() >= 2);
+
+                    match agent
+                        .start_divergent_session(
+                            &problem_statement,
+                            custom_framings,
+                            &thread_id,
+                            goal_run_id.as_deref(),
+                        )
+                        .await
+                    {
+                        Ok(session_id) => {
+                            let result = serde_json::json!({
+                                "session_id": session_id,
+                                "status": "started",
+                            });
+                            framed
+                                .send(DaemonMessage::AgentDivergentSessionStarted {
+                                    session_json: serde_json::to_string(&result)
+                                        .unwrap_or_default(),
+                                })
+                                .await?;
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::Error {
+                                    message: format!("Failed to start divergent session: {e}"),
                                 })
                                 .await?;
                         }

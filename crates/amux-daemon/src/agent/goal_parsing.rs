@@ -15,6 +15,9 @@ pub(super) struct GoalPlanResponse {
     pub summary: String,
     #[serde(default)]
     pub steps: Vec<GoalPlanStepResponse>,
+    /// Alternatives the LLM considered but rejected during planning (EXPL-03).
+    #[serde(default)]
+    pub rejected_alternatives: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -71,7 +74,7 @@ pub(super) fn collect_plan_issues(plan: &GoalPlanResponse) -> Vec<String> {
             issues.push(format!("Step {n}: missing success_criteria."));
         }
         if step.kind == GoalRunStepKind::Unknown {
-            issues.push(format!("Step {n}: kind is empty or unknown — must be one of: command, research, reason, memory, skill."));
+            issues.push(format!("Step {n}: kind is empty or unknown — must be one of: command, research, reason, memory, skill, specialist, divergent."));
         }
     }
 
@@ -220,7 +223,10 @@ pub(super) fn retry_goal_run_step(goal_run: &mut GoalRun, step_index: Option<usi
         .steps
         .get(target_index)
         .map(|step| step.title.clone());
-    goal_run.current_step_kind = goal_run.steps.get(target_index).map(|step| step.kind);
+    goal_run.current_step_kind = goal_run
+        .steps
+        .get(target_index)
+        .map(|step| step.kind.clone());
     goal_run.awaiting_approval_id = None;
     goal_run.active_task_id = None;
     Ok(())
@@ -247,7 +253,10 @@ pub(super) fn rerun_goal_run_from_step(
         .steps
         .get(target_index)
         .map(|step| step.title.clone());
-    goal_run.current_step_kind = goal_run.steps.get(target_index).map(|step| step.kind);
+    goal_run.current_step_kind = goal_run
+        .steps
+        .get(target_index)
+        .map(|step| step.kind.clone());
     goal_run.awaiting_approval_id = None;
     goal_run.active_task_id = None;
     goal_run.reflection_summary = None;
@@ -303,7 +312,7 @@ pub(super) fn project_goal_run_snapshot(
     goal_run.current_step_kind = goal_run
         .steps
         .get(goal_run.current_step_index)
-        .map(|step| step.kind);
+        .map(|step| step.kind.clone());
     goal_run.active_task_id = goal_run
         .steps
         .get(goal_run.current_step_index)
@@ -458,6 +467,11 @@ pub(super) fn goal_plan_json_schema() -> serde_json::Value {
                     "required": ["title", "instructions", "kind", "success_criteria", "session_id"],
                     "additionalProperties": false
                 }
+            },
+            "rejected_alternatives": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "1-3 alternative approaches you considered but rejected, each with a brief reason."
             }
         },
         "required": ["title", "summary", "steps"],
@@ -632,4 +646,42 @@ pub(super) fn parse_json_block<T: serde::de::DeserializeOwned>(raw: &str) -> Res
 
     tracing::warn!(raw_len = raw.len(), raw_output = %raw, "failed to parse structured JSON from model output");
     anyhow::bail!("failed to parse structured JSON from model output")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn goal_plan_response_with_rejected_alternatives_round_trips() {
+        let plan = GoalPlanResponse {
+            title: Some("Build feature".to_string()),
+            summary: "Implement the feature in 3 steps".to_string(),
+            steps: vec![GoalPlanStepResponse {
+                title: "Step 1".to_string(),
+                instructions: "Do the thing".to_string(),
+                kind: GoalRunStepKind::Command,
+                success_criteria: "Thing is done".to_string(),
+                session_id: None,
+            }],
+            rejected_alternatives: vec![
+                "Could have used a single monolithic script but too risky".to_string(),
+                "Considered manual approach but would take too long".to_string(),
+            ],
+        };
+
+        let json = serde_json::to_string(&plan).expect("serialize");
+        let decoded: GoalPlanResponse = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(decoded.rejected_alternatives.len(), 2);
+        assert!(decoded.rejected_alternatives[0].contains("monolithic"));
+        assert!(decoded.rejected_alternatives[1].contains("manual"));
+    }
+
+    #[test]
+    fn goal_plan_response_without_rejected_alternatives_defaults_empty() {
+        let json = r#"{"title":"Test","summary":"Test","steps":[]}"#;
+        let decoded: GoalPlanResponse = serde_json::from_str(json).expect("deserialize");
+        assert!(decoded.rejected_alternatives.is_empty());
+    }
 }

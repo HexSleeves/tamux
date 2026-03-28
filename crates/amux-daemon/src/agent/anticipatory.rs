@@ -673,6 +673,11 @@ mod tests {
             duration_ms: None,
             steps: Vec::new(),
             events: Vec::new(),
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            estimated_cost_usd: None,
+            autonomy_level: Default::default(),
+            authorship_tag: None,
         }
     }
 

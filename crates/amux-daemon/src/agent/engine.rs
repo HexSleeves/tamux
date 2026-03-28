@@ -107,6 +107,7 @@ pub struct AgentEngine {
     pub stream_generation: AtomicU64,
     pub(super) active_operator_sessions: RwLock<HashMap<String, u64>>,
     pub(super) pending_operator_approvals: RwLock<HashMap<String, PendingApprovalObservation>>,
+    pub(super) operator_profile_sessions: RwLock<HashMap<String, OperatorProfileSessionState>>,
     pub(super) honcho_sync: Mutex<HonchoSyncState>,
     pub repo_watchers: Mutex<HashMap<String, ThreadRepoWatcher>>,
     pub watcher_refresh_tx: mpsc::UnboundedSender<String>,
@@ -132,6 +133,15 @@ pub struct AgentEngine {
     pub(super) episodic_store: RwLock<super::episodic::EpisodicStore>,
     /// Situational awareness monitor (Phase v3.0: AWAR-01).
     pub(super) awareness: RwLock<super::awareness::AwarenessMonitor>,
+    /// Calibration tracker for uncertainty quantification (Phase v3.0: UNCR-07).
+    pub(super) calibration_tracker: RwLock<super::uncertainty::calibration::CalibrationTracker>,
+    /// Handoff broker for multi-agent task delegation (Phase v3.0: HAND-01).
+    pub(super) handoff_broker: RwLock<super::handoff::HandoffBroker>,
+    /// Active divergent sessions for parallel framing mode (Phase v3.0: DIVR-01).
+    pub(super) divergent_sessions:
+        RwLock<HashMap<String, super::handoff::divergent::DivergentSession>>,
+    /// Per-goal-run cost trackers, keyed by goal_run_id (Phase v3.0: COST-01).
+    pub(super) cost_trackers: Mutex<HashMap<String, super::cost::CostTracker>>,
 }
 
 impl AgentEngine {
@@ -219,6 +229,7 @@ impl AgentEngine {
             stream_generation: AtomicU64::new(1),
             active_operator_sessions: RwLock::new(HashMap::new()),
             pending_operator_approvals: RwLock::new(HashMap::new()),
+            operator_profile_sessions: RwLock::new(HashMap::new()),
             honcho_sync: Mutex::new(HonchoSyncState::default()),
             repo_watchers: Mutex::new(HashMap::new()),
             watcher_refresh_tx,
@@ -232,6 +243,12 @@ impl AgentEngine {
             plugin_manager: std::sync::OnceLock::new(),
             episodic_store: RwLock::new(super::episodic::EpisodicStore::default()),
             awareness: RwLock::new(super::awareness::AwarenessMonitor::new()),
+            calibration_tracker: RwLock::new(
+                super::uncertainty::calibration::CalibrationTracker::default(),
+            ),
+            handoff_broker: RwLock::new(super::handoff::HandoffBroker::default()),
+            divergent_sessions: RwLock::new(HashMap::new()),
+            cost_trackers: Mutex::new(HashMap::new()),
         })
     }
 

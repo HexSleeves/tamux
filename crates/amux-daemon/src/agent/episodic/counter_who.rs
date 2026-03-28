@@ -2,7 +2,7 @@
 //! what approaches have been tried, detects repeated failing patterns,
 //! and records operator corrections.
 
-use super::{CounterWhoState, CorrectionPattern, EpisodeOutcome, TriedApproach};
+use super::{CorrectionPattern, CounterWhoState, EpisodeOutcome, TriedApproach};
 use crate::agent::engine::AgentEngine;
 use crate::agent::types::AgentEvent;
 
@@ -118,10 +118,7 @@ pub fn format_counter_who_context(state: &CounterWhoState) -> String {
     let mut out = String::new();
     out.push_str("## Self-Awareness (Counter-Who)\n");
 
-    let focus = state
-        .current_focus
-        .as_deref()
-        .unwrap_or("none");
+    let focus = state.current_focus.as_deref().unwrap_or("none");
     out.push_str(&format!("Current focus: {focus}\n"));
 
     if has_approaches {
@@ -199,10 +196,10 @@ impl AgentEngine {
         let mut store = self.episodic_store.write().await;
         store.counter_who.tried_approaches.push(approach);
         store.counter_who.current_focus = Some(format!("Tool: {tool_name}"));
-        store
-            .counter_who
-            .recent_changes
-            .push(format!("{tool_name} -> {}", if success { "success" } else { "failure" }));
+        store.counter_who.recent_changes.push(format!(
+            "{tool_name} -> {}",
+            if success { "success" } else { "failure" }
+        ));
         store.counter_who.updated_at = now_ms;
 
         prune_old_approaches(&mut store.counter_who, now_ms, 7, 20);
@@ -269,11 +266,7 @@ impl AgentEngine {
         let state = store.counter_who.clone();
         drop(store);
 
-        let id = state
-            .goal_run_id
-            .as_deref()
-            .unwrap_or("global")
-            .to_string();
+        let id = state.goal_run_id.as_deref().unwrap_or("global").to_string();
         let goal_run_id = state.goal_run_id.clone();
         let thread_id = state.thread_id.clone();
         let state_json =
@@ -295,13 +288,8 @@ impl AgentEngine {
     }
 
     /// Restore counter-who state from SQLite (CWHO-04).
-    pub(crate) async fn restore_counter_who(
-        &self,
-        goal_run_id: Option<&str>,
-    ) -> Result<()> {
-        let gid = goal_run_id
-            .unwrap_or("global")
-            .to_string();
+    pub(crate) async fn restore_counter_who(&self, goal_run_id: Option<&str>) -> Result<()> {
+        let gid = goal_run_id.unwrap_or("global").to_string();
 
         let state_json: Option<String> = self
             .history

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(super) struct CollaborationSession {
+pub(in crate::agent) struct CollaborationSession {
     pub id: String,
     pub parent_task_id: String,
     pub thread_id: Option<String>,
@@ -21,7 +21,7 @@ pub(super) struct CollaborationSession {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct CollaborativeAgent {
+pub(in crate::agent) struct CollaborativeAgent {
     pub task_id: String,
     pub title: String,
     pub role: String,
@@ -30,7 +30,7 @@ pub(super) struct CollaborativeAgent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct Contribution {
+pub(in crate::agent) struct Contribution {
     pub id: String,
     pub task_id: String,
     pub topic: String,
@@ -41,7 +41,7 @@ pub(super) struct Contribution {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct Disagreement {
+pub(in crate::agent) struct Disagreement {
     pub id: String,
     pub topic: String,
     pub agents: Vec<String>,
@@ -53,14 +53,14 @@ pub(super) struct Disagreement {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct Vote {
+pub(in crate::agent) struct Vote {
     pub task_id: String,
     pub position: String,
     pub weight: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct Consensus {
+pub(in crate::agent) struct Consensus {
     pub topic: String,
     pub winner: String,
     pub rationale: String,
@@ -361,7 +361,7 @@ fn normalize_topic(topic: &str) -> String {
     topic.trim().to_ascii_lowercase()
 }
 
-fn detect_disagreements(session: &mut CollaborationSession) {
+pub(in crate::agent) fn detect_disagreements(session: &mut CollaborationSession) {
     let previous = session
         .disagreements
         .iter()

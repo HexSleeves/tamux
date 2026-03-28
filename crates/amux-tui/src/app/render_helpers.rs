@@ -260,6 +260,22 @@ pub(super) fn render_help_modal(frame: &mut Frame, area: Rect, theme: &ThemeToke
             Span::styled("This help screen", theme.fg_dim),
         ]),
         Line::from(vec![
+            Span::styled("  /explain         ", theme.fg_active),
+            Span::styled("Explain latest goal-run decision", theme.fg_dim),
+        ]),
+        Line::from(vec![
+            Span::styled("  /diverge         ", theme.fg_active),
+            Span::styled("Prepare divergent session command", theme.fg_dim),
+        ]),
+        Line::from(vec![
+            Span::styled("  /diverge-start   ", theme.fg_active),
+            Span::styled("Start divergent session", theme.fg_dim),
+        ]),
+        Line::from(vec![
+            Span::styled("  /diverge-get     ", theme.fg_active),
+            Span::styled("Fetch divergent session payload", theme.fg_dim),
+        ]),
+        Line::from(vec![
             Span::styled("  /quit            ", theme.fg_active),
             Span::styled("Exit TUI", theme.fg_dim),
         ]),

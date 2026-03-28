@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import {
   TerminalNotification,
+  NotificationAction,
   NotificationId,
   NotificationSource,
   WorkspaceId,
@@ -30,6 +31,7 @@ export interface NotificationState {
     surfaceId?: SurfaceId | null;
     paneId?: PaneId | null;
     panelId?: PaneId | null;
+    actions?: NotificationAction[];
   }) => void;
 
   markRead: (id: NotificationId) => void;
@@ -61,6 +63,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       isRead: false,
       timestamp: Date.now(),
       source: opts.source,
+      actions: opts.actions ?? [],
     };
 
     set((s) => {

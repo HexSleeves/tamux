@@ -13,10 +13,9 @@ const { execFileSync } = require("child_process");
 const VERSION = require("./package.json").version;
 const BIN_DIR = path.join(__dirname, "bin");
 
-// GitLab Generic Package Registry project ID placeholder.
-// Set to the real numeric project ID during CI publish, or use
-// the URL-encoded project path format.
-const PROJECT_ID = "PROJECT_ID";
+// GitHub owner/repo for release asset downloads.
+const GITHUB_OWNER = "mkurman";
+const GITHUB_REPO = "tamux";
 
 const PLATFORM_MAP = {
   "linux-x64": "linux-x64",
@@ -26,7 +25,7 @@ const PLATFORM_MAP = {
   "win32-x64": "windows-x64",
 };
 
-const BASE_URL = `https://gitlab.com/api/v4/projects/${PROJECT_ID}/packages/generic/tamux/${VERSION}`;
+const BASE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/v${VERSION}`;
 
 /**
  * Download a URL to a Buffer, following up to maxRedirects HTTP 301/302 redirects.
@@ -211,9 +210,15 @@ async function main() {
 }
 
 module.exports = main;
+module.exports.GITHUB_OWNER = GITHUB_OWNER;
+module.exports.GITHUB_REPO = GITHUB_REPO;
 
-main().catch(function (err) {
-  console.warn("tamux: postinstall binary download failed: " + err.message);
-  console.warn("tamux: binaries will be downloaded on first run");
-  process.exit(0);
-});
+// Auto-run only when executed directly (postinstall) or via tryFallbackDownload,
+// not when required just for the exported constants.
+if (require.main === module) {
+  main().catch(function (err) {
+    console.warn("tamux: postinstall binary download failed: " + err.message);
+    console.warn("tamux: binaries will be downloaded on first run");
+    process.exit(0);
+  });
+}

@@ -4,6 +4,10 @@ use super::heartbeat::is_peak_activity_hour;
 use super::*;
 use chrono::Timelike;
 
+fn is_gateway_reset_command(trimmed_lower: &str) -> bool {
+    matches!(trimmed_lower, "!reset" | "!new")
+}
+
 impl AgentEngine {
     /// Initialize gateway connections for receiving messages.
     pub(crate) async fn init_gateway(&self) {
@@ -807,8 +811,11 @@ impl AgentEngine {
 
             // Handle control commands (reset/new conversation)
             let trimmed = msg.content.trim().to_lowercase();
-            if trimmed == "!reset" || trimmed == "!new" || trimmed == "reset" || trimmed == "new" {
+            if is_gateway_reset_command(&trimmed) {
                 self.gateway_threads.write().await.remove(&channel_key);
+                if let Err(error) = self.history.delete_gateway_thread_binding(&channel_key).await {
+                    tracing::warn!(channel_key = %channel_key, %error, "gateway: failed to persist reset binding");
+                }
                 tracing::info!(channel_key = %channel_key, "gateway: conversation reset");
 
                 // Send confirmation back
@@ -860,6 +867,8 @@ impl AgentEngine {
 
             let prompt = format!(
                 "[{platform} message from {sender}]: {content}\n\n\
+                 Recent channel history is auto-injected for continuity. \
+                 If you need more context, call fetch_gateway_history with a larger count.\n\
                  YOU MUST CALL {reply_tool} to reply. Do NOT just write a text response — \
                  the user is on {platform} and will ONLY see messages sent via the tool. \
                  Your text response here is invisible to them.\n\
@@ -951,14 +960,58 @@ impl AgentEngine {
 
             // Use persistent thread per channel for conversation continuity
             let existing_thread = self.gateway_threads.read().await.get(&channel_key).cloned();
+            let history_window = if let Some(ref tid) = existing_thread {
+                match self.history.list_recent_messages(tid, 10).await {
+                    Ok(messages) if !messages.is_empty() => {
+                        let mut lines = Vec::with_capacity(messages.len() + 2);
+                        lines.push(
+                            "Previous 10 messages from this channel (oldest first):".to_string(),
+                        );
+                        for m in messages {
+                            let role = m.role;
+                            let content = m
+                                .content
+                                .replace('\n', " ")
+                                .chars()
+                                .take(240)
+                                .collect::<String>();
+                            lines.push(format!("- {role}: {content}"));
+                        }
+                        Some(lines.join("\n"))
+                    }
+                    Ok(_) => None,
+                    Err(error) => {
+                        tracing::warn!(channel_key = %channel_key, %error, "gateway: failed to load recent history");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
-            match self.send_message(existing_thread.as_deref(), &prompt).await {
+            let enriched_prompt = if let Some(window) = history_window {
+                format!("{prompt}\n\n{window}")
+            } else {
+                prompt
+            };
+
+            match self
+                .send_message(existing_thread.as_deref(), &enriched_prompt)
+                .await
+            {
                 Ok(thread_id) => {
                     // Store the mapping so follow-up messages use the same thread
                     self.gateway_threads
                         .write()
                         .await
                         .insert(channel_key.clone(), thread_id.clone());
+                    if let Err(error) = self
+                        .history
+                        .upsert_gateway_thread_binding(&channel_key, &thread_id, now_millis())
+                        .await
+                    {
+                        tracing::warn!(channel_key = %channel_key, %error, "gateway: failed to persist thread binding");
+                    }
 
                     // Safety net: if the agent didn't call the gateway send tool,
                     // auto-send the last assistant message to the platform
@@ -1045,5 +1098,19 @@ impl AgentEngine {
                 .await
                 .remove(&channel_key);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_gateway_reset_command;
+
+    #[test]
+    fn reset_commands_require_bang_prefix() {
+        assert!(is_gateway_reset_command("!reset"));
+        assert!(is_gateway_reset_command("!new"));
+        assert!(!is_gateway_reset_command("reset"));
+        assert!(!is_gateway_reset_command("new"));
+        assert!(!is_gateway_reset_command("!renew"));
     }
 }

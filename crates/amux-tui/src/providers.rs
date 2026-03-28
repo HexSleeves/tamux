@@ -375,6 +375,7 @@ pub fn known_models_for_provider_auth(provider: &str, auth_source: &str) -> Vec<
             ),
         ],
         "z.ai" | "z.ai-coding-plan" => &[
+            ("glm-5.1", "GLM-5.1", 204_800),
             ("glm-4.7", "GLM-4.7", 128_000),
             ("glm-4.7-air", "GLM-4.7 Air", 128_000),
             ("glm-4.7-flash", "GLM-4.7 Flash", 128_000),

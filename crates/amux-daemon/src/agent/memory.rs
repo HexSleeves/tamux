@@ -1,6 +1,9 @@
 //! Persistent memory helpers for SOUL.md, MEMORY.md, and USER.md.
 
 use super::*;
+use super::operator_profile::user_sync::{
+    current_user_sync_state, handle_user_memory_append_with_reconcile, UserProfileSyncState,
+};
 use crate::history::{HistoryStore, MemoryProvenanceRecord};
 
 const SOUL_LIMIT_CHARS: usize = 1_500;
@@ -150,6 +153,18 @@ pub(super) async fn apply_memory_update(
     let memory_dir = active_memory_dir(agent_data_dir);
     let path = memory_dir.join(target.file_name());
     let existing = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+
+    if target == MemoryTarget::User && mode == MemoryUpdateMode::Append {
+        handle_user_memory_append_with_reconcile(agent_data_dir, history, trimmed).await?;
+        let state = match current_user_sync_state() {
+            UserProfileSyncState::Clean => "clean",
+            UserProfileSyncState::Dirty => "dirty",
+            UserProfileSyncState::Reconciling => "reconciling",
+        };
+        return Ok(format!(
+            "Staged USER.md update through profile reconciliation path (sync_state={state})."
+        ));
+    }
 
     if matches!(mode, MemoryUpdateMode::Append | MemoryUpdateMode::Replace) {
         validate_no_memory_contradictions(target, &existing, trimmed)?;
@@ -534,6 +549,19 @@ impl super::engine::AgentEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::operator_profile::user_sync::{
+        acquire_user_sync_test_guard, set_user_sync_state_for_test,
+    };
+    use crate::history::HistoryStore;
+
+    fn test_write_context() -> MemoryWriteContext<'static> {
+        MemoryWriteContext {
+            source_kind: "test",
+            thread_id: None,
+            task_id: None,
+            goal_run_id: None,
+        }
+    }
 
     #[test]
     fn validate_memory_size_rejects_over_limit() {
@@ -576,5 +604,68 @@ mod tests {
             "- package manager: cargo",
         )
         .expect("identical facts should not conflict");
+    }
+
+    #[tokio::test]
+    async fn user_append_while_reconciling_stages_without_conflicting_file_write() -> Result<()> {
+        let _guard = acquire_user_sync_test_guard();
+        let root = std::env::temp_dir().join(format!("tamux-memory-test-{}", Uuid::new_v4()));
+        let history = HistoryStore::new_test_store(&root).await?;
+        ensure_memory_files(&root).await?;
+        let user_path = active_memory_dir(&root).join(MemoryTarget::User.file_name());
+        tokio::fs::write(&user_path, "# User\n- shell: bash\n").await?;
+
+        set_user_sync_state_for_test(UserProfileSyncState::Reconciling);
+        let _ = apply_memory_update(
+            &root,
+            &history,
+            MemoryTarget::User,
+            MemoryUpdateMode::Append,
+            "- shell: zsh",
+            test_write_context(),
+        )
+        .await?;
+
+        // While reconciling, append is staged but USER.md content remains unchanged.
+        let final_content = tokio::fs::read_to_string(&user_path).await?;
+        assert!(final_content.contains("- shell: bash"));
+        assert!(!final_content.contains("- shell: zsh"));
+
+        let staged = history
+            .get_profile_field("legacy_user_signal")
+            .await?
+            .expect("legacy append should be staged into profile fields");
+        assert_eq!(staged.source, "legacy_append");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn user_append_is_staged_then_rerendered_from_db() -> Result<()> {
+        let _guard = acquire_user_sync_test_guard();
+        let root = std::env::temp_dir().join(format!("tamux-memory-test-{}", Uuid::new_v4()));
+        let history = HistoryStore::new_test_store(&root).await?;
+        ensure_memory_files(&root).await?;
+        let user_path = active_memory_dir(&root).join(MemoryTarget::User.file_name());
+        tokio::fs::write(&user_path, "# User\nlegacy note\n").await?;
+
+        set_user_sync_state_for_test(UserProfileSyncState::Clean);
+        let _ = apply_memory_update(
+            &root,
+            &history,
+            MemoryTarget::User,
+            MemoryUpdateMode::Append,
+            "- prefers concise replies",
+            test_write_context(),
+        )
+        .await?;
+
+        let final_content = tokio::fs::read_to_string(&user_path).await?;
+        assert!(final_content.contains("Profile summary is generated from SQLite-backed operator profile."));
+        assert!(final_content.contains("- legacy_user_signal: "));
+        assert!(final_content.contains("- legacy_user_md: "));
+
+        let import_done = history.get_profile_field("__legacy_user_import_done").await?;
+        assert!(import_done.is_some(), "legacy bootstrap import sentinel should be written");
+        Ok(())
     }
 }

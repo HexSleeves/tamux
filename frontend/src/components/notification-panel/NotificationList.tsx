@@ -7,12 +7,14 @@ export function NotificationList({
     onSelectNotification,
     onApproveNotification,
     onDenyNotification,
+    onNotificationAction,
 }: {
     notifications: TerminalNotification[];
     markRead: (id: string) => void;
     onSelectNotification?: (notification: TerminalNotification) => void;
     onApproveNotification?: (notification: TerminalNotification) => void;
     onDenyNotification?: (notification: TerminalNotification) => void;
+    onNotificationAction?: (notification: TerminalNotification, actionId: string) => void;
 }) {
     return (
         <div style={{ flex: 1, overflow: "auto", padding: "4px 0" }}>
@@ -150,6 +152,34 @@ export function NotificationList({
                                 >
                                     Deny (n)
                                 </button>
+                            </div>
+                        ) : null}
+                        {notification.source !== "approval" &&
+                        Array.isArray(notification.actions) &&
+                        notification.actions.length > 0 ? (
+                            <div style={{ marginTop: 10, display: "flex", gap: 8, marginLeft: notification.isRead ? 0 : 12 }}>
+                                {notification.actions.map((action) => (
+                                    <button
+                                        key={action.id}
+                                        type="button"
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            markRead(notification.id);
+                                            onNotificationAction?.(notification, action.id);
+                                        }}
+                                        style={{
+                                            border: "1px solid rgba(97, 197, 255, 0.36)",
+                                            background: "rgba(97, 197, 255, 0.14)",
+                                            color: "var(--accent)",
+                                            fontSize: 11,
+                                            fontWeight: 700,
+                                            padding: "5px 10px",
+                                            cursor: "pointer",
+                                        }}
+                                    >
+                                        {action.label}
+                                    </button>
+                                ))}
                             </div>
                         ) : null}
                     </div>

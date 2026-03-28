@@ -148,6 +148,7 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
     const [symbolQuery, setSymbolQuery] = useState("");
     const [daemonTodosByThread, setDaemonTodosByThread] = useState<Record<string, AgentTodoItem[]>>({});
     const [goalRunsForTrace, setGoalRunsForTrace] = useState<GoalRun[]>([]);
+    const [latestDivergentSessionId, setLatestDivergentSessionId] = useState<string | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const abortRef = useRef<AbortController | null>(null);
@@ -540,6 +541,80 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                 }
                 case "workflow_notice": {
                     recordDaemonWorkflowNotice(event);
+                    if (event.kind === "operator-profile-warning") {
+                        const details = typeof event.details === "string" ? event.details : null;
+                        let retryAction: string | null = null;
+                        let warningBody = typeof event.message === "string" ? event.message : "Operator profile warning";
+                        if (details) {
+                            try {
+                                const parsed = JSON.parse(details);
+                                if (typeof parsed?.retry_action === "string") {
+                                    retryAction = parsed.retry_action;
+                                }
+                                if (typeof parsed?.error === "string") {
+                                    warningBody = `${warningBody}\n${parsed.error}`;
+                                }
+                            } catch {
+                                warningBody = `${warningBody}\n${details}`;
+                            }
+                        }
+                        addNotification({
+                            title: "Operator profile warning",
+                            body: warningBody,
+                            icon: "alert-triangle",
+                            source: "system",
+                            workspaceId: activeWorkspace?.id ?? null,
+                            paneId: activePaneId ?? null,
+                            panelId: activePaneId ?? null,
+                            actions: retryAction
+                                ? [
+                                    {
+                                        id: retryAction,
+                                        label: "Retry",
+                                    },
+                                ]
+                                : [],
+                        });
+                    }
+                    break;
+                }
+                case "agent-divergent-session-started": {
+                    const payload = normalizeBridgePayload(event);
+                    if (payload?.ok === false && typeof payload?.error === "string") {
+                        appendDaemonSystemMessage(`Failed to start divergent session: ${payload.error}`);
+                        break;
+                    }
+                    const sessionId = typeof payload.session_id === "string" ? payload.session_id : null;
+                    if (sessionId) {
+                        setLatestDivergentSessionId(sessionId);
+                    }
+                    appendDaemonSystemMessage(
+                        sessionId
+                            ? `Divergent session started: \`${sessionId}\`.\nType \`!diverge-get\` to fetch it.`
+                            : "Divergent session started.",
+                    );
+                    break;
+                }
+                case "agent-divergent-session": {
+                    const payload = normalizeBridgePayload(event);
+                    if (payload?.ok === false && typeof payload?.error === "string") {
+                        appendDaemonSystemMessage(`Failed to fetch divergent session: ${payload.error}`);
+                        break;
+                    }
+                    appendDaemonSystemMessage(
+                        `Divergent session payload\n\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\``,
+                    );
+                    break;
+                }
+                case "agent-explanation": {
+                    const payload = normalizeBridgePayload(event);
+                    if (payload?.ok === false && typeof payload?.error === "string") {
+                        appendDaemonSystemMessage(`Failed to explain action: ${payload.error}`);
+                        break;
+                    }
+                    appendDaemonSystemMessage(
+                        `Explainability\n\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\``,
+                    );
                     break;
                 }
                 case "workspace_command": {
@@ -754,6 +829,26 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         });
     }
 
+    function appendDaemonSystemMessage(content: string) {
+        const threadId = daemonLocalThreadRef.current ?? activeThreadId;
+        if (!threadId) return;
+        addMessage(threadId, {
+            role: "system",
+            content,
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            isCompactionSummary: false,
+        });
+    }
+
+    function normalizeBridgePayload(payload: any) {
+        if (payload && typeof payload === "object" && "data" in payload) {
+            return payload.data ?? {};
+        }
+        return payload ?? {};
+    }
+
     function stopStreaming(threadId?: string | null) {
         const targetThreadId = threadId ?? activeThreadId;
         if (!targetThreadId) return;
@@ -803,6 +898,101 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                 return;
             }
             void (async () => {
+                const trimmed = text.trim();
+                if (trimmed === "!explain") {
+                    const latestGoalRun = [...goalRunsForTrace]
+                        .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0];
+                    if (latestGoalRun?.id && amux?.agentExplainAction) {
+                        const response = await amux.agentExplainAction(latestGoalRun.id, null);
+                        const payload = normalizeBridgePayload(response);
+                        if (payload?.ok === false && typeof payload?.error === "string") {
+                            appendDaemonSystemMessage(`Failed to explain action: ${payload.error}`);
+                        } else {
+                            appendDaemonSystemMessage(
+                                `Explainability\n\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\``,
+                            );
+                        }
+                    } else {
+                        const threadId = daemonLocalThreadRef.current ?? activeThreadId;
+                        if (threadId) {
+                            addMessage(threadId, {
+                                role: "system",
+                                content: "No goal run available to explain.",
+                                inputTokens: 0,
+                                outputTokens: 0,
+                                totalTokens: 0,
+                                isCompactionSummary: false,
+                            });
+                        }
+                    }
+                    return;
+                }
+                if (trimmed.startsWith("!diverge ")) {
+                    const problemStatement = trimmed.slice("!diverge ".length).trim();
+                    const daemonTid = daemonThreadIdRef.current;
+                    if (problemStatement && daemonTid && amux?.agentStartDivergentSession) {
+                        const response = await amux.agentStartDivergentSession({
+                            problemStatement,
+                            threadId: daemonTid,
+                            goalRunId: null,
+                        });
+                        const payload = normalizeBridgePayload(response);
+                        if (payload?.ok === false && typeof payload?.error === "string") {
+                            appendDaemonSystemMessage(`Failed to start divergent session: ${payload.error}`);
+                        } else {
+                            const sessionId = typeof payload.session_id === "string" ? payload.session_id : null;
+                            if (sessionId) {
+                                setLatestDivergentSessionId(sessionId);
+                            }
+                            appendDaemonSystemMessage(
+                                sessionId
+                                    ? `Divergent session started: \`${sessionId}\`.\nType \`!diverge-get\` to fetch it.`
+                                    : "Divergent session started.",
+                            );
+                        }
+                    } else {
+                        const threadId = daemonLocalThreadRef.current ?? activeThreadId;
+                        if (threadId) {
+                            addMessage(threadId, {
+                                role: "system",
+                                content: "Usage: !diverge <problem>. Also ensure this thread is linked to a daemon thread.",
+                                inputTokens: 0,
+                                outputTokens: 0,
+                                totalTokens: 0,
+                                isCompactionSummary: false,
+                            });
+                        }
+                    }
+                    return;
+                }
+                if (trimmed.startsWith("!diverge-get")) {
+                    const explicitSessionId = trimmed.slice("!diverge-get".length).trim();
+                    const sessionId = explicitSessionId || latestDivergentSessionId || "";
+                    if (sessionId && amux?.agentGetDivergentSession) {
+                        const response = await amux.agentGetDivergentSession(sessionId);
+                        const payload = normalizeBridgePayload(response);
+                        if (payload?.ok === false && typeof payload?.error === "string") {
+                            appendDaemonSystemMessage(`Failed to fetch divergent session: ${payload.error}`);
+                        } else {
+                            appendDaemonSystemMessage(
+                                `Divergent session payload\n\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\``,
+                            );
+                        }
+                    } else {
+                        const threadId = daemonLocalThreadRef.current ?? activeThreadId;
+                        if (threadId) {
+                            addMessage(threadId, {
+                                role: "system",
+                                content: "No divergent session id cached yet. Start one with `!diverge <problem>` first, or pass `!diverge-get <session_id>`.",
+                                inputTokens: 0,
+                                outputTokens: 0,
+                                totalTokens: 0,
+                                isCompactionSummary: false,
+                            });
+                        }
+                    }
+                    return;
+                }
                 const daemonTid = daemonThreadIdRef.current;
                 let threadId = activeThreadId;
                 console.log("[agent-send] start", { daemonTid, activeThreadId: threadId, daemonLocalRef: daemonLocalThreadRef.current });
@@ -1455,6 +1645,8 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         deleteMessage,
         startGoalRunFromPrompt,
         tabItems,
+        goalRunsForTrace,
+        latestDivergentSessionId,
     ]);
 
     if (!open) {

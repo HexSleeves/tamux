@@ -201,9 +201,11 @@ The daemon maintains three editable markdown files under the agent memory direct
 
 - `SOUL.md`: stable agent identity and principles
 - `MEMORY.md`: learned project facts, conventions, durable environment knowledge
-- `USER.md`: stable operator preferences and constraints
+- `USER.md`: daemon-rendered operator profile summary synchronized from SQLite-backed profile fields
 
 These files have enforced size limits and are injected into future prompts.
+
+Operator profile onboarding and check-ins are daemon-first workflows. The concierge flow starts onboarding interview sessions in the daemon, persists answers/check-ins in SQLite, and then synchronizes `USER.md` from that structured profile state.
 
 ### Curated Writes
 
@@ -214,6 +216,8 @@ The built-in agent updates memory through `update_memory`, which requires:
 - bounded content
 
 This is intentionally curated. Memory is meant to store durable signal, not transient run output.
+
+For `USER.md`, append-style updates are staged through the operator-profile reconciliation path instead of direct freeform-only file writes, so the daemon can keep profile state transparent and consistent.
 
 ### Pre-compaction Memory Flush
 
@@ -268,6 +272,7 @@ SQLite is used for structured operational state such as:
 - goal runs and events
 - transcript index rows
 - mission events
+- operator profile fields, consents, interview/check-in events, and scheduled check-ins
 - checkpoints
 - provenance records
 - collaboration sessions

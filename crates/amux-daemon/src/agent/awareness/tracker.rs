@@ -138,7 +138,13 @@ impl OutcomeWindow {
 mod tests {
     use super::*;
 
-    fn make_entry(tool: &str, hash: &str, success: bool, is_progress: bool, ts: u64) -> OutcomeEntry {
+    fn make_entry(
+        tool: &str,
+        hash: &str,
+        success: bool,
+        is_progress: bool,
+        ts: u64,
+    ) -> OutcomeEntry {
         OutcomeEntry {
             timestamp: ts,
             tool_name: tool.to_string(),
@@ -164,7 +170,10 @@ mod tests {
     fn push_caps_at_max_entries() {
         let mut w = OutcomeWindow::new("e1".to_string(), "thread".to_string());
         for i in 0..250 {
-            w.push(make_entry("tool", &format!("h{i}"), true, false, i as u64), 200);
+            w.push(
+                make_entry("tool", &format!("h{i}"), true, false, i as u64),
+                200,
+            );
         }
         assert_eq!(w.recent_outcomes.len(), 200);
         // Oldest entries should be dropped
@@ -176,10 +185,16 @@ mod tests {
         let mut w = OutcomeWindow::new("e1".to_string(), "thread".to_string());
         // Push 10 entries: first 5 success, last 5 failure
         for i in 0..5 {
-            w.push(make_entry("tool", &format!("h{i}"), true, false, i as u64), 200);
+            w.push(
+                make_entry("tool", &format!("h{i}"), true, false, i as u64),
+                200,
+            );
         }
         for i in 5..10 {
-            w.push(make_entry("tool", &format!("h{i}"), false, false, i as u64), 200);
+            w.push(
+                make_entry("tool", &format!("h{i}"), false, false, i as u64),
+                200,
+            );
         }
         w.recompute_rates(10);
         // Short-term = last 5 = all failures
@@ -193,7 +208,10 @@ mod tests {
         let mut w = OutcomeWindow::new("e1".to_string(), "thread".to_string());
 
         // Entry well before the window (should be excluded)
-        w.push(make_entry("tool", "old", false, false, medium_cutoff - 10000), 200);
+        w.push(
+            make_entry("tool", "old", false, false, medium_cutoff - 10000),
+            200,
+        );
         // Entry within window (success)
         w.push(make_entry("tool", "new1", true, false, now - 1000), 200);
         // Entry within window (failure)

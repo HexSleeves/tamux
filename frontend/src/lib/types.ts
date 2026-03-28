@@ -101,6 +101,11 @@ export interface PaneInfo {
 // ---------------------------------------------------------------------------
 export type NotificationSource = "osc9" | "osc99" | "osc777" | "cli" | "system" | "approval" | "heartbeat" | "audit";
 
+export interface NotificationAction {
+  id: string;
+  label: string;
+}
+
 // ---------------------------------------------------------------------------
 // Audit Feed (Phase 3 — Transparent Autonomy)
 // ---------------------------------------------------------------------------
@@ -151,6 +156,7 @@ export interface TerminalNotification {
   isRead: boolean;
   timestamp: number;
   source: NotificationSource;
+  actions?: NotificationAction[];
 }
 
 // ---------------------------------------------------------------------------

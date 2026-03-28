@@ -265,6 +265,9 @@ pub enum ClientMessage {
         session_id: Option<String>,
         priority: Option<String>,
         client_request_id: Option<String>,
+        /// Autonomy dial: "autonomous", "aware", or "supervised". Default is "aware".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        autonomy_level: Option<String>,
     },
 
     /// Cancel a queued or running agent task.
@@ -407,6 +410,27 @@ pub enum ClientMessage {
     AgentGetCollaborationSessions {
         #[serde(default)]
         parent_task_id: Option<String>,
+    },
+
+    /// Start a divergent session: parallel framings of a problem (DIVR-01, DIVR-02).
+    AgentStartDivergentSession {
+        /// The problem to analyze from multiple perspectives.
+        problem_statement: String,
+        /// Thread to associate with. Required.
+        thread_id: String,
+        /// Optional goal run context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        goal_run_id: Option<String>,
+        /// Optional custom framings JSON: Vec of {label, system_prompt_override}.
+        /// If omitted, default analytical + pragmatic lenses are used.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        custom_framings_json: Option<String>,
+    },
+
+    /// Fetch divergent session completion/progress payload by session ID.
+    AgentGetDivergentSession {
+        /// Divergent session ID returned by AgentStartDivergentSession.
+        session_id: String,
     },
 
     /// List runtime-generated tools registered in the local daemon.
@@ -610,6 +634,62 @@ pub enum ClientMessage {
 
     /// Unsubscribe from WhatsApp QR linking updates.
     AgentWhatsAppLinkUnsubscribe,
+
+    /// Start an interactive operator profiling session.
+    AgentStartOperatorProfileSession {
+        /// Session kind (for example: onboarding, tune-up, retrospective).
+        kind: String,
+    },
+
+    /// Request the next pending operator profiling question.
+    AgentNextOperatorProfileQuestion {
+        /// Active operator profile session id.
+        session_id: String,
+    },
+
+    /// Submit an answer for an operator profiling question.
+    AgentSubmitOperatorProfileAnswer {
+        /// Active operator profile session id.
+        session_id: String,
+        /// Question id from the previously emitted question payload.
+        question_id: String,
+        /// JSON-encoded answer payload.
+        answer_json: String,
+    },
+
+    /// Skip an operator profiling question.
+    AgentSkipOperatorProfileQuestion {
+        session_id: String,
+        question_id: String,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+
+    /// Defer an operator profiling question until later in the same session.
+    AgentDeferOperatorProfileQuestion {
+        session_id: String,
+        question_id: String,
+        #[serde(default)]
+        defer_until_unix_ms: Option<u64>,
+    },
+
+    /// Fetch the current operator profiling summary snapshot.
+    AgentGetOperatorProfileSummary,
+
+    /// Set an operator profiling consent toggle.
+    AgentSetOperatorProfileConsent {
+        consent_key: String,
+        granted: bool,
+    },
+
+    /// Query explainability: "Why did you do that?" for a past action (EXPL-01, EXPL-02).
+    AgentExplainAction {
+        /// The action ID (typically a goal_run_id) to explain.
+        action_id: String,
+        /// Optional step index to narrow the explanation to a specific step.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step_index: Option<usize>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,6 +1103,7 @@ pub enum DaemonMessage {
         provider_health_json: String,
         gateway_statuses_json: String,
         recent_actions_json: String,
+        diagnostics_json: String,
     },
 
     /// Response to PluginList -- list of installed plugins. Per PLUG-09.
@@ -1104,6 +1185,57 @@ pub enum DaemonMessage {
     AgentWhatsAppLinkDisconnected {
         #[serde(default)]
         reason: Option<String>,
+    },
+
+    /// Operator profile session started.
+    AgentOperatorProfileSessionStarted {
+        session_id: String,
+        kind: String,
+    },
+
+    /// Operator profile question payload.
+    AgentOperatorProfileQuestion {
+        session_id: String,
+        question_id: String,
+        field_key: String,
+        prompt: String,
+        input_kind: String,
+        optional: bool,
+    },
+
+    /// Operator profile progress payload.
+    AgentOperatorProfileProgress {
+        session_id: String,
+        answered: u32,
+        remaining: u32,
+        completion_ratio: f64,
+    },
+
+    /// Operator profile summary payload.
+    AgentOperatorProfileSummary { summary_json: String },
+
+    /// Operator profile session completed payload.
+    AgentOperatorProfileSessionCompleted {
+        session_id: String,
+        updated_fields: Vec<String>,
+    },
+
+    /// Response to AgentExplainAction: structured explanation (EXPL-01, EXPL-02).
+    AgentExplanation {
+        /// JSON-serialized ExplanationResponse.
+        explanation_json: String,
+    },
+
+    /// Response to AgentStartDivergentSession (DIVR-01, DIVR-02).
+    AgentDivergentSessionStarted {
+        /// JSON with session_id and status.
+        session_json: String,
+    },
+
+    /// Response to AgentGetDivergentSession.
+    AgentDivergentSession {
+        /// JSON payload with status, framing progress, tensions, mediator output.
+        session_json: String,
     },
 }
 
@@ -1894,6 +2026,31 @@ mod tests {
     }
 
     #[test]
+    fn operator_profile_client_messages_bincode_roundtrip() {
+        let start = ClientMessage::AgentStartOperatorProfileSession {
+            kind: "onboarding".to_string(),
+        };
+        let decoded: ClientMessage = bincode::deserialize(&bincode::serialize(&start).unwrap()).unwrap();
+        match decoded {
+            ClientMessage::AgentStartOperatorProfileSession { kind } => {
+                assert_eq!(kind, "onboarding");
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+
+        let next = ClientMessage::AgentNextOperatorProfileQuestion {
+            session_id: "sess-1".to_string(),
+        };
+        let decoded: ClientMessage = bincode::deserialize(&bincode::serialize(&next).unwrap()).unwrap();
+        match decoded {
+            ClientMessage::AgentNextOperatorProfileQuestion { session_id } => {
+                assert_eq!(session_id, "sess-1");
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
     fn client_message_backward_compat_skill_list_bincode_roundtrip() {
         let msg = ClientMessage::SkillList {
             status: Some("active".to_string()),
@@ -1905,6 +2062,21 @@ mod tests {
             ClientMessage::SkillList { status, limit } => {
                 assert_eq!(status.as_deref(), Some("active"));
                 assert_eq!(limit, 5);
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn divergent_agent_get_session_client_message_bincode_roundtrip() {
+        let msg = ClientMessage::AgentGetDivergentSession {
+            session_id: "divergent_test".to_string(),
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            ClientMessage::AgentGetDivergentSession { session_id } => {
+                assert_eq!(session_id, "divergent_test");
             }
             other => panic!("unexpected variant: {:?}", other),
         }
@@ -2155,6 +2327,52 @@ mod tests {
     }
 
     #[test]
+    fn operator_profile_daemon_messages_bincode_roundtrip() {
+        let started = DaemonMessage::AgentOperatorProfileSessionStarted {
+            session_id: "sess-1".to_string(),
+            kind: "onboarding".to_string(),
+        };
+        let decoded: DaemonMessage =
+            bincode::deserialize(&bincode::serialize(&started).unwrap()).unwrap();
+        match decoded {
+            DaemonMessage::AgentOperatorProfileSessionStarted { session_id, kind } => {
+                assert_eq!(session_id, "sess-1");
+                assert_eq!(kind, "onboarding");
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+
+        let question = DaemonMessage::AgentOperatorProfileQuestion {
+            session_id: "sess-1".to_string(),
+            question_id: "q1".to_string(),
+            field_key: "enabled".to_string(),
+            prompt: "Enable operator model?".to_string(),
+            input_kind: "boolean".to_string(),
+            optional: false,
+        };
+        let decoded: DaemonMessage =
+            bincode::deserialize(&bincode::serialize(&question).unwrap()).unwrap();
+        match decoded {
+            DaemonMessage::AgentOperatorProfileQuestion {
+                session_id,
+                question_id,
+                field_key,
+                prompt,
+                input_kind,
+                optional,
+            } => {
+                assert_eq!(session_id, "sess-1");
+                assert_eq!(question_id, "q1");
+                assert_eq!(field_key, "enabled");
+                assert_eq!(prompt, "Enable operator model?");
+                assert_eq!(input_kind, "boolean");
+                assert!(!optional);
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
     fn daemon_message_backward_compat_skill_publish_result_bincode_roundtrip() {
         let msg = DaemonMessage::SkillPublishResult {
             success: true,
@@ -2166,6 +2384,21 @@ mod tests {
             DaemonMessage::SkillPublishResult { success, message } => {
                 assert!(success);
                 assert_eq!(message, "published");
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn divergent_agent_session_daemon_message_bincode_roundtrip() {
+        let msg = DaemonMessage::AgentDivergentSession {
+            session_json: "{\"status\":\"complete\"}".to_string(),
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+        match decoded {
+            DaemonMessage::AgentDivergentSession { session_json } => {
+                assert!(session_json.contains("\"complete\""));
             }
             other => panic!("unexpected variant: {:?}", other),
         }

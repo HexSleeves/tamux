@@ -49,6 +49,9 @@ pub enum ClientEvent {
         goal_run_id: String,
         checkpoints: Vec<CheckpointSummary>,
     },
+    AgentExplanation(serde_json::Value),
+    DivergentSessionStarted(serde_json::Value),
+    DivergentSession(serde_json::Value),
     ThreadTodos {
         thread_id: String,
         items: Vec<crate::wire::TodoItem>,
@@ -197,6 +200,36 @@ pub enum ClientEvent {
         actions: Vec<crate::state::ConciergeActionVm>,
     },
     ConciergeWelcomeDismissed,
+    OperatorProfileSessionStarted {
+        session_id: String,
+        kind: String,
+    },
+    OperatorProfileQuestion {
+        session_id: String,
+        question_id: String,
+        field_key: String,
+        prompt: String,
+        input_kind: String,
+        optional: bool,
+    },
+    OperatorProfileProgress {
+        session_id: String,
+        answered: u32,
+        remaining: u32,
+        completion_ratio: f64,
+    },
+    OperatorProfileSummary {
+        summary_json: String,
+    },
+    OperatorProfileSessionCompleted {
+        session_id: String,
+        updated_fields: Vec<String>,
+    },
+    StatusDiagnostics {
+        operator_profile_sync_state: String,
+        operator_profile_sync_dirty: bool,
+        operator_profile_scheduler_fallback: bool,
+    },
 
     TierChanged {
         new_tier: String,
@@ -863,6 +896,101 @@ impl DaemonClient {
                     .send(ClientEvent::WhatsAppLinkDisconnected { reason })
                     .await;
             }
+            DaemonMessage::AgentExplanation { explanation_json } => {
+                let payload = serde_json::from_str::<serde_json::Value>(&explanation_json)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                let _ = event_tx.send(ClientEvent::AgentExplanation(payload)).await;
+            }
+            DaemonMessage::AgentDivergentSessionStarted { session_json } => {
+                let payload = serde_json::from_str::<serde_json::Value>(&session_json)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                let _ = event_tx
+                    .send(ClientEvent::DivergentSessionStarted(payload))
+                    .await;
+            }
+            DaemonMessage::AgentDivergentSession { session_json } => {
+                let payload = serde_json::from_str::<serde_json::Value>(&session_json)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                let _ = event_tx.send(ClientEvent::DivergentSession(payload)).await;
+            }
+            DaemonMessage::AgentStatusResponse {
+                diagnostics_json, ..
+            } => {
+                if let Ok(diagnostics) = serde_json::from_str::<serde_json::Value>(&diagnostics_json) {
+                    let _ = event_tx
+                        .send(ClientEvent::StatusDiagnostics {
+                            operator_profile_sync_state: diagnostics
+                                .get("operator_profile_sync_state")
+                                .and_then(Value::as_str)
+                                .unwrap_or("unknown")
+                                .to_string(),
+                            operator_profile_sync_dirty: diagnostics
+                                .get("operator_profile_sync_dirty")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                            operator_profile_scheduler_fallback: diagnostics
+                                .get("operator_profile_scheduler_fallback")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        })
+                        .await;
+                }
+            }
+            DaemonMessage::AgentOperatorProfileSessionStarted { session_id, kind } => {
+                let _ = event_tx
+                    .send(ClientEvent::OperatorProfileSessionStarted { session_id, kind })
+                    .await;
+            }
+            DaemonMessage::AgentOperatorProfileQuestion {
+                session_id,
+                question_id,
+                field_key,
+                prompt,
+                input_kind,
+                optional,
+            } => {
+                let _ = event_tx
+                    .send(ClientEvent::OperatorProfileQuestion {
+                        session_id,
+                        question_id,
+                        field_key,
+                        prompt,
+                        input_kind,
+                        optional,
+                    })
+                    .await;
+            }
+            DaemonMessage::AgentOperatorProfileProgress {
+                session_id,
+                answered,
+                remaining,
+                completion_ratio,
+            } => {
+                let _ = event_tx
+                    .send(ClientEvent::OperatorProfileProgress {
+                        session_id,
+                        answered,
+                        remaining,
+                        completion_ratio,
+                    })
+                    .await;
+            }
+            DaemonMessage::AgentOperatorProfileSummary { summary_json } => {
+                let _ = event_tx
+                    .send(ClientEvent::OperatorProfileSummary { summary_json })
+                    .await;
+            }
+            DaemonMessage::AgentOperatorProfileSessionCompleted {
+                session_id,
+                updated_fields,
+            } => {
+                let _ = event_tx
+                    .send(ClientEvent::OperatorProfileSessionCompleted {
+                        session_id,
+                        updated_fields,
+                    })
+                    .await;
+            }
             DaemonMessage::Error { message } => {
                 let _ = event_tx.send(ClientEvent::Error(message)).await;
             }
@@ -1228,7 +1356,33 @@ impl DaemonClient {
             session_id,
             priority: None,
             client_request_id: None,
+            autonomy_level: None,
         })
+    }
+
+    pub fn explain_action(&self, action_id: String, step_index: Option<usize>) -> Result<()> {
+        self.send(ClientMessage::AgentExplainAction {
+            action_id,
+            step_index,
+        })
+    }
+
+    pub fn start_divergent_session(
+        &self,
+        problem_statement: String,
+        thread_id: String,
+        goal_run_id: Option<String>,
+    ) -> Result<()> {
+        self.send(ClientMessage::AgentStartDivergentSession {
+            problem_statement,
+            thread_id,
+            goal_run_id,
+            custom_framings_json: None,
+        })
+    }
+
+    pub fn get_divergent_session(&self, session_id: String) -> Result<()> {
+        self.send(ClientMessage::AgentGetDivergentSession { session_id })
     }
 
     pub fn request_thread(&self, thread_id: impl Into<String>) -> Result<()> {
@@ -1402,6 +1556,64 @@ impl DaemonClient {
             surface,
             thread_id,
             goal_run_id,
+        })
+    }
+
+    pub fn start_operator_profile_session(&self, kind: String) -> Result<()> {
+        self.send(ClientMessage::AgentStartOperatorProfileSession { kind })
+    }
+
+    pub fn next_operator_profile_question(&self, session_id: String) -> Result<()> {
+        self.send(ClientMessage::AgentNextOperatorProfileQuestion { session_id })
+    }
+
+    pub fn submit_operator_profile_answer(
+        &self,
+        session_id: String,
+        question_id: String,
+        answer_json: String,
+    ) -> Result<()> {
+        self.send(ClientMessage::AgentSubmitOperatorProfileAnswer {
+            session_id,
+            question_id,
+            answer_json,
+        })
+    }
+
+    pub fn skip_operator_profile_question(
+        &self,
+        session_id: String,
+        question_id: String,
+        reason: Option<String>,
+    ) -> Result<()> {
+        self.send(ClientMessage::AgentSkipOperatorProfileQuestion {
+            session_id,
+            question_id,
+            reason,
+        })
+    }
+
+    pub fn defer_operator_profile_question(
+        &self,
+        session_id: String,
+        question_id: String,
+        defer_until_unix_ms: Option<u64>,
+    ) -> Result<()> {
+        self.send(ClientMessage::AgentDeferOperatorProfileQuestion {
+            session_id,
+            question_id,
+            defer_until_unix_ms,
+        })
+    }
+
+    pub fn get_operator_profile_summary(&self) -> Result<()> {
+        self.send(ClientMessage::AgentGetOperatorProfileSummary)
+    }
+
+    pub fn set_operator_profile_consent(&self, consent_key: String, granted: bool) -> Result<()> {
+        self.send(ClientMessage::AgentSetOperatorProfileConsent {
+            consent_key,
+            granted,
         })
     }
 

@@ -11,7 +11,9 @@ impl AgentEngine {
                 .filter(|goal_run| {
                     !matches!(
                         goal_run.status,
-                        GoalRunStatus::Paused
+                        GoalRunStatus::AwaitingApproval
+                            | GoalRunStatus::Planning
+                            | GoalRunStatus::Paused
                             | GoalRunStatus::Completed
                             | GoalRunStatus::Failed
                             | GoalRunStatus::Cancelled
@@ -54,6 +56,13 @@ impl AgentEngine {
             Some(goal_run) => goal_run,
             None => return Ok(()),
         };
+
+        if matches!(
+            goal_run.status,
+            GoalRunStatus::AwaitingApproval | GoalRunStatus::Planning
+        ) {
+            return Ok(());
+        }
 
         if goal_run.status == GoalRunStatus::Queued && goal_run.steps.is_empty() {
             self.plan_goal_run(goal_run_id).await?;
@@ -111,10 +120,17 @@ impl AgentEngine {
     pub(super) async fn dispatch_ready_tasks(self: Arc<Self>) -> Result<()> {
         let now = now_millis();
         let sessions = self.session_manager.list().await;
+        let goal_run_statuses = {
+            let goal_runs = self.goal_runs.lock().await;
+            goal_runs
+                .iter()
+                .map(|goal_run| (goal_run.id.clone(), goal_run.status))
+                .collect::<HashMap<_, _>>()
+        };
         let (changed_before_start, dispatched_tasks) = {
             let mut tasks = self.tasks.lock().await;
             let changed_before_start = refresh_task_queue_state(&mut tasks, now, &sessions);
-            let next_indices = select_ready_task_indices(&tasks, &sessions);
+            let next_indices = select_ready_task_indices(&tasks, &sessions, &goal_run_statuses);
             if next_indices.is_empty() {
                 drop(tasks);
                 if !changed_before_start.is_empty() {
@@ -272,6 +288,17 @@ impl AgentEngine {
                 if updated.status == TaskStatus::Completed {
                     self.settle_task_skill_consultations(&updated, "success")
                         .await;
+                    if updated.source == "divergent" {
+                        if let Err(error) = self
+                            .record_divergent_contribution_on_task_completion(&updated)
+                            .await
+                        {
+                            tracing::warn!(
+                                task_id = %updated.id,
+                                "failed to process divergent contribution completion hook: {error}"
+                            );
+                        }
+                    }
                 }
                 if updated.source == "subagent" {
                     self.record_collaboration_outcome(&updated, "success").await;

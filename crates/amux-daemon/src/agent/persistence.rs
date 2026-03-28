@@ -214,6 +214,102 @@ impl AgentEngine {
             }
         }
 
+        match self.history.list_gateway_thread_bindings().await {
+            Ok(bindings) if !bindings.is_empty() => {
+                let map: HashMap<String, String> = bindings.into_iter().collect();
+                *self.gateway_threads.write().await = map;
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("failed to load gateway thread map from sqlite: {e}"),
+        }
+
+        // One-time migration from legacy file persistence to SQLite table.
+        let legacy_gateway_threads_path = self.data_dir.join("gateway-threads.json");
+        if legacy_gateway_threads_path.exists() {
+            match tokio::fs::read_to_string(&legacy_gateway_threads_path).await {
+                Ok(raw) => match serde_json::from_str::<HashMap<String, String>>(&raw) {
+                    Ok(items) => {
+                        let now = now_millis();
+                        let mut imported = 0usize;
+                        let mut failed = 0usize;
+                        for (channel_key, thread_id) in &items {
+                            match self
+                                .history
+                                .upsert_gateway_thread_binding(channel_key, thread_id, now)
+                                .await
+                            {
+                                Ok(_) => imported += 1,
+                                Err(error) => {
+                                    failed += 1;
+                                    tracing::warn!(
+                                        channel_key = %channel_key,
+                                        thread_id = %thread_id,
+                                        %error,
+                                        "failed to migrate legacy gateway thread binding"
+                                    );
+                                }
+                            }
+                        }
+
+                        if failed == 0 {
+                            if let Err(error) = tokio::fs::remove_file(&legacy_gateway_threads_path).await {
+                                tracing::warn!(%error, "failed to remove legacy gateway thread map file after migration");
+                            } else {
+                                tracing::info!(imported, "migrated legacy gateway thread map into sqlite");
+                            }
+                        } else {
+                            tracing::warn!(imported, failed, "legacy gateway thread map migration partially failed; keeping legacy file");
+                        }
+
+                        if !items.is_empty() {
+                            match self.history.list_gateway_thread_bindings().await {
+                                Ok(bindings) if !bindings.is_empty() => {
+                                    let map: HashMap<String, String> = bindings.into_iter().collect();
+                                    *self.gateway_threads.write().await = map;
+                                }
+                                Ok(_) => {}
+                                Err(error) => tracing::warn!(
+                                    %error,
+                                    "failed to reload gateway thread bindings from sqlite after migration"
+                                ),
+                            }
+                        }
+                    }
+                    Err(error) => tracing::warn!(
+                        %error,
+                        "failed to parse legacy gateway-threads.json for migration"
+                    ),
+                },
+                Err(error) => tracing::warn!(
+                    %error,
+                    "failed to read legacy gateway-threads.json for migration"
+                ),
+            }
+        }
+
+        match self.history.list_operator_profile_sessions().await {
+            Ok(rows) if !rows.is_empty() => {
+                let mut sessions = HashMap::new();
+                for row in rows {
+                    match serde_json::from_str::<OperatorProfileSessionState>(&row.session_json) {
+                        Ok(session) => {
+                            sessions.insert(row.session_id, session);
+                        }
+                        Err(error) => tracing::warn!(
+                            session_id = %row.session_id,
+                            kind = %row.kind,
+                            updated_at = row.updated_at,
+                            %error,
+                            "failed to hydrate operator profile session"
+                        ),
+                    }
+                }
+                *self.operator_profile_sessions.write().await = sessions;
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!("failed to load operator profile sessions from sqlite: {error}"),
+        }
+
         // Load heartbeat items
         let heartbeat_path = self.data_dir.join("heartbeat.json");
         if heartbeat_path.exists() {
@@ -631,5 +727,81 @@ impl AgentEngine {
             "Resuming from where we left off \u{2014} last working on {}.",
             topic
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_manager::SessionManager;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn hydrate_migrates_legacy_gateway_threads_json_to_sqlite_and_removes_file() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+        // Clear any preloaded bindings to isolate legacy migration behavior.
+        let existing = engine
+            .history
+            .list_gateway_thread_bindings()
+            .await
+            .expect("list initial gateway bindings");
+        for (channel_key, _) in existing {
+            engine
+                .history
+                .delete_gateway_thread_binding(&channel_key)
+                .await
+                .expect("delete initial gateway binding");
+        }
+
+        let legacy_path = engine.data_dir.join("gateway-threads.json");
+        let legacy_json = serde_json::json!({
+            "Slack:C123": "thread_alpha",
+            "Discord:456": "thread_beta"
+        });
+        tokio::fs::write(
+            &legacy_path,
+            serde_json::to_string_pretty(&legacy_json).expect("serialize legacy json"),
+        )
+        .await
+        .expect("write legacy gateway map");
+        assert!(legacy_path.exists());
+
+        engine.hydrate().await.expect("hydrate should succeed");
+
+        // Legacy file should be deleted after successful full migration.
+        assert!(
+            !legacy_path.exists(),
+            "legacy gateway-threads.json should be removed after migration"
+        );
+
+        // Verify DB has migrated bindings.
+        let bindings = engine
+            .history
+            .list_gateway_thread_bindings()
+            .await
+            .expect("list migrated gateway bindings");
+        let map: std::collections::HashMap<String, String> = bindings.into_iter().collect();
+        assert_eq!(
+            map.get("Slack:C123").map(String::as_str),
+            Some("thread_alpha")
+        );
+        assert_eq!(
+            map.get("Discord:456").map(String::as_str),
+            Some("thread_beta")
+        );
+
+        // Verify in-memory map is hydrated from DB state too.
+        let in_memory = engine.gateway_threads.read().await;
+        assert_eq!(
+            in_memory.get("Slack:C123").map(String::as_str),
+            Some("thread_alpha")
+        );
+        assert_eq!(
+            in_memory.get("Discord:456").map(String::as_str),
+            Some("thread_beta")
+        );
     }
 }

@@ -356,6 +356,11 @@ mod tests {
             duration_ms: None,
             steps: Vec::new(),
             events: Vec::new(),
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            estimated_cost_usd: None,
+            autonomy_level: Default::default(),
+            authorship_tag: None,
         }
     }
 
@@ -434,6 +439,7 @@ mod tests {
             stream_generation: AtomicU64::new(1),
             active_operator_sessions: RwLock::new(HashMap::new()),
             pending_operator_approvals: RwLock::new(HashMap::new()),
+            operator_profile_sessions: RwLock::new(HashMap::new()),
             honcho_sync: Mutex::new(HonchoSyncState::default()),
             repo_watchers: Mutex::new(HashMap::new()),
             watcher_refresh_tx,
@@ -447,6 +453,12 @@ mod tests {
             plugin_manager: std::sync::OnceLock::new(),
             episodic_store: RwLock::new(super::episodic::EpisodicStore::default()),
             awareness: RwLock::new(super::awareness::AwarenessMonitor::new()),
+            calibration_tracker: RwLock::new(
+                super::uncertainty::calibration::CalibrationTracker::default(),
+            ),
+            handoff_broker: RwLock::new(super::handoff::HandoffBroker::default()),
+            divergent_sessions: RwLock::new(HashMap::new()),
+            cost_trackers: Mutex::new(HashMap::new()),
         })
     }
 

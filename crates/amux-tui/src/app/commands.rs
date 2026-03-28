@@ -230,6 +230,8 @@ impl TuiModel {
                 | "goal"
                 | "attach"
                 | "help"
+                | "explain"
+                | "diverge"
         )
     }
 
@@ -320,6 +322,34 @@ impl TuiModel {
                 self.modal
                     .reduce(modal::ModalAction::Push(modal::ModalKind::Help));
                 self.modal.set_picker_item_count(100);
+            }
+            "explain" => {
+                let action_id = self
+                    .tasks
+                    .goal_runs()
+                    .iter()
+                    .max_by_key(|run| run.updated_at)
+                    .map(|run| run.id.clone());
+                if let Some(action_id) = action_id {
+                    self.send_daemon_command(DaemonCommand::ExplainAction {
+                        action_id,
+                        step_index: None,
+                    });
+                    self.status_line = "Requesting explainability report...".to_string();
+                } else {
+                    self.status_line = "No goal run available to explain".to_string();
+                }
+            }
+            "diverge" => {
+                if let Some(thread_id) = self.chat.active_thread_id().map(str::to_string) {
+                    self.input.set_text(&format!(
+                        "/diverge-start {thread_id} Compare two implementation approaches for the current task"
+                    ));
+                    self.focus = FocusArea::Input;
+                    self.status_line = "Edit /diverge-start prompt and press Enter".to_string();
+                } else {
+                    self.status_line = "Open a thread first, then run /diverge".to_string();
+                }
             }
             _ => {
                 // Unrecognized commands — insert into input so user can add

@@ -19,6 +19,7 @@ import { isCDUIViewVisible, useCDUIVisibilityFlags } from "./lib/cduiVisibility"
 import { registerAITrainingPlugin } from "./plugins/ai-training/registerPlugin";
 import { registerCodingAgentsPlugin } from "./plugins/coding-agents/registerPlugin";
 import { SetupOnboardingPanel } from "./components/SetupOnboardingPanel";
+import { OperatorProfileOnboardingPanel } from "./components/OperatorProfileOnboardingPanel";
 import { ConciergeToast } from "./components/ConciergeToast";
 import { useAgentStore } from "./lib/agentStore";
 
@@ -121,16 +122,36 @@ const CDUIApp = () => {
     const unsubscribe = amux.onAgentEvent((event: any) => {
       if (event?.type === "concierge_welcome") {
         applyConciergeWelcome(event);
+        void useAgentStore.getState().maybeStartOperatorProfileOnboarding();
+      }
+      if (event?.type === "operator-profile-session-started") {
+        useAgentStore.getState().applyOperatorProfileSessionStarted(event.data ?? event);
+      }
+      if (event?.type === "operator-profile-question") {
+        useAgentStore.getState().applyOperatorProfileQuestion(event.data ?? event);
+      }
+      if (event?.type === "operator-profile-progress") {
+        useAgentStore.getState().applyOperatorProfileProgress(event.data ?? event);
+      }
+      if (event?.type === "operator-profile-session-completed") {
+        useAgentStore.getState().applyOperatorProfileSessionCompleted(event.data ?? event);
+      }
+      if (event?.type === "operator-profile-summary") {
+        useAgentStore.getState().getOperatorProfileSummary().catch(() => {});
       }
     });
 
     void useAgentStore.getState().refreshConciergeConfig?.();
 
-    const requestWelcome = () => {
+    const requestWelcome = async () => {
+      const profileState = useAgentStore.getState().operatorProfile;
+      if (profileState.sessionId || profileState.question || profileState.panelOpen) {
+        return;
+      }
       if (!amux.agentRequestConciergeWelcome) {
         return;
       }
-      void amux.agentRequestConciergeWelcome().catch(() => {});
+      await amux.agentRequestConciergeWelcome().catch(() => {});
     };
 
     const timer = window.setTimeout(requestWelcome, 250);
@@ -339,6 +360,7 @@ const CDUIApp = () => {
       })}
       <ViewBuilderOverlay />
       <SetupOnboardingPanel />
+      <OperatorProfileOnboardingPanel />
       <ConciergeToast />
     </AppContext.Provider>
   );

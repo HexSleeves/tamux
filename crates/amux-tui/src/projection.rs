@@ -162,6 +162,9 @@ pub enum ClientEvent {
         actions: Vec<crate::state::ConciergeActionVm>,
     },
     ConciergeWelcomeDismissed,
+    AgentExplanation(serde_json::Value),
+    DivergentSessionStarted(serde_json::Value),
+    DivergentSession(serde_json::Value),
 
     Error(String),
 }
@@ -280,6 +283,9 @@ impl DaemonProjection {
             ClientEvent::GoalRunCheckpoints { .. } => vec![],
             ClientEvent::ConciergeWelcome { .. } => vec![],
             ClientEvent::ConciergeWelcomeDismissed => vec![],
+            ClientEvent::AgentExplanation(_) => vec![],
+            ClientEvent::DivergentSessionStarted(_) => vec![],
+            ClientEvent::DivergentSession(_) => vec![],
 
             // Streaming events → ChatAction
             ClientEvent::Delta { thread_id, content } => {
