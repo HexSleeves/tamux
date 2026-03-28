@@ -3917,10 +3917,15 @@ function registerIpcHandlers() {
                     'agent-explanation',
                     'agent-divergent-session-started',
                     'agent-divergent-session',
+                    'operator-profile-session-started',
+                    'operator-profile-question',
+                    'operator-profile-progress',
+                    'operator-profile-summary',
+                    'operator-profile-session-completed',
                 ].includes(event.type)) {
                     let oldest = null;
                     for (const [reqId, handler] of agentBridge.pending.entries()) {
-                        if (handler.responseType === event.type) {
+                        if (pendingHandlerMatchesResponseType(handler, event.type)) {
                             if (!oldest || handler.ts < oldest.ts) {
                                 oldest = { reqId, handler, ts: handler.ts };
                             }
@@ -3968,7 +3973,7 @@ function registerIpcHandlers() {
                 if (event.type === 'whatsapp-link-status') {
                     let oldest = null;
                     for (const [reqId, handler] of agentBridge.pending.entries()) {
-                        if (handler.responseType === event.type) {
+                        if (pendingHandlerMatchesResponseType(handler, event.type)) {
                             if (!oldest || handler.ts < oldest.ts) {
                                 oldest = { reqId, handler, ts: handler.ts };
                             }
@@ -4222,6 +4227,14 @@ function registerIpcHandlers() {
         bridge.process.stdin.write(`${JSON.stringify(command)}\n`);
     }
 
+    function pendingHandlerMatchesResponseType(handler, eventType) {
+        const responseType = handler?.responseType;
+        if (Array.isArray(responseType)) {
+            return responseType.includes(eventType);
+        }
+        return responseType === eventType;
+    }
+
     // Expose to module scope for gateway message forwarding
     sendAgentCommandFn = sendAgentCommand;
 
@@ -4232,10 +4245,13 @@ function registerIpcHandlers() {
                 reject(new Error('Agent bridge not available'));
                 return;
             }
-            const reqId = `${responseType}_${Date.now()}`;
+            const responseKey = Array.isArray(responseType)
+                ? responseType.join('|')
+                : responseType;
+            const reqId = `${responseKey}_${Date.now()}`;
             const timer = setTimeout(() => {
                 bridge.pending.delete(reqId);
-                reject(new Error(`Agent query timeout: ${responseType}`));
+                reject(new Error(`Agent query timeout: ${responseKey}`));
             }, timeoutMs);
 
             bridge.pending.set(reqId, {
@@ -4522,6 +4538,103 @@ function registerIpcHandlers() {
             }, 'agent-divergent-session');
         } catch (err) {
             return { ok: false, error: err?.message || String(err) };
+        }
+    });
+
+    ipcMain.handle('agent-start-operator-profile-session', async (_event, kind) => {
+        try {
+            return await sendAgentQuery(
+                { type: 'start-operator-profile-session', kind: kind || 'first_run_onboarding' },
+                'operator-profile-session-started'
+            );
+        } catch (err) {
+            return { error: err?.message || String(err) };
+        }
+    });
+
+    ipcMain.handle('agent-next-operator-profile-question', async (_event, sessionId) => {
+        try {
+            return await sendAgentQuery(
+                { type: 'next-operator-profile-question', session_id: sessionId },
+                ['operator-profile-question', 'operator-profile-session-completed']
+            );
+        } catch (err) {
+            return { error: err?.message || String(err) };
+        }
+    });
+
+    ipcMain.handle('agent-submit-operator-profile-answer', async (_event, sessionId, questionId, answerJson) => {
+        try {
+            return await sendAgentQuery(
+                {
+                    type: 'submit-operator-profile-answer',
+                    session_id: sessionId,
+                    question_id: questionId,
+                    answer_json: answerJson,
+                },
+                ['operator-profile-progress', 'operator-profile-session-completed']
+            );
+        } catch (err) {
+            return { error: err?.message || String(err) };
+        }
+    });
+
+    ipcMain.handle('agent-skip-operator-profile-question', async (_event, sessionId, questionId, reason) => {
+        try {
+            return await sendAgentQuery(
+                {
+                    type: 'skip-operator-profile-question',
+                    session_id: sessionId,
+                    question_id: questionId,
+                    reason: typeof reason === 'string' ? reason : null,
+                },
+                ['operator-profile-progress', 'operator-profile-session-completed']
+            );
+        } catch (err) {
+            return { error: err?.message || String(err) };
+        }
+    });
+
+    ipcMain.handle('agent-defer-operator-profile-question', async (_event, sessionId, questionId, deferUntilUnixMs) => {
+        try {
+            return await sendAgentQuery(
+                {
+                    type: 'defer-operator-profile-question',
+                    session_id: sessionId,
+                    question_id: questionId,
+                    defer_until_unix_ms: Number.isFinite(deferUntilUnixMs) ? Math.trunc(deferUntilUnixMs) : null,
+                },
+                ['operator-profile-progress', 'operator-profile-session-completed']
+            );
+        } catch (err) {
+            return { error: err?.message || String(err) };
+        }
+    });
+
+    ipcMain.handle('agent-get-operator-profile-summary', async () => {
+        try {
+            return await sendAgentQuery(
+                { type: 'get-operator-profile-summary' },
+                'operator-profile-summary'
+            );
+        } catch (err) {
+            return { error: err?.message || String(err) };
+        }
+    });
+
+    ipcMain.handle('agent-set-operator-profile-consent', async (_event, consentKey, granted) => {
+        try {
+            await sendAgentQuery(
+                {
+                    type: 'set-operator-profile-consent',
+                    consent_key: consentKey,
+                    granted: Boolean(granted),
+                },
+                'operator-profile-session-completed'
+            );
+            return { ok: true };
+        } catch (err) {
+            return { error: err?.message || String(err) };
         }
     });
 
