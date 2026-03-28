@@ -51,10 +51,12 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &ModalState, theme: &ThemeTo
             lines.push(Line::from(Span::styled(line.to_string(), theme.fg_active)));
         }
     } else {
-        lines.push(Line::from(Span::styled(
-            "Waiting for QR payload…",
-            theme.fg_dim,
-        )));
+        let waiting_copy = if link.last_error().is_some() {
+            "QR unavailable due to error — relink required"
+        } else {
+            "Waiting for QR payload…"
+        };
+        lines.push(Line::from(Span::styled(waiting_copy, theme.fg_dim)));
     }
 
     lines.push(Line::raw(""));

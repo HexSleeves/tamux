@@ -142,8 +142,10 @@ impl ModalState {
             "starting" => {
                 self.whatsapp_link.phase = WhatsAppLinkPhase::Starting;
                 self.whatsapp_link.status_text = "Starting WhatsApp linking…".to_string();
+                self.whatsapp_link.ascii_qr = None;
+                self.whatsapp_link.expires_at_ms = None;
             }
-            "awaiting_qr" => {
+            "qr_ready" | "awaiting_qr" => {
                 self.whatsapp_link.phase = WhatsAppLinkPhase::AwaitingScan;
                 self.whatsapp_link.status_text =
                     "Scan the QR code in WhatsApp on your phone".to_string();
@@ -195,7 +197,12 @@ impl ModalState {
         self.set_whatsapp_link_status("error", self.whatsapp_link.phone.clone(), Some(message));
     }
     pub fn set_whatsapp_link_disconnected(&mut self, reason: Option<String>) {
-        self.set_whatsapp_link_status("disconnected", self.whatsapp_link.phone.clone(), reason);
+        let preserved_reason = reason.or_else(|| self.whatsapp_link.last_error.clone());
+        self.set_whatsapp_link_status(
+            "disconnected",
+            self.whatsapp_link.phone.clone(),
+            preserved_reason,
+        );
     }
 
     /// Merge plugin commands into the command palette.
@@ -463,6 +470,10 @@ mod tests {
     #[test]
     fn whatsapp_status_maps_to_connected_error_and_disconnected() {
         let mut state = ModalState::new();
+        state.set_whatsapp_link_status("qr_ready", None, None);
+        assert_eq!(state.whatsapp_link().phase(), WhatsAppLinkPhase::AwaitingScan);
+        assert!(state.whatsapp_link().status_text().contains("Scan the QR code"));
+
         state.set_whatsapp_link_status("connected", Some("+12065550123".to_string()), None);
         assert_eq!(state.whatsapp_link().phase(), WhatsAppLinkPhase::Connected);
         assert!(state.whatsapp_link().status_text().contains("Connected"));

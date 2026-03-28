@@ -434,6 +434,12 @@ impl TuiModel {
                 phone,
                 last_error,
             } => {
+                tracing::info!(
+                    state = %state,
+                    phone = phone.as_deref().unwrap_or(""),
+                    has_last_error = last_error.is_some(),
+                    "tui received whatsapp link status"
+                );
                 self.modal
                     .set_whatsapp_link_status(&state, phone.clone(), last_error.clone());
                 self.status_line = match state.as_str() {
@@ -448,7 +454,7 @@ impl TuiModel {
                         "WhatsApp link disconnected: {}",
                         last_error.as_deref().unwrap_or("none")
                     ),
-                    "awaiting_qr" => "WhatsApp link awaiting QR scan".to_string(),
+                    "qr_ready" | "awaiting_qr" => "WhatsApp link awaiting QR scan".to_string(),
                     "starting" => "WhatsApp link starting".to_string(),
                     _ => "WhatsApp link status updated".to_string(),
                 };
@@ -457,6 +463,11 @@ impl TuiModel {
                 ascii_qr,
                 expires_at_ms,
             } => {
+                tracing::info!(
+                    qr_len = ascii_qr.len(),
+                    expires_at_ms,
+                    "tui received whatsapp link qr"
+                );
                 self.modal.set_whatsapp_link_qr(ascii_qr, expires_at_ms);
                 if self.modal.top() != Some(crate::state::modal::ModalKind::WhatsAppLink) {
                     self.modal.reduce(crate::state::modal::ModalAction::Push(
@@ -466,11 +477,16 @@ impl TuiModel {
                 self.status_line = "WhatsApp QR ready — scan with your phone".to_string();
             }
             ClientEvent::WhatsAppLinked { phone } => {
+                tracing::info!(
+                    phone = phone.as_deref().unwrap_or(""),
+                    "tui received whatsapp linked event"
+                );
                 self.modal.set_whatsapp_link_connected(phone.clone());
                 self.status_line =
                     format!("WhatsApp linked: {}", phone.as_deref().unwrap_or("device"));
             }
             ClientEvent::WhatsAppLinkError { message, .. } => {
+                tracing::warn!(message = %message, "tui received whatsapp link error");
                 self.modal.set_whatsapp_link_error(message.clone());
                 if self.modal.top() != Some(crate::state::modal::ModalKind::WhatsAppLink) {
                     self.modal.reduce(crate::state::modal::ModalAction::Push(
@@ -480,10 +496,21 @@ impl TuiModel {
                 self.status_line = format!("WhatsApp link error: {message}");
             }
             ClientEvent::WhatsAppLinkDisconnected { reason } => {
+                tracing::info!(
+                    reason = reason.as_deref().unwrap_or(""),
+                    "tui received whatsapp link disconnected"
+                );
                 self.modal.set_whatsapp_link_disconnected(reason.clone());
+                let display_reason = self
+                    .modal
+                    .whatsapp_link()
+                    .last_error()
+                    .map(str::to_string)
+                    .or(reason.clone())
+                    .unwrap_or_else(|| "none".to_string());
                 self.status_line = format!(
                     "WhatsApp link disconnected: {}",
-                    reason.as_deref().unwrap_or("none")
+                    display_reason
                 );
             }
             ClientEvent::TierChanged { new_tier } => {

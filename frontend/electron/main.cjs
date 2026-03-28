@@ -43,6 +43,8 @@ let whatsappRpcId = 0;
 const whatsappPendingCalls = new Map();
 let whatsappDaemonSubscribed = false;
 let whatsappDaemonSubscriptionDesired = false;
+let agentBridgeRestartCooldownUntil = 0;
+let agentBridgeConsecutiveExitCount = 0;
 let discordClient = null;
 let discordClientToken = null;
 let discordListenerAttached = false;
@@ -593,25 +595,46 @@ function handleWhatsAppMessage(msg) {
     if (msg.event && mainWindow) {
         switch (msg.event) {
             case 'qr':
+                logToFile('info', 'WhatsApp bridge qr event', {
+                    asciiLen: typeof msg.data?.ascii_qr === 'string' ? msg.data.ascii_qr.length : 0,
+                    hasDataUrl: typeof msg.data?.data_url === 'string',
+                });
                 mainWindow.webContents.send('whatsapp-qr', msg.data);
                 break;
             case 'connected':
+                logToFile('info', 'WhatsApp bridge connected event', {
+                    phone: msg.data?.phone || null,
+                });
                 mainWindow.webContents.send('whatsapp-connected', msg.data);
                 break;
             case 'disconnected':
+                logToFile('info', 'WhatsApp bridge disconnected event', {
+                    reason: msg.data?.reason || null,
+                });
                 mainWindow.webContents.send('whatsapp-disconnected');
                 break;
             case 'error':
+                logToFile('warn', 'WhatsApp bridge error event', {
+                    message: msg.data || null,
+                });
                 mainWindow.webContents.send('whatsapp-error', msg.data);
                 break;
             case 'message':
                 mainWindow.webContents.send('whatsapp-message', msg.data);
                 break;
             case 'reconnecting':
-                logToFile('info', 'WhatsApp bridge reconnecting...');
+                logToFile('info', 'WhatsApp bridge reconnecting...', {
+                    statusCode: msg.data?.status_code ?? null,
+                    reason: msg.data?.reason ?? null,
+                    connectAttempt: msg.data?.connect_attempt ?? null,
+                    relinkRetryAttempt: msg.data?.relink_retry_attempt ?? null,
+                });
                 break;
             case 'ready':
                 logToFile('info', 'WhatsApp bridge sidecar ready');
+                break;
+            case 'trace':
+                logToFile('info', 'WhatsApp bridge trace', msg.data ?? {});
                 break;
         }
     }
@@ -3064,6 +3087,8 @@ async function spawnDaemon() {
         if (await checkDaemonRunning()) {
             console.log('[tamux] Daemon ready');
             logToFile('info', 'daemon ready');
+            agentBridgeConsecutiveExitCount = 0;
+            agentBridgeRestartCooldownUntil = 0;
             return true;
         }
     }
@@ -3835,6 +3860,10 @@ function registerIpcHandlers() {
 
     function ensureAgentBridge() {
         if (agentBridge && !agentBridge.process.killed) return agentBridge;
+        const now = Date.now();
+        if (now < agentBridgeRestartCooldownUntil) {
+            return null;
+        }
 
         const cliPath = getDaemonPath().replace(/tamux-daemon/, 'tamux').replace(/tamux-daemon\.exe/, 'tamux.exe');
         if (!fs.existsSync(cliPath)) {
@@ -3871,6 +3900,8 @@ function registerIpcHandlers() {
 
                 if (event.type === 'ready') {
                     agentBridge.ready = true;
+                    agentBridgeConsecutiveExitCount = 0;
+                    agentBridgeRestartCooldownUntil = 0;
                     logToFile('info', 'agent bridge ready');
                     if (whatsappDaemonSubscriptionDesired && !whatsappDaemonSubscribed) {
                         try {
@@ -3980,6 +4011,10 @@ function registerIpcHandlers() {
                 }
 
                 if (event.type === 'whatsapp-link-status') {
+                    logToFile('info', 'daemon whatsapp-link-status event', {
+                        state: event.data?.status ?? null,
+                        hasLastError: Boolean(event.data?.last_error),
+                    });
                     let oldest = null;
                     for (const [reqId, handler] of agentBridge.pending.entries()) {
                         if (pendingHandlerMatchesResponseType(handler, event.type)) {
@@ -4002,6 +4037,10 @@ function registerIpcHandlers() {
                 }
 
                 if (event.type === 'whatsapp-link-qr') {
+                    logToFile('info', 'daemon whatsapp-link-qr event', {
+                        asciiLen: typeof event.data?.ascii_qr === 'string' ? event.data.ascii_qr.length : 0,
+                        expiresAtMs: event.data?.expires_at_ms ?? null,
+                    });
                     if (mainWindow && !mainWindow.isDestroyed()) {
                         convertWhatsAppQrToDataUrl(event.data?.ascii_qr)
                             .then((dataUrl) => {
@@ -4015,6 +4054,9 @@ function registerIpcHandlers() {
                 }
 
                 if (event.type === 'whatsapp-link-linked') {
+                    logToFile('info', 'daemon whatsapp-link-linked event', {
+                        phone: event.data?.phone ?? null,
+                    });
                     if (mainWindow && !mainWindow.isDestroyed()) {
                         mainWindow.webContents.send('whatsapp-connected', {
                             phone: event.data?.phone || null,
@@ -4024,6 +4066,10 @@ function registerIpcHandlers() {
                 }
 
                 if (event.type === 'whatsapp-link-error') {
+                    logToFile('warn', 'daemon whatsapp-link-error event', {
+                        message: event.data?.message || null,
+                        recoverable: event.data?.recoverable ?? null,
+                    });
                     if (mainWindow && !mainWindow.isDestroyed()) {
                         mainWindow.webContents.send('whatsapp-error', event.data?.message || 'WhatsApp link error');
                     }
@@ -4031,6 +4077,9 @@ function registerIpcHandlers() {
                 }
 
                 if (event.type === 'whatsapp-link-disconnected') {
+                    logToFile('info', 'daemon whatsapp-link-disconnected event', {
+                        reason: event.data?.reason || null,
+                    });
                     if (mainWindow && !mainWindow.isDestroyed()) {
                         const reason = event.data?.reason;
                         if (typeof reason === 'string' && reason.trim()) {
@@ -4080,6 +4129,13 @@ function registerIpcHandlers() {
             }
             agentBridge = null;
             whatsappDaemonSubscribed = false;
+            agentBridgeConsecutiveExitCount += 1;
+            const cappedBackoffMs = Math.min(5000, 250 * (2 ** Math.min(agentBridgeConsecutiveExitCount, 5)));
+            agentBridgeRestartCooldownUntil = Date.now() + cappedBackoffMs;
+            logToFile('warn', 'agent bridge restart cooldown', {
+                consecutiveExits: agentBridgeConsecutiveExitCount,
+                cooldownMs: cappedBackoffMs,
+            });
         });
 
         return agentBridge;

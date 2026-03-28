@@ -56,6 +56,31 @@ impl Drop for WhatsAppLinkSubscriberGuard {
     }
 }
 
+fn is_expected_disconnect_error(error: &anyhow::Error) -> bool {
+    let expected_io_error = |kind: std::io::ErrorKind| {
+        matches!(
+            kind,
+            std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::NotConnected
+        )
+    };
+    if error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| expected_io_error(io.kind()))
+    }) {
+        return true;
+    }
+
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("unexpected end of file")
+        || message.contains("connection reset by peer")
+        || message.contains("broken pipe")
+}
+
 fn agent_event_thread_id(event: &crate::agent::types::AgentEvent) -> Option<&str> {
     use crate::agent::types::AgentEvent;
 
@@ -187,6 +212,28 @@ async fn forward_whatsapp_sidecar_stdout(
                 if let Some(event_name) = parsed.get("event").and_then(|value| value.as_str()) {
                     match event_name {
                         "ready" => {}
+                        "trace" => {
+                            let phase = parsed
+                                .get("data")
+                                .and_then(|value| value.get("phase"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("unknown");
+                            let connect_attempt = parsed
+                                .get("data")
+                                .and_then(|value| value.get("connect_attempt"))
+                                .and_then(|value| value.as_i64());
+                            let status_code = parsed
+                                .get("data")
+                                .and_then(|value| value.get("status_code"))
+                                .and_then(|value| value.as_i64());
+                            tracing::info!(
+                                phase,
+                                connect_attempt,
+                                status_code,
+                                payload = %parsed.get("data").unwrap_or(&serde_json::Value::Null),
+                                "whatsapp sidecar trace"
+                            );
+                        }
                         "reconnecting" => {
                             let reason = parsed
                                 .get("data")
@@ -197,6 +244,21 @@ async fn forward_whatsapp_sidecar_stdout(
                                 .get("data")
                                 .and_then(|value| value.get("status_code"))
                                 .and_then(|value| value.as_i64());
+                            let connect_attempt = parsed
+                                .get("data")
+                                .and_then(|value| value.get("connect_attempt"))
+                                .and_then(|value| value.as_i64());
+                            let relink_retry_attempt = parsed
+                                .get("data")
+                                .and_then(|value| value.get("relink_retry_attempt"))
+                                .and_then(|value| value.as_i64());
+                            tracing::info!(
+                                status_code,
+                                connect_attempt,
+                                relink_retry_attempt,
+                                reason = reason.as_deref().unwrap_or(""),
+                                "whatsapp sidecar reconnecting"
+                            );
                             let mut message = "WhatsApp sidecar reconnecting".to_string();
                             if let Some(code) = status_code {
                                 message.push_str(&format!(" (status_code={code})"));
@@ -209,6 +271,9 @@ async fn forward_whatsapp_sidecar_stdout(
                         }
                         "qr" => {
                             let data = parsed.get("data");
+                            let connect_attempt = data
+                                .and_then(|payload| payload.get("connect_attempt"))
+                                .and_then(|value| value.as_i64());
                             let qr_payload = data
                                 .and_then(|payload| {
                                     payload
@@ -220,6 +285,11 @@ async fn forward_whatsapp_sidecar_stdout(
                                 })
                                 .or_else(|| data.and_then(|payload| payload.as_str()));
                             if let Some(ascii_qr) = qr_payload {
+                                tracing::info!(
+                                    connect_attempt,
+                                    qr_len = ascii_qr.len(),
+                                    "whatsapp sidecar qr payload received"
+                                );
                                 agent
                                     .whatsapp_link
                                     .broadcast_qr(ascii_qr.to_string(), None)
@@ -232,6 +302,10 @@ async fn forward_whatsapp_sidecar_stdout(
                                 .and_then(|value| value.get("phone"))
                                 .and_then(|value| value.as_str())
                                 .map(|value| value.to_string());
+                            tracing::info!(
+                                phone = phone.as_deref().unwrap_or(""),
+                                "whatsapp sidecar connected"
+                            );
                             agent.whatsapp_link.broadcast_linked(phone).await;
                         }
                         "disconnected" => {
@@ -240,6 +314,10 @@ async fn forward_whatsapp_sidecar_stdout(
                                 .and_then(|value| value.get("reason"))
                                 .and_then(|value| value.as_str())
                                 .map(|value| value.to_string());
+                            tracing::info!(
+                                reason = reason.as_deref().unwrap_or(""),
+                                "whatsapp sidecar disconnected"
+                            );
                             agent.whatsapp_link.broadcast_disconnected(reason).await;
                         }
                         "error" => {
@@ -248,6 +326,7 @@ async fn forward_whatsapp_sidecar_stdout(
                                 .and_then(|value| value.as_str())
                                 .unwrap_or("WhatsApp sidecar error")
                                 .to_string();
+                            tracing::warn!(message = %message, "whatsapp sidecar error");
                             agent.whatsapp_link.broadcast_error(message, true).await;
                         }
                         _ => {}
@@ -332,7 +411,7 @@ async fn start_whatsapp_link_sidecar(agent: Arc<AgentEngine>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{concierge_welcome_fingerprint, handle_connection};
+    use super::{concierge_welcome_fingerprint, handle_connection, is_expected_disconnect_error};
     use crate::agent::types::AgentConfig;
     use crate::agent::types::{
         AgentEvent, ConciergeAction, ConciergeActionType, ConciergeDetailLevel,
@@ -395,6 +474,20 @@ mod tests {
             concierge_welcome_fingerprint(&event_a),
             concierge_welcome_fingerprint(&event_b)
         );
+    }
+
+    #[test]
+    fn expected_disconnect_error_matches_unexpected_eof() {
+        let error: anyhow::Error =
+            std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "peer closed").into();
+        assert!(is_expected_disconnect_error(&error));
+    }
+
+    #[test]
+    fn expected_disconnect_error_does_not_match_invalid_data() {
+        let error: anyhow::Error =
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "bad frame").into();
+        assert!(!is_expected_disconnect_error(&error));
     }
 
     struct TestConnection {
@@ -881,7 +974,11 @@ async fn accept_loop_unix(
                 tokio::spawn(async move {
                     if let Err(e) = handle_connection(stream, manager, agent, plugin_manager).await
                     {
-                        tracing::error!(error = %e, "client connection error");
+                        if is_expected_disconnect_error(&e) {
+                            tracing::debug!(error = %e, "client disconnected");
+                        } else {
+                            tracing::error!(error = %e, "client connection error");
+                        }
                     }
                 });
             }
@@ -959,7 +1056,11 @@ async fn accept_loop_tcp(
                 tokio::spawn(async move {
                     if let Err(e) = handle_connection(stream, manager, agent, plugin_manager).await
                     {
-                        tracing::error!(%addr, error = %e, "client connection error");
+                        if is_expected_disconnect_error(&e) {
+                            tracing::debug!(%addr, error = %e, "client disconnected");
+                        } else {
+                            tracing::error!(%addr, error = %e, "client connection error");
+                        }
                     }
                 });
             }
@@ -1035,6 +1136,11 @@ where
                 match rx.try_recv() {
                     Ok(event) => match event {
                         crate::agent::types::WhatsAppLinkRuntimeEvent::Status(snapshot) => {
+                            tracing::debug!(
+                                state = %snapshot.state,
+                                has_error = snapshot.last_error.is_some(),
+                                "forwarding whatsapp runtime status to client"
+                            );
                             if !whatsapp_link_snapshot_replayed {
                                 whatsapp_link_snapshot_replayed = true;
                                 framed
@@ -1050,6 +1156,11 @@ where
                             ascii_qr,
                             expires_at_ms,
                         } => {
+                            tracing::debug!(
+                                qr_len = ascii_qr.len(),
+                                expires_at_ms,
+                                "forwarding whatsapp runtime qr to client"
+                            );
                             framed
                                 .send(DaemonMessage::AgentWhatsAppLinkQr {
                                     ascii_qr,
@@ -1058,6 +1169,10 @@ where
                                 .await?;
                         }
                         crate::agent::types::WhatsAppLinkRuntimeEvent::Linked { phone } => {
+                            tracing::debug!(
+                                phone = phone.as_deref().unwrap_or(""),
+                                "forwarding whatsapp runtime linked to client"
+                            );
                             framed
                                 .send(DaemonMessage::AgentWhatsAppLinked { phone })
                                 .await?;
@@ -1066,6 +1181,11 @@ where
                             message,
                             recoverable,
                         } => {
+                            tracing::debug!(
+                                recoverable,
+                                message = %message,
+                                "forwarding whatsapp runtime error to client"
+                            );
                             framed
                                 .send(DaemonMessage::AgentWhatsAppLinkError {
                                     message,
@@ -1074,6 +1194,10 @@ where
                                 .await?;
                         }
                         crate::agent::types::WhatsAppLinkRuntimeEvent::Disconnected { reason } => {
+                            tracing::debug!(
+                                reason = reason.as_deref().unwrap_or(""),
+                                "forwarding whatsapp runtime disconnected to client"
+                            );
                             framed
                                 .send(DaemonMessage::AgentWhatsAppLinkDisconnected { reason })
                                 .await?;

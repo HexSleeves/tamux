@@ -35,6 +35,13 @@ test("main forwards daemon WhatsApp link events to renderer channels", () => {
   assert.match(src, /event\.type === 'whatsapp-link-status'/);
 });
 
+test("main logs daemon WhatsApp event diagnostics", () => {
+  assert.match(src, /logToFile\('info', 'daemon whatsapp-link-status event'/);
+  assert.match(src, /logToFile\('info', 'daemon whatsapp-link-qr event'/);
+  assert.match(src, /logToFile\('warn', 'daemon whatsapp-link-error event'/);
+  assert.match(src, /logToFile\('info', 'daemon whatsapp-link-disconnected event'/);
+});
+
 test("agent bridge exit resets daemon WhatsApp subscription state", () => {
   assert.match(src, /bridgeProcess\.on\('exit'[\s\S]*?whatsappDaemonSubscribed\s*=\s*false/);
 });
