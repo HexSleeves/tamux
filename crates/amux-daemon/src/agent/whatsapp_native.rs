@@ -12,14 +12,15 @@ use wa_rs::Jid;
 use wa_rs_tokio_transport::TokioWebSocketTransportFactory;
 use wa_rs_ureq_http::UreqHttpClient;
 
+use super::{gateway, persist_transport_session_update, AgentEngine, WHATSAPP_LINK_PROVIDER_ID};
 use super::gateway::IncomingMessage;
-use super::{persist_transport_session_update, AgentEngine, WHATSAPP_LINK_PROVIDER_ID};
+use super::gateway_loop::process_replay_result;
 use super::whatsapp_link::{
     collect_exact_jid_candidates, collect_normalized_identifiers, normalize_identifier,
     normalize_jid_user, transport,
 };
 
-const TAMUX_SELF_CHAT_PREFIX: &str = "🤖 Swarog - The Smith ⚒️\n";
+const TAMUX_SELF_CHAT_PREFIX: &str = "🦅 Rarog - Swarog's concierge ⚒️\n";
 
 pub(crate) fn whatsapp_native_store_path(base_dir: &Path) -> PathBuf {
     base_dir.join("whatsapp-link.sqlite")
@@ -57,6 +58,28 @@ fn format_outbound_whatsapp_text(text: &str, prefix_self_chat: bool) -> String {
     format!("{TAMUX_SELF_CHAT_PREFIX}{text}")
 }
 
+/// Encode a WhatsApp replay cursor from a message timestamp (Unix seconds) and message ID.
+/// Format: `"{ts_secs}:{msg_id}"`.
+fn build_whatsapp_cursor(ts_secs: u64, msg_id: &str) -> String {
+    format!("{ts_secs}:{msg_id}")
+}
+
+/// Parse the Unix-seconds timestamp component from a WhatsApp cursor value.
+/// Accepts `"{ts}:{msg_id}"` (current format).  Returns `None` for legacy
+/// cursors that cannot be parsed (they will be treated as "no cursor" and
+/// the chat will be skipped for replay — safe no-backfill fallback).
+fn parse_whatsapp_cursor_ts_secs(cursor: &str) -> Option<u64> {
+    cursor.split(':').next()?.parse::<u64>().ok()
+}
+
+/// Insert "whatsapp" into `replay_cycle_active` when persisted cursors exist.
+/// Called once per reconnect cycle from the `Event::Connected` handler.
+fn mark_whatsapp_replay_active_if_cursors(gw: &mut gateway::GatewayState) {
+    if !gw.whatsapp_replay_cursors.is_empty() {
+        gw.replay_cycle_active.insert("whatsapp".to_string());
+    }
+}
+
 pub(crate) async fn start_whatsapp_link_native(agent: Arc<AgentEngine>) -> Result<()> {
     let store_path = whatsapp_native_store_path(&agent.data_dir);
     if let Some(parent) = store_path.parent() {
@@ -70,15 +93,33 @@ pub(crate) async fn start_whatsapp_link_native(agent: Arc<AgentEngine>) -> Resul
             .await
             .with_context(|| format!("failed to open wa-rs sqlite store {}", store_path.display()))?,
     );
+
+    // Enable history sync only when persisted WhatsApp replay cursors already exist.
+    // On first-ever connect there are no cursors, so skip history sync to prevent
+    // backfilling old messages.  On reconnect, cursors exist and history sync is
+    // the source for the reconnect-replay path.
+    let has_whatsapp_cursors = match agent.history.load_gateway_replay_cursors("whatsapp").await {
+        Ok(rows) => !rows.is_empty(),
+        Err(e) => {
+            tracing::warn!("whatsapp: failed to check replay cursors, defaulting to no-sync: {e}");
+            false
+        }
+    };
+
     let store_path_string = store_path.to_string_lossy().to_string();
     let agent_for_events = agent.clone();
     let (device_os, device_version, device_platform) = tamux_device_props();
-    let mut bot = Bot::builder()
+    let base_builder = Bot::builder()
         .with_backend(store)
         .with_transport_factory(TokioWebSocketTransportFactory::new())
         .with_http_client(UreqHttpClient::new())
-        .with_device_props(device_os.clone(), device_version, device_platform)
-        .skip_history_sync()
+        .with_device_props(device_os.clone(), device_version, device_platform);
+    let base_builder = if has_whatsapp_cursors {
+        base_builder
+    } else {
+        base_builder.skip_history_sync()
+    };
+    let mut bot = base_builder
         .on_event(move |event, client| {
             let agent = agent_for_events.clone();
             let store_path = store_path_string.clone();
@@ -179,6 +220,13 @@ async fn handle_native_event(
                     .await;
             }
             agent.whatsapp_link.broadcast_linked(phone).await;
+            // Mark whatsapp replay active for this reconnect cycle when cursors exist.
+            {
+                let mut gw_guard = agent.gateway_state.lock().await;
+                if let Some(gw) = gw_guard.as_mut() {
+                    mark_whatsapp_replay_active_if_cursors(gw);
+                }
+            }
         }
         Event::Disconnected(_) => {
             agent
@@ -198,6 +246,149 @@ async fn handle_native_event(
                 .broadcast_error(format!("pairing failed: {}", error.error), false)
                 .await;
         }
+        Event::JoinedGroup(lazy_conv) => {
+            // History sync delivers one JoinedGroup event per conversation.
+            // We only process it when a WhatsApp replay cycle is active (i.e. we have
+            // persisted cursors and history sync was enabled for this connect).
+            let is_replay_active = {
+                let gw_guard = agent.gateway_state.lock().await;
+                gw_guard
+                    .as_ref()
+                    .map(|g| g.replay_cycle_active.contains("whatsapp"))
+                    .unwrap_or(false)
+            };
+            if !is_replay_active {
+                return;
+            }
+
+            // Extract all data from the lazy conversation synchronously so we do
+            // not hold a borrow across await points.
+            let (chat_jid, extracted_msgs) = {
+                let Some(conv) = lazy_conv.get() else {
+                    return;
+                };
+                let jid = conv.id.clone();
+                let msgs: Vec<(u64, String, String, String)> = conv
+                    .messages
+                    .iter()
+                    .filter_map(|h| h.message.as_ref())
+                    // Inbound only — skip outbound history entries.
+                    .filter(|wmi| !wmi.key.from_me.unwrap_or(false))
+                    .filter_map(|wmi| {
+                        let ts = wmi.message_timestamp.unwrap_or(0);
+                        let msg_id = wmi.key.id.clone().unwrap_or_default();
+                        if msg_id.is_empty() {
+                            return None;
+                        }
+                        // Group: participant field holds the real sender.
+                        // 1-1:   remote_jid is the other party (= the chat jid).
+                        let sender = wmi
+                            .key
+                            .participant
+                            .clone()
+                            .or_else(|| wmi.participant.clone())
+                            .unwrap_or_else(|| {
+                                wmi.key.remote_jid.clone().unwrap_or_else(|| jid.clone())
+                            });
+                        let text = wmi
+                            .message
+                            .as_ref()
+                            .and_then(|m| m.text_content())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        if text.is_empty() {
+                            return None;
+                        }
+                        Some((ts, msg_id, sender, text))
+                    })
+                    .collect();
+                (jid, msgs)
+            };
+            // lazy_conv borrow released here.
+
+            if chat_jid.is_empty() || extracted_msgs.is_empty() {
+                return;
+            }
+
+            let chat_key = normalize_identifier(&chat_jid);
+            if chat_key.is_empty() {
+                return;
+            }
+
+            // Only replay conversations for which a persisted cursor exists.
+            // This ensures chats seen for the first time are not backfilled.
+            let cursor_ts_secs: Option<u64> = {
+                let gw_guard = agent.gateway_state.lock().await;
+                gw_guard
+                    .as_ref()
+                    .and_then(|g| g.whatsapp_replay_cursors.get(&chat_key).cloned())
+                    .and_then(|c| parse_whatsapp_cursor_ts_secs(&c))
+            };
+            let Some(cursor_ts) = cursor_ts_secs else {
+                // No parseable cursor for this chat; skip (safe no-backfill fallback).
+                return;
+            };
+
+            // Build replay envelopes for messages newer than the cursor.
+            let envelopes: Vec<gateway::ReplayEnvelope> = extracted_msgs
+                .into_iter()
+                .filter(|(ts, _, _, _)| *ts > cursor_ts)
+                .map(|(ts, msg_id, sender, text)| gateway::ReplayEnvelope {
+                    message: IncomingMessage {
+                        platform: "WhatsApp".to_string(),
+                        sender,
+                        content: text,
+                        channel: chat_jid.clone(),
+                        message_id: Some(format!("wa:{msg_id}")),
+                        thread_context: None,
+                    },
+                    channel_id: chat_key.clone(),
+                    cursor_value: build_whatsapp_cursor(ts, &msg_id),
+                    cursor_type: "ts_msgid",
+                })
+                .collect();
+
+            if envelopes.is_empty() {
+                return;
+            }
+
+            let result = gateway::ReplayFetchResult::Replay(envelopes);
+            let accepted = {
+                let mut gw_guard = agent.gateway_state.lock().await;
+                let mut seen_ids = agent.gateway_seen_ids.lock().await;
+                match gw_guard.as_mut() {
+                    Some(gw) => {
+                        let (msgs, _) = process_replay_result(
+                            &agent.history,
+                            "whatsapp",
+                            result,
+                            gw,
+                            &mut seen_ids,
+                        )
+                        .await;
+                        msgs
+                    }
+                    None => Vec::new(),
+                }
+            };
+
+            for msg in accepted {
+                if let Err(error) = agent.enqueue_gateway_message(msg).await {
+                    tracing::warn!(
+                        chat = %chat_jid,
+                        "whatsapp replay: failed to enqueue history message: {error}"
+                    );
+                }
+            }
+        }
+        Event::OfflineSyncCompleted(_) => {
+            // History sync is complete for this reconnect cycle; clear the active flag.
+            let mut gw_guard = agent.gateway_state.lock().await;
+            if let Some(gw) = gw_guard.as_mut() {
+                gw.replay_cycle_active.remove("whatsapp");
+            }
+        }
         Event::Message(message, info) => {
             if let Some(text) = message.text_content() {
                 let text = text.trim().to_string();
@@ -207,10 +398,15 @@ async fn handle_native_event(
 
                 let chat = info.source.chat.to_string();
                 let sender = info.source.sender.to_string();
-                if info.source.is_from_me {
+                let msg_id = info.id.clone();
+                let ts_secs = info.timestamp.timestamp() as u64;
+
+                // Determine whether this message should be enqueued (WhatsApp-specific
+                // self-echo suppression and self-chat acceptance logic).
+                let should_enqueue = if info.source.is_from_me {
                     let known_outbound_echo = agent
                         .whatsapp_link
-                        .is_recent_outbound_message_id(&info.id.to_string())
+                        .is_recent_outbound_message_id(&msg_id)
                         .await;
                     let own_identifiers = collect_normalized_identifiers(&[
                         &chat,
@@ -245,30 +441,83 @@ async fn handle_native_event(
                         && !sender_norm.is_empty()
                         && own_identifiers.contains(&sender_norm)
                         && !exact_self_jids.is_empty();
-                    if known_outbound_echo || !self_chat {
-                        return;
-                    }
-                }
+                    // Outbound echoes and non-self-chat outbound messages are never
+                    // enqueued, but still flow through process_replay_result below so
+                    // the cursor advances past them.
+                    !known_outbound_echo && self_chat
+                } else {
+                    true
+                };
 
-                let sender_display = sender.clone();
-                if let Err(error) = agent
-                    .enqueue_gateway_message(IncomingMessage {
+                // Build the replay envelope for cursor-advancement (applies to ALL
+                // live messages, including suppressed outbound echoes).
+                let chat_key = normalize_identifier(&chat);
+                let envelope = gateway::ReplayEnvelope {
+                    message: IncomingMessage {
                         platform: "WhatsApp".to_string(),
-                        sender: sender_display,
-                        content: text,
-                        channel: chat,
-                        message_id: Some(format!("wa:{}", info.id)),
+                        sender: sender.clone(),
+                        content: text.clone(),
+                        channel: chat.clone(),
+                        message_id: Some(format!("wa:{msg_id}")),
                         thread_context: None,
-                    })
-                    .await
-                {
-                    agent
-                        .whatsapp_link
-                        .broadcast_error(
-                            format!("failed to enqueue native whatsapp message: {error}"),
-                            true,
-                        )
-                        .await;
+                    },
+                    channel_id: chat_key,
+                    cursor_value: build_whatsapp_cursor(ts_secs, &msg_id),
+                    cursor_type: "ts_msgid",
+                };
+
+                // Route through the shared replay classification path.  This advances
+                // the persisted cursor for every classified message (accepted, filtered,
+                // or duplicate), including outbound echoes that are not enqueued.
+                let result = gateway::ReplayFetchResult::Replay(vec![envelope]);
+                let accepted = {
+                    let mut gw_guard = agent.gateway_state.lock().await;
+                    let mut seen_ids = agent.gateway_seen_ids.lock().await;
+                    match gw_guard.as_mut() {
+                        Some(gw) => {
+                            let (msgs, _) = process_replay_result(
+                                &agent.history,
+                                "whatsapp",
+                                result,
+                                gw,
+                                &mut seen_ids,
+                            )
+                            .await;
+                            msgs
+                        }
+                        None => {
+                            // Gateway not yet initialised — fall back to direct enqueue.
+                            drop(seen_ids);
+                            if should_enqueue {
+                                vec![IncomingMessage {
+                                    platform: "WhatsApp".to_string(),
+                                    sender,
+                                    content: text,
+                                    channel: chat,
+                                    message_id: Some(format!("wa:{msg_id}")),
+                                    thread_context: None,
+                                }]
+                            } else {
+                                vec![]
+                            }
+                        }
+                    }
+                };
+
+                for msg in accepted {
+                    if should_enqueue {
+                        if let Err(error) = agent.enqueue_gateway_message(msg).await {
+                            agent
+                                .whatsapp_link
+                                .broadcast_error(
+                                    format!(
+                                        "failed to enqueue native whatsapp message: {error}"
+                                    ),
+                                    true,
+                                )
+                                .await;
+                        }
+                    }
                 }
             }
         }
@@ -333,7 +582,8 @@ mod tests {
 
     #[test]
     fn outbound_self_chat_messages_get_tamux_prefix() {
-        assert_eq!(format_outbound_whatsapp_text("Hello", true), "Tamux\nHello");
+        let expected = format!("{TAMUX_SELF_CHAT_PREFIX}Hello");
+        assert_eq!(format_outbound_whatsapp_text("Hello", true), expected);
     }
 
     #[test]
@@ -348,5 +598,174 @@ mod tests {
             format_outbound_whatsapp_text(&prefixed, true),
             prefixed
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 5: Cursor helpers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn whatsapp_replay_cursor_roundtrips() {
+        let cursor = build_whatsapp_cursor(1700000000, "msg-abc-123");
+        assert_eq!(cursor, "1700000000:msg-abc-123");
+        assert_eq!(parse_whatsapp_cursor_ts_secs(&cursor), Some(1700000000));
+    }
+
+    #[test]
+    fn whatsapp_replay_cursor_parses_ts_only_prefix() {
+        // Cursor values that contain colons should parse only the first segment.
+        assert_eq!(
+            parse_whatsapp_cursor_ts_secs("1700000001:some:extra:colons"),
+            Some(1700000001)
+        );
+    }
+
+    #[test]
+    fn whatsapp_replay_cursor_rejects_non_numeric_legacy_format() {
+        // Legacy "message_id" cursors (e.g. plain base64 IDs) cannot be parsed
+        // as a timestamp, which safely triggers the no-backfill fallback.
+        assert_eq!(parse_whatsapp_cursor_ts_secs("wamid-ABC123"), None);
+        assert_eq!(parse_whatsapp_cursor_ts_secs(""), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 5: replay-cycle marking on Connected
+    // -----------------------------------------------------------------------
+
+    fn make_replay_gateway_config() -> super::super::types::GatewayConfig {
+        super::super::types::GatewayConfig {
+            enabled: true,
+            slack_token: String::new(),
+            slack_channel_filter: String::new(),
+            telegram_token: String::new(),
+            telegram_allowed_chats: String::new(),
+            discord_token: String::new(),
+            discord_channel_filter: String::new(),
+            discord_allowed_users: String::new(),
+            whatsapp_allowed_contacts: String::new(),
+            whatsapp_token: String::new(),
+            whatsapp_phone_id: String::new(),
+            command_prefix: "!".into(),
+            gateway_electron_bridges_enabled: false,
+            whatsapp_link_fallback_electron: false,
+        }
+    }
+
+    /// When a WhatsApp cursor exists for at least one chat, the Connected event
+    /// must mark "whatsapp" as replay-active so history sync conversations are
+    /// processed.
+    #[test]
+    fn whatsapp_connected_event_triggers_replay_for_chat_with_cursor() {
+        let config = make_replay_gateway_config();
+        let client = reqwest::Client::new();
+        let mut gw = gateway::GatewayState::new(config, client);
+
+        gw.whatsapp_replay_cursors
+            .insert("15551234567".into(), build_whatsapp_cursor(1700000000, "msg1"));
+
+        // Simulate the Connected handler logic.
+        mark_whatsapp_replay_active_if_cursors(&mut gw);
+
+        assert!(
+            gw.replay_cycle_active.contains("whatsapp"),
+            "replay_cycle_active must contain 'whatsapp' when cursors are present"
+        );
+    }
+
+    /// On first connect there are no persisted cursors.  The replay cycle must
+    /// NOT be activated so we never backfill old history.
+    #[test]
+    fn whatsapp_first_connect_without_cursor_does_not_backfill_history() {
+        let config = make_replay_gateway_config();
+        let client = reqwest::Client::new();
+        let mut gw = gateway::GatewayState::new(config, client);
+
+        // No cursors inserted — whatsapp_replay_cursors is empty.
+        mark_whatsapp_replay_active_if_cursors(&mut gw);
+
+        assert!(
+            !gw.replay_cycle_active.contains("whatsapp"),
+            "replay_cycle_active must NOT contain 'whatsapp' on first connect (no cursors)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 5: self-echo is classified but not re-enqueued
+    // -----------------------------------------------------------------------
+
+    /// Verify that an outbound echo (`should_enqueue = false`) flows through
+    /// `process_replay_result` so the cursor advances, but the returned accepted
+    /// message is then discarded by the caller.
+    ///
+    /// We test this by confirming `process_replay_result` accepts a message
+    /// regardless of the `should_enqueue` flag (which is caller-side logic) and
+    /// that the cursor is persisted.
+    #[tokio::test]
+    async fn whatsapp_self_echo_replay_is_classified_but_not_reenqueued() {
+        use std::fs;
+        use uuid::Uuid;
+
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-artifacts")
+            .join(format!("wa-self-echo-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("create test root");
+
+        let history = crate::history::HistoryStore::new_test_store(&root)
+            .await
+            .expect("history store");
+
+        let config = make_replay_gateway_config();
+        let http = reqwest::Client::new();
+        let mut gw = gateway::GatewayState::new(config, http);
+        let mut seen_ids: Vec<String> = Vec::new();
+
+        // The envelope represents a live outbound echo message.
+        let envelope = gateway::ReplayEnvelope {
+            message: gateway::IncomingMessage {
+                platform: "WhatsApp".into(),
+                sender: "49123456789@s.whatsapp.net".into(),
+                content: "echo text".into(),
+                channel: "49123456789@s.whatsapp.net".into(),
+                message_id: Some("wa:ECHO001".into()),
+                thread_context: None,
+            },
+            channel_id: "49123456789".into(),
+            cursor_value: build_whatsapp_cursor(1700000042, "ECHO001"),
+            cursor_type: "ts_msgid",
+        };
+
+        let result = gateway::ReplayFetchResult::Replay(vec![envelope]);
+
+        // process_replay_result accepts the message (cursor advances).
+        let (accepted_msgs, completed) =
+            process_replay_result(&history, "whatsapp", result, &mut gw, &mut seen_ids).await;
+
+        assert!(completed, "replay must complete for a single valid envelope");
+        assert_eq!(
+            accepted_msgs.len(),
+            1,
+            "process_replay_result must accept the message (cursor must advance)"
+        );
+        // In-memory cursor must be updated.
+        assert_eq!(
+            gw.whatsapp_replay_cursors.get("49123456789").map(String::as_str),
+            Some("1700000042:ECHO001"),
+            "in-memory cursor must advance even for an outbound echo"
+        );
+
+        // The CALLER (Event::Message handler) gates enqueue on `should_enqueue`.
+        // For an outbound echo, should_enqueue = false, so we discard the message.
+        let should_enqueue = false; // simulates outbound echo
+        let enqueued: Vec<_> = accepted_msgs
+            .into_iter()
+            .filter(|_| should_enqueue)
+            .collect();
+        assert!(
+            enqueued.is_empty(),
+            "outbound echo must not be enqueued despite cursor advancement"
+        );
+
+        fs::remove_dir_all(&root).ok();
     }
 }

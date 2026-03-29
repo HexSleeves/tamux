@@ -69,6 +69,10 @@ fn update_in_memory_replay_cursor(
             gw.discord_replay_cursors
                 .insert(channel_id.to_string(), cursor_value.to_string());
         }
+        "whatsapp" => {
+            gw.whatsapp_replay_cursors
+                .insert(channel_id.to_string(), cursor_value.to_string());
+        }
         _ => {}
     }
 }
