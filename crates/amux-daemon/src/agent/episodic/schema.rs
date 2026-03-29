@@ -45,16 +45,21 @@ const EPISODIC_TABLES: &str = "
     );
 
     CREATE TABLE IF NOT EXISTS negative_knowledge (
-        id              TEXT PRIMARY KEY,
-        agent_id        TEXT,
-        episode_id      TEXT,
-        constraint_type TEXT NOT NULL,
-        subject         TEXT NOT NULL,
-        solution_class  TEXT,
-        description     TEXT NOT NULL,
-        confidence      REAL NOT NULL,
-        valid_until     INTEGER,
-        created_at      INTEGER NOT NULL
+        id                          TEXT PRIMARY KEY,
+        agent_id                    TEXT,
+        episode_id                  TEXT,
+        constraint_type             TEXT NOT NULL,
+        subject                     TEXT NOT NULL,
+        solution_class              TEXT,
+        description                 TEXT NOT NULL,
+        confidence                  REAL NOT NULL,
+        state                       TEXT NOT NULL DEFAULT 'dying',
+        evidence_count              INTEGER NOT NULL DEFAULT 1,
+        direct_observation          INTEGER NOT NULL DEFAULT 1,
+        derived_from_constraint_ids TEXT NOT NULL DEFAULT '[]',
+        related_subject_tokens      TEXT NOT NULL DEFAULT '[]',
+        valid_until                 INTEGER,
+        created_at                  INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS counter_who_state (
@@ -139,6 +144,36 @@ fn ensure_episode_columns(conn: &rusqlite::Connection) -> Result<()> {
     ensure_column(conn, "episodes", "confidence_after", "REAL")?;
     ensure_column(conn, "episode_links", "agent_id", "TEXT")?;
     ensure_column(conn, "negative_knowledge", "agent_id", "TEXT")?;
+    ensure_column(
+        conn,
+        "negative_knowledge",
+        "state",
+        "TEXT NOT NULL DEFAULT 'dying'",
+    )?;
+    ensure_column(
+        conn,
+        "negative_knowledge",
+        "evidence_count",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
+    ensure_column(
+        conn,
+        "negative_knowledge",
+        "direct_observation",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
+    ensure_column(
+        conn,
+        "negative_knowledge",
+        "derived_from_constraint_ids",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(
+        conn,
+        "negative_knowledge",
+        "related_subject_tokens",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
     ensure_column(conn, "counter_who_state", "agent_id", "TEXT")?;
     Ok(())
 }
@@ -162,4 +197,38 @@ fn ensure_column(
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::init_episodic_schema;
+    use anyhow::Result;
+    use rusqlite::Connection;
+
+    #[test]
+    fn init_episodic_schema_adds_constraint_state_columns() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+
+        init_episodic_schema(&conn)?;
+
+        let mut stmt = conn.prepare("PRAGMA table_info(negative_knowledge)")?;
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        for expected in [
+            "state",
+            "evidence_count",
+            "direct_observation",
+            "derived_from_constraint_ids",
+            "related_subject_tokens",
+        ] {
+            assert!(
+                columns.iter().any(|column| column == expected),
+                "missing column {expected}; found columns: {columns:?}"
+            );
+        }
+
+        Ok(())
+    }
 }
