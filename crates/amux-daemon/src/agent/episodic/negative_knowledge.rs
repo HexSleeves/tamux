@@ -1,7 +1,7 @@
 //! Negative knowledge constraint graph: tracks ruled-out approaches,
 //! impossible combinations, and known limitations with TTL expiry.
 
-use super::{ConstraintType, Episode, EpisodeOutcome, NegativeConstraint};
+use super::{ConstraintState, ConstraintType, Episode, EpisodeOutcome, NegativeConstraint};
 use crate::agent::engine::AgentEngine;
 
 use anyhow::Result;
@@ -175,6 +175,11 @@ impl AgentEngine {
             solution_class: episode.solution_class.clone(),
             description: episode.root_cause.clone().unwrap_or_default(),
             confidence: episode.confidence.unwrap_or(0.7),
+            state: ConstraintState::Dying,
+            evidence_count: 1,
+            direct_observation: true,
+            derived_from_constraint_ids: Vec::new(),
+            related_subject_tokens: Vec::new(),
             valid_until: Some(valid_until),
             created_at: now_ms,
         };
@@ -287,6 +292,11 @@ fn row_to_constraint(row: &rusqlite::Row<'_>) -> rusqlite::Result<NegativeConstr
         solution_class: row.get(5)?,
         description: row.get(6)?,
         confidence: row.get(7)?,
+        state: ConstraintState::Dying,
+        evidence_count: 1,
+        direct_observation: true,
+        derived_from_constraint_ids: Vec::new(),
+        related_subject_tokens: Vec::new(),
         valid_until: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
         created_at: row.get::<_, i64>(9)? as u64,
     })
@@ -309,6 +319,11 @@ mod tests {
             solution_class: Some("test-class".to_string()),
             description: format!("Reason for {subject}"),
             confidence: 0.85,
+            state: ConstraintState::Dying,
+            evidence_count: 1,
+            direct_observation: true,
+            derived_from_constraint_ids: Vec::new(),
+            related_subject_tokens: Vec::new(),
             valid_until,
             created_at: 1_000_000_000,
         }
