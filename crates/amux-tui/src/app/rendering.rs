@@ -331,6 +331,7 @@ impl TuiModel {
                         overlay_area,
                         &self.settings,
                         &self.config,
+                        &self.modal,
                         &self.auth,
                         &self.subagents,
                         &self.concierge,

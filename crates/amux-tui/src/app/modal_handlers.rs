@@ -393,6 +393,8 @@ impl TuiModel {
                         self.send_daemon_command(DaemonCommand::ListSubAgents);
                     } else if matches!(next_tab, SettingsTab::Concierge) {
                         self.send_daemon_command(DaemonCommand::GetConciergeConfig);
+                    } else if matches!(next_tab, SettingsTab::Gateway) {
+                        self.send_daemon_command(DaemonCommand::WhatsAppLinkStatus);
                     } else if matches!(next_tab, SettingsTab::Plugins) {
                         self.plugin_settings.list_mode = true;
                         self.send_daemon_command(DaemonCommand::PluginList);
@@ -413,6 +415,8 @@ impl TuiModel {
                         self.send_daemon_command(DaemonCommand::ListSubAgents);
                     } else if matches!(prev_tab, SettingsTab::Concierge) {
                         self.send_daemon_command(DaemonCommand::GetConciergeConfig);
+                    } else if matches!(prev_tab, SettingsTab::Gateway) {
+                        self.send_daemon_command(DaemonCommand::WhatsAppLinkStatus);
                     } else if matches!(prev_tab, SettingsTab::Plugins) {
                         self.plugin_settings.list_mode = true;
                         self.send_daemon_command(DaemonCommand::PluginList);

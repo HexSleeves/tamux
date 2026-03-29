@@ -417,6 +417,9 @@ fn start_daemon_bridge(
                             DaemonCommand::WhatsAppLinkUnsubscribe => {
                                 let _ = client.whatsapp_link_unsubscribe();
                             }
+                            DaemonCommand::WhatsAppLinkReset => {
+                                let _ = client.whatsapp_link_reset();
+                            }
                         }
                     }
                 }

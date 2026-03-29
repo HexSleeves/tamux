@@ -1092,8 +1092,14 @@ impl TuiModel {
                     .start_editing("whatsapp_phone_id", &self.config.whatsapp_phone_id.clone());
             }
             "whatsapp_link_device" => {
+                let was_connected =
+                    self.modal.whatsapp_link().phase() == modal::WhatsAppLinkPhase::Connected;
                 self.modal.set_whatsapp_link_starting();
                 self.send_daemon_command(DaemonCommand::WhatsAppLinkSubscribe);
+                self.send_daemon_command(DaemonCommand::WhatsAppLinkStatus);
+                if was_connected {
+                    self.send_daemon_command(DaemonCommand::WhatsAppLinkReset);
+                }
                 self.send_daemon_command(DaemonCommand::WhatsAppLinkStart);
                 self.modal
                     .reduce(modal::ModalAction::Push(modal::ModalKind::WhatsAppLink));
@@ -1886,7 +1892,7 @@ mod tests {
     }
 
     #[test]
-    fn whatsapp_link_device_sends_subscribe_and_start_without_status_probe() {
+    fn whatsapp_link_device_probes_status_before_starting_link_flow() {
         let (mut model, mut daemon_rx) = make_model();
         model
             .settings
@@ -1901,10 +1907,46 @@ mod tests {
             DaemonCommand::WhatsAppLinkSubscribe
         ));
         assert!(matches!(
+            daemon_rx.try_recv().expect("expected status probe"),
+            DaemonCommand::WhatsAppLinkStatus
+        ));
+        assert!(matches!(
             daemon_rx.try_recv().expect("expected start command"),
             DaemonCommand::WhatsAppLinkStart
         ));
         assert!(daemon_rx.try_recv().is_err());
         assert_eq!(model.modal.top(), Some(modal::ModalKind::WhatsAppLink));
+    }
+
+    #[test]
+    fn whatsapp_link_device_resets_existing_link_before_restart() {
+        let (mut model, mut daemon_rx) = make_model();
+        model
+            .settings
+            .reduce(SettingsAction::SwitchTab(SettingsTab::Gateway));
+        model.settings.reduce(SettingsAction::NavigateField(12));
+        model
+            .modal
+            .set_whatsapp_link_connected(Some("+48663977535".to_string()));
+
+        model.activate_settings_field();
+
+        assert!(matches!(
+            daemon_rx.try_recv().expect("expected subscribe command"),
+            DaemonCommand::WhatsAppLinkSubscribe
+        ));
+        assert!(matches!(
+            daemon_rx.try_recv().expect("expected status command"),
+            DaemonCommand::WhatsAppLinkStatus
+        ));
+        assert!(matches!(
+            daemon_rx.try_recv().expect("expected reset command"),
+            DaemonCommand::WhatsAppLinkReset
+        ));
+        assert!(matches!(
+            daemon_rx.try_recv().expect("expected start command"),
+            DaemonCommand::WhatsAppLinkStart
+        ));
+        assert!(daemon_rx.try_recv().is_err());
     }
 }

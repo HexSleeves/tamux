@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use crate::providers;
 use crate::state::concierge::ConciergeState;
 use crate::state::config::ConfigState;
+use crate::state::modal::{ModalState, WhatsAppLinkPhase};
 use crate::state::settings::{PluginSettingsState, SettingsState, SettingsTab};
 use crate::state::subagents::SubAgentsState;
 use crate::theme::ThemeTokens;
@@ -104,6 +105,7 @@ pub fn render(
     area: Rect,
     settings: &SettingsState,
     config: &ConfigState,
+    modal: &ModalState,
     auth: &crate::state::auth::AuthState,
     subagents: &SubAgentsState,
     concierge: &ConciergeState,
@@ -169,6 +171,7 @@ pub fn render(
         chunks[2].width,
         settings,
         config,
+        modal,
         auth,
         subagents,
         concierge,
@@ -728,6 +731,7 @@ fn render_tab_content<'a>(
     content_width: u16,
     settings: &'a SettingsState,
     config: &'a ConfigState,
+    modal: &'a ModalState,
     auth: &'a crate::state::auth::AuthState,
     subagents: &'a SubAgentsState,
     concierge: &'a ConciergeState,
@@ -740,7 +744,7 @@ fn render_tab_content<'a>(
         SettingsTab::Tools => render_tools_tab(settings, config, theme),
         SettingsTab::WebSearch => render_websearch_tab(settings, config, theme),
         SettingsTab::Chat => render_chat_tab(settings, config, theme),
-        SettingsTab::Gateway => render_gateway_tab(settings, config, theme),
+        SettingsTab::Gateway => render_gateway_tab(settings, config, modal, theme),
         SettingsTab::Auth => render_auth_tab(content_width, auth, theme),
         SettingsTab::Agent => render_agent_tab(settings, config, theme),
         SettingsTab::SubAgents => render_subagents_tab(content_width, subagents, theme),
@@ -2563,6 +2567,7 @@ fn render_advanced_tab<'a>(
 fn render_gateway_tab<'a>(
     settings: &'a SettingsState,
     config: &'a ConfigState,
+    modal: &'a ModalState,
     theme: &ThemeTokens,
 ) -> Vec<Line<'a>> {
     let mut lines = Vec::new();
@@ -2746,6 +2751,8 @@ fn render_gateway_tab<'a>(
         "whatsapp_phone_id",
         false,
     );
+    let whatsapp_link = modal.whatsapp_link();
+    let relink = whatsapp_link.phase() == WhatsAppLinkPhase::Connected;
     {
         let is_selected = settings.field_cursor() == 12;
         let marker = if is_selected { "> " } else { "  " };
@@ -2761,13 +2768,44 @@ fn render_gateway_tab<'a>(
         };
         let mut spans = vec![
             Span::styled(marker, marker_style),
-            Span::styled("Link Device", label_style),
+            Span::styled(
+                if relink {
+                    "Re-link Device"
+                } else {
+                    "Link Device"
+                },
+                label_style,
+            ),
         ];
         if is_selected {
             spans.push(Span::styled("  [Enter]", theme.fg_dim));
         }
         lines.push(Line::from(spans));
     }
+    lines.push(Line::from(Span::styled(
+        match whatsapp_link.phase() {
+            WhatsAppLinkPhase::Connected => format!(
+                "  Linked: {}",
+                whatsapp_link.phone().unwrap_or("device")
+            ),
+            WhatsAppLinkPhase::AwaitingScan => "  Status: awaiting QR scan".to_string(),
+            WhatsAppLinkPhase::Starting => "  Status: starting link workflow".to_string(),
+            WhatsAppLinkPhase::Error => format!(
+                "  Status: error — {}",
+                whatsapp_link.last_error().unwrap_or("unknown")
+            ),
+            WhatsAppLinkPhase::Disconnected => format!(
+                "  Status: disconnected — {}",
+                whatsapp_link.last_error().unwrap_or("none")
+            ),
+            WhatsAppLinkPhase::Idle => "  Status: not linked".to_string(),
+        },
+        if relink {
+            theme.accent_success
+        } else {
+            theme.fg_dim
+        },
+    )));
     lines.push(Line::from(Span::styled(
         "  QR linking is available in TUI and Electron (Settings -> Gateway -> Link Device).",
         theme.fg_dim,
@@ -3404,6 +3442,7 @@ fn mask_api_key(key: &str) -> String {
 mod tests {
     use super::*;
     use crate::state::config::ConfigState;
+    use crate::state::modal::ModalState;
     use crate::state::settings::SettingsState;
 
     #[test]
@@ -3455,7 +3494,8 @@ mod tests {
             SettingsTab::Gateway,
         ));
         let config = ConfigState::new();
-        let lines = render_gateway_tab(&settings, &config, &ThemeTokens::default());
+        let modal = ModalState::new();
+        let lines = render_gateway_tab(&settings, &config, &modal, &ThemeTokens::default());
         let text = lines
             .iter()
             .map(|line| line.to_string())
@@ -3475,12 +3515,35 @@ mod tests {
         ));
         settings.reduce(crate::state::settings::SettingsAction::NavigateField(12));
         let config = ConfigState::new();
-        let lines = render_gateway_tab(&settings, &config, &ThemeTokens::default());
+        let modal = ModalState::new();
+        let lines = render_gateway_tab(&settings, &config, &modal, &ThemeTokens::default());
         let text = lines
             .iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("> Link Device"));
+    }
+
+    #[test]
+    fn gateway_tab_shows_connected_whatsapp_status_and_relink_action() {
+        let mut settings = SettingsState::new();
+        settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+            SettingsTab::Gateway,
+        ));
+        settings.reduce(crate::state::settings::SettingsAction::NavigateField(12));
+        let config = ConfigState::new();
+        let mut modal = ModalState::new();
+        modal.set_whatsapp_link_connected(Some("+48663977535".to_string()));
+
+        let lines = render_gateway_tab(&settings, &config, &modal, &ThemeTokens::default());
+        let text = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("> Re-link Device"));
+        assert!(text.contains("Linked: +48663977535"));
     }
 }

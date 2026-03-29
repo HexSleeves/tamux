@@ -137,6 +137,7 @@ pub enum DaemonCommand {
     WhatsAppLinkStatus,
     WhatsAppLinkSubscribe,
     WhatsAppLinkUnsubscribe,
+    WhatsAppLinkReset,
     DeleteMessages {
         thread_id: String,
         message_ids: Vec<String>,

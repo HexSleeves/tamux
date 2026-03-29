@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::path::Path;
@@ -157,6 +157,15 @@ pub fn resolve_send_target_candidates(
     }
 
     targets
+}
+
+fn resolve_native_send_plan(requested: &str, own_pn: &str, own_lid: &str) -> (Vec<String>, bool) {
+    let own_identifiers = collect_normalized_identifiers(&[own_pn, own_lid]);
+    let requested_user = normalize_identifier(requested);
+    let prefix_self_chat =
+        !requested_user.is_empty() && own_identifiers.contains(&requested_user);
+    let targets = resolve_send_target_candidates(requested, &HashSet::new(), None, &[]);
+    (targets, prefix_self_chat)
 }
 
 fn push_unique_target(targets: &mut Vec<String>, value: &str) {
@@ -645,6 +654,7 @@ struct RuntimeInner {
     stopping: bool,
     retry_count: u32,
     last_retry_at_ms: Option<u64>,
+    recent_outbound_message_ids: VecDeque<(String, u64)>,
     next_rpc_id: u64,
     #[cfg(test)]
     forced_stop_kill_error: Option<String>,
@@ -677,6 +687,7 @@ impl WhatsAppLinkRuntime {
                 stopping: false,
                 retry_count: 0,
                 last_retry_at_ms: None,
+                recent_outbound_message_ids: VecDeque::new(),
                 next_rpc_id: 1,
                 #[cfg(test)]
                 forced_stop_kill_error: None,
@@ -781,6 +792,7 @@ impl WhatsAppLinkRuntime {
             inner.active_qr_expires_at_ms = None;
             inner.retry_count = 0;
             inner.last_retry_at_ms = None;
+            inner.recent_outbound_message_ids.clear();
             inner.state = WhatsAppLinkState::Disconnected;
         }
         self.broadcast_status().await;
@@ -933,6 +945,59 @@ impl WhatsAppLinkRuntime {
         Ok(())
     }
 
+    pub async fn remember_outbound_message_id(&self, message_id: &str) {
+        let trimmed = message_id.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        let mut inner = self.inner.lock().await;
+        while let Some((_, recorded_at_ms)) = inner.recent_outbound_message_ids.front() {
+            if now_ms.saturating_sub(*recorded_at_ms) <= 120_000 {
+                break;
+            }
+            inner.recent_outbound_message_ids.pop_front();
+        }
+        if inner
+            .recent_outbound_message_ids
+            .iter()
+            .any(|(existing_id, _)| existing_id == trimmed)
+        {
+            return;
+        }
+        inner
+            .recent_outbound_message_ids
+            .push_back((trimmed.to_string(), now_ms));
+        while inner.recent_outbound_message_ids.len() > 512 {
+            inner.recent_outbound_message_ids.pop_front();
+        }
+    }
+
+    pub async fn is_recent_outbound_message_id(&self, message_id: &str) -> bool {
+        let trimmed = message_id.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        let mut inner = self.inner.lock().await;
+        while let Some((_, recorded_at_ms)) = inner.recent_outbound_message_ids.front() {
+            if now_ms.saturating_sub(*recorded_at_ms) <= 120_000 {
+                break;
+            }
+            inner.recent_outbound_message_ids.pop_front();
+        }
+        inner
+            .recent_outbound_message_ids
+            .iter()
+            .any(|(existing_id, _)| existing_id == trimmed)
+    }
+
     pub async fn has_sidecar_process(&self) -> bool {
         let inner = self.inner.lock().await;
         inner.process.is_some()
@@ -950,14 +1015,6 @@ impl WhatsAppLinkRuntime {
 
     pub async fn send_message(&self, jid: &str, text: &str) -> Result<()> {
         let jid = jid.trim();
-        let targets = resolve_send_target_candidates(jid, &HashSet::new(), None, &[]);
-        let primary_target = targets
-            .first()
-            .map(String::as_str)
-            .unwrap_or(jid);
-        if primary_target.is_empty() {
-            bail!("whatsapp send target is empty");
-        }
         if text.trim().is_empty() {
             bail!("whatsapp message body is empty");
         }
@@ -966,7 +1023,44 @@ impl WhatsAppLinkRuntime {
             inner.native_client.clone()
         };
         if let Some(client) = native_client {
-            return crate::agent::send_native_whatsapp_message(&client, &targets, text).await;
+            let own_pn = client
+                .get_pn()
+                .await
+                .map(|jid| jid.to_string())
+                .unwrap_or_default();
+            let own_lid = client
+                .get_lid()
+                .await
+                .map(|jid| jid.to_string())
+                .unwrap_or_default();
+            let (targets, prefix_self_chat) =
+                resolve_native_send_plan(jid, &own_pn, &own_lid);
+            let primary_target = targets
+                .first()
+                .map(String::as_str)
+                .unwrap_or(jid);
+            if primary_target.is_empty() {
+                bail!("whatsapp send target is empty");
+            }
+            let sent_message_id = crate::agent::send_native_whatsapp_message(
+                &client,
+                &targets,
+                text,
+                prefix_self_chat,
+            )
+            .await;
+            if let Ok(message_id) = sent_message_id.as_ref() {
+                self.remember_outbound_message_id(message_id).await;
+            }
+            return sent_message_id.map(|_| ());
+        }
+        let targets = resolve_send_target_candidates(jid, &HashSet::new(), None, &[]);
+        let primary_target = targets
+            .first()
+            .map(String::as_str)
+            .unwrap_or(jid);
+        if primary_target.is_empty() {
+            bail!("whatsapp send target is empty");
         }
         self.send_sidecar_command(
             "send",
@@ -1328,6 +1422,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remembers_recent_outbound_message_ids() {
+        let runtime = WhatsAppLinkRuntime::new();
+        assert!(!runtime.is_recent_outbound_message_id("msg-1").await);
+        runtime.remember_outbound_message_id("msg-1").await;
+        assert!(runtime.is_recent_outbound_message_id("msg-1").await);
+        assert!(!runtime.is_recent_outbound_message_id("msg-2").await);
+    }
+
+    #[tokio::test]
     async fn reset_clears_runtime_state() {
         let runtime = WhatsAppLinkRuntime::new();
         runtime.start().await.expect("start should succeed");
@@ -1431,6 +1534,24 @@ mod tests {
             vec![
                 "48663977535@s.whatsapp.net".to_string(),
                 "48663977535@lid".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_native_send_plan_keeps_working_delivery_targets_for_self_chat() {
+        let (targets, prefix_self_chat) = resolve_native_send_plan(
+            "13383252336718@lid",
+            "48663977535@s.whatsapp.net",
+            "13383252336718@lid",
+        );
+
+        assert!(prefix_self_chat);
+        assert_eq!(
+            targets,
+            vec![
+                "13383252336718@lid".to_string(),
+                "13383252336718@s.whatsapp.net".to_string(),
             ]
         );
     }

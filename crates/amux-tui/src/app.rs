@@ -626,6 +626,9 @@ impl TuiModel {
         self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
         self.send_daemon_command(DaemonCommand::ListSubAgents);
         self.send_daemon_command(DaemonCommand::GetConciergeConfig);
+        if matches!(tab, SettingsTab::Gateway) {
+            self.send_daemon_command(DaemonCommand::WhatsAppLinkStatus);
+        }
     }
 
     fn open_provider_setup(&mut self) {

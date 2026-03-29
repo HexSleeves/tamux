@@ -19,8 +19,42 @@ use super::whatsapp_link::{
     normalize_jid_user, transport,
 };
 
+const TAMUX_SELF_CHAT_PREFIX: &str = "🤖 Swarog - The Smith ⚒️\n";
+
 pub(crate) fn whatsapp_native_store_path(base_dir: &Path) -> PathBuf {
     base_dir.join("whatsapp-link.sqlite")
+}
+
+fn parse_tamux_device_version() -> wa::device_props::AppVersion {
+    let mut parts = env!("CARGO_PKG_VERSION")
+        .split('.')
+        .map(|part| part.parse::<u32>().ok());
+    wa::device_props::AppVersion {
+        primary: parts.next().flatten(),
+        secondary: parts.next().flatten(),
+        tertiary: parts.next().flatten(),
+        quaternary: parts.next().flatten(),
+        quinary: parts.next().flatten(),
+    }
+}
+
+fn tamux_device_props() -> (
+    Option<String>,
+    Option<wa::device_props::AppVersion>,
+    Option<wa::device_props::PlatformType>,
+) {
+    (
+        Some("Tamux".to_string()),
+        Some(parse_tamux_device_version()),
+        Some(wa::device_props::PlatformType::Desktop),
+    )
+}
+
+fn format_outbound_whatsapp_text(text: &str, prefix_self_chat: bool) -> String {
+    if !prefix_self_chat || text.starts_with(TAMUX_SELF_CHAT_PREFIX) {
+        return text.to_string();
+    }
+    format!("{TAMUX_SELF_CHAT_PREFIX}{text}")
 }
 
 pub(crate) async fn start_whatsapp_link_native(agent: Arc<AgentEngine>) -> Result<()> {
@@ -38,16 +72,30 @@ pub(crate) async fn start_whatsapp_link_native(agent: Arc<AgentEngine>) -> Resul
     );
     let store_path_string = store_path.to_string_lossy().to_string();
     let agent_for_events = agent.clone();
+    let (device_os, device_version, device_platform) = tamux_device_props();
     let mut bot = Bot::builder()
         .with_backend(store)
         .with_transport_factory(TokioWebSocketTransportFactory::new())
         .with_http_client(UreqHttpClient::new())
+        .with_device_props(device_os.clone(), device_version, device_platform)
         .skip_history_sync()
         .on_event(move |event, client| {
             let agent = agent_for_events.clone();
             let store_path = store_path_string.clone();
+            let device_os = device_os.clone();
+            let device_version = device_version;
+            let device_platform = device_platform;
             async move {
-                handle_native_event(agent, client, event, &store_path).await;
+                handle_native_event(
+                    agent,
+                    client,
+                    event,
+                    &store_path,
+                    device_os.as_deref(),
+                    device_version,
+                    device_platform,
+                )
+                .await;
             }
         })
         .build()
@@ -76,6 +124,9 @@ async fn handle_native_event(
     client: Arc<wa_rs::Client>,
     event: Event,
     store_path: &str,
+    device_os: Option<&str>,
+    device_version: Option<wa::device_props::AppVersion>,
+    device_platform: Option<wa::device_props::PlatformType>,
 ) {
     match event {
         Event::PairingQrCode { code, timeout } => {
@@ -98,6 +149,14 @@ async fn handle_native_event(
                         "pn": pn,
                         "lid": lid,
                         "store_path": store_path,
+                        "device_os": device_os.unwrap_or(""),
+                        "device_platform": device_platform.map(|platform| platform.as_str_name()).unwrap_or(""),
+                        "device_version": format!(
+                            "{}.{}.{}",
+                            device_version.and_then(|v| v.primary).unwrap_or_default(),
+                            device_version.and_then(|v| v.secondary).unwrap_or_default(),
+                            device_version.and_then(|v| v.tertiary).unwrap_or_default(),
+                        ),
                     })
                     .to_string(),
                 ),
@@ -149,6 +208,10 @@ async fn handle_native_event(
                 let chat = info.source.chat.to_string();
                 let sender = info.source.sender.to_string();
                 if info.source.is_from_me {
+                    let known_outbound_echo = agent
+                        .whatsapp_link
+                        .is_recent_outbound_message_id(&info.id.to_string())
+                        .await;
                     let own_identifiers = collect_normalized_identifiers(&[
                         &chat,
                         &sender,
@@ -182,7 +245,7 @@ async fn handle_native_event(
                         && !sender_norm.is_empty()
                         && own_identifiers.contains(&sender_norm)
                         && !exact_self_jids.is_empty();
-                    if !self_chat {
+                    if known_outbound_echo || !self_chat {
                         return;
                     }
                 }
@@ -217,7 +280,9 @@ pub(crate) async fn send_native_whatsapp_message(
     client: &Arc<wa_rs::Client>,
     targets: &[String],
     text: &str,
-) -> Result<()> {
+    prefix_self_chat: bool,
+) -> Result<String> {
+    let text = format_outbound_whatsapp_text(text, prefix_self_chat);
     let mut last_error = None;
     for target in targets {
         let jid: Jid = target
@@ -227,13 +292,13 @@ pub(crate) async fn send_native_whatsapp_message(
             .send_message(
                 jid,
                 wa::Message {
-                    conversation: Some(text.to_string()),
+                    conversation: Some(text.clone()),
                     ..Default::default()
                 },
             )
             .await
         {
-            Ok(_) => return Ok(()),
+            Ok(message_id) => return Ok(message_id),
             Err(error) => last_error = Some(error),
         }
     }
@@ -251,5 +316,37 @@ pub(crate) async fn disconnect_native_whatsapp_client(
     if let Some(task) = run_task {
         task.abort();
         let _ = tokio::time::timeout(Duration::from_secs(2), task).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tamux_device_props_uses_desktop_platform_and_package_version() {
+        let (os_name, version, platform_type) = tamux_device_props();
+        assert_eq!(os_name.as_deref(), Some("Tamux"));
+        assert_eq!(platform_type, Some(wa::device_props::PlatformType::Desktop));
+        assert!(version.and_then(|value| value.primary).is_some());
+    }
+
+    #[test]
+    fn outbound_self_chat_messages_get_tamux_prefix() {
+        assert_eq!(format_outbound_whatsapp_text("Hello", true), "Tamux\nHello");
+    }
+
+    #[test]
+    fn outbound_non_self_chat_messages_keep_original_text() {
+        assert_eq!(format_outbound_whatsapp_text("Hello", false), "Hello");
+    }
+
+    #[test]
+    fn outbound_self_chat_prefix_is_idempotent() {
+        let prefixed = format!("{TAMUX_SELF_CHAT_PREFIX}Hello");
+        assert_eq!(
+            format_outbound_whatsapp_text(&prefixed, true),
+            prefixed
+        );
     }
 }

@@ -1689,6 +1689,10 @@ impl DaemonClient {
         self.send(ClientMessage::AgentWhatsAppLinkUnsubscribe)
     }
 
+    pub fn whatsapp_link_reset(&self) -> Result<()> {
+        self.send(ClientMessage::AgentWhatsAppLinkReset)
+    }
+
     pub fn resolve_task_approval(&self, approval_id: String, decision: String) -> Result<()> {
         use amux_protocol::ApprovalDecision;
         let decision = match decision.as_str() {
@@ -1759,6 +1763,12 @@ mod tests {
         assert!(matches!(
             drain_request(&mut rx),
             ClientMessage::AgentWhatsAppLinkUnsubscribe
+        ));
+
+        client.whatsapp_link_reset().unwrap();
+        assert!(matches!(
+            drain_request(&mut rx),
+            ClientMessage::AgentWhatsAppLinkReset
         ));
 
         client.whatsapp_link_stop().unwrap();
