@@ -9,6 +9,8 @@
 //! 5. Start `GatewayRuntime` (which sends ready ACK and enters the main loop).
 
 mod discord;
+mod format;
+mod health;
 mod ipc;
 mod router;
 mod runtime;
@@ -16,7 +18,10 @@ mod slack;
 mod state;
 mod telegram;
 
-use amux_protocol::GatewayProviderBootstrap;
+#[cfg(test)]
+mod test_support;
+
+use amux_protocol::GatewayBootstrapPayload;
 use anyhow::Result;
 use runtime::GatewayRuntime;
 
@@ -40,25 +45,38 @@ fn init_logging() {
         .init();
 }
 
-fn providers_from_bootstrap(
-    providers: &[GatewayProviderBootstrap],
-) -> Result<Vec<Box<dyn GatewayProvider>>> {
+fn providers_from_bootstrap(bootstrap: &GatewayBootstrapPayload) -> Result<Vec<Box<dyn GatewayProvider>>> {
     let mut active: Vec<Box<dyn GatewayProvider>> = Vec::new();
 
-    for provider in providers {
+    for provider in &bootstrap.providers {
         match provider.platform.to_ascii_lowercase().as_str() {
             "slack" => {
-                if let Some(slack) = slack::SlackProvider::from_bootstrap(provider)? {
+                if let Some(slack) =
+                    slack::SlackProvider::from_bootstrap_with_cursors(
+                        provider,
+                        &bootstrap.continuity.cursors,
+                    )?
+                {
                     active.push(Box::new(slack));
                 }
             }
             "discord" => {
-                if let Some(discord) = discord::DiscordProvider::from_bootstrap(provider)? {
+                if let Some(discord) =
+                    discord::DiscordProvider::from_bootstrap_with_cursors(
+                        provider,
+                        &bootstrap.continuity.cursors,
+                    )?
+                {
                     active.push(Box::new(discord));
                 }
             }
             "telegram" => {
-                if let Some(telegram) = telegram::TelegramProvider::from_bootstrap(provider)? {
+                if let Some(telegram) =
+                    telegram::TelegramProvider::from_bootstrap_with_cursors(
+                        provider,
+                        &bootstrap.continuity.cursors,
+                    )?
+                {
                     active.push(Box::new(telegram));
                 }
             }
@@ -87,7 +105,7 @@ async fn main() -> Result<()> {
     .await?;
 
     let state = state::GatewayRuntimeState::from_bootstrap(&bootstrap);
-    let providers = providers_from_bootstrap(&bootstrap.providers)?;
+    let providers = providers_from_bootstrap(&bootstrap)?;
     tracing::info!(
         providers = providers.len(),
         "gateway providers built from bootstrap"
