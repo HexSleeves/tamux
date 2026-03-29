@@ -205,12 +205,7 @@ mod tests {
     use anyhow::Result;
     use rusqlite::Connection;
 
-    #[test]
-    fn init_episodic_schema_adds_constraint_state_columns() -> Result<()> {
-        let conn = Connection::open_in_memory()?;
-
-        init_episodic_schema(&conn)?;
-
+    fn assert_constraint_state_columns_exist(conn: &Connection) -> Result<()> {
         let mut stmt = conn.prepare("PRAGMA table_info(negative_knowledge)")?;
         let columns = stmt
             .query_map([], |row| row.get::<_, String>(1))?
@@ -228,6 +223,43 @@ mod tests {
                 "missing column {expected}; found columns: {columns:?}"
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn init_episodic_schema_adds_constraint_state_columns() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+
+        init_episodic_schema(&conn)?;
+
+        assert_constraint_state_columns_exist(&conn)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn init_episodic_schema_migrates_legacy_negative_knowledge_table() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+
+        conn.execute_batch(
+            "CREATE TABLE negative_knowledge (
+                id              TEXT PRIMARY KEY,
+                agent_id        TEXT,
+                episode_id      TEXT,
+                constraint_type TEXT NOT NULL,
+                subject         TEXT NOT NULL,
+                solution_class  TEXT,
+                description     TEXT NOT NULL,
+                confidence      REAL NOT NULL,
+                valid_until     INTEGER,
+                created_at      INTEGER NOT NULL
+            );",
+        )?;
+
+        init_episodic_schema(&conn)?;
+
+        assert_constraint_state_columns_exist(&conn)?;
 
         Ok(())
     }
