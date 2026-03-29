@@ -191,22 +191,27 @@ impl AgentEngine {
     /// updating the shared `gateway_seen_ids` ring buffer with the IDs of every
     /// accepted message so that the live-path duplicate check sees them.
     ///
-    /// `platform_results` is a list of `(platform_name, channel_results)` pairs
-    /// collected by the caller before holding the gateway-state lock.  Each entry
-    /// holds **all** per-channel results for that platform; the platform is only
-    /// removed from `gw.replay_cycle_active` when every channel result completes
-    /// successfully.
+    /// `platform_results` is a list of `(platform_name, channel_results,
+    /// fetch_complete)` tuples collected by the caller before holding the
+    /// gateway-state lock.  `fetch_complete` is `true` only when **all**
+    /// channels for the platform were fetched without error; it is `false` when
+    /// a later channel fetch failed after earlier ones already succeeded (partial
+    /// fetch).  The platform is removed from `gw.replay_cycle_active` only when
+    /// every channel result processed successfully **and** `fetch_complete` is
+    /// `true`.  Passing `fetch_complete = false` with partial channel results
+    /// preserves those results for routing while keeping the platform active so
+    /// the remaining channels are retried on the next cycle.
     ///
     /// Returns the accumulated messages to prepend to the live queue.
     pub(crate) async fn apply_replay_results(
         &self,
-        platform_results: Vec<(String, Vec<gateway::ReplayFetchResult>)>,
+        platform_results: Vec<(String, Vec<gateway::ReplayFetchResult>, bool)>,
         gw: &mut gateway::GatewayState,
     ) -> Vec<gateway::IncomingMessage> {
         let mut seen_ids_snap = self.gateway_seen_ids.lock().await.clone();
         let mut replay_msgs: Vec<gateway::IncomingMessage> = Vec::new();
 
-        for (platform, channel_results) in platform_results {
+        for (platform, channel_results, fetch_complete) in platform_results {
             let mut all_completed = true;
             let mut platform_msgs: Vec<gateway::IncomingMessage> = Vec::new();
 
@@ -221,7 +226,7 @@ impl AgentEngine {
                 }
             }
 
-            if all_completed {
+            if all_completed && fetch_complete {
                 gw.replay_cycle_active.remove(platform.as_str());
                 tracing::info!(
                     platform = %platform,
@@ -1074,14 +1079,16 @@ impl AgentEngine {
             let platforms_for_replay: Vec<String> =
                 gw.replay_cycle_active.clone().into_iter().collect();
             if !platforms_for_replay.is_empty() {
-                let mut platform_results: Vec<(String, Vec<gateway::ReplayFetchResult>)> =
+                let mut platform_results: Vec<(String, Vec<gateway::ReplayFetchResult>, bool)> =
                     Vec::new();
 
                 for platform in &platforms_for_replay {
-                    let channel_results: Vec<gateway::ReplayFetchResult> = match platform.as_str()
-                    {
+                    let (channel_results, fetch_complete): (
+                        Vec<gateway::ReplayFetchResult>,
+                        bool,
+                    ) = match platform.as_str() {
                         "telegram" => match gateway::fetch_telegram_replay(gw).await {
-                            Ok(result) => vec![result],
+                            Ok(result) => (vec![result], true),
                             Err(e) => {
                                 tracing::warn!("replay: telegram fetch failed: {e}");
                                 continue;
@@ -1103,10 +1110,13 @@ impl AgentEngine {
                                     }
                                 }
                             }
-                            if !fetch_ok {
+                            // Partial fetch: push whatever succeeded so those messages
+                            // aren't lost; fetch_ok=false keeps the platform active for
+                            // retry on the next cycle.
+                            if results.is_empty() && !fetch_ok {
                                 continue;
                             }
-                            results
+                            (results, fetch_ok)
                         }
                         "discord" => {
                             let mut results = Vec::new();
@@ -1124,14 +1134,17 @@ impl AgentEngine {
                                     }
                                 }
                             }
-                            if !fetch_ok {
+                            // Partial fetch: push whatever succeeded so those messages
+                            // aren't lost; fetch_ok=false keeps the platform active for
+                            // retry on the next cycle.
+                            if results.is_empty() && !fetch_ok {
                                 continue;
                             }
-                            results
+                            (results, fetch_ok)
                         }
                         _ => continue,
                     };
-                    platform_results.push((platform.clone(), channel_results));
+                    platform_results.push((platform.clone(), channel_results, fetch_complete));
                 }
 
                 let replay_msgs = self.apply_replay_results(platform_results, gw).await;
@@ -2019,7 +2032,7 @@ mod tests {
         ]);
 
         let messages = engine
-            .apply_replay_results(vec![("telegram".to_string(), vec![result])], &mut gw)
+            .apply_replay_results(vec![("telegram".to_string(), vec![result], true)], &mut gw)
             .await;
 
         assert_eq!(messages.len(), 2, "both messages accepted");
@@ -2091,6 +2104,97 @@ mod tests {
         );
         // The good message is still returned for routing.
         assert_eq!(messages.len(), 1);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Regression: Task 4 refactor — partial multi-channel fetch must preserve
+    /// already-fetched channel results and keep the platform active for retry.
+    ///
+    /// When the first channel of a multi-channel platform (e.g. Slack/Discord)
+    /// succeeds but a later channel fetch would fail, `apply_replay_results` must
+    /// still route the messages from the already-fetched channels.  The platform
+    /// must remain in `replay_cycle_active` so the missing channels are retried
+    /// on the next cycle.
+    ///
+    /// This test directly exercises `apply_replay_results` with
+    /// `fetch_complete = false` to prove both properties.
+    #[tokio::test]
+    async fn partial_multichannel_fetch_preserves_earlier_results_and_keeps_platform_active() {
+        let root = make_test_root("replay-partial-multichannel");
+        let manager = SessionManager::new_test(&root).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), &root).await;
+
+        let mut gw = super::gateway::GatewayState::new(
+            make_replay_gateway_config(),
+            reqwest::Client::new(),
+        );
+        // Platform is active for replay (simulates a reconnect cycle).
+        gw.replay_cycle_active.insert("slack".to_string());
+
+        // Only the first channel result is present — the second channel fetch
+        // "failed" so it was never added to the vec.  fetch_complete=false
+        // signals that the fetch was partial.
+        let ch1_result = super::gateway::ReplayFetchResult::Replay(vec![
+            make_telegram_replay_envelope("301", "C1", "msg from ch1", "alice"),
+        ]);
+
+        let messages = engine
+            .apply_replay_results(
+                vec![("slack".to_string(), vec![ch1_result], false)],
+                &mut gw,
+            )
+            .await;
+
+        // Messages from the successfully-fetched channel must be routed.
+        assert_eq!(
+            messages.len(),
+            1,
+            "messages from the successful channel must not be dropped"
+        );
+
+        // Platform must remain active so the failed channel is retried next cycle.
+        assert!(
+            gw.replay_cycle_active.contains("slack"),
+            "platform must stay in replay_cycle_active when fetch was partial"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Regression: complementary case — when all channels fetch successfully
+    /// (`fetch_complete = true`) the platform IS removed from `replay_cycle_active`.
+    #[tokio::test]
+    async fn complete_multichannel_fetch_removes_platform_from_active() {
+        let root = make_test_root("replay-complete-multichannel");
+        let manager = SessionManager::new_test(&root).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), &root).await;
+
+        let mut gw = super::gateway::GatewayState::new(
+            make_replay_gateway_config(),
+            reqwest::Client::new(),
+        );
+        gw.replay_cycle_active.insert("slack".to_string());
+
+        let ch1_result = super::gateway::ReplayFetchResult::Replay(vec![
+            make_telegram_replay_envelope("401", "C1", "msg from ch1", "alice"),
+        ]);
+        let ch2_result = super::gateway::ReplayFetchResult::Replay(vec![
+            make_telegram_replay_envelope("402", "C2", "msg from ch2", "bob"),
+        ]);
+
+        let messages = engine
+            .apply_replay_results(
+                vec![("slack".to_string(), vec![ch1_result, ch2_result], true)],
+                &mut gw,
+            )
+            .await;
+
+        assert_eq!(messages.len(), 2, "both channel messages must be routed");
+        assert!(
+            !gw.replay_cycle_active.contains("slack"),
+            "platform must be removed from replay_cycle_active after complete fetch"
+        );
 
         fs::remove_dir_all(&root).ok();
     }
