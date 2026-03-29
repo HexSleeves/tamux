@@ -363,9 +363,9 @@ declare global {
         whatsappConnect?: () => Promise<{ ok?: boolean; error?: string }>;
         whatsappDisconnect?: () => Promise<{ ok?: boolean; error?: string }>;
         whatsappStatus?: () => Promise<{ status?: string; phone?: string; phoneNumber?: string; lastError?: string | null }>;
-        onWhatsAppQR?: (cb: (dataUrl: string) => void) => (() => void) | void;
+        onWhatsAppQR?: (cb: (dataUrl: string | null) => void) => (() => void) | void;
         onWhatsAppConnected?: (cb: (info: { phone: string }) => void) => (() => void) | void;
-        onWhatsAppDisconnected?: (cb: () => void) => (() => void) | void;
+        onWhatsAppDisconnected?: (cb: (info?: { reason?: string | null } | null) => void) => (() => void) | void;
         onWhatsAppError?: (cb: (message: string) => void) => (() => void) | void;
         saveVisionScreenshot?: (payload: { dataUrl: string }) => Promise<{ ok?: boolean; error?: string; path?: string; expiresAt?: number }>;
         getSystemMonitorSnapshot?: (opts?: { processLimit?: number }) => Promise<any>;

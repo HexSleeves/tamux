@@ -2,13 +2,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use amux_protocol::parse_whatsapp_allowed_contacts;
 use anyhow::{Context, Result};
+use wa_rs::Jid;
 use wa_rs::bot::Bot;
 use wa_rs::proto_helpers::MessageExt;
 use wa_rs::store::SqliteStore;
 use wa_rs::types::events::Event;
 use wa_rs::wa_rs_proto::whatsapp as wa;
-use wa_rs::Jid;
 use wa_rs_tokio_transport::TokioWebSocketTransportFactory;
 use wa_rs_ureq_http::UreqHttpClient;
 
@@ -19,8 +20,8 @@ use super::whatsapp_link::{
     normalize_identifier, normalize_jid_user, transport,
 };
 use super::{
-    gateway, persist_transport_session_update, AgentEngine, CONCIERGE_AGENT_NAME, MAIN_AGENT_NAME,
-    WHATSAPP_LINK_PROVIDER_ID,
+    AgentEngine, CONCIERGE_AGENT_NAME, MAIN_AGENT_NAME, WHATSAPP_LINK_PROVIDER_ID, gateway,
+    persist_transport_session_update,
 };
 
 fn tamux_self_chat_prefix() -> String {
@@ -111,11 +112,15 @@ fn is_whatsapp_self_chat(
 ) -> bool {
     let chat_norm = normalize_identifier(chat);
     let sender_norm = normalize_identifier(sender);
+    let chat_exact = chat.trim();
+    let sender_exact = sender.trim();
     !chat_norm.is_empty()
         && own_identifiers.contains(&chat_norm)
         && !sender_norm.is_empty()
         && own_identifiers.contains(&sender_norm)
-        && !exact_self_jids.is_empty()
+        && exact_self_jids
+            .iter()
+            .any(|jid| jid == chat_exact || jid == sender_exact)
 }
 
 fn should_enqueue_from_me_whatsapp_message(
@@ -129,6 +134,75 @@ fn should_enqueue_from_me_whatsapp_message(
     !known_outbound_echo
         && is_whatsapp_self_chat(chat, sender, own_identifiers, exact_self_jids)
         && !text.starts_with(&tamux_self_chat_prefix())
+}
+
+fn collect_whatsapp_allowlist_candidates(sender: &str, chat: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    for value in [sender, chat] {
+        let normalized = normalize_identifier(value);
+        if !normalized.is_empty() && !candidates.iter().any(|candidate| candidate == &normalized) {
+            candidates.push(normalized);
+        }
+    }
+    candidates
+}
+
+fn whatsapp_sender_matches_allowlist(raw_allowlist: &str, sender: &str, chat: &str) -> bool {
+    let allowlist = parse_whatsapp_allowed_contacts(raw_allowlist);
+    if allowlist.is_empty() {
+        return false;
+    }
+
+    let candidates = collect_whatsapp_allowlist_candidates(sender, chat);
+    candidates
+        .iter()
+        .any(|candidate| allowlist.iter().any(|allowed| allowed == candidate))
+}
+
+fn log_whatsapp_allowlist_suppression(sender: &str, chat: &str) {
+    tracing::info!(
+        sender = %sender,
+        chat = %chat,
+        candidates = ?collect_whatsapp_allowlist_candidates(sender, chat),
+        "whatsapp: suppressed sender outside allowlist"
+    );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WhatsAppEnqueueDecision {
+    Enqueue,
+    SuppressAllowlist,
+    SuppressSelfEcho,
+}
+
+fn classify_whatsapp_enqueue_decision(
+    text: &str,
+    chat: &str,
+    sender: &str,
+    own_identifiers: &std::collections::HashSet<String>,
+    exact_self_jids: &[String],
+    known_outbound_echo: bool,
+    is_from_me: bool,
+    raw_allowlist: &str,
+) -> WhatsAppEnqueueDecision {
+    if is_from_me
+        && !should_enqueue_from_me_whatsapp_message(
+            text,
+            chat,
+            sender,
+            own_identifiers,
+            exact_self_jids,
+            known_outbound_echo,
+        )
+    {
+        return WhatsAppEnqueueDecision::SuppressSelfEcho;
+    }
+
+    if !whatsapp_sender_matches_allowlist(raw_allowlist, sender, chat) {
+        return WhatsAppEnqueueDecision::SuppressAllowlist;
+    }
+
+    WhatsAppEnqueueDecision::Enqueue
 }
 
 pub(crate) async fn start_whatsapp_link_native(agent: Arc<AgentEngine>) -> Result<()> {
@@ -422,6 +496,14 @@ async fn handle_native_event(
                     .unwrap_or_default(),
             ]);
 
+            let whatsapp_allowed_contacts = agent
+                .config
+                .read()
+                .await
+                .gateway
+                .whatsapp_allowed_contacts
+                .clone();
+
             // Build replay envelopes for messages newer than the cursor.
             let mut envelopes: Vec<gateway::ReplayEnvelope> = Vec::new();
             for (ts, msg_id, sender, text, is_from_me) in extracted_msgs {
@@ -436,18 +518,20 @@ async fn handle_native_event(
                 } else {
                     false
                 };
-                let should_enqueue = if is_from_me {
-                    should_enqueue_from_me_whatsapp_message(
-                        &text,
-                        &chat_jid,
-                        &sender,
-                        &own_identifiers,
-                        &exact_self_jids,
-                        known_outbound_echo,
-                    )
-                } else {
-                    true
-                };
+                let decision = classify_whatsapp_enqueue_decision(
+                    &text,
+                    &chat_jid,
+                    &sender,
+                    &own_identifiers,
+                    &exact_self_jids,
+                    known_outbound_echo,
+                    is_from_me,
+                    &whatsapp_allowed_contacts,
+                );
+                let should_enqueue = matches!(decision, WhatsAppEnqueueDecision::Enqueue);
+                if matches!(decision, WhatsAppEnqueueDecision::SuppressAllowlist) {
+                    log_whatsapp_allowlist_suppression(&sender, &chat_jid);
+                }
                 envelopes.push(gateway::ReplayEnvelope {
                     message: IncomingMessage {
                         platform: "WhatsApp".to_string(),
@@ -514,51 +598,64 @@ async fn handle_native_event(
                 let sender = info.source.sender.to_string();
                 let msg_id = info.id.clone();
                 let ts_secs = info.timestamp.timestamp() as u64;
+                let whatsapp_allowed_contacts = agent
+                    .config
+                    .read()
+                    .await
+                    .gateway
+                    .whatsapp_allowed_contacts
+                    .clone();
 
                 // Determine whether this message should be enqueued (WhatsApp-specific
                 // self-echo suppression and self-chat acceptance logic).
-                let should_enqueue = if info.source.is_from_me {
-                    let known_outbound_echo = agent
+                let known_outbound_echo = if info.source.is_from_me {
+                    agent
                         .whatsapp_link
                         .is_recent_outbound_message_id(&msg_id)
-                        .await;
-                    let own_identifiers = collect_normalized_identifiers(&[
-                        &chat,
-                        &sender,
-                        &client
-                            .get_pn()
-                            .await
-                            .map(|jid| jid.to_string())
-                            .unwrap_or_default(),
-                        &client
-                            .get_lid()
-                            .await
-                            .map(|jid| jid.to_string())
-                            .unwrap_or_default(),
-                    ]);
-                    let exact_self_jids = collect_exact_jid_candidates(&[
-                        &client
-                            .get_lid()
-                            .await
-                            .map(|jid| jid.to_string())
-                            .unwrap_or_default(),
-                        &client
-                            .get_pn()
-                            .await
-                            .map(|jid| jid.to_string())
-                            .unwrap_or_default(),
-                    ]);
-                    should_enqueue_from_me_whatsapp_message(
-                        &text,
-                        &chat,
-                        &sender,
-                        &own_identifiers,
-                        &exact_self_jids,
-                        known_outbound_echo,
-                    )
+                        .await
                 } else {
-                    true
+                    false
                 };
+                let own_identifiers = collect_normalized_identifiers(&[
+                    &chat,
+                    &sender,
+                    &client
+                        .get_pn()
+                        .await
+                        .map(|jid| jid.to_string())
+                        .unwrap_or_default(),
+                    &client
+                        .get_lid()
+                        .await
+                        .map(|jid| jid.to_string())
+                        .unwrap_or_default(),
+                ]);
+                let exact_self_jids = collect_exact_jid_candidates(&[
+                    &client
+                        .get_lid()
+                        .await
+                        .map(|jid| jid.to_string())
+                        .unwrap_or_default(),
+                    &client
+                        .get_pn()
+                        .await
+                        .map(|jid| jid.to_string())
+                        .unwrap_or_default(),
+                ]);
+                let decision = classify_whatsapp_enqueue_decision(
+                    &text,
+                    &chat,
+                    &sender,
+                    &own_identifiers,
+                    &exact_self_jids,
+                    known_outbound_echo,
+                    info.source.is_from_me,
+                    &whatsapp_allowed_contacts,
+                );
+                let should_enqueue = matches!(decision, WhatsAppEnqueueDecision::Enqueue);
+                if matches!(decision, WhatsAppEnqueueDecision::SuppressAllowlist) {
+                    log_whatsapp_allowlist_suppression(&sender, &chat);
+                }
 
                 // Build the replay envelope for cursor-advancement (applies to ALL
                 // live messages, including suppressed outbound echoes).
@@ -688,6 +785,7 @@ mod tests {
     use super::*;
     use crate::agent::load_persisted_provider_state;
     use crate::agent::types::AgentConfig;
+    use crate::agent::{gateway::GatewayState, gateway_loop::process_replay_result};
     use crate::session_manager::SessionManager;
     use tempfile::tempdir;
 
@@ -959,6 +1057,271 @@ mod tests {
         assert!(
             !store_path.exists(),
             "logged out cleanup must remove the native sqlite store"
+        );
+    }
+
+    async fn simulate_live_whatsapp_enqueue(
+        allowlist: &str,
+        sender: &str,
+        chat: &str,
+        own_identifiers: std::collections::HashSet<String>,
+        exact_self_jids: Vec<String>,
+        is_from_me: bool,
+        known_outbound_echo: bool,
+        text: &str,
+    ) -> (WhatsAppEnqueueDecision, usize, Option<String>) {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+        let mut gw = GatewayState::new(make_replay_gateway_config(), reqwest::Client::new());
+        let mut seen_ids = Vec::new();
+        let decision = classify_whatsapp_enqueue_decision(
+            text,
+            chat,
+            sender,
+            &own_identifiers,
+            &exact_self_jids,
+            known_outbound_echo,
+            is_from_me,
+            allowlist,
+        );
+
+        let result = gateway::ReplayFetchResult::Replay(vec![gateway::ReplayEnvelope {
+            message: IncomingMessage {
+                platform: "WhatsApp".into(),
+                sender: sender.into(),
+                content: if matches!(decision, WhatsAppEnqueueDecision::Enqueue) {
+                    text.into()
+                } else {
+                    String::new()
+                },
+                channel: chat.into(),
+                message_id: Some("wa:LIVE001".into()),
+                thread_context: None,
+            },
+            channel_id: normalize_identifier(chat),
+            cursor_value: build_whatsapp_cursor(1700000100, "LIVE001"),
+            cursor_type: "ts_msgid",
+        }]);
+
+        let (accepted, _) =
+            process_replay_result(&engine.history, "whatsapp", result, &mut gw, &mut seen_ids)
+                .await;
+        *engine.gateway_state.lock().await = Some(gw);
+
+        for msg in accepted {
+            if matches!(decision, WhatsAppEnqueueDecision::Enqueue) {
+                engine
+                    .enqueue_gateway_message(msg)
+                    .await
+                    .expect("enqueue live whatsapp message");
+            }
+        }
+
+        let queue_len = engine.gateway_injected_messages.lock().await.len();
+        let cursor = engine
+            .gateway_state
+            .lock()
+            .await
+            .as_ref()
+            .and_then(|state| {
+                state
+                    .whatsapp_replay_cursors
+                    .get(&normalize_identifier(chat))
+                    .cloned()
+            });
+        (decision, queue_len, cursor)
+    }
+
+    #[tokio::test]
+    async fn whatsapp_unmatched_sender_is_filtered_from_live_enqueue() {
+        let (decision, queue_len, cursor) = simulate_live_whatsapp_enqueue(
+            "+1 206 555 0123",
+            "49123456789@lid",
+            "49123456789@s.whatsapp.net",
+            std::collections::HashSet::new(),
+            Vec::new(),
+            false,
+            false,
+            "hello from contact",
+        )
+        .await;
+
+        assert_eq!(decision, WhatsAppEnqueueDecision::SuppressAllowlist);
+        assert_eq!(queue_len, 0, "unmatched sender must not be enqueued");
+        assert_eq!(cursor.as_deref(), Some("1700000100:LIVE001"));
+    }
+
+    #[tokio::test]
+    async fn whatsapp_matched_sender_is_accepted() {
+        let (decision, queue_len, cursor) = simulate_live_whatsapp_enqueue(
+            "+49 123 456789",
+            "49123456789@lid",
+            "49123456789@s.whatsapp.net",
+            std::collections::HashSet::new(),
+            Vec::new(),
+            false,
+            false,
+            "hello from contact",
+        )
+        .await;
+
+        assert_eq!(decision, WhatsAppEnqueueDecision::Enqueue);
+        assert_eq!(queue_len, 1, "matched sender must be enqueued");
+        assert_eq!(cursor.as_deref(), Some("1700000100:LIVE001"));
+    }
+
+    #[tokio::test]
+    async fn whatsapp_empty_allowlist_suppresses_live_enqueue() {
+        let (decision, queue_len, cursor) = simulate_live_whatsapp_enqueue(
+            "",
+            "49123456789@lid",
+            "49123456789@s.whatsapp.net",
+            std::collections::HashSet::new(),
+            Vec::new(),
+            false,
+            false,
+            "hello from contact",
+        )
+        .await;
+
+        assert_eq!(decision, WhatsAppEnqueueDecision::SuppressAllowlist);
+        assert_eq!(
+            queue_len, 0,
+            "empty allowlist must not enqueue inbound messages"
+        );
+        assert_eq!(cursor.as_deref(), Some("1700000100:LIVE001"));
+    }
+
+    #[tokio::test]
+    async fn whatsapp_self_chat_is_filtered_when_allowlist_excludes_self() {
+        let own_identifiers =
+            collect_normalized_identifiers(&["48663977535@s.whatsapp.net", "48663977535@lid"]);
+        let exact_self_jids =
+            collect_exact_jid_candidates(&["48663977535@s.whatsapp.net", "48663977535@lid"]);
+
+        let (decision, queue_len, cursor) = simulate_live_whatsapp_enqueue(
+            "+1 206 555 0123",
+            "48663977535@lid",
+            "48663977535@s.whatsapp.net",
+            own_identifiers,
+            exact_self_jids,
+            true,
+            false,
+            "hello from phone",
+        )
+        .await;
+
+        assert_eq!(decision, WhatsAppEnqueueDecision::SuppressAllowlist);
+        assert_eq!(queue_len, 0, "self-chat message must respect the allowlist");
+        assert_eq!(cursor.as_deref(), Some("1700000100:LIVE001"));
+    }
+
+    #[tokio::test]
+    async fn whatsapp_self_chat_enqueues_when_allowlist_includes_self() {
+        let own_identifiers =
+            collect_normalized_identifiers(&["48663977535@s.whatsapp.net", "48663977535@lid"]);
+        let exact_self_jids =
+            collect_exact_jid_candidates(&["48663977535@s.whatsapp.net", "48663977535@lid"]);
+
+        let (decision, queue_len, cursor) = simulate_live_whatsapp_enqueue(
+            "+48 663 977 535",
+            "48663977535@lid",
+            "48663977535@s.whatsapp.net",
+            own_identifiers,
+            exact_self_jids,
+            true,
+            false,
+            "hello from phone",
+        )
+        .await;
+
+        assert_eq!(decision, WhatsAppEnqueueDecision::Enqueue);
+        assert_eq!(queue_len, 1, "allowlisted self-chat message must enqueue");
+        assert_eq!(cursor.as_deref(), Some("1700000100:LIVE001"));
+    }
+
+    #[tokio::test]
+    async fn whatsapp_self_echo_suppression_still_wins_with_allowlist_active() {
+        let own_identifiers =
+            collect_normalized_identifiers(&["48663977535@s.whatsapp.net", "48663977535@lid"]);
+        let exact_self_jids =
+            collect_exact_jid_candidates(&["48663977535@s.whatsapp.net", "48663977535@lid"]);
+
+        let (decision, queue_len, cursor) = simulate_live_whatsapp_enqueue(
+            "+49 111 222333",
+            "48663977535@lid",
+            "48663977535@s.whatsapp.net",
+            own_identifiers,
+            exact_self_jids,
+            true,
+            false,
+            &format!("{}assistant reply", tamux_self_chat_prefix()),
+        )
+        .await;
+
+        assert_eq!(decision, WhatsAppEnqueueDecision::SuppressSelfEcho);
+        assert_eq!(queue_len, 0, "self-echo must stay suppressed");
+        assert_eq!(cursor.as_deref(), Some("1700000100:LIVE001"));
+    }
+
+    #[tokio::test]
+    async fn whatsapp_replay_filtering_uses_the_same_allowlist_rule() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let mut gw = GatewayState::new(make_replay_gateway_config(), reqwest::Client::new());
+        let mut seen_ids = Vec::new();
+
+        let decision = classify_whatsapp_enqueue_decision(
+            "replayed hello",
+            "49123456789@s.whatsapp.net",
+            "49123456789@lid",
+            &std::collections::HashSet::new(),
+            &[],
+            false,
+            false,
+            "+1 206 555 0123",
+        );
+
+        let result = gateway::ReplayFetchResult::Replay(vec![gateway::ReplayEnvelope {
+            message: IncomingMessage {
+                platform: "WhatsApp".into(),
+                sender: "49123456789@lid".into(),
+                content: if matches!(decision, WhatsAppEnqueueDecision::Enqueue) {
+                    "replayed hello".into()
+                } else {
+                    String::new()
+                },
+                channel: "49123456789@s.whatsapp.net".into(),
+                message_id: Some("wa:REPLAY001".into()),
+                thread_context: None,
+            },
+            channel_id: "49123456789".into(),
+            cursor_value: build_whatsapp_cursor(1700000200, "REPLAY001"),
+            cursor_type: "ts_msgid",
+        }]);
+
+        let (accepted, completed) =
+            process_replay_result(&engine.history, "whatsapp", result, &mut gw, &mut seen_ids)
+                .await;
+
+        assert_eq!(decision, WhatsAppEnqueueDecision::SuppressAllowlist);
+        assert!(
+            completed,
+            "filtered replay message must still complete replay"
+        );
+        assert!(
+            accepted.is_empty(),
+            "filtered replay message must not be routed"
+        );
+        assert_eq!(
+            gw.whatsapp_replay_cursors
+                .get("49123456789")
+                .map(String::as_str),
+            Some("1700000200:REPLAY001"),
+            "filtered replay message must still advance the cursor"
         );
     }
 }

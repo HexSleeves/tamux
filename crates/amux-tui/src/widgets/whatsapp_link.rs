@@ -39,8 +39,9 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &ModalState, theme: &ThemeTo
     }
 
     if let Some(expires_at_ms) = link.expires_at_ms() {
+        let _ = expires_at_ms;
         lines.push(Line::from(Span::styled(
-            format!("QR expires at: {expires_at_ms} ms"),
+            "QR code is time-limited and will refresh automatically.",
             theme.fg_dim,
         )));
         lines.push(Line::raw(""));
@@ -60,6 +61,11 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &ModalState, theme: &ThemeTo
     }
 
     lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "Only allowed WhatsApp numbers will be forwarded and receive replies.",
+        theme.fg_dim,
+    )));
+    lines.push(Line::raw(""));
     lines.push(Line::from(vec![
         Span::styled("Esc", theme.fg_active),
         Span::styled(" close + stop linking", theme.fg_dim),
@@ -75,4 +81,37 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &ModalState, theme: &ThemeTo
             .wrap(Wrap { trim: false }),
         inner,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    #[test]
+    fn whatsapp_link_modal_uses_human_qr_expiry_copy() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        let mut modal = ModalState::new();
+        modal.set_whatsapp_link_qr("██ QR".to_string(), Some(42));
+
+        terminal
+            .draw(|frame| render(frame, frame.area(), &modal, &ThemeTokens::default()))
+            .expect("render should not panic");
+
+        let buffer = terminal.backend().buffer();
+        let text = (0..24)
+            .map(|y| {
+                (0..80)
+                    .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("QR code is time-limited and will refresh automatically."));
+        assert!(!text.contains("QR expires at:"));
+        assert!(!text.contains(" ms"));
+    }
 }
