@@ -241,7 +241,7 @@ const bridgeApi = {
         return () => ipcRenderer.removeListener('whatsapp-connected', listener);
     },
     onWhatsAppDisconnected: (cb) => {
-        const listener = () => cb();
+        const listener = (_event, info) => cb(info);
         ipcRenderer.on('whatsapp-disconnected', listener);
         return () => ipcRenderer.removeListener('whatsapp-disconnected', listener);
     },

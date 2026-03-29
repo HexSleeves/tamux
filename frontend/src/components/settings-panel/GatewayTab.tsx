@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getBridge } from "@/lib/bridge";
 import type { AgentSettings } from "../../lib/agentStore";
-import { PasswordInput, Section, SettingRow, TextInput, Toggle, smallBtnStyle } from "./shared";
+import { PasswordInput, Section, SettingRow, TextAreaInput, TextInput, Toggle, smallBtnStyle } from "./shared";
 import { GatewayHealth } from "./GatewaySettings";
+import { getWhatsAppAllowlistState, type WhatsAppAllowlistState } from "./whatsappAllowlist";
 
 type WhatsAppStatus = "disconnected" | "connecting" | "qr_ready" | "connected" | "error";
 
@@ -14,9 +15,9 @@ function normalizeWhatsAppStatus(raw: unknown): WhatsAppStatus {
     return "disconnected";
 }
 
-function WhatsAppConnector() {
+function WhatsAppConnector({ allowlistState }: { allowlistState: WhatsAppAllowlistState }) {
     const [status, setStatus] = useState<WhatsAppStatus>("disconnected");
-    const [qrAscii, setQrAscii] = useState<string | null>(null);
+    const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
     const [phoneInfo, setPhoneInfo] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
@@ -24,63 +25,39 @@ function WhatsAppConnector() {
         checkStatus();
 
         const amux = getBridge();
-        const unsubAgentEvents = amux?.onAgentEvent?.((event: any) => {
-            if (!event || typeof event !== "object") return;
-
-            if (event.type === "whatsapp-link-status") {
-                const payload = event.data ?? event;
-                const nextStatus = normalizeWhatsAppStatus(payload?.status);
-                setStatus(nextStatus);
-                setPhoneInfo(payload?.phone ?? null);
-                if (nextStatus !== "qr_ready") setQrAscii(null);
-                if (typeof payload?.last_error === "string" && payload.last_error.trim()) {
-                    setError(payload.last_error);
-                } else if (nextStatus !== "error") {
-                    setError(null);
-                }
-                return;
-            }
-
-            if (event.type === "whatsapp-link-qr") {
-                const ascii = event.data?.ascii_qr;
-                if (typeof ascii === "string" && ascii.trim()) {
-                    setQrAscii(ascii);
-                    setStatus("qr_ready");
-                    setError(null);
-                }
-                return;
-            }
-
-            if (event.type === "whatsapp-link-linked") {
-                setPhoneInfo(event.data?.phone ?? null);
-                setStatus("connected");
-                setQrAscii(null);
+        const unsubWhatsAppQr = amux?.onWhatsAppQR?.((dataUrl: string | null) => {
+            if (dataUrl && dataUrl.trim()) {
+                setQrDataUrl(dataUrl);
+                setStatus("qr_ready");
                 setError(null);
-                return;
             }
-
-            if (event.type === "whatsapp-link-error") {
-                const message = event.data?.message;
-                setError(typeof message === "string" ? message : "WhatsApp link error");
-                setStatus("error");
-                return;
+        });
+        const unsubWhatsAppConnected = amux?.onWhatsAppConnected?.((info: { phone?: string | null }) => {
+            setPhoneInfo(info?.phone ?? null);
+            setStatus("connected");
+            setQrDataUrl(null);
+            setError(null);
+        });
+        const unsubWhatsAppDisconnected = amux?.onWhatsAppDisconnected?.((payload?: { reason?: string | null }) => {
+            setStatus("disconnected");
+            setQrDataUrl(null);
+            setPhoneInfo(null);
+            if (typeof payload?.reason === "string" && payload.reason.trim()) {
+                setError(payload.reason);
+            } else {
+                setError(null);
             }
-
-            if (event.type === "whatsapp-link-disconnected") {
-                const reason = event.data?.reason;
-                setStatus("disconnected");
-                setQrAscii(null);
-                setPhoneInfo(null);
-                if (typeof reason === "string" && reason.trim()) {
-                    setError(reason);
-                } else {
-                    setError(null);
-                }
-            }
+        });
+        const unsubWhatsAppError = amux?.onWhatsAppError?.((message: string) => {
+            setError(typeof message === "string" ? message : "WhatsApp link error");
+            setStatus("error");
         });
 
         return () => {
-            unsubAgentEvents?.();
+            unsubWhatsAppQr?.();
+            unsubWhatsAppConnected?.();
+            unsubWhatsAppDisconnected?.();
+            unsubWhatsAppError?.();
         };
     }, []);
 
@@ -89,8 +66,10 @@ function WhatsAppConnector() {
             const amux = getBridge();
             if (!amux?.whatsappStatus) return;
             const result = await amux.whatsappStatus();
-            setStatus(normalizeWhatsAppStatus(result.status));
+            const nextStatus = normalizeWhatsAppStatus(result.status);
+            setStatus(nextStatus);
             if (result.phone) setPhoneInfo(result.phone);
+            if (nextStatus !== "qr_ready") setQrDataUrl(null);
             if (typeof result.lastError === "string" && result.lastError.trim()) {
                 setError(result.lastError);
             }
@@ -100,6 +79,12 @@ function WhatsAppConnector() {
     }
 
     async function connect() {
+        if (!allowlistState.hasValidContacts) {
+            setError(allowlistState.errorText || "Set at least one allowed WhatsApp contact before linking.");
+            setStatus("error");
+            return;
+        }
+
         setStatus("connecting");
         setError(null);
         try {
@@ -124,7 +109,7 @@ function WhatsAppConnector() {
         try {
             await getBridge()?.whatsappDisconnect?.();
             setStatus("disconnected");
-            setQrAscii(null);
+            setQrDataUrl(null);
             setPhoneInfo(null);
             setError(null);
         } catch (disconnectError: any) {
@@ -166,8 +151,12 @@ function WhatsAppConnector() {
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
                     {(status === "disconnected" || status === "error") ? (
-                        <button onClick={connect} style={{
-                            ...smallBtnStyle, color: "var(--success)", borderColor: "rgba(166, 227, 161, 0.2)",
+                        <button onClick={connect} disabled={!allowlistState.hasValidContacts} style={{
+                            ...smallBtnStyle,
+                            color: allowlistState.hasValidContacts ? "var(--success)" : "var(--text-muted)",
+                            borderColor: allowlistState.hasValidContacts ? "rgba(166, 227, 161, 0.2)" : "var(--border)",
+                            opacity: allowlistState.hasValidContacts ? 1 : 0.6,
+                            cursor: allowlistState.hasValidContacts ? "pointer" : "not-allowed",
                         }}>Link Device</button>
                     ) : null}
                     {status === "connected" ? (
@@ -181,27 +170,60 @@ function WhatsAppConnector() {
                 </div>
             </div>
 
+            <div style={{
+                marginBottom: 10,
+                padding: "6px 10px",
+                borderRadius: 0,
+                background: allowlistState.hasValidContacts ? "rgba(255,255,255,0.03)" : "rgba(243, 139, 168, 0.08)",
+                border: allowlistState.hasValidContacts
+                    ? "1px solid rgba(255,255,255,0.06)"
+                    : "1px solid rgba(243, 139, 168, 0.2)",
+                fontSize: 11,
+                color: allowlistState.hasValidContacts ? "var(--text-muted)" : "var(--danger)",
+                lineHeight: 1.4,
+            }}>
+                {allowlistState.hasValidContacts
+                    ? `Only messages from allowed contacts will be forwarded after linking. ${allowlistState.helperText}`
+                    : `${allowlistState.errorText} ${allowlistState.helperText}`}
+            </div>
+
+            {allowlistState.warningText ? (
+                <div style={{
+                    marginBottom: 10,
+                    padding: "6px 10px",
+                    borderRadius: 0,
+                    background: "rgba(250, 179, 135, 0.08)",
+                    border: "1px solid rgba(250, 179, 135, 0.2)",
+                    fontSize: 11,
+                    color: "var(--warning)",
+                    lineHeight: 1.4,
+                }}>
+                    {allowlistState.warningText}
+                </div>
+            ) : null}
+
             {(status === "qr_ready" || status === "connecting") ? (
                 <div style={{
                     display: "flex", flexDirection: "column", alignItems: "center",
                     padding: 16, borderRadius: 0,
                     background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)",
                 }}>
-                    {qrAscii ? (
+                    {qrDataUrl ? (
                         <>
-                            <pre style={{
-                                margin: 0,
-                                width: "100%",
-                                padding: 12,
-                                background: "rgba(0,0,0,0.35)",
-                                color: "var(--text)",
-                                border: "1px solid rgba(255,255,255,0.08)",
-                                fontSize: 8,
-                                lineHeight: 1,
-                                overflowX: "auto",
-                                whiteSpace: "pre",
-                                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
-                            }}>{qrAscii}</pre>
+                            <img
+                                src={qrDataUrl}
+                                alt="WhatsApp linking QR code"
+                                style={{
+                                    display: "block",
+                                    width: "100%",
+                                    maxWidth: 320,
+                                    height: "auto",
+                                    padding: 12,
+                                    background: "rgba(255,255,255,0.98)",
+                                    border: "1px solid rgba(255,255,255,0.08)",
+                                    imageRendering: "pixelated",
+                                }}
+                            />
                             <div style={{ marginTop: 12, fontSize: 11, color: "var(--text-muted)", textAlign: "center", lineHeight: 1.5 }}>
                                 Open WhatsApp on your phone → Settings → Linked Devices → Link a Device
                             </div>
@@ -244,6 +266,11 @@ export function GatewayTab({
     settings: AgentSettings;
     updateSetting: <K extends keyof AgentSettings>(key: K, value: AgentSettings[K]) => void;
 }) {
+    const whatsappAllowlistState = useMemo(
+        () => getWhatsAppAllowlistState(settings.whatsapp_allowed_contacts),
+        [settings.whatsapp_allowed_contacts],
+    );
+
     return (
         <>
             <Section title="Connection Status">
@@ -312,12 +339,18 @@ export function GatewayTab({
             </Section>
 
             <Section title="WhatsApp">
-                <WhatsAppConnector />
+                <WhatsAppConnector allowlistState={whatsappAllowlistState} />
                 <SettingRow label="Allowed Contacts">
-                    <TextInput value={settings.whatsapp_allowed_contacts}
+                    <TextAreaInput value={settings.whatsapp_allowed_contacts}
                         onChange={(value) => updateSetting("whatsapp_allowed_contacts", value)}
-                        placeholder="+1234567890, +0987654321 (comma-separated)" />
+                        placeholder={"+1234567890, +19876543210\n+447700900123"}
+                        rows={4} />
                 </SettingRow>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4, marginBottom: 12, lineHeight: 1.5 }}>
+                    Enter allowed WhatsApp numbers separated by commas or new lines. {whatsappAllowlistState.hasValidContacts
+                        ? `${whatsappAllowlistState.contacts.length} valid contact${whatsappAllowlistState.contacts.length === 1 ? " is" : "s are"} ready for linking.`
+                        : "Linking stays disabled until at least one valid contact is configured."}
+                </div>
 
                 <div style={{
                     marginTop: 12, padding: "8px 10px", borderRadius: 0,

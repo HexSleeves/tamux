@@ -1,6 +1,10 @@
 use super::*;
 
 impl TuiModel {
+    fn whatsapp_linking_allowed(&self) -> bool {
+        amux_protocol::has_whatsapp_allowed_contacts(&self.config.whatsapp_allowed_contacts)
+    }
+
     fn provider_auth_snapshot(&self, provider_id: &str) -> (String, String, String) {
         let mut base_url = providers::find_by_id(provider_id)
             .map(|def| def.default_base_url.to_string())
@@ -1096,15 +1100,29 @@ impl TuiModel {
                     .start_editing("whatsapp_phone_id", &self.config.whatsapp_phone_id.clone());
             }
             "whatsapp_link_device" => {
-                self.modal.set_whatsapp_link_starting();
+                if !self.whatsapp_linking_allowed() {
+                    self.status_line =
+                        "Set at least one allowed WhatsApp phone number before linking".to_string();
+                    return;
+                }
                 self.send_daemon_command(DaemonCommand::WhatsAppLinkSubscribe);
                 self.send_daemon_command(DaemonCommand::WhatsAppLinkStatus);
-                self.send_daemon_command(DaemonCommand::WhatsAppLinkStart);
+                if self.modal.whatsapp_link().phase() == modal::WhatsAppLinkPhase::Connected {
+                    self.status_line = "Showing WhatsApp link status".to_string();
+                } else {
+                    self.modal.set_whatsapp_link_starting();
+                    self.send_daemon_command(DaemonCommand::WhatsAppLinkStart);
+                    self.status_line = "Starting WhatsApp link workflow".to_string();
+                }
                 self.modal
                     .reduce(modal::ModalAction::Push(modal::ModalKind::WhatsAppLink));
-                self.status_line = "Starting WhatsApp link workflow".to_string();
             }
             "whatsapp_relink_device" => {
+                if !self.whatsapp_linking_allowed() {
+                    self.status_line =
+                        "Set at least one allowed WhatsApp phone number before linking".to_string();
+                    return;
+                }
                 if self.modal.whatsapp_link().phase() != modal::WhatsAppLinkPhase::Connected {
                     self.status_line =
                         "WhatsApp is not linked yet — use Link Device first".to_string();
@@ -1912,6 +1930,7 @@ mod tests {
         model
             .settings
             .reduce(SettingsAction::SwitchTab(SettingsTab::Gateway));
+        model.config.whatsapp_allowed_contacts = "+48663977535".to_string();
         model.settings.reduce(SettingsAction::NavigateField(12));
         assert_eq!(model.settings.current_field_name(), "whatsapp_link_device");
 
@@ -1939,6 +1958,7 @@ mod tests {
         model
             .settings
             .reduce(SettingsAction::SwitchTab(SettingsTab::Gateway));
+        model.config.whatsapp_allowed_contacts = "+48663977535".to_string();
         model.settings.reduce(SettingsAction::NavigateField(12));
         model
             .modal
@@ -1954,11 +1974,9 @@ mod tests {
             daemon_rx.try_recv().expect("expected status command"),
             DaemonCommand::WhatsAppLinkStatus
         ));
-        assert!(matches!(
-            daemon_rx.try_recv().expect("expected start command"),
-            DaemonCommand::WhatsAppLinkStart
-        ));
         assert!(daemon_rx.try_recv().is_err());
+        assert_eq!(model.modal.top(), Some(modal::ModalKind::WhatsAppLink));
+        assert_eq!(model.status_line, "Showing WhatsApp link status");
     }
 
     #[test]
@@ -1967,6 +1985,7 @@ mod tests {
         model
             .settings
             .reduce(SettingsAction::SwitchTab(SettingsTab::Gateway));
+        model.config.whatsapp_allowed_contacts = "+48663977535".to_string();
         model.settings.reduce(SettingsAction::NavigateField(13));
         model
             .modal
@@ -2007,5 +2026,72 @@ mod tests {
 
         assert_eq!(model.settings.editing_field(), Some("custom_model_entry"));
         assert_ne!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+    }
+
+    #[test]
+    fn whatsapp_link_device_requires_allowed_contacts() {
+        let (mut model, mut daemon_rx) = make_model();
+        model
+            .settings
+            .reduce(SettingsAction::SwitchTab(SettingsTab::Gateway));
+        model.settings.reduce(SettingsAction::NavigateField(12));
+
+        model.activate_settings_field();
+
+        assert!(daemon_rx.try_recv().is_err());
+        assert_eq!(
+            model.status_line,
+            "Set at least one allowed WhatsApp phone number before linking"
+        );
+        assert_eq!(model.modal.top(), None);
+    }
+
+    #[test]
+    fn whatsapp_relink_device_requires_allowed_contacts() {
+        let (mut model, mut daemon_rx) = make_model();
+        model
+            .settings
+            .reduce(SettingsAction::SwitchTab(SettingsTab::Gateway));
+        model.settings.reduce(SettingsAction::NavigateField(13));
+        model
+            .modal
+            .set_whatsapp_link_connected(Some("+48663977535".to_string()));
+
+        model.activate_settings_field();
+
+        assert!(daemon_rx.try_recv().is_err());
+        assert_eq!(
+            model.status_line,
+            "Set at least one allowed WhatsApp phone number before linking"
+        );
+        assert_eq!(model.modal.top(), None);
+    }
+
+    #[test]
+    fn whatsapp_link_device_starts_when_allowlist_is_present() {
+        let (mut model, mut daemon_rx) = make_model();
+        model
+            .settings
+            .reduce(SettingsAction::SwitchTab(SettingsTab::Gateway));
+        model.config.whatsapp_allowed_contacts = "+48663977535\ninvalid".to_string();
+        model.settings.reduce(SettingsAction::NavigateField(12));
+
+        model.activate_settings_field();
+
+        assert!(matches!(
+            daemon_rx.try_recv().expect("expected subscribe command"),
+            DaemonCommand::WhatsAppLinkSubscribe
+        ));
+        assert!(matches!(
+            daemon_rx.try_recv().expect("expected status probe"),
+            DaemonCommand::WhatsAppLinkStatus
+        ));
+        assert!(matches!(
+            daemon_rx.try_recv().expect("expected start command"),
+            DaemonCommand::WhatsAppLinkStart
+        ));
+        assert!(daemon_rx.try_recv().is_err());
+        assert_eq!(model.status_line, "Starting WhatsApp link workflow");
+        assert_eq!(model.modal.top(), Some(modal::ModalKind::WhatsAppLink));
     }
 }

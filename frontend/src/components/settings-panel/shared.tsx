@@ -110,12 +110,40 @@ export function SliderInput({ value, min, max, step, onChange }: {
     );
 }
 
-export function TextInput({ value, onChange, placeholder }: {
-    value: string; onChange: (value: string) => void; placeholder?: string;
+export function TextInput({ value, onChange, placeholder, disabled }: {
+    value: string; onChange: (value: string) => void; placeholder?: string; disabled?: boolean;
 }) {
     return (
         <input type="text" value={value} onChange={(event) => onChange(event.target.value)}
-            placeholder={placeholder} style={inputStyle} />
+            placeholder={placeholder} disabled={disabled}
+            style={disabled ? { ...inputStyle, opacity: 0.6, cursor: "not-allowed" } : inputStyle} />
+    );
+}
+
+export function TextAreaInput({ value, onChange, placeholder, disabled, rows = 3 }: {
+    value: string;
+    onChange: (value: string) => void;
+    placeholder?: string;
+    disabled?: boolean;
+    rows?: number;
+}) {
+    return (
+        <textarea
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder={placeholder}
+            disabled={disabled}
+            rows={rows}
+            style={{
+                ...inputStyle,
+                resize: "vertical",
+                minHeight: rows * 22,
+                paddingTop: 6,
+                paddingBottom: 6,
+                opacity: disabled ? 0.6 : 1,
+                cursor: disabled ? "not-allowed" : "text",
+            }}
+        />
     );
 }
 

@@ -82,6 +82,13 @@ pub struct SettingsState {
     dirty: bool,
 }
 
+fn field_uses_textarea(field: &str) -> bool {
+    matches!(
+        field,
+        "system_prompt" | "subagent_system_prompt" | "whatsapp_allowed_contacts"
+    )
+}
+
 impl SettingsState {
     pub fn new() -> Self {
         Self {
@@ -149,7 +156,7 @@ impl SettingsState {
         self.editing_field = Some(field.to_string());
         self.edit_buffer = current_value.to_string();
         self.edit_cursor = self.edit_buffer.len();
-        self.textarea_mode = field == "system_prompt" || field == "subagent_system_prompt";
+        self.textarea_mode = field_uses_textarea(field);
     }
 
     fn line_col_to_offset(&self, target_line: usize, target_col: usize) -> usize {
@@ -845,6 +852,26 @@ mod tests {
         assert!(!state.is_editing());
         // Buffer still has value so caller can read it
         assert_eq!(state.edit_buffer(), "https://x");
+    }
+
+    #[test]
+    fn whatsapp_allowed_contacts_uses_textarea_mode() {
+        let mut state = SettingsState::new();
+        state.start_editing("whatsapp_allowed_contacts", "+15551234567");
+
+        assert!(state.is_editing());
+        assert!(state.is_textarea());
+    }
+
+    #[test]
+    fn whatsapp_allowed_contacts_preserves_newlines_in_textarea_mode() {
+        let mut state = SettingsState::new();
+        state.start_editing("whatsapp_allowed_contacts", "+15551234567");
+
+        state.reduce(SettingsAction::InsertChar('\n'));
+        state.reduce(SettingsAction::InsertChar('+'));
+
+        assert_eq!(state.edit_buffer(), "+15551234567\n+");
     }
 
     #[test]

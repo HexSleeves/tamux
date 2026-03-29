@@ -9,6 +9,7 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
+const { pathToFileURL } = require('url');
 
 const DAEMON_NAME = 'tamux-daemon';
 const CLI_NAME = 'tamux';
@@ -52,6 +53,7 @@ const slackLastMessageTsByChannel = new Map();
 let telegramBotToken = null;
 let telegramPollTimer = null;
 let telegramUpdateOffset = 0;
+let desktopWhatsAppLinkingHelpersPromise = null;
 
 function normalizeDiscordSnowflake(value) {
     if (typeof value !== 'string') return null;
@@ -542,7 +544,9 @@ function startWhatsAppBridge() {
             if (!line.trim()) continue;
             try {
                 const msg = JSON.parse(line);
-                handleWhatsAppMessage(msg);
+                Promise.resolve(handleWhatsAppMessage(msg)).catch((err) => {
+                    logToFile('warn', `WhatsApp bridge message handling failed: ${err.message || String(err)}`);
+                });
             } catch (err) {
                 logToFile('warn', `WhatsApp bridge invalid JSON: ${err.message}`);
             }
@@ -569,7 +573,7 @@ function startWhatsAppBridge() {
         // Notify UI that bridge died
         if (mainWindow && code !== 0) {
             mainWindow.webContents.send('whatsapp-error', `WhatsApp bridge exited unexpectedly (code ${code}). Check that dependencies are installed.`);
-            mainWindow.webContents.send('whatsapp-disconnected');
+            mainWindow.webContents.send('whatsapp-disconnected', null);
         }
     });
 
@@ -579,7 +583,7 @@ function startWhatsAppBridge() {
     });
 }
 
-function handleWhatsAppMessage(msg) {
+async function handleWhatsAppMessage(msg) {
     // RPC response
     if (msg.id !== undefined && whatsappPendingCalls.has(msg.id)) {
         const { resolve, reject } = whatsappPendingCalls.get(msg.id);
@@ -597,7 +601,10 @@ function handleWhatsAppMessage(msg) {
                     asciiLen: typeof msg.data?.ascii_qr === 'string' ? msg.data.ascii_qr.length : 0,
                     hasDataUrl: typeof msg.data?.data_url === 'string',
                 });
-                mainWindow.webContents.send('whatsapp-qr', msg.data);
+                {
+                    const { getRendererWhatsAppQrDataUrl } = await getDesktopWhatsAppLinkingHelpers();
+                    mainWindow.webContents.send('whatsapp-qr', getRendererWhatsAppQrDataUrl(msg.data));
+                }
                 break;
             case 'connected':
                 logToFile('info', 'WhatsApp bridge connected event', {
@@ -609,7 +616,9 @@ function handleWhatsAppMessage(msg) {
                 logToFile('info', 'WhatsApp bridge disconnected event', {
                     reason: msg.data?.reason || null,
                 });
-                mainWindow.webContents.send('whatsapp-disconnected');
+                mainWindow.webContents.send('whatsapp-disconnected', {
+                    reason: msg.data?.reason || null,
+                });
                 break;
             case 'error':
                 logToFile('warn', 'WhatsApp bridge error event', {
@@ -3768,6 +3777,20 @@ function registerIpcHandlers() {
         }
     }
 
+    function getDesktopWhatsAppLinkingHelpers() {
+        if (!desktopWhatsAppLinkingHelpersPromise) {
+            desktopWhatsAppLinkingHelpersPromise = import(
+                pathToFileURL(path.join(__dirname, 'whatsappLinking.js')).href
+            );
+        }
+        return desktopWhatsAppLinkingHelpersPromise;
+    }
+
+    async function assertValidWhatsAppAllowlistForConnect(config) {
+        const { assertValidWhatsAppConnectConfig } = await getDesktopWhatsAppLinkingHelpers();
+        assertValidWhatsAppConnectConfig(config);
+    }
+
     async function ensureDaemonWhatsAppSubscribed() {
         if (whatsappDaemonSubscribed) return;
         sendAgentCommand({ type: 'whats-app-link-subscribe' });
@@ -3779,6 +3802,7 @@ function registerIpcHandlers() {
     ipcMain.handle('whatsapp-connect', async () => {
         try {
             const config = await getGatewayConfigForWhatsAppFallback();
+            await assertValidWhatsAppAllowlistForConnect(config);
             if (isWhatsAppElectronFallbackEnabled(config)) {
                 startWhatsAppBridge();
                 await whatsappRpc('connect');
@@ -4082,7 +4106,9 @@ function registerIpcHandlers() {
                         if (typeof reason === 'string' && reason.trim()) {
                             mainWindow.webContents.send('whatsapp-error', reason);
                         }
-                        mainWindow.webContents.send('whatsapp-disconnected');
+                        mainWindow.webContents.send('whatsapp-disconnected', {
+                            reason: typeof reason === 'string' ? reason : null,
+                        });
                     }
                     continue;
                 }

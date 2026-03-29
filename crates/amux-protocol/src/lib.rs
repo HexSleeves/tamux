@@ -10,7 +10,8 @@ mod messages;
 
 pub use codec::{AmuxCodec, DaemonCodec};
 pub use config::{
-    amux_data_dir, default_tcp_addr, ensure_amux_data_dir, log_file_path, AmuxConfig,
-    DEFAULT_TCP_HOST, DEFAULT_TCP_PORT,
+    amux_data_dir, default_tcp_addr, ensure_amux_data_dir, has_whatsapp_allowed_contacts,
+    log_file_path, normalize_whatsapp_phone_like_identifier, parse_whatsapp_allowed_contacts,
+    AmuxConfig, DEFAULT_TCP_HOST, DEFAULT_TCP_PORT,
 };
 pub use messages::*;

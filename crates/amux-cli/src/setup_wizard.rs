@@ -7,7 +7,9 @@
 //! Navigation uses crossterm arrow-key selection (not number input).
 //! Provider list is queried from the daemon at runtime (no hardcoded list).
 
-use amux_protocol::{AmuxCodec, ClientMessage, DaemonMessage};
+use amux_protocol::{
+    AmuxCodec, ClientMessage, DaemonMessage, parse_whatsapp_allowed_contacts,
+};
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::{self, Stylize};
@@ -373,6 +375,115 @@ fn text_input(prompt_text: &str, default: &str, masked: bool) -> Result<Option<S
     terminal::disable_raw_mode().context("Failed to disable raw mode")?;
 
     result
+}
+
+fn parse_whatsapp_setup_allowlist(raw: &str) -> Option<Vec<String>> {
+    let parsed = parse_whatsapp_allowed_contacts(raw);
+    if parsed.is_empty() {
+        None
+    } else {
+        Some(parsed)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WhatsAppAllowlistPromptOutcome {
+    Submitted(String),
+    Cancelled,
+    EndOfInput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WhatsAppAllowlistPromptResolution<'a> {
+    Accept(String),
+    Retry(&'a str),
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigWrite {
+    key_path: String,
+    value_json: String,
+}
+
+fn resolve_whatsapp_allowlist_prompt(
+    outcome: WhatsAppAllowlistPromptOutcome,
+) -> WhatsAppAllowlistPromptResolution<'static> {
+    match outcome {
+        WhatsAppAllowlistPromptOutcome::Submitted(raw)
+            if parse_whatsapp_setup_allowlist(&raw).is_some() =>
+        {
+            WhatsAppAllowlistPromptResolution::Accept(raw)
+        }
+        WhatsAppAllowlistPromptOutcome::Submitted(_) => {
+            WhatsAppAllowlistPromptResolution::Retry(
+                "Enter at least one valid WhatsApp phone number before linking.",
+            )
+        }
+        WhatsAppAllowlistPromptOutcome::Cancelled | WhatsAppAllowlistPromptOutcome::EndOfInput => {
+            WhatsAppAllowlistPromptResolution::Cancel
+        }
+    }
+}
+
+fn whatsapp_gateway_config_writes(raw_allowlist: &str) -> Result<Vec<ConfigWrite>> {
+    parse_whatsapp_setup_allowlist(raw_allowlist)
+        .ok_or_else(|| anyhow::anyhow!("Enter at least one valid WhatsApp phone number before linking."))?;
+
+    Ok(vec![
+        ConfigWrite {
+            key_path: "/gateway/whatsapp_allowed_contacts".to_string(),
+            value_json: serde_json::to_string(raw_allowlist)
+                .context("Failed to encode WhatsApp allowlist")?,
+        },
+        ConfigWrite {
+            key_path: "/gateway/enabled".to_string(),
+            value_json: "true".to_string(),
+        },
+    ])
+}
+
+fn collect_whatsapp_allowlist_input() -> Result<WhatsAppAllowlistPromptOutcome> {
+    let mut stdout = io::stdout();
+    let mut lines = Vec::new();
+
+    println!(
+        "Before linking WhatsApp, tamux requires an allowlist to avoid replying in every chat."
+    );
+    println!("Enter allowed phone numbers now before QR linking starts.");
+    println!("You can paste comma-separated values or enter one contact per line.");
+    println!("Press Enter on an empty line when finished, or type /back to cancel.");
+
+    loop {
+        if lines.is_empty() {
+            write!(stdout, "Allowed contacts: ")?;
+        } else {
+            write!(stdout, "> ")?;
+        }
+        stdout.flush()?;
+
+        let mut line = String::new();
+        let bytes_read = io::stdin()
+            .read_line(&mut line)
+            .context("Failed to read WhatsApp allowlist input")?;
+
+        if bytes_read == 0 {
+            return Ok(WhatsAppAllowlistPromptOutcome::EndOfInput);
+        }
+
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line == "/back" {
+            return Ok(WhatsAppAllowlistPromptOutcome::Cancelled);
+        }
+
+        if line.is_empty() {
+            break;
+        }
+
+        lines.push(line.to_string());
+    }
+
+    Ok(WhatsAppAllowlistPromptOutcome::Submitted(lines.join("\n")))
 }
 
 const WHATSAPP_LINK_TIMEOUT_SECS: u64 = 120;
@@ -1231,31 +1342,63 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
             )? {
                 Some(idx) if idx + 1 < gateway_items.len() => {
                     let (platform_label, platform) = gateway_items[idx];
-                    // Enable gateway for any selected platform.
-                    wizard_send(
-                        &mut framed,
-                        ClientMessage::AgentSetConfigItem {
-                            key_path: "/gateway/enabled".to_string(),
-                            value_json: "true".to_string(),
-                        },
-                    )
-                    .await
-                    .context("Failed to enable gateway")?;
-
                     if platform == "whatsapp" {
-                        let linked = run_whatsapp_link_subflow(&mut framed)
-                            .await
-                            .context("WhatsApp link flow failed during setup")?;
-                        summary_gateway = Some(platform_label.to_string());
-                        summary_whatsapp_linked = linked;
-                        if linked {
-                            println!("WhatsApp gateway linked.");
-                        } else {
-                            println!("WhatsApp gateway selected (link skipped).");
+                        let whatsapp_allowlist_raw = loop {
+                            println!();
+                            match resolve_whatsapp_allowlist_prompt(
+                                collect_whatsapp_allowlist_input()?,
+                            ) {
+                                WhatsAppAllowlistPromptResolution::Accept(raw) => break Some(raw),
+                                WhatsAppAllowlistPromptResolution::Retry(message) => {
+                                    println!("{message}");
+                                }
+                                WhatsAppAllowlistPromptResolution::Cancel => {
+                                    println!(
+                                        "Skipped -- you can configure WhatsApp later with `tamux setup`."
+                                    );
+                                    break None;
+                                }
+                            }
+                        };
+
+                        if let Some(whatsapp_allowlist_raw) = whatsapp_allowlist_raw {
+                            for write in whatsapp_gateway_config_writes(&whatsapp_allowlist_raw)? {
+                                wizard_send(
+                                    &mut framed,
+                                    ClientMessage::AgentSetConfigItem {
+                                        key_path: write.key_path,
+                                        value_json: write.value_json,
+                                    },
+                                )
+                                .await
+                                .context("Failed to save WhatsApp gateway setup")?;
+                            }
+
+                            let linked = run_whatsapp_link_subflow(&mut framed)
+                                .await
+                                .context("WhatsApp link flow failed during setup")?;
+                            summary_gateway = Some(platform_label.to_string());
+                            summary_whatsapp_linked = linked;
+                            if linked {
+                                println!("WhatsApp gateway linked.");
+                            } else {
+                                println!("WhatsApp gateway selected (link skipped).");
+                            }
                         }
                     } else {
+                        // Enable gateway for token-based platforms only after token entry succeeds.
                         match text_input(&format!("Enter {platform_label} token"), "", true)? {
                             Some(token) if !token.is_empty() => {
+                                wizard_send(
+                                    &mut framed,
+                                    ClientMessage::AgentSetConfigItem {
+                                        key_path: "/gateway/enabled".to_string(),
+                                        value_json: "true".to_string(),
+                                    },
+                                )
+                                .await
+                                .context("Failed to enable gateway")?;
+
                                 let token_key = format!("/gateway/{}_token", platform);
                                 wizard_send(
                                     &mut framed,
@@ -1460,5 +1603,60 @@ mod tests {
         assert_eq!(choices.len(), 2);
         assert!(whatsapp_timeout_retry_selected(0));
         assert!(!whatsapp_timeout_retry_selected(1));
+    }
+
+    #[test]
+    fn whatsapp_setup_accepts_multiline_or_csv_contacts() {
+        let parsed = parse_whatsapp_setup_allowlist("+48 123 456 789, 15551230000\n+44 20 7946 0958");
+
+        assert_eq!(
+            parsed,
+            Some(vec![
+                "48123456789".to_string(),
+                "15551230000".to_string(),
+                "442079460958".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn whatsapp_setup_rejects_empty_allowlist() {
+        assert_eq!(parse_whatsapp_setup_allowlist("\n , invalid , device "), None);
+        assert_eq!(parse_whatsapp_setup_allowlist("   \n  "), None);
+    }
+
+    #[test]
+    fn whatsapp_setup_cancellation_paths_stop_without_retry() {
+        assert_eq!(
+            resolve_whatsapp_allowlist_prompt(WhatsAppAllowlistPromptOutcome::Cancelled),
+            WhatsAppAllowlistPromptResolution::Cancel
+        );
+        assert_eq!(
+            resolve_whatsapp_allowlist_prompt(WhatsAppAllowlistPromptOutcome::EndOfInput),
+            WhatsAppAllowlistPromptResolution::Cancel
+        );
+    }
+
+    #[test]
+    fn whatsapp_setup_invalid_submission_requests_retry() {
+        assert_eq!(
+            resolve_whatsapp_allowlist_prompt(WhatsAppAllowlistPromptOutcome::Submitted(
+                "\n , invalid , device ".to_string()
+            )),
+            WhatsAppAllowlistPromptResolution::Retry(
+                "Enter at least one valid WhatsApp phone number before linking."
+            )
+        );
+    }
+
+    #[test]
+    fn whatsapp_setup_persists_allowlist_before_gateway_enable() {
+        let writes = whatsapp_gateway_config_writes("+48 123 456 789").expect("valid writes");
+
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0].key_path, "/gateway/whatsapp_allowed_contacts");
+        assert_eq!(writes[0].value_json, "\"+48 123 456 789\"");
+        assert_eq!(writes[1].key_path, "/gateway/enabled");
+        assert_eq!(writes[1].value_json, "true");
     }
 }

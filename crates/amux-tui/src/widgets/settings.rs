@@ -2,6 +2,8 @@ use ratatui::prelude::*;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
+use amux_protocol::has_whatsapp_allowed_contacts;
+
 use crate::providers;
 use crate::state::concierge::ConciergeState;
 use crate::state::config::ConfigState;
@@ -392,9 +394,8 @@ fn editing_cursor_hit_test(
     let row = mouse.y.saturating_sub(content_area.y) as usize;
     let rel_x = mouse.x.saturating_sub(content_area.x) as usize;
 
-    if settings.is_textarea() && field == "system_prompt" {
-        let text_start_row = 7usize;
-        let text_start_col = 4usize;
+    if settings.is_textarea() {
+        let (text_start_row, text_start_col) = textarea_edit_layout(settings, field)?;
         let line_count = settings.edit_buffer().split('\n').count().max(1);
         let row_end = text_start_row + line_count;
         if row < text_start_row || row > row_end {
@@ -485,6 +486,14 @@ fn single_line_edit_layout(settings: &SettingsState, field: &str) -> Option<(usi
     }
 }
 
+fn textarea_edit_layout(settings: &SettingsState, field: &str) -> Option<(usize, usize)> {
+    match settings.active_tab() {
+        SettingsTab::Agent if field == "system_prompt" => Some((7, 4)),
+        SettingsTab::Gateway if field == "whatsapp_allowed_contacts" => Some((23, 4)),
+        _ => None,
+    }
+}
+
 fn settings_row_hit(
     settings: &SettingsState,
     subagents: &SubAgentsState,
@@ -537,6 +546,21 @@ fn settings_row_hit(
             17 => Some((7, None)),
             18 => Some((8, None)),
             21 => Some((9, None)),
+            r if settings.is_editing()
+                && settings.is_textarea()
+                && settings.editing_field() == Some("whatsapp_allowed_contacts") =>
+            {
+                let textarea_lines = settings.edit_buffer().lines().count().max(1);
+                match r {
+                    22..=23 => Some((9, None)),
+                    line if line >= 24 && line < 24 + textarea_lines => Some((9, None)),
+                    line if line == 24 + textarea_lines => Some((10, None)),
+                    line if line == 25 + textarea_lines => Some((11, None)),
+                    line if line == 26 + textarea_lines => Some((12, None)),
+                    line if line == 27 + textarea_lines => Some((13, None)),
+                    _ => None,
+                }
+            }
             22 => Some((10, None)),
             23 => Some((11, None)),
             24 => Some((12, None)),
@@ -2755,6 +2779,7 @@ fn render_gateway_tab<'a>(
     );
     let whatsapp_link = modal.whatsapp_link();
     let linked = whatsapp_link.phase() == WhatsAppLinkPhase::Connected;
+    let whatsapp_allowlist_ready = has_whatsapp_allowed_contacts(&config.whatsapp_allowed_contacts);
     {
         let is_selected = settings.field_cursor() == 12;
         let marker = if is_selected { "> " } else { "  " };
@@ -2768,19 +2793,16 @@ fn render_gateway_tab<'a>(
         } else {
             theme.fg_active
         };
+        let action_label = if linked { "Link Status" } else { "Link Device" };
         let mut spans = vec![
             Span::styled(marker, marker_style),
-            Span::styled(
-                if linked {
-                    "Show Link Status"
-                } else {
-                    "Link Device"
-                },
-                label_style,
-            ),
+            Span::styled(action_label, label_style),
         ];
         if is_selected {
             spans.push(Span::styled("  [Enter]", theme.fg_dim));
+        }
+        if !linked && !whatsapp_allowlist_ready {
+            spans.push(Span::styled("  (requires allowed contacts)", theme.fg_dim));
         }
         lines.push(Line::from(spans));
     }
@@ -2809,9 +2831,19 @@ fn render_gateway_tab<'a>(
         }
         if !enabled {
             spans.push(Span::styled("  (link first)", theme.fg_dim));
+        } else if !whatsapp_allowlist_ready {
+            spans.push(Span::styled("  (requires allowed contacts)", theme.fg_dim));
         }
         lines.push(Line::from(spans));
     }
+    lines.push(Line::from(Span::styled(
+        if whatsapp_allowlist_ready {
+            "  Only allowed numbers will be forwarded and can receive replies."
+        } else {
+            "  Add at least one allowed phone number before QR linking."
+        },
+        theme.fg_dim,
+    )));
     lines.push(Line::from(Span::styled(
         match whatsapp_link.phase() {
             WhatsAppLinkPhase::Connected => {
@@ -2836,7 +2868,7 @@ fn render_gateway_tab<'a>(
         },
     )));
     lines.push(Line::from(Span::styled(
-        "  QR linking is available in TUI and Electron (Settings -> Gateway -> Link Device).",
+        "  Allowed Contacts accepts comma or newline separated phone numbers.",
         theme.fg_dim,
     )));
     lines.push(Line::from(Span::styled(
@@ -2868,12 +2900,51 @@ fn render_gateway_text_field<'a>(
         theme.fg_dim
     };
 
+    if is_editing && settings.is_textarea() {
+        lines.push(Line::from(vec![
+            Span::styled(marker, marker_style),
+            Span::styled(format!("{:<16}", label), theme.fg_dim),
+            Span::styled(" [Ctrl+Enter: save, Esc: cancel]", theme.fg_dim),
+        ]));
+        lines.push(Line::from(Span::styled(
+            "  ╭──────────────────────────────────────────╮",
+            theme.fg_dim,
+        )));
+        for (idx, buf_line) in settings.edit_buffer().split('\n').enumerate() {
+            let rendered = if idx == settings.edit_cursor_line_col().0 {
+                render_edit_line_with_cursor(buf_line, settings.edit_cursor_line_col().1)
+            } else {
+                buf_line.to_string()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("  │ ", theme.fg_dim),
+                Span::styled(rendered, theme.fg_active),
+            ]));
+        }
+        lines.push(Line::from(Span::styled(
+            "  ╰──────────────────────────────────────────╯",
+            theme.fg_dim,
+        )));
+        return;
+    }
+
     let display_value: String = if is_editing {
         format!("{}\u{2588}", settings.edit_buffer())
     } else if value.is_empty() {
         "(not set)".to_string()
     } else if password {
         mask_api_key(value)
+    } else if field_name == "whatsapp_allowed_contacts" {
+        let first_lines: Vec<&str> = value.lines().take(2).collect();
+        let preview = first_lines.join(", ");
+        if preview.is_empty() {
+            "(not set)".to_string()
+        } else if value.lines().count() > 2 || preview.chars().count() > 40 {
+            let truncated: String = preview.chars().take(37).collect();
+            format!("{}...", truncated)
+        } else {
+            preview
+        }
     } else {
         value.to_string()
     };
@@ -3531,9 +3602,30 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            text.contains("QR linking is available in TUI and Electron"),
-            "Gateway tab should mention TUI QR linking support"
+            text.contains("Allowed Contacts accepts comma or newline separated phone numbers."),
+            "Gateway tab should explain how to enter the WhatsApp allowlist"
         );
+    }
+
+    #[test]
+    fn gateway_tab_shows_allowlist_requirement_before_linking() {
+        let mut settings = SettingsState::new();
+        settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+            SettingsTab::Gateway,
+        ));
+        settings.reduce(crate::state::settings::SettingsAction::NavigateField(12));
+        let config = ConfigState::new();
+        let modal = ModalState::new();
+
+        let lines = render_gateway_tab(&settings, &config, &modal, &ThemeTokens::default());
+        let text = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("> Link Device  [Enter]  (requires allowed contacts)"));
+        assert!(text.contains("Add at least one allowed phone number before QR linking."));
     }
 
     #[test]
@@ -3561,7 +3653,8 @@ mod tests {
             SettingsTab::Gateway,
         ));
         settings.reduce(crate::state::settings::SettingsAction::NavigateField(12));
-        let config = ConfigState::new();
+        let mut config = ConfigState::new();
+        config.whatsapp_allowed_contacts = "+48663977535".to_string();
         let mut modal = ModalState::new();
         modal.set_whatsapp_link_connected(Some("+48663977535".to_string()));
 
@@ -3572,8 +3665,31 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(text.contains("> Show Link Status"));
+        assert!(text.contains("> Link Status"));
         assert!(text.contains("Re-link Device"));
         assert!(text.contains("Linked: +48663977535"));
+        assert!(text.contains("Only allowed numbers will be forwarded and can receive replies."));
+    }
+
+    #[test]
+    fn gateway_tab_renders_whatsapp_allowlist_as_textarea_when_editing() {
+        let mut settings = SettingsState::new();
+        settings.start_editing("whatsapp_allowed_contacts", "+15551234567\n+15557654321");
+        let mut config = ConfigState::new();
+        config.whatsapp_allowed_contacts = "+15551234567\n+15557654321".to_string();
+        let modal = ModalState::new();
+
+        let lines = render_gateway_tab(&settings, &config, &modal, &ThemeTokens::default());
+        let text = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("Allowed Contacts [Ctrl+Enter: save, Esc: cancel]"));
+        assert!(text.contains("+15551234567"));
+        assert!(text.contains("+15557654321"));
+        assert!(text.contains("╭"));
+        assert!(text.contains("╰"));
     }
 }
