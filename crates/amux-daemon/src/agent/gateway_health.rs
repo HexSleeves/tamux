@@ -88,6 +88,13 @@ impl PlatformHealthState {
     pub fn status_changed(&self, old: GatewayConnectionStatus) -> bool {
         self.status != old
     }
+
+    /// Returns true only when the platform transitions from a non-connected
+    /// state into `Connected`.
+    pub fn is_reconnect_transition(&self, old: GatewayConnectionStatus) -> bool {
+        self.status == GatewayConnectionStatus::Connected
+            && old != GatewayConnectionStatus::Connected
+    }
 }
 
 /// Token-bucket rate limiter for gateway message sends.
@@ -276,6 +283,30 @@ mod tests {
         let old = state.status;
         state.on_success(3000);
         assert!(!state.status_changed(old)); // Connected -> Connected (no change)
+    }
+
+    #[test]
+    fn reconnect_transition_from_disconnected_or_error_to_connected_returns_true() {
+        let mut state = PlatformHealthState::new();
+
+        let old = state.status;
+        state.on_success(1000);
+        assert!(state.is_reconnect_transition(old));
+
+        state.on_failure(2000, "err".to_string());
+        let old = state.status;
+        state.on_success(3000);
+        assert!(state.is_reconnect_transition(old));
+    }
+
+    #[test]
+    fn reconnect_transition_connected_to_connected_returns_false() {
+        let mut state = PlatformHealthState::new();
+        state.on_success(1000);
+
+        let old = state.status;
+        state.on_success(2000);
+        assert!(!state.is_reconnect_transition(old));
     }
 
     // -----------------------------------------------------------------------

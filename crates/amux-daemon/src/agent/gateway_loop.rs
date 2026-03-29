@@ -133,10 +133,67 @@ impl AgentEngine {
             "gateway: config loaded"
         );
 
-        *self.gateway_state.lock().await = Some(gateway::GatewayState::new(
-            gw_config,
-            self.http_client.clone(),
-        ));
+        let telegram_replay_cursor = match self.history.load_gateway_replay_cursors("telegram").await {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|row| row.channel_id == "global")
+                .find_map(|row| match row.cursor_value.parse::<i64>() {
+                    Ok(cursor) => Some(cursor),
+                    Err(error) => {
+                        tracing::warn!(
+                            channel_id = %row.channel_id,
+                            cursor_value = %row.cursor_value,
+                            %error,
+                            "gateway: ignoring invalid telegram replay cursor"
+                        );
+                        None
+                    }
+                }),
+            Err(error) => {
+                tracing::warn!(%error, "gateway: failed to load telegram replay cursors");
+                None
+            }
+        };
+        let slack_replay_cursors = match self.history.load_gateway_replay_cursors("slack").await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|row| (row.channel_id, row.cursor_value))
+                .collect(),
+            Err(error) => {
+                tracing::warn!(%error, "gateway: failed to load slack replay cursors");
+                HashMap::new()
+            }
+        };
+        let discord_replay_cursors =
+            match self.history.load_gateway_replay_cursors("discord").await {
+                Ok(rows) => rows
+                    .into_iter()
+                    .map(|row| (row.channel_id, row.cursor_value))
+                    .collect(),
+                Err(error) => {
+                    tracing::warn!(%error, "gateway: failed to load discord replay cursors");
+                    HashMap::new()
+                }
+            };
+        let whatsapp_replay_cursors =
+            match self.history.load_gateway_replay_cursors("whatsapp").await {
+                Ok(rows) => rows
+                    .into_iter()
+                    .map(|row| (row.channel_id, row.cursor_value))
+                    .collect(),
+                Err(error) => {
+                    tracing::warn!(%error, "gateway: failed to load whatsapp replay cursors");
+                    HashMap::new()
+                }
+            };
+
+        let mut gateway_state = gateway::GatewayState::new(gw_config, self.http_client.clone());
+        gateway_state.telegram_replay_cursor = telegram_replay_cursor;
+        gateway_state.slack_replay_cursors = slack_replay_cursors;
+        gateway_state.discord_replay_cursors = discord_replay_cursors;
+        gateway_state.whatsapp_replay_cursors = whatsapp_replay_cursors;
+
+        *self.gateway_state.lock().await = Some(gateway_state);
 
         tracing::info!("gateway: polling initialized in daemon");
     }
@@ -585,6 +642,9 @@ impl AgentEngine {
                 match gateway::poll_telegram(gw).await {
                     Ok(telegram_msgs) => {
                         gw.telegram_health.on_success(now_ms);
+                        if gw.telegram_health.is_reconnect_transition(old_status) {
+                            gw.replay_cycle_active.insert("telegram".to_string());
+                        }
                         if !telegram_msgs.is_empty() {
                             tracing::info!(
                                 count = telegram_msgs.len(),
@@ -603,6 +663,7 @@ impl AgentEngine {
                     }
                     Err(e) => {
                         gw.telegram_health.on_failure(now_ms, e.to_string());
+                        gw.replay_cycle_active.remove("telegram");
                         tracing::warn!("gateway: telegram poll error: {e}");
                     }
                 }
@@ -636,6 +697,9 @@ impl AgentEngine {
                 match gateway::poll_slack(gw, &slack_channels).await {
                     Ok(slack_msgs) => {
                         gw.slack_health.on_success(now_ms);
+                        if gw.slack_health.is_reconnect_transition(old_status) {
+                            gw.replay_cycle_active.insert("slack".to_string());
+                        }
                         if !slack_msgs.is_empty() {
                             tracing::info!(
                                 count = slack_msgs.len(),
@@ -653,6 +717,7 @@ impl AgentEngine {
                     }
                     Err(e) => {
                         gw.slack_health.on_failure(now_ms, e.to_string());
+                        gw.replay_cycle_active.remove("slack");
                         tracing::warn!("gateway: slack poll error: {e}");
                     }
                 }
@@ -684,6 +749,9 @@ impl AgentEngine {
                 match gateway::poll_discord(gw, &discord_channels).await {
                     Ok(discord_msgs) => {
                         gw.discord_health.on_success(now_ms);
+                        if gw.discord_health.is_reconnect_transition(old_status) {
+                            gw.replay_cycle_active.insert("discord".to_string());
+                        }
                         if !discord_msgs.is_empty() {
                             tracing::info!(
                                 count = discord_msgs.len(),
@@ -701,6 +769,7 @@ impl AgentEngine {
                     }
                     Err(e) => {
                         gw.discord_health.on_failure(now_ms, e.to_string());
+                        gw.replay_cycle_active.remove("discord");
                         tracing::warn!("gateway: discord poll error: {e}");
                     }
                 }
@@ -1210,7 +1279,18 @@ impl AgentEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::is_gateway_reset_command;
+    use super::*;
+    use std::fs;
+    use uuid::Uuid;
+
+    fn make_test_root(test_name: &str) -> std::path::PathBuf {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-artifacts")
+            .join(format!("{test_name}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("failed to create test root");
+        root
+    }
 
     #[test]
     fn reset_commands_require_bang_prefix() {
@@ -1219,5 +1299,79 @@ mod tests {
         assert!(!is_gateway_reset_command("reset"));
         assert!(!is_gateway_reset_command("new"));
         assert!(!is_gateway_reset_command("!renew"));
+    }
+
+    #[tokio::test]
+    async fn gateway_init_loads_replay_cursors() {
+        let root = make_test_root("gateway-init-loads-replay-cursors");
+        let manager = SessionManager::new_test(&root).await;
+
+        let mut config = AgentConfig::default();
+        config.gateway.enabled = true;
+        config.gateway.telegram_token = "telegram-token".to_string();
+        config.gateway.slack_token = "slack-token".to_string();
+        config.gateway.slack_channel_filter = "C123".to_string();
+        config.gateway.discord_token = "discord-token".to_string();
+        config.gateway.discord_channel_filter = "D456".to_string();
+        config.gateway.whatsapp_token = "whatsapp-token".to_string();
+
+        let engine = AgentEngine::new_test(manager, config, &root).await;
+
+        engine
+            .history
+            .save_gateway_replay_cursor("telegram", "other", "99", "update_id")
+            .await
+            .expect("save other telegram cursor");
+        engine
+            .history
+            .save_gateway_replay_cursor("telegram", "global", "42", "update_id")
+            .await
+            .expect("save telegram cursor");
+        engine
+            .history
+            .save_gateway_replay_cursor("slack", "C123", "1712345678.000100", "message_ts")
+            .await
+            .expect("save slack cursor");
+        engine
+            .history
+            .save_gateway_replay_cursor("discord", "D456", "998877665544", "message_id")
+            .await
+            .expect("save discord cursor");
+        engine
+            .history
+            .save_gateway_replay_cursor("whatsapp", "15551234567", "wamid-1", "message_id")
+            .await
+            .expect("save whatsapp cursor");
+
+        engine.init_gateway().await;
+
+        let state_guard = engine.gateway_state.lock().await;
+        let state = state_guard.as_ref().expect("gateway state should exist");
+        assert_eq!(state.telegram_replay_cursor, Some(42));
+        assert_eq!(
+            state
+                .slack_replay_cursors
+                .get("C123")
+                .map(std::string::String::as_str),
+            Some("1712345678.000100")
+        );
+        assert_eq!(
+            state
+                .discord_replay_cursors
+                .get("D456")
+                .map(std::string::String::as_str),
+            Some("998877665544")
+        );
+        assert_eq!(
+            state
+                .whatsapp_replay_cursors
+                .get("15551234567")
+                .map(std::string::String::as_str),
+            Some("wamid-1")
+        );
+        assert!(state.replay_cycle_active.is_empty());
+
+        drop(state_guard);
+        fs::remove_dir_all(&root).expect("cleanup test root");
     }
 }

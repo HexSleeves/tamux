@@ -7,7 +7,7 @@
 //!
 //! Incoming messages are routed to the agent engine for processing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 
@@ -47,6 +47,11 @@ pub struct GatewayState {
     pub telegram_offset: i64,
     pub slack_last_ts: HashMap<String, String>,
     pub discord_last_id: HashMap<String, String>,
+    pub telegram_replay_cursor: Option<i64>,
+    pub slack_replay_cursors: HashMap<String, String>,
+    pub discord_replay_cursors: HashMap<String, String>,
+    pub whatsapp_replay_cursors: HashMap<String, String>,
+    pub replay_cycle_active: HashSet<String>,
     pub http_client: reqwest::Client,
     // Per-platform health tracking (Plan 02)
     pub slack_health: PlatformHealthState,
@@ -78,6 +83,11 @@ impl GatewayState {
             telegram_offset: 0,
             slack_last_ts: HashMap::new(),
             discord_last_id: HashMap::new(),
+            telegram_replay_cursor: None,
+            slack_replay_cursors: HashMap::new(),
+            discord_replay_cursors: HashMap::new(),
+            whatsapp_replay_cursors: HashMap::new(),
+            replay_cycle_active: HashSet::new(),
             http_client,
             slack_health: PlatformHealthState::new(),
             discord_health: PlatformHealthState::new(),
@@ -139,14 +149,16 @@ pub async fn poll_telegram(state: &mut GatewayState) -> Result<Vec<IncomingMessa
     let mut messages = Vec::new();
     let is_first_poll = state.telegram_offset == 0;
 
+    let mut next_offset = state.telegram_offset;
+
     if let Some(results) = body.get("result").and_then(|v| v.as_array()) {
         for update in results {
             let update_id = update
                 .get("update_id")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
-            if update_id >= state.telegram_offset {
-                state.telegram_offset = update_id + 1;
+            if update_id >= next_offset {
+                next_offset = update_id + 1;
             }
 
             // Skip historical messages on first poll
@@ -205,6 +217,8 @@ pub async fn poll_telegram(state: &mut GatewayState) -> Result<Vec<IncomingMessa
         }
     }
 
+    state.telegram_offset = next_offset;
+
     Ok(messages)
 }
 
@@ -258,6 +272,8 @@ pub async fn poll_slack(
             anyhow::bail!("slack API error for channel {channel}: {error_msg}");
         }
 
+        let mut next_oldest = oldest.clone();
+
         if let Some(msgs) = body.get("messages").and_then(|v| v.as_array()) {
             for msg in msgs {
                 let ts = msg.get("ts").and_then(|v| v.as_str()).unwrap_or("");
@@ -279,15 +295,9 @@ pub async fn poll_slack(
                 }
 
                 if !ts.is_empty() {
-                    state
-                        .slack_last_ts
-                        .entry(channel.clone())
-                        .and_modify(|v| {
-                            if ts > v.as_str() {
-                                *v = ts.to_string();
-                            }
-                        })
-                        .or_insert_with(|| ts.to_string());
+                    if next_oldest.is_empty() || ts > next_oldest.as_str() {
+                        next_oldest = ts.to_string();
+                    }
                 }
 
                 // Extract thread context: thread_ts if in a thread, otherwise ts
@@ -322,6 +332,10 @@ pub async fn poll_slack(
                     thread_context,
                 });
             }
+        }
+
+        if !next_oldest.is_empty() {
+            state.slack_last_ts.insert(channel.clone(), next_oldest);
         }
     }
 
@@ -391,15 +405,15 @@ pub async fn poll_discord(
             .first()
             .and_then(|m| m.get("id").and_then(|v| v.as_str()))
             .unwrap_or("");
-        if !newest_id.is_empty() {
-            state
-                .discord_last_id
-                .insert(channel_id.clone(), newest_id.to_string());
-        }
 
         // On first poll (no prior last_id), skip historical messages —
         // only process messages from subsequent polls
         if !had_last_id {
+            if !newest_id.is_empty() {
+                state
+                    .discord_last_id
+                    .insert(channel_id.clone(), newest_id.to_string());
+            }
             tracing::info!(
                 channel = %channel_id,
                 skipped = msgs.len(),
@@ -449,6 +463,12 @@ pub async fn poll_discord(
                 message_id: discord_msg_id,
                 thread_context,
             });
+        }
+
+        if !newest_id.is_empty() {
+            state
+                .discord_last_id
+                .insert(channel_id.clone(), newest_id.to_string());
         }
     }
 
