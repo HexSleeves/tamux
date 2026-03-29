@@ -96,6 +96,9 @@ On startup, the daemon launches `tamux-gateway`, establishes IPC, and sends a bo
 
 The gateway uses that bootstrap payload to reconstruct runtime state in memory and begin provider polling.
 
+Bootstrap should reuse the existing daemon/gateway IPC transport rather than introducing a second parallel channel.
+Provider secrets should continue to originate from daemon-owned config and be passed only as needed for runtime bootstrap, not copied into a new persistent gateway-owned store.
+
 ## Data Flow
 
 ### Inbound Messages
