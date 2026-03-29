@@ -11,10 +11,11 @@
 //! - Replace `recv()` with real event deserialization from the Slack stream.
 //! - Replace `send()` with `chat.postMessage` API calls.
 
-use anyhow::{bail, Result};
+use amux_protocol::{GatewayProviderBootstrap, GatewaySendRequest};
+use anyhow::{bail, Context, Result};
+use serde_json::Value;
 
-use crate::router::{GatewayMessage, GatewayResponse};
-use crate::GatewayProvider;
+use crate::runtime::{GatewayProvider, GatewayProviderEvent};
 
 /// Slack gateway provider.
 pub struct SlackProvider {
@@ -23,22 +24,31 @@ pub struct SlackProvider {
 }
 
 impl SlackProvider {
-    /// Create a `SlackProvider` if `AMUX_SLACK_TOKEN` is set and non-empty.
-    pub fn from_env() -> Option<Self> {
-        let token = std::env::var("AMUX_SLACK_TOKEN").ok()?;
-        if token.is_empty() {
-            return None;
+    /// Create a `SlackProvider` from daemon bootstrap config.
+    pub fn from_bootstrap(bootstrap: &GatewayProviderBootstrap) -> Result<Option<Self>> {
+        if bootstrap.platform != "slack" || !bootstrap.enabled {
+            return Ok(None);
         }
-        Some(Self {
-            token,
+        let credentials: Value =
+            serde_json::from_str(&bootstrap.credentials_json).context("parse slack credentials")?;
+        let token = credentials
+            .get("token")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if token.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            token: token.to_string(),
             connected: false,
-        })
+        }))
     }
 }
 
 impl GatewayProvider for SlackProvider {
-    fn name(&self) -> &str {
-        "Slack"
+    fn platform(&self) -> &str {
+        "slack"
     }
 
     #[allow(unused)]
@@ -65,7 +75,7 @@ impl GatewayProvider for SlackProvider {
     fn recv<'a>(
         &'a mut self,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Option<GatewayMessage>>> + Send + 'a>,
+        Box<dyn std::future::Future<Output = Result<Option<GatewayProviderEvent>>> + Send + 'a>,
     > {
         Box::pin(async move {
             if !self.connected {
@@ -75,35 +85,34 @@ impl GatewayProvider for SlackProvider {
             // deserialize them into GatewayMessage structs.
             //
             // Example message mapping:
-            //   SlackEvent::Message { channel, user, text, ts } -> GatewayMessage {
-            //       platform: "slack",
-            //       channel_id: channel,
-            //       user_id: user,
-            //       text,
-            //       timestamp: parse_slack_ts(ts),
-            //   }
+            //   SlackEvent::Message { channel, user, text, ts }
+            //       -> GatewayProviderEvent::Incoming(...)
             Ok(None)
         })
     }
 
     fn send<'a>(
         &'a mut self,
-        response: GatewayResponse,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        request: GatewaySendRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + 'a>>
+    {
         Box::pin(async move {
             if !self.connected {
                 bail!("Slack provider not connected");
             }
             tracing::info!(
-                channel = %response.channel_id,
-                text = %response.text,
+                channel = %request.channel_id,
+                text = %request.content,
                 "Slack: would send message via chat.postMessage API"
             );
             // TODO: POST to https://slack.com/api/chat.postMessage with:
-            //   { "channel": response.channel_id, "text": response.text }
+            //   { "channel": request.channel_id, "text": request.content }
             //   Authorization: Bearer {self.token}
             tracing::warn!("Slack send is a stub — message not actually delivered");
-            Ok(())
+            Ok(Some(format!(
+                "slack:{}:{}",
+                request.channel_id, request.correlation_id
+            )))
         })
     }
 }

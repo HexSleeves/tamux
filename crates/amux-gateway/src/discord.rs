@@ -10,10 +10,11 @@
 //! - Replace `recv()` with MESSAGE_CREATE event deserialization.
 //! - Replace `send()` with `POST /channels/{id}/messages` REST call.
 
-use anyhow::{bail, Result};
+use amux_protocol::{GatewayProviderBootstrap, GatewaySendRequest};
+use anyhow::{bail, Context, Result};
+use serde_json::Value;
 
-use crate::router::{GatewayMessage, GatewayResponse};
-use crate::GatewayProvider;
+use crate::runtime::{GatewayProvider, GatewayProviderEvent};
 
 /// Discord gateway provider.
 pub struct DiscordProvider {
@@ -22,22 +23,31 @@ pub struct DiscordProvider {
 }
 
 impl DiscordProvider {
-    /// Create a `DiscordProvider` if `AMUX_DISCORD_TOKEN` is set and non-empty.
-    pub fn from_env() -> Option<Self> {
-        let token = std::env::var("AMUX_DISCORD_TOKEN").ok()?;
-        if token.is_empty() {
-            return None;
+    /// Create a `DiscordProvider` from daemon bootstrap config.
+    pub fn from_bootstrap(bootstrap: &GatewayProviderBootstrap) -> Result<Option<Self>> {
+        if bootstrap.platform != "discord" || !bootstrap.enabled {
+            return Ok(None);
         }
-        Some(Self {
-            token,
+        let credentials: Value = serde_json::from_str(&bootstrap.credentials_json)
+            .context("parse discord credentials")?;
+        let token = credentials
+            .get("token")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if token.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            token: token.to_string(),
             connected: false,
-        })
+        }))
     }
 }
 
 impl GatewayProvider for DiscordProvider {
-    fn name(&self) -> &str {
-        "Discord"
+    fn platform(&self) -> &str {
+        "discord"
     }
 
     fn connect<'a>(
@@ -65,7 +75,7 @@ impl GatewayProvider for DiscordProvider {
     fn recv<'a>(
         &'a mut self,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Option<GatewayMessage>>> + Send + 'a>,
+        Box<dyn std::future::Future<Output = Result<Option<GatewayProviderEvent>>> + Send + 'a>,
     > {
         Box::pin(async move {
             if !self.connected {
@@ -74,13 +84,7 @@ impl GatewayProvider for DiscordProvider {
             // TODO: Read from the Discord Gateway WebSocket and match on
             // MESSAGE_CREATE dispatch events:
             //
-            //   GatewayMessage {
-            //       platform: "discord",
-            //       channel_id: message.channel_id,
-            //       user_id: message.author.id,
-            //       text: message.content,
-            //       timestamp: parse_discord_timestamp(message.timestamp),
-            //   }
+            //   GatewayProviderEvent::Incoming(...)
             //
             // Filter out messages from bots (message.author.bot == true).
             Ok(None)
@@ -89,22 +93,26 @@ impl GatewayProvider for DiscordProvider {
 
     fn send<'a>(
         &'a mut self,
-        response: GatewayResponse,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        request: GatewaySendRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + 'a>>
+    {
         Box::pin(async move {
             if !self.connected {
                 bail!("Discord provider not connected");
             }
             tracing::info!(
-                channel = %response.channel_id,
-                text = %response.text,
+                channel = %request.channel_id,
+                text = %request.content,
                 "Discord: would send message via Create Message API"
             );
             // TODO: POST https://discord.com/api/v10/channels/{channel_id}/messages
-            //   { "content": response.text }
+            //   { "content": request.content }
             //   Authorization: Bot {self.token}
             tracing::warn!("Discord send is a stub — message not actually delivered");
-            Ok(())
+            Ok(Some(format!(
+                "discord:{}:{}",
+                request.channel_id, request.correlation_id
+            )))
         })
     }
 }

@@ -11,10 +11,11 @@
 //! - Replace `recv()` with `getUpdates` long-polling or webhook handler.
 //! - Replace `send()` with `sendMessage` API call.
 
-use anyhow::{bail, Result};
+use amux_protocol::{GatewayProviderBootstrap, GatewaySendRequest};
+use anyhow::{bail, Context, Result};
+use serde_json::Value;
 
-use crate::router::{GatewayMessage, GatewayResponse};
-use crate::GatewayProvider;
+use crate::runtime::{GatewayProvider, GatewayProviderEvent};
 
 /// Telegram gateway provider.
 pub struct TelegramProvider {
@@ -26,17 +27,26 @@ pub struct TelegramProvider {
 }
 
 impl TelegramProvider {
-    /// Create a `TelegramProvider` if `AMUX_TELEGRAM_TOKEN` is set and non-empty.
-    pub fn from_env() -> Option<Self> {
-        let token = std::env::var("AMUX_TELEGRAM_TOKEN").ok()?;
-        if token.is_empty() {
-            return None;
+    /// Create a `TelegramProvider` from daemon bootstrap config.
+    pub fn from_bootstrap(bootstrap: &GatewayProviderBootstrap) -> Result<Option<Self>> {
+        if bootstrap.platform != "telegram" || !bootstrap.enabled {
+            return Ok(None);
         }
-        Some(Self {
-            token,
+        let credentials: Value = serde_json::from_str(&bootstrap.credentials_json)
+            .context("parse telegram credentials")?;
+        let token = credentials
+            .get("token")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if token.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            token: token.to_string(),
             connected: false,
             update_offset: 0,
-        })
+        }))
     }
 
     /// Base URL for the Telegram Bot API.
@@ -47,8 +57,8 @@ impl TelegramProvider {
 }
 
 impl GatewayProvider for TelegramProvider {
-    fn name(&self) -> &str {
-        "Telegram"
+    fn platform(&self) -> &str {
+        "telegram"
     }
 
     fn connect<'a>(
@@ -73,7 +83,7 @@ impl GatewayProvider for TelegramProvider {
     fn recv<'a>(
         &'a mut self,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Option<GatewayMessage>>> + Send + 'a>,
+        Box<dyn std::future::Future<Output = Result<Option<GatewayProviderEvent>>> + Send + 'a>,
     > {
         Box::pin(async move {
             if !self.connected {
@@ -82,13 +92,7 @@ impl GatewayProvider for TelegramProvider {
             // TODO: Long-poll via GET {api_base}/getUpdates?offset={update_offset}&timeout=30
             //
             // For each Update containing a Message:
-            //   GatewayMessage {
-            //       platform: "telegram",
-            //       channel_id: message.chat.id.to_string(),
-            //       user_id: message.from.id.to_string(),
-            //       text: message.text.unwrap_or_default(),
-            //       timestamp: message.date as u64,
-            //   }
+            //   GatewayProviderEvent::Incoming(...)
             //
             // After processing, set update_offset = last_update_id + 1.
             Ok(None)
@@ -97,21 +101,25 @@ impl GatewayProvider for TelegramProvider {
 
     fn send<'a>(
         &'a mut self,
-        response: GatewayResponse,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        request: GatewaySendRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + 'a>>
+    {
         Box::pin(async move {
             if !self.connected {
                 bail!("Telegram provider not connected");
             }
             tracing::info!(
-                chat_id = %response.channel_id,
-                text = %response.text,
+                chat_id = %request.channel_id,
+                text = %request.content,
                 "Telegram: would send message via sendMessage API"
             );
             // TODO: POST {api_base}/sendMessage with:
-            //   { "chat_id": response.channel_id, "text": response.text }
+            //   { "chat_id": request.channel_id, "text": request.content }
             tracing::warn!("Telegram send is a stub — message not actually delivered");
-            Ok(())
+            Ok(Some(format!(
+                "telegram:{}:{}",
+                request.channel_id, request.correlation_id
+            )))
         })
     }
 }
