@@ -382,30 +382,43 @@ impl AgentEngine {
     }
 
     pub(super) async fn refresh_memory_cache(&self) {
-        if let Err(e) = ensure_memory_files(&self.data_dir).await {
-            tracing::warn!("failed to ensure persistent memory files: {e}");
-        }
-        let mut memory = AgentMemory::default();
-        let memory_dirs = ordered_memory_dirs(&self.data_dir);
-        for dir in &memory_dirs {
-            if let Ok(soul) = tokio::fs::read_to_string(dir.join("SOUL.md")).await {
-                memory.soul = soul;
-                break;
+        let scope_id = current_agent_scope_id();
+        self.refresh_memory_cache_for_scope(&scope_id).await;
+    }
+
+    pub(super) async fn refresh_memory_cache_for_scope(&self, scope_id: &str) {
+        match load_memory_for_scope(&self.data_dir, scope_id).await {
+            Ok(memory) => {
+                self.memory
+                    .write()
+                    .await
+                    .insert(scope_id.to_string(), memory);
+            }
+            Err(e) => {
+                tracing::warn!(scope_id, "failed to ensure persistent memory files: {e}");
             }
         }
-        for dir in &memory_dirs {
-            if let Ok(mem) = tokio::fs::read_to_string(dir.join("MEMORY.md")).await {
-                memory.memory = mem;
-                break;
+    }
+
+    pub(super) async fn memory_snapshot_for_scope(&self, scope_id: &str) -> AgentMemory {
+        {
+            let memory = self.memory.read().await;
+            if let Some(snapshot) = memory.get(scope_id) {
+                return snapshot.clone();
             }
         }
-        for dir in &memory_dirs {
-            if let Ok(user) = tokio::fs::read_to_string(dir.join("USER.md")).await {
-                memory.user_profile = user;
-                break;
-            }
-        }
-        *self.memory.write().await = memory;
+        self.refresh_memory_cache_for_scope(scope_id).await;
+        self.memory
+            .read()
+            .await
+            .get(scope_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub(super) async fn current_memory_snapshot(&self) -> AgentMemory {
+        let scope_id = current_agent_scope_id();
+        self.memory_snapshot_for_scope(&scope_id).await
     }
 
     pub(super) async fn onecontext_bootstrap_for_new_thread(

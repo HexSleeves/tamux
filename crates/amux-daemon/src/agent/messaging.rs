@@ -501,17 +501,17 @@ impl AgentEngine {
             .to_string();
         drop(config);
 
-        let memory_dir = active_memory_dir(&self.data_dir);
-        let memory = self.memory.read().await;
+        let memory_paths = memory_paths_for_scope(&self.data_dir, MAIN_AGENT_ID);
+        let memory = self.memory_snapshot_for_scope(MAIN_AGENT_ID).await;
         let mut system_prompt = format!(
             "{}\n\n{} is the main builder agent. You are {}, the concierge. If you need deeper implementation work, summarize what {} should handle.\nPersistent memory files:\n- MEMORY.md: {}\n- SOUL.md: {}\n- USER.md: {}",
             crate::agent::concierge::concierge_system_prompt(),
             MAIN_AGENT_NAME,
             CONCIERGE_AGENT_NAME,
             MAIN_AGENT_NAME,
-            memory_dir.join("MEMORY.md").display(),
-            memory_dir.join("SOUL.md").display(),
-            memory_dir.join("USER.md").display(),
+            memory_paths.memory_path.display(),
+            memory_paths.soul_path.display(),
+            memory_paths.user_path.display(),
         );
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&build_concierge_runtime_identity_prompt(
@@ -530,7 +530,6 @@ impl AgentEngine {
             system_prompt.push_str("\n\n## Operator Profile\n");
             system_prompt.push_str(memory.user_profile.trim());
         }
-        drop(memory);
         if is_internal_dm_thread(thread_id) {
             system_prompt.push_str(
                 "\n\nThis thread is an internal agent-to-agent DM. Reply to another agent, not directly to the operator.",

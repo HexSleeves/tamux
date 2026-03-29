@@ -51,32 +51,32 @@ fn str_to_episode_outcome(s: &str) -> EpisodeOutcome {
 }
 
 fn row_to_episode(row: &rusqlite::Row<'_>) -> rusqlite::Result<Episode> {
-    let episode_type_str: String = row.get(4)?;
-    let outcome_str: String = row.get(8)?;
-    let entities_json: String = row.get(10)?;
-    let causal_chain_json: String = row.get(11)?;
+    let episode_type_str: String = row.get(5)?;
+    let outcome_str: String = row.get(9)?;
+    let entities_json: String = row.get(11)?;
+    let causal_chain_json: String = row.get(12)?;
 
     Ok(Episode {
         id: row.get(0)?,
-        goal_run_id: row.get(1)?,
-        thread_id: row.get(2)?,
-        session_id: row.get(3)?,
-        goal_text: row.get(5)?,
-        goal_type: row.get(6)?,
+        goal_run_id: row.get(2)?,
+        thread_id: row.get(3)?,
+        session_id: row.get(4)?,
+        goal_text: row.get(6)?,
+        goal_type: row.get(7)?,
         episode_type: str_to_episode_type(&episode_type_str),
-        summary: row.get(7)?,
+        summary: row.get(8)?,
         outcome: str_to_episode_outcome(&outcome_str),
-        root_cause: row.get(9)?,
+        root_cause: row.get(10)?,
         entities: serde_json::from_str(&entities_json).unwrap_or_default(),
         causal_chain: serde_json::from_str(&causal_chain_json).unwrap_or_default(),
-        solution_class: row.get(12)?,
-        duration_ms: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
-        tokens_used: row.get::<_, Option<i32>>(14)?.map(|v| v as u32),
-        confidence: row.get(15)?,
-        confidence_before: row.get(16)?,
-        confidence_after: row.get(17)?,
-        created_at: row.get::<_, i64>(18)? as u64,
-        expires_at: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
+        solution_class: row.get(13)?,
+        duration_ms: row.get::<_, Option<i64>>(14)?.map(|v| v as u64),
+        tokens_used: row.get::<_, Option<i32>>(15)?.map(|v| v as u32),
+        confidence: row.get(16)?,
+        confidence_before: row.get(17)?,
+        confidence_after: row.get(18)?,
+        created_at: row.get::<_, i64>(19)? as u64,
+        expires_at: row.get::<_, Option<i64>>(20)?.map(|v| v as u64),
     })
 }
 
@@ -120,6 +120,7 @@ impl AgentEngine {
         }
 
         let ep = episode.clone();
+        let agent_id = crate::agent::agent_identity::current_agent_scope_id();
         let episode_type_str = episode_type_to_str(&ep.episode_type).to_string();
         let outcome_str = episode_outcome_to_str(&ep.outcome).to_string();
         let entities_json = ep.entities_json();
@@ -131,13 +132,14 @@ impl AgentEngine {
             .call(move |conn| {
                 conn.execute(
                     "INSERT OR REPLACE INTO episodes (
-                        id, goal_run_id, thread_id, session_id, goal_text, goal_type,
+                        id, agent_id, goal_run_id, thread_id, session_id, goal_text, goal_type,
                         episode_type, summary, outcome, root_cause, entities, causal_chain,
                         solution_class, duration_ms, tokens_used, confidence,
                         confidence_before, confidence_after, created_at, expires_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
                     params![
                         ep.id,
+                        agent_id,
                         ep.goal_run_id,
                         ep.thread_id,
                         ep.session_id,
@@ -377,17 +379,19 @@ impl AgentEngine {
     /// Retrieve a single episode by ID.
     pub(crate) async fn get_episode(&self, episode_id: &str) -> Result<Option<Episode>> {
         let episode_id = episode_id.to_string();
+        let agent_id = crate::agent::agent_identity::current_agent_scope_id();
+        let include_legacy = crate::agent::is_main_agent_scope(&agent_id) as i64;
         self.history
             .conn
             .call(move |conn| {
                 let result = conn
                     .query_row(
-                        "SELECT id, goal_run_id, thread_id, session_id, episode_type,
+                        "SELECT id, agent_id, goal_run_id, thread_id, session_id, episode_type,
                                 goal_text, goal_type, summary, outcome, root_cause, entities, causal_chain,
                                 solution_class, duration_ms, tokens_used, confidence, confidence_before, confidence_after,
                                 created_at, expires_at
-                         FROM episodes WHERE id = ?1",
-                        params![episode_id],
+                         FROM episodes WHERE id = ?1 AND (agent_id = ?2 OR (?3 = 1 AND agent_id IS NULL))",
+                        params![episode_id, agent_id, include_legacy],
                         row_to_episode,
                     )
                     .optional()?;
@@ -403,18 +407,21 @@ impl AgentEngine {
         goal_run_id: &str,
     ) -> Result<Vec<Episode>> {
         let goal_run_id = goal_run_id.to_string();
+        let agent_id = crate::agent::agent_identity::current_agent_scope_id();
+        let include_legacy = crate::agent::is_main_agent_scope(&agent_id) as i64;
         self.history
             .conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, goal_run_id, thread_id, session_id, episode_type,
+                    "SELECT id, agent_id, goal_run_id, thread_id, session_id, episode_type,
                             goal_text, goal_type, summary, outcome, root_cause, entities, causal_chain,
                             solution_class, duration_ms, tokens_used, confidence, confidence_before, confidence_after,
                             created_at, expires_at
-                     FROM episodes WHERE goal_run_id = ?1
+                     FROM episodes WHERE goal_run_id = ?1 AND (agent_id = ?2 OR (?3 = 1 AND agent_id IS NULL))
                      ORDER BY created_at DESC",
                 )?;
-                let rows = stmt.query_map(params![goal_run_id], row_to_episode)?;
+                let rows =
+                    stmt.query_map(params![goal_run_id, agent_id, include_legacy], row_to_episode)?;
                 rows.collect::<std::result::Result<Vec<_>, _>>()
                     .map_err(Into::into)
             })
@@ -495,6 +502,8 @@ impl AgentEngine {
             return Ok(());
         };
         let current_episode_id = episode.id.clone();
+        let agent_id = crate::agent::agent_identity::current_agent_scope_id();
+        let include_legacy = crate::agent::is_main_agent_scope(&agent_id) as i64;
         let related: Option<(String, String)> = self
             .history
             .conn
@@ -502,10 +511,12 @@ impl AgentEngine {
                 Ok(conn
                     .query_row(
                         "SELECT id, outcome FROM episodes
-                     WHERE goal_text = ?1 AND id != ?2
+                     WHERE goal_text = ?1
+                       AND id != ?2
+                       AND (agent_id = ?3 OR (?4 = 1 AND agent_id IS NULL))
                      ORDER BY created_at DESC
                      LIMIT 1",
-                        params![goal_text, current_episode_id],
+                        params![goal_text, current_episode_id, agent_id, include_legacy],
                         |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
                     )
                     .optional()?)

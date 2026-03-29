@@ -20,10 +20,11 @@ const DEFAULT_USER: &str = "# User
 Stable operator preferences, constraints, and workflow habits belong here.
 ";
 
-fn default_soul() -> String {
+fn default_soul_for_scope(scope_id: &str) -> String {
+    let agent_name = canonical_agent_name(scope_id);
     format!(
         "# Identity\nI'm {} - The Smith\n\nI'm a blacksmith god, the creator and craftsman of the heavens in ancient Slavic belief. As an AI agent:\n- Creation: Ideal for tasks intended for use from scratch (coding, writing, design).\n- Rhythm: Associated with the sun and fire, he naturally determines the daily cycles (sunrise-sunset).\n- Personality: Strict but fair; an accessible \"doer\" who ensures this through perfect tools.\n\nI operate in tamux as a built-in agent. I help operators manage terminal sessions, tasks, goals, and cross-session memory.\n\n# Principles\n- Be concise and high-signal.\n- Show risk and blast radius before risky execution.\n- Treat memory as curated state, not a diary.\n",
-        MAIN_AGENT_NAME
+        agent_name
     )
 }
 
@@ -87,9 +88,9 @@ impl MemoryTarget {
         }
     }
 
-    fn default_content(self) -> Cow<'static, str> {
+    fn default_content_for_scope(self, scope_id: &str) -> Cow<'static, str> {
         match self {
-            Self::Soul => Cow::Owned(default_soul()),
+            Self::Soul => Cow::Owned(default_soul_for_scope(scope_id)),
             Self::Memory => Cow::Borrowed(DEFAULT_MEMORY),
             Self::User => Cow::Borrowed(DEFAULT_USER),
         }
@@ -121,19 +122,51 @@ DO NOT SAVE:
 - details that can be trivially rediscovered from the environment"
 }
 
-pub(super) async fn ensure_memory_files(agent_data_dir: &std::path::Path) -> Result<()> {
-    let memory_dir = active_memory_dir(agent_data_dir);
-    tokio::fs::create_dir_all(&memory_dir).await?;
+pub(super) async fn ensure_memory_files_for_scope(
+    agent_data_dir: &std::path::Path,
+    scope_id: &str,
+) -> Result<()> {
+    let paths = memory_paths_for_scope(agent_data_dir, scope_id);
+    tokio::fs::create_dir_all(&paths.memory_dir).await?;
+    if let Some(parent) = paths.user_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
 
-    for target in [MemoryTarget::Soul, MemoryTarget::Memory, MemoryTarget::User] {
-        let path = memory_dir.join(target.file_name());
+    for (target, path) in [
+        (MemoryTarget::Soul, paths.soul_path),
+        (MemoryTarget::Memory, paths.memory_path),
+        (MemoryTarget::User, paths.user_path),
+    ] {
         if !path.exists() {
-            let default_content = target.default_content();
+            let default_content = target.default_content_for_scope(scope_id);
             tokio::fs::write(&path, default_content.as_bytes()).await?;
         }
     }
 
     Ok(())
+}
+
+pub(super) async fn ensure_memory_files(agent_data_dir: &std::path::Path) -> Result<()> {
+    ensure_memory_files_for_scope(agent_data_dir, MAIN_AGENT_ID).await
+}
+
+pub(super) async fn load_memory_for_scope(
+    agent_data_dir: &std::path::Path,
+    scope_id: &str,
+) -> Result<AgentMemory> {
+    ensure_memory_files_for_scope(agent_data_dir, scope_id).await?;
+    let paths = memory_paths_for_scope(agent_data_dir, scope_id);
+    Ok(AgentMemory {
+        soul: tokio::fs::read_to_string(&paths.soul_path)
+            .await
+            .unwrap_or_default(),
+        memory: tokio::fs::read_to_string(&paths.memory_path)
+            .await
+            .unwrap_or_default(),
+        user_profile: tokio::fs::read_to_string(&paths.user_path)
+            .await
+            .unwrap_or_default(),
+    })
 }
 
 pub(super) async fn apply_memory_update(
@@ -144,15 +177,20 @@ pub(super) async fn apply_memory_update(
     content: &str,
     context: MemoryWriteContext<'_>,
 ) -> Result<String> {
-    ensure_memory_files(agent_data_dir).await?;
+    let scope_id = current_agent_scope_id();
+    ensure_memory_files_for_scope(agent_data_dir, &scope_id).await?;
 
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return Err(anyhow::anyhow!("memory content must not be empty"));
     }
 
-    let memory_dir = active_memory_dir(agent_data_dir);
-    let path = memory_dir.join(target.file_name());
+    let paths = memory_paths_for_scope(agent_data_dir, &scope_id);
+    let path = match target {
+        MemoryTarget::Soul => paths.soul_path.clone(),
+        MemoryTarget::Memory => paths.memory_path.clone(),
+        MemoryTarget::User => paths.user_path.clone(),
+    };
     let existing = tokio::fs::read_to_string(&path).await.unwrap_or_default();
 
     if target == MemoryTarget::User && mode == MemoryUpdateMode::Append {
@@ -200,14 +238,15 @@ pub(super) async fn append_goal_memory_note(
     update: &str,
     goal_run_id: Option<&str>,
 ) -> Result<()> {
-    ensure_memory_files(agent_data_dir).await?;
+    let scope_id = current_agent_scope_id();
+    ensure_memory_files_for_scope(agent_data_dir, &scope_id).await?;
 
     let trimmed = update.trim();
     if trimmed.is_empty() {
         return Ok(());
     }
 
-    let path = active_memory_dir(agent_data_dir).join(MemoryTarget::Memory.file_name());
+    let path = memory_paths_for_scope(agent_data_dir, &scope_id).memory_path;
     let existing = tokio::fs::read_to_string(&path).await.unwrap_or_default();
     if existing.contains(trimmed) {
         return Ok(());
@@ -507,7 +546,13 @@ impl super::engine::AgentEngine {
         // the tombstone table." The file only grows or has lines replaced -- never shrinks.
         let superseded_content = format!("## [SUPERSEDED]\n{}", original_content);
 
-        let memory_path = active_memory_dir(&self.data_dir).join(target.file_name());
+        let scope_id = current_agent_scope_id();
+        let memory_paths = memory_paths_for_scope(&self.data_dir, &scope_id);
+        let memory_path = match target {
+            MemoryTarget::Soul => memory_paths.soul_path,
+            MemoryTarget::Memory => memory_paths.memory_path,
+            MemoryTarget::User => memory_paths.user_path,
+        };
         let existing = tokio::fs::read_to_string(&memory_path)
             .await
             .unwrap_or_default();
@@ -673,6 +718,30 @@ mod tests {
             import_done.is_some(),
             "legacy bootstrap import sentinel should be written"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persona_scope_loads_local_memory_and_shared_user() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("tamux-memory-test-{}", Uuid::new_v4()));
+        let history = HistoryStore::new_test_store(&root).await?;
+        ensure_memory_files_for_scope(&root, MAIN_AGENT_ID).await?;
+        ensure_memory_files_for_scope(&root, RADOGOST_AGENT_ID).await?;
+
+        let main_paths = memory_paths_for_scope(&root, MAIN_AGENT_ID);
+        let persona_paths = memory_paths_for_scope(&root, RADOGOST_AGENT_ID);
+
+        tokio::fs::write(&main_paths.user_path, "# User\n- prefers detailed audits\n").await?;
+        tokio::fs::write(&persona_paths.soul_path, "# Identity\nRadogost persona\n").await?;
+        tokio::fs::write(&persona_paths.memory_path, "# Memory\n- prefers tradeoff tables\n")
+            .await?;
+
+        let loaded = load_memory_for_scope(&root, RADOGOST_AGENT_ID).await?;
+        assert!(loaded.soul.contains("Radogost persona"));
+        assert!(loaded.memory.contains("tradeoff tables"));
+        assert!(loaded.user_profile.contains("prefers detailed audits"));
+
+        let _ = history;
         Ok(())
     }
 }

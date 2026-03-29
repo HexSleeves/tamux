@@ -1,7 +1,7 @@
 use super::*;
 
 impl TuiModel {
-    fn begin_custom_model_edit(&mut self) {
+    pub(crate) fn begin_custom_model_edit(&mut self) {
         let current = if self.config.custom_model_name.trim().is_empty()
             || self.config.custom_model_name == self.config.model
         {
@@ -663,28 +663,31 @@ impl TuiModel {
                     {
                         SettingsPickerTarget::Provider => {
                             self.apply_provider_selection(def.id);
-                            // Chain into model picker so user can choose a model
-                            // for the newly selected provider.
-                            let models = providers::known_models_for_provider_auth(
-                                &self.config.provider,
-                                &self.config.auth_source,
-                            );
-                            if !models.is_empty() {
-                                self.config
-                                    .reduce(config::ConfigAction::ModelsFetched(models));
-                            }
-                            self.send_daemon_command(DaemonCommand::FetchModels {
-                                provider_id: self.config.provider.clone(),
-                                base_url: self.config.base_url.clone(),
-                                api_key: self.config.api_key.clone(),
-                            });
-                            let count =
-                                widgets::model_picker::available_models(&self.config).len() + 1;
                             self.settings_picker_target = None;
                             self.close_top_modal();
-                            self.modal
-                                .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
-                            self.modal.set_picker_item_count(count);
+                            if self.config.provider != "custom" {
+                                // Chain into model picker so user can choose a model
+                                // for the newly selected provider.
+                                let models = providers::known_models_for_provider_auth(
+                                    &self.config.provider,
+                                    &self.config.auth_source,
+                                );
+                                if !models.is_empty() {
+                                    self.config
+                                        .reduce(config::ConfigAction::ModelsFetched(models));
+                                }
+                                self.send_daemon_command(DaemonCommand::FetchModels {
+                                    provider_id: self.config.provider.clone(),
+                                    base_url: self.config.base_url.clone(),
+                                    api_key: self.config.api_key.clone(),
+                                });
+                                let count =
+                                    widgets::model_picker::available_models(&self.config).len() + 1;
+                                self.modal.reduce(modal::ModalAction::Push(
+                                    modal::ModalKind::ModelPicker,
+                                ));
+                                self.modal.set_picker_item_count(count);
+                            }
                             return;
                         }
                         SettingsPickerTarget::SubAgentProvider => {
@@ -1010,5 +1013,35 @@ mod tests {
             DaemonCommand::WhatsAppLinkUnsubscribe
         ));
         assert!(daemon_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn selecting_custom_provider_does_not_chain_into_model_picker() {
+        let (mut model, _daemon_rx) = make_model();
+        let custom_index = providers::PROVIDERS
+            .iter()
+            .position(|provider| provider.id == "custom")
+            .expect("custom provider to exist");
+
+        model.settings_picker_target = Some(SettingsPickerTarget::Provider);
+        model
+            .modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::ProviderPicker));
+        model.modal.set_picker_item_count(providers::PROVIDERS.len());
+        if custom_index > 0 {
+            model
+                .modal
+                .reduce(modal::ModalAction::Navigate(custom_index as i32));
+        }
+
+        let quit = model.handle_key_modal(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            modal::ModalKind::ProviderPicker,
+        );
+
+        assert!(!quit);
+        assert_eq!(model.config.provider, "custom");
+        assert_ne!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
     }
 }

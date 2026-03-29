@@ -8,7 +8,8 @@ pub(super) fn build_system_prompt(
     config: &AgentConfig,
     base: &str,
     memory: &AgentMemory,
-    data_dir: &std::path::Path,
+    memory_paths: &super::task_prompt::MemoryPaths,
+    agent_scope_id: &str,
     sub_agents: &[SubAgentDefinition],
     operator_model_summary: Option<&str>,
     operational_context: Option<&str>,
@@ -18,10 +19,7 @@ pub(super) fn build_system_prompt(
     negative_constraints: Option<&str>,
 ) -> String {
     let mut prompt = String::new();
-    let memory_path = data_dir.join("MEMORY.md");
-    let soul_path = data_dir.join("SOUL.md");
-    let user_path = data_dir.join("USER.md");
-    let skills_root = super::skills_dir(data_dir);
+    let skills_root = super::skills_dir(&super::agent_data_dir());
     let generated_skills_root = skills_root.join("generated");
 
     if !memory.soul.is_empty() {
@@ -48,11 +46,18 @@ pub(super) fn build_system_prompt(
              - SOUL.md: {}\n\
              - USER.md: {}\n\
              - Use these exact paths when reading or explaining where tamux agent memory lives on this platform.\n",
-            memory_path.display(),
-            soul_path.display(),
-            user_path.display(),
+            memory_paths.memory_path.display(),
+            memory_paths.soul_path.display(),
+            memory_paths.user_path.display(),
         ),
     );
+    if !super::agent_identity::is_main_agent_scope(agent_scope_id) {
+        prompt.push_str(
+            "\n## Shared User Profile Policy\n\
+             - USER.md is shared across agents and read-only for you.\n\
+             - If a user preference or operator profile fact should change, ask Swarog via `message_agent` and let Swarog decide whether to apply it.\n",
+        );
+    }
 
     prompt.push_str(
         &format!(
@@ -274,13 +279,13 @@ pub(super) fn build_external_agent_prompt(
     config: &AgentConfig,
     memory: &AgentMemory,
     user_message: &str,
-    memory_dir: &std::path::Path,
+    memory_paths: &super::task_prompt::MemoryPaths,
+    agent_scope_id: &str,
     operator_model_summary: Option<&str>,
     operational_context: Option<&str>,
     causal_guidance: Option<&str>,
 ) -> String {
     let mut context_parts = Vec::new();
-    let memory_root = memory_dir;
     let skills_root = super::skills_dir(&super::agent_data_dir());
     let generated_skills_root = skills_root.join("generated");
 
@@ -358,10 +363,14 @@ pub(super) fn build_external_agent_prompt(
 
     context_parts.push(format!(
         "tamux persistent memory files on this machine:\n- MEMORY.md: {}\n- SOUL.md: {}\n- USER.md: {}\n",
-        memory_root.join("MEMORY.md").display(),
-        memory_root.join("SOUL.md").display(),
-        memory_root.join("USER.md").display(),
+        memory_paths.memory_path.display(),
+        memory_paths.soul_path.display(),
+        memory_paths.user_path.display(),
     ));
+    if !super::agent_identity::is_main_agent_scope(agent_scope_id) {
+        context_parts
+            .push("USER.md is shared across agents and read-only for this scope.\n".to_string());
+    }
     context_parts.push(format!(
         "tamux local skills on this machine:\n- Skills root: {}\n- Generated skills: {}\n\
          Before non-trivial work, review relevant skills in that directory and reuse them when possible.\n",

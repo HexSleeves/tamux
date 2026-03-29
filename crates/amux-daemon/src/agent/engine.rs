@@ -81,7 +81,7 @@ pub struct AgentEngine {
     pub inflight_goal_runs: Mutex<HashSet<String>>,
     pub heartbeat_items: RwLock<Vec<HeartbeatItem>>,
     pub event_tx: broadcast::Sender<AgentEvent>,
-    pub memory: RwLock<AgentMemory>,
+    pub memory: RwLock<HashMap<String, AgentMemory>>,
     pub(super) operator_model: RwLock<OperatorModel>,
     pub(super) anticipatory: RwLock<AnticipatoryRuntime>,
     pub(super) collaboration: RwLock<HashMap<String, collaboration::CollaborationSession>>,
@@ -134,7 +134,7 @@ pub struct AgentEngine {
     /// Set after both AgentEngine and PluginManager are constructed in server.rs.
     pub plugin_manager: std::sync::OnceLock<Arc<crate::plugin::PluginManager>>,
     /// Episodic memory subsystem state (Phase v3.0).
-    pub(super) episodic_store: RwLock<super::episodic::EpisodicStore>,
+    pub(super) episodic_store: RwLock<HashMap<String, super::episodic::EpisodicStore>>,
     /// Situational awareness monitor (Phase v3.0: AWAR-01).
     pub(super) awareness: RwLock<super::awareness::AwarenessMonitor>,
     /// Calibration tracker for uncertainty quantification (Phase v3.0: UNCR-07).
@@ -214,7 +214,7 @@ impl AgentEngine {
             inflight_goal_runs: Mutex::new(HashSet::new()),
             heartbeat_items: RwLock::new(Vec::new()),
             event_tx,
-            memory: RwLock::new(AgentMemory::default()),
+            memory: RwLock::new(HashMap::new()),
             operator_model: RwLock::new(OperatorModel::default()),
             anticipatory: RwLock::new(AnticipatoryRuntime::default()),
             collaboration: RwLock::new(HashMap::new()),
@@ -247,7 +247,7 @@ impl AgentEngine {
             pattern_store: RwLock::new(super::learning::patterns::PatternStore::default()),
             disclosure_queue: RwLock::new(super::capability_tier::DisclosureQueue::default()),
             plugin_manager: std::sync::OnceLock::new(),
-            episodic_store: RwLock::new(super::episodic::EpisodicStore::default()),
+            episodic_store: RwLock::new(HashMap::new()),
             awareness: RwLock::new(super::awareness::AwarenessMonitor::new()),
             calibration_tracker: RwLock::new(
                 super::uncertainty::calibration::CalibrationTracker::default(),

@@ -59,8 +59,9 @@ impl AgentEngine {
         };
 
         let mut enriched_prompt = if is_first_message {
-            let memory = self.memory.read().await;
-            let memory_dir = active_memory_dir(&self.data_dir);
+            let agent_scope_id = current_agent_scope_id();
+            let memory = self.current_memory_snapshot().await;
+            let memory_paths = memory_paths_for_scope(&self.data_dir, &agent_scope_id);
             let operator_model_summary = self.build_operator_model_prompt_summary().await;
             let operational_context = self.build_operational_context_summary().await;
             let causal_guidance = self.build_causal_guidance_summary().await;
@@ -68,7 +69,8 @@ impl AgentEngine {
                 config,
                 &memory,
                 content,
-                &memory_dir,
+                &memory_paths,
+                &agent_scope_id,
                 operator_model_summary.as_deref(),
                 operational_context.as_deref(),
                 causal_guidance.as_deref(),
@@ -82,7 +84,9 @@ impl AgentEngine {
             "Loaded persistent memory, user profile, and local skill paths for this turn.",
             Some(format!(
                 "memory_dir={}; skills_dir={}",
-                active_memory_dir(&self.data_dir).display(),
+                memory_paths_for_scope(&self.data_dir, &current_agent_scope_id())
+                    .memory_dir
+                    .display(),
                 skills_dir(&self.data_dir).display()
             )),
         );

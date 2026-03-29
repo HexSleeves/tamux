@@ -104,17 +104,19 @@ impl AgentEngine {
     ) -> Result<()> {
         let c = constraint.clone();
         let ct_str = constraint_type_to_str(&c.constraint_type).to_string();
+        let agent_id = crate::agent::agent_identity::current_agent_scope_id();
 
         self.history
             .conn
             .call(move |conn| {
                 conn.execute(
                     "INSERT OR REPLACE INTO negative_knowledge
-                     (id, episode_id, constraint_type, subject, solution_class,
+                     (id, agent_id, episode_id, constraint_type, subject, solution_class,
                       description, confidence, valid_until, created_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     params![
                         c.id,
+                        agent_id,
                         c.episode_id,
                         ct_str,
                         c.subject,
@@ -131,7 +133,9 @@ impl AgentEngine {
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         // Update cached constraints
-        let mut store = self.episodic_store.write().await;
+        let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+        let mut stores = self.episodic_store.write().await;
+        let store = stores.entry(scope_id).or_default();
         store.cached_constraints.push(constraint.clone());
 
         tracing::info!(subject = %constraint.subject, "Added negative knowledge constraint");
@@ -185,21 +189,25 @@ impl AgentEngine {
     ) -> Result<Vec<NegativeConstraint>> {
         let now_ms = super::super::now_millis() as i64;
         let filter = entity_filter.map(|s| format!("%{s}%"));
+        let agent_id = crate::agent::agent_identity::current_agent_scope_id();
+        let include_legacy = crate::agent::is_main_agent_scope(&agent_id) as i64;
 
         self.history
             .conn
             .call(move |conn| {
                 if let Some(ref pattern) = filter {
                     let mut stmt = conn.prepare(
-                        "SELECT id, episode_id, constraint_type, subject, solution_class,
+                        "SELECT id, agent_id, episode_id, constraint_type, subject, solution_class,
                                 description, confidence, valid_until, created_at
                          FROM negative_knowledge
-                         WHERE (valid_until IS NULL OR valid_until > ?1)
-                         AND (subject LIKE ?2 OR solution_class LIKE ?2)
+                         WHERE (agent_id = ?1 OR (?2 = 1 AND agent_id IS NULL))
+                         AND (valid_until IS NULL OR valid_until > ?3)
+                         AND (subject LIKE ?4 OR solution_class LIKE ?4)
                          ORDER BY created_at DESC
                          LIMIT 20",
                     )?;
-                    let rows = stmt.query_map(params![now_ms, pattern], row_to_constraint)?;
+                    let rows =
+                        stmt.query_map(params![agent_id, include_legacy, now_ms, pattern], row_to_constraint)?;
                     let mut constraints = Vec::new();
                     for row in rows {
                         constraints.push(row?);
@@ -207,14 +215,15 @@ impl AgentEngine {
                     Ok(constraints)
                 } else {
                     let mut stmt = conn.prepare(
-                        "SELECT id, episode_id, constraint_type, subject, solution_class,
+                        "SELECT id, agent_id, episode_id, constraint_type, subject, solution_class,
                                 description, confidence, valid_until, created_at
                          FROM negative_knowledge
-                         WHERE (valid_until IS NULL OR valid_until > ?1)
+                         WHERE (agent_id = ?1 OR (?2 = 1 AND agent_id IS NULL))
+                           AND (valid_until IS NULL OR valid_until > ?3)
                          ORDER BY created_at DESC
                          LIMIT 20",
                     )?;
-                    let rows = stmt.query_map(params![now_ms], row_to_constraint)?;
+                    let rows = stmt.query_map(params![agent_id, include_legacy, now_ms], row_to_constraint)?;
                     let mut constraints = Vec::new();
                     for row in rows {
                         constraints.push(row?);
@@ -246,7 +255,9 @@ impl AgentEngine {
         // Update cached constraints: filter out expired
         if deleted > 0 {
             let now_ms = super::super::now_millis();
-            let mut store = self.episodic_store.write().await;
+            let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+            let mut stores = self.episodic_store.write().await;
+            let store = stores.entry(scope_id).or_default();
             store
                 .cached_constraints
                 .retain(|c| is_constraint_active(c, now_ms));
@@ -258,24 +269,26 @@ impl AgentEngine {
     /// Refresh the in-memory constraint cache from the database.
     pub(crate) async fn refresh_constraint_cache(&self) -> Result<()> {
         let constraints = self.query_active_constraints(None).await?;
-        let mut store = self.episodic_store.write().await;
+        let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+        let mut stores = self.episodic_store.write().await;
+        let store = stores.entry(scope_id).or_default();
         store.cached_constraints = constraints;
         Ok(())
     }
 }
 
 fn row_to_constraint(row: &rusqlite::Row<'_>) -> rusqlite::Result<NegativeConstraint> {
-    let ct_str: String = row.get(2)?;
+    let ct_str: String = row.get(3)?;
     Ok(NegativeConstraint {
         id: row.get(0)?,
-        episode_id: row.get(1)?,
+        episode_id: row.get(2)?,
         constraint_type: str_to_constraint_type(&ct_str),
-        subject: row.get(3)?,
-        solution_class: row.get(4)?,
-        description: row.get(5)?,
-        confidence: row.get(6)?,
-        valid_until: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
-        created_at: row.get::<_, i64>(8)? as u64,
+        subject: row.get(4)?,
+        solution_class: row.get(5)?,
+        description: row.get(6)?,
+        confidence: row.get(7)?,
+        valid_until: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
+        created_at: row.get::<_, i64>(9)? as u64,
     })
 }
 

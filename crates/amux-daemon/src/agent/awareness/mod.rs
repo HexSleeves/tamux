@@ -199,7 +199,9 @@ impl AgentEngine {
 
         // 2. Consult counter-who (AWAR-03 locked decision)
         let counter_who_confirms = {
-            let store = self.episodic_store.read().await;
+            let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+            let stores = self.episodic_store.read().await;
+            let store = stores.get(&scope_id).cloned().unwrap_or_default();
             super::episodic::counter_who::detect_repeated_approaches(
                 &store.counter_who.tried_approaches,
                 3,

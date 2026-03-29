@@ -2,17 +2,17 @@
 
 use anyhow::Result;
 
-/// Full SQL schema for the episodic memory subsystem.
+/// Base table schema for the episodic memory subsystem.
 ///
 /// Tables:
 /// - `episodes` — structured episode records
-/// - `episodes_fts` — FTS5 full-text search index on episodes
 /// - `episode_links` — directed relationships between episodes
 /// - `negative_knowledge` — constraint graph of ruled-out approaches
 /// - `counter_who_state` — persistent self-model snapshots
-pub const EPISODIC_SCHEMA: &str = "
+const EPISODIC_TABLES: &str = "
     CREATE TABLE IF NOT EXISTS episodes (
         id             TEXT PRIMARY KEY,
+        agent_id       TEXT,
         goal_run_id    TEXT,
         thread_id      TEXT,
         session_id     TEXT,
@@ -33,25 +33,20 @@ pub const EPISODIC_SCHEMA: &str = "
         created_at     INTEGER NOT NULL,
         expires_at     INTEGER
     );
-    CREATE INDEX IF NOT EXISTS idx_episodes_goal ON episodes(goal_run_id);
-    CREATE INDEX IF NOT EXISTS idx_episodes_thread ON episodes(thread_id);
-    CREATE INDEX IF NOT EXISTS idx_episodes_type_ts ON episodes(episode_type, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_episodes_outcome ON episodes(outcome, created_at DESC);
 
     CREATE TABLE IF NOT EXISTS episode_links (
         id                 TEXT PRIMARY KEY,
+        agent_id           TEXT,
         source_episode_id  TEXT NOT NULL,
         target_episode_id  TEXT NOT NULL,
         link_type          TEXT NOT NULL,
         evidence           TEXT,
         created_at         INTEGER NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_episode_links_source ON episode_links(source_episode_id);
-    CREATE INDEX IF NOT EXISTS idx_episode_links_target ON episode_links(target_episode_id);
-    CREATE INDEX IF NOT EXISTS idx_episode_links_type ON episode_links(link_type);
 
     CREATE TABLE IF NOT EXISTS negative_knowledge (
         id              TEXT PRIMARY KEY,
+        agent_id        TEXT,
         episode_id      TEXT,
         constraint_type TEXT NOT NULL,
         subject         TEXT NOT NULL,
@@ -61,17 +56,35 @@ pub const EPISODIC_SCHEMA: &str = "
         valid_until     INTEGER,
         created_at      INTEGER NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_negative_knowledge_subject ON negative_knowledge(subject);
-    CREATE INDEX IF NOT EXISTS idx_negative_knowledge_type ON negative_knowledge(constraint_type);
-    CREATE INDEX IF NOT EXISTS idx_negative_knowledge_valid ON negative_knowledge(valid_until);
 
     CREATE TABLE IF NOT EXISTS counter_who_state (
         id           TEXT PRIMARY KEY,
+        agent_id     TEXT,
         goal_run_id  TEXT,
         thread_id    TEXT,
         state_json   TEXT NOT NULL,
         updated_at   INTEGER NOT NULL
     );
+";
+
+/// Indexes created after column-migration helpers run.
+const EPISODIC_INDEXES: &str = "
+    CREATE INDEX IF NOT EXISTS idx_episodes_agent ON episodes(agent_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_episodes_goal ON episodes(goal_run_id);
+    CREATE INDEX IF NOT EXISTS idx_episodes_thread ON episodes(thread_id);
+    CREATE INDEX IF NOT EXISTS idx_episodes_type_ts ON episodes(episode_type, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_episodes_outcome ON episodes(outcome, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_episode_links_agent ON episode_links(agent_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_episode_links_source ON episode_links(source_episode_id);
+    CREATE INDEX IF NOT EXISTS idx_episode_links_target ON episode_links(target_episode_id);
+    CREATE INDEX IF NOT EXISTS idx_episode_links_type ON episode_links(link_type);
+
+    CREATE INDEX IF NOT EXISTS idx_negative_knowledge_agent ON negative_knowledge(agent_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_negative_knowledge_subject ON negative_knowledge(subject);
+    CREATE INDEX IF NOT EXISTS idx_negative_knowledge_type ON negative_knowledge(constraint_type);
+    CREATE INDEX IF NOT EXISTS idx_negative_knowledge_valid ON negative_knowledge(valid_until);
+
     CREATE INDEX IF NOT EXISTS idx_counter_who_state_updated ON counter_who_state(updated_at DESC);
 ";
 
@@ -80,8 +93,9 @@ pub const EPISODIC_SCHEMA: &str = "
 /// This creates all episodic tables, indexes, and FTS5 virtual tables.
 /// Safe to call multiple times (all statements use IF NOT EXISTS).
 pub fn init_episodic_schema(conn: &rusqlite::Connection) -> Result<()> {
-    conn.execute_batch(EPISODIC_SCHEMA)?;
+    conn.execute_batch(EPISODIC_TABLES)?;
     ensure_episode_columns(conn)?;
+    conn.execute_batch(EPISODIC_INDEXES)?;
 
     // FTS5 virtual table created separately — virtual tables need individual statements.
     // Use .ok() to tolerate SQLite builds without FTS5 support.
@@ -118,10 +132,14 @@ pub fn init_episodic_schema(conn: &rusqlite::Connection) -> Result<()> {
 }
 
 fn ensure_episode_columns(conn: &rusqlite::Connection) -> Result<()> {
+    ensure_column(conn, "episodes", "agent_id", "TEXT")?;
     ensure_column(conn, "episodes", "goal_text", "TEXT")?;
     ensure_column(conn, "episodes", "goal_type", "TEXT")?;
     ensure_column(conn, "episodes", "confidence_before", "REAL")?;
     ensure_column(conn, "episodes", "confidence_after", "REAL")?;
+    ensure_column(conn, "episode_links", "agent_id", "TEXT")?;
+    ensure_column(conn, "negative_knowledge", "agent_id", "TEXT")?;
+    ensure_column(conn, "counter_who_state", "agent_id", "TEXT")?;
     Ok(())
 }
 

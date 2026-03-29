@@ -420,7 +420,7 @@ mod tests {
             inflight_goal_runs: Mutex::new(HashSet::new()),
             heartbeat_items: RwLock::new(Vec::new()),
             event_tx,
-            memory: RwLock::new(AgentMemory::default()),
+            memory: RwLock::new(HashMap::new()),
             operator_model: RwLock::new(OperatorModel::default()),
             anticipatory: RwLock::new(AnticipatoryRuntime::default()),
             collaboration: RwLock::new(HashMap::new()),
@@ -453,7 +453,7 @@ mod tests {
             pattern_store: RwLock::new(super::learning::patterns::PatternStore::default()),
             disclosure_queue: RwLock::new(super::capability_tier::DisclosureQueue::default()),
             plugin_manager: std::sync::OnceLock::new(),
-            episodic_store: RwLock::new(super::episodic::EpisodicStore::default()),
+            episodic_store: RwLock::new(HashMap::new()),
             awareness: RwLock::new(super::awareness::AwarenessMonitor::new()),
             calibration_tracker: RwLock::new(
                 super::uncertainty::calibration::CalibrationTracker::default(),

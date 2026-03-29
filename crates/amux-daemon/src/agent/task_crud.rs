@@ -1121,6 +1121,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn repeated_goal_start_does_not_link_across_persona_scopes() {
+        let root = tempdir().expect("temp dir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+        run_with_agent_scope(DOMOWOJ_AGENT_ID.to_string(), async {
+            let first = engine
+                .start_goal_run(
+                    "repair archived parity gaps".to_string(),
+                    Some("Persona A parity".to_string()),
+                    Some("thread-epis-scope-1".to_string()),
+                    Some("session-epis-scope-1".to_string()),
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+            engine
+                .record_goal_episode(&first, crate::agent::episodic::EpisodeOutcome::Failure)
+                .await
+                .expect("persona A goal failure episode should record");
+        })
+        .await;
+
+        run_with_agent_scope(ROD_AGENT_ID.to_string(), async {
+            let second = engine
+                .start_goal_run(
+                    "repair archived parity gaps".to_string(),
+                    Some("Persona B parity".to_string()),
+                    Some("thread-epis-scope-2".to_string()),
+                    Some("session-epis-scope-2".to_string()),
+                    None,
+                    Some("req-persona-b".to_string()),
+                    None,
+                )
+                .await;
+
+            let episodes = engine
+                .list_episodes_for_goal_run(&second.id)
+                .await
+                .expect("persona B episodes should load");
+            let start_episode = episodes
+                .iter()
+                .find(|episode| episode.episode_type == EpisodeType::GoalStart)
+                .expect("persona B goal should have a goal_start episode");
+
+            let links = engine
+                .get_episode_links(&start_episode.id)
+                .await
+                .expect("persona B links should load");
+            assert!(
+                links.is_empty(),
+                "persona-scoped goal-start episodes must not auto-link to another persona's history"
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
     async fn suppressed_session_id_skips_goal_start_episode_recording() {
         let root = tempdir().expect("temp dir");
         let manager = SessionManager::new_test(root.path()).await;

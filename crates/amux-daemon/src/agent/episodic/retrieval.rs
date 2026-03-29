@@ -124,65 +124,65 @@ fn format_age(created_at: u64) -> String {
 // ---------------------------------------------------------------------------
 
 fn row_to_episode_with_rank(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Episode, f64)> {
-    let episode_type_str: String = row.get(4)?;
-    let outcome_str: String = row.get(8)?;
-    let entities_json: String = row.get(10)?;
-    let causal_chain_json: String = row.get(11)?;
-    let rank: f64 = row.get(20)?;
+    let episode_type_str: String = row.get(5)?;
+    let outcome_str: String = row.get(9)?;
+    let entities_json: String = row.get(11)?;
+    let causal_chain_json: String = row.get(12)?;
+    let rank: f64 = row.get(21)?;
 
     let episode = Episode {
         id: row.get(0)?,
-        goal_run_id: row.get(1)?,
-        thread_id: row.get(2)?,
-        session_id: row.get(3)?,
-        goal_text: row.get(5)?,
-        goal_type: row.get(6)?,
+        goal_run_id: row.get(2)?,
+        thread_id: row.get(3)?,
+        session_id: row.get(4)?,
+        goal_text: row.get(6)?,
+        goal_type: row.get(7)?,
         episode_type: str_to_episode_type(&episode_type_str),
-        summary: row.get(7)?,
+        summary: row.get(8)?,
         outcome: str_to_episode_outcome(&outcome_str),
-        root_cause: row.get(9)?,
+        root_cause: row.get(10)?,
         entities: serde_json::from_str(&entities_json).unwrap_or_default(),
         causal_chain: serde_json::from_str(&causal_chain_json).unwrap_or_default(),
-        solution_class: row.get(12)?,
-        duration_ms: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
-        tokens_used: row.get::<_, Option<i32>>(14)?.map(|v| v as u32),
-        confidence: row.get(15)?,
-        confidence_before: row.get(16)?,
-        confidence_after: row.get(17)?,
-        created_at: row.get::<_, i64>(18)? as u64,
-        expires_at: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
+        solution_class: row.get(13)?,
+        duration_ms: row.get::<_, Option<i64>>(14)?.map(|v| v as u64),
+        tokens_used: row.get::<_, Option<i32>>(15)?.map(|v| v as u32),
+        confidence: row.get(16)?,
+        confidence_before: row.get(17)?,
+        confidence_after: row.get(18)?,
+        created_at: row.get::<_, i64>(19)? as u64,
+        expires_at: row.get::<_, Option<i64>>(20)?.map(|v| v as u64),
     };
 
     Ok((episode, rank))
 }
 
 fn row_to_episode_plain(row: &rusqlite::Row<'_>) -> rusqlite::Result<Episode> {
-    let episode_type_str: String = row.get(6)?;
-    let outcome_str: String = row.get(8)?;
-    let entities_json: String = row.get(10)?;
-    let causal_chain_json: String = row.get(11)?;
+    let episode_type_str: String = row.get(7)?;
+    let outcome_str: String = row.get(9)?;
+    let entities_json: String = row.get(11)?;
+    let causal_chain_json: String = row.get(12)?;
 
     Ok(Episode {
         id: row.get(0)?,
-        goal_run_id: row.get(1)?,
-        thread_id: row.get(2)?,
-        session_id: row.get(3)?,
-        goal_text: row.get(4)?,
-        goal_type: row.get(5)?,
+        goal_run_id: row.get(2)?,
+        thread_id: row.get(3)?,
+        session_id: row.get(4)?,
+        goal_text: row.get(5)?,
+        goal_type: row.get(6)?,
         episode_type: str_to_episode_type(&episode_type_str),
-        summary: row.get(7)?,
+        summary: row.get(8)?,
         outcome: str_to_episode_outcome(&outcome_str),
-        root_cause: row.get(9)?,
+        root_cause: row.get(10)?,
         entities: serde_json::from_str(&entities_json).unwrap_or_default(),
         causal_chain: serde_json::from_str(&causal_chain_json).unwrap_or_default(),
-        solution_class: row.get(12)?,
-        duration_ms: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
-        tokens_used: row.get::<_, Option<i32>>(14)?.map(|v| v as u32),
-        confidence: row.get(15)?,
-        confidence_before: row.get(16)?,
-        confidence_after: row.get(17)?,
-        created_at: row.get::<_, i64>(18)? as u64,
-        expires_at: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
+        solution_class: row.get(13)?,
+        duration_ms: row.get::<_, Option<i64>>(14)?.map(|v| v as u64),
+        tokens_used: row.get::<_, Option<i32>>(15)?.map(|v| v as u32),
+        confidence: row.get(16)?,
+        confidence_before: row.get(17)?,
+        confidence_after: row.get(18)?,
+        created_at: row.get::<_, i64>(19)? as u64,
+        expires_at: row.get::<_, Option<i64>>(20)?.map(|v| v as u64),
     })
 }
 
@@ -232,6 +232,8 @@ impl AgentEngine {
 
         let effective_limit = limit.min(ep_config.max_retrieval_episodes);
         let fts5_query = format_fts5_query(query);
+        let agent_id = crate::agent::agent_identity::current_agent_scope_id();
+        let include_legacy = crate::agent::is_main_agent_scope(&agent_id) as i64;
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -243,7 +245,7 @@ impl AgentEngine {
             .conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT e.id, e.goal_run_id, e.thread_id, e.session_id, e.episode_type,
+                    "SELECT e.id, e.agent_id, e.goal_run_id, e.thread_id, e.session_id, e.episode_type,
                             e.goal_text, e.goal_type, e.summary, e.outcome, e.root_cause, e.entities, e.causal_chain,
                             e.solution_class, e.duration_ms, e.tokens_used, e.confidence, e.confidence_before, e.confidence_after,
                             e.created_at, e.expires_at,
@@ -251,12 +253,13 @@ impl AgentEngine {
                      FROM episodes e
                      JOIN episodes_fts ON e.rowid = episodes_fts.rowid
                      WHERE episodes_fts MATCH ?1
-                       AND (e.expires_at IS NULL OR e.expires_at > ?2)
+                       AND (e.agent_id = ?2 OR (?3 = 1 AND e.agent_id IS NULL))
+                       AND (e.expires_at IS NULL OR e.expires_at > ?4)
                      ORDER BY rank
-                     LIMIT ?3",
+                     LIMIT ?5",
                 )?;
                 let rows = stmt.query_map(
-                    params![fts5_query, now_ms as i64, over_fetch as i64],
+                    params![fts5_query, agent_id, include_legacy, now_ms as i64, over_fetch as i64],
                     row_to_episode_with_rank,
                 )?;
                 rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -299,6 +302,8 @@ impl AgentEngine {
 
         let effective_limit = limit.min(ep_config.max_retrieval_episodes);
         let fts5_query = format_fts5_query(query);
+        let agent_id = crate::agent::agent_identity::current_agent_scope_id();
+        let include_legacy = crate::agent::is_main_agent_scope(&agent_id) as i64;
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -310,7 +315,7 @@ impl AgentEngine {
             .conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT e.id, e.goal_run_id, e.thread_id, e.session_id, e.episode_type,
+                    "SELECT e.id, e.agent_id, e.goal_run_id, e.thread_id, e.session_id, e.episode_type,
                             e.goal_text, e.goal_type, e.summary, e.outcome, e.root_cause, e.entities, e.causal_chain,
                             e.solution_class, e.duration_ms, e.tokens_used, e.confidence, e.confidence_before, e.confidence_after,
                             e.created_at, e.expires_at,
@@ -318,14 +323,17 @@ impl AgentEngine {
                      FROM episodes e
                      JOIN episodes_fts ON e.rowid = episodes_fts.rowid
                      WHERE episodes_fts MATCH ?1
-                       AND (e.expires_at IS NULL OR e.expires_at > ?2)
-                       AND e.created_at >= ?3
+                       AND (e.agent_id = ?2 OR (?3 = 1 AND e.agent_id IS NULL))
+                       AND (e.expires_at IS NULL OR e.expires_at > ?4)
+                       AND e.created_at >= ?5
                      ORDER BY rank
-                     LIMIT ?4",
+                     LIMIT ?6",
                 )?;
                 let rows = stmt.query_map(
                     params![
                         fts5_query,
+                        agent_id,
+                        include_legacy,
                         now_ms as i64,
                         since_ms as i64,
                         over_fetch as i64
@@ -369,6 +377,8 @@ impl AgentEngine {
 
         let effective_limit = limit.min(ep_config.max_retrieval_episodes);
         let entity_pattern = format!("%{}%", entity);
+        let agent_id = crate::agent::agent_identity::current_agent_scope_id();
+        let include_legacy = crate::agent::is_main_agent_scope(&agent_id) as i64;
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -378,18 +388,25 @@ impl AgentEngine {
             .conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, goal_run_id, thread_id, session_id, goal_text, goal_type, episode_type,
+                    "SELECT id, agent_id, goal_run_id, thread_id, session_id, goal_text, goal_type, episode_type,
                             summary, outcome, root_cause, entities, causal_chain,
                             solution_class, duration_ms, tokens_used, confidence, confidence_before, confidence_after,
                             created_at, expires_at
                      FROM episodes
                      WHERE entities LIKE ?1
-                       AND (expires_at IS NULL OR expires_at > ?2)
+                       AND (agent_id = ?2 OR (?3 = 1 AND agent_id IS NULL))
+                       AND (expires_at IS NULL OR expires_at > ?4)
                      ORDER BY created_at DESC
-                     LIMIT ?3",
+                     LIMIT ?5",
                 )?;
                 let rows = stmt.query_map(
-                    params![entity_pattern, now_ms as i64, effective_limit as i64],
+                    params![
+                        entity_pattern,
+                        agent_id,
+                        include_legacy,
+                        now_ms as i64,
+                        effective_limit as i64
+                    ],
                     row_to_episode_plain,
                 )?;
                 rows.collect::<std::result::Result<Vec<_>, _>>()

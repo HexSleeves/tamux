@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use super::agent_identity::{is_main_agent_scope, MAIN_AGENT_ID};
 use super::task_scheduler::describe_scheduled_time;
 use super::types::*;
 
@@ -190,6 +191,28 @@ pub(super) fn ordered_memory_dirs(agent_data_dir: &std::path::Path) -> Vec<std::
     dirs
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MemoryPaths {
+    pub memory_dir: std::path::PathBuf,
+    pub memory_path: std::path::PathBuf,
+    pub soul_path: std::path::PathBuf,
+    pub user_path: std::path::PathBuf,
+}
+
+pub(super) fn memory_paths_for_scope(
+    agent_data_dir: &std::path::Path,
+    scope_id: &str,
+) -> MemoryPaths {
+    let shared_user_dir = active_memory_dir_for_scope(agent_data_dir, MAIN_AGENT_ID);
+    let memory_dir = active_memory_dir_for_scope(agent_data_dir, scope_id);
+    MemoryPaths {
+        memory_path: memory_dir.join("MEMORY.md"),
+        soul_path: memory_dir.join("SOUL.md"),
+        user_path: shared_user_dir.join("USER.md"),
+        memory_dir,
+    }
+}
+
 pub(super) fn skills_dir(agent_data_dir: &std::path::Path) -> std::path::PathBuf {
     agent_data_dir
         .parent()
@@ -288,7 +311,18 @@ pub(super) fn dir_has_memory_files(dir: &std::path::Path) -> bool {
         .any(|name| dir.join(name).exists())
 }
 
-pub(super) fn active_memory_dir(agent_data_dir: &std::path::Path) -> std::path::PathBuf {
+fn persona_memory_dir(agent_data_dir: &std::path::Path, scope_id: &str) -> std::path::PathBuf {
+    agent_data_dir.join("personas").join(scope_id)
+}
+
+pub(super) fn active_memory_dir_for_scope(
+    agent_data_dir: &std::path::Path,
+    scope_id: &str,
+) -> std::path::PathBuf {
+    if !is_main_agent_scope(scope_id) {
+        return persona_memory_dir(agent_data_dir, scope_id);
+    }
+
     let dirs = ordered_memory_dirs(agent_data_dir);
     if let Some(path) = dirs.iter().find(|dir| dir_has_memory_files(dir)) {
         return path.clone();
@@ -299,6 +333,10 @@ pub(super) fn active_memory_dir(agent_data_dir: &std::path::Path) -> std::path::
     dirs.first()
         .cloned()
         .unwrap_or_else(|| agent_data_dir.to_path_buf())
+}
+
+pub(super) fn active_memory_dir(agent_data_dir: &std::path::Path) -> std::path::PathBuf {
+    active_memory_dir_for_scope(agent_data_dir, MAIN_AGENT_ID)
 }
 
 /// Read a string from a legacy frontend settings payload using either the nested
@@ -337,4 +375,38 @@ pub async fn load_config_from_history(
 ) -> anyhow::Result<AgentConfig> {
     let items = history.list_agent_config_items().await?;
     super::config::load_config_from_items(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::agent_identity::{MAIN_AGENT_ID, RADOGOST_AGENT_ID};
+
+    #[test]
+    fn memory_paths_for_main_scope_falls_back_to_legacy_root() {
+        let root = std::path::Path::new("/tmp/tamux/agent");
+        let paths = memory_paths_for_scope(root, MAIN_AGENT_ID);
+        let legacy_root = root.parent().unwrap().join("agent-mission");
+        assert_eq!(paths.memory_dir, legacy_root);
+        assert_eq!(paths.memory_path, legacy_root.join("MEMORY.md"));
+        assert_eq!(paths.soul_path, legacy_root.join("SOUL.md"));
+        assert_eq!(paths.user_path, legacy_root.join("USER.md"));
+    }
+
+    #[test]
+    fn memory_paths_for_persona_scope_use_persona_root_and_shared_user() {
+        let root = std::path::Path::new("/tmp/tamux/agent");
+        let paths = memory_paths_for_scope(root, RADOGOST_AGENT_ID);
+        let shared_user_root = active_memory_dir_for_scope(root, MAIN_AGENT_ID);
+        assert_eq!(paths.memory_dir, root.join("personas").join(RADOGOST_AGENT_ID));
+        assert_eq!(
+            paths.memory_path,
+            root.join("personas").join(RADOGOST_AGENT_ID).join("MEMORY.md")
+        );
+        assert_eq!(
+            paths.soul_path,
+            root.join("personas").join(RADOGOST_AGENT_ID).join("SOUL.md")
+        );
+        assert_eq!(paths.user_path, shared_user_root.join("USER.md"));
+    }
 }

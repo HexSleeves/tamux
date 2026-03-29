@@ -975,8 +975,12 @@ impl TuiModel {
                 self.execute_command("provider");
             }
             "model" => {
-                self.settings_picker_target = Some(SettingsPickerTarget::Model);
-                self.execute_command("model");
+                if self.config.provider == "custom" {
+                    self.begin_custom_model_edit();
+                } else {
+                    self.settings_picker_target = Some(SettingsPickerTarget::Model);
+                    self.execute_command("model");
+                }
             }
             "auth_source" => {
                 let supported = providers::supported_auth_sources_for(&self.config.provider);
@@ -1987,5 +1991,21 @@ mod tests {
             DaemonCommand::WhatsAppLinkStart
         ));
         assert!(daemon_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn activating_model_for_custom_provider_starts_inline_custom_model_edit() {
+        let (mut model, _daemon_rx) = make_model();
+        model.apply_provider_selection("custom");
+        model
+            .settings
+            .reduce(SettingsAction::SwitchTab(SettingsTab::Provider));
+        model.settings.reduce(SettingsAction::NavigateField(3));
+        assert_eq!(model.settings.current_field_name(), "model");
+
+        model.activate_settings_field();
+
+        assert_eq!(model.settings.editing_field(), Some("custom_model_entry"));
+        assert_ne!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
     }
 }

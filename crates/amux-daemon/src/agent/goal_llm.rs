@@ -238,7 +238,9 @@ impl AgentEngine {
 
             // 4. Approach novelty: check counter-who for similar approaches
             let approach_novelty = {
-                let store = self.episodic_store.read().await;
+                let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+                let stores = self.episodic_store.read().await;
+                let store = stores.get(&scope_id).cloned().unwrap_or_default();
                 let kind_str = format!("{:?}", step.kind);
                 let hash = super::episodic::counter_who::compute_approach_hash(
                     &kind_str,

@@ -2689,6 +2689,45 @@ async fn execute_update_memory(
     } else {
         None
     };
+    let acting_scope_id = if let Some(current_task_id) = task_id {
+        let tasks = agent.tasks.lock().await;
+        crate::agent::agent_scope_id_for_task(tasks.iter().find(|task| task.id == current_task_id))
+    } else {
+        MAIN_AGENT_ID.to_string()
+    };
+    if target == MemoryTarget::User
+        && !crate::agent::is_main_agent_scope(&acting_scope_id)
+    {
+        let sender = if let Some(current_task_id) = task_id {
+            let tasks = agent.tasks.lock().await;
+            sender_name_for_task(tasks.iter().find(|task| task.id == current_task_id))
+        } else {
+            canonical_agent_name(&acting_scope_id).to_string()
+        };
+        let mediation_request = format!(
+            "A non-main agent is requesting a shared USER.md update.\n\
+             Requesting agent: {} ({})\n\
+             Source thread: {}\n\
+             Goal run: {}\n\
+             Requested mode: {}\n\
+             Proposed content:\n{}\n\n\
+             Evaluate whether this belongs in shared USER.md. If yes, apply it yourself with the appropriate memory update tool. If not, reject it and explain briefly.",
+            sender,
+            acting_scope_id,
+            thread_id,
+            goal_run_id.as_deref().unwrap_or("none"),
+            match mode {
+                MemoryUpdateMode::Replace => "replace",
+                MemoryUpdateMode::Append => "append",
+                MemoryUpdateMode::Remove => "remove",
+            },
+            content.trim(),
+        );
+        let (_dm_thread_id, response) = agent
+            .send_internal_agent_message(&sender, MAIN_AGENT_ID, &mediation_request, None)
+            .await?;
+        return Ok(response);
+    }
     apply_memory_update(
         agent_data_dir,
         &agent.history,

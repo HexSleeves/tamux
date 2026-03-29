@@ -12,6 +12,14 @@ impl AgentEngine {
         backend_override: Option<&str>,
         record_operator: bool,
     ) -> Result<SendMessageOutcome> {
+        let agent_scope_id = if let Some(current_task_id) = task_id {
+            let tasks = self.tasks.lock().await;
+            agent_scope_id_for_task(tasks.iter().find(|task| task.id == current_task_id))
+        } else {
+            MAIN_AGENT_ID.to_string()
+        };
+
+        run_with_agent_scope(agent_scope_id, async {
         if thread_id == Some(crate::agent::concierge::CONCIERGE_THREAD_ID) {
             self.send_concierge_message_on_thread(
                 crate::agent::concierge::CONCIERGE_THREAD_ID,
@@ -163,8 +171,9 @@ impl AgentEngine {
 
         // Build system prompt with memory.
         // If this task has a sub-agent system prompt override, prepend it.
-        let memory = self.memory.read().await;
-        let memory_dir = active_memory_dir(&self.data_dir);
+        let agent_scope_id = current_agent_scope_id();
+        let memory = self.current_memory_snapshot().await;
+        let memory_paths = memory_paths_for_scope(&self.data_dir, &agent_scope_id);
         let base_prompt = if let Some((_, _, Some(ref override_prompt))) = task_provider_override {
             format!("{}\n\n{}", override_prompt, config.system_prompt)
         } else {
@@ -187,7 +196,8 @@ impl AgentEngine {
             &config,
             &base_prompt,
             &memory,
-            &memory_dir,
+            &memory_paths,
+            &agent_scope_id,
             &config.sub_agents,
             operator_model_summary.as_deref(),
             operational_context.as_deref(),
@@ -206,7 +216,6 @@ impl AgentEngine {
             &active_provider_id,
             &provider_config.model,
         ));
-        drop(memory);
         if let Some(recall) = onecontext_bootstrap.as_deref() {
             system_prompt.push_str("\n\n## OneContext Recall\n");
             system_prompt
@@ -233,7 +242,7 @@ impl AgentEngine {
             "Loaded persistent memory, user profile, and local skill paths for this turn.",
             Some(format!(
                 "memory_dir={}; skills_dir={}",
-                memory_dir.display(),
+                memory_paths.memory_dir.display(),
                 skills_dir(&self.data_dir).display()
             )),
         );
@@ -385,13 +394,14 @@ impl AgentEngine {
                 )
                 .await?
             {
-                let memory = self.memory.read().await;
+                let memory = self.current_memory_snapshot().await;
                 let causal_guidance = self.build_causal_guidance_summary().await;
                 system_prompt = build_system_prompt(
                     &config,
                     &base_prompt,
                     &memory,
-                    &memory_dir,
+                    &memory_paths,
+                    &agent_scope_id,
                     &config.sub_agents,
                     operator_model_summary.as_deref(),
                     operational_context.as_deref(),
@@ -400,7 +410,6 @@ impl AgentEngine {
                     None, // episodic_context — injected via goal planning path
                     None, // negative_constraints — injected via goal planning path
                 );
-                drop(memory);
                 if let Some(recall) = onecontext_bootstrap.as_deref() {
                     system_prompt.push_str("\n\n## OneContext Recall\n");
                     system_prompt.push_str(
@@ -1472,6 +1481,8 @@ impl AgentEngine {
             thread_id: tid,
             interrupted_for_approval,
         })
+        })
+        .await
     }
 
     pub(super) fn resolve_provider_config(&self, config: &AgentConfig) -> Result<ProviderConfig> {

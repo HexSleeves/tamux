@@ -352,7 +352,7 @@ impl AgentEngine {
         let now = now_millis();
 
         // Read MEMORY.md content
-        let memory_path = active_memory_dir(&self.data_dir).join(MemoryTarget::Memory.file_name());
+        let memory_path = memory_paths_for_scope(&self.data_dir, &current_agent_scope_id()).memory_path;
         let content = match tokio::fs::read_to_string(&memory_path).await {
             Ok(c) => c,
             Err(_) => return 0,
@@ -501,7 +501,7 @@ impl AgentEngine {
         }
 
         // 3. Read MEMORY.md content
-        let memory_path = active_memory_dir(&self.data_dir).join(MemoryTarget::Memory.file_name());
+        let memory_path = memory_paths_for_scope(&self.data_dir, &current_agent_scope_id()).memory_path;
         let content = match tokio::fs::read_to_string(&memory_path).await {
             Ok(c) => c,
             Err(_) => return 0,

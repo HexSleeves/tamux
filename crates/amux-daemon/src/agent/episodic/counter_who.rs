@@ -193,7 +193,9 @@ impl AgentEngine {
             timestamp: now_ms,
         };
 
-        let mut store = self.episodic_store.write().await;
+        let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+        let mut stores = self.episodic_store.write().await;
+        let store = stores.entry(scope_id).or_default();
         store.counter_who.tried_approaches.push(approach);
         store.counter_who.current_focus = Some(format!("Tool: {tool_name}"));
         store.counter_who.recent_changes.push(format!(
@@ -232,7 +234,9 @@ impl AgentEngine {
         correction_pattern: &str,
     ) {
         let now_ms = super::super::now_millis();
-        let mut store = self.episodic_store.write().await;
+        let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+        let mut stores = self.episodic_store.write().await;
+        let store = stores.entry(scope_id).or_default();
         record_correction(&mut store.counter_who, correction_pattern, now_ms);
         store.counter_who.updated_at = now_ms;
 
@@ -262,11 +266,16 @@ impl AgentEngine {
 
     /// Persist counter-who state to SQLite (CWHO-04).
     pub(crate) async fn persist_counter_who(&self) -> Result<()> {
-        let store = self.episodic_store.read().await;
-        let state = store.counter_who.clone();
-        drop(store);
+        let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+        let stores = self.episodic_store.read().await;
+        let state = stores
+            .get(&scope_id)
+            .map(|store| store.counter_who.clone())
+            .unwrap_or_default();
+        drop(stores);
 
         let id = state.goal_run_id.as_deref().unwrap_or("global").to_string();
+        let agent_id = scope_id;
         let goal_run_id = state.goal_run_id.clone();
         let thread_id = state.thread_id.clone();
         let state_json =
@@ -277,9 +286,9 @@ impl AgentEngine {
             .conn
             .call(move |conn| {
                 conn.execute(
-                    "INSERT OR REPLACE INTO counter_who_state (id, goal_run_id, thread_id, state_json, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    rusqlite::params![id, goal_run_id, thread_id, state_json, updated_at],
+                    "INSERT OR REPLACE INTO counter_who_state (id, agent_id, goal_run_id, thread_id, state_json, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![id, agent_id, goal_run_id, thread_id, state_json, updated_at],
                 )?;
                 Ok(())
             })
@@ -290,6 +299,8 @@ impl AgentEngine {
     /// Restore counter-who state from SQLite (CWHO-04).
     pub(crate) async fn restore_counter_who(&self, goal_run_id: Option<&str>) -> Result<()> {
         let gid = goal_run_id.unwrap_or("global").to_string();
+        let agent_id = crate::agent::agent_identity::current_agent_scope_id();
+        let include_legacy = crate::agent::is_main_agent_scope(&agent_id) as i64;
 
         let state_json: Option<String> = self
             .history
@@ -297,8 +308,8 @@ impl AgentEngine {
             .call(move |conn| {
                 let result = conn
                     .query_row(
-                        "SELECT state_json FROM counter_who_state WHERE id = ?1",
-                        rusqlite::params![gid],
+                        "SELECT state_json FROM counter_who_state WHERE id = ?1 AND (agent_id = ?2 OR (?3 = 1 AND agent_id IS NULL))",
+                        rusqlite::params![gid, agent_id, include_legacy],
                         |row| row.get(0),
                     )
                     .optional()?;
@@ -310,7 +321,9 @@ impl AgentEngine {
         if let Some(json) = state_json {
             let state: CounterWhoState =
                 serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("deserialize: {e}"))?;
-            let mut store = self.episodic_store.write().await;
+            let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+            let mut stores = self.episodic_store.write().await;
+            let store = stores.entry(scope_id).or_default();
             store.counter_who = state;
         }
 
