@@ -447,6 +447,7 @@ fn single_line_edit_layout(settings: &SettingsState, field: &str) -> Option<(usi
             "whatsapp_token" => Some((22, 19)),
             "whatsapp_phone_id" => Some((23, 19)),
             "whatsapp_link_device" => Some((24, 19)),
+            "whatsapp_relink_device" => Some((25, 19)),
             _ => None,
         },
         SettingsTab::Auth => None,
@@ -539,6 +540,7 @@ fn settings_row_hit(
             22 => Some((10, None)),
             23 => Some((11, None)),
             24 => Some((12, None)),
+            25 => Some((13, None)),
             _ => None,
         },
         SettingsTab::Auth => row
@@ -2752,7 +2754,7 @@ fn render_gateway_tab<'a>(
         false,
     );
     let whatsapp_link = modal.whatsapp_link();
-    let relink = whatsapp_link.phase() == WhatsAppLinkPhase::Connected;
+    let linked = whatsapp_link.phase() == WhatsAppLinkPhase::Connected;
     {
         let is_selected = settings.field_cursor() == 12;
         let marker = if is_selected { "> " } else { "  " };
@@ -2769,8 +2771,8 @@ fn render_gateway_tab<'a>(
         let mut spans = vec![
             Span::styled(marker, marker_style),
             Span::styled(
-                if relink {
-                    "Re-link Device"
+                if linked {
+                    "Show Link Status"
                 } else {
                     "Link Device"
                 },
@@ -2782,12 +2784,39 @@ fn render_gateway_tab<'a>(
         }
         lines.push(Line::from(spans));
     }
+    {
+        let is_selected = settings.field_cursor() == 13;
+        let marker = if is_selected { "> " } else { "  " };
+        let marker_style = if is_selected {
+            theme.accent_primary
+        } else {
+            theme.fg_dim
+        };
+        let enabled = linked;
+        let label_style = if is_selected && enabled {
+            theme.accent_primary
+        } else if enabled {
+            theme.fg_active
+        } else {
+            theme.fg_dim
+        };
+        let mut spans = vec![
+            Span::styled(marker, marker_style),
+            Span::styled("Re-link Device", label_style),
+        ];
+        if is_selected {
+            spans.push(Span::styled("  [Enter]", theme.fg_dim));
+        }
+        if !enabled {
+            spans.push(Span::styled("  (link first)", theme.fg_dim));
+        }
+        lines.push(Line::from(spans));
+    }
     lines.push(Line::from(Span::styled(
         match whatsapp_link.phase() {
-            WhatsAppLinkPhase::Connected => format!(
-                "  Linked: {}",
-                whatsapp_link.phone().unwrap_or("device")
-            ),
+            WhatsAppLinkPhase::Connected => {
+                format!("  Linked: {}", whatsapp_link.phone().unwrap_or("device"))
+            }
             WhatsAppLinkPhase::AwaitingScan => "  Status: awaiting QR scan".to_string(),
             WhatsAppLinkPhase::Starting => "  Status: starting link workflow".to_string(),
             WhatsAppLinkPhase::Error => format!(
@@ -2800,7 +2829,7 @@ fn render_gateway_tab<'a>(
             ),
             WhatsAppLinkPhase::Idle => "  Status: not linked".to_string(),
         },
-        if relink {
+        if linked {
             theme.accent_success
         } else {
             theme.fg_dim
@@ -3526,7 +3555,7 @@ mod tests {
     }
 
     #[test]
-    fn gateway_tab_shows_connected_whatsapp_status_and_relink_action() {
+    fn gateway_tab_shows_connected_whatsapp_status_and_split_actions() {
         let mut settings = SettingsState::new();
         settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
             SettingsTab::Gateway,
@@ -3543,7 +3572,8 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(text.contains("> Re-link Device"));
+        assert!(text.contains("> Show Link Status"));
+        assert!(text.contains("Re-link Device"));
         assert!(text.contains("Linked: +48663977535"));
     }
 }

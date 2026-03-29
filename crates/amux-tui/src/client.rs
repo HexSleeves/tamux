@@ -916,7 +916,9 @@ impl DaemonClient {
             DaemonMessage::AgentStatusResponse {
                 diagnostics_json, ..
             } => {
-                if let Ok(diagnostics) = serde_json::from_str::<serde_json::Value>(&diagnostics_json) {
+                if let Ok(diagnostics) =
+                    serde_json::from_str::<serde_json::Value>(&diagnostics_json)
+                {
                     let _ = event_tx
                         .send(ClientEvent::StatusDiagnostics {
                             operator_profile_sync_state: diagnostics

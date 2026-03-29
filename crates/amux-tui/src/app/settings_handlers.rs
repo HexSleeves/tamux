@@ -1092,18 +1092,28 @@ impl TuiModel {
                     .start_editing("whatsapp_phone_id", &self.config.whatsapp_phone_id.clone());
             }
             "whatsapp_link_device" => {
-                let was_connected =
-                    self.modal.whatsapp_link().phase() == modal::WhatsAppLinkPhase::Connected;
                 self.modal.set_whatsapp_link_starting();
                 self.send_daemon_command(DaemonCommand::WhatsAppLinkSubscribe);
                 self.send_daemon_command(DaemonCommand::WhatsAppLinkStatus);
-                if was_connected {
-                    self.send_daemon_command(DaemonCommand::WhatsAppLinkReset);
-                }
                 self.send_daemon_command(DaemonCommand::WhatsAppLinkStart);
                 self.modal
                     .reduce(modal::ModalAction::Push(modal::ModalKind::WhatsAppLink));
                 self.status_line = "Starting WhatsApp link workflow".to_string();
+            }
+            "whatsapp_relink_device" => {
+                if self.modal.whatsapp_link().phase() != modal::WhatsAppLinkPhase::Connected {
+                    self.status_line =
+                        "WhatsApp is not linked yet — use Link Device first".to_string();
+                    return;
+                }
+                self.modal.set_whatsapp_link_starting();
+                self.send_daemon_command(DaemonCommand::WhatsAppLinkSubscribe);
+                self.send_daemon_command(DaemonCommand::WhatsAppLinkStatus);
+                self.send_daemon_command(DaemonCommand::WhatsAppLinkReset);
+                self.send_daemon_command(DaemonCommand::WhatsAppLinkStart);
+                self.modal
+                    .reduce(modal::ModalAction::Push(modal::ModalKind::WhatsAppLink));
+                self.status_line = "Restarting WhatsApp link workflow".to_string();
             }
             "search_provider" => {
                 let next = match self.config.search_provider.as_str() {
@@ -1873,6 +1883,7 @@ impl TuiModel {
                 | "feat_consolidation_enabled"
                 | "feat_skill_discovery_enabled"
                 | "whatsapp_link_device"
+                | "whatsapp_relink_device"
         ) || self.settings.current_field_name().starts_with("tool_")
     }
 }
@@ -1919,12 +1930,40 @@ mod tests {
     }
 
     #[test]
-    fn whatsapp_link_device_resets_existing_link_before_restart() {
+    fn whatsapp_link_device_does_not_reset_existing_link() {
         let (mut model, mut daemon_rx) = make_model();
         model
             .settings
             .reduce(SettingsAction::SwitchTab(SettingsTab::Gateway));
         model.settings.reduce(SettingsAction::NavigateField(12));
+        model
+            .modal
+            .set_whatsapp_link_connected(Some("+48663977535".to_string()));
+
+        model.activate_settings_field();
+
+        assert!(matches!(
+            daemon_rx.try_recv().expect("expected subscribe command"),
+            DaemonCommand::WhatsAppLinkSubscribe
+        ));
+        assert!(matches!(
+            daemon_rx.try_recv().expect("expected status command"),
+            DaemonCommand::WhatsAppLinkStatus
+        ));
+        assert!(matches!(
+            daemon_rx.try_recv().expect("expected start command"),
+            DaemonCommand::WhatsAppLinkStart
+        ));
+        assert!(daemon_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn whatsapp_relink_device_resets_existing_link_before_restart() {
+        let (mut model, mut daemon_rx) = make_model();
+        model
+            .settings
+            .reduce(SettingsAction::SwitchTab(SettingsTab::Gateway));
+        model.settings.reduce(SettingsAction::NavigateField(13));
         model
             .modal
             .set_whatsapp_link_connected(Some("+48663977535".to_string()));

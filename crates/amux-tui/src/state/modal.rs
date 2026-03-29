@@ -471,8 +471,14 @@ mod tests {
     fn whatsapp_status_maps_to_connected_error_and_disconnected() {
         let mut state = ModalState::new();
         state.set_whatsapp_link_status("qr_ready", None, None);
-        assert_eq!(state.whatsapp_link().phase(), WhatsAppLinkPhase::AwaitingScan);
-        assert!(state.whatsapp_link().status_text().contains("Scan the QR code"));
+        assert_eq!(
+            state.whatsapp_link().phase(),
+            WhatsAppLinkPhase::AwaitingScan
+        );
+        assert!(state
+            .whatsapp_link()
+            .status_text()
+            .contains("Scan the QR code"));
 
         state.set_whatsapp_link_status("connected", Some("+12065550123".to_string()), None);
         assert_eq!(state.whatsapp_link().phase(), WhatsAppLinkPhase::Connected);

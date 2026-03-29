@@ -191,9 +191,13 @@ pub(crate) async fn process_replay_result(
 }
 
 impl AgentEngine {
-    /// Apply a batch of pre-fetched replay results across one or more platforms,
-    /// updating the shared `gateway_seen_ids` ring buffer with the IDs of every
-    /// accepted message so that the live-path duplicate check sees them.
+    /// Apply a batch of pre-fetched replay results across one or more platforms.
+    ///
+    /// Accepted replay message IDs are tracked only within this replay batch.
+    /// The shared `gateway_seen_ids` ring buffer is updated later, when the
+    /// returned messages are actually routed through the normal incoming queue.
+    /// Pre-seeding the shared ring here would cause those queued messages to be
+    /// discarded as duplicates before they ever reached the agent.
     ///
     /// `platform_results` is a list of `(platform_name, channel_results,
     /// fetch_complete)` tuples collected by the caller before holding the
@@ -240,11 +244,6 @@ impl AgentEngine {
             }
             replay_msgs.extend(platform_msgs);
         }
-
-        // Write the updated snapshot back to the shared ring buffer so that
-        // live-path deduplication sees all IDs from this replay cycle.
-        *self.gateway_seen_ids.lock().await = seen_ids_snap;
-
         replay_msgs
     }
 
@@ -369,27 +368,28 @@ impl AgentEngine {
             "gateway: config loaded"
         );
 
-        let telegram_replay_cursor = match self.history.load_gateway_replay_cursors("telegram").await {
-            Ok(rows) => rows
-                .into_iter()
-                .filter(|row| row.channel_id == "global")
-                .find_map(|row| match row.cursor_value.parse::<i64>() {
-                    Ok(cursor) => Some(cursor),
-                    Err(error) => {
-                        tracing::warn!(
-                            channel_id = %row.channel_id,
-                            cursor_value = %row.cursor_value,
-                            %error,
-                            "gateway: ignoring invalid telegram replay cursor"
-                        );
-                        None
-                    }
-                }),
-            Err(error) => {
-                tracing::warn!(%error, "gateway: failed to load telegram replay cursors");
-                None
-            }
-        };
+        let telegram_replay_cursor =
+            match self.history.load_gateway_replay_cursors("telegram").await {
+                Ok(rows) => rows
+                    .into_iter()
+                    .filter(|row| row.channel_id == "global")
+                    .find_map(|row| match row.cursor_value.parse::<i64>() {
+                        Ok(cursor) => Some(cursor),
+                        Err(error) => {
+                            tracing::warn!(
+                                channel_id = %row.channel_id,
+                                cursor_value = %row.cursor_value,
+                                %error,
+                                "gateway: ignoring invalid telegram replay cursor"
+                            );
+                            None
+                        }
+                    }),
+                Err(error) => {
+                    tracing::warn!(%error, "gateway: failed to load telegram replay cursors");
+                    None
+                }
+            };
         let slack_replay_cursors = match self.history.load_gateway_replay_cursors("slack").await {
             Ok(rows) => rows
                 .into_iter()
@@ -400,17 +400,17 @@ impl AgentEngine {
                 HashMap::new()
             }
         };
-        let discord_replay_cursors =
-            match self.history.load_gateway_replay_cursors("discord").await {
-                Ok(rows) => rows
-                    .into_iter()
-                    .map(|row| (row.channel_id, row.cursor_value))
-                    .collect(),
-                Err(error) => {
-                    tracing::warn!(%error, "gateway: failed to load discord replay cursors");
-                    HashMap::new()
-                }
-            };
+        let discord_replay_cursors = match self.history.load_gateway_replay_cursors("discord").await
+        {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|row| (row.channel_id, row.cursor_value))
+                .collect(),
+            Err(error) => {
+                tracing::warn!(%error, "gateway: failed to load discord replay cursors");
+                HashMap::new()
+            }
+        };
         let whatsapp_replay_cursors =
             match self.history.load_gateway_replay_cursors("whatsapp").await {
                 Ok(rows) => rows
@@ -1087,67 +1087,65 @@ impl AgentEngine {
                     Vec::new();
 
                 for platform in &platforms_for_replay {
-                    let (channel_results, fetch_complete): (
-                        Vec<gateway::ReplayFetchResult>,
-                        bool,
-                    ) = match platform.as_str() {
-                        "telegram" => match gateway::fetch_telegram_replay(gw).await {
-                            Ok(result) => (vec![result], true),
-                            Err(e) => {
-                                tracing::warn!("replay: telegram fetch failed: {e}");
-                                continue;
-                            }
-                        },
-                        "slack" => {
-                            let mut results = Vec::new();
-                            let mut fetch_ok = true;
-                            for ch in &slack_channels {
-                                match gateway::fetch_slack_replay(gw, ch).await {
-                                    Ok(result) => results.push(result),
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            channel = ch,
-                                            "replay: slack fetch failed: {e}"
-                                        );
-                                        fetch_ok = false;
-                                        break;
+                    let (channel_results, fetch_complete): (Vec<gateway::ReplayFetchResult>, bool) =
+                        match platform.as_str() {
+                            "telegram" => match gateway::fetch_telegram_replay(gw).await {
+                                Ok(result) => (vec![result], true),
+                                Err(e) => {
+                                    tracing::warn!("replay: telegram fetch failed: {e}");
+                                    continue;
+                                }
+                            },
+                            "slack" => {
+                                let mut results = Vec::new();
+                                let mut fetch_ok = true;
+                                for ch in &slack_channels {
+                                    match gateway::fetch_slack_replay(gw, ch).await {
+                                        Ok(result) => results.push(result),
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                channel = ch,
+                                                "replay: slack fetch failed: {e}"
+                                            );
+                                            fetch_ok = false;
+                                            break;
+                                        }
                                     }
                                 }
+                                // Partial fetch: push whatever succeeded so those messages
+                                // aren't lost; fetch_ok=false keeps the platform active for
+                                // retry on the next cycle.
+                                if results.is_empty() && !fetch_ok {
+                                    continue;
+                                }
+                                (results, fetch_ok)
                             }
-                            // Partial fetch: push whatever succeeded so those messages
-                            // aren't lost; fetch_ok=false keeps the platform active for
-                            // retry on the next cycle.
-                            if results.is_empty() && !fetch_ok {
-                                continue;
-                            }
-                            (results, fetch_ok)
-                        }
-                        "discord" => {
-                            let mut results = Vec::new();
-                            let mut fetch_ok = true;
-                            for ch in &discord_channels {
-                                match gateway::fetch_discord_replay(gw, ch).await {
-                                    Ok(result) => results.push(result),
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            channel = ch,
-                                            "replay: discord fetch failed: {e}"
-                                        );
-                                        fetch_ok = false;
-                                        break;
+                            "discord" => {
+                                let mut results = Vec::new();
+                                let mut fetch_ok = true;
+                                for ch in &discord_channels {
+                                    match gateway::fetch_discord_replay(gw, ch).await {
+                                        Ok(result) => results.push(result),
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                channel = ch,
+                                                "replay: discord fetch failed: {e}"
+                                            );
+                                            fetch_ok = false;
+                                            break;
+                                        }
                                     }
                                 }
+                                // Partial fetch: push whatever succeeded so those messages
+                                // aren't lost; fetch_ok=false keeps the platform active for
+                                // retry on the next cycle.
+                                if results.is_empty() && !fetch_ok {
+                                    continue;
+                                }
+                                (results, fetch_ok)
                             }
-                            // Partial fetch: push whatever succeeded so those messages
-                            // aren't lost; fetch_ok=false keeps the platform active for
-                            // retry on the next cycle.
-                            if results.is_empty() && !fetch_ok {
-                                continue;
-                            }
-                            (results, fetch_ok)
-                        }
-                        _ => continue,
-                    };
+                            _ => continue,
+                        };
                     platform_results.push((platform.clone(), channel_results, fetch_complete));
                 }
 
@@ -1285,7 +1283,11 @@ impl AgentEngine {
             let trimmed = msg.content.trim().to_lowercase();
             if is_gateway_reset_command(&trimmed) {
                 self.gateway_threads.write().await.remove(&channel_key);
-                if let Err(error) = self.history.delete_gateway_thread_binding(&channel_key).await {
+                if let Err(error) = self
+                    .history
+                    .delete_gateway_thread_binding(&channel_key)
+                    .await
+                {
                     tracing::warn!(channel_key = %channel_key, %error, "gateway: failed to persist reset binding");
                 }
                 tracing::info!(channel_key = %channel_key, "gateway: conversation reset");
@@ -1841,16 +1843,15 @@ mod tests {
         let manager = SessionManager::new_test(&root).await;
         let engine = AgentEngine::new_test(manager, AgentConfig::default(), &root).await;
 
-        let mut gw = super::gateway::GatewayState::new(
-            make_replay_gateway_config(),
-            reqwest::Client::new(),
-        );
+        let mut gw =
+            super::gateway::GatewayState::new(make_replay_gateway_config(), reqwest::Client::new());
         gw.telegram_replay_cursor = Some(100);
         gw.replay_cycle_active.insert("telegram".to_string());
 
-        let result = super::gateway::ReplayFetchResult::Replay(vec![
-            make_telegram_replay_envelope("101", "777", "hello", "alice"),
-        ]);
+        let result =
+            super::gateway::ReplayFetchResult::Replay(vec![make_telegram_replay_envelope(
+                "101", "777", "hello", "alice",
+            )]);
         let mut seen_ids: Vec<String> = Vec::new();
 
         let (messages, completed) = super::process_replay_result(
@@ -1897,10 +1898,8 @@ mod tests {
         let manager = SessionManager::new_test(&root).await;
         let engine = AgentEngine::new_test(manager, AgentConfig::default(), &root).await;
 
-        let mut gw = super::gateway::GatewayState::new(
-            make_replay_gateway_config(),
-            reqwest::Client::new(),
-        );
+        let mut gw =
+            super::gateway::GatewayState::new(make_replay_gateway_config(), reqwest::Client::new());
         // No cursor set — simulates a first-connect scenario.
         assert!(gw.telegram_replay_cursor.is_none());
 
@@ -1955,10 +1954,8 @@ mod tests {
         let manager = SessionManager::new_test(&root).await;
         let engine = AgentEngine::new_test(manager, AgentConfig::default(), &root).await;
 
-        let mut gw = super::gateway::GatewayState::new(
-            make_replay_gateway_config(),
-            reqwest::Client::new(),
-        );
+        let mut gw =
+            super::gateway::GatewayState::new(make_replay_gateway_config(), reqwest::Client::new());
         // Pre-seed two seen IDs so both envelopes are classified as duplicates.
         let mut seen_ids = vec!["tg:1001".to_string(), "tg:1002".to_string()];
         // Start with no in-memory cursor so the effect of the fix is visible.
@@ -2008,27 +2005,23 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
-    /// Replayed accepted messages must be written back to the shared
-    /// `engine.gateway_seen_ids` ring buffer so that live-path deduplication
-    /// sees them (Bug 1 regression).
+    /// Replayed accepted messages must NOT be pre-written into the shared
+    /// `engine.gateway_seen_ids` ring buffer before they are routed.
     ///
-    /// This test calls `apply_replay_results` — the production method that owns
-    /// both the replay processing and the write-back.  If the write-back is
-    /// removed from that method the final assertion will fail, proving the test
-    /// catches the bug.
+    /// They are prepended to the incoming queue and the normal routing path
+    /// records their IDs when it actually processes them. Pre-seeding the
+    /// shared ring early causes the queue consumer to skip them as duplicates.
     #[tokio::test]
-    async fn replay_accepted_messages_propagate_to_shared_seen_ids() {
-        let root = make_test_root("replay-shared-seen-ids");
+    async fn replay_accepted_messages_do_not_preseed_shared_seen_ids() {
+        let root = make_test_root("replay-no-preseed-shared-seen-ids");
         let manager = SessionManager::new_test(&root).await;
         let engine = AgentEngine::new_test(manager, AgentConfig::default(), &root).await;
 
         // Shared ring-buffer starts empty.
         assert!(engine.gateway_seen_ids.lock().await.is_empty());
 
-        let mut gw = super::gateway::GatewayState::new(
-            make_replay_gateway_config(),
-            reqwest::Client::new(),
-        );
+        let mut gw =
+            super::gateway::GatewayState::new(make_replay_gateway_config(), reqwest::Client::new());
 
         let result = super::gateway::ReplayFetchResult::Replay(vec![
             make_telegram_replay_envelope("201", "777", "first replayed msg", "alice"),
@@ -2041,17 +2034,12 @@ mod tests {
 
         assert_eq!(messages.len(), 2, "both messages accepted");
 
-        // Bug 1 regression: shared gateway_seen_ids must reflect IDs from the
-        // replay so that a live message with the same ID is detected as a
-        // duplicate and not re-routed to the agent.
+        // Regression: replay accepts must not poison the shared seen-id ring
+        // before the queue consumer has a chance to route them.
         let seen = engine.gateway_seen_ids.lock().await;
         assert!(
-            seen.contains(&"tg:201".to_string()),
-            "tg:201 must be in shared seen_ids after replay"
-        );
-        assert!(
-            seen.contains(&"tg:202".to_string()),
-            "tg:202 must be in shared seen_ids after replay"
+            seen.is_empty(),
+            "shared seen_ids must stay unchanged until queued messages are routed"
         );
 
         fs::remove_dir_all(&root).ok();
@@ -2073,10 +2061,8 @@ mod tests {
             .await
             .unwrap();
 
-        let mut gw = super::gateway::GatewayState::new(
-            make_replay_gateway_config(),
-            reqwest::Client::new(),
-        );
+        let mut gw =
+            super::gateway::GatewayState::new(make_replay_gateway_config(), reqwest::Client::new());
         let mut seen_ids: Vec<String> = Vec::new();
 
         // First envelope is valid; second is malformed (empty cursor_value).
@@ -2129,19 +2115,21 @@ mod tests {
         let manager = SessionManager::new_test(&root).await;
         let engine = AgentEngine::new_test(manager, AgentConfig::default(), &root).await;
 
-        let mut gw = super::gateway::GatewayState::new(
-            make_replay_gateway_config(),
-            reqwest::Client::new(),
-        );
+        let mut gw =
+            super::gateway::GatewayState::new(make_replay_gateway_config(), reqwest::Client::new());
         // Platform is active for replay (simulates a reconnect cycle).
         gw.replay_cycle_active.insert("slack".to_string());
 
         // Only the first channel result is present — the second channel fetch
         // "failed" so it was never added to the vec.  fetch_complete=false
         // signals that the fetch was partial.
-        let ch1_result = super::gateway::ReplayFetchResult::Replay(vec![
-            make_telegram_replay_envelope("301", "C1", "msg from ch1", "alice"),
-        ]);
+        let ch1_result =
+            super::gateway::ReplayFetchResult::Replay(vec![make_telegram_replay_envelope(
+                "301",
+                "C1",
+                "msg from ch1",
+                "alice",
+            )]);
 
         let messages = engine
             .apply_replay_results(
@@ -2174,18 +2162,24 @@ mod tests {
         let manager = SessionManager::new_test(&root).await;
         let engine = AgentEngine::new_test(manager, AgentConfig::default(), &root).await;
 
-        let mut gw = super::gateway::GatewayState::new(
-            make_replay_gateway_config(),
-            reqwest::Client::new(),
-        );
+        let mut gw =
+            super::gateway::GatewayState::new(make_replay_gateway_config(), reqwest::Client::new());
         gw.replay_cycle_active.insert("slack".to_string());
 
-        let ch1_result = super::gateway::ReplayFetchResult::Replay(vec![
-            make_telegram_replay_envelope("401", "C1", "msg from ch1", "alice"),
-        ]);
-        let ch2_result = super::gateway::ReplayFetchResult::Replay(vec![
-            make_telegram_replay_envelope("402", "C2", "msg from ch2", "bob"),
-        ]);
+        let ch1_result =
+            super::gateway::ReplayFetchResult::Replay(vec![make_telegram_replay_envelope(
+                "401",
+                "C1",
+                "msg from ch1",
+                "alice",
+            )]);
+        let ch2_result =
+            super::gateway::ReplayFetchResult::Replay(vec![make_telegram_replay_envelope(
+                "402",
+                "C2",
+                "msg from ch2",
+                "bob",
+            )]);
 
         let messages = engine
             .apply_replay_results(

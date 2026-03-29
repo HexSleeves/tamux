@@ -12,13 +12,13 @@ use wa_rs::Jid;
 use wa_rs_tokio_transport::TokioWebSocketTransportFactory;
 use wa_rs_ureq_http::UreqHttpClient;
 
-use super::{gateway, persist_transport_session_update, AgentEngine, WHATSAPP_LINK_PROVIDER_ID};
 use super::gateway::IncomingMessage;
 use super::gateway_loop::process_replay_result;
 use super::whatsapp_link::{
-    collect_exact_jid_candidates, collect_normalized_identifiers, normalize_identifier,
-    normalize_jid_user, transport,
+    clear_persisted_provider_state, collect_exact_jid_candidates, collect_normalized_identifiers,
+    normalize_identifier, normalize_jid_user, transport,
 };
+use super::{gateway, persist_transport_session_update, AgentEngine, WHATSAPP_LINK_PROVIDER_ID};
 
 const TAMUX_SELF_CHAT_PREFIX: &str = "🦅 Rarog - Swarog's concierge ⚒️\n";
 
@@ -125,15 +125,20 @@ fn should_enqueue_from_me_whatsapp_message(
 pub(crate) async fn start_whatsapp_link_native(agent: Arc<AgentEngine>) -> Result<()> {
     let store_path = whatsapp_native_store_path(&agent.data_dir);
     if let Some(parent) = store_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("failed to create whatsapp store directory {}", parent.display()))?;
+        tokio::fs::create_dir_all(parent).await.with_context(|| {
+            format!(
+                "failed to create whatsapp store directory {}",
+                parent.display()
+            )
+        })?;
     }
 
     let store = Arc::new(
         SqliteStore::new(&store_path.to_string_lossy())
             .await
-            .with_context(|| format!("failed to open wa-rs sqlite store {}", store_path.display()))?,
+            .with_context(|| {
+                format!("failed to open wa-rs sqlite store {}", store_path.display())
+            })?,
     );
 
     // Enable history sync only when persisted WhatsApp replay cursors already exist.
@@ -197,6 +202,24 @@ fn now_millis_local() -> u64 {
         .unwrap_or(0)
 }
 
+async fn clear_logged_out_whatsapp_session(agent: &AgentEngine) -> Result<()> {
+    tracing::info!("whatsapp: clearing logged out native session");
+    agent
+        .whatsapp_link
+        .stop(Some("logged_out".to_string()))
+        .await
+        .context("failed to stop logged out whatsapp runtime")?;
+    clear_persisted_provider_state(&agent.history, WHATSAPP_LINK_PROVIDER_ID).await?;
+    let store_path = whatsapp_native_store_path(&agent.data_dir);
+    if store_path.exists() {
+        tokio::fs::remove_file(&store_path)
+            .await
+            .with_context(|| format!("failed to remove {}", store_path.display()))?;
+    }
+    tracing::info!(path=%store_path.display(), "whatsapp: cleared logged out native session store");
+    Ok(())
+}
+
 async fn handle_native_event(
     agent: Arc<AgentEngine>,
     client: Arc<wa_rs::Client>,
@@ -241,12 +264,9 @@ async fn handle_native_event(
                 linked_at: Some(now_millis_local()),
                 updated_at: now_millis_local(),
             };
-            if let Err(error) = persist_transport_session_update(
-                &agent.history,
-                WHATSAPP_LINK_PROVIDER_ID,
-                update,
-            )
-            .await
+            if let Err(error) =
+                persist_transport_session_update(&agent.history, WHATSAPP_LINK_PROVIDER_ID, update)
+                    .await
             {
                 agent
                     .whatsapp_link
@@ -276,10 +296,10 @@ async fn handle_native_event(
                 .await;
         }
         Event::LoggedOut(_) => {
-            agent
-                .whatsapp_link
-                .broadcast_disconnected(Some("logged_out".to_string()))
-                .await;
+            tracing::info!("whatsapp: received native logged_out event");
+            if let Err(error) = clear_logged_out_whatsapp_session(&agent).await {
+                tracing::warn!(%error, "whatsapp: failed to clear logged out native session");
+            }
         }
         Event::PairError(error) => {
             agent
@@ -441,7 +461,7 @@ async fn handle_native_event(
             let result = gateway::ReplayFetchResult::Replay(envelopes);
             let accepted = {
                 let mut gw_guard = agent.gateway_state.lock().await;
-                let mut seen_ids = agent.gateway_seen_ids.lock().await;
+                let mut seen_ids = agent.gateway_seen_ids.lock().await.clone();
                 match gw_guard.as_mut() {
                     Some(gw) => {
                         let (msgs, _) = process_replay_result(
@@ -558,7 +578,7 @@ async fn handle_native_event(
                 let result = gateway::ReplayFetchResult::Replay(vec![envelope]);
                 let accepted = {
                     let mut gw_guard = agent.gateway_state.lock().await;
-                    let mut seen_ids = agent.gateway_seen_ids.lock().await;
+                    let mut seen_ids = agent.gateway_seen_ids.lock().await.clone();
                     match gw_guard.as_mut() {
                         Some(gw) => {
                             let (msgs, _) = process_replay_result(
@@ -576,7 +596,6 @@ async fn handle_native_event(
                         }
                         None => {
                             // Gateway not yet initialised — fall back to direct enqueue.
-                            drop(seen_ids);
                             if should_enqueue {
                                 vec![IncomingMessage {
                                     platform: "WhatsApp".to_string(),
@@ -599,9 +618,7 @@ async fn handle_native_event(
                             agent
                                 .whatsapp_link
                                 .broadcast_error(
-                                    format!(
-                                        "failed to enqueue native whatsapp message: {error}"
-                                    ),
+                                    format!("failed to enqueue native whatsapp message: {error}"),
                                     true,
                                 )
                                 .await;
@@ -660,6 +677,10 @@ pub(crate) async fn disconnect_native_whatsapp_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::load_persisted_provider_state;
+    use crate::agent::types::AgentConfig;
+    use crate::session_manager::SessionManager;
+    use tempfile::tempdir;
 
     #[test]
     fn tamux_device_props_uses_desktop_platform_and_package_version() {
@@ -683,10 +704,7 @@ mod tests {
     #[test]
     fn outbound_self_chat_prefix_is_idempotent() {
         let prefixed = format!("{TAMUX_SELF_CHAT_PREFIX}Hello");
-        assert_eq!(
-            format_outbound_whatsapp_text(&prefixed, true),
-            prefixed
-        );
+        assert_eq!(format_outbound_whatsapp_text(&prefixed, true), prefixed);
     }
 
     // -----------------------------------------------------------------------
@@ -697,7 +715,10 @@ mod tests {
     fn whatsapp_replay_cursor_roundtrips() {
         let cursor = build_whatsapp_cursor(1700000000, "msg-abc-123");
         assert_eq!(cursor, "1700000000:msg-abc-123");
-        assert_eq!(parse_whatsapp_cursor(&cursor), Some((1700000000, "msg-abc-123")));
+        assert_eq!(
+            parse_whatsapp_cursor(&cursor),
+            Some((1700000000, "msg-abc-123"))
+        );
     }
 
     #[test]
@@ -774,8 +795,10 @@ mod tests {
         let client = reqwest::Client::new();
         let mut gw = gateway::GatewayState::new(config, client);
 
-        gw.whatsapp_replay_cursors
-            .insert("15551234567".into(), build_whatsapp_cursor(1700000000, "msg1"));
+        gw.whatsapp_replay_cursors.insert(
+            "15551234567".into(),
+            build_whatsapp_cursor(1700000000, "msg1"),
+        );
 
         // Simulate the Connected handler logic.
         mark_whatsapp_replay_active_if_cursors(&mut gw);
@@ -855,7 +878,10 @@ mod tests {
         let (accepted_msgs, completed) =
             process_replay_result(&history, "whatsapp", result, &mut gw, &mut seen_ids).await;
 
-        assert!(completed, "replay must complete for a single valid envelope");
+        assert!(
+            completed,
+            "replay must complete for a single valid envelope"
+        );
         assert_eq!(
             accepted_msgs.len(),
             1,
@@ -863,7 +889,9 @@ mod tests {
         );
         // In-memory cursor must be updated.
         assert_eq!(
-            gw.whatsapp_replay_cursors.get("49123456789").map(String::as_str),
+            gw.whatsapp_replay_cursors
+                .get("49123456789")
+                .map(String::as_str),
             Some("1700000042:ECHO001"),
             "in-memory cursor must advance even for an outbound echo"
         );
@@ -881,5 +909,47 @@ mod tests {
         );
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn logged_out_clears_persisted_session_and_native_store() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+        persist_transport_session_update(
+            &engine.history,
+            WHATSAPP_LINK_PROVIDER_ID,
+            transport::SessionUpdate {
+                linked_phone: Some("+15550000001".to_string()),
+                auth_json: Some("{\"session\":true}".to_string()),
+                metadata_json: Some("{\"device\":\"native\"}".to_string()),
+                linked_at: Some(1),
+                updated_at: 1,
+            },
+        )
+        .await
+        .expect("persist provider state");
+
+        let store_path = whatsapp_native_store_path(&engine.data_dir);
+        tokio::fs::write(&store_path, b"sqlite-placeholder")
+            .await
+            .expect("write native store");
+
+        clear_logged_out_whatsapp_session(&engine)
+            .await
+            .expect("clear logged out session");
+
+        assert!(
+            load_persisted_provider_state(&engine.history, WHATSAPP_LINK_PROVIDER_ID)
+                .await
+                .expect("load provider state")
+                .is_none(),
+            "logged out cleanup must remove persisted provider state"
+        );
+        assert!(
+            !store_path.exists(),
+            "logged out cleanup must remove the native sqlite store"
+        );
     }
 }

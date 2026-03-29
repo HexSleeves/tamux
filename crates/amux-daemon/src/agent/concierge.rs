@@ -1394,10 +1394,7 @@ pub enum WelcomeProfileDecision {
 /// field so the caller can start a profile session and emit the question.
 pub fn profile_interview_decision(
     specs: &[crate::agent::operator_profile::ProfileFieldSpec],
-    answered: &std::collections::HashMap<
-        String,
-        crate::agent::operator_profile::ProfileFieldValue,
-    >,
+    answered: &std::collections::HashMap<String, crate::agent::operator_profile::ProfileFieldValue>,
     session: &crate::agent::operator_profile::InterviewSession,
     now_ms: u64,
 ) -> WelcomeProfileDecision {
@@ -2268,9 +2265,7 @@ mod tests {
 
     use crate::agent::operator_profile;
 
-    fn make_answered(
-        keys: &[&str],
-    ) -> HashMap<String, operator_profile::ProfileFieldValue> {
+    fn make_answered(keys: &[&str]) -> HashMap<String, operator_profile::ProfileFieldValue> {
         keys.iter()
             .map(|k| {
                 (
@@ -2298,7 +2293,9 @@ mod tests {
 
         match decision {
             WelcomeProfileDecision::EmitProfileQuestion {
-                field_key, optional, ..
+                field_key,
+                optional,
+                ..
             } => {
                 // "name" is the first required field in the canonical spec list.
                 assert_eq!(field_key, "name");

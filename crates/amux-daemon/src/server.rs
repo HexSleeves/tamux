@@ -172,9 +172,9 @@ mod tests {
     use crate::session_manager::SessionManager;
     use amux_protocol::{AmuxCodec, ClientMessage, DaemonMessage};
     use futures::{SinkExt, StreamExt};
+    use std::collections::HashSet;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use std::collections::HashSet;
     use tokio::io::DuplexStream;
     use tokio::task::JoinHandle;
     use tokio::time::{timeout, Duration};
@@ -576,10 +576,7 @@ mod tests {
             .expect("start divergent session");
 
         // Record contributions and complete session to synthesize retrieval payload.
-        let framing_labels = vec![
-            "analytical-lens".to_string(),
-            "pragmatic-lens".to_string(),
-        ];
+        let framing_labels = vec!["analytical-lens".to_string(), "pragmatic-lens".to_string()];
         for (idx, label) in framing_labels.iter().enumerate() {
             conn.agent
                 .record_divergent_contribution(
@@ -613,20 +610,22 @@ mod tests {
             }
             other => panic!("expected AgentDivergentSession, got {other:?}"),
         };
-        assert_eq!(payload.get("session_id").and_then(|v| v.as_str()), Some(session_id.as_str()));
-        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("complete"));
-        assert!(
-            payload
-                .get("tensions_markdown")
-                .and_then(|v| v.as_str())
-                .is_some_and(|v| !v.is_empty())
+        assert_eq!(
+            payload.get("session_id").and_then(|v| v.as_str()),
+            Some(session_id.as_str())
         );
-        assert!(
-            payload
-                .get("mediator_prompt")
-                .and_then(|v| v.as_str())
-                .is_some_and(|v| !v.is_empty())
+        assert_eq!(
+            payload.get("status").and_then(|v| v.as_str()),
+            Some("complete")
         );
+        assert!(payload
+            .get("tensions_markdown")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| !v.is_empty()));
+        assert!(payload
+            .get("mediator_prompt")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| !v.is_empty()));
 
         conn.shutdown().await;
     }
@@ -4444,35 +4443,36 @@ where
                 ClientMessage::AgentWhatsAppLinkStart => {
                     tracing::info!("whatsapp link start requested by client");
                     match agent.whatsapp_link.start_if_idle().await {
-                    Ok(_started) => {
-                        #[cfg(not(test))]
-                        {
-                            if _started {
-                                if let Err(e) = start_whatsapp_link_backend(agent.clone()).await {
-                                    agent
-                                        .whatsapp_link
-                                        .broadcast_error(e.to_string(), false)
-                                        .await;
+                        Ok(_started) => {
+                            #[cfg(not(test))]
+                            {
+                                if _started {
+                                    if let Err(e) = start_whatsapp_link_backend(agent.clone()).await
+                                    {
+                                        agent
+                                            .whatsapp_link
+                                            .broadcast_error(e.to_string(), false)
+                                            .await;
+                                    }
                                 }
                             }
+                            let snapshot = agent.whatsapp_link.status_snapshot().await;
+                            framed
+                                .send(DaemonMessage::AgentWhatsAppLinkStatus {
+                                    state: snapshot.state,
+                                    phone: snapshot.phone,
+                                    last_error: snapshot.last_error,
+                                })
+                                .await?;
                         }
-                        let snapshot = agent.whatsapp_link.status_snapshot().await;
-                        framed
-                            .send(DaemonMessage::AgentWhatsAppLinkStatus {
-                                state: snapshot.state,
-                                phone: snapshot.phone,
-                                last_error: snapshot.last_error,
-                            })
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::AgentWhatsAppLinkError {
+                                    message: e.to_string(),
+                                    recoverable: false,
+                                })
                                 .await?;
-                    }
-                    Err(e) => {
-                        framed
-                            .send(DaemonMessage::AgentWhatsAppLinkError {
-                                message: e.to_string(),
-                                recoverable: false,
-                            })
-                                .await?;
-                    }
+                        }
                     }
                 }
                 ClientMessage::AgentWhatsAppLinkStop => {
@@ -4502,6 +4502,7 @@ where
                     }
                 }
                 ClientMessage::AgentWhatsAppLinkReset => {
+                    tracing::info!("whatsapp link reset requested by client");
                     match agent.whatsapp_link.reset().await {
                         Ok(()) => {
                             if let Err(e) = crate::agent::clear_persisted_provider_state(
@@ -4523,6 +4524,10 @@ where
                             let native_store_path =
                                 crate::agent::whatsapp_native_store_path(&agent.data_dir);
                             if native_store_path.exists() {
+                                tracing::info!(
+                                    path = %native_store_path.display(),
+                                    "whatsapp link reset removing native store"
+                                );
                                 if let Err(e) = tokio::fs::remove_file(&native_store_path).await {
                                     framed
                                         .send(DaemonMessage::AgentWhatsAppLinkError {

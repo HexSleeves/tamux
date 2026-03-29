@@ -307,11 +307,7 @@ impl AgentEngine {
 
         // Keep a stable baseline regardless of kind; kind is still persisted for future branching.
         let _ = kind;
-        push_flag(
-            "enabled",
-            "enabled",
-            "Enable operator modeling overall?",
-        );
+        push_flag("enabled", "enabled", "Enable operator modeling overall?");
         push_flag(
             "allow_message_statistics",
             "allow_message_statistics",
@@ -339,10 +335,9 @@ impl AgentEngine {
         if let Ok(value) = serde_json::from_str::<bool>(answer_json) {
             return Ok(value);
         }
-        let value: serde_json::Value =
-            serde_json::from_str(answer_json).map_err(|error| {
-                anyhow::anyhow!("invalid answer_json payload for boolean consent: {error}")
-            })?;
+        let value: serde_json::Value = serde_json::from_str(answer_json).map_err(|error| {
+            anyhow::anyhow!("invalid answer_json payload for boolean consent: {error}")
+        })?;
         value
             .as_bool()
             .ok_or_else(|| anyhow::anyhow!("answer_json must decode to a boolean"))
@@ -482,7 +477,10 @@ impl AgentEngine {
     pub async fn next_operator_profile_question_for_session(
         &self,
         session_id: &str,
-    ) -> Result<(Option<OperatorProfileQuestionPayload>, OperatorProfileProgressPayload)> {
+    ) -> Result<(
+        Option<OperatorProfileQuestionPayload>,
+        OperatorProfileProgressPayload,
+    )> {
         let session = {
             let sessions = self.operator_profile_sessions.read().await;
             sessions
@@ -500,7 +498,10 @@ impl AgentEngine {
         session_id: &str,
         question_id: &str,
         answer_json: &str,
-    ) -> Result<(Option<OperatorProfileQuestionPayload>, OperatorProfileProgressPayload)> {
+    ) -> Result<(
+        Option<OperatorProfileQuestionPayload>,
+        OperatorProfileProgressPayload,
+    )> {
         let mut sessions = self.operator_profile_sessions.write().await;
         let session = sessions
             .get_mut(session_id)
@@ -533,7 +534,10 @@ impl AgentEngine {
         session_id: &str,
         question_id: &str,
         reason: Option<&str>,
-    ) -> Result<(Option<OperatorProfileQuestionPayload>, OperatorProfileProgressPayload)> {
+    ) -> Result<(
+        Option<OperatorProfileQuestionPayload>,
+        OperatorProfileProgressPayload,
+    )> {
         let mut sessions = self.operator_profile_sessions.write().await;
         let session = sessions
             .get_mut(session_id)
@@ -566,7 +570,10 @@ impl AgentEngine {
         session_id: &str,
         question_id: &str,
         defer_until_unix_ms: Option<u64>,
-    ) -> Result<(Option<OperatorProfileQuestionPayload>, OperatorProfileProgressPayload)> {
+    ) -> Result<(
+        Option<OperatorProfileQuestionPayload>,
+        OperatorProfileProgressPayload,
+    )> {
         let mut sessions = self.operator_profile_sessions.write().await;
         let session = sessions
             .get_mut(session_id)

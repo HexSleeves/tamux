@@ -536,7 +536,9 @@ impl TuiModel {
                 },
                 "select" => {
                     let normalized = answer.to_ascii_lowercase();
-                    if let Some(options) = Self::operator_profile_select_options(&question.field_key) {
+                    if let Some(options) =
+                        Self::operator_profile_select_options(&question.field_key)
+                    {
                         if !options.iter().any(|option| *option == normalized) {
                             self.show_input_notice(
                                 format!(
@@ -646,7 +648,9 @@ impl TuiModel {
 
     fn close_top_modal(&mut self) {
         if self.modal.top() == Some(modal::ModalKind::WhatsAppLink) {
-            self.send_daemon_command(DaemonCommand::WhatsAppLinkStop);
+            if self.modal.whatsapp_link().phase() != modal::WhatsAppLinkPhase::Connected {
+                self.send_daemon_command(DaemonCommand::WhatsAppLinkStop);
+            }
             self.send_daemon_command(DaemonCommand::WhatsAppLinkUnsubscribe);
             self.modal.reset_whatsapp_link();
         }
@@ -3299,9 +3303,7 @@ mod tests {
             "question should clear when skip starts"
         );
 
-        let sent = cmd_rx
-            .try_recv()
-            .expect("skip should emit daemon command");
+        let sent = cmd_rx.try_recv().expect("skip should emit daemon command");
         match sent {
             DaemonCommand::SkipOperatorProfileQuestion {
                 session_id,
@@ -3338,9 +3340,7 @@ mod tests {
             "question should clear when defer starts"
         );
 
-        let sent = cmd_rx
-            .try_recv()
-            .expect("defer should emit daemon command");
+        let sent = cmd_rx.try_recv().expect("defer should emit daemon command");
         match sent {
             DaemonCommand::DeferOperatorProfileQuestion {
                 session_id,

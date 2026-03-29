@@ -680,10 +680,7 @@ pub enum ClientMessage {
     AgentGetOperatorProfileSummary,
 
     /// Set an operator profiling consent toggle.
-    AgentSetOperatorProfileConsent {
-        consent_key: String,
-        granted: bool,
-    },
+    AgentSetOperatorProfileConsent { consent_key: String, granted: bool },
 
     /// Query explainability: "Why did you do that?" for a past action (EXPL-01, EXPL-02).
     AgentExplainAction {
@@ -1198,10 +1195,7 @@ pub enum DaemonMessage {
     },
 
     /// Operator profile session started.
-    AgentOperatorProfileSessionStarted {
-        session_id: String,
-        kind: String,
-    },
+    AgentOperatorProfileSessionStarted { session_id: String, kind: String },
 
     /// Operator profile question payload.
     AgentOperatorProfileQuestion {
@@ -2051,7 +2045,8 @@ mod tests {
         let start = ClientMessage::AgentStartOperatorProfileSession {
             kind: "onboarding".to_string(),
         };
-        let decoded: ClientMessage = bincode::deserialize(&bincode::serialize(&start).unwrap()).unwrap();
+        let decoded: ClientMessage =
+            bincode::deserialize(&bincode::serialize(&start).unwrap()).unwrap();
         match decoded {
             ClientMessage::AgentStartOperatorProfileSession { kind } => {
                 assert_eq!(kind, "onboarding");
@@ -2062,7 +2057,8 @@ mod tests {
         let next = ClientMessage::AgentNextOperatorProfileQuestion {
             session_id: "sess-1".to_string(),
         };
-        let decoded: ClientMessage = bincode::deserialize(&bincode::serialize(&next).unwrap()).unwrap();
+        let decoded: ClientMessage =
+            bincode::deserialize(&bincode::serialize(&next).unwrap()).unwrap();
         match decoded {
             ClientMessage::AgentNextOperatorProfileQuestion { session_id } => {
                 assert_eq!(session_id, "sess-1");

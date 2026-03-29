@@ -474,7 +474,10 @@ mod tests {
 
         set_user_sync_state_for_test(UserProfileSyncState::Clean);
         let result = handle_user_memory_append_with_reconcile(&root, &history, "uses neovim").await;
-        assert!(result.is_err(), "expected reconcile to fail when USER.md is a directory");
+        assert!(
+            result.is_err(),
+            "expected reconcile to fail when USER.md is a directory"
+        );
         assert_eq!(
             current_user_sync_state(),
             UserProfileSyncState::Dirty,

@@ -95,16 +95,14 @@ pub fn next_question<'a>(
 ) -> Option<&'a ProfileFieldSpec> {
     // Pass 1: required fields only.
     for spec in specs.iter().filter(|s| s.required) {
-        if !answered.contains_key(&spec.field_key)
-            && !session.is_excluded(&spec.field_key, now_ms)
+        if !answered.contains_key(&spec.field_key) && !session.is_excluded(&spec.field_key, now_ms)
         {
             return Some(spec);
         }
     }
     // Pass 2: optional fields.
     for spec in specs.iter().filter(|s| !s.required) {
-        if !answered.contains_key(&spec.field_key)
-            && !session.is_excluded(&spec.field_key, now_ms)
+        if !answered.contains_key(&spec.field_key) && !session.is_excluded(&spec.field_key, now_ms)
         {
             return Some(spec);
         }
@@ -228,10 +226,7 @@ mod tests {
 
     #[test]
     fn falls_through_to_optional_when_required_exhausted() {
-        let specs = vec![
-            make_spec("req", true),
-            make_spec("opt", false),
-        ];
+        let specs = vec![make_spec("req", true), make_spec("opt", false)];
         let mut answered = HashMap::new();
         answered.insert("req".to_string(), make_value("\"done\""));
         let session = InterviewSession::new("s1", "onboarding");

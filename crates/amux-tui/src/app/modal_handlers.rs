@@ -893,6 +893,30 @@ mod tests {
     }
 
     #[test]
+    fn whatsapp_modal_esc_keeps_connected_session_running() {
+        let (mut model, mut daemon_rx) = make_model();
+        model
+            .modal
+            .set_whatsapp_link_connected(Some("+48663977535".to_string()));
+        model
+            .modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::WhatsAppLink));
+
+        let quit = model.handle_key_modal(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            modal::ModalKind::WhatsAppLink,
+        );
+        assert!(!quit);
+        assert!(model.modal.top().is_none());
+        assert!(matches!(
+            daemon_rx.try_recv().expect("expected unsubscribe command"),
+            DaemonCommand::WhatsAppLinkUnsubscribe
+        ));
+        assert!(daemon_rx.try_recv().is_err());
+    }
+
+    #[test]
     fn whatsapp_modal_cancel_sends_stop_and_closes() {
         let (mut model, mut daemon_rx) = make_model();
         model
@@ -950,5 +974,41 @@ mod tests {
             daemon_rx.try_recv().expect("expected unsubscribe command"),
             DaemonCommand::WhatsAppLinkUnsubscribe
         ));
+    }
+
+    #[test]
+    fn stacked_modal_pop_preserves_connected_whatsapp_session() {
+        let (mut model, mut daemon_rx) = make_model();
+        model
+            .modal
+            .set_whatsapp_link_connected(Some("+48663977535".to_string()));
+        model
+            .modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::WhatsAppLink));
+        model
+            .modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
+
+        let quit = model.handle_key_modal(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            modal::ModalKind::CommandPalette,
+        );
+        assert!(!quit);
+        assert_eq!(model.modal.top(), Some(modal::ModalKind::WhatsAppLink));
+        assert!(daemon_rx.try_recv().is_err());
+
+        let quit = model.handle_key_modal(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            modal::ModalKind::WhatsAppLink,
+        );
+        assert!(!quit);
+        assert!(model.modal.top().is_none());
+        assert!(matches!(
+            daemon_rx.try_recv().expect("expected unsubscribe command"),
+            DaemonCommand::WhatsAppLinkUnsubscribe
+        ));
+        assert!(daemon_rx.try_recv().is_err());
     }
 }

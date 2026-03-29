@@ -932,11 +932,15 @@ mod tests {
         let task_id = "task-supervised";
         let approval_id = "autonomy-ack-1";
 
-        engine.goal_runs.lock().await.push_back(sample_supervised_goal_run(
-            goal_run_id,
-            task_id,
-            approval_id,
-        ));
+        engine
+            .goal_runs
+            .lock()
+            .await
+            .push_back(sample_supervised_goal_run(
+                goal_run_id,
+                task_id,
+                approval_id,
+            ));
         sample_awaiting_task(&engine, goal_run_id, task_id, approval_id).await;
 
         let changed = engine.control_goal_run(goal_run_id, "resume", None).await;
@@ -973,14 +977,20 @@ mod tests {
         let task_id = "task-supervised";
         let approval_id = "autonomy-ack-2";
 
-        engine.goal_runs.lock().await.push_back(sample_supervised_goal_run(
-            goal_run_id,
-            task_id,
-            approval_id,
-        ));
+        engine
+            .goal_runs
+            .lock()
+            .await
+            .push_back(sample_supervised_goal_run(
+                goal_run_id,
+                task_id,
+                approval_id,
+            ));
         sample_awaiting_task(&engine, goal_run_id, task_id, approval_id).await;
 
-        let changed = engine.control_goal_run(goal_run_id, "acknowledge", None).await;
+        let changed = engine
+            .control_goal_run(goal_run_id, "acknowledge", None)
+            .await;
         assert!(changed, "acknowledge should clear supervised gate");
 
         let goal = engine

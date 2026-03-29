@@ -437,7 +437,8 @@ impl AgentEngine {
             })
         };
 
-        let Some((session_id, framing_label, framing_index, existing_count, total_count)) = resolved
+        let Some((session_id, framing_label, framing_index, existing_count, total_count)) =
+            resolved
         else {
             return Ok(false);
         };
@@ -489,7 +490,10 @@ impl AgentEngine {
     }
 
     /// Canonical divergent session payload for operator retrieval surfaces.
-    pub(crate) async fn get_divergent_session(&self, session_id: &str) -> Result<serde_json::Value> {
+    pub(crate) async fn get_divergent_session(
+        &self,
+        session_id: &str,
+    ) -> Result<serde_json::Value> {
         let session = {
             let sessions = self.divergent_sessions.read().await;
             sessions
@@ -593,7 +597,8 @@ impl AgentEngine {
             if session.status == DivergentStatus::Running {
                 session.transition_to(DivergentStatus::Mediating)?;
             }
-            let prompt = existing_prompt.unwrap_or_else(|| format_mediator_prompt(session, &tensions));
+            let prompt =
+                existing_prompt.unwrap_or_else(|| format_mediator_prompt(session, &tensions));
             session.tensions_markdown = Some(tensions.clone());
             session.mediator_prompt = Some(prompt.clone());
             if session.status == DivergentStatus::Mediating {
@@ -911,7 +916,8 @@ mod tests {
         }
         let updated_task = {
             let tasks = engine.tasks.lock().await;
-            tasks.iter()
+            tasks
+                .iter()
                 .find(|task| task.id == framing_task_id)
                 .cloned()
                 .expect("task should exist")
@@ -920,7 +926,10 @@ mod tests {
             .record_divergent_contribution_on_task_completion(&updated_task)
             .await
             .expect("completion hook should succeed");
-        assert!(handled, "divergent completion hook should run for divergent task");
+        assert!(
+            handled,
+            "divergent completion hook should run for divergent task"
+        );
 
         let sessions = engine.divergent_sessions.read().await;
         let session = sessions.get(&session_id).expect("session should exist");
@@ -931,7 +940,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn divergent_completion_hook_final_contribution_synthesizes_tensions_and_mediator_prompt() {
+    async fn divergent_completion_hook_final_contribution_synthesizes_tensions_and_mediator_prompt()
+    {
         let root = tempdir().expect("temp dir");
         let manager = SessionManager::new_test(root.path()).await;
         let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
@@ -963,7 +973,8 @@ mod tests {
             }
             let task_snapshot = {
                 let tasks = engine.tasks.lock().await;
-                tasks.iter()
+                tasks
+                    .iter()
                     .find(|task| &task.id == task_id)
                     .cloned()
                     .expect("task should exist")
@@ -1029,7 +1040,8 @@ mod tests {
         }
         let snapshot = {
             let tasks = engine.tasks.lock().await;
-            tasks.iter()
+            tasks
+                .iter()
                 .find(|entry| entry.id == task.id)
                 .cloned()
                 .expect("task exists")

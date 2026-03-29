@@ -2652,7 +2652,15 @@ impl HistoryStore {
                     "INSERT INTO operator_profile_events \
                      (id, event_type, field_key, value_json, source, metadata_json, created_at) \
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![id, event_type, field_key, value_json, source, metadata_json, now],
+                    params![
+                        id,
+                        event_type,
+                        field_key,
+                        value_json,
+                        source,
+                        metadata_json,
+                        now
+                    ],
                 )?;
                 Ok(())
             })
@@ -2660,10 +2668,7 @@ impl HistoryStore {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    pub async fn list_profile_events(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<OperatorProfileEventRow>> {
+    pub async fn list_profile_events(&self, limit: usize) -> Result<Vec<OperatorProfileEventRow>> {
         self.conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
@@ -2722,10 +2727,7 @@ impl HistoryStore {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    pub async fn get_profile_checkin(
-        &self,
-        id: &str,
-    ) -> Result<Option<OperatorProfileCheckinRow>> {
+    pub async fn get_profile_checkin(&self, id: &str) -> Result<Option<OperatorProfileCheckinRow>> {
         let id = id.to_string();
         self.conn
             .call(move |conn| {
@@ -2898,7 +2900,13 @@ impl HistoryStore {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    pub async fn save_gateway_replay_cursor(&self, platform: &str, channel_id: &str, cursor_value: &str, cursor_type: &str) -> Result<()> {
+    pub async fn save_gateway_replay_cursor(
+        &self,
+        platform: &str,
+        channel_id: &str,
+        cursor_value: &str,
+        cursor_type: &str,
+    ) -> Result<()> {
         let platform = platform.to_string();
         let channel_id = channel_id.to_string();
         let cursor_value = cursor_value.to_string();
@@ -2915,7 +2923,11 @@ impl HistoryStore {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    pub async fn load_gateway_replay_cursor(&self, platform: &str, channel_id: &str) -> Result<Option<GatewayReplayCursorRow>> {
+    pub async fn load_gateway_replay_cursor(
+        &self,
+        platform: &str,
+        channel_id: &str,
+    ) -> Result<Option<GatewayReplayCursorRow>> {
         let platform = platform.to_string();
         let channel_id = channel_id.to_string();
         self.conn
@@ -2940,7 +2952,10 @@ impl HistoryStore {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    pub async fn load_gateway_replay_cursors(&self, platform: &str) -> Result<Vec<GatewayReplayCursorRow>> {
+    pub async fn load_gateway_replay_cursors(
+        &self,
+        platform: &str,
+    ) -> Result<Vec<GatewayReplayCursorRow>> {
         let platform = platform.to_string();
         self.conn
             .call(move |conn| {
@@ -7297,15 +7312,11 @@ mod tests {
         assert_eq!(loaded.last_linked_at, state.last_linked_at);
         assert_eq!(loaded.updated_at, state.updated_at);
 
-        store
-            .delete_whatsapp_provider_state("whatsapp_web")
-            .await?;
-        assert!(
-            store
-                .get_whatsapp_provider_state("whatsapp_web")
-                .await?
-                .is_none()
-        );
+        store.delete_whatsapp_provider_state("whatsapp_web").await?;
+        assert!(store
+            .get_whatsapp_provider_state("whatsapp_web")
+            .await?
+            .is_none());
 
         fs::remove_dir_all(root)?;
         Ok(())
@@ -7349,10 +7360,7 @@ mod tests {
             by_id.get("sess-a").map(|row| row.kind.as_str()),
             Some("onboarding")
         );
-        assert_eq!(
-            by_id.get("sess-a").map(|row| row.updated_at),
-            Some(1200)
-        );
+        assert_eq!(by_id.get("sess-a").map(|row| row.updated_at), Some(1200));
         assert_eq!(
             by_id.get("sess-b").map(|row| row.kind.as_str()),
             Some("retrospective")

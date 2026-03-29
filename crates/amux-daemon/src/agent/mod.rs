@@ -64,8 +64,8 @@ mod task_prompt;
 mod task_scheduler;
 mod thread_crud;
 mod tool_synthesis;
-mod whatsapp_native;
 mod whatsapp_link;
+mod whatsapp_native;
 mod work_context;
 
 pub mod awareness;

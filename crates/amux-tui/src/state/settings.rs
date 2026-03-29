@@ -297,6 +297,7 @@ impl SettingsState {
                 10 => "whatsapp_token",
                 11 => "whatsapp_phone_id",
                 12 => "whatsapp_link_device",
+                13 => "whatsapp_relink_device",
                 _ => "",
             },
             SettingsTab::Auth => match self.field_cursor {
@@ -372,7 +373,7 @@ impl SettingsState {
             SettingsTab::Tools => 7,
             SettingsTab::WebSearch => 8,
             SettingsTab::Chat => 22,
-            SettingsTab::Gateway => 13,
+            SettingsTab::Gateway => 14,
             SettingsTab::Auth => 1,
             SettingsTab::Agent => 3,
             SettingsTab::SubAgents => 1,
@@ -913,6 +914,10 @@ mod tests {
         assert_eq!(state.current_field_name(), "whatsapp_token");
         state.reduce(SettingsAction::NavigateField(1));
         assert_eq!(state.current_field_name(), "whatsapp_phone_id");
+        state.reduce(SettingsAction::NavigateField(1));
+        assert_eq!(state.current_field_name(), "whatsapp_link_device");
+        state.reduce(SettingsAction::NavigateField(1));
+        assert_eq!(state.current_field_name(), "whatsapp_relink_device");
     }
 
     #[test]
@@ -1014,7 +1019,7 @@ mod tests {
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Chat));
         assert_eq!(state.field_count(), 22); // streaming, memory, Honcho, and capability controls
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Gateway));
-        assert_eq!(state.field_count(), 13); // enabled, prefix, slack×2, telegram×2, discord×3, whatsapp×4
+        assert_eq!(state.field_count(), 14); // enabled, prefix, slack×2, telegram×2, discord×3, whatsapp×5
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Auth));
         assert_eq!(state.field_count(), 1); // provider list with row-level actions handled separately
         state.reduce(SettingsAction::SwitchTab(SettingsTab::Agent));

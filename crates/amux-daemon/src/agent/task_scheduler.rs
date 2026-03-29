@@ -666,13 +666,21 @@ mod tests {
         );
         let selected = select_ready_task_indices(&tasks, &[], &goal_run_statuses);
 
-        assert_eq!(selected, vec![1], "goal-linked queued task should stay blocked");
+        assert_eq!(
+            selected,
+            vec![1],
+            "goal-linked queued task should stay blocked"
+        );
     }
 
     #[test]
     fn select_ready_task_indices_fail_closed_when_goal_metadata_missing_for_goal_linked_task() {
         let mut tasks = VecDeque::new();
-        tasks.push_back(make_task("goal-task", TaskStatus::Queued, Some("unknown-goal-run")));
+        tasks.push_back(make_task(
+            "goal-task",
+            TaskStatus::Queued,
+            Some("unknown-goal-run"),
+        ));
         tasks.push_back(make_task("independent-task", TaskStatus::Queued, None));
 
         let selected = select_ready_task_indices(&tasks, &[], &HashMap::new());

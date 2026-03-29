@@ -4761,7 +4761,9 @@ async fn execute_get_divergent_session(
         .ok_or_else(|| anyhow::anyhow!("missing 'session_id' argument"))?;
 
     match agent.get_divergent_session(session_id).await {
-        Ok(payload) => Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string())),
+        Ok(payload) => {
+            Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()))
+        }
         Err(error) => Ok(format!("Failed to fetch divergent session: {error}")),
     }
 }
@@ -5319,6 +5321,14 @@ fn now_epoch_millis() -> u64 {
         .as_millis() as u64
 }
 
+fn should_use_linked_whatsapp_transport(
+    wa_link_state: &str,
+    has_native_client: bool,
+    has_sidecar_process: bool,
+) -> bool {
+    wa_link_state == "connected" || has_native_client || has_sidecar_process
+}
+
 async fn execute_gateway_message(
     tool_name: &str,
     args: &serde_json::Value,
@@ -5725,7 +5735,13 @@ async fn execute_gateway_message(
             }
             let phone = phone.as_str();
             let wa_link_state = agent.whatsapp_link.status_snapshot().await.state;
-            if wa_link_state == "connected" {
+            let has_native_client = agent.whatsapp_link.has_native_client().await;
+            let has_sidecar_process = agent.whatsapp_link.has_sidecar_process().await;
+            if should_use_linked_whatsapp_transport(
+                &wa_link_state,
+                has_native_client,
+                has_sidecar_process,
+            ) {
                 agent.whatsapp_link.send_message(phone, message).await?;
                 {
                     let mut gw_lock = agent.gateway_state.lock().await;
@@ -5962,8 +5978,8 @@ mod tests {
         command_looks_interactive, command_matches_policy_risk, command_requires_managed_state,
         execute_get_divergent_session, execute_headless_shell_command, get_available_tools,
         managed_alias_args, parse_capture_output, parse_tool_args, resolve_skill_path,
-        should_use_managed_execution, validate_read_path, validate_write_path,
-        wait_for_managed_command_outcome,
+        should_use_linked_whatsapp_transport, should_use_managed_execution, validate_read_path,
+        validate_write_path, wait_for_managed_command_outcome,
     };
     use crate::agent::{types::AgentConfig, AgentEngine};
     use crate::history::SkillVariantRecord;
@@ -6031,6 +6047,31 @@ mod tests {
         let script = build_list_files_script("L3RtcA==", "tok123");
         assert!(script.contains("\ntry:\n    rows = []\n    for entry in sorted("));
         assert!(script.contains("\nexcept Exception as exc:\n    payload = f'Error: {exc}'"));
+    }
+
+    #[test]
+    fn linked_whatsapp_transport_is_used_when_native_client_exists() {
+        assert!(should_use_linked_whatsapp_transport(
+            "starting", true, false
+        ));
+    }
+
+    #[test]
+    fn linked_whatsapp_transport_is_used_when_sidecar_exists() {
+        assert!(should_use_linked_whatsapp_transport(
+            "disconnected",
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn linked_whatsapp_transport_requires_connected_state_or_transport() {
+        assert!(!should_use_linked_whatsapp_transport(
+            "disconnected",
+            false,
+            false
+        ));
     }
 
     #[test]
@@ -6322,19 +6363,18 @@ mod tests {
         .expect("tool execution should succeed");
         let payload: serde_json::Value =
             serde_json::from_str(&response).expect("tool payload should be valid JSON");
-        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("complete"));
-        assert!(
-            payload
-                .get("tensions_markdown")
-                .and_then(|v| v.as_str())
-                .is_some_and(|value| !value.is_empty())
+        assert_eq!(
+            payload.get("status").and_then(|v| v.as_str()),
+            Some("complete")
         );
-        assert!(
-            payload
-                .get("mediator_prompt")
-                .and_then(|v| v.as_str())
-                .is_some_and(|value| !value.is_empty())
-        );
+        assert!(payload
+            .get("tensions_markdown")
+            .and_then(|v| v.as_str())
+            .is_some_and(|value| !value.is_empty()));
+        assert!(payload
+            .get("mediator_prompt")
+            .and_then(|v| v.as_str())
+            .is_some_and(|value| !value.is_empty()));
     }
 
     #[tokio::test]
@@ -6355,9 +6395,14 @@ mod tests {
         .expect("tool execution should succeed");
         let payload: serde_json::Value =
             serde_json::from_str(&response).expect("tool payload should be valid JSON");
-        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("running"));
+        assert_eq!(
+            payload.get("status").and_then(|v| v.as_str()),
+            Some("running")
+        );
         assert!(
-            payload.get("tensions_markdown").is_some_and(|v| v.is_null()),
+            payload
+                .get("tensions_markdown")
+                .is_some_and(|v| v.is_null()),
             "in-progress session should not report tensions output"
         );
         assert!(

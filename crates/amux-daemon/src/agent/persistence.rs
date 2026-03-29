@@ -252,10 +252,15 @@ impl AgentEngine {
                         }
 
                         if failed == 0 {
-                            if let Err(error) = tokio::fs::remove_file(&legacy_gateway_threads_path).await {
+                            if let Err(error) =
+                                tokio::fs::remove_file(&legacy_gateway_threads_path).await
+                            {
                                 tracing::warn!(%error, "failed to remove legacy gateway thread map file after migration");
                             } else {
-                                tracing::info!(imported, "migrated legacy gateway thread map into sqlite");
+                                tracing::info!(
+                                    imported,
+                                    "migrated legacy gateway thread map into sqlite"
+                                );
                             }
                         } else {
                             tracing::warn!(imported, failed, "legacy gateway thread map migration partially failed; keeping legacy file");
@@ -264,7 +269,8 @@ impl AgentEngine {
                         if !items.is_empty() {
                             match self.history.list_gateway_thread_bindings().await {
                                 Ok(bindings) if !bindings.is_empty() => {
-                                    let map: HashMap<String, String> = bindings.into_iter().collect();
+                                    let map: HashMap<String, String> =
+                                        bindings.into_iter().collect();
                                     *self.gateway_threads.write().await = map;
                                 }
                                 Ok(_) => {}
@@ -307,7 +313,9 @@ impl AgentEngine {
                 *self.operator_profile_sessions.write().await = sessions;
             }
             Ok(_) => {}
-            Err(error) => tracing::warn!("failed to load operator profile sessions from sqlite: {error}"),
+            Err(error) => {
+                tracing::warn!("failed to load operator profile sessions from sqlite: {error}")
+            }
         }
 
         // Load heartbeat items

@@ -508,10 +508,7 @@ impl TuiModel {
                     .map(str::to_string)
                     .or(reason.clone())
                     .unwrap_or_else(|| "none".to_string());
-                self.status_line = format!(
-                    "WhatsApp link disconnected: {}",
-                    display_reason
-                );
+                self.status_line = format!("WhatsApp link disconnected: {}", display_reason);
             }
             ClientEvent::TierChanged { new_tier } => {
                 self.tier.on_tier_changed(&new_tier);
@@ -1122,8 +1119,8 @@ impl TuiModel {
                     .active_thread_id()
                     .map(str::to_string)
                     .unwrap_or_else(|| "local-explain".to_string());
-                let content = serde_json::to_string_pretty(&payload)
-                    .unwrap_or_else(|_| payload.to_string());
+                let content =
+                    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
                 self.chat.reduce(chat::ChatAction::AppendMessage {
                     thread_id,
                     message: chat::AgentMessage {
@@ -1167,8 +1164,8 @@ impl TuiModel {
                     .active_thread_id()
                     .map(str::to_string)
                     .unwrap_or_else(|| "local-divergent".to_string());
-                let content = serde_json::to_string_pretty(&payload)
-                    .unwrap_or_else(|_| payload.to_string());
+                let content =
+                    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
                 self.chat.reduce(chat::ChatAction::AppendMessage {
                     thread_id,
                     message: chat::AgentMessage {

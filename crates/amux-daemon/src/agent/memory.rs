@@ -1,9 +1,9 @@
 //! Persistent memory helpers for SOUL.md, MEMORY.md, and USER.md.
 
-use super::*;
 use super::operator_profile::user_sync::{
     current_user_sync_state, handle_user_memory_append_with_reconcile, UserProfileSyncState,
 };
+use super::*;
 use crate::history::{HistoryStore, MemoryProvenanceRecord};
 
 const SOUL_LIMIT_CHARS: usize = 1_500;
@@ -555,10 +555,10 @@ impl super::engine::AgentEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::operator_profile::user_sync::{
         acquire_user_sync_test_guard, set_user_sync_state_for_test,
     };
+    use super::*;
     use crate::history::HistoryStore;
 
     fn test_write_context() -> MemoryWriteContext<'static> {
@@ -667,12 +667,18 @@ mod tests {
         .await?;
 
         let final_content = tokio::fs::read_to_string(&user_path).await?;
-        assert!(final_content.contains("Profile summary is generated from SQLite-backed operator profile."));
+        assert!(final_content
+            .contains("Profile summary is generated from SQLite-backed operator profile."));
         assert!(final_content.contains("- legacy_user_signal: "));
         assert!(final_content.contains("- legacy_user_md: "));
 
-        let import_done = history.get_profile_field("__legacy_user_import_done").await?;
-        assert!(import_done.is_some(), "legacy bootstrap import sentinel should be written");
+        let import_done = history
+            .get_profile_field("__legacy_user_import_done")
+            .await?;
+        assert!(
+            import_done.is_some(),
+            "legacy bootstrap import sentinel should be written"
+        );
         Ok(())
     }
 }
