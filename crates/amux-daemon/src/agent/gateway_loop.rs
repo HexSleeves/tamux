@@ -191,32 +191,45 @@ impl AgentEngine {
     /// updating the shared `gateway_seen_ids` ring buffer with the IDs of every
     /// accepted message so that the live-path duplicate check sees them.
     ///
-    /// `platform_results` is a list of `(platform_name, ReplayFetchResult)` pairs
-    /// collected by the caller before holding the gateway-state lock.  Completed
-    /// platforms are removed from `gw.replay_cycle_active`.
+    /// `platform_results` is a list of `(platform_name, channel_results)` pairs
+    /// collected by the caller before holding the gateway-state lock.  Each entry
+    /// holds **all** per-channel results for that platform; the platform is only
+    /// removed from `gw.replay_cycle_active` when every channel result completes
+    /// successfully.
     ///
     /// Returns the accumulated messages to prepend to the live queue.
     pub(crate) async fn apply_replay_results(
         &self,
-        platform_results: Vec<(String, gateway::ReplayFetchResult)>,
+        platform_results: Vec<(String, Vec<gateway::ReplayFetchResult>)>,
         gw: &mut gateway::GatewayState,
     ) -> Vec<gateway::IncomingMessage> {
         let mut seen_ids_snap = self.gateway_seen_ids.lock().await.clone();
         let mut replay_msgs: Vec<gateway::IncomingMessage> = Vec::new();
 
-        for (platform, result) in platform_results {
-            let (msgs, completed) =
-                process_replay_result(&self.history, &platform, result, gw, &mut seen_ids_snap)
-                    .await;
-            if completed {
+        for (platform, channel_results) in platform_results {
+            let mut all_completed = true;
+            let mut platform_msgs: Vec<gateway::IncomingMessage> = Vec::new();
+
+            for result in channel_results {
+                let (msgs, completed) =
+                    process_replay_result(&self.history, &platform, result, gw, &mut seen_ids_snap)
+                        .await;
+                platform_msgs.extend(msgs);
+                if !completed {
+                    all_completed = false;
+                    break;
+                }
+            }
+
+            if all_completed {
                 gw.replay_cycle_active.remove(platform.as_str());
                 tracing::info!(
                     platform = %platform,
-                    replay_count = msgs.len(),
+                    replay_count = platform_msgs.len(),
                     "gateway: replay cycle complete"
                 );
             }
-            replay_msgs.extend(msgs);
+            replay_msgs.extend(platform_msgs);
         }
 
         // Write the updated snapshot back to the shared ring buffer so that
@@ -1053,123 +1066,81 @@ impl AgentEngine {
         }
 
         // --- Replay orchestration ---
-        // For each platform that just reconnected (replay_cycle_active), fetch and
-        // process messages missed during the outage before routing live messages.
+        // For each platform that just reconnected (replay_cycle_active), fetch
+        // all channel results first, then delegate to apply_replay_results so
+        // that seen-id write-back and replay_cycle_active management live in one
+        // place.
         {
             let platforms_for_replay: Vec<String> =
                 gw.replay_cycle_active.clone().into_iter().collect();
             if !platforms_for_replay.is_empty() {
-                let mut seen_ids_snap: Vec<String> =
-                    self.gateway_seen_ids.lock().await.clone();
-                let mut replay_msgs: Vec<gateway::IncomingMessage> = Vec::new();
+                let mut platform_results: Vec<(String, Vec<gateway::ReplayFetchResult>)> =
+                    Vec::new();
 
                 for platform in &platforms_for_replay {
-                    let (msgs, completed) = match platform.as_str() {
-                        "telegram" => {
-                            match gateway::fetch_telegram_replay(gw).await {
-                                Ok(result) => {
-                                    process_replay_result(
-                                        &self.history,
-                                        platform,
-                                        result,
-                                        gw,
-                                        &mut seen_ids_snap,
-                                    )
-                                    .await
-                                }
-                                Err(e) => {
-                                    tracing::warn!("replay: telegram fetch failed: {e}");
-                                    (Vec::new(), false)
-                                }
+                    let channel_results: Vec<gateway::ReplayFetchResult> = match platform.as_str()
+                    {
+                        "telegram" => match gateway::fetch_telegram_replay(gw).await {
+                            Ok(result) => vec![result],
+                            Err(e) => {
+                                tracing::warn!("replay: telegram fetch failed: {e}");
+                                continue;
                             }
-                        }
+                        },
                         "slack" => {
-                            let mut all_msgs = Vec::new();
-                            let mut all_completed = true;
+                            let mut results = Vec::new();
+                            let mut fetch_ok = true;
                             for ch in &slack_channels {
                                 match gateway::fetch_slack_replay(gw, ch).await {
-                                    Ok(result) => {
-                                        let (ch_msgs, ch_done) = process_replay_result(
-                                            &self.history,
-                                            platform,
-                                            result,
-                                            gw,
-                                            &mut seen_ids_snap,
-                                        )
-                                        .await;
-                                        all_msgs.extend(ch_msgs);
-                                        if !ch_done {
-                                            all_completed = false;
-                                            break;
-                                        }
-                                    }
+                                    Ok(result) => results.push(result),
                                     Err(e) => {
                                         tracing::warn!(
                                             channel = ch,
                                             "replay: slack fetch failed: {e}"
                                         );
-                                        all_completed = false;
+                                        fetch_ok = false;
                                         break;
                                     }
                                 }
                             }
-                            (all_msgs, all_completed)
+                            if !fetch_ok {
+                                continue;
+                            }
+                            results
                         }
                         "discord" => {
-                            let mut all_msgs = Vec::new();
-                            let mut all_completed = true;
+                            let mut results = Vec::new();
+                            let mut fetch_ok = true;
                             for ch in &discord_channels {
                                 match gateway::fetch_discord_replay(gw, ch).await {
-                                    Ok(result) => {
-                                        let (ch_msgs, ch_done) = process_replay_result(
-                                            &self.history,
-                                            platform,
-                                            result,
-                                            gw,
-                                            &mut seen_ids_snap,
-                                        )
-                                        .await;
-                                        all_msgs.extend(ch_msgs);
-                                        if !ch_done {
-                                            all_completed = false;
-                                            break;
-                                        }
-                                    }
+                                    Ok(result) => results.push(result),
                                     Err(e) => {
                                         tracing::warn!(
                                             channel = ch,
                                             "replay: discord fetch failed: {e}"
                                         );
-                                        all_completed = false;
+                                        fetch_ok = false;
                                         break;
                                     }
                                 }
                             }
-                            (all_msgs, all_completed)
+                            if !fetch_ok {
+                                continue;
+                            }
+                            results
                         }
-                        _ => (Vec::new(), true),
+                        _ => continue,
                     };
-
-                    if completed {
-                        gw.replay_cycle_active.remove(platform.as_str());
-                        tracing::info!(
-                            platform,
-                            replay_count = msgs.len(),
-                            "gateway: replay cycle complete"
-                        );
-                    }
-                    replay_msgs.extend(msgs);
+                    platform_results.push((platform.clone(), channel_results));
                 }
 
-                // Bug 1 fix: write the updated seen-IDs snapshot back to the
-                // shared ring buffer so that live-path deduplication sees all
-                // IDs that were accepted during this replay cycle.
-                *self.gateway_seen_ids.lock().await = seen_ids_snap;
+                let replay_msgs = self.apply_replay_results(platform_results, gw).await;
 
                 // Prepend replay messages so they are processed before live messages.
                 if !replay_msgs.is_empty() {
-                    replay_msgs.extend(std::mem::take(&mut incoming));
-                    incoming = replay_msgs;
+                    let mut combined = replay_msgs;
+                    combined.extend(std::mem::take(&mut incoming));
+                    incoming = combined;
                 }
             }
         }
@@ -2048,7 +2019,7 @@ mod tests {
         ]);
 
         let messages = engine
-            .apply_replay_results(vec![("telegram".to_string(), result)], &mut gw)
+            .apply_replay_results(vec![("telegram".to_string(), vec![result])], &mut gw)
             .await;
 
         assert_eq!(messages.len(), 2, "both messages accepted");
