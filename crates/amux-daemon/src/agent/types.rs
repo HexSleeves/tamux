@@ -866,8 +866,8 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: GITHUB_COPILOT_MODELS,
         supports_model_fetch: true,
         anthropic_base_url: None,
-        supported_transports: CHAT_ONLY_TRANSPORTS,
-        default_transport: ApiTransport::ChatCompletions,
+        supported_transports: RESPONSES_AND_CHAT_TRANSPORTS,
+        default_transport: ApiTransport::Responses,
         native_transport_kind: None,
         native_base_url: None,
         supports_response_continuity: false,
@@ -4095,6 +4095,13 @@ mod tests {
         let provider = get_provider_definition("github-copilot").expect("copilot provider");
         assert!(!provider.models.is_empty());
         assert_eq!(provider.default_model, "gpt-4.1");
+        assert_eq!(provider.default_transport, ApiTransport::Responses);
+        assert!(provider
+            .supported_transports
+            .contains(&ApiTransport::Responses));
+        assert!(provider
+            .supported_transports
+            .contains(&ApiTransport::ChatCompletions));
         assert!(provider.models.iter().any(|model| model.id == "gpt-5.4"));
         assert!(provider
             .models

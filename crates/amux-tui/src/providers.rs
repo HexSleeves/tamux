@@ -41,8 +41,8 @@ pub const PROVIDERS: &[ProviderDef] = &[
         name: "GitHub Copilot",
         default_base_url: "https://api.githubcopilot.com",
         default_model: "gpt-4.1",
-        supported_transports: CHAT_ONLY_TRANSPORTS,
-        default_transport: "chat_completions",
+        supported_transports: RESPONSES_AND_CHAT_TRANSPORTS,
+        default_transport: "responses",
         supported_auth_sources: GITHUB_COPILOT_AUTH_SOURCES,
         default_auth_source: "github_copilot",
         native_base_url: None,
@@ -578,6 +578,8 @@ mod tests {
         let provider = find_by_id("github-copilot").unwrap();
         assert_eq!(provider.default_auth_source, "github_copilot");
         assert_eq!(provider.supported_auth_sources, GITHUB_COPILOT_AUTH_SOURCES);
+        assert_eq!(provider.default_transport, "responses");
+        assert_eq!(provider.supported_transports, RESPONSES_AND_CHAT_TRANSPORTS);
     }
 
     #[test]

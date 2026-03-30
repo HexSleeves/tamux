@@ -806,6 +806,9 @@ fn build_chat_completion_url(base_url: &str) -> String {
     let base = base_url.trim_end_matches('/');
     let lower = base.to_lowercase();
 
+    if lower == "https://api.githubcopilot.com" || lower == "http://api.githubcopilot.com" {
+        return format!("{base}/chat/completions");
+    }
     if lower == "https://models.github.ai" || lower == "http://models.github.ai" {
         return format!("{base}/inference/chat/completions");
     }
@@ -832,6 +835,9 @@ fn build_responses_url(base_url: &str) -> String {
     let base = base_url.trim_end_matches('/');
     let lower = base.to_lowercase();
 
+    if lower == "https://api.githubcopilot.com" || lower == "http://api.githubcopilot.com" {
+        return format!("{base}/responses");
+    }
     if lower == "https://models.github.ai" || lower == "http://models.github.ai" {
         return format!("{base}/inference/responses");
     }
