@@ -13,7 +13,7 @@ use rusqlite::params;
 
 /// Normalize a subject into lowercase alphanumeric tokens.
 /// Drops tokens shorter than 3 characters, then sorts and dedupes.
-pub fn normalize_subject_tokens(subject: &str) -> Vec<String> {
+pub(crate) fn normalize_subject_tokens(subject: &str) -> Vec<String> {
     let mut tokens: Vec<String> = subject
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|token| token.len() >= 3)
@@ -26,12 +26,12 @@ pub fn normalize_subject_tokens(subject: &str) -> Vec<String> {
 }
 
 /// Build a stable deduped subject key for exact normalized comparisons.
-pub fn normalized_subject_key(subject: &str) -> String {
+pub(crate) fn normalized_subject_key(subject: &str) -> String {
     normalize_subject_tokens(subject).join(" ")
 }
 
 /// Compute the next monotonic constraint state from accumulated evidence.
-pub fn next_constraint_state(
+pub(crate) fn next_constraint_state(
     current: ConstraintState,
     evidence_count: u32,
     direct_observation: bool,
@@ -53,9 +53,11 @@ pub fn next_constraint_state(
 }
 
 /// Determine whether two constraints are identical enough to merge.
-pub fn constraints_match_for_merge(a: &NegativeConstraint, b: &NegativeConstraint) -> bool {
-    normalized_subject_key(&a.subject) == normalized_subject_key(&b.subject)
-        && a.solution_class == b.solution_class
+pub(crate) fn constraints_match_for_merge(a: &NegativeConstraint, b: &NegativeConstraint) -> bool {
+    let a_key = normalized_subject_key(&a.subject);
+    let b_key = normalized_subject_key(&b.subject);
+
+    !a_key.is_empty() && a_key == b_key && a.solution_class == b.solution_class
 }
 
 fn shared_normalized_subject_token_count(a: &NegativeConstraint, b: &NegativeConstraint) -> usize {
@@ -69,7 +71,7 @@ fn shared_normalized_subject_token_count(a: &NegativeConstraint, b: &NegativeCon
 }
 
 /// Determine whether two constraints are related enough for propagation.
-pub fn related_for_propagation(source: &NegativeConstraint, target: &NegativeConstraint) -> bool {
+pub(crate) fn related_for_propagation(source: &NegativeConstraint, target: &NegativeConstraint) -> bool {
     let shared_tokens = shared_normalized_subject_token_count(source, target);
 
     match (&source.solution_class, &target.solution_class) {
@@ -517,6 +519,22 @@ mod tests {
         let b = make_constraint_with_class("prod deploy fix config", None);
 
         assert!(constraints_match_for_merge(&a, &b));
+    }
+
+    #[test]
+    fn constraints_match_for_merge_rejects_empty_normalized_subjects() {
+        let a = make_constraint_with_class("CI CD", Some("deploy-fix"));
+        let b = make_constraint_with_class("QA DB", Some("deploy-fix"));
+
+        assert!(!constraints_match_for_merge(&a, &b));
+    }
+
+    #[test]
+    fn constraints_match_for_merge_rejects_different_normalized_subjects_with_same_solution_class() {
+        let a = make_constraint_with_class("deploy config rollback", Some("deploy-fix"));
+        let b = make_constraint_with_class("cache rebuild timeout", Some("deploy-fix"));
+
+        assert!(!constraints_match_for_merge(&a, &b));
     }
 
     #[test]
