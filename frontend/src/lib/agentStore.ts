@@ -35,6 +35,7 @@ export type AgentRole = "user" | "assistant" | "system" | "tool";
 export type AgentProviderId =
   | "featherless"
   | "openai"
+  | "github-copilot"
   | "qwen"
   | "qwen-deepinfra"
   | "kimi"
@@ -57,6 +58,7 @@ export type AgentProviderId =
 export const AGENT_PROVIDER_IDS: AgentProviderId[] = [
   "featherless",
   "openai",
+  "github-copilot",
   "qwen",
   "qwen-deepinfra",
   "kimi",
@@ -139,12 +141,13 @@ export interface SubAgentDefinition {
 
 export type ApiType = "openai" | "anthropic";
 export type AuthMethod = "bearer" | "x-api-key";
-export type AuthSource = "api_key" | "chatgpt_subscription";
+export type AuthSource = "api_key" | "chatgpt_subscription" | "github_copilot";
 export type ApiTransportMode = "native_assistant" | "responses" | "chat_completions";
 export type NativeTransportKind = "alibaba_assistant_api";
 
 const API_KEY_ONLY_AUTH_SOURCES: AuthSource[] = ["api_key"];
 const OPENAI_AUTH_SOURCES: AuthSource[] = ["chatgpt_subscription", "api_key"];
+const GITHUB_COPILOT_AUTH_SOURCES: AuthSource[] = ["github_copilot", "api_key"];
 
 function normalizeApiTransport(
   providerId: AgentProviderId,
@@ -166,7 +169,9 @@ function normalizeAuthSource(
 ): AuthSource {
   const normalized = value === "chatgpt_subscription"
     ? "chatgpt_subscription"
-    : "api_key";
+    : value === "github_copilot"
+      ? "github_copilot"
+      : "api_key";
   return getSupportedAuthSources(providerId).includes(normalized)
     ? normalized
     : getDefaultAuthSource(providerId);
@@ -279,6 +284,34 @@ const OPENAI_CHATGPT_SUBSCRIPTION_MODELS: ModelDefinition[] = [
   { id: "gpt-5.1-codex-mini", name: "GPT-5.1 Codex Mini", contextWindow: 400_000 },
 ];
 
+const GITHUB_COPILOT_MODELS: ModelDefinition[] = [
+  { id: "claude-haiku-4.5", name: "Claude Haiku 4.5", contextWindow: 160_000, modalities: M_TI },
+  { id: "claude-opus-4.5", name: "Claude Opus 4.5", contextWindow: 160_000, modalities: M_TI },
+  { id: "claude-opus-4.6", name: "Claude Opus 4.6", contextWindow: 192_000, modalities: M_TI },
+  { id: "claude-opus-4.6-fast", name: "Claude Opus 4.6 (fast mode) (Preview)", contextWindow: 192_000, modalities: M_TI },
+  { id: "claude-sonnet-4", name: "Claude Sonnet 4", contextWindow: 144_000, modalities: M_TI },
+  { id: "claude-sonnet-4.5", name: "Claude Sonnet 4.5", contextWindow: 160_000, modalities: M_TI },
+  { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6", contextWindow: 160_000, modalities: M_TI },
+  { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", contextWindow: 173_000, modalities: M_TI },
+  { id: "gemini-3-flash-preview", name: "Gemini 3 Flash (Preview)", contextWindow: 173_000, modalities: M_TI },
+  { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro (Preview)", contextWindow: 173_000, modalities: M_TI },
+  { id: "gpt-4.1", name: "GPT-4.1", contextWindow: 128_000, modalities: M_TI },
+  { id: "gpt-4o", name: "GPT-4o", contextWindow: 128_000, modalities: M_TI },
+  { id: "gpt-5-mini", name: "GPT-5 mini", contextWindow: 192_000, modalities: M_TI },
+  { id: "gpt-5.1", name: "GPT-5.1", contextWindow: 192_000, modalities: M_TI },
+  { id: "gpt-5.1-codex", name: "GPT-5.1-Codex", contextWindow: 256_000, modalities: M_TI },
+  { id: "gpt-5.1-codex-max", name: "GPT-5.1-Codex-Max", contextWindow: 256_000, modalities: M_TI },
+  { id: "gpt-5.1-codex-mini", name: "GPT-5.1-Codex-Mini (Preview)", contextWindow: 256_000, modalities: M_TI },
+  { id: "gpt-5.2", name: "GPT-5.2", contextWindow: 192_000, modalities: M_TI },
+  { id: "gpt-5.2-codex", name: "GPT-5.2-Codex", contextWindow: 400_000, modalities: M_TI },
+  { id: "gpt-5.3-codex", name: "GPT-5.3-Codex", contextWindow: 400_000, modalities: M_TI },
+  { id: "gpt-5.4", name: "GPT-5.4", contextWindow: 400_000, modalities: M_TI },
+  { id: "gpt-5.4-mini", name: "GPT-5.4 mini", contextWindow: 400_000, modalities: M_TI },
+  { id: "grok-code-fast-1", name: "Grok Code Fast 1", contextWindow: 173_000 },
+  { id: "raptor-mini", name: "Raptor mini (Preview)", contextWindow: 264_000, modalities: M_TI },
+  { id: "goldeneye", name: "Goldeneye", contextWindow: 524_000, modalities: M_TI },
+];
+
 const ZAI_MODELS: ModelDefinition[] = [
   { id: "glm-5.1", name: "GLM-5.1", contextWindow: 204800 },
   { id: "glm-5", name: "GLM-5", contextWindow: 128000 },
@@ -342,6 +375,7 @@ const NATIVE_AND_CHAT_TRANSPORTS: ApiTransportMode[] = ["native_assistant", "cha
 export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
   { id: "featherless", name: "Featherless", defaultBaseUrl: "https://api.featherless.ai/v1", defaultModel: "meta-llama/Llama-3.3-70B-Instruct", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "openai", name: "OpenAI / ChatGPT", defaultBaseUrl: "https://api.openai.com/v1", defaultModel: "gpt-5.4", apiType: "openai", authMethod: "bearer", models: OPENAI_API_MODELS, supportsModelFetch: true, supportedTransports: RESPONSES_AND_CHAT_TRANSPORTS, defaultTransport: "responses", supportedAuthSources: OPENAI_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: true },
+  { id: "github-copilot", name: "GitHub Copilot", defaultBaseUrl: "https://api.githubcopilot.com", defaultModel: "gpt-4.1", apiType: "openai", authMethod: "bearer", models: GITHUB_COPILOT_MODELS, supportsModelFetch: true, supportedTransports: RESPONSES_AND_CHAT_TRANSPORTS, defaultTransport: "responses", supportedAuthSources: GITHUB_COPILOT_AUTH_SOURCES, defaultAuthSource: "github_copilot", supportsResponseContinuity: true },
   { id: "qwen", name: "Qwen", defaultBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", defaultModel: "qwen-max", apiType: "openai", authMethod: "bearer", models: ALIBABA_CODING_MODELS, supportsModelFetch: true, supportedTransports: NATIVE_AND_CHAT_TRANSPORTS, defaultTransport: "native_assistant", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", nativeTransportKind: "alibaba_assistant_api", nativeBaseUrl: "https://dashscope-intl.aliyuncs.com/api/v1", supportsResponseContinuity: false },
   { id: "qwen-deepinfra", name: "Qwen (DeepInfra)", defaultBaseUrl: "https://api.deepinfra.com/v1/openai", defaultModel: "Qwen/Qwen2.5-72B-Instruct", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "kimi", name: "Kimi (Moonshot)", defaultBaseUrl: "https://api.moonshot.ai/v1", defaultModel: "moonshot-v1-32k", apiType: "openai", authMethod: "bearer", models: KIMI_MODELS, supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
@@ -518,6 +552,7 @@ export interface AgentSettings {
   active_provider: AgentProviderId;
   featherless: AgentProviderConfig;
   openai: AgentProviderConfig;
+  "github-copilot": AgentProviderConfig;
   qwen: AgentProviderConfig;
   "qwen-deepinfra": AgentProviderConfig;
   kimi: AgentProviderConfig;
@@ -616,6 +651,7 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   active_provider: "openai",
   featherless: { base_url: "https://api.featherless.ai/v1", model: "meta-llama/Llama-3.3-70B-Instruct", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   openai: { base_url: "https://api.openai.com/v1", model: "gpt-5.4", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "responses", auth_source: "api_key", context_window_tokens: null },
+  "github-copilot": { base_url: "https://api.githubcopilot.com", model: "gpt-4.1", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "responses", auth_source: "github_copilot", context_window_tokens: null },
   qwen: { base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", model: "qwen-max", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "native_assistant", auth_source: "api_key", context_window_tokens: null },
   "qwen-deepinfra": { base_url: "https://api.deepinfra.com/v1/openai", model: "Qwen/Qwen2.5-72B-Instruct", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   kimi: { base_url: "https://api.moonshot.ai/v1", model: "moonshot-v1-32k", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
@@ -1222,6 +1258,7 @@ function normalizeAgentSettingsFromSource(source: DiskAgentSettings): AgentSetti
     agent_backend: normalizeAgentBackend(source.agent_backend ?? source.agent_backend),
     featherless: providerConfigFromRaw("featherless", source),
     openai: providerConfigFromRaw("openai", source),
+    "github-copilot": providerConfigFromRaw("github-copilot", source),
     qwen: providerConfigFromRaw("qwen", source),
     "qwen-deepinfra": providerConfigFromRaw("qwen-deepinfra", source),
     kimi: providerConfigFromRaw("kimi", source),

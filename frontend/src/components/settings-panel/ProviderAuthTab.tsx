@@ -103,8 +103,9 @@ export function ProviderAuthTab() {
     const handleTest = async (providerId: string) => {
         setValidating(providerId);
         const state = filtered.find((s) => s.provider_id === providerId);
+        const usesChatgptSubscription = providerId === "openai" && state?.auth_source === "chatgpt_subscription";
         try {
-            if (providerId === "openai" && state?.auth_source === "chatgpt_subscription") {
+            if (usesChatgptSubscription) {
                 const amux = getBridge();
                 if (!amux?.openAICodexAuthStatus) {
                     setValidationResult((prev) => ({
@@ -157,6 +158,14 @@ export function ProviderAuthTab() {
                         const isExpanded = loginTarget === state.provider_id;
                         const vr = validationResult[state.provider_id];
                         const isOpenAI = state.provider_id === "openai";
+                        const isGithubCopilot = state.provider_id === "github-copilot";
+                        const usesChatgptSubscription = isOpenAI && state.auth_source === "chatgpt_subscription";
+                        const authButtonLabel = isGithubCopilot ? "Token" : "API Key";
+                        const keyPlaceholder = isOpenAI
+                            ? "OpenAI API Key"
+                            : isGithubCopilot
+                                ? "GitHub Copilot Token"
+                                : "API Key";
                         return (
                             <div key={state.provider_id} style={{
                                 border: "1px solid rgba(255,255,255,0.06)",
@@ -216,7 +225,7 @@ export function ProviderAuthTab() {
                                                     }}
                                                     style={{ ...smallBtnStyle, fontSize: 10 }}
                                                 >
-                                                    {isExpanded ? "Cancel" : "API Key"}
+                                                    {isExpanded ? "Cancel" : authButtonLabel}
                                                 </button>
                                                 {isOpenAI && (
                                                     <button
@@ -258,7 +267,7 @@ export function ProviderAuthTab() {
                                         <span style={{ marginLeft: 8, color: "var(--text-secondary)" }}>Waiting for confirmation...</span>
                                     </div>
                                 )}
-                                {isExpanded && !isOpenAI && (
+                                {isExpanded && !usesChatgptSubscription && (
                                     <div style={{
                                         display: "flex",
                                         gap: 6,
@@ -267,34 +276,7 @@ export function ProviderAuthTab() {
                                     }}>
                                         <input
                                             type="password"
-                                            placeholder="API Key"
-                                            value={loginKey}
-                                            onChange={(e) => setLoginKey(e.target.value)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === "Enter") handleLogin(state.provider_id);
-                                            }}
-                                            style={{ ...inputStyle, flex: 1 }}
-                                            autoFocus
-                                        />
-                                        <button
-                                            onClick={() => handleLogin(state.provider_id)}
-                                            disabled={!loginKey.trim()}
-                                            style={smallBtnStyle}
-                                        >
-                                            Save
-                                        </button>
-                                    </div>
-                                )}
-                                {isExpanded && isOpenAI && (
-                                    <div style={{
-                                        display: "flex",
-                                        gap: 6,
-                                        marginTop: 8,
-                                        alignItems: "center",
-                                    }}>
-                                        <input
-                                            type="password"
-                                            placeholder="OpenAI API Key"
+                                            placeholder={keyPlaceholder}
                                             value={loginKey}
                                             onChange={(e) => setLoginKey(e.target.value)}
                                             onKeyDown={(e) => {

@@ -1381,7 +1381,7 @@ export function prepareOpenAIRequest(
   provider: AgentProviderId,
   model: string,
   requestedTransport: ApiTransportMode,
-  auth_source?: "api_key" | "chatgpt_subscription",
+  auth_source?: "api_key" | "chatgpt_subscription" | "github_copilot",
   assistant_id?: string,
   thread?: Pick<AgentThread, "upstreamThreadId" | "upstreamTransport" | "upstreamProvider" | "upstreamModel" | "upstreamAssistantId">,
 ): PreparedOpenAIRequest {

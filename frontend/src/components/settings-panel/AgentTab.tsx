@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getBridge } from "@/lib/bridge";
 import type { AgentProviderConfig, AgentProviderId, AgentSettings } from "../../lib/agentStore";
 import { getDefaultApiTransport, getDefaultAuthSource, getDefaultModelForProvider, getEffectiveContextWindow, getProviderApiType, getProviderDefinition, getProviderModels, getSupportedApiTransports, getSupportedAuthSources } from "../../lib/agentStore";
+import { useAgentStore } from "../../lib/agentStore";
 import { addBtnStyle, ModelSelector, NumberInput, PasswordInput, Section, SelectInput, SettingRow, TextInput, Toggle, inputStyle, smallBtnStyle } from "./shared";
 
 export function AgentTab({
@@ -15,6 +16,8 @@ export function AgentTab({
     const [subscriptionAuthStatus, setSubscriptionAuthStatus] = useState<any>(null);
     const [subscriptionAuthBusy, setSubscriptionAuthBusy] = useState(false);
     const [subscriptionAuthUrl, setSubscriptionAuthUrl] = useState<string | null>(null);
+    const providerAuthStates = useAgentStore((s) => s.providerAuthStates);
+    const refreshProviderAuthStates = useAgentStore((s) => s.refreshProviderAuthStates);
 
     const openSubscriptionAuthUrl = (url: string) => {
         if (!url) return;
@@ -29,6 +32,7 @@ export function AgentTab({
     const providerOptions: { id: AgentProviderId; label: string }[] = [
         { id: "featherless", label: "Featherless" },
         { id: "openai", label: "OpenAI / ChatGPT" },
+        { id: "github-copilot", label: "GitHub Copilot" },
         { id: "qwen", label: "Qwen" },
         { id: "qwen-deepinfra", label: "Qwen (DeepInfra)" },
         { id: "kimi", label: "Kimi (Moonshot)" },
@@ -61,9 +65,16 @@ export function AgentTab({
     const isCustomProvider = settings.active_provider === "custom";
     const showUrlEditor = isCustomProvider || useCustomUrl || Boolean(providerConfig.base_url && providerConfig.base_url !== providerDef?.defaultBaseUrl);
     const effectiveContextWindow = getEffectiveContextWindow(settings.active_provider, providerConfig);
+    const activeProviderAuthState = providerAuthStates.find((state) => state.provider_id === settings.active_provider);
     const providerAuthenticated = providerConfig.auth_source === "chatgpt_subscription"
         ? Boolean(subscriptionAuthStatus?.available)
-        : Boolean(providerConfig.api_key);
+        : providerConfig.auth_source === "github_copilot"
+            ? Boolean(activeProviderAuthState?.authenticated)
+            : Boolean(providerConfig.api_key);
+
+    useEffect(() => {
+        void refreshProviderAuthStates();
+    }, [refreshProviderAuthStates]);
 
     useEffect(() => {
         if (settings.active_provider !== "openai" || providerConfig.auth_source !== "chatgpt_subscription") {
@@ -331,7 +342,11 @@ export function AgentTab({
                             >
                                 {supportedAuthSources.map((source) => (
                                     <option key={source} value={source}>
-                                        {source === "chatgpt_subscription" ? "ChatGPT Subscription" : "API Key"}
+                                        {source === "chatgpt_subscription"
+                                            ? "ChatGPT Subscription"
+                                            : source === "github_copilot"
+                                                ? "GitHub Copilot"
+                                                : "API Key"}
                                     </option>
                                 ))}
                             </select>
