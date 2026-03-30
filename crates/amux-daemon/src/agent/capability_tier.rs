@@ -315,30 +315,18 @@ impl AgentEngine {
 
         // Gateway statuses
         let gateway_statuses_json = {
-            let gw = self.gateway_state.lock().await;
-            if let Some(ref state) = *gw {
+            let snapshots = self.gateway_health_snapshots().await;
+            if !snapshots.is_empty() {
                 let mut statuses = serde_json::Map::new();
-                statuses.insert(
-                    "slack".to_string(),
-                    serde_json::json!({
-                        "status": format!("{:?}", state.slack_health.status),
-                        "consecutive_failures": state.slack_health.consecutive_failure_count,
-                    }),
-                );
-                statuses.insert(
-                    "discord".to_string(),
-                    serde_json::json!({
-                        "status": format!("{:?}", state.discord_health.status),
-                        "consecutive_failures": state.discord_health.consecutive_failure_count,
-                    }),
-                );
-                statuses.insert(
-                    "telegram".to_string(),
-                    serde_json::json!({
-                        "status": format!("{:?}", state.telegram_health.status),
-                        "consecutive_failures": state.telegram_health.consecutive_failure_count,
-                    }),
-                );
+                for snapshot in snapshots {
+                    statuses.insert(
+                        snapshot.platform.clone(),
+                        serde_json::json!({
+                            "status": format!("{:?}", snapshot.status),
+                            "consecutive_failures": snapshot.consecutive_failure_count,
+                        }),
+                    );
+                }
                 serde_json::to_string(&statuses).unwrap_or_else(|_| "{}".to_string())
             } else {
                 "{}".to_string()
