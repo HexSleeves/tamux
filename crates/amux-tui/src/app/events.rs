@@ -530,7 +530,7 @@ impl TuiModel {
                 name,
                 arguments,
             } => {
-                self.agent_activity = Some(format!("\u{2699} {}", name));
+                self.agent_activity = Some(format!("\u{2699}  {}", name));
                 self.chat.reduce(chat::ChatAction::ToolCall {
                     thread_id,
                     call_id,
@@ -545,7 +545,7 @@ impl TuiModel {
                 content,
                 is_error,
             } => {
-                self.agent_activity = Some(format!("\u{2699} {} \u{2713}", name));
+                self.agent_activity = Some(format!("\u{2699}  {} \u{2713}", name));
                 self.chat.reduce(chat::ChatAction::ToolResult {
                     thread_id,
                     call_id,

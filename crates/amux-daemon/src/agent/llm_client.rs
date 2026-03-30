@@ -2938,4 +2938,5 @@ mod tests {
         assert!(serialized[1]["content"].is_null());
         assert_eq!(serialized[1]["tool_calls"][0]["id"], "call_1");
     }
+
 }
