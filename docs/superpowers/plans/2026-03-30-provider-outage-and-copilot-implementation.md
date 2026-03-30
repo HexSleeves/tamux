@@ -19,10 +19,14 @@
   - Add structured outage payload builders.
 - Modify: `crates/amux-daemon/src/agent/types.rs`
   - Extend provider outage event and any shared DTOs.
+- Modify: `crates/amux-daemon/src/agent/agent_loop.rs`
+  - Replace misleading circuit-breaker fallback text with eligibility-filtered messaging.
 - Modify: `crates/amux-daemon/src/agent/config.rs`
   - Teach provider auth state reporting about GitHub Copilot auth validity.
 - Modify: `crates/amux-daemon/src/agent/capability_tier.rs`
   - Extend status snapshot/provider health payload with outage details and alternatives.
+- Modify: `crates/amux-daemon/src/agent/concierge.rs`
+  - Emit richer provider outage metadata from concierge circuit-breaker paths.
 - Modify: `crates/amux-daemon/src/server.rs`
   - Wire enriched provider outage events and any new provider auth commands.
 - Modify: `crates/amux-daemon/src/agent/provider_resolution.rs`
@@ -41,6 +45,8 @@
 
 - Modify: `crates/amux-tui/src/client.rs`
   - Parse richer provider outage and status payloads.
+- Modify: `crates/amux-tui/src/providers.rs`
+  - Register GitHub Copilot as a selectable provider in TUI flows.
 - Modify: `crates/amux-tui/src/app/events.rs`
   - Route outage events into app state and banner actions.
 - Modify: `crates/amux-tui/src/state/config.rs`
@@ -54,6 +60,8 @@
 
 ### React
 
+- Modify: `frontend/src/lib/bridge.ts`
+  - Add any new daemon bridge calls needed for atomic provider switching or Copilot auth.
 - Modify: `frontend/src/lib/statusStore.ts`
   - Store richer outage payload from daemon status snapshot.
 - Modify: `frontend/src/components/StatusBar.tsx`
@@ -123,6 +131,9 @@ git commit -m "fix: filter provider fallback suggestions by eligibility"
 
 **Files:**
 - Modify: `crates/amux-daemon/src/agent/types.rs`
+- Modify: `crates/amux-daemon/src/agent/engine.rs`
+- Modify: `crates/amux-daemon/src/agent/agent_loop.rs`
+- Modify: `crates/amux-daemon/src/agent/concierge.rs`
 - Modify: `crates/amux-daemon/src/agent/capability_tier.rs`
 - Modify: `crates/amux-protocol/src/messages.rs`
 - Modify: `crates/amux-daemon/src/server.rs`
@@ -153,6 +164,10 @@ Prefer additive changes where possible so rollout stays compatible.
 
 Ensure the richer event survives daemon-to-client forwarding and appears in status polling responses.
 
+- [ ] **Step 4a: Update all provider outage emit sites and fallback text**
+
+Update the main agent loop and concierge circuit-breaker emitters so every `ProviderCircuitOpen` path produces the richer payload, and replace the old misleading human-readable fallback string with eligibility-filtered messaging.
+
 - [ ] **Step 5: Run targeted tests to verify they pass**
 
 Run: `cargo test -p tamux-daemon provider_circuit -- --nocapture`
@@ -161,7 +176,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/amux-daemon/src/agent/types.rs crates/amux-daemon/src/agent/capability_tier.rs crates/amux-protocol/src/messages.rs crates/amux-daemon/src/server.rs
+git add crates/amux-daemon/src/agent/types.rs crates/amux-daemon/src/agent/engine.rs crates/amux-daemon/src/agent/agent_loop.rs crates/amux-daemon/src/agent/concierge.rs crates/amux-daemon/src/agent/capability_tier.rs crates/amux-protocol/src/messages.rs crates/amux-daemon/src/server.rs
 git commit -m "feat: expose actionable provider outage metadata"
 ```
 
@@ -170,7 +185,11 @@ git commit -m "feat: expose actionable provider outage metadata"
 **Files:**
 - Modify: `crates/amux-daemon/src/server.rs`
 - Modify: `crates/amux-daemon/src/agent/config.rs`
+- Modify: `crates/amux-protocol/src/messages.rs`
+- Modify: `frontend/src/types/amux-bridge.d.ts`
+- Modify: `frontend/src/lib/bridge.ts`
 - Modify: `frontend/src/components/agent-chat-panel/runtime.tsx`
+- Modify: `crates/amux-tui/src/client.rs`
 - Modify: `crates/amux-tui/src/state/config.rs`
 - Test: `crates/amux-daemon/src/agent/config.rs`
 
@@ -190,19 +209,23 @@ Expected: FAIL because no dedicated atomic path exists yet.
 
 Reuse existing config persistence instead of inventing a parallel runtime-only path.
 
-- [ ] **Step 4: Wire existing React/TUI config update flows to call the atomic path**
+- [ ] **Step 4: Add protocol and bridge support for atomic switching**
+
+Expose the atomic provider+model switch through an explicit wire command and client bindings so both TUI and React can use the same daemon-owned path.
+
+- [ ] **Step 5: Wire existing React/TUI config update flows to call the atomic path**
 
 Do not duplicate provider canonicalization in both clients; clients should trigger the daemon-owned switch behavior.
 
-- [ ] **Step 5: Run targeted tests to verify they pass**
+- [ ] **Step 6: Run targeted tests to verify they pass**
 
 Run: `cargo test -p tamux-daemon provider_switch -- --nocapture`
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add crates/amux-daemon/src/server.rs crates/amux-daemon/src/agent/config.rs frontend/src/components/agent-chat-panel/runtime.tsx crates/amux-tui/src/state/config.rs
+git add crates/amux-daemon/src/server.rs crates/amux-daemon/src/agent/config.rs crates/amux-protocol/src/messages.rs frontend/src/types/amux-bridge.d.ts frontend/src/lib/bridge.ts frontend/src/components/agent-chat-panel/runtime.tsx crates/amux-tui/src/client.rs crates/amux-tui/src/state/config.rs
 git commit -m "feat: add atomic provider model switching"
 ```
 
@@ -304,6 +327,9 @@ git commit -m "feat: add tui provider outage banner and actions"
 - Modify: `crates/amux-daemon/src/agent/config.rs`
 - Modify: `crates/amux-daemon/src/server.rs`
 - Create or modify: `crates/amux-daemon/src/agent/copilot_auth.rs`
+- Modify: `crates/amux-tui/src/providers.rs`
+- Modify: `crates/amux-tui/src/app/settings_handlers.rs`
+- Modify: `crates/amux-tui/src/client.rs`
 - Modify: `frontend/src/lib/agentStore.ts`
 - Modify: `frontend/src/components/settings-panel/ProviderAuthTab.tsx`
 - Modify: `frontend/src/types/amux-bridge.d.ts`
@@ -334,6 +360,10 @@ Add:
 
 Reuse existing provider-auth/state machinery instead of creating a separate panel.
 
+- [ ] **Step 4a: Expose Copilot through TUI provider/auth flows**
+
+Add Copilot to the TUI provider registry and auth/settings handling so it can be authenticated and selected there too.
+
 - [ ] **Step 5: Run targeted tests to verify they pass**
 
 Run: `cargo test -p tamux-daemon copilot_auth -- --nocapture`
@@ -342,7 +372,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/amux-daemon/src/agent/types.rs crates/amux-daemon/src/agent/config.rs crates/amux-daemon/src/server.rs crates/amux-daemon/src/agent/copilot_auth.rs frontend/src/lib/agentStore.ts frontend/src/components/settings-panel/ProviderAuthTab.tsx frontend/src/types/amux-bridge.d.ts
+git add crates/amux-daemon/src/agent/types.rs crates/amux-daemon/src/agent/config.rs crates/amux-daemon/src/server.rs crates/amux-daemon/src/agent/copilot_auth.rs crates/amux-tui/src/providers.rs crates/amux-tui/src/app/settings_handlers.rs crates/amux-tui/src/client.rs frontend/src/lib/agentStore.ts frontend/src/components/settings-panel/ProviderAuthTab.tsx frontend/src/types/amux-bridge.d.ts
 git commit -m "feat: add github copilot provider auth support"
 ```
 
@@ -352,6 +382,8 @@ git commit -m "feat: add github copilot provider auth support"
 - Modify: `crates/amux-daemon/src/agent/copilot_auth.rs`
 - Modify: `crates/amux-daemon/src/agent/llm_client.rs`
 - Modify: `crates/amux-daemon/src/agent/config.rs`
+- Modify: `crates/amux-tui/src/providers.rs`
+- Modify: `crates/amux-tui/src/app/settings_handlers.rs`
 - Modify: `frontend/src/components/settings-panel/ProviderAuthTab.tsx`
 - Test: `crates/amux-daemon/src/agent/llm_client.rs`
 
@@ -380,6 +412,10 @@ If a safe static fallback list is needed for UI placeholders, do not use it for 
 
 Only include Copilot when validation says it is genuinely usable.
 
+- [ ] **Step 4a: Wire validated Copilot models into TUI selection flows**
+
+Ensure the TUI uses the validated Copilot model set and does not expose stale or placeholder model choices.
+
 - [ ] **Step 5: Run targeted tests to verify they pass**
 
 Run: `cargo test -p tamux-daemon copilot_validation -- --nocapture`
@@ -388,7 +424,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/amux-daemon/src/agent/copilot_auth.rs crates/amux-daemon/src/agent/llm_client.rs crates/amux-daemon/src/agent/config.rs frontend/src/components/settings-panel/ProviderAuthTab.tsx
+git add crates/amux-daemon/src/agent/copilot_auth.rs crates/amux-daemon/src/agent/llm_client.rs crates/amux-daemon/src/agent/config.rs crates/amux-tui/src/providers.rs crates/amux-tui/src/app/settings_handlers.rs frontend/src/components/settings-panel/ProviderAuthTab.tsx
 git commit -m "feat: validate github copilot models for provider fallback"
 ```
 
