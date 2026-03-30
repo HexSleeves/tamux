@@ -672,7 +672,15 @@ impl AgentEngine {
 
     /// Refresh the in-memory constraint cache from the database.
     pub(crate) async fn refresh_constraint_cache(&self) -> Result<()> {
-        let constraints = self.query_active_constraints(None).await?;
+        let agent_id = crate::agent::agent_identity::current_agent_scope_id();
+        let include_legacy = crate::agent::is_main_agent_scope(&agent_id) as i64;
+        let now_ms = crate::agent::now_millis() as i64;
+        let constraints = self
+            .history
+            .conn
+            .call(move |conn| Ok(load_all_active_constraints(conn, &agent_id, include_legacy, now_ms)?))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         let scope_id = crate::agent::agent_identity::current_agent_scope_id();
         let mut stores = self.episodic_store.write().await;
         let store = stores.entry(scope_id).or_default();
@@ -863,24 +871,6 @@ mod tests {
             })
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))
-    }
-
-    async fn refresh_full_constraint_cache_for_test(engine: &AgentEngine) -> anyhow::Result<()> {
-        let agent_id = crate::agent::agent_identity::current_agent_scope_id();
-        let include_legacy = crate::agent::is_main_agent_scope(&agent_id) as i64;
-        let now_ms = crate::agent::now_millis() as i64;
-        let constraints = engine
-            .history
-            .conn
-            .call(move |conn| Ok(load_all_active_constraints(conn, &agent_id, include_legacy, now_ms)?))
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-        let scope_id = crate::agent::agent_identity::current_agent_scope_id();
-        let mut stores = engine.episodic_store.write().await;
-        let store = stores.entry(scope_id).or_default();
-        store.cached_constraints = constraints;
-        Ok(())
     }
 
     #[test]
@@ -1645,7 +1635,7 @@ mod tests {
             .await?;
         }
 
-        refresh_full_constraint_cache_for_test(&engine).await?;
+        engine.refresh_constraint_cache().await?;
 
         let scope_id = crate::agent::agent_identity::current_agent_scope_id();
         let stores = engine.episodic_store.read().await;
