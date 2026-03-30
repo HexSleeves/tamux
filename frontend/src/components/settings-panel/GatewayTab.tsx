@@ -38,7 +38,7 @@ function WhatsAppConnector({ allowlistState }: { allowlistState: WhatsAppAllowli
             setQrDataUrl(null);
             setError(null);
         });
-        const unsubWhatsAppDisconnected = amux?.onWhatsAppDisconnected?.((payload?: { reason?: string | null }) => {
+        const unsubWhatsAppDisconnected = amux?.onWhatsAppDisconnected?.((payload: { reason?: string | null } | null | undefined) => {
             setStatus("disconnected");
             setQrDataUrl(null);
             setPhoneInfo(null);
