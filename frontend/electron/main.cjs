@@ -4731,6 +4731,19 @@ function registerIpcHandlers() {
         }
     });
 
+    ipcMain.handle('agent-set-provider-model', async (_event, providerId, model) => {
+        try {
+            sendAgentCommand({
+                type: 'set-provider-model',
+                provider_id: providerId,
+                model,
+            });
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
+
     ipcMain.handle('agent-set-tier-override', async (_event, tier) => {
         try {
             sendAgentCommand({

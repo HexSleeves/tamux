@@ -77,6 +77,10 @@ pub enum DaemonCommand {
         key_path: String,
         value_json: String,
     },
+    SetProviderModel {
+        provider_id: String,
+        model: String,
+    },
     ControlGoalRun {
         goal_run_id: String,
         action: String,

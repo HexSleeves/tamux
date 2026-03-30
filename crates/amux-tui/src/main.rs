@@ -267,6 +267,9 @@ fn start_daemon_bridge(
                             DaemonCommand::SetConfigItem { key_path, value_json } => {
                                 let _ = client.set_config_item_json(key_path, value_json);
                             }
+                            DaemonCommand::SetProviderModel { provider_id, model } => {
+                                let _ = client.set_provider_model(provider_id, model);
+                            }
                             DaemonCommand::ControlGoalRun { goal_run_id, action } => {
                                 let _ = client.control_goal_run(goal_run_id, action);
                             }

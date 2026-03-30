@@ -73,6 +73,184 @@ pub(crate) fn aline_available() -> bool {
     *AVAILABLE.get_or_init(|| which::which("aline").is_ok())
 }
 
+pub(super) async fn provider_is_eligible_for_alternative(
+    config: &Arc<RwLock<AgentConfig>>,
+    circuit_breakers: &Arc<CircuitBreakerRegistry>,
+    failed_provider: &str,
+    provider_id: &str,
+) -> bool {
+    if provider_id == failed_provider {
+        return false;
+    }
+
+    let config_guard = config.read().await;
+    let Ok(resolved) = resolve_candidate_provider_config(&config_guard, provider_id) else {
+        return false;
+    };
+    drop(config_guard);
+
+    if resolved.model.trim().is_empty() || resolved.base_url.trim().is_empty() {
+        return false;
+    }
+
+    match resolved.auth_source {
+        AuthSource::ApiKey => {
+            if resolved.api_key.trim().is_empty() {
+                return false;
+            }
+        }
+        AuthSource::ChatgptSubscription => {
+            if provider_id != "openai" || !super::llm_client::has_openai_chatgpt_subscription_auth()
+            {
+                return false;
+            }
+        }
+    }
+
+    let breaker_arc = circuit_breakers.get(provider_id).await;
+    let mut breaker = breaker_arc.lock().await;
+    breaker.can_execute(now_millis())
+}
+
+async fn collect_provider_alternatives(
+    config: &Arc<RwLock<AgentConfig>>,
+    circuit_breakers: &Arc<CircuitBreakerRegistry>,
+    failed_provider: &str,
+) -> Vec<ProviderAlternativeSuggestion> {
+    let provider_ids: Vec<String> = config.read().await.providers.keys().cloned().collect();
+    let mut alternatives = Vec::new();
+
+    for provider_id in provider_ids {
+        if !provider_is_eligible_for_alternative(
+            config,
+            circuit_breakers,
+            failed_provider,
+            provider_id.as_str(),
+        )
+        .await
+        {
+            continue;
+        }
+
+        let config_guard = config.read().await;
+        let Ok(resolved) = resolve_candidate_provider_config(&config_guard, &provider_id) else {
+            continue;
+        };
+
+        alternatives.push(ProviderAlternativeSuggestion {
+            provider_id,
+            model: Some(resolved.model),
+            reason: "configured and healthy".to_string(),
+        });
+    }
+
+    alternatives
+}
+
+pub(super) async fn collect_provider_outage_metadata(
+    config: &Arc<RwLock<AgentConfig>>,
+    circuit_breakers: &Arc<CircuitBreakerRegistry>,
+    failed_provider: &str,
+    trip_count: u32,
+    reason: impl Into<String>,
+) -> ProviderCircuitOpenDetails {
+    let failed_model = {
+        let config_guard = config.read().await;
+        resolve_candidate_provider_config(&config_guard, failed_provider)
+            .ok()
+            .and_then(|resolved| (!resolved.model.trim().is_empty()).then_some(resolved.model))
+    };
+
+    ProviderCircuitOpenDetails {
+        provider: failed_provider.to_string(),
+        failed_model,
+        trip_count,
+        reason: reason.into(),
+        suggested_alternatives: collect_provider_alternatives(
+            config,
+            circuit_breakers,
+            failed_provider,
+        )
+        .await,
+    }
+}
+
+pub(super) async fn collect_provider_health_snapshot(
+    config: &Arc<RwLock<AgentConfig>>,
+    circuit_breakers: &Arc<CircuitBreakerRegistry>,
+) -> Vec<ProviderHealthSnapshot> {
+    let provider_ids: Vec<String> = config.read().await.providers.keys().cloned().collect();
+    let mut snapshots = Vec::new();
+
+    for provider_id in provider_ids {
+        let breaker_arc = circuit_breakers.get(&provider_id).await;
+        let mut breaker = breaker_arc.lock().await;
+        let can_execute = breaker.can_execute(now_millis());
+        let trip_count = breaker.trip_count();
+        drop(breaker);
+
+        if can_execute {
+            snapshots.push(ProviderHealthSnapshot {
+                provider_id,
+                can_execute,
+                trip_count,
+                failed_model: None,
+                reason: None,
+                suggested_alternatives: Vec::new(),
+            });
+            continue;
+        }
+
+        let outage = collect_provider_outage_metadata(
+            config,
+            circuit_breakers,
+            &provider_id,
+            trip_count,
+            "circuit breaker open",
+        )
+        .await;
+        snapshots.push(ProviderHealthSnapshot {
+            provider_id: outage.provider,
+            can_execute,
+            trip_count: outage.trip_count,
+            failed_model: outage.failed_model,
+            reason: Some(outage.reason),
+            suggested_alternatives: outage.suggested_alternatives,
+        });
+    }
+
+    snapshots
+}
+
+pub(super) fn format_provider_outage_message(
+    outage: &ProviderCircuitOpenDetails,
+) -> Option<String> {
+    if outage.suggested_alternatives.is_empty() {
+        return None;
+    }
+
+    let alternatives = outage
+        .suggested_alternatives
+        .iter()
+        .map(|alt| match &alt.model {
+            Some(model) => format!("{} ({})", alt.provider_id, model),
+            None => alt.provider_id.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let model = outage
+        .failed_model
+        .as_ref()
+        .map(|m| format!(" model '{}'", m))
+        .unwrap_or_default();
+
+    Some(format!(
+        "Provider '{}'{} is temporarily unavailable ({}). Alternatives: {}.",
+        outage.provider, model, outage.reason, alternatives
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // AgentEngine
 // ---------------------------------------------------------------------------
@@ -298,22 +476,33 @@ impl AgentEngine {
     /// breaker is open (provider is unhealthy). Callers must invoke
     /// [`record_llm_outcome`] after the call completes.
     pub async fn check_circuit_breaker(&self, provider: &str) -> Result<()> {
-        use super::circuit_breaker::CircuitState;
-
         let breaker_arc = self.circuit_breakers.get(provider).await;
         let mut breaker = breaker_arc.lock().await;
         let now = now_millis();
 
         if !breaker.can_execute(now) {
+            let trip_count = breaker.trip_count();
+            drop(breaker);
+            let outage = collect_provider_outage_metadata(
+                &self.config,
+                &self.circuit_breakers,
+                provider,
+                trip_count,
+                "circuit breaker open",
+            )
+            .await;
             let _ = self.event_tx.send(AgentEvent::ProviderCircuitOpen {
-                provider: provider.to_string(),
-                trip_count: breaker.trip_count(),
+                provider: outage.provider,
+                failed_model: outage.failed_model,
+                trip_count: outage.trip_count,
+                reason: outage.reason,
+                suggested_alternatives: outage.suggested_alternatives,
             });
             anyhow::bail!(
                 "Circuit breaker open for provider '{}' — {} consecutive failures. \
                  Requests are blocked for ~30s to allow recovery.",
                 provider,
-                breaker.trip_count()
+                trip_count
             );
         }
         Ok(())
@@ -345,17 +534,44 @@ impl AgentEngine {
             let was_closed_or_half = breaker.state() != CircuitState::Open;
             breaker.record_failure(now);
             if was_closed_or_half && breaker.state() == CircuitState::Open {
+                let trip_count = breaker.trip_count();
+                drop(breaker);
+                let outage = collect_provider_outage_metadata(
+                    &self.config,
+                    &self.circuit_breakers,
+                    provider,
+                    trip_count,
+                    "circuit breaker tripped",
+                )
+                .await;
                 tracing::warn!(
                     provider,
-                    trips = breaker.trip_count(),
+                    trips = trip_count,
                     "circuit breaker tripped — provider marked unhealthy"
                 );
                 let _ = self.event_tx.send(AgentEvent::ProviderCircuitOpen {
-                    provider: provider.to_string(),
-                    trip_count: breaker.trip_count(),
+                    provider: outage.provider,
+                    failed_model: outage.failed_model,
+                    trip_count: outage.trip_count,
+                    reason: outage.reason,
+                    suggested_alternatives: outage.suggested_alternatives,
                 });
             }
         }
+    }
+
+    async fn provider_is_eligible_for_alternative(
+        &self,
+        failed_provider: &str,
+        provider_id: &str,
+    ) -> bool {
+        provider_is_eligible_for_alternative(
+            &self.config,
+            &self.circuit_breakers,
+            failed_provider,
+            provider_id,
+        )
+        .await
     }
 
     /// Suggest an alternative healthy provider when the requested one is unavailable.
@@ -363,21 +579,15 @@ impl AgentEngine {
         &self,
         failed_provider: &str,
     ) -> Option<String> {
-        let config = self.config.read().await;
-        for (name, _pconfig) in &config.providers {
-            if name != failed_provider {
-                let breaker_arc = self.circuit_breakers.get(name).await;
-                let mut breaker = breaker_arc.lock().await;
-                let now = now_millis();
-                if breaker.can_execute(now) {
-                    return Some(format!(
-                        "Consider switching to provider '{}' which is currently healthy.",
-                        name
-                    ));
-                }
-            }
-        }
-        None
+        let outage = collect_provider_outage_metadata(
+            &self.config,
+            &self.circuit_breakers,
+            failed_provider,
+            0,
+            "circuit breaker open",
+        )
+        .await;
+        format_provider_outage_message(&outage)
     }
 
     #[cfg(test)]
@@ -408,9 +618,236 @@ impl AgentEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
     use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
+
+    async fn make_test_engine(config: AgentConfig) -> (Arc<AgentEngine>, TempDir) {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let session_manager = SessionManager::new_test(temp_dir.path()).await;
+        let history = HistoryStore::new_test_store(temp_dir.path())
+            .await
+            .expect("history store");
+        let data_dir = temp_dir.path().join("agent");
+        std::fs::create_dir_all(&data_dir).expect("create agent data dir");
+        let engine = AgentEngine::new_with_storage_and_http_client(
+            session_manager,
+            config,
+            history,
+            data_dir,
+            build_agent_http_client(Duration::from_millis(75)),
+        );
+        (engine, temp_dir)
+    }
+
+    fn provider_config(
+        base_url: &str,
+        model: &str,
+        api_key: &str,
+        auth_source: AuthSource,
+    ) -> ProviderConfig {
+        ProviderConfig {
+            base_url: base_url.to_string(),
+            model: model.to_string(),
+            api_key: api_key.to_string(),
+            assistant_id: String::new(),
+            auth_source,
+            api_transport: ApiTransport::ChatCompletions,
+            reasoning_effort: String::new(),
+            context_window_tokens: 0,
+            response_schema: None,
+        }
+    }
+
+    fn openai_auth_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn write_openai_subscription_auth(path: &Path) {
+        let auth = serde_json::json!({
+            "provider": "openai-codex",
+            "auth_mode": "chatgpt_subscription",
+            "access_token": "header.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiacctMSJ9LCJleHAiOjQxMDI0NDQ4MDB9.signature",
+            "refresh_token": "refresh-token",
+            "account_id": "acct-1",
+            "expires_at": 4_102_444_800_000i64,
+            "source": "test",
+            "updated_at": 4_102_444_800_000i64,
+            "created_at": 4_102_444_800_000i64
+        });
+        std::fs::write(
+            path,
+            serde_json::to_vec(&auth).expect("serialize auth fixture"),
+        )
+        .expect("write auth fixture");
+    }
+
+    #[tokio::test]
+    async fn provider_alternative_excludes_placeholder_provider_row() {
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.providers.insert(
+            "custom".to_string(),
+            provider_config("", "", "", AuthSource::ApiKey),
+        );
+        let (engine, _temp_dir) = make_test_engine(config).await;
+
+        let suggestion = engine.suggest_alternative_provider("openai").await;
+
+        assert!(
+            suggestion.is_none(),
+            "placeholder provider rows must not be suggested"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_alternative_excludes_failed_provider_itself() {
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.providers.insert(
+            "openai".to_string(),
+            provider_config(
+                "https://api.openai.com/v1",
+                "gpt-4o",
+                "valid-key",
+                AuthSource::ApiKey,
+            ),
+        );
+        let (engine, _temp_dir) = make_test_engine(config).await;
+
+        let suggestion = engine.suggest_alternative_provider("openai").await;
+
+        assert!(
+            suggestion.is_none(),
+            "the failed provider itself must not be suggested as an alternative"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_alternative_excludes_open_breaker_provider() {
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.providers.insert(
+            "custom".to_string(),
+            provider_config(
+                "https://example.invalid/v1",
+                "model-a",
+                "valid-key",
+                AuthSource::ApiKey,
+            ),
+        );
+        let (engine, _temp_dir) = make_test_engine(config).await;
+        {
+            let breaker = engine.circuit_breakers.get("custom").await;
+            let mut breaker = breaker.lock().await;
+            let now = now_millis();
+            for offset in 0..5 {
+                breaker.record_failure(now + offset);
+            }
+        }
+
+        let suggestion = engine.suggest_alternative_provider("openai").await;
+
+        assert!(
+            suggestion.is_none(),
+            "providers with open circuit breakers must not be suggested"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_alternative_includes_configured_healthy_provider() {
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.providers.insert(
+            "custom".to_string(),
+            provider_config(
+                "https://example.invalid/v1",
+                "model-a",
+                "valid-key",
+                AuthSource::ApiKey,
+            ),
+        );
+        let (engine, _temp_dir) = make_test_engine(config).await;
+
+        let suggestion = engine.suggest_alternative_provider("openai").await;
+
+        let suggestion = suggestion.expect("healthy provider should be suggested");
+        assert!(
+            suggestion.contains("custom"),
+            "expected healthy configured provider to be suggested, got: {suggestion}"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_alternative_excludes_openai_subscription_without_auth() {
+        let _env_guard = openai_auth_env_lock().lock().expect("lock auth env");
+        let temp_dir = TempDir::new().expect("temp dir");
+        let missing_auth_path = temp_dir.path().join("missing-openai-auth.json");
+        std::env::set_var("TAMUX_OPENAI_CODEX_AUTH_PATH", &missing_auth_path);
+        std::env::set_var("TAMUX_CODEX_CLI_AUTH_PATH", &missing_auth_path);
+
+        let mut config = AgentConfig::default();
+        config.provider = "groq".to_string();
+        config.providers.insert(
+            "openai".to_string(),
+            provider_config(
+                "https://api.openai.com/v1",
+                "gpt-5.4",
+                "",
+                AuthSource::ChatgptSubscription,
+            ),
+        );
+        let (engine, _temp_dir) = make_test_engine(config).await;
+
+        let suggestion = engine.suggest_alternative_provider("groq").await;
+
+        std::env::remove_var("TAMUX_OPENAI_CODEX_AUTH_PATH");
+        std::env::remove_var("TAMUX_CODEX_CLI_AUTH_PATH");
+        assert!(
+            suggestion.is_none(),
+            "OpenAI subscription auth must be present before suggesting it as an alternative"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_alternative_uses_candidate_default_model_for_empty_named_model() {
+        let _env_guard = openai_auth_env_lock().lock().expect("lock auth env");
+        let temp_dir = TempDir::new().expect("temp dir");
+        let auth_path = temp_dir.path().join("openai-auth.json");
+        write_openai_subscription_auth(&auth_path);
+        std::env::set_var("TAMUX_OPENAI_CODEX_AUTH_PATH", &auth_path);
+        std::env::set_var(
+            "TAMUX_CODEX_CLI_AUTH_PATH",
+            temp_dir.path().join("missing-codex-auth.json"),
+        );
+
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.model = "gpt-5.4".to_string();
+        config.providers.insert(
+            "groq".to_string(),
+            provider_config("", "", "groq-key", AuthSource::ApiKey),
+        );
+        let (engine, _temp_dir) = make_test_engine(config).await;
+
+        let resolved = {
+            let config = engine.config.read().await;
+            resolve_candidate_provider_config(&config, "groq")
+                .expect("candidate provider should resolve with its default model")
+        };
+        let suggestion = engine.suggest_alternative_provider("openai").await;
+
+        std::env::remove_var("TAMUX_OPENAI_CODEX_AUTH_PATH");
+        std::env::remove_var("TAMUX_CODEX_CLI_AUTH_PATH");
+        assert_eq!(resolved.model, "llama-3.3-70b-versatile");
+        assert!(
+            suggestion.as_deref().unwrap_or_default().contains("groq"),
+            "expected groq to remain eligible using its own default model"
+        );
+    }
 
     async fn spawn_hung_http_server() -> String {
         let listener = TcpListener::bind("127.0.0.1:0")

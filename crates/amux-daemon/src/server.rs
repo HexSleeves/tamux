@@ -3817,6 +3817,25 @@ where
                     }
                 },
 
+                ClientMessage::AgentSetProviderModel { provider_id, model } => {
+                    match agent.set_provider_model_json(&provider_id, &model).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                provider_id,
+                                model,
+                                "server: AgentSetProviderModel rejected"
+                            );
+                            framed
+                                .send(DaemonMessage::Error {
+                                    message: format!("Invalid provider/model selection: {e}"),
+                                })
+                                .await?;
+                        }
+                    }
+                }
+
                 ClientMessage::AgentFetchModels {
                     provider_id,
                     base_url,
