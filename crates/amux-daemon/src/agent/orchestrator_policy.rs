@@ -70,13 +70,32 @@ pub(crate) fn evaluate_triggers(input: &PolicyTriggerInput) -> TriggerOutcome {
 pub(crate) fn aggregate_trigger_contexts(
     inputs: &[PolicyTriggerInput],
 ) -> HashMap<String, PolicyTriggerContext> {
-    inputs
+    let mut contexts = HashMap::new();
+
+    for context in inputs
         .iter()
         .filter_map(|input| match evaluate_triggers(input) {
             TriggerOutcome::NoIntervention => None,
-            TriggerOutcome::EvaluatePolicy(context) => Some((context.thread_id.clone(), context)),
+            TriggerOutcome::EvaluatePolicy(context) => Some(context),
         })
-        .collect()
+    {
+        contexts
+            .entry(context.thread_id.clone())
+            .and_modify(|existing: &mut PolicyTriggerContext| {
+                existing.goal_run_id = match (&existing.goal_run_id, &context.goal_run_id) {
+                    (Some(existing_id), _) => Some(existing_id.clone()),
+                    (None, Some(incoming_id)) => Some(incoming_id.clone()),
+                    (None, None) => None,
+                };
+                existing.repeated_approach |= context.repeated_approach;
+                existing.awareness_stuck |= context.awareness_stuck;
+                existing.self_assessment.should_pivot |= context.self_assessment.should_pivot;
+                existing.self_assessment.should_escalate |= context.self_assessment.should_escalate;
+            })
+            .or_insert(context);
+    }
+
+    contexts
 }
 
 #[cfg(test)]
@@ -255,5 +274,104 @@ mod tests {
             })
         );
         assert!(!contexts.contains_key("thread-2"));
+    }
+
+    #[test]
+    fn trigger_aggregation_merges_active_signals_for_same_thread() {
+        let inputs = vec![
+            PolicyTriggerInput {
+                thread_id: "thread-1".to_string(),
+                goal_run_id: Some("goal-1".to_string()),
+                repeated_approach: true,
+                awareness_stuck: false,
+                should_pivot: false,
+                should_escalate: false,
+            },
+            PolicyTriggerInput {
+                thread_id: "thread-1".to_string(),
+                goal_run_id: Some("goal-1".to_string()),
+                repeated_approach: false,
+                awareness_stuck: true,
+                should_pivot: true,
+                should_escalate: false,
+            },
+        ];
+
+        let contexts = aggregate_trigger_contexts(&inputs);
+
+        assert_eq!(
+            contexts.get("thread-1"),
+            Some(&PolicyTriggerContext {
+                thread_id: "thread-1".to_string(),
+                goal_run_id: Some("goal-1".to_string()),
+                repeated_approach: true,
+                awareness_stuck: true,
+                self_assessment: PolicySelfAssessmentSummary {
+                    should_pivot: true,
+                    should_escalate: false,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn trigger_aggregation_prefers_first_non_none_goal_run_id_for_same_thread() {
+        let inputs = vec![
+            PolicyTriggerInput {
+                thread_id: "thread-1".to_string(),
+                goal_run_id: None,
+                repeated_approach: true,
+                awareness_stuck: false,
+                should_pivot: false,
+                should_escalate: false,
+            },
+            PolicyTriggerInput {
+                thread_id: "thread-1".to_string(),
+                goal_run_id: Some("goal-1".to_string()),
+                repeated_approach: false,
+                awareness_stuck: true,
+                should_pivot: false,
+                should_escalate: false,
+            },
+            PolicyTriggerInput {
+                thread_id: "thread-1".to_string(),
+                goal_run_id: Some("goal-2".to_string()),
+                repeated_approach: false,
+                awareness_stuck: false,
+                should_pivot: false,
+                should_escalate: true,
+            },
+        ];
+
+        let contexts = aggregate_trigger_contexts(&inputs);
+
+        assert_eq!(
+            contexts
+                .get("thread-1")
+                .and_then(|context| context.goal_run_id.as_deref()),
+            Some("goal-1")
+        );
+    }
+
+    #[test]
+    fn trigger_assessment_adapter_captures_pivot_and_escalate_flags() {
+        let assessment = Assessment {
+            making_progress: false,
+            approach_optimal: false,
+            should_escalate: true,
+            should_pivot: true,
+            should_terminate: false,
+            confidence: 0.2,
+            reasoning: "signals indicate intervention".to_string(),
+            recommendations: vec!["pivot".to_string(), "escalate".to_string()],
+        };
+
+        assert_eq!(
+            PolicySelfAssessmentSummary::from(&assessment),
+            PolicySelfAssessmentSummary {
+                should_pivot: true,
+                should_escalate: true,
+            }
+        );
     }
 }
