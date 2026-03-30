@@ -115,6 +115,30 @@ fn constraint_state_str(state: ConstraintState) -> &'static str {
     }
 }
 
+fn constraint_state_to_str(state: &ConstraintState) -> &'static str {
+    match state {
+        ConstraintState::Dead => "dead",
+        ConstraintState::Dying => "dying",
+        ConstraintState::Suspicious => "suspicious",
+    }
+}
+
+fn str_to_constraint_state(s: &str) -> ConstraintState {
+    match s {
+        "dead" => ConstraintState::Dead,
+        "suspicious" => ConstraintState::Suspicious,
+        _ => ConstraintState::Dying,
+    }
+}
+
+fn parse_json_string_vec(value: String) -> Vec<String> {
+    if value.trim().is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(&value).unwrap_or_default()
+    }
+}
+
 fn constraint_source_line(constraint: &NegativeConstraint) -> String {
     let source = if constraint.direct_observation {
         "direct"
@@ -228,6 +252,9 @@ impl AgentEngine {
     ) -> Result<()> {
         let c = constraint.clone();
         let ct_str = constraint_type_to_str(&c.constraint_type).to_string();
+        let state_str = constraint_state_to_str(&c.state).to_string();
+        let derived_from_constraint_ids = serde_json::to_string(&c.derived_from_constraint_ids)?;
+        let related_subject_tokens = serde_json::to_string(&c.related_subject_tokens)?;
         let agent_id = crate::agent::agent_identity::current_agent_scope_id();
 
         self.history
@@ -236,8 +263,9 @@ impl AgentEngine {
                 conn.execute(
                     "INSERT OR REPLACE INTO negative_knowledge
                      (id, agent_id, episode_id, constraint_type, subject, solution_class,
-                      description, confidence, valid_until, created_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                      description, confidence, state, evidence_count, direct_observation,
+                      derived_from_constraint_ids, related_subject_tokens, valid_until, created_at)
+                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                     params![
                         c.id,
                         agent_id,
@@ -247,6 +275,11 @@ impl AgentEngine {
                         c.solution_class,
                         c.description,
                         c.confidence,
+                        state_str,
+                        c.evidence_count,
+                        if c.direct_observation { 1 } else { 0 },
+                        derived_from_constraint_ids,
+                        related_subject_tokens,
                         c.valid_until.map(|v| v as i64),
                         c.created_at as i64,
                     ],
@@ -327,7 +360,8 @@ impl AgentEngine {
                 if let Some(ref pattern) = filter {
                     let mut stmt = conn.prepare(
                         "SELECT id, agent_id, episode_id, constraint_type, subject, solution_class,
-                                description, confidence, valid_until, created_at
+                                description, confidence, state, evidence_count, direct_observation,
+                                derived_from_constraint_ids, related_subject_tokens, valid_until, created_at
                          FROM negative_knowledge
                          WHERE (agent_id = ?1 OR (?2 = 1 AND agent_id IS NULL))
                          AND (valid_until IS NULL OR valid_until > ?3)
@@ -345,7 +379,8 @@ impl AgentEngine {
                 } else {
                     let mut stmt = conn.prepare(
                         "SELECT id, agent_id, episode_id, constraint_type, subject, solution_class,
-                                description, confidence, valid_until, created_at
+                                description, confidence, state, evidence_count, direct_observation,
+                                derived_from_constraint_ids, related_subject_tokens, valid_until, created_at
                          FROM negative_knowledge
                          WHERE (agent_id = ?1 OR (?2 = 1 AND agent_id IS NULL))
                            AND (valid_until IS NULL OR valid_until > ?3)
@@ -408,6 +443,11 @@ impl AgentEngine {
 
 fn row_to_constraint(row: &rusqlite::Row<'_>) -> rusqlite::Result<NegativeConstraint> {
     let ct_str: String = row.get(3)?;
+    let state_str: String = row.get(8)?;
+    let direct_observation: i64 = row.get(10)?;
+    let derived_from_constraint_ids = parse_json_string_vec(row.get(11)?);
+    let related_subject_tokens = parse_json_string_vec(row.get(12)?);
+
     Ok(NegativeConstraint {
         id: row.get(0)?,
         episode_id: row.get(2)?,
@@ -416,13 +456,13 @@ fn row_to_constraint(row: &rusqlite::Row<'_>) -> rusqlite::Result<NegativeConstr
         solution_class: row.get(5)?,
         description: row.get(6)?,
         confidence: row.get(7)?,
-        state: ConstraintState::Dying,
-        evidence_count: 1,
-        direct_observation: true,
-        derived_from_constraint_ids: Vec::new(),
-        related_subject_tokens: Vec::new(),
-        valid_until: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
-        created_at: row.get::<_, i64>(9)? as u64,
+        state: str_to_constraint_state(&state_str),
+        evidence_count: row.get(9)?,
+        direct_observation: direct_observation != 0,
+        derived_from_constraint_ids,
+        related_subject_tokens,
+        valid_until: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
+        created_at: row.get::<_, i64>(14)? as u64,
     })
 }
 
@@ -433,6 +473,8 @@ fn row_to_constraint(row: &rusqlite::Row<'_>) -> rusqlite::Result<NegativeConstr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::schema::init_episodic_schema;
+    use rusqlite::{params, Connection};
 
     fn make_constraint(subject: &str, valid_until: Option<u64>) -> NegativeConstraint {
         NegativeConstraint {
@@ -479,6 +521,100 @@ mod tests {
             valid_until: Some(2_000_000_000),
             ..make_constraint(subject, Some(2_000_000_000))
         }
+    }
+
+    fn select_constraint_by_id(conn: &Connection, id: &str) -> rusqlite::Result<NegativeConstraint> {
+        conn.query_row(
+            "SELECT id, agent_id, episode_id, constraint_type, subject, solution_class,
+                    description, confidence, state, evidence_count, direct_observation,
+                    derived_from_constraint_ids, related_subject_tokens, valid_until, created_at
+             FROM negative_knowledge
+             WHERE id = ?1",
+            params![id],
+            row_to_constraint,
+        )
+    }
+
+    #[test]
+    fn row_to_constraint_reads_richer_persisted_fields() -> anyhow::Result<()> {
+        let conn = Connection::open_in_memory()?;
+        init_episodic_schema(&conn)?;
+
+        conn.execute(
+            "INSERT INTO negative_knowledge
+             (id, agent_id, episode_id, constraint_type, subject, solution_class,
+              description, confidence, state, evidence_count, direct_observation,
+              derived_from_constraint_ids, related_subject_tokens, valid_until, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                "nc-rich",
+                "agent-1",
+                "ep-123",
+                "known_limitation",
+                "rich subject",
+                "solver",
+                "cannot proceed",
+                0.92,
+                "dead",
+                4,
+                0,
+                "[\"nc-a\",\"nc-b\"]",
+                "[\"alpha\",\"beta\"]",
+                1_234_567i64,
+                7_654_321i64,
+            ],
+        )?;
+
+        let constraint = select_constraint_by_id(&conn, "nc-rich")?;
+
+        assert_eq!(constraint.state, ConstraintState::Dead);
+        assert_eq!(constraint.evidence_count, 4);
+        assert!(!constraint.direct_observation);
+        assert_eq!(
+            constraint.derived_from_constraint_ids,
+            vec!["nc-a".to_string(), "nc-b".to_string()]
+        );
+        assert_eq!(
+            constraint.related_subject_tokens,
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_to_constraint_defaults_new_fields_for_legacy_rows() -> anyhow::Result<()> {
+        let conn = Connection::open_in_memory()?;
+        init_episodic_schema(&conn)?;
+
+        conn.execute(
+            "INSERT INTO negative_knowledge
+             (id, agent_id, episode_id, constraint_type, subject, solution_class,
+              description, confidence, valid_until, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                "nc-legacy",
+                "agent-1",
+                "ep-legacy",
+                "ruled_out",
+                "legacy subject",
+                "solver",
+                "legacy description",
+                0.61,
+                2_222_222i64,
+                3_333_333i64,
+            ],
+        )?;
+
+        let constraint = select_constraint_by_id(&conn, "nc-legacy")?;
+
+        assert_eq!(constraint.state, ConstraintState::Dying);
+        assert_eq!(constraint.evidence_count, 1);
+        assert!(constraint.direct_observation);
+        assert!(constraint.derived_from_constraint_ids.is_empty());
+        assert!(constraint.related_subject_tokens.is_empty());
+
+        Ok(())
     }
 
     #[test]
