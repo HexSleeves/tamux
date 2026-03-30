@@ -21,6 +21,12 @@ pub enum GatewayProviderEvent {
     HealthUpdate(GatewayHealthState),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewaySendOutcome {
+    pub channel_id: String,
+    pub delivery_id: Option<String>,
+}
+
 pub trait GatewayProvider: Send + 'static {
     fn platform(&self) -> &str;
 
@@ -37,7 +43,9 @@ pub trait GatewayProvider: Send + 'static {
     fn send(
         &mut self,
         request: GatewaySendRequest,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>>;
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<GatewaySendOutcome>> + Send + '_>,
+    >;
 }
 
 pub trait DaemonConnection: Send + 'static {
@@ -322,15 +330,16 @@ impl<D: DaemonConnection> GatewayRuntime<D> {
                                 break;
                             };
                             let correlation_id = request.correlation_id.clone();
-                            let channel_id = request.channel_id.clone();
+                            let requested_channel_id = request.channel_id.clone();
                             let send_result = provider.send(request).await;
 
                             let result = match send_result {
-                                Ok(delivery_id) => GatewaySendResult {
+                                Ok(outcome) => GatewaySendResult {
                                     correlation_id,
                                     platform: platform.clone(),
-                                    channel_id,
-                                    delivery_id,
+                                    channel_id: outcome.channel_id,
+                                    requested_channel_id: Some(requested_channel_id),
+                                    delivery_id: outcome.delivery_id,
                                     ok: true,
                                     error: None,
                                     completed_at_ms: now_ms(),
@@ -338,7 +347,8 @@ impl<D: DaemonConnection> GatewayRuntime<D> {
                                 Err(error) => GatewaySendResult {
                                     correlation_id,
                                     platform: platform.clone(),
-                                    channel_id,
+                                    channel_id: requested_channel_id.clone(),
+                                    requested_channel_id: Some(requested_channel_id.clone()),
                                     delivery_id: None,
                                     ok: false,
                                     error: Some(error.to_string()),
@@ -397,11 +407,13 @@ fn dispatch_send_request(
             return Ok(());
         }
     }
+    let requested_channel_id = request.channel_id.clone();
 
     core.emit_send_result(GatewaySendResult {
         correlation_id: request.correlation_id,
         platform: request.platform,
         channel_id: request.channel_id,
+        requested_channel_id: Some(requested_channel_id),
         delivery_id: None,
         ok: false,
         error: Some("provider queue unavailable".to_string()),

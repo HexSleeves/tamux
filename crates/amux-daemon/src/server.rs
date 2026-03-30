@@ -346,6 +346,17 @@ async fn persist_gateway_health_update(
     Ok(())
 }
 
+fn gateway_response_channel_key(platform: &str, channel_id: &str) -> Option<String> {
+    let label = match platform.to_ascii_lowercase().as_str() {
+        "slack" => "Slack",
+        "discord" => "Discord",
+        "telegram" => "Telegram",
+        "whatsapp" => "WhatsApp",
+        _ => return None,
+    };
+    Some(format!("{label}:{channel_id}"))
+}
+
 fn is_expected_disconnect_error(error: &anyhow::Error) -> bool {
     let expected_io_error = |kind: std::io::ErrorKind| {
         matches!(
@@ -566,7 +577,7 @@ mod tests {
     use crate::session_manager::SessionManager;
     use amux_protocol::{
         AmuxCodec, ClientMessage, DaemonMessage, GatewayConnectionStatus, GatewayIncomingEvent,
-        GatewayRegistration, SessionInfo, GATEWAY_IPC_PROTOCOL_VERSION,
+        GatewayRegistration, GatewaySendRequest, SessionInfo, GATEWAY_IPC_PROTOCOL_VERSION,
     };
     use futures::{SinkExt, StreamExt};
     use std::collections::HashSet;
@@ -1148,6 +1159,136 @@ mod tests {
                 .any(|(channel_key, route_mode)| channel_key == "Slack:C123"
                     && route_mode == "swarog")
         );
+
+        conn.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn gateway_send_results_complete_waiters_and_update_last_response_state() {
+        let mut config = AgentConfig::default();
+        config.gateway.enabled = true;
+        let mut conn = spawn_test_connection_with_config(config).await;
+        let correlation_id = register_gateway(&mut conn).await;
+        acknowledge_gateway_bootstrap(&mut conn, correlation_id).await;
+        conn.agent.init_gateway().await;
+
+        let agent = conn.agent.clone();
+        let send_task = tokio::spawn(async move {
+            agent
+                .request_gateway_send(GatewaySendRequest {
+                    correlation_id: "send-1".to_string(),
+                    platform: "slack".to_string(),
+                    channel_id: "C123".to_string(),
+                    thread_id: Some("1712345678.000100".to_string()),
+                    content: "hello".to_string(),
+                })
+                .await
+        });
+
+        let request = match conn.recv().await {
+            DaemonMessage::GatewaySendRequest { request } => request,
+            other => panic!("expected GatewaySendRequest, got {other:?}"),
+        };
+        assert_eq!(request.correlation_id, "send-1");
+        assert_eq!(request.channel_id, "C123");
+
+        conn.framed
+            .send(ClientMessage::GatewaySendResult {
+                result: amux_protocol::GatewaySendResult {
+                    correlation_id: request.correlation_id.clone(),
+                    platform: "slack".to_string(),
+                    channel_id: "C123".to_string(),
+                    requested_channel_id: Some("C123".to_string()),
+                    delivery_id: Some("1712345678.000200".to_string()),
+                    ok: true,
+                    error: None,
+                    completed_at_ms: 1234,
+                },
+            })
+            .await
+            .expect("send gateway result");
+
+        let result = send_task
+            .await
+            .expect("join send task")
+            .expect("gateway send should complete");
+        assert!(result.ok);
+
+        let gw_guard = conn.agent.gateway_state.lock().await;
+        let gw = gw_guard.as_ref().expect("gateway state should exist");
+        assert!(gw.last_response_at.contains_key("Slack:C123"));
+        drop(gw_guard);
+
+        conn.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn gateway_send_results_use_canonical_discord_dm_channel_keys() {
+        let mut config = AgentConfig::default();
+        config.gateway.enabled = true;
+        let mut conn = spawn_test_connection_with_config(config).await;
+        let correlation_id = register_gateway(&mut conn).await;
+        acknowledge_gateway_bootstrap(&mut conn, correlation_id).await;
+        conn.agent.init_gateway().await;
+
+        let agent = conn.agent.clone();
+        let send_task = tokio::spawn(async move {
+            agent
+                .request_gateway_send(GatewaySendRequest {
+                    correlation_id: "discord-dm-send".to_string(),
+                    platform: "discord".to_string(),
+                    channel_id: "user:123456789".to_string(),
+                    thread_id: Some("987654321".to_string()),
+                    content: "hello".to_string(),
+                })
+                .await
+        });
+
+        let request = match conn.recv().await {
+            DaemonMessage::GatewaySendRequest { request } => request,
+            other => panic!("expected GatewaySendRequest, got {other:?}"),
+        };
+        assert_eq!(request.channel_id, "user:123456789");
+
+        conn.framed
+            .send(ClientMessage::GatewaySendResult {
+                result: amux_protocol::GatewaySendResult {
+                    correlation_id: request.correlation_id.clone(),
+                    platform: "discord".to_string(),
+                    channel_id: "DM123".to_string(),
+                    requested_channel_id: Some("user:123456789".to_string()),
+                    delivery_id: Some("delivery-1".to_string()),
+                    ok: true,
+                    error: None,
+                    completed_at_ms: 1234,
+                },
+            })
+            .await
+            .expect("send discord gateway result");
+
+        let result = send_task
+            .await
+            .expect("join discord send task")
+            .expect("gateway send should complete");
+        assert!(result.ok);
+
+        let gw_guard = conn.agent.gateway_state.lock().await;
+        let gw = gw_guard.as_ref().expect("gateway state should exist");
+        assert!(gw.last_response_at.contains_key("Discord:DM123"));
+        assert!(!gw.last_response_at.contains_key("Discord:user:123456789"));
+        assert_eq!(
+            gw.discord_dm_channels_by_user
+                .get("user:123456789")
+                .map(String::as_str),
+            Some("DM123")
+        );
+        assert_eq!(
+            gw.reply_contexts
+                .get("Discord:DM123")
+                .and_then(|ctx| ctx.discord_message_id.as_deref()),
+            Some("delivery-1")
+        );
+        drop(gw_guard);
 
         conn.shutdown().await;
     }
@@ -2210,6 +2351,47 @@ where
                         ok = result.ok,
                         "gateway send result received"
                     );
+                    if result.ok {
+                        if let Some(channel_key) =
+                            gateway_response_channel_key(&result.platform, &result.channel_id)
+                        {
+                            let mut gw_guard = agent.gateway_state.lock().await;
+                            if let Some(gateway_state) = gw_guard.as_mut() {
+                                if result.platform.eq_ignore_ascii_case("discord") {
+                                    if let Some(requested_channel_id) =
+                                        result.requested_channel_id.as_deref()
+                                    {
+                                        if requested_channel_id.starts_with("user:")
+                                            && requested_channel_id != result.channel_id
+                                        {
+                                            gateway_state.discord_dm_channels_by_user.insert(
+                                                requested_channel_id.to_string(),
+                                                result.channel_id.clone(),
+                                            );
+                                        }
+                                    }
+                                    if let Some(delivery_id) = result.delivery_id.as_ref() {
+                                        gateway_state.reply_contexts.insert(
+                                            channel_key.clone(),
+                                            crate::agent::gateway::ThreadContext {
+                                                discord_message_id: Some(delivery_id.clone()),
+                                                ..Default::default()
+                                            },
+                                        );
+                                    }
+                                }
+                                gateway_state
+                                    .last_response_at
+                                    .insert(channel_key, current_time_ms());
+                            }
+                        }
+                    }
+                    if !agent.complete_gateway_send_result(result.clone()).await {
+                        tracing::debug!(
+                            correlation_id = %result.correlation_id,
+                            "gateway send result had no waiting caller"
+                        );
+                    }
                 }
 
                 ClientMessage::GatewayHealthUpdate { update } => {

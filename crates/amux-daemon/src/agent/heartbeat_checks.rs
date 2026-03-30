@@ -428,6 +428,7 @@ mod tests {
             gateway_process: Mutex::new(None),
             gateway_state: Mutex::new(None),
             gateway_ipc_sender: Mutex::new(None),
+            gateway_pending_send_results: Mutex::new(HashMap::new()),
             gateway_restart_attempts: Mutex::new(0),
             gateway_restart_not_before_ms: Mutex::new(None),
             gateway_discord_channels: RwLock::new(Vec::new()),
@@ -561,6 +562,57 @@ mod tests {
         );
         assert_eq!(result.items_found, 0);
         assert!(result.summary.contains("No unreplied gateway"));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_checks_ignore_channels_with_newer_response_timestamps() {
+        let engine = make_test_engine(HashMap::new(), VecDeque::new(), HashMap::new()).await;
+        let mut gateway_state =
+            crate::agent::gateway::GatewayState::new(AgentConfig::default().gateway, reqwest::Client::new());
+        let now = now_millis();
+        gateway_state
+            .last_incoming_at
+            .insert("Slack:C123".to_string(), now.saturating_sub(3_600_000));
+        gateway_state
+            .last_response_at
+            .insert("Slack:C123".to_string(), now.saturating_sub(60_000));
+        *engine.gateway_state.lock().await = Some(gateway_state);
+
+        let result = engine.check_unreplied_messages(1).await;
+        assert_eq!(result.items_found, 0);
+        assert!(result.summary.contains("No unreplied gateway"));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_checks_read_gateway_health_from_ipc_updates() {
+        let engine = make_test_engine(HashMap::new(), VecDeque::new(), HashMap::new()).await;
+        let mut gateway_state = crate::agent::gateway::GatewayState::new(
+            AgentConfig::default().gateway,
+            reqwest::Client::new(),
+        );
+        crate::agent::gateway_loop::apply_health_snapshot(
+            &mut gateway_state,
+            &amux_protocol::GatewayHealthState {
+                platform: "slack".to_string(),
+                status: amux_protocol::GatewayConnectionStatus::Error,
+                last_success_at_ms: Some(100),
+                last_error_at_ms: Some(200),
+                consecutive_failure_count: 3,
+                last_error: Some("api timeout".to_string()),
+                current_backoff_secs: 30,
+            },
+        );
+        *engine.gateway_state.lock().await = Some(gateway_state);
+
+        let snapshots = engine.gateway_health_snapshots().await;
+        let slack = snapshots
+            .iter()
+            .find(|snapshot| snapshot.platform == "slack")
+            .expect("slack snapshot should exist");
+        assert_eq!(slack.status, amux_protocol::GatewayConnectionStatus::Error);
+        assert_eq!(slack.consecutive_failure_count, 3);
+        assert_eq!(slack.last_error.as_deref(), Some("api timeout"));
+        assert_eq!(slack.current_backoff_secs, 30);
     }
 
     #[tokio::test]

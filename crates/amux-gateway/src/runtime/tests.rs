@@ -157,6 +157,30 @@ async fn gateway_runtime_applies_outbound_send_request_to_provider_queue() {
 }
 
 #[tokio::test]
+async fn gateway_runtime_preserves_requested_channel_on_queue_failure() {
+    let (daemon_tx, mut daemon_rx) = tokio::sync::mpsc::unbounded_channel::<ClientMessage>();
+    let (provider_tx, _provider_rx) = tokio::sync::mpsc::unbounded_channel::<GatewaySendRequest>();
+    let mut runtime = GatewayRuntimeCore::new(daemon_tx, provider_tx);
+    let mut provider_senders = std::collections::HashMap::new();
+
+    super::dispatch_send_request(&mut runtime, &mut provider_senders, sample_send_request())
+        .expect("send request should emit failure result");
+
+    match daemon_rx.recv().await {
+        Some(ClientMessage::GatewaySendResult { result }) => {
+            assert!(!result.ok);
+            assert_eq!(result.channel_id, "C123");
+            assert_eq!(result.requested_channel_id.as_deref(), Some("C123"));
+            assert_eq!(
+                result.error.as_deref(),
+                Some("provider queue unavailable")
+            );
+        }
+        other => panic!("expected GatewaySendResult, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn gateway_runtime_emits_live_cursor_thread_binding_and_route_mode_updates() {
     let (daemon_tx, mut daemon_rx) = tokio::sync::mpsc::unbounded_channel::<ClientMessage>();
     let (provider_tx, _provider_rx) = tokio::sync::mpsc::unbounded_channel::<GatewaySendRequest>();

@@ -26,7 +26,6 @@ use super::agent_identity::{
     CONCIERGE_AGENT_ALIAS, CONCIERGE_AGENT_ID, CONCIERGE_AGENT_NAME, MAIN_AGENT_ALIAS,
     MAIN_AGENT_ID, MAIN_AGENT_NAME,
 };
-use super::gateway_format;
 use super::memory::{apply_memory_update, MemoryTarget, MemoryUpdateMode, MemoryWriteContext};
 use super::semantic_env::{execute_semantic_query, infer_workspace_context_tags};
 use super::session_recall::execute_session_search as run_session_search;
@@ -1990,21 +1989,6 @@ fn terminal_output_tail(raw: &[u8], max_lines: usize) -> String {
     result
 }
 
-fn discord_authorization_header(token: &str) -> String {
-    let trimmed = token.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    let normalized = trimmed
-        .strip_prefix("Bot ")
-        .or_else(|| trimmed.strip_prefix("bot "))
-        .or_else(|| trimmed.strip_prefix("Bearer "))
-        .or_else(|| trimmed.strip_prefix("bearer "))
-        .unwrap_or(trimmed)
-        .trim();
-    format!("Bot {normalized}")
-}
-
 async fn wait_for_managed_command_outcome(
     rx: &mut tokio::sync::broadcast::Receiver<DaemonMessage>,
     session_id: SessionId,
@@ -2695,9 +2679,7 @@ async fn execute_update_memory(
     } else {
         MAIN_AGENT_ID.to_string()
     };
-    if target == MemoryTarget::User
-        && !crate::agent::is_main_agent_scope(&acting_scope_id)
-    {
+    if target == MemoryTarget::User && !crate::agent::is_main_agent_scope(&acting_scope_id) {
         let sender = if let Some(current_task_id) = task_id {
             let tasks = agent.tasks.lock().await;
             sender_name_for_task(tasks.iter().find(|task| task.id == current_task_id))
@@ -5493,9 +5475,6 @@ async fn execute_gateway_message(
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing 'message' argument"))?;
     let gateway = agent.get_config().await.gateway;
-    let slack_token = gateway.slack_token.clone();
-    let telegram_token = gateway.telegram_token.clone();
-    let discord_token = gateway.discord_token.clone();
     let first_csv =
         |val: &str| -> String { val.split(',').next().unwrap_or("").trim().to_string() };
 
@@ -5512,28 +5491,6 @@ async fn execute_gateway_message(
                 ));
             }
             let channel = channel.as_str();
-            if slack_token.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "Slack token not configured in gateway settings"
-                ));
-            }
-
-            // Rate limiting: check Slack rate limiter before sending
-            {
-                let mut gw_lock = agent.gateway_state.lock().await;
-                if let Some(gw) = gw_lock.as_mut() {
-                    if let Some(wait) = gw.slack_rate_limiter.try_acquire() {
-                        drop(gw_lock);
-                        tokio::time::sleep(wait).await;
-                    }
-                }
-            }
-
-            // Format conversion: markdown to Slack mrkdwn
-            let formatted = gateway_format::markdown_to_slack_mrkdwn(message);
-
-            // Chunking: split long messages at Slack character limit
-            let chunks = gateway_format::chunk_message(&formatted, gateway_format::SLACK_MAX_CHARS);
 
             // Thread context: auto-inject thread_ts from reply_contexts or agent args
             let thread_ts = args
@@ -5551,39 +5508,24 @@ async fn execute_gateway_message(
             tracing::info!(
                 platform = "slack",
                 channel = %channel,
-                chunks = chunks.len(),
                 thread_ts = ?thread_ts,
-                "gateway: sending message"
+                "gateway: queueing send request via standalone runtime"
             );
 
-            for chunk in &chunks {
-                let mut payload = serde_json::json!({ "channel": channel, "text": chunk });
-                if let Some(ref ts) = thread_ts {
-                    payload["thread_ts"] = serde_json::json!(ts);
-                }
-                let resp = http_client
-                    .post("https://slack.com/api/chat.postMessage")
-                    .bearer_auth(&slack_token)
-                    .json(&payload)
-                    .send()
-                    .await?;
-                let body: serde_json::Value = resp.json().await?;
-                if body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
-                    let err = body
-                        .get("error")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown error");
-                    return Err(anyhow::anyhow!("Slack API error: {err}"));
-                }
-            }
-
-            // Update last_response_at for unreplied message detection
-            {
-                let mut gw_lock = agent.gateway_state.lock().await;
-                if let Some(gw) = gw_lock.as_mut() {
-                    gw.last_response_at
-                        .insert(format!("Slack:{channel}"), now_epoch_millis());
-                }
+            let result = agent
+                .request_gateway_send(amux_protocol::GatewaySendRequest {
+                    correlation_id: format!("slack-send-{}", uuid::Uuid::new_v4()),
+                    platform: "slack".to_string(),
+                    channel_id: channel.to_string(),
+                    thread_id: thread_ts,
+                    content: message.to_string(),
+                })
+                .await?;
+            if !result.ok {
+                return Err(anyhow::anyhow!(
+                    "Slack gateway send failed: {}",
+                    result.error.unwrap_or_else(|| "unknown error".to_string())
+                ));
             }
 
             Ok(format!("Slack message sent to #{channel}"))
@@ -5611,56 +5553,24 @@ async fn execute_gateway_message(
                     }
                 }
             }
-            let channel_id = channel_id.as_str();
-            let user_id = user_id.as_str();
-            if discord_token.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "Discord token not configured in gateway settings"
-                ));
-            }
-
             let target_channel = if !channel_id.is_empty() {
-                channel_id.to_string()
+                channel_id.clone()
             } else if !user_id.is_empty() {
-                let discord_auth = discord_authorization_header(&discord_token);
-                if discord_auth.is_empty() {
-                    return Err(anyhow::anyhow!(
-                        "Discord token not configured in gateway settings"
-                    ));
-                }
-                // Create DM channel first
-                let resp = http_client
-                    .post("https://discord.com/api/v10/users/@me/channels")
-                    .header("Authorization", discord_auth)
-                    .json(&serde_json::json!({ "recipient_id": user_id }))
-                    .send()
-                    .await?;
-                let body: serde_json::Value = resp.json().await?;
-                body.get("id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Failed to create DM channel: {body}"))?
-                    .to_string()
+                format!("user:{user_id}")
             } else {
                 return Err(anyhow::anyhow!("Either channel_id or user_id is required"));
             };
-
-            // Rate limiting: check Discord rate limiter before sending
-            {
-                let mut gw_lock = agent.gateway_state.lock().await;
-                if let Some(gw) = gw_lock.as_mut() {
-                    if let Some(wait) = gw.discord_rate_limiter.try_acquire() {
-                        drop(gw_lock);
-                        tokio::time::sleep(wait).await;
-                    }
-                }
-            }
-
-            // Format conversion: markdown to Discord format (passthrough)
-            let formatted = gateway_format::markdown_to_discord(message);
-
-            // Chunking: split long messages at Discord character limit
-            let chunks =
-                gateway_format::chunk_message(&formatted, gateway_format::DISCORD_MAX_CHARS);
+            let reply_context_channel = if !channel_id.is_empty() {
+                target_channel.clone()
+            } else {
+                let gw_lock = agent.gateway_state.try_lock().ok();
+                gw_lock
+                    .as_ref()
+                    .and_then(|gw| gw.as_ref())
+                    .and_then(|gw| gw.discord_dm_channels_by_user.get(&target_channel))
+                    .cloned()
+                    .unwrap_or_else(|| target_channel.clone())
+            };
 
             // Thread context: auto-inject message_reference from reply_contexts or agent args
             let reply_msg_id = args
@@ -5672,61 +5582,30 @@ async fn execute_gateway_message(
                     let gw = gw_lock.as_ref()?;
                     let ctx = gw
                         .reply_contexts
-                        .get(&format!("Discord:{target_channel}"))?;
+                        .get(&format!("Discord:{reply_context_channel}"))?;
                     ctx.discord_message_id.clone()
                 });
 
             tracing::info!(
                 platform = "discord",
                 channel = %target_channel,
-                chunks = chunks.len(),
                 reply_to = ?reply_msg_id,
-                "gateway: sending message"
+                "gateway: queueing send request via standalone runtime"
             );
-
-            let discord_auth = discord_authorization_header(&discord_token);
-            if discord_auth.is_empty() {
+            let result = agent
+                .request_gateway_send(amux_protocol::GatewaySendRequest {
+                    correlation_id: format!("discord-send-{}", uuid::Uuid::new_v4()),
+                    platform: "discord".to_string(),
+                    channel_id: target_channel.clone(),
+                    thread_id: reply_msg_id,
+                    content: message.to_string(),
+                })
+                .await?;
+            if !result.ok {
                 return Err(anyhow::anyhow!(
-                    "Discord token not configured in gateway settings"
+                    "Discord gateway send failed: {}",
+                    result.error.unwrap_or_else(|| "unknown error".to_string())
                 ));
-            }
-
-            for (i, chunk) in chunks.iter().enumerate() {
-                let mut payload = serde_json::json!({ "content": chunk });
-                // Add message_reference to the FIRST chunk only (per D-08/Pitfall 3)
-                if i == 0 {
-                    if let Some(ref mid) = reply_msg_id {
-                        payload["message_reference"] = serde_json::json!({
-                            "message_id": mid,
-                            "fail_if_not_exists": false
-                        });
-                    }
-                }
-                let resp = http_client
-                    .post(format!(
-                        "https://discord.com/api/v10/channels/{target_channel}/messages"
-                    ))
-                    .header("Authorization", &discord_auth)
-                    .json(&payload)
-                    .send()
-                    .await?;
-
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    let body = resp.text().await.unwrap_or_default();
-                    return Err(anyhow::anyhow!(
-                        "Discord API error (status {status}): {body}"
-                    ));
-                }
-            }
-
-            // Update last_response_at for unreplied message detection
-            {
-                let mut gw_lock = agent.gateway_state.lock().await;
-                if let Some(gw) = gw_lock.as_mut() {
-                    gw.last_response_at
-                        .insert(format!("Discord:{target_channel}"), now_epoch_millis());
-                }
             }
 
             Ok(format!("Discord message sent to {target_channel}"))
@@ -5743,29 +5622,6 @@ async fn execute_gateway_message(
                 ));
             }
             let chat_id = chat_id.as_str();
-            if telegram_token.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "Telegram token not configured in gateway settings"
-                ));
-            }
-
-            // Rate limiting: check Telegram rate limiter before sending
-            {
-                let mut gw_lock = agent.gateway_state.lock().await;
-                if let Some(gw) = gw_lock.as_mut() {
-                    if let Some(wait) = gw.telegram_rate_limiter.try_acquire() {
-                        drop(gw_lock);
-                        tokio::time::sleep(wait).await;
-                    }
-                }
-            }
-
-            // Format conversion: markdown to Telegram MarkdownV2
-            let formatted = gateway_format::markdown_to_telegram_v2(message);
-
-            // Chunking: split long messages at Telegram character limit
-            let chunks =
-                gateway_format::chunk_message(&formatted, gateway_format::TELEGRAM_MAX_CHARS);
 
             // Thread context: auto-inject reply_to_message_id from reply_contexts or agent args
             let reply_to_id = args
@@ -5781,96 +5637,23 @@ async fn execute_gateway_message(
             tracing::info!(
                 platform = "telegram",
                 chat_id = %chat_id,
-                chunks = chunks.len(),
                 reply_to = ?reply_to_id,
-                "gateway: sending message"
+                "gateway: queueing send request via standalone runtime"
             );
-
-            let url = format!("https://api.telegram.org/bot{telegram_token}/sendMessage");
-
-            for (i, chunk) in chunks.iter().enumerate() {
-                let mut payload = serde_json::json!({
-                    "chat_id": chat_id,
-                    "text": chunk,
-                    "parse_mode": "MarkdownV2"
-                });
-                // Add reply_to_message_id to the FIRST chunk only
-                if i == 0 {
-                    if let Some(mid) = reply_to_id {
-                        payload["reply_to_message_id"] = serde_json::json!(mid);
-                    }
-                }
-
-                let resp = http_client.post(&url).json(&payload).send().await?;
-                let body: serde_json::Value = resp.json().await?;
-
-                if body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
-                    let desc = body
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown error");
-
-                    // Pitfall 2 fallback: if Telegram can't parse MarkdownV2 entities,
-                    // retry as plain text without parse_mode
-                    if desc.contains("can't parse entities") {
-                        tracing::warn!(
-                            platform = "telegram",
-                            chat_id = %chat_id,
-                            "MarkdownV2 parse failed, falling back to plain text"
-                        );
-                        let plain = gateway_format::markdown_to_plain(message);
-                        let plain_chunks = gateway_format::chunk_message(
-                            &plain,
-                            gateway_format::TELEGRAM_MAX_CHARS,
-                        );
-                        for (j, plain_chunk) in plain_chunks.iter().enumerate() {
-                            let mut plain_payload = serde_json::json!({
-                                "chat_id": chat_id,
-                                "text": plain_chunk
-                            });
-                            if j == 0 {
-                                if let Some(mid) = reply_to_id {
-                                    plain_payload["reply_to_message_id"] = serde_json::json!(mid);
-                                }
-                            }
-                            let retry_resp =
-                                http_client.post(&url).json(&plain_payload).send().await?;
-                            let retry_body: serde_json::Value = retry_resp.json().await?;
-                            if retry_body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
-                                let retry_desc = retry_body
-                                    .get("description")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("unknown error");
-                                return Err(anyhow::anyhow!(
-                                    "Telegram API error (plain text fallback): {retry_desc}"
-                                ));
-                            }
-                        }
-
-                        // Update last_response_at after successful plain text fallback
-                        {
-                            let mut gw_lock = agent.gateway_state.lock().await;
-                            if let Some(gw) = gw_lock.as_mut() {
-                                gw.last_response_at
-                                    .insert(format!("Telegram:{chat_id}"), now_epoch_millis());
-                            }
-                        }
-                        return Ok(format!(
-                            "Telegram message sent to {chat_id} (plain text fallback)"
-                        ));
-                    }
-
-                    return Err(anyhow::anyhow!("Telegram API error: {desc}"));
-                }
-            }
-
-            // Update last_response_at for unreplied message detection
-            {
-                let mut gw_lock = agent.gateway_state.lock().await;
-                if let Some(gw) = gw_lock.as_mut() {
-                    gw.last_response_at
-                        .insert(format!("Telegram:{chat_id}"), now_epoch_millis());
-                }
+            let result = agent
+                .request_gateway_send(amux_protocol::GatewaySendRequest {
+                    correlation_id: format!("telegram-send-{}", uuid::Uuid::new_v4()),
+                    platform: "telegram".to_string(),
+                    channel_id: chat_id.to_string(),
+                    thread_id: reply_to_id.map(|value| value.to_string()),
+                    content: message.to_string(),
+                })
+                .await?;
+            if !result.ok {
+                return Err(anyhow::anyhow!(
+                    "Telegram gateway send failed: {}",
+                    result.error.unwrap_or_else(|| "unknown error".to_string())
+                ));
             }
 
             Ok(format!("Telegram message sent to {chat_id}"))
@@ -6129,19 +5912,20 @@ mod tests {
     use super::{
         build_list_files_script, build_write_file_command, build_write_file_script,
         command_looks_interactive, command_matches_policy_risk, command_requires_managed_state,
-        execute_get_divergent_session, execute_headless_shell_command, get_available_tools,
-        managed_alias_args, parse_capture_output, parse_tool_args, resolve_skill_path,
-        should_use_linked_whatsapp_transport, should_use_managed_execution, validate_read_path,
-        validate_write_path, wait_for_managed_command_outcome,
+        execute_gateway_message, execute_get_divergent_session, execute_headless_shell_command,
+        get_available_tools, managed_alias_args, parse_capture_output, parse_tool_args,
+        resolve_skill_path, should_use_linked_whatsapp_transport, should_use_managed_execution,
+        validate_read_path, validate_write_path, wait_for_managed_command_outcome,
     };
     use crate::agent::{types::AgentConfig, AgentEngine};
     use crate::history::SkillVariantRecord;
     use crate::session_manager::SessionManager;
-    use amux_protocol::{DaemonMessage, SessionId};
+    use amux_protocol::{DaemonMessage, GatewaySendResult, SessionId};
     use base64::Engine;
     use std::fs;
     use tempfile::tempdir;
     use tokio::sync::broadcast;
+    use tokio::time::{timeout, Duration};
     use tokio_util::sync::CancellationToken;
 
     #[test]
@@ -6566,6 +6350,252 @@ mod tests {
             .get("framing_progress")
             .expect("framing_progress should exist");
         assert_eq!(progress.get("completed").and_then(|v| v.as_u64()), Some(0));
+    }
+
+    #[tokio::test]
+    async fn send_slack_message_emits_gateway_ipc_request() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.gateway.enabled = true;
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
+        engine.init_gateway().await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        engine.set_gateway_ipc_sender(Some(tx)).await;
+
+        let send_engine = engine.clone();
+        let send_task = tokio::spawn(async move {
+            execute_gateway_message(
+                "send_slack_message",
+                &serde_json::json!({
+                    "channel": "C123",
+                    "message": "hello from daemon",
+                    "thread_ts": "1712345678.000100"
+                }),
+                &send_engine,
+                &reqwest::Client::new(),
+            )
+            .await
+        });
+
+        let request = match timeout(Duration::from_millis(250), rx.recv())
+            .await
+            .expect("gateway send request should be emitted")
+            .expect("gateway send request should exist")
+        {
+            DaemonMessage::GatewaySendRequest { request } => request,
+            other => panic!("expected GatewaySendRequest, got {other:?}"),
+        };
+        assert_eq!(request.platform, "slack");
+        assert_eq!(request.channel_id, "C123");
+        assert_eq!(request.thread_id.as_deref(), Some("1712345678.000100"));
+        assert_eq!(request.content, "hello from daemon");
+
+        engine
+            .complete_gateway_send_result(GatewaySendResult {
+                correlation_id: request.correlation_id.clone(),
+                platform: "slack".to_string(),
+                channel_id: "C123".to_string(),
+                requested_channel_id: Some("C123".to_string()),
+                delivery_id: Some("1712345678.000200".to_string()),
+                ok: true,
+                error: None,
+                completed_at_ms: 1,
+            })
+            .await;
+
+        let result = send_task
+            .await
+            .expect("send task should join")
+            .expect("send should succeed");
+        assert_eq!(result, "Slack message sent to #C123");
+    }
+
+    #[tokio::test]
+    async fn send_discord_message_emits_gateway_ipc_request() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.gateway.enabled = true;
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        engine.set_gateway_ipc_sender(Some(tx)).await;
+
+        let send_engine = engine.clone();
+        let send_task = tokio::spawn(async move {
+            execute_gateway_message(
+                "send_discord_message",
+                &serde_json::json!({
+                    "user_id": "123456789",
+                    "message": "discord reply",
+                    "reply_to_message_id": "987654321"
+                }),
+                &send_engine,
+                &reqwest::Client::new(),
+            )
+            .await
+        });
+
+        let request = match timeout(Duration::from_millis(250), rx.recv())
+            .await
+            .expect("gateway send request should be emitted")
+            .expect("gateway send request should exist")
+        {
+            DaemonMessage::GatewaySendRequest { request } => request,
+            other => panic!("expected GatewaySendRequest, got {other:?}"),
+        };
+        assert_eq!(request.platform, "discord");
+        assert_eq!(request.channel_id, "user:123456789");
+        assert_eq!(request.thread_id.as_deref(), Some("987654321"));
+        assert_eq!(request.content, "discord reply");
+
+        engine
+            .complete_gateway_send_result(GatewaySendResult {
+                correlation_id: request.correlation_id.clone(),
+                platform: "discord".to_string(),
+                channel_id: "user:123456789".to_string(),
+                requested_channel_id: Some("user:123456789".to_string()),
+                delivery_id: Some("delivery-1".to_string()),
+                ok: true,
+                error: None,
+                completed_at_ms: 1,
+            })
+            .await;
+
+        let result = send_task
+            .await
+            .expect("send task should join")
+            .expect("send should succeed");
+        assert_eq!(result, "Discord message sent to user:123456789");
+    }
+
+    #[tokio::test]
+    async fn send_discord_message_uses_canonical_dm_reply_context_for_user_targets() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.gateway.enabled = true;
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
+        engine.init_gateway().await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        engine.set_gateway_ipc_sender(Some(tx)).await;
+
+        {
+            let mut gw_guard = engine.gateway_state.lock().await;
+            let gw = gw_guard.as_mut().expect("gateway state should exist");
+            gw.discord_dm_channels_by_user
+                .insert("user:123456789".to_string(), "DM123".to_string());
+            gw.reply_contexts.insert(
+                "Discord:DM123".to_string(),
+                crate::agent::gateway::ThreadContext {
+                    discord_message_id: Some("987654321".to_string()),
+                    ..Default::default()
+                },
+            );
+        }
+
+        let send_engine = engine.clone();
+        let send_task = tokio::spawn(async move {
+            execute_gateway_message(
+                "send_discord_message",
+                &serde_json::json!({
+                    "user_id": "123456789",
+                    "message": "discord reply"
+                }),
+                &send_engine,
+                &reqwest::Client::new(),
+            )
+            .await
+        });
+
+        let request = match timeout(Duration::from_millis(250), rx.recv())
+            .await
+            .expect("gateway send request should be emitted")
+            .expect("gateway send request should exist")
+        {
+            DaemonMessage::GatewaySendRequest { request } => request,
+            other => panic!("expected GatewaySendRequest, got {other:?}"),
+        };
+        assert_eq!(request.platform, "discord");
+        assert_eq!(request.channel_id, "user:123456789");
+        assert_eq!(request.thread_id.as_deref(), Some("987654321"));
+
+        engine
+            .complete_gateway_send_result(GatewaySendResult {
+                correlation_id: request.correlation_id.clone(),
+                platform: "discord".to_string(),
+                channel_id: "DM123".to_string(),
+                requested_channel_id: Some("user:123456789".to_string()),
+                delivery_id: Some("delivery-2".to_string()),
+                ok: true,
+                error: None,
+                completed_at_ms: 1,
+            })
+            .await;
+
+        let result = send_task
+            .await
+            .expect("send task should join")
+            .expect("send should succeed");
+        assert_eq!(result, "Discord message sent to user:123456789");
+    }
+
+    #[tokio::test]
+    async fn send_telegram_message_emits_gateway_ipc_request() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.gateway.enabled = true;
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        engine.set_gateway_ipc_sender(Some(tx)).await;
+
+        let send_engine = engine.clone();
+        let send_task = tokio::spawn(async move {
+            execute_gateway_message(
+                "send_telegram_message",
+                &serde_json::json!({
+                    "chat_id": "777",
+                    "message": "telegram reply",
+                    "reply_to_message_id": 42
+                }),
+                &send_engine,
+                &reqwest::Client::new(),
+            )
+            .await
+        });
+
+        let request = match timeout(Duration::from_millis(250), rx.recv())
+            .await
+            .expect("gateway send request should be emitted")
+            .expect("gateway send request should exist")
+        {
+            DaemonMessage::GatewaySendRequest { request } => request,
+            other => panic!("expected GatewaySendRequest, got {other:?}"),
+        };
+        assert_eq!(request.platform, "telegram");
+        assert_eq!(request.channel_id, "777");
+        assert_eq!(request.thread_id.as_deref(), Some("42"));
+        assert_eq!(request.content, "telegram reply");
+
+        engine
+            .complete_gateway_send_result(GatewaySendResult {
+                correlation_id: request.correlation_id.clone(),
+                platform: "telegram".to_string(),
+                channel_id: "777".to_string(),
+                requested_channel_id: Some("777".to_string()),
+                delivery_id: Some("99".to_string()),
+                ok: true,
+                error: None,
+                completed_at_ms: 1,
+            })
+            .await;
+
+        let result = send_task
+            .await
+            .expect("send task should join")
+            .expect("send should succeed");
+        assert_eq!(result, "Telegram message sent to 777");
     }
 
     // -----------------------------------------------------------------------

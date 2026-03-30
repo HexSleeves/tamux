@@ -150,6 +150,8 @@ pub struct GatewaySendResult {
     pub platform: String,
     pub channel_id: String,
     #[serde(default)]
+    pub requested_channel_id: Option<String>,
+    #[serde(default)]
     pub delivery_id: Option<String>,
     pub ok: bool,
     #[serde(default)]
@@ -2220,6 +2222,7 @@ mod tests {
                 correlation_id: "send-1".to_string(),
                 platform: "slack".to_string(),
                 channel_id: "C123".to_string(),
+                requested_channel_id: Some("C123".to_string()),
                 delivery_id: Some("slack:C123:1712345679.000200".to_string()),
                 ok: true,
                 error: None,
@@ -2233,6 +2236,7 @@ mod tests {
                 assert_eq!(result.correlation_id, "send-1");
                 assert_eq!(result.platform, "slack");
                 assert_eq!(result.channel_id, "C123");
+                assert_eq!(result.requested_channel_id.as_deref(), Some("C123"));
                 assert!(result.ok);
                 assert!(result.error.is_none());
             }

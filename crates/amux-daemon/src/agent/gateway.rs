@@ -83,6 +83,9 @@ pub struct GatewayState {
     /// Per-channel thread context for auto-injecting reply metadata.
     /// Key: "Platform:channel_id", Value: most recent ThreadContext.
     pub reply_contexts: HashMap<String, ThreadContext>,
+    /// Discord DM alias resolution for user-targeted sends.
+    /// Key: "user:<discord_user_id>", Value: canonical DM channel id.
+    pub discord_dm_channels_by_user: HashMap<String, String>,
     /// Per-channel timestamp of last outgoing agent response (epoch millis).
     /// Key: "Platform:channel_id". Populated by send tools after successful sends.
     pub last_response_at: HashMap<String, u64>,
@@ -116,6 +119,7 @@ impl GatewayState {
             discord_health: PlatformHealthState::new(),
             telegram_health: PlatformHealthState::new(),
             reply_contexts: HashMap::new(),
+            discord_dm_channels_by_user: HashMap::new(),
             last_response_at: HashMap::new(),
             last_incoming_at: HashMap::new(),
             slack_rate_limiter: TokenBucket::slack(),

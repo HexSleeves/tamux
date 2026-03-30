@@ -65,7 +65,6 @@ fn should_poll_local_gateway(gateway_enabled: bool) -> bool {
 
 #[derive(Default)]
 struct GatewayRuntimeControl {
-    ipc_sender: Option<mpsc::UnboundedSender<amux_protocol::DaemonMessage>>,
     restart_attempts: u32,
     restart_not_before_ms: Option<u64>,
 }
@@ -214,6 +213,8 @@ fn gateway_reply_args(platform: &str, channel: &str, message: &str) -> serde_jso
 
 const GATEWAY_TRIAGE_TIMEOUT_SECS: u64 = 12;
 const GATEWAY_AGENT_TIMEOUT_SECS: u64 = 120;
+// Allow enough headroom for provider-side rate limiting and chunked deliveries.
+const GATEWAY_SEND_RESULT_TIMEOUT_SECS: u64 = 180;
 
 // ---------------------------------------------------------------------------
 // Replay classification
@@ -665,11 +666,99 @@ impl AgentEngine {
         &self,
         sender: Option<mpsc::UnboundedSender<amux_protocol::DaemonMessage>>,
     ) {
-        gateway_runtime_control().lock().await.ipc_sender = sender;
+        *self.gateway_ipc_sender.lock().await = sender;
     }
 
     pub(crate) async fn clear_gateway_ipc_sender(&self) {
-        self.set_gateway_ipc_sender(None).await;
+        *self.gateway_ipc_sender.lock().await = None;
+        self.gateway_pending_send_results.lock().await.clear();
+    }
+
+    pub(crate) async fn request_gateway_send(
+        &self,
+        request: amux_protocol::GatewaySendRequest,
+    ) -> Result<amux_protocol::GatewaySendResult> {
+        let correlation_id = request.correlation_id.clone();
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+
+        let sender = {
+            let Some(sender) = self.gateway_ipc_sender.lock().await.clone() else {
+                return Err(anyhow::anyhow!(
+                    "standalone gateway runtime is not connected"
+                ));
+            };
+            let mut pending = self.gateway_pending_send_results.lock().await;
+            if pending.contains_key(&correlation_id) {
+                return Err(anyhow::anyhow!(
+                    "duplicate gateway send correlation id: {correlation_id}"
+                ));
+            }
+            pending.insert(correlation_id.clone(), result_tx);
+            sender
+        };
+
+        if let Err(error) = sender.send(amux_protocol::DaemonMessage::GatewaySendRequest {
+            request,
+        }) {
+            self.gateway_pending_send_results
+                .lock()
+                .await
+                .remove(&correlation_id);
+            return Err(anyhow::anyhow!(
+                "failed to deliver gateway send request: {error}"
+            ));
+        }
+
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(GATEWAY_SEND_RESULT_TIMEOUT_SECS),
+            result_rx,
+        )
+        .await
+        {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(_)) => Err(anyhow::anyhow!(
+                "gateway send request was interrupted before a result arrived"
+            )),
+            Err(_) => {
+                self.gateway_pending_send_results
+                    .lock()
+                    .await
+                    .remove(&correlation_id);
+                Err(anyhow::anyhow!(
+                    "timed out waiting for gateway send result"
+                ))
+            }
+        }
+    }
+
+    pub(crate) async fn complete_gateway_send_result(
+        &self,
+        result: amux_protocol::GatewaySendResult,
+    ) -> bool {
+        let waiter = self
+            .gateway_pending_send_results
+            .lock()
+            .await
+            .remove(&result.correlation_id);
+        if let Some(waiter) = waiter {
+            let _ = waiter.send(result);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) async fn gateway_health_snapshots(&self) -> Vec<amux_protocol::GatewayHealthState> {
+        let gw = self.gateway_state.lock().await;
+        let Some(state) = gw.as_ref() else {
+            return Vec::new();
+        };
+
+        vec![
+            snapshot_from_platform_health("slack", &state.slack_health),
+            snapshot_from_platform_health("discord", &state.discord_health),
+            snapshot_from_platform_health("telegram", &state.telegram_health),
+        ]
     }
 
     async fn reset_gateway_restart_backoff(&self) {
@@ -771,7 +860,7 @@ impl AgentEngine {
 
     /// Stop the gateway process.
     pub async fn stop_gateway(&self) {
-        if let Some(sender) = gateway_runtime_control().lock().await.ipc_sender.clone() {
+        if let Some(sender) = self.gateway_ipc_sender.lock().await.clone() {
             let _ = sender.send(amux_protocol::DaemonMessage::GatewayShutdownCommand {
                 command: amux_protocol::GatewayShutdownCommand {
                     correlation_id: format!("gateway-shutdown-{}", uuid::Uuid::new_v4()),
@@ -793,7 +882,7 @@ impl AgentEngine {
     }
 
     pub(crate) async fn request_gateway_reload(&self, reason: Option<String>) -> Result<bool> {
-        let sender = gateway_runtime_control().lock().await.ipc_sender.clone();
+        let sender = self.gateway_ipc_sender.lock().await.clone();
         let Some(sender) = sender else {
             return Ok(false);
         };
