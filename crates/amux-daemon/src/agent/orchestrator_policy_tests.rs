@@ -382,3 +382,55 @@ fn decision_antithrash_and_retry_guards_do_not_leak_across_goal_runs() {
         "approach-hash-1",
     ));
 }
+
+#[test]
+fn decision_pivot_without_retry_guard_and_different_strategy_hint_does_not_reuse() {
+    let scope = scope("thread-1", Some("goal-1"));
+    let mut recorded = decision(PolicyAction::Pivot);
+    recorded.reason = "Try a filesystem-first investigation.".to_string();
+    recorded.strategy_hint = Some("inspect logs first".to_string());
+    let mut candidate = decision(PolicyAction::Pivot);
+    candidate.reason = "Switch to a config-first recovery path.".to_string();
+    candidate.strategy_hint = Some("review config before logs".to_string());
+    let recent_decisions = HashMap::from([(
+        scope.clone(),
+        RecentPolicyDecision {
+            decision: recorded,
+            decided_at_epoch_secs: 1_000,
+        },
+    )]);
+
+    assert!(!should_reuse_recent_decision(
+        &recent_decisions,
+        &scope,
+        &candidate,
+        1_030,
+        60,
+    ));
+}
+
+#[test]
+fn decision_pivot_without_retry_guard_and_normalized_strategy_hint_reuses() {
+    let scope = scope("thread-1", Some("goal-1"));
+    let mut recorded = decision(PolicyAction::Pivot);
+    recorded.reason = "Try a filesystem-first investigation.".to_string();
+    recorded.strategy_hint = Some(" Inspect Logs First ".to_string());
+    let mut candidate = decision(PolicyAction::Pivot);
+    candidate.reason = "The current plan is still stuck.".to_string();
+    candidate.strategy_hint = Some("inspect logs first".to_string());
+    let recent_decisions = HashMap::from([(
+        scope.clone(),
+        RecentPolicyDecision {
+            decision: recorded,
+            decided_at_epoch_secs: 1_000,
+        },
+    )]);
+
+    assert!(should_reuse_recent_decision(
+        &recent_decisions,
+        &scope,
+        &candidate,
+        1_030,
+        60,
+    ));
+}

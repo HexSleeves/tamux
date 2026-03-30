@@ -144,13 +144,29 @@ pub(crate) enum PolicyDecisionValidationError {
 struct PolicyDecisionSemanticIdentity {
     action: PolicyAction,
     retry_guard: Option<String>,
+    strategy_hint: Option<String>,
 }
 
 impl PolicyDecision {
+    fn normalized_strategy_hint(&self) -> Option<String> {
+        self.strategy_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase())
+    }
+
     fn semantic_identity(&self) -> PolicyDecisionSemanticIdentity {
+        let retry_guard = self.retry_guard.clone();
+
         PolicyDecisionSemanticIdentity {
             action: self.action.clone(),
-            retry_guard: self.retry_guard.clone(),
+            strategy_hint: if retry_guard.is_none() && self.action == PolicyAction::Pivot {
+                self.normalized_strategy_hint()
+            } else {
+                None
+            },
+            retry_guard,
         }
     }
 }
