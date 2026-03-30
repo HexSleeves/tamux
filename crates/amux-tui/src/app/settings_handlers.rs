@@ -639,14 +639,17 @@ impl TuiModel {
                     match crate::auth::begin_github_copilot_auth_flow() {
                         Ok(crate::auth::GithubCopilotAuthFlowResult::AlreadyAvailable) => {
                             self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
-                            self.status_line =
-                                "GitHub Copilot auth already available via GitHub CLI"
-                                    .to_string();
+                            self.status_line = "GitHub Copilot auth already available".to_string();
                         }
-                        Ok(crate::auth::GithubCopilotAuthFlowResult::Started) => {
+                        Ok(crate::auth::GithubCopilotAuthFlowResult::ImportedFromGhCli) => {
                             self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
                             self.status_line =
-                                "Started GitHub Copilot login via GitHub CLI".to_string();
+                                "Imported GitHub Copilot auth from GitHub CLI".to_string();
+                        }
+                        Ok(crate::auth::GithubCopilotAuthFlowResult::Started) => {
+                            self.status_line =
+                                "Started GitHub Copilot browser login. Refresh after completing it."
+                                    .to_string();
                         }
                         Err(err) => {
                             self.status_line =

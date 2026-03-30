@@ -3,6 +3,7 @@ use base64::Engine;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -17,6 +18,7 @@ const OPENAI_CODEX_AUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const OPENAI_CODEX_AUTH_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const OPENAI_CODEX_AUTH_SCOPE: &str = "openid profile email offline_access";
 const PROVIDER_AUTH_DB_PATH_ENV: &str = "TAMUX_PROVIDER_AUTH_DB_PATH";
+const GITHUB_CLI_PATH_ENV: &str = "TAMUX_GH_CLI_PATH";
 
 static AUTH_FLOW_ACTIVE: OnceLock<Mutex<bool>> = OnceLock::new();
 
@@ -42,6 +44,15 @@ struct StoredOpenAICodexAuth {
     refresh_token: String,
     account_id: String,
     expires_at: i64,
+    source: String,
+    updated_at: i64,
+    created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredGithubCopilotAuth {
+    auth_mode: String,
+    access_token: String,
     source: String,
     updated_at: i64,
     created_at: i64,
@@ -187,6 +198,63 @@ pub fn clear_github_copilot_auth() -> Result<()> {
         params!["github-copilot", "github_copilot"],
     )?;
     Ok(())
+}
+
+fn read_stored_github_copilot_auth() -> Option<StoredGithubCopilotAuth> {
+    let conn = open_provider_auth_db().ok()?;
+    let raw = conn
+        .query_row(
+            "SELECT state_json FROM provider_auth_state WHERE provider_id = ?1 AND auth_mode = ?2",
+            params!["github-copilot", "github_copilot"],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .ok()??;
+    serde_json::from_str(&raw).ok()
+}
+
+fn write_stored_github_copilot_auth(auth: &StoredGithubCopilotAuth) -> Result<()> {
+    let conn = open_provider_auth_db()?;
+    conn.execute(
+        "INSERT OR REPLACE INTO provider_auth_state (provider_id, auth_mode, state_json, updated_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![
+            "github-copilot",
+            "github_copilot",
+            serde_json::to_string(auth)?,
+            now_millis(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn github_cli_program() -> OsString {
+    std::env::var_os(GITHUB_CLI_PATH_ENV).unwrap_or_else(|| OsString::from("gh"))
+}
+
+fn gh_cli_token_quiet() -> Option<String> {
+    let output = std::process::Command::new(github_cli_program())
+        .args(["auth", "token"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let token = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if token.is_empty() { None } else { Some(token) }
+}
+
+fn store_github_copilot_token(token: String, source: &str) -> Result<()> {
+    let now = now_millis();
+    write_stored_github_copilot_auth(&StoredGithubCopilotAuth {
+        auth_mode: "github_copilot".to_string(),
+        access_token: token,
+        source: source.to_string(),
+        updated_at: now,
+        created_at: now,
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -427,24 +495,81 @@ pub fn begin_openai_codex_auth_flow() -> Result<OpenAICodexAuthFlowResult> {
 #[derive(Debug)]
 pub enum GithubCopilotAuthFlowResult {
     AlreadyAvailable,
+    ImportedFromGhCli,
     Started,
 }
 
 pub fn begin_github_copilot_auth_flow() -> Result<GithubCopilotAuthFlowResult> {
-    let status = std::process::Command::new("gh")
-        .args(["auth", "status"])
-        .status();
-    if matches!(status, Ok(status) if status.success()) {
+    if read_stored_github_copilot_auth().is_some() {
         return Ok(GithubCopilotAuthFlowResult::AlreadyAvailable);
     }
 
-    let status = std::process::Command::new("gh")
-        .args(["auth", "login", "--web", "--scopes", "read:org"])
-        .status()
-        .context("failed to start GitHub CLI login flow")?;
-    if !status.success() {
-        anyhow::bail!("GitHub CLI login flow failed");
+    if let Some(token) = gh_cli_token_quiet() {
+        store_github_copilot_token(token, "gh_cli_import")?;
+        return Ok(GithubCopilotAuthFlowResult::ImportedFromGhCli);
     }
 
+    std::process::Command::new(github_cli_program())
+        .args([
+            "auth",
+            "login",
+            "--web",
+            "--hostname",
+            "github.com",
+            "--git-protocol",
+            "ssh",
+            "--skip-ssh-key",
+            "--scopes",
+            "read:org,models:read",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("failed to start GitHub CLI login flow")?;
+
     Ok(GithubCopilotAuthFlowResult::Started)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_test_db_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("tamux-auth-{name}-{}.sqlite", Uuid::new_v4()))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn github_copilot_flow_imports_existing_gh_token() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let db_path = unique_test_db_path("gh-import");
+        let script_path = std::env::temp_dir().join(format!("tamux-gh-{}", Uuid::new_v4()));
+        std::fs::write(
+            &script_path,
+            "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"token\" ]; then\n  printf 'ghu_test_token\\n'\n  exit 0\nfi\nexit 1\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+
+        std::env::set_var(PROVIDER_AUTH_DB_PATH_ENV, &db_path);
+        std::env::set_var(GITHUB_CLI_PATH_ENV, &script_path);
+
+        let result = begin_github_copilot_auth_flow().unwrap();
+        assert!(matches!(
+            result,
+            GithubCopilotAuthFlowResult::ImportedFromGhCli
+        ));
+        let stored = read_stored_github_copilot_auth().expect("stored copilot auth");
+        assert_eq!(stored.access_token, "ghu_test_token");
+        assert_eq!(stored.source, "gh_cli_import");
+
+        std::env::remove_var(PROVIDER_AUTH_DB_PATH_ENV);
+        std::env::remove_var(GITHUB_CLI_PATH_ENV);
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&script_path);
+    }
 }
