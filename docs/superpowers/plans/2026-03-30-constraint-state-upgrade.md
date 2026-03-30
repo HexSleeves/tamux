@@ -43,7 +43,7 @@ Also add a backward-compat test that deserializes a pre-upgrade JSON payload wit
 
 - [ ] **Step 2: Run the targeted test to verify it fails**
 
-Run: `cargo test -p amux-daemon episodic::mod::tests::negative_constraint_round_trip_serialization`
+Run: `cargo test -p tamux-daemon episodic::mod::tests::negative_constraint_round_trip_serialization`
 
 Expected: FAIL because `ConstraintState` and/or the new fields do not exist yet.
 
@@ -78,7 +78,7 @@ fn default_direct_observation() -> bool { true }
 
 - [ ] **Step 4: Run the targeted test to verify it passes**
 
-Run: `cargo test -p amux-daemon episodic::mod::tests::negative_constraint_round_trip_serialization`
+Run: `cargo test -p tamux-daemon episodic::mod::tests::negative_constraint_round_trip_serialization`
 
 Expected: PASS.
 
@@ -106,7 +106,7 @@ Add a test that creates an in-memory SQLite DB, runs `init_episodic_schema`, the
 
 - [ ] **Step 2: Run the targeted test to verify it fails**
 
-Run: `cargo test -p amux-daemon episodic::schema::tests::init_episodic_schema_adds_constraint_state_columns`
+Run: `cargo test -p tamux-daemon episodic::schema::tests::init_episodic_schema_adds_constraint_state_columns`
 
 Expected: FAIL because the columns are not present.
 
@@ -127,7 +127,7 @@ related_subject_tokens TEXT NOT NULL DEFAULT '[]'
 
 - [ ] **Step 4: Run the targeted test to verify it passes**
 
-Run: `cargo test -p amux-daemon episodic::schema::tests::init_episodic_schema_adds_constraint_state_columns`
+Run: `cargo test -p tamux-daemon episodic::schema::tests::init_episodic_schema_adds_constraint_state_columns`
 
 Expected: PASS.
 
@@ -157,9 +157,9 @@ Add unit tests for pure helpers that do not exist yet:
 
 - [ ] **Step 2: Run the targeted tests to verify they fail**
 
-Run: `cargo test -p amux-daemon episodic::negative_knowledge::tests::normalize_subject_tokens_` 
+Run: `cargo test -p tamux-daemon episodic::negative_knowledge::tests::normalize_subject_tokens_` 
 
-Expected: FAIL because the helper functions/tests are not implemented yet. If a name filter is too narrow, run the module: `cargo test -p amux-daemon episodic::negative_knowledge::tests`.
+Expected: FAIL because the helper functions/tests are not implemented yet. If a name filter is too narrow, run the module: `cargo test -p tamux-daemon episodic::negative_knowledge::tests`.
 
 - [ ] **Step 3: Implement the pure helpers**
 
@@ -188,7 +188,7 @@ Implementation rules:
 
 - [ ] **Step 4: Run the targeted tests to verify they pass**
 
-Run: `cargo test -p amux-daemon episodic::negative_knowledge::tests`
+Run: `cargo test -p tamux-daemon episodic::negative_knowledge::tests`
 
 Expected: PASS for the new helper tests.
 
@@ -218,7 +218,7 @@ Add tests that verify `format_negative_constraints`:
 
 - [ ] **Step 2: Run the targeted tests to verify they fail**
 
-Run: `cargo test -p amux-daemon episodic::negative_knowledge::tests::format_negative_constraints_`
+Run: `cargo test -p tamux-daemon episodic::negative_knowledge::tests::format_negative_constraints_`
 
 Expected: FAIL because formatting still uses the old flat output.
 
@@ -238,7 +238,7 @@ Keep the overall section heading compatible with current prompt injection: `## R
 
 - [ ] **Step 4: Run the targeted tests to verify they pass**
 
-Run: `cargo test -p amux-daemon episodic::negative_knowledge::tests::format_negative_constraints_`
+Run: `cargo test -p tamux-daemon episodic::negative_knowledge::tests::format_negative_constraints_`
 
 Expected: PASS.
 
@@ -267,7 +267,7 @@ Add a second test for backward compatibility where those new columns are left at
 
 - [ ] **Step 2: Run the targeted tests to verify they fail**
 
-Run: `cargo test -p amux-daemon episodic::negative_knowledge::tests::row_to_constraint_`
+Run: `cargo test -p tamux-daemon episodic::negative_knowledge::tests::row_to_constraint_`
 
 Expected: FAIL because row parsing does not read the new fields yet.
 
@@ -282,7 +282,7 @@ Update `crates/amux-daemon/src/agent/episodic/negative_knowledge.rs`:
 
 - [ ] **Step 4: Run the targeted tests to verify they pass**
 
-Run: `cargo test -p amux-daemon episodic::negative_knowledge::tests::row_to_constraint_`
+Run: `cargo test -p tamux-daemon episodic::negative_knowledge::tests::row_to_constraint_`
 
 Expected: PASS.
 
@@ -316,7 +316,7 @@ Prefer pure helper functions for the propagation transformation so tests stay un
 
 - [ ] **Step 2: Run the targeted tests to verify they fail**
 
-Run: `cargo test -p amux-daemon episodic::negative_knowledge::tests::propagation_`
+Run: `cargo test -p tamux-daemon episodic::negative_knowledge::tests::propagation_`
 
 Expected: FAIL because merge and propagation logic is not implemented yet.
 
@@ -339,7 +339,7 @@ If direct SQL updates become awkward, add a focused internal helper for persisti
 
 - [ ] **Step 4: Run the targeted tests to verify they pass**
 
-Run: `cargo test -p amux-daemon episodic::negative_knowledge::tests`
+Run: `cargo test -p tamux-daemon episodic::negative_knowledge::tests`
 
 Expected: PASS for merge and propagation tests.
 
@@ -366,7 +366,7 @@ Add a test for the helper or integration path used by `record_negative_knowledge
 
 - [ ] **Step 2: Run the targeted test to verify it fails**
 
-Run: `cargo test -p amux-daemon episodic::negative_knowledge::tests::record_negative_knowledge_from_episode_`
+Run: `cargo test -p tamux-daemon episodic::negative_knowledge::tests::record_negative_knowledge_from_episode_`
 
 Expected: FAIL because created constraints do not yet initialize the new fields correctly.
 
@@ -383,7 +383,7 @@ Route creation through the upgraded add/merge path from Task 6.
 
 - [ ] **Step 4: Run the targeted test to verify it passes**
 
-Run: `cargo test -p amux-daemon episodic::negative_knowledge::tests::record_negative_knowledge_from_episode_`
+Run: `cargo test -p tamux-daemon episodic::negative_knowledge::tests::record_negative_knowledge_from_episode_`
 
 Expected: PASS.
 
@@ -401,13 +401,13 @@ git commit -m "feat: initialize constraint state from episodes"
 
 - [ ] **Step 1: Run focused module tests**
 
-Run: `cargo test -p amux-daemon episodic::`
+Run: `cargo test -p tamux-daemon episodic::`
 
 Expected: PASS for all episodic module tests.
 
 - [ ] **Step 2: Run the crate test suite if module tests pass**
 
-Run: `cargo test -p amux-daemon`
+Run: `cargo test -p tamux-daemon`
 
 Expected: PASS, or if unrelated failures exist, capture them explicitly before proceeding.
 
@@ -417,7 +417,7 @@ Only address issues caused by this feature. Do not broaden scope.
 
 - [ ] **Step 4: Re-run the affected tests**
 
-Run the smallest command that proves the fix, then re-run `cargo test -p amux-daemon episodic::`.
+Run the smallest command that proves the fix, then re-run `cargo test -p tamux-daemon episodic::`.
 
 - [ ] **Step 5: Commit**
 

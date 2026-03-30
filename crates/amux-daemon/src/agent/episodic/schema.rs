@@ -196,18 +196,25 @@ fn ensure_column(
             [],
         ) {
             Ok(_) => {}
-            Err(rusqlite::Error::SqliteFailure(err, Some(message)))
-                if err.code == rusqlite::ErrorCode::Unknown
-                    && message.contains("duplicate column name") => {}
+            Err(err) if is_duplicate_column_error(&err) => {}
             Err(err) => return Err(err.into()),
         }
     }
     Ok(())
 }
 
+fn is_duplicate_column_error(err: &rusqlite::Error) -> bool {
+    matches!(
+        err,
+        rusqlite::Error::SqliteFailure(sqlite_err, Some(message))
+            if sqlite_err.code == rusqlite::ErrorCode::Unknown
+                && message.contains("duplicate column name")
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::init_episodic_schema;
+    use super::{init_episodic_schema, is_duplicate_column_error};
     use anyhow::Result;
     use rusqlite::Connection;
     use std::sync::{Arc, Barrier};
@@ -271,6 +278,29 @@ mod tests {
         assert_constraint_state_columns_exist(&conn)?;
 
         Ok(())
+    }
+
+    #[test]
+    fn duplicate_column_error_detection_matches_sqlite_shape() {
+        let duplicate_column = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ErrorCode::Unknown,
+                extended_code: 1,
+            },
+            Some("duplicate column name: state".to_string()),
+        );
+
+        let other_sqlite_error = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ErrorCode::Unknown,
+                extended_code: 1,
+            },
+            Some("some other sqlite failure".to_string()),
+        );
+
+        assert!(is_duplicate_column_error(&duplicate_column));
+        assert!(!is_duplicate_column_error(&other_sqlite_error));
+        assert!(!is_duplicate_column_error(&rusqlite::Error::InvalidQuery));
     }
 
     #[test]
