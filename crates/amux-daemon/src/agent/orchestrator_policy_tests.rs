@@ -1,6 +1,13 @@
 use std::collections::HashMap;
 
 use super::*;
+use crate::agent::{AgentConfig, AgentEngine};
+use crate::agent::types::{
+    AgentEvent, AgentMessage, AgentTask, AgentTaskLogEntry, GoalRun, GoalRunStatus, GoalRunStep,
+    GoalRunStepKind, GoalRunStepStatus, MessageRole, TaskLogLevel, TaskPriority, TaskStatus,
+};
+use crate::session_manager::SessionManager;
+use tempfile::tempdir;
 
 fn trigger_input(thread_id: &str) -> PolicyTriggerInput {
     PolicyTriggerInput {
@@ -82,6 +89,158 @@ fn policy_eval_context() -> PolicyEvaluationContext {
         recent_decision_summary: Some(
             "Recent policy decision: pivot because the previous retry loop was stuck.".to_string(),
         ),
+    }
+}
+
+async fn test_engine() -> std::sync::Arc<AgentEngine> {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await
+}
+
+fn goal_run_fixture(thread_id: &str) -> GoalRun {
+    GoalRun {
+        id: "goal-1".to_string(),
+        title: "Test goal".to_string(),
+        goal: "Recover from repeated failure".to_string(),
+        client_request_id: None,
+        status: GoalRunStatus::Running,
+        priority: TaskPriority::Normal,
+        created_at: 1,
+        updated_at: 1,
+        started_at: Some(1),
+        completed_at: None,
+        thread_id: Some(thread_id.to_string()),
+        session_id: Some("session-1".to_string()),
+        current_step_index: 0,
+        current_step_title: Some("Investigate failure".to_string()),
+        current_step_kind: Some(GoalRunStepKind::Research),
+        replan_count: 0,
+        max_replans: 2,
+        plan_summary: Some("Initial plan".to_string()),
+        reflection_summary: None,
+        memory_updates: Vec::new(),
+        generated_skill_path: None,
+        last_error: None,
+        failure_cause: None,
+        child_task_ids: vec!["task-1".to_string()],
+        child_task_count: 1,
+        approval_count: 0,
+        awaiting_approval_id: None,
+        active_task_id: Some("task-1".to_string()),
+        duration_ms: None,
+        steps: vec![GoalRunStep {
+            id: "step-1".to_string(),
+            position: 0,
+            title: "Investigate failure".to_string(),
+            instructions: "Inspect the failing path".to_string(),
+            kind: GoalRunStepKind::Research,
+            success_criteria: "Know why it failed".to_string(),
+            session_id: Some("session-1".to_string()),
+            status: GoalRunStepStatus::InProgress,
+            task_id: Some("task-1".to_string()),
+            summary: None,
+            error: None,
+            started_at: Some(1),
+            completed_at: None,
+        }],
+        events: Vec::new(),
+        total_prompt_tokens: 0,
+        total_completion_tokens: 0,
+        estimated_cost_usd: None,
+        autonomy_level: Default::default(),
+        authorship_tag: None,
+    }
+}
+
+fn task_fixture(thread_id: &str) -> AgentTask {
+    AgentTask {
+        id: "task-1".to_string(),
+        title: "Investigate failure".to_string(),
+        description: "Inspect the failing path".to_string(),
+        status: TaskStatus::InProgress,
+        priority: TaskPriority::Normal,
+        progress: 35,
+        created_at: 1,
+        started_at: Some(1),
+        completed_at: None,
+        error: None,
+        result: None,
+        thread_id: Some(thread_id.to_string()),
+        source: "goal_run".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: Some("session-1".to_string()),
+        goal_run_id: Some("goal-1".to_string()),
+        goal_run_title: Some("Test goal".to_string()),
+        goal_step_id: Some("step-1".to_string()),
+        goal_step_title: Some("Investigate failure".to_string()),
+        parent_task_id: None,
+        parent_thread_id: None,
+        runtime: "daemon".to_string(),
+        retry_count: 1,
+        max_retries: 2,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: None,
+        awaiting_approval_id: None,
+        lane_id: None,
+        last_error: Some("same bash command failed again".to_string()),
+        logs: vec![AgentTaskLogEntry {
+            id: "log-1".to_string(),
+            timestamp: 1,
+            level: TaskLogLevel::Warn,
+            phase: "execution".to_string(),
+            message: "attempt failed".to_string(),
+            details: Some("same command failed".to_string()),
+            attempt: 1,
+        }],
+        tool_whitelist: None,
+        tool_blacklist: None,
+        override_provider: None,
+        override_model: None,
+        override_system_prompt: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: Some("Know why it failed".to_string()),
+        max_duration_secs: None,
+        supervisor_config: None,
+        sub_agent_def_id: None,
+    }
+}
+
+async fn seed_runtime(engine: &std::sync::Arc<AgentEngine>, thread_id: &str) {
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            crate::agent::types::AgentThread {
+                id: thread_id.to_string(),
+                title: "Policy thread".to_string(),
+                messages: vec![AgentMessage::user("Investigate the failure", 1)],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+    }
+    {
+        let mut goal_runs = engine.goal_runs.lock().await;
+        goal_runs.push_back(goal_run_fixture(thread_id));
+    }
+    {
+        let mut tasks = engine.tasks.lock().await;
+        tasks.push_back(task_fixture(thread_id));
     }
 }
 
@@ -722,4 +881,270 @@ fn policy_eval_missing_result_degrades_to_continue() {
             retry_guard: None,
         }
     );
+}
+
+#[tokio::test]
+async fn apply_halt_retries_blocks_same_pattern_retry_in_same_thread() {
+    let engine = test_engine().await;
+    let thread_id = "thread-policy-halt";
+    seed_runtime(&engine, thread_id).await;
+    let scope = scope(thread_id, Some("goal-1"));
+    let decision = PolicyDecision {
+        action: PolicyAction::HaltRetries,
+        reason: "Stop retrying the same failing bash path.".to_string(),
+        strategy_hint: None,
+        retry_guard: Some("approach-hash-1".to_string()),
+    };
+    let trigger = PolicyTriggerContext {
+        thread_id: thread_id.to_string(),
+        goal_run_id: Some("goal-1".to_string()),
+        repeated_approach: true,
+        awareness_stuck: false,
+        self_assessment: PolicySelfAssessmentSummary {
+            should_pivot: false,
+            should_escalate: false,
+        },
+    };
+
+    engine.record_policy_decision(&scope, decision, 1_000).await;
+    engine
+        .apply_orchestrator_policy_decision(
+            thread_id,
+            Some("task-1"),
+            Some("goal-1"),
+            &trigger,
+            &PolicyDecision {
+                action: PolicyAction::HaltRetries,
+                reason: "Stop retrying the same failing bash path.".to_string(),
+                strategy_hint: None,
+                retry_guard: Some("approach-hash-1".to_string()),
+            },
+            1_000,
+        )
+        .await
+        .expect("halt retries should apply");
+
+    let outcome = engine
+        .enforce_orchestrator_retry_guard(thread_id, Some("task-1"), &scope, "approach-hash-1", 1_010)
+        .await
+        .expect("retry guard should be enforced");
+
+    assert_eq!(outcome, PolicyLoopAction::AbortRetry);
+    let tasks = engine.tasks.lock().await;
+    let task = tasks.iter().find(|task| task.id == "task-1").expect("task");
+    assert_eq!(task.retry_count, task.max_retries);
+}
+
+#[tokio::test]
+async fn apply_pivot_routes_into_existing_strategy_refresh_behavior() {
+    let engine = test_engine().await;
+    let thread_id = "thread-policy-pivot";
+    seed_runtime(&engine, thread_id).await;
+    let decision = PolicyDecision {
+        action: PolicyAction::Pivot,
+        reason: "The repeated failures justify a different strategy.".to_string(),
+        strategy_hint: Some("Inspect state before running the same command again.".to_string()),
+        retry_guard: Some("approach-hash-1".to_string()),
+    };
+    let trigger = PolicyTriggerContext {
+        thread_id: thread_id.to_string(),
+        goal_run_id: Some("goal-1".to_string()),
+        repeated_approach: true,
+        awareness_stuck: true,
+        self_assessment: PolicySelfAssessmentSummary {
+            should_pivot: true,
+            should_escalate: false,
+        },
+    };
+
+    let outcome = engine
+        .apply_orchestrator_policy_decision(
+            thread_id,
+            Some("task-1"),
+            Some("goal-1"),
+            &trigger,
+            &decision,
+            1_000,
+        )
+        .await
+        .expect("pivot should apply");
+
+    assert_eq!(outcome, PolicyLoopAction::RestartLoop);
+    let threads = engine.threads.read().await;
+    let thread = threads.get(thread_id).expect("thread");
+    let injected = thread
+        .messages
+        .iter()
+        .find(|message| {
+            message.role == MessageRole::System
+                && message.content.contains("Investigate failure")
+                && message.content.contains("Inspect state before running the same command again")
+        })
+        .expect("strategy refresh prompt");
+    assert!(injected.content.contains("Fallback strategy"));
+}
+
+#[tokio::test]
+async fn apply_escalate_routes_into_existing_escalation_behavior() {
+    let engine = test_engine().await;
+    let thread_id = "thread-policy-escalate";
+    seed_runtime(&engine, thread_id).await;
+    let decision = PolicyDecision {
+        action: PolicyAction::Escalate,
+        reason: "Repeated failures need operator guidance now.".to_string(),
+        strategy_hint: None,
+        retry_guard: None,
+    };
+    let trigger = PolicyTriggerContext {
+        thread_id: thread_id.to_string(),
+        goal_run_id: Some("goal-1".to_string()),
+        repeated_approach: true,
+        awareness_stuck: true,
+        self_assessment: PolicySelfAssessmentSummary {
+            should_pivot: false,
+            should_escalate: true,
+        },
+    };
+    let mut events = engine.subscribe();
+
+    let outcome = engine
+        .apply_orchestrator_policy_decision(
+            thread_id,
+            Some("task-1"),
+            Some("goal-1"),
+            &trigger,
+            &decision,
+            1_000,
+        )
+        .await
+        .expect("escalation should apply");
+
+    assert_eq!(outcome, PolicyLoopAction::InterruptForApproval);
+    let tasks = engine.tasks.lock().await;
+    let task = tasks.iter().find(|task| task.id == "task-1").expect("task");
+    assert_eq!(task.status, TaskStatus::AwaitingApproval);
+    assert!(task.awaiting_approval_id.is_some());
+    drop(tasks);
+
+    let mut saw_escalation_update = false;
+    let mut saw_audit_action = false;
+    for _ in 0..4 {
+        let event = events.recv().await.expect("event");
+        match event {
+            AgentEvent::EscalationUpdate { thread_id: event_thread_id, .. }
+                if event_thread_id == thread_id =>
+            {
+                saw_escalation_update = true;
+            }
+            AgentEvent::AuditAction { thread_id: Some(event_thread_id), .. }
+                if event_thread_id == thread_id =>
+            {
+                saw_audit_action = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_escalation_update);
+    assert!(saw_audit_action);
+}
+
+#[tokio::test]
+async fn apply_continue_leaves_current_flow_unchanged() {
+    let engine = test_engine().await;
+    let thread_id = "thread-policy-continue";
+    seed_runtime(&engine, thread_id).await;
+    let decision = PolicyDecision {
+        action: PolicyAction::Continue,
+        reason: String::new(),
+        strategy_hint: None,
+        retry_guard: None,
+    };
+    let trigger = PolicyTriggerContext {
+        thread_id: thread_id.to_string(),
+        goal_run_id: Some("goal-1".to_string()),
+        repeated_approach: false,
+        awareness_stuck: false,
+        self_assessment: PolicySelfAssessmentSummary {
+            should_pivot: false,
+            should_escalate: false,
+        },
+    };
+
+    let outcome = engine
+        .apply_orchestrator_policy_decision(
+            thread_id,
+            Some("task-1"),
+            Some("goal-1"),
+            &trigger,
+            &decision,
+            1_000,
+        )
+        .await
+        .expect("continue should apply");
+
+    assert_eq!(outcome, PolicyLoopAction::Continue);
+    let threads = engine.threads.read().await;
+    assert_eq!(threads.get(thread_id).expect("thread").messages.len(), 1);
+}
+
+#[tokio::test]
+async fn apply_recent_policy_decision_is_persisted_and_reused_on_next_relevant_turn() {
+    let engine = test_engine().await;
+    let thread_id = "thread-policy-reuse";
+    seed_runtime(&engine, thread_id).await;
+    let scope = scope(thread_id, Some("goal-1"));
+    let trigger = PolicyTriggerContext {
+        thread_id: thread_id.to_string(),
+        goal_run_id: Some("goal-1".to_string()),
+        repeated_approach: true,
+        awareness_stuck: true,
+        self_assessment: PolicySelfAssessmentSummary {
+            should_pivot: true,
+            should_escalate: false,
+        },
+    };
+    let pivot_decision = PolicyDecision {
+        action: PolicyAction::Pivot,
+        reason: "Switch away from the repeating failure.".to_string(),
+        strategy_hint: Some("Inspect the workspace before running commands again.".to_string()),
+        retry_guard: Some("approach-hash-1".to_string()),
+    };
+
+    engine.record_policy_decision(&scope, pivot_decision.clone(), 1_000).await;
+    let recent = engine
+        .latest_policy_decision(&scope, 1_010)
+        .await
+        .expect("recent policy decision");
+
+    let fallback = decision(PolicyAction::Continue);
+    let selection = select_orchestrator_policy_decision(Some(&recent), &trigger, fallback);
+
+    assert_eq!(selection.source, PolicyDecisionSource::ReusedRecent);
+    assert_eq!(selection.decision, pivot_decision);
+}
+
+#[tokio::test]
+async fn apply_repeated_failed_approach_changes_execution_policy_not_only_events() {
+    let engine = test_engine().await;
+    let thread_id = "thread-policy-change";
+    seed_runtime(&engine, thread_id).await;
+    let scope = scope(thread_id, Some("goal-1"));
+    let decision = PolicyDecision {
+        action: PolicyAction::HaltRetries,
+        reason: "The same failing approach should stop now.".to_string(),
+        strategy_hint: None,
+        retry_guard: Some("approach-hash-1".to_string()),
+    };
+
+    engine.record_policy_decision(&scope, decision, 1_000).await;
+    let outcome = engine
+        .enforce_orchestrator_retry_guard(thread_id, Some("task-1"), &scope, "approach-hash-1", 1_010)
+        .await
+        .expect("guard outcome");
+
+    assert_eq!(outcome, PolicyLoopAction::AbortRetry);
+    let tasks = engine.tasks.lock().await;
+    let task = tasks.iter().find(|task| task.id == "task-1").expect("task");
+    assert_eq!(task.retry_count, task.max_retries);
+    assert!(task.logs.iter().any(|entry| entry.message.contains("policy halted")));
 }

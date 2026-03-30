@@ -2,6 +2,205 @@
 
 use super::*;
 
+const POLICY_TOOL_OUTCOME_HISTORY_LIMIT: usize = 6;
+
+fn tool_args_summary(arguments: &str) -> String {
+    arguments.chars().take(100).collect()
+}
+
+fn current_epoch_secs() -> u64 {
+    now_millis() / 1000
+}
+
+fn summarize_tool_result_for_policy(
+    tool_name: &str,
+    result: &ToolResult,
+) -> super::orchestrator_policy::PolicyToolOutcomeSummary {
+    super::orchestrator_policy::PolicyToolOutcomeSummary {
+        tool_name: tool_name.to_string(),
+        outcome: if result.is_error {
+            "failure".to_string()
+        } else {
+            "success".to_string()
+        },
+        summary: result.content.chars().take(160).collect(),
+    }
+}
+
+fn summarize_policy_self_assessment(
+    assessment: &super::metacognitive::self_assessment::Assessment,
+) -> Option<String> {
+    let reasoning = assessment.reasoning.trim();
+    if reasoning.is_empty() {
+        None
+    } else {
+        Some(reasoning.to_string())
+    }
+}
+
+fn build_runtime_self_assessment(
+    goal_run: Option<&GoalRun>,
+    task_retry_count: u32,
+    short_term_success_rate: f64,
+    awareness_stuck: bool,
+    repeated_approach: bool,
+) -> super::metacognitive::self_assessment::Assessment {
+    let (steps_completed, steps_total) = goal_run
+        .map(|goal_run| {
+            let completed = goal_run
+                .steps
+                .iter()
+                .filter(|step| step.status == GoalRunStepStatus::Completed)
+                .count();
+            (completed, goal_run.steps.len())
+        })
+        .unwrap_or((0, 0));
+    let goal_distance_pct = if steps_total == 0 {
+        0.0
+    } else {
+        (steps_completed as f64 / steps_total as f64) * 100.0
+    };
+    let momentum = if repeated_approach || awareness_stuck {
+        -0.5
+    } else if short_term_success_rate >= 0.5 {
+        0.1
+    } else {
+        -0.1
+    };
+
+    super::metacognitive::self_assessment::SelfAssessor::default().assess(
+        &super::metacognitive::self_assessment::AssessmentInput {
+            progress: super::metacognitive::self_assessment::ProgressMetrics {
+                goal_distance_pct,
+                steps_completed,
+                steps_total,
+                estimated_remaining: steps_total.saturating_sub(steps_completed),
+                momentum,
+            },
+            efficiency: super::metacognitive::self_assessment::EfficiencyMetrics {
+                token_efficiency: if short_term_success_rate > 0.0 { 0.6 } else { 0.0 },
+                tool_success_rate: short_term_success_rate,
+                time_efficiency: 0.0,
+                tokens_consumed: 0,
+                elapsed_secs: task_retry_count as u64,
+            },
+            quality: super::metacognitive::self_assessment::QualityMetrics {
+                error_rate: 1.0 - short_term_success_rate,
+                revision_count: task_retry_count,
+                user_feedback_score: None,
+            },
+        },
+    )
+}
+
+async fn build_policy_context_for_tool_result(
+    engine: &AgentEngine,
+    thread_id: &str,
+    task: &AgentTask,
+    current_approach_hash: &str,
+    recent_tool_outcomes: &[super::orchestrator_policy::PolicyToolOutcomeSummary],
+) -> Option<(
+    super::orchestrator_policy::PolicyDecisionScope,
+    super::orchestrator_policy::PolicyEvaluationContext,
+)> {
+    let scope = super::orchestrator_policy::PolicyDecisionScope {
+        thread_id: thread_id.to_string(),
+        goal_run_id: task.goal_run_id.clone(),
+    };
+
+    let repeated_approach = {
+        let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+        let stores = engine.episodic_store.read().await;
+        stores.get(&scope_id).is_some_and(|store| {
+            super::episodic::counter_who::detect_repeated_approaches(
+                &store.counter_who.tried_approaches,
+                3,
+            )
+            .is_some()
+                || store
+                    .counter_who
+                    .tried_approaches
+                    .iter()
+                    .rev()
+                    .take(3)
+                    .filter(|approach| !matches!(approach.outcome, super::episodic::EpisodeOutcome::Success))
+                    .all(|approach| approach.approach_hash == current_approach_hash)
+        })
+    };
+
+    let (awareness_stuck, awareness_summary, short_term_success_rate) = {
+        let monitor = engine.awareness.read().await;
+        let stuck = monitor.check_diminishing_returns(thread_id).is_some();
+        let summary = monitor.get_window(thread_id).map(|window| {
+            format!(
+                "short-term success {:.0}%, same-pattern streak {}, failures {}",
+                window.short_term_success_rate * 100.0,
+                window.consecutive_same_pattern,
+                window.total_failure_count,
+            )
+        });
+        let rate = monitor
+            .get_window(thread_id)
+            .map(|window| window.short_term_success_rate)
+            .unwrap_or(0.8);
+        (stuck, summary, rate)
+    };
+
+    let goal_run = match task.goal_run_id.as_deref() {
+        Some(goal_run_id) => engine.get_goal_run(goal_run_id).await,
+        None => None,
+    };
+    let assessment = build_runtime_self_assessment(
+        goal_run.as_ref(),
+        task.retry_count,
+        short_term_success_rate,
+        awareness_stuck,
+        repeated_approach,
+    );
+    let trigger_input = super::orchestrator_policy::PolicyTriggerInput {
+        thread_id: thread_id.to_string(),
+        goal_run_id: task.goal_run_id.clone(),
+        repeated_approach,
+        awareness_stuck,
+        should_pivot: assessment.should_pivot,
+        should_escalate: assessment.should_escalate,
+    };
+    let trigger = match super::orchestrator_policy::evaluate_triggers(&trigger_input) {
+        super::orchestrator_policy::TriggerOutcome::NoIntervention => return None,
+        super::orchestrator_policy::TriggerOutcome::EvaluatePolicy(trigger) => trigger,
+    };
+
+    let counter_who_context = {
+        let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+        let stores = engine.episodic_store.read().await;
+        stores.get(&scope_id).and_then(|store| {
+            let formatted = super::episodic::counter_who::format_counter_who_context(&store.counter_who);
+            (!formatted.trim().is_empty()).then_some(formatted)
+        })
+    };
+    let thread_context = goal_run.as_ref().map(|goal_run| {
+        format!(
+            "Goal: {}\nCurrent step: {}\nTask: {}",
+            goal_run.goal,
+            goal_run.current_step_title.as_deref().unwrap_or("current step"),
+            task.title,
+        )
+    });
+
+    Some((
+        scope,
+        super::orchestrator_policy::PolicyEvaluationContext {
+            trigger,
+            recent_tool_outcomes: recent_tool_outcomes.to_vec(),
+            awareness_summary,
+            counter_who_context,
+            self_assessment_summary: summarize_policy_self_assessment(&assessment),
+            thread_context,
+            recent_decision_summary: None,
+        },
+    ))
+}
+
 fn unexpected_stream_end_message(accumulated_content: &str) -> String {
     let trimmed = accumulated_content.trim();
     if trimmed.is_empty() {
@@ -390,6 +589,8 @@ impl AgentEngine {
         let mut tool_ack_emitted = false;
         let mut tool_sequence_repaired = false;
         let mut retry_status_visible = false;
+        let mut recent_policy_tool_outcomes =
+            VecDeque::<super::orchestrator_policy::PolicyToolOutcomeSummary>::new();
 
         'agent_loop: while max_loops == 0 || loop_count < max_loops {
             if stream_cancel_token.is_cancelled() {
@@ -1183,6 +1384,14 @@ impl AgentEngine {
                             last_tool_error = None;
                         }
 
+                        recent_policy_tool_outcomes.push_back(summarize_tool_result_for_policy(
+                            &tc.function.name,
+                            &result,
+                        ));
+                        while recent_policy_tool_outcomes.len() > POLICY_TOOL_OUTCOME_HISTORY_LIMIT {
+                            recent_policy_tool_outcomes.pop_front();
+                        }
+
                         if !result.is_error {
                             self.capture_tool_work_context(
                                 &tid,
@@ -1227,8 +1436,7 @@ impl AgentEngine {
 
                         // Update counter-who self-model with tool result (Phase 1: Memory Foundation - CWHO-01)
                         {
-                            let args_summary: String =
-                                tc.function.arguments.chars().take(100).collect();
+                            let args_summary = tool_args_summary(&tc.function.arguments);
                             self.update_counter_who_on_tool_result(
                                 &tid,
                                 &tc.function.name,
@@ -1240,8 +1448,7 @@ impl AgentEngine {
 
                         // Record outcome for situational awareness (Phase 2: AWAR-01)
                         {
-                            let args_summary: String =
-                                tc.function.arguments.chars().take(100).collect();
+                            let args_summary = tool_args_summary(&tc.function.arguments);
                             let args_hash = super::episodic::counter_who::compute_approach_hash(
                                 &tc.function.name,
                                 &args_summary,
@@ -1258,6 +1465,91 @@ impl AgentEngine {
                             .await;
                             // Check for mode shift (AWAR-02 + AWAR-03)
                             self.check_awareness_mode_shift(&tid, &tid).await;
+
+                            if result.is_error {
+                                if let Some(task_id) = task_id {
+                                    let now_epoch_secs = current_epoch_secs();
+                                    let task_snapshot = {
+                                        let tasks = self.tasks.lock().await;
+                                        tasks.iter().find(|task| task.id == task_id).cloned()
+                                    };
+                                    if let Some(task_snapshot) = task_snapshot {
+                                        let scope = super::orchestrator_policy::PolicyDecisionScope {
+                                            thread_id: tid.clone(),
+                                            goal_run_id: task_snapshot.goal_run_id.clone(),
+                                        };
+                                        if self
+                                            .is_retry_guard_active(&scope, &args_hash, now_epoch_secs)
+                                            .await
+                                        {
+                                            match self
+                                                .enforce_orchestrator_retry_guard(
+                                                    &tid,
+                                                    Some(task_id),
+                                                    &scope,
+                                                    &args_hash,
+                                                    now_epoch_secs,
+                                                )
+                                                .await?
+                                            {
+                                                super::orchestrator_policy::PolicyLoopAction::AbortRetry => {
+                                                    break 'agent_loop;
+                                                }
+                                                _ => {}
+                                            }
+                                        } else if let Some((scope, policy_context)) =
+                                            build_policy_context_for_tool_result(
+                                                self,
+                                                &tid,
+                                                &task_snapshot,
+                                                &args_hash,
+                                                recent_policy_tool_outcomes.make_contiguous(),
+                                            )
+                                            .await
+                                        {
+                                            let selection = self
+                                                .evaluate_orchestrator_policy_turn(
+                                                    &scope,
+                                                    policy_context,
+                                                    now_epoch_secs,
+                                                )
+                                                .await?;
+                                            match self
+                                                .apply_orchestrator_policy_decision(
+                                                    &tid,
+                                                    Some(task_id),
+                                                    task_snapshot.goal_run_id.as_deref(),
+                                                    &super::orchestrator_policy::PolicyTriggerContext {
+                                                        thread_id: scope.thread_id.clone(),
+                                                        goal_run_id: scope.goal_run_id.clone(),
+                                                        repeated_approach: true,
+                                                        awareness_stuck: true,
+                                                        self_assessment: super::orchestrator_policy::PolicySelfAssessmentSummary {
+                                                            should_pivot: matches!(selection.decision.action, super::orchestrator_policy::PolicyAction::Pivot),
+                                                            should_escalate: matches!(selection.decision.action, super::orchestrator_policy::PolicyAction::Escalate),
+                                                        },
+                                                    },
+                                                    &selection.decision,
+                                                    now_epoch_secs,
+                                                )
+                                                .await?
+                                            {
+                                                super::orchestrator_policy::PolicyLoopAction::Continue => {}
+                                                super::orchestrator_policy::PolicyLoopAction::RestartLoop => {
+                                                    continue 'agent_loop;
+                                                }
+                                                super::orchestrator_policy::PolicyLoopAction::InterruptForApproval => {
+                                                    interrupted_for_approval = true;
+                                                    break 'agent_loop;
+                                                }
+                                                super::orchestrator_policy::PolicyLoopAction::AbortRetry => {
+                                                    break 'agent_loop;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         let _ = self.event_tx.send(AgentEvent::ToolResult {
