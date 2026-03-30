@@ -2,6 +2,255 @@
 
 use super::*;
 
+const POLICY_TOOL_OUTCOME_HISTORY_LIMIT: usize = 6;
+
+fn tool_args_summary(arguments: &str) -> String {
+    arguments.chars().take(100).collect()
+}
+
+fn current_epoch_secs() -> u64 {
+    now_millis() / 1000
+}
+
+fn summarize_tool_result_for_policy(
+    tool_name: &str,
+    result: &ToolResult,
+) -> super::orchestrator_policy::PolicyToolOutcomeSummary {
+    super::orchestrator_policy::PolicyToolOutcomeSummary {
+        tool_name: tool_name.to_string(),
+        outcome: if result.is_error {
+            "failure".to_string()
+        } else {
+            "success".to_string()
+        },
+        summary: result.content.chars().take(160).collect(),
+    }
+}
+
+fn summarize_policy_self_assessment(
+    assessment: &super::metacognitive::self_assessment::Assessment,
+) -> Option<String> {
+    let reasoning = assessment.reasoning.trim();
+    if reasoning.is_empty() {
+        None
+    } else {
+        Some(reasoning.to_string())
+    }
+}
+
+fn policy_scope_for_task(
+    thread_id: &str,
+    task: &AgentTask,
+) -> super::orchestrator_policy::PolicyDecisionScope {
+    super::orchestrator_policy::PolicyDecisionScope {
+        thread_id: thread_id.to_string(),
+        goal_run_id: task.goal_run_id.clone(),
+    }
+}
+
+fn build_runtime_self_assessment(
+    goal_run: Option<&GoalRun>,
+    task_retry_count: u32,
+    short_term_success_rate: f64,
+    awareness_stuck: bool,
+    repeated_approach: bool,
+) -> super::metacognitive::self_assessment::Assessment {
+    let (steps_completed, steps_total) = goal_run
+        .map(|goal_run| {
+            let completed = goal_run
+                .steps
+                .iter()
+                .filter(|step| step.status == GoalRunStepStatus::Completed)
+                .count();
+            (completed, goal_run.steps.len())
+        })
+        .unwrap_or((0, 0));
+    let goal_distance_pct = if steps_total == 0 {
+        0.0
+    } else {
+        (steps_completed as f64 / steps_total as f64) * 100.0
+    };
+    let momentum = if repeated_approach || awareness_stuck {
+        -0.5
+    } else if short_term_success_rate >= 0.5 {
+        0.1
+    } else {
+        -0.1
+    };
+
+    super::metacognitive::self_assessment::SelfAssessor::default().assess(
+        &super::metacognitive::self_assessment::AssessmentInput {
+            progress: super::metacognitive::self_assessment::ProgressMetrics {
+                goal_distance_pct,
+                steps_completed,
+                steps_total,
+                estimated_remaining: steps_total.saturating_sub(steps_completed),
+                momentum,
+            },
+            efficiency: super::metacognitive::self_assessment::EfficiencyMetrics {
+                token_efficiency: if short_term_success_rate > 0.0 { 0.6 } else { 0.0 },
+                tool_success_rate: short_term_success_rate,
+                time_efficiency: 0.0,
+                tokens_consumed: 0,
+                elapsed_secs: task_retry_count as u64,
+            },
+            quality: super::metacognitive::self_assessment::QualityMetrics {
+                error_rate: 1.0 - short_term_success_rate,
+                revision_count: task_retry_count,
+                user_feedback_score: None,
+            },
+        },
+    )
+}
+
+async fn build_policy_context_for_tool_result(
+    engine: &AgentEngine,
+    thread_id: &str,
+    task: &AgentTask,
+    current_approach_hash: &str,
+    recent_tool_outcomes: &[super::orchestrator_policy::PolicyToolOutcomeSummary],
+) -> Option<(
+    super::orchestrator_policy::PolicyDecisionScope,
+    super::orchestrator_policy::PolicyEvaluationContext,
+)> {
+    let scope = super::orchestrator_policy::PolicyDecisionScope {
+        thread_id: thread_id.to_string(),
+        goal_run_id: task.goal_run_id.clone(),
+    };
+
+    let repeated_approach = {
+        let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+        let stores = engine.episodic_store.read().await;
+        stores.get(&scope_id).is_some_and(|store| {
+            super::episodic::counter_who::detect_repeated_approaches(
+                &store.counter_who.tried_approaches,
+                3,
+            )
+            .is_some()
+                || store
+                    .counter_who
+                    .tried_approaches
+                    .iter()
+                    .rev()
+                    .take(3)
+                    .filter(|approach| !matches!(approach.outcome, super::episodic::EpisodeOutcome::Success))
+                    .all(|approach| approach.approach_hash == current_approach_hash)
+        })
+    };
+
+    let (awareness_stuck, awareness_summary, short_term_success_rate) = {
+        let monitor = engine.awareness.read().await;
+        let stuck = monitor.check_diminishing_returns(thread_id).is_some();
+        let summary = monitor.get_window(thread_id).map(|window| {
+            format!(
+                "short-term success {:.0}%, same-pattern streak {}, failures {}",
+                window.short_term_success_rate * 100.0,
+                window.consecutive_same_pattern,
+                window.total_failure_count,
+            )
+        });
+        let rate = monitor
+            .get_window(thread_id)
+            .map(|window| window.short_term_success_rate)
+            .unwrap_or(0.8);
+        (stuck, summary, rate)
+    };
+
+    let goal_run = match task.goal_run_id.as_deref() {
+        Some(goal_run_id) => engine.get_goal_run(goal_run_id).await,
+        None => None,
+    };
+    let assessment = build_runtime_self_assessment(
+        goal_run.as_ref(),
+        task.retry_count,
+        short_term_success_rate,
+        awareness_stuck,
+        repeated_approach,
+    );
+    let trigger_input = super::orchestrator_policy::PolicyTriggerInput {
+        thread_id: thread_id.to_string(),
+        goal_run_id: task.goal_run_id.clone(),
+        repeated_approach,
+        awareness_stuck,
+        should_pivot: assessment.should_pivot,
+        should_escalate: assessment.should_escalate,
+    };
+    let trigger = match super::orchestrator_policy::evaluate_triggers(&trigger_input) {
+        super::orchestrator_policy::TriggerOutcome::NoIntervention => return None,
+        super::orchestrator_policy::TriggerOutcome::EvaluatePolicy(trigger) => trigger,
+    };
+
+    let counter_who_context = {
+        let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+        let stores = engine.episodic_store.read().await;
+        stores.get(&scope_id).and_then(|store| {
+            let formatted = super::episodic::counter_who::format_counter_who_context(&store.counter_who);
+            (!formatted.trim().is_empty()).then_some(formatted)
+        })
+    };
+    let thread_context = goal_run.as_ref().map(|goal_run| {
+        format!(
+            "Goal: {}\nCurrent step: {}\nTask: {}",
+            goal_run.goal,
+            goal_run.current_step_title.as_deref().unwrap_or("current step"),
+            task.title,
+        )
+    });
+
+    Some((
+        scope,
+        super::orchestrator_policy::PolicyEvaluationContext {
+            trigger,
+            current_retry_guard: Some(current_approach_hash.to_string()),
+            recent_tool_outcomes: recent_tool_outcomes.to_vec(),
+            awareness_summary,
+            counter_who_context,
+            self_assessment_summary: summarize_policy_self_assessment(&assessment),
+            thread_context,
+            recent_decision_summary: None,
+        },
+    ))
+}
+
+async fn apply_post_tool_policy_checkpoint(
+    engine: &AgentEngine,
+    thread_id: &str,
+    task_id: &str,
+    task_snapshot: &AgentTask,
+    current_approach_hash: &str,
+    recent_tool_outcomes: &[super::orchestrator_policy::PolicyToolOutcomeSummary],
+    now_epoch_secs: u64,
+) -> Result<Option<super::orchestrator_policy::PolicyLoopAction>> {
+    let Some((scope, policy_context)) = build_policy_context_for_tool_result(
+        engine,
+        thread_id,
+        task_snapshot,
+        current_approach_hash,
+        recent_tool_outcomes,
+    )
+    .await
+    else {
+        return Ok(None);
+    };
+
+    let trigger = policy_context.trigger.clone();
+    let selection = engine
+        .evaluate_orchestrator_policy_turn(&scope, policy_context, now_epoch_secs)
+        .await?;
+    let action = engine
+        .apply_orchestrator_policy_decision(
+            thread_id,
+            Some(task_id),
+            task_snapshot.goal_run_id.as_deref(),
+            &trigger,
+            &selection.decision,
+            now_epoch_secs,
+        )
+        .await?;
+
+    Ok(Some(action))
+}
+
 fn unexpected_stream_end_message(accumulated_content: &str) -> String {
     let trimmed = accumulated_content.trim();
     if trimmed.is_empty() {
@@ -370,6 +619,7 @@ impl AgentEngine {
         let mut loop_count = 0u32;
         let mut was_cancelled = false;
         let mut interrupted_for_approval = false;
+        let mut policy_aborted_retry = false;
         let mut previous_tool_signature: Option<String> = None;
         let mut previous_tool_outcome: Option<(String, bool)> = None;
         let mut last_tool_error: Option<(String, String)> = None;
@@ -390,6 +640,8 @@ impl AgentEngine {
         let mut tool_ack_emitted = false;
         let mut tool_sequence_repaired = false;
         let mut retry_status_visible = false;
+        let mut recent_policy_tool_outcomes =
+            VecDeque::<super::orchestrator_policy::PolicyToolOutcomeSummary>::new();
 
         'agent_loop: while max_loops == 0 || loop_count < max_loops {
             if stream_cancel_token.is_cancelled() {
@@ -1026,6 +1278,33 @@ impl AgentEngine {
                             break;
                         }
 
+                        let args_summary = tool_args_summary(&tc.function.arguments);
+                        let args_hash = super::episodic::counter_who::compute_approach_hash(
+                            &tc.function.name,
+                            &args_summary,
+                        );
+                        let now_epoch_secs = current_epoch_secs();
+
+                        if let Some(task) = current_task_snapshot.as_ref() {
+                            let scope = policy_scope_for_task(&tid, task);
+                            match self
+                                .enforce_orchestrator_retry_guard(
+                                    &tid,
+                                    Some(task.id.as_str()),
+                                    &scope,
+                                    &args_hash,
+                                    now_epoch_secs,
+                                )
+                                .await?
+                            {
+                                super::orchestrator_policy::PolicyLoopAction::AbortRetry => {
+                                    policy_aborted_retry = true;
+                                    break 'agent_loop;
+                                }
+                                _ => {}
+                            }
+                        }
+
                         let _ = self.event_tx.send(AgentEvent::ToolCall {
                             thread_id: tid.clone(),
                             call_id: tc.id.clone(),
@@ -1183,6 +1462,14 @@ impl AgentEngine {
                             last_tool_error = None;
                         }
 
+                        recent_policy_tool_outcomes.push_back(summarize_tool_result_for_policy(
+                            &tc.function.name,
+                            &result,
+                        ));
+                        while recent_policy_tool_outcomes.len() > POLICY_TOOL_OUTCOME_HISTORY_LIMIT {
+                            recent_policy_tool_outcomes.pop_front();
+                        }
+
                         if !result.is_error {
                             self.capture_tool_work_context(
                                 &tid,
@@ -1227,8 +1514,6 @@ impl AgentEngine {
 
                         // Update counter-who self-model with tool result (Phase 1: Memory Foundation - CWHO-01)
                         {
-                            let args_summary: String =
-                                tc.function.arguments.chars().take(100).collect();
                             self.update_counter_who_on_tool_result(
                                 &tid,
                                 &tc.function.name,
@@ -1238,48 +1523,29 @@ impl AgentEngine {
                             .await;
                         }
 
-                        // Record outcome for situational awareness (Phase 2: AWAR-01)
-                        {
-                            let args_summary: String =
-                                tc.function.arguments.chars().take(100).collect();
-                            let args_hash = super::episodic::counter_who::compute_approach_hash(
-                                &tc.function.name,
-                                &args_summary,
-                            );
-                            let is_progress = !result.is_error && result.content.len() > 50;
-                            self.record_awareness_outcome(
-                                &tid,
-                                "thread",
-                                &tc.function.name,
-                                &args_hash,
-                                !result.is_error,
-                                is_progress,
-                            )
-                            .await;
-                            // Check for mode shift (AWAR-02 + AWAR-03)
-                            self.check_awareness_mode_shift(&tid, &tid).await;
-                        }
+                        let tool_result_content = result.content.clone();
+                        let tool_result_name = result.name.clone();
+                        let tool_result_id = result.tool_call_id.clone();
+                        let tool_status = if result.is_error { "error" } else { "done" };
 
                         let _ = self.event_tx.send(AgentEvent::ToolResult {
                             thread_id: tid.clone(),
-                            call_id: tc.id.clone(),
-                            name: result.name.clone(),
-                            content: result.content.clone(),
+                            call_id: tool_result_id.clone(),
+                            name: tool_result_name.clone(),
+                            content: tool_result_content.clone(),
                             is_error: result.is_error,
                         });
 
-                        // Add tool result message
                         {
-                            let tool_status = if result.is_error { "error" } else { "done" };
                             let mut threads = self.threads.write().await;
                             if let Some(thread) = threads.get_mut(&tid) {
                                 thread.messages.push(AgentMessage {
                                     id: generate_message_id(),
                                     role: MessageRole::Tool,
-                                    content: result.content,
+                                    content: tool_result_content,
                                     tool_calls: None,
-                                    tool_call_id: Some(result.tool_call_id),
-                                    tool_name: Some(result.name),
+                                    tool_call_id: Some(tool_result_id),
+                                    tool_name: Some(tool_result_name),
                                     tool_arguments: Some(tc.function.arguments.clone()),
                                     tool_status: Some(tool_status.to_string()),
                                     input_tokens: 0,
@@ -1310,6 +1576,81 @@ impl AgentEngine {
                             )
                             .await;
                             self.persist_subagent_runtime_metrics(&task.id).await;
+                        }
+
+                        // Record outcome for situational awareness (Phase 2: AWAR-01)
+                        {
+                            let is_progress = !result.is_error && result.content.len() > 50;
+                            self.record_awareness_outcome(
+                                &tid,
+                                "thread",
+                                &tc.function.name,
+                                &args_hash,
+                                !result.is_error,
+                                is_progress,
+                            )
+                            .await;
+                            // Check for mode shift (AWAR-02 + AWAR-03)
+                            self.check_awareness_mode_shift(&tid, &tid).await;
+
+                            if let Some(task_id) = task_id {
+                                let task_snapshot = {
+                                    let tasks = self.tasks.lock().await;
+                                    tasks.iter().find(|task| task.id == task_id).cloned()
+                                };
+                                if let Some(task_snapshot) = task_snapshot {
+                                    let scope = policy_scope_for_task(&tid, &task_snapshot);
+                                    if result.is_error
+                                        && self
+                                            .is_retry_guard_active(&scope, &args_hash, now_epoch_secs)
+                                            .await
+                                    {
+                                        match self
+                                            .enforce_orchestrator_retry_guard(
+                                                &tid,
+                                                Some(task_id),
+                                                &scope,
+                                                &args_hash,
+                                                now_epoch_secs,
+                                            )
+                                            .await?
+                                        {
+                                            super::orchestrator_policy::PolicyLoopAction::AbortRetry => {
+                                                policy_aborted_retry = true;
+                                                break 'agent_loop;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+
+                                    if let Some(action) = apply_post_tool_policy_checkpoint(
+                                        self,
+                                        &tid,
+                                        task_id,
+                                        &task_snapshot,
+                                        &args_hash,
+                                        recent_policy_tool_outcomes.make_contiguous(),
+                                        now_epoch_secs,
+                                    )
+                                    .await?
+                                    {
+                                        match action {
+                                            super::orchestrator_policy::PolicyLoopAction::Continue => {}
+                                            super::orchestrator_policy::PolicyLoopAction::RestartLoop => {
+                                                continue 'agent_loop;
+                                            }
+                                            super::orchestrator_policy::PolicyLoopAction::InterruptForApproval => {
+                                                interrupted_for_approval = true;
+                                                break 'agent_loop;
+                                            }
+                                            super::orchestrator_policy::PolicyLoopAction::AbortRetry => {
+                                                policy_aborted_retry = true;
+                                                break 'agent_loop;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         if let Some(pending_approval) = result.pending_approval.as_ref() {
@@ -1449,7 +1790,11 @@ impl AgentEngine {
 
         // Finalize execution trace and persist (only for task-driven turns)
         if task_id.is_some() {
-            let trace_outcome = if interrupted_for_approval {
+            let trace_outcome = if policy_aborted_retry {
+                crate::agent::learning::traces::TraceOutcome::Failure {
+                    reason: "policy halted repeated retry".to_string(),
+                }
+            } else if interrupted_for_approval {
                 crate::agent::learning::traces::TraceOutcome::Partial {
                     completed_pct: 50.0,
                 }
@@ -1466,7 +1811,7 @@ impl AgentEngine {
                 None,
                 now_millis(),
             );
-            if !trace.steps.is_empty() {
+            if policy_aborted_retry || !trace.steps.is_empty() {
                 let tool_seq = crate::agent::learning::traces::extract_tool_sequence(&trace);
                 let tool_seq_json = serde_json::to_string(&tool_seq).unwrap_or_default();
                 let metrics_json = serde_json::to_string(&serde_json::json!({
@@ -1860,8 +2205,14 @@ pub(super) fn parse_plugin_command(content: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::types::{AgentEvent, TaskStatus};
+    use rusqlite::OptionalExtension;
     use crate::session_manager::SessionManager;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex};
     use tempfile::tempdir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
     fn parse_plugin_command_basic() {
@@ -2001,5 +2352,678 @@ mod tests {
         assert_eq!(persisted.len(), 2);
         assert_eq!(persisted[0].content, "start");
         assert_eq!(persisted[1].content, "continue");
+    }
+
+    async fn spawn_tool_call_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind tool call server");
+        let addr = listener.local_addr().expect("tool call server local addr");
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let mut buffer = vec![0u8; 65536];
+                    let _ = socket.read(&mut buffer).await;
+                    let response = concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "content-type: text/event-stream\r\n",
+                        "cache-control: no-cache\r\n",
+                        "connection: close\r\n",
+                        "\r\n",
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"Checking state\"}}]}\n\n",
+                        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_policy_1\",\"function\":{\"name\":\"definitely_unknown_tool\",\"arguments\":\"{}\"}}]}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+                        "data: [DONE]\n\n"
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("write tool call response");
+                });
+            }
+        });
+
+        format!("http://{addr}/v1")
+    }
+
+    async fn spawn_policy_pivot_tool_call_server(
+        recorded_bodies: Arc<StdMutex<VecDeque<String>>>,
+        readable_path: String,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind policy pivot tool server");
+        let addr = listener
+            .local_addr()
+            .expect("policy pivot tool server local addr");
+        let assistant_turns = Arc::new(AtomicUsize::new(0));
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let recorded_bodies = recorded_bodies.clone();
+                let assistant_turns = assistant_turns.clone();
+                let readable_path = readable_path.clone();
+                tokio::spawn(async move {
+                    let mut buffer = vec![0u8; 65536];
+                    let read = socket
+                        .read(&mut buffer)
+                        .await
+                        .expect("read policy pivot tool request");
+                    let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+                    let body = request
+                        .split("\r\n\r\n")
+                        .nth(1)
+                        .unwrap_or_default()
+                        .to_string();
+                    recorded_bodies
+                        .lock()
+                        .expect("lock policy pivot request log")
+                        .push_back(body.clone());
+
+                    let response = if body.contains(
+                        "tamux orchestrator should continue, pivot, escalate, or halt_retries",
+                    ) {
+                        String::from(concat!(
+                            "HTTP/1.1 200 OK\r\n",
+                            "content-type: text/event-stream\r\n",
+                            "cache-control: no-cache\r\n",
+                            "connection: close\r\n",
+                            "\r\n",
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"action\\\":\\\"pivot\\\",\\\"reason\\\":\\\"Low progress suggests a fresh strategy.\\\",\\\"strategy_hint\\\":\\\"Inspect the workspace state before more reads.\\\"}\"}}]}\n\n",
+                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+                            "data: [DONE]\n\n"
+                        ))
+                    } else if assistant_turns.fetch_add(1, Ordering::SeqCst) == 0 {
+                        let tool_args = serde_json::json!({
+                            "path": readable_path,
+                            "max_lines": 1,
+                        })
+                        .to_string();
+                        let chunk_one = serde_json::json!({
+                            "choices": [{
+                                "delta": {
+                                    "content": "Checking state"
+                                }
+                            }]
+                        })
+                        .to_string();
+                        let chunk_two = serde_json::json!({
+                            "choices": [{
+                                "delta": {
+                                    "tool_calls": [{
+                                        "index": 0,
+                                        "id": "call_policy_read_1",
+                                        "function": {
+                                            "name": "read_file",
+                                            "arguments": tool_args,
+                                        }
+                                    }]
+                                }
+                            }],
+                            "usage": {
+                                "prompt_tokens": 7,
+                                "completion_tokens": 3,
+                            }
+                        })
+                        .to_string();
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\ndata: {chunk_one}\n\ndata: {chunk_two}\n\ndata: [DONE]\n\n"
+                        )
+                    } else {
+                        String::from(concat!(
+                            "HTTP/1.1 200 OK\r\n",
+                            "content-type: text/event-stream\r\n",
+                            "cache-control: no-cache\r\n",
+                            "connection: close\r\n",
+                            "\r\n",
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"Done. I will inspect the workspace next.\"}}]}\n\n",
+                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+                            "data: [DONE]\n\n"
+                        ))
+                    };
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("write policy pivot tool response");
+                });
+            }
+        });
+
+        format!("http://{addr}/v1")
+    }
+
+    async fn latest_trace_outcome_for_task(root: &std::path::Path, task_id: &str) -> Option<String> {
+        let store = crate::history::HistoryStore::new_test_store(root)
+            .await
+            .expect("open history store");
+        let task_id = task_id.to_string();
+        store
+            .conn
+            .call(move |conn| {
+                Ok(conn.query_row(
+                    "SELECT outcome FROM execution_traces WHERE task_id = ?1 ORDER BY created_at DESC LIMIT 1",
+                    rusqlite::params![task_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?)
+            })
+            .await
+            .expect("query trace outcome")
+    }
+
+    #[tokio::test]
+    async fn policy_halt_aborts_before_guarded_tool_execution_and_persists_failure_trace() {
+        let root = tempdir().unwrap();
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.base_url = spawn_tool_call_server().await;
+        config.model = "gpt-4o-mini".to_string();
+        config.api_key = "test-key".to_string();
+        config.auto_retry = false;
+        config.max_retries = 0;
+        config.max_tool_loops = 2;
+
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
+        let mut events = engine.subscribe();
+        let thread_id = "thread-policy-loop-proof";
+
+        {
+            let mut tasks = engine.tasks.lock().await;
+            tasks.push_back(crate::agent::types::AgentTask {
+                id: "task-policy-loop-proof".to_string(),
+                title: "Investigate failure".to_string(),
+                description: "Inspect the failing path".to_string(),
+                status: TaskStatus::InProgress,
+                priority: crate::agent::types::TaskPriority::Normal,
+                progress: 0,
+                created_at: 1,
+                started_at: Some(1),
+                completed_at: None,
+                error: None,
+                result: None,
+                thread_id: Some(thread_id.to_string()),
+                source: "goal_run".to_string(),
+                notify_on_complete: false,
+                notify_channels: Vec::new(),
+                dependencies: Vec::new(),
+                command: None,
+                session_id: None,
+                goal_run_id: Some("goal-1".to_string()),
+                goal_run_title: Some("Test goal".to_string()),
+                goal_step_id: Some("step-1".to_string()),
+                goal_step_title: Some("Investigate failure".to_string()),
+                parent_task_id: None,
+                parent_thread_id: None,
+                runtime: "daemon".to_string(),
+                retry_count: 1,
+                max_retries: 2,
+                next_retry_at: None,
+                scheduled_at: None,
+                blocked_reason: None,
+                awaiting_approval_id: None,
+                lane_id: None,
+                last_error: None,
+                logs: Vec::new(),
+                tool_whitelist: None,
+                tool_blacklist: None,
+                override_provider: None,
+                override_model: None,
+                override_system_prompt: None,
+                context_budget_tokens: None,
+                context_overflow_action: None,
+                termination_conditions: None,
+                success_criteria: None,
+                max_duration_secs: None,
+                supervisor_config: None,
+                sub_agent_def_id: None,
+            });
+        }
+        {
+            let mut goal_runs = engine.goal_runs.lock().await;
+            goal_runs.push_back(crate::agent::types::GoalRun {
+                id: "goal-1".to_string(),
+                title: "Test goal".to_string(),
+                goal: "Recover from repeated failure".to_string(),
+                client_request_id: None,
+                status: crate::agent::types::GoalRunStatus::Running,
+                priority: crate::agent::types::TaskPriority::Normal,
+                created_at: 1,
+                updated_at: 1,
+                started_at: Some(1),
+                completed_at: None,
+                thread_id: Some(thread_id.to_string()),
+                session_id: None,
+                current_step_index: 0,
+                current_step_title: Some("Investigate failure".to_string()),
+                current_step_kind: Some(crate::agent::types::GoalRunStepKind::Research),
+                replan_count: 0,
+                max_replans: 2,
+                plan_summary: None,
+                reflection_summary: None,
+                memory_updates: Vec::new(),
+                generated_skill_path: None,
+                last_error: None,
+                failure_cause: None,
+                child_task_ids: vec!["task-policy-loop-proof".to_string()],
+                child_task_count: 1,
+                approval_count: 0,
+                awaiting_approval_id: None,
+                active_task_id: Some("task-policy-loop-proof".to_string()),
+                duration_ms: None,
+                steps: vec![crate::agent::types::GoalRunStep {
+                    id: "step-1".to_string(),
+                    position: 0,
+                    title: "Investigate failure".to_string(),
+                    instructions: "Inspect the failing path".to_string(),
+                    kind: crate::agent::types::GoalRunStepKind::Research,
+                    success_criteria: "Know why it failed".to_string(),
+                    session_id: None,
+                    status: crate::agent::types::GoalRunStepStatus::InProgress,
+                    task_id: Some("task-policy-loop-proof".to_string()),
+                    summary: None,
+                    error: None,
+                    started_at: Some(1),
+                    completed_at: None,
+                }],
+                events: Vec::new(),
+                total_prompt_tokens: 0,
+                total_completion_tokens: 0,
+                estimated_cost_usd: None,
+                autonomy_level: Default::default(),
+                authorship_tag: None,
+            });
+        }
+
+        let now_epoch_secs = current_epoch_secs();
+        let args_hash = crate::agent::episodic::counter_who::compute_approach_hash(
+            "definitely_unknown_tool",
+            "{}",
+        );
+        let scope = crate::agent::orchestrator_policy::PolicyDecisionScope {
+            thread_id: thread_id.to_string(),
+            goal_run_id: Some("goal-1".to_string()),
+        };
+        engine.record_retry_guard(&scope, &args_hash, now_epoch_secs).await;
+        {
+            let mut stores = engine.episodic_store.write().await;
+            let store = stores.entry(crate::agent::agent_identity::MAIN_AGENT_ID.to_string()).or_default();
+            store.counter_who.tried_approaches = VecDeque::from(vec![
+                crate::agent::episodic::TriedApproach {
+                    approach_hash: args_hash.clone(),
+                    description: "definitely_unknown_tool({})".to_string(),
+                    outcome: crate::agent::episodic::EpisodeOutcome::Failure,
+                    timestamp: 1,
+                },
+                crate::agent::episodic::TriedApproach {
+                    approach_hash: args_hash.clone(),
+                    description: "definitely_unknown_tool({})".to_string(),
+                    outcome: crate::agent::episodic::EpisodeOutcome::Failure,
+                    timestamp: 2,
+                },
+            ])
+            .into_iter()
+            .collect();
+        }
+        {
+            let mut awareness = engine.awareness.write().await;
+            for ts in 1..=4 {
+                awareness.record_outcome(
+                    thread_id,
+                    "thread",
+                    "definitely_unknown_tool",
+                    &args_hash,
+                    false,
+                    false,
+                    ts,
+                );
+            }
+        }
+
+        let outcome = engine
+            .send_message_inner(
+                Some(thread_id),
+                "Investigate the failure",
+                Some("task-policy-loop-proof"),
+                None,
+                None,
+                None,
+                None,
+                true,
+            )
+            .await
+            .expect("send message should complete");
+
+        assert!(!outcome.interrupted_for_approval);
+
+        let mut saw_guarded_tool_call = false;
+        let mut seen_tool_result = false;
+        let mut buffered = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            match &event {
+                AgentEvent::ToolCall {
+                    thread_id: event_thread_id,
+                    name,
+                    ..
+                } if event_thread_id == thread_id && name == "definitely_unknown_tool" => {
+                    saw_guarded_tool_call = true;
+                }
+                AgentEvent::ToolResult {
+                    thread_id: event_thread_id,
+                    name,
+                    ..
+                } if event_thread_id == thread_id && name == "definitely_unknown_tool" => {
+                    seen_tool_result = true;
+                }
+                _ => {}
+            }
+            buffered.push(event);
+        }
+        assert!(
+            !saw_guarded_tool_call,
+            "expected retry guard to abort before emitting a guarded tool call",
+        );
+        assert!(
+            !seen_tool_result,
+            "expected retry guard to abort before producing a guarded tool result",
+        );
+
+        let threads = engine.threads.read().await;
+        let thread = threads.get(thread_id).expect("thread");
+        assert!(!thread.messages.iter().any(|message| {
+            message.role == MessageRole::Tool
+                && message.tool_name.as_deref() == Some("definitely_unknown_tool")
+        }));
+        assert!(thread.messages.iter().any(|message| {
+            message.role == MessageRole::System
+                && message
+                    .content
+                    .contains("Policy halted a repeated retry for the same failing approach.")
+        }));
+        drop(threads);
+
+        let tasks = engine.tasks.lock().await;
+        let task = tasks
+            .iter()
+            .find(|task| task.id == "task-policy-loop-proof")
+            .expect("task");
+        assert_eq!(task.status, TaskStatus::Failed);
+        drop(tasks);
+
+        let trace_outcome = latest_trace_outcome_for_task(root.path(), "task-policy-loop-proof").await;
+        assert_eq!(trace_outcome.as_deref(), Some("failure"));
+    }
+
+    #[tokio::test]
+    async fn post_tool_policy_checkpoint_pivots_for_non_error_stuckness_with_runtime_side_effect() {
+        let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+        let root = tempdir().unwrap();
+        let readable_path = root.path().join("policy-loop-note.txt");
+        std::fs::write(&readable_path, "ok\n").expect("seed readable file");
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.base_url = spawn_policy_pivot_tool_call_server(
+            recorded_bodies.clone(),
+            readable_path.display().to_string(),
+        )
+        .await;
+        config.model = "gpt-4o-mini".to_string();
+        config.api_key = "test-key".to_string();
+        config.auto_retry = false;
+        config.max_retries = 0;
+        config.max_tool_loops = 2;
+
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
+        let thread_id = "thread-policy-non-error-loop-proof";
+
+        {
+            let mut threads = engine.threads.write().await;
+            threads.insert(
+                thread_id.to_string(),
+                crate::agent::types::AgentThread {
+                    id: thread_id.to_string(),
+                    title: "Policy thread".to_string(),
+                    messages: vec![crate::agent::types::AgentMessage::user(
+                        "Investigate the failure",
+                        1,
+                    )],
+                    pinned: false,
+                    upstream_thread_id: None,
+                    upstream_transport: None,
+                    upstream_provider: None,
+                    upstream_model: None,
+                    upstream_assistant_id: None,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    created_at: 1,
+                    updated_at: 1,
+                },
+            );
+        }
+
+        {
+            let mut tasks = engine.tasks.lock().await;
+            tasks.push_back(crate::agent::types::AgentTask {
+                id: "task-policy-non-error-loop-proof".to_string(),
+                title: "Investigate failure".to_string(),
+                description: "Inspect the failing path".to_string(),
+                status: TaskStatus::InProgress,
+                priority: crate::agent::types::TaskPriority::Normal,
+                progress: 0,
+                created_at: 1,
+                started_at: Some(1),
+                completed_at: None,
+                error: None,
+                result: None,
+                thread_id: Some(thread_id.to_string()),
+                source: "goal_run".to_string(),
+                notify_on_complete: false,
+                notify_channels: Vec::new(),
+                dependencies: Vec::new(),
+                command: None,
+                session_id: None,
+                goal_run_id: Some("goal-1".to_string()),
+                goal_run_title: Some("Test goal".to_string()),
+                goal_step_id: Some("step-1".to_string()),
+                goal_step_title: Some("Investigate failure".to_string()),
+                parent_task_id: None,
+                parent_thread_id: None,
+                runtime: "daemon".to_string(),
+                retry_count: 1,
+                max_retries: 2,
+                next_retry_at: None,
+                scheduled_at: None,
+                blocked_reason: None,
+                awaiting_approval_id: None,
+                lane_id: None,
+                last_error: None,
+                logs: Vec::new(),
+                tool_whitelist: None,
+                tool_blacklist: None,
+                override_provider: None,
+                override_model: None,
+                override_system_prompt: None,
+                context_budget_tokens: None,
+                context_overflow_action: None,
+                termination_conditions: None,
+                success_criteria: None,
+                max_duration_secs: None,
+                supervisor_config: None,
+                sub_agent_def_id: None,
+            });
+        }
+        {
+            let mut goal_runs = engine.goal_runs.lock().await;
+            goal_runs.push_back(crate::agent::types::GoalRun {
+                id: "goal-1".to_string(),
+                title: "Test goal".to_string(),
+                goal: "Recover from repeated failure".to_string(),
+                client_request_id: None,
+                status: crate::agent::types::GoalRunStatus::Running,
+                priority: crate::agent::types::TaskPriority::Normal,
+                created_at: 1,
+                updated_at: 1,
+                started_at: Some(1),
+                completed_at: None,
+                thread_id: Some(thread_id.to_string()),
+                session_id: None,
+                current_step_index: 0,
+                current_step_title: Some("Investigate failure".to_string()),
+                current_step_kind: Some(crate::agent::types::GoalRunStepKind::Research),
+                replan_count: 0,
+                max_replans: 2,
+                plan_summary: None,
+                reflection_summary: None,
+                memory_updates: Vec::new(),
+                generated_skill_path: None,
+                last_error: None,
+                failure_cause: None,
+                child_task_ids: vec!["task-policy-non-error-loop-proof".to_string()],
+                child_task_count: 1,
+                approval_count: 0,
+                awaiting_approval_id: None,
+                active_task_id: Some("task-policy-non-error-loop-proof".to_string()),
+                duration_ms: None,
+                steps: vec![crate::agent::types::GoalRunStep {
+                    id: "step-1".to_string(),
+                    position: 0,
+                    title: "Investigate failure".to_string(),
+                    instructions: "Inspect the failing path".to_string(),
+                    kind: crate::agent::types::GoalRunStepKind::Research,
+                    success_criteria: "Know why it failed".to_string(),
+                    session_id: None,
+                    status: crate::agent::types::GoalRunStepStatus::InProgress,
+                    task_id: Some("task-policy-non-error-loop-proof".to_string()),
+                    summary: None,
+                    error: None,
+                    started_at: Some(1),
+                    completed_at: None,
+                }],
+                events: Vec::new(),
+                total_prompt_tokens: 0,
+                total_completion_tokens: 0,
+                estimated_cost_usd: None,
+                autonomy_level: Default::default(),
+                authorship_tag: None,
+            });
+        }
+
+        let tool_args = serde_json::json!({
+            "path": readable_path.display().to_string(),
+            "max_lines": 1,
+        })
+        .to_string();
+        let args_hash =
+            crate::agent::episodic::counter_who::compute_approach_hash("read_file", &tool_args);
+        {
+            let mut stores = engine.episodic_store.write().await;
+            let store = stores
+                .entry(crate::agent::agent_identity::MAIN_AGENT_ID.to_string())
+                .or_default();
+            store.counter_who.tried_approaches = VecDeque::from(vec![
+                crate::agent::episodic::TriedApproach {
+                    approach_hash: args_hash.clone(),
+                    description: format!("read_file({tool_args})"),
+                    outcome: crate::agent::episodic::EpisodeOutcome::Failure,
+                    timestamp: 1,
+                },
+                crate::agent::episodic::TriedApproach {
+                    approach_hash: args_hash.clone(),
+                    description: format!("read_file({tool_args})"),
+                    outcome: crate::agent::episodic::EpisodeOutcome::Failure,
+                    timestamp: 2,
+                },
+            ])
+            .into_iter()
+            .collect();
+        }
+        {
+            let mut awareness = engine.awareness.write().await;
+            for ts in 1..=4 {
+                awareness.record_outcome(
+                    thread_id,
+                    "thread",
+                    "read_file",
+                    &args_hash,
+                    false,
+                    false,
+                    ts,
+                );
+            }
+        }
+
+        let task_snapshot = {
+            let tasks = engine.tasks.lock().await;
+            tasks
+                .iter()
+                .find(|task| task.id == "task-policy-non-error-loop-proof")
+                .cloned()
+                .expect("task")
+        };
+        let recent_tool_outcomes = vec![summarize_tool_result_for_policy(
+            "read_file",
+            &ToolResult {
+                tool_call_id: "call_policy_read_1".to_string(),
+                name: "read_file".to_string(),
+                content: "ok\n".to_string(),
+                is_error: false,
+                pending_approval: None,
+            },
+        )];
+
+        let action = apply_post_tool_policy_checkpoint(
+            &engine,
+            thread_id,
+            "task-policy-non-error-loop-proof",
+            &task_snapshot,
+            &args_hash,
+            &recent_tool_outcomes,
+            10,
+        )
+        .await
+        .expect("policy checkpoint should succeed")
+        .expect("policy checkpoint should apply an action");
+
+        assert_eq!(action, crate::agent::orchestrator_policy::PolicyLoopAction::RestartLoop);
+
+        let scope = crate::agent::orchestrator_policy::PolicyDecisionScope {
+            thread_id: thread_id.to_string(),
+            goal_run_id: Some("goal-1".to_string()),
+        };
+        let recent_decision = engine
+            .latest_policy_decision(&scope, 10)
+            .await
+            .expect("expected checkpoint to persist a policy decision");
+        assert_eq!(recent_decision.decision.action, crate::agent::orchestrator_policy::PolicyAction::Pivot);
+        assert_eq!(recent_decision.decision.strategy_hint.as_deref(), Some("Inspect the workspace state before more reads."));
+
+        let recorded = recorded_bodies.lock().expect("lock recorded bodies");
+        assert!(
+            recorded.iter().any(|body| {
+                body.contains("tamux orchestrator should continue, pivot, escalate, or halt_retries")
+            }),
+            "expected the policy checkpoint to issue the orchestrator policy evaluation prompt",
+        );
+        drop(recorded);
+
+        let threads = engine.threads.read().await;
+        let thread = threads.get(thread_id).expect("thread");
+        assert!(
+            thread
+                .messages
+                .iter()
+                .any(|message| {
+                    message.role == MessageRole::System
+                        && message.content.contains("Inspect the workspace state before more reads.")
+                }),
+            "expected pivot application to inject a strategy refresh system message",
+        );
     }
 }

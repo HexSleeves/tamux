@@ -1,6 +1,6 @@
 # Approval, Sandbox, and Recovery Safety
 
-Use tamux's managed execution path: approval gates, sandbox controls, automatic snapshots, WORM telemetry ledgers, and scrubbing tools.
+Use the managed execution path: approval gates, sandbox controls, automatic snapshots, WORM telemetry ledgers, and scrubbing tools.
 
 These protections apply to managed commands such as `execute_command`; direct terminal input via `type_in_terminal` and other interactive terminal flows bypass approval gates and filesystem snapshots.
 
@@ -14,19 +14,19 @@ Snapshots are created for managed commands and can be pruned or unavailable depe
 - **Do not repeat denied or failing approaches unchanged** — if a command is denied, rejected, or keeps failing, inspect fresh state and change strategy before trying again.
 - **Respect sandbox and policy controls** — do not try to bypass managed execution, approval gates, or platform sandboxing.
 - **Keep scope and impact clear** — keep commands scoped, and describe expected impact plainly when risky work is necessary.
-- **Use rollback, redaction, and integrity tools when needed** — snapshots help with rollback, `scrub_sensitive` can redact sensitive text before sharing or storing it, and `verify_integrity` checks tamux's WORM telemetry ledgers.
+- **Use rollback, redaction, and integrity tools when needed** — snapshots help with rollback, `scrub_sensitive` can redact sensitive text before sharing or storing it, and `verify_integrity` checks the WORM telemetry ledgers.
 
 ## Reference
 
 ### Safety Layers
 
-tamux safety is operator-visible and layered:
+The safety model is operator-visible and layered:
 
 1. **Policy evaluation** — risky managed commands can be stopped before execution.
 2. **Sandbox isolation** — managed commands run in a sandboxed lane with platform-specific restrictions.
 3. **Approval workflow** — higher-risk commands pause for operator review.
 4. **Filesystem snapshots** — automatic checkpoints are created before managed commands.
-5. **Append-only WORM telemetry ledgers** — tamux records execution telemetry for audit and tamper detection.
+5. **Append-only WORM telemetry ledgers** — the daemon records execution telemetry for audit and tamper detection.
 6. **Sensitive-data scrubbing** — secrets can be redacted before display or logging.
 
 ### Approval and Denial Flow
@@ -86,7 +86,7 @@ Managed commands create snapshots automatically. If a command causes damage or u
 
 **WORM telemetry ledgers**
 
-- `verify_integrity` validates tamux's WORM telemetry ledgers for tampering.
+- `verify_integrity` validates the WORM telemetry ledgers for tampering.
 
 **Scrubbing**
 

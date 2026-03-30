@@ -47,6 +47,7 @@ mod messaging;
 mod metadata;
 mod operational_context;
 mod operator_model;
+mod orchestrator_policy;
 mod persistence;
 mod provider_auth_store;
 mod provenance;
