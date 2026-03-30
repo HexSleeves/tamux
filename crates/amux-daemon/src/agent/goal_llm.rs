@@ -8,7 +8,11 @@ impl AgentEngine {
         prompt: &str,
     ) -> Result<Option<super::orchestrator_policy::PolicyDecision>> {
         let raw = self
-            .run_goal_llm_json_with_schema(prompt, orchestrator_policy_json_schema())
+            .run_goal_llm_json_with_schema(
+                prompt,
+                orchestrator_policy_json_schema(),
+                "orchestrator policy LLM call",
+            )
             .await?;
 
         Ok(parse_json_block::<super::orchestrator_policy::PolicyDecision>(&raw).ok())
@@ -577,7 +581,7 @@ impl AgentEngine {
     }
 
     pub(super) async fn run_goal_llm_json(&self, prompt: &str) -> Result<String> {
-        self.run_goal_llm_json_with_schema(prompt, goal_plan_json_schema())
+        self.run_goal_llm_json_with_schema(prompt, goal_plan_json_schema(), "goal planning LLM call")
             .await
     }
 
@@ -585,6 +589,7 @@ impl AgentEngine {
         &self,
         prompt: &str,
         schema: serde_json::Value,
+        log_label: &str,
     ) -> Result<String> {
         let config = self.config.read().await.clone();
         if config.agent_backend != AgentBackend::Daemon {
@@ -595,7 +600,8 @@ impl AgentEngine {
         tracing::info!(
             provider = %config.provider,
             model = %provider_config.model,
-            "goal planning LLM call"
+            operation = log_label,
+            "structured LLM call"
         );
         let messages = vec![ApiMessage {
             role: "user".into(),

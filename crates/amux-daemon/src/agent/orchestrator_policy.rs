@@ -125,6 +125,9 @@ pub(crate) type ShortLivedRecentPolicyDecisions =
 pub(crate) type ShortLivedRetryGuards = HashMap<PolicyDecisionScope, RecentRetryGuard>;
 
 pub(crate) const SHORT_LIVED_POLICY_WINDOW_SECS: u64 = 60;
+const POLICY_PROMPT_MAX_TOOL_OUTCOMES: usize = 4;
+const POLICY_PROMPT_MAX_FIELD_CHARS: usize = 220;
+const POLICY_PROMPT_MAX_TOOL_SUMMARY_CHARS: usize = 160;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct PolicyDecisionScope {
@@ -370,10 +373,27 @@ pub(crate) fn has_active_retry_guard(
 
 fn normalized_optional_text(value: &Option<String>) -> Option<String> {
     value
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+        .as_ref()
+        .map(|value| normalize_policy_prompt_text(value, POLICY_PROMPT_MAX_FIELD_CHARS))
+}
+
+fn normalize_policy_prompt_text(value: &str, max_chars: usize) -> String {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    if collapsed.is_empty() {
+        return String::new();
+    }
+
+    let mut normalized = String::new();
+    for (index, ch) in collapsed.chars().enumerate() {
+        if index >= max_chars {
+            normalized.push_str("...");
+            break;
+        }
+        normalized.push(ch);
+    }
+
+    normalized
 }
 
 fn format_policy_prompt_section(title: &str, value: Option<&str>) -> String {
@@ -412,19 +432,33 @@ pub(crate) fn build_policy_eval_prompt(context: &PolicyEvaluationContext) -> Str
     let tool_outcomes = if context.recent_tool_outcomes.is_empty() {
         "- none".to_string()
     } else {
-        context
+        let rendered = context
             .recent_tool_outcomes
             .iter()
+            .take(POLICY_PROMPT_MAX_TOOL_OUTCOMES)
             .map(|outcome| {
                 format!(
                     "- {} => {}: {}",
-                    outcome.tool_name,
-                    outcome.outcome,
-                    outcome.summary.trim()
+                    normalize_policy_prompt_text(&outcome.tool_name, 40),
+                    normalize_policy_prompt_text(&outcome.outcome, 20),
+                    normalize_policy_prompt_text(
+                        &outcome.summary,
+                        POLICY_PROMPT_MAX_TOOL_SUMMARY_CHARS
+                    )
                 )
             })
-            .collect::<Vec<_>>()
-            .join("\n")
+            .collect::<Vec<_>>();
+        let omitted_count = context
+            .recent_tool_outcomes
+            .len()
+            .saturating_sub(POLICY_PROMPT_MAX_TOOL_OUTCOMES);
+        let mut lines = rendered;
+        if omitted_count > 0 {
+            lines.push(format!(
+                "- ... {omitted_count} additional tool outcomes omitted"
+            ));
+        }
+        lines.join("\n")
     };
     prompt.push_str(&format!("## Recent tool outcomes\n{tool_outcomes}\n\n"));
 
