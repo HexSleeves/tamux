@@ -548,7 +548,9 @@ pub(crate) fn select_orchestrator_policy_decision(
 ) -> SelectedPolicyDecision {
     if trigger_requires_intervention(trigger) {
         if let Some(recent) = recent {
-            if recent.decision.action != PolicyAction::Continue {
+            if recent.decision.action != PolicyAction::Continue
+                && recent.decision.semantic_identity() == evaluated.semantic_identity()
+            {
                 return SelectedPolicyDecision {
                     source: PolicyDecisionSource::ReusedRecent,
                     decision: recent.decision.clone(),
@@ -624,6 +626,45 @@ fn build_strategy_refresh_prompt(
 }
 
 impl AgentEngine {
+    async fn mark_policy_halted_retry_failure(
+        &self,
+        thread_id: &str,
+        task_id: Option<&str>,
+        detail: Option<String>,
+    ) {
+        if let Some(task_id) = task_id {
+            let updated = {
+                let mut tasks = self.tasks.lock().await;
+                let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) else {
+                    return;
+                };
+                task.retry_count = task.max_retries;
+                task.status = TaskStatus::Failed;
+                task.completed_at = Some(now_millis());
+                task.blocked_reason = Some("policy halted repeated retry".to_string());
+                task.last_error = Some("policy halted repeated retry".to_string());
+                task.logs.push(make_task_log_entry(
+                    task.retry_count,
+                    TaskLogLevel::Warn,
+                    "policy",
+                    "policy halted repeated retry",
+                    detail,
+                ));
+                task.clone()
+            };
+            self.persist_tasks().await;
+            self.emit_task_update(&updated, Some("Policy halted repeated retry".into()));
+            if let Some(goal_run_id) = updated.goal_run_id.as_deref() {
+                self.sync_goal_run_with_task(goal_run_id, &updated).await;
+            }
+        }
+        self.append_system_message(
+            thread_id,
+            "Policy halted a repeated retry for the same failing approach.".to_string(),
+        )
+        .await;
+    }
+
     async fn append_system_message(&self, thread_id: &str, content: String) {
         {
             let mut threads = self.threads.write().await;
@@ -807,11 +848,12 @@ impl AgentEngine {
                     .await
             }
             PolicyAction::HaltRetries => {
-                self.append_system_message(
-                    thread_id,
-                    format!("Policy halted retries for the current approach: {}", decision.reason),
-                )
-                .await;
+                let detail = decision
+                    .retry_guard
+                    .as_ref()
+                    .map(|retry_guard| format!("approach_hash={retry_guard}; reason={}", decision.reason));
+                self.mark_policy_halted_retry_failure(thread_id, task_id, detail)
+                    .await;
                 Ok(PolicyLoopAction::AbortRetry)
             }
         }
@@ -831,35 +873,10 @@ impl AgentEngine {
         {
             return Ok(PolicyLoopAction::Continue);
         }
-        if let Some(task_id) = task_id {
-            let updated = {
-                let mut tasks = self.tasks.lock().await;
-                let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) else {
-                    return Ok(PolicyLoopAction::AbortRetry);
-                };
-                task.retry_count = task.max_retries;
-                task.status = TaskStatus::Failed;
-                task.completed_at = Some(now_millis());
-                task.blocked_reason = Some("policy halted repeated retry".to_string());
-                task.last_error = Some("policy halted repeated retry".to_string());
-                task.logs.push(make_task_log_entry(
-                    task.retry_count,
-                    TaskLogLevel::Warn,
-                    "policy",
-                    "policy halted repeated retry",
-                    Some(format!("approach_hash={approach_hash}")),
-                ));
-                task.clone()
-            };
-            self.persist_tasks().await;
-            self.emit_task_update(&updated, Some("Policy halted repeated retry".into()));
-            if let Some(goal_run_id) = updated.goal_run_id.as_deref() {
-                self.sync_goal_run_with_task(goal_run_id, &updated).await;
-            }
-        }
-        self.append_system_message(
+        self.mark_policy_halted_retry_failure(
             thread_id,
-            "Policy halted a repeated retry for the same failing approach.".to_string(),
+            task_id,
+            Some(format!("approach_hash={approach_hash}")),
         )
         .await;
         Ok(PolicyLoopAction::AbortRetry)

@@ -936,6 +936,54 @@ async fn apply_halt_retries_blocks_same_pattern_retry_in_same_thread() {
 }
 
 #[tokio::test]
+async fn apply_fresh_halt_retries_marks_task_as_failed_immediately() {
+    let engine = test_engine().await;
+    let thread_id = "thread-policy-fresh-halt";
+    seed_runtime(&engine, thread_id).await;
+    let decision = PolicyDecision {
+        action: PolicyAction::HaltRetries,
+        reason: "Stop retrying the same failing bash path.".to_string(),
+        strategy_hint: None,
+        retry_guard: Some("approach-hash-1".to_string()),
+    };
+    let trigger = PolicyTriggerContext {
+        thread_id: thread_id.to_string(),
+        goal_run_id: Some("goal-1".to_string()),
+        repeated_approach: true,
+        awareness_stuck: true,
+        self_assessment: PolicySelfAssessmentSummary {
+            should_pivot: false,
+            should_escalate: false,
+        },
+    };
+
+    let outcome = engine
+        .apply_orchestrator_policy_decision(
+            thread_id,
+            Some("task-1"),
+            Some("goal-1"),
+            &trigger,
+            &decision,
+            1_000,
+        )
+        .await
+        .expect("halt retries should apply");
+
+    assert_eq!(outcome, PolicyLoopAction::AbortRetry);
+    let tasks = engine.tasks.lock().await;
+    let task = tasks.iter().find(|task| task.id == "task-1").expect("task");
+    assert_eq!(task.status, TaskStatus::Failed);
+    assert_eq!(task.retry_count, task.max_retries);
+    assert_eq!(task.blocked_reason.as_deref(), Some("policy halted repeated retry"));
+    assert_eq!(task.last_error.as_deref(), Some("policy halted repeated retry"));
+    assert!(task.completed_at.is_some());
+    assert!(task
+        .logs
+        .iter()
+        .any(|entry| entry.message.contains("policy halted repeated retry")));
+}
+
+#[tokio::test]
 async fn apply_pivot_routes_into_existing_strategy_refresh_behavior() {
     let engine = test_engine().await;
     let thread_id = "thread-policy-pivot";
@@ -1116,11 +1164,53 @@ async fn apply_recent_policy_decision_is_persisted_and_reused_on_next_relevant_t
         .await
         .expect("recent policy decision");
 
-    let fallback = decision(PolicyAction::Continue);
-    let selection = select_orchestrator_policy_decision(Some(&recent), &trigger, fallback);
+    let selection = select_orchestrator_policy_decision(
+        Some(&recent),
+        &trigger,
+        PolicyDecision {
+            action: PolicyAction::Pivot,
+            reason: "Fresh wording but same bounded pivot.".to_string(),
+            strategy_hint: Some("Inspect the workspace before running commands again.".to_string()),
+            retry_guard: Some("approach-hash-1".to_string()),
+        },
+    );
 
     assert_eq!(selection.source, PolicyDecisionSource::ReusedRecent);
     assert_eq!(selection.decision, pivot_decision);
+}
+
+#[test]
+fn apply_recent_policy_decision_is_not_reused_for_materially_different_retry_guard() {
+    let trigger = PolicyTriggerContext {
+        thread_id: "thread-policy-reuse-different".to_string(),
+        goal_run_id: Some("goal-1".to_string()),
+        repeated_approach: true,
+        awareness_stuck: true,
+        self_assessment: PolicySelfAssessmentSummary {
+            should_pivot: false,
+            should_escalate: false,
+        },
+    };
+    let recent = RecentPolicyDecision {
+        decision: PolicyDecision {
+            action: PolicyAction::HaltRetries,
+            reason: "Stop retrying the first failing approach.".to_string(),
+            strategy_hint: None,
+            retry_guard: Some("approach-hash-1".to_string()),
+        },
+        decided_at_epoch_secs: 1_000,
+    };
+    let evaluated = PolicyDecision {
+        action: PolicyAction::HaltRetries,
+        reason: "Stop retrying the new failing approach.".to_string(),
+        strategy_hint: None,
+        retry_guard: Some("approach-hash-2".to_string()),
+    };
+
+    let selection = select_orchestrator_policy_decision(Some(&recent), &trigger, evaluated.clone());
+
+    assert_eq!(selection.source, PolicyDecisionSource::FreshEvaluation);
+    assert_eq!(selection.decision, evaluated);
 }
 
 #[tokio::test]

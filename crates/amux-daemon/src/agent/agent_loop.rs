@@ -569,6 +569,7 @@ impl AgentEngine {
         let mut loop_count = 0u32;
         let mut was_cancelled = false;
         let mut interrupted_for_approval = false;
+        let mut policy_aborted_retry = false;
         let mut previous_tool_signature: Option<String> = None;
         let mut previous_tool_outcome: Option<(String, bool)> = None;
         let mut last_tool_error: Option<(String, String)> = None;
@@ -1446,6 +1447,61 @@ impl AgentEngine {
                             .await;
                         }
 
+                        let tool_result_content = result.content.clone();
+                        let tool_result_name = result.name.clone();
+                        let tool_result_id = result.tool_call_id.clone();
+                        let tool_status = if result.is_error { "error" } else { "done" };
+
+                        let _ = self.event_tx.send(AgentEvent::ToolResult {
+                            thread_id: tid.clone(),
+                            call_id: tool_result_id.clone(),
+                            name: tool_result_name.clone(),
+                            content: tool_result_content.clone(),
+                            is_error: result.is_error,
+                        });
+
+                        {
+                            let mut threads = self.threads.write().await;
+                            if let Some(thread) = threads.get_mut(&tid) {
+                                thread.messages.push(AgentMessage {
+                                    id: generate_message_id(),
+                                    role: MessageRole::Tool,
+                                    content: tool_result_content,
+                                    tool_calls: None,
+                                    tool_call_id: Some(tool_result_id),
+                                    tool_name: Some(tool_result_name),
+                                    tool_arguments: Some(tc.function.arguments.clone()),
+                                    tool_status: Some(tool_status.to_string()),
+                                    input_tokens: 0,
+                                    output_tokens: 0,
+                                    provider: None,
+                                    model: None,
+                                    api_transport: None,
+                                    response_id: None,
+                                    reasoning: None,
+                                    timestamp: now_millis(),
+                                });
+                            }
+                        }
+                        let current_tokens = {
+                            let threads = self.threads.read().await;
+                            threads
+                                .get(&tid)
+                                .map(|thread| estimate_message_tokens(&thread.messages))
+                                .unwrap_or(0) as u32
+                        };
+                        if let Some(task) = current_task_snapshot.as_ref() {
+                            self.record_subagent_tool_result(
+                                task,
+                                &tid,
+                                &tc.function.name,
+                                result.is_error,
+                                current_tokens,
+                            )
+                            .await;
+                            self.persist_subagent_runtime_metrics(&task.id).await;
+                        }
+
                         // Record outcome for situational awareness (Phase 2: AWAR-01)
                         {
                             let args_summary = tool_args_summary(&tc.function.arguments);
@@ -1493,6 +1549,7 @@ impl AgentEngine {
                                                 .await?
                                             {
                                                 super::orchestrator_policy::PolicyLoopAction::AbortRetry => {
+                                                    policy_aborted_retry = true;
                                                     break 'agent_loop;
                                                 }
                                                 _ => {}
@@ -1543,6 +1600,7 @@ impl AgentEngine {
                                                     break 'agent_loop;
                                                 }
                                                 super::orchestrator_policy::PolicyLoopAction::AbortRetry => {
+                                                    policy_aborted_retry = true;
                                                     break 'agent_loop;
                                                 }
                                             }
@@ -1550,58 +1608,6 @@ impl AgentEngine {
                                     }
                                 }
                             }
-                        }
-
-                        let _ = self.event_tx.send(AgentEvent::ToolResult {
-                            thread_id: tid.clone(),
-                            call_id: tc.id.clone(),
-                            name: result.name.clone(),
-                            content: result.content.clone(),
-                            is_error: result.is_error,
-                        });
-
-                        // Add tool result message
-                        {
-                            let tool_status = if result.is_error { "error" } else { "done" };
-                            let mut threads = self.threads.write().await;
-                            if let Some(thread) = threads.get_mut(&tid) {
-                                thread.messages.push(AgentMessage {
-                                    id: generate_message_id(),
-                                    role: MessageRole::Tool,
-                                    content: result.content,
-                                    tool_calls: None,
-                                    tool_call_id: Some(result.tool_call_id),
-                                    tool_name: Some(result.name),
-                                    tool_arguments: Some(tc.function.arguments.clone()),
-                                    tool_status: Some(tool_status.to_string()),
-                                    input_tokens: 0,
-                                    output_tokens: 0,
-                                    provider: None,
-                                    model: None,
-                                    api_transport: None,
-                                    response_id: None,
-                                    reasoning: None,
-                                    timestamp: now_millis(),
-                                });
-                            }
-                        }
-                        let current_tokens = {
-                            let threads = self.threads.read().await;
-                            threads
-                                .get(&tid)
-                                .map(|thread| estimate_message_tokens(&thread.messages))
-                                .unwrap_or(0) as u32
-                        };
-                        if let Some(task) = current_task_snapshot.as_ref() {
-                            self.record_subagent_tool_result(
-                                task,
-                                &tid,
-                                &tc.function.name,
-                                result.is_error,
-                                current_tokens,
-                            )
-                            .await;
-                            self.persist_subagent_runtime_metrics(&task.id).await;
                         }
 
                         if let Some(pending_approval) = result.pending_approval.as_ref() {
@@ -1741,7 +1747,11 @@ impl AgentEngine {
 
         // Finalize execution trace and persist (only for task-driven turns)
         if task_id.is_some() {
-            let trace_outcome = if interrupted_for_approval {
+            let trace_outcome = if policy_aborted_retry {
+                crate::agent::learning::traces::TraceOutcome::Failure {
+                    reason: "policy halted repeated retry".to_string(),
+                }
+            } else if interrupted_for_approval {
                 crate::agent::learning::traces::TraceOutcome::Partial {
                     completed_pct: 50.0,
                 }
@@ -2152,8 +2162,12 @@ pub(super) fn parse_plugin_command(content: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::types::{AgentEvent, TaskStatus};
+    use rusqlite::OptionalExtension;
     use crate::session_manager::SessionManager;
     use tempfile::tempdir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
     fn parse_plugin_command_basic() {
@@ -2293,5 +2307,283 @@ mod tests {
         assert_eq!(persisted.len(), 2);
         assert_eq!(persisted[0].content, "start");
         assert_eq!(persisted[1].content, "continue");
+    }
+
+    async fn spawn_tool_call_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind tool call server");
+        let addr = listener.local_addr().expect("tool call server local addr");
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let mut buffer = vec![0u8; 65536];
+                    let _ = socket.read(&mut buffer).await;
+                    let response = concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "content-type: text/event-stream\r\n",
+                        "cache-control: no-cache\r\n",
+                        "connection: close\r\n",
+                        "\r\n",
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"Checking state\"}}]}\n\n",
+                        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_policy_1\",\"function\":{\"name\":\"definitely_unknown_tool\",\"arguments\":\"{}\"}}]}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+                        "data: [DONE]\n\n"
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("write tool call response");
+                });
+            }
+        });
+
+        format!("http://{addr}/v1")
+    }
+
+    async fn latest_trace_outcome_for_task(root: &std::path::Path, task_id: &str) -> Option<String> {
+        let store = crate::history::HistoryStore::new_test_store(root)
+            .await
+            .expect("open history store");
+        let task_id = task_id.to_string();
+        store
+            .conn
+            .call(move |conn| {
+                Ok(conn.query_row(
+                    "SELECT outcome FROM execution_traces WHERE task_id = ?1 ORDER BY created_at DESC LIMIT 1",
+                    rusqlite::params![task_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?)
+            })
+            .await
+            .expect("query trace outcome")
+    }
+
+    #[tokio::test]
+    async fn policy_halt_records_tool_result_before_aborting_and_persists_failure_trace() {
+        let root = tempdir().unwrap();
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.base_url = spawn_tool_call_server().await;
+        config.model = "gpt-4o-mini".to_string();
+        config.api_key = "test-key".to_string();
+        config.auto_retry = false;
+        config.max_retries = 0;
+        config.max_tool_loops = 2;
+
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
+        let mut events = engine.subscribe();
+        let thread_id = "thread-policy-loop-proof";
+
+        {
+            let mut tasks = engine.tasks.lock().await;
+            tasks.push_back(crate::agent::types::AgentTask {
+                id: "task-policy-loop-proof".to_string(),
+                title: "Investigate failure".to_string(),
+                description: "Inspect the failing path".to_string(),
+                status: TaskStatus::InProgress,
+                priority: crate::agent::types::TaskPriority::Normal,
+                progress: 0,
+                created_at: 1,
+                started_at: Some(1),
+                completed_at: None,
+                error: None,
+                result: None,
+                thread_id: Some(thread_id.to_string()),
+                source: "goal_run".to_string(),
+                notify_on_complete: false,
+                notify_channels: Vec::new(),
+                dependencies: Vec::new(),
+                command: None,
+                session_id: None,
+                goal_run_id: Some("goal-1".to_string()),
+                goal_run_title: Some("Test goal".to_string()),
+                goal_step_id: Some("step-1".to_string()),
+                goal_step_title: Some("Investigate failure".to_string()),
+                parent_task_id: None,
+                parent_thread_id: None,
+                runtime: "daemon".to_string(),
+                retry_count: 1,
+                max_retries: 2,
+                next_retry_at: None,
+                scheduled_at: None,
+                blocked_reason: None,
+                awaiting_approval_id: None,
+                lane_id: None,
+                last_error: None,
+                logs: Vec::new(),
+                tool_whitelist: None,
+                tool_blacklist: None,
+                override_provider: None,
+                override_model: None,
+                override_system_prompt: None,
+                context_budget_tokens: None,
+                context_overflow_action: None,
+                termination_conditions: None,
+                success_criteria: None,
+                max_duration_secs: None,
+                supervisor_config: None,
+                sub_agent_def_id: None,
+            });
+        }
+        {
+            let mut goal_runs = engine.goal_runs.lock().await;
+            goal_runs.push_back(crate::agent::types::GoalRun {
+                id: "goal-1".to_string(),
+                title: "Test goal".to_string(),
+                goal: "Recover from repeated failure".to_string(),
+                client_request_id: None,
+                status: crate::agent::types::GoalRunStatus::Running,
+                priority: crate::agent::types::TaskPriority::Normal,
+                created_at: 1,
+                updated_at: 1,
+                started_at: Some(1),
+                completed_at: None,
+                thread_id: Some(thread_id.to_string()),
+                session_id: None,
+                current_step_index: 0,
+                current_step_title: Some("Investigate failure".to_string()),
+                current_step_kind: Some(crate::agent::types::GoalRunStepKind::Research),
+                replan_count: 0,
+                max_replans: 2,
+                plan_summary: None,
+                reflection_summary: None,
+                memory_updates: Vec::new(),
+                generated_skill_path: None,
+                last_error: None,
+                failure_cause: None,
+                child_task_ids: vec!["task-policy-loop-proof".to_string()],
+                child_task_count: 1,
+                approval_count: 0,
+                awaiting_approval_id: None,
+                active_task_id: Some("task-policy-loop-proof".to_string()),
+                duration_ms: None,
+                steps: vec![crate::agent::types::GoalRunStep {
+                    id: "step-1".to_string(),
+                    position: 0,
+                    title: "Investigate failure".to_string(),
+                    instructions: "Inspect the failing path".to_string(),
+                    kind: crate::agent::types::GoalRunStepKind::Research,
+                    success_criteria: "Know why it failed".to_string(),
+                    session_id: None,
+                    status: crate::agent::types::GoalRunStepStatus::InProgress,
+                    task_id: Some("task-policy-loop-proof".to_string()),
+                    summary: None,
+                    error: None,
+                    started_at: Some(1),
+                    completed_at: None,
+                }],
+                events: Vec::new(),
+                total_prompt_tokens: 0,
+                total_completion_tokens: 0,
+                estimated_cost_usd: None,
+                autonomy_level: Default::default(),
+                authorship_tag: None,
+            });
+        }
+
+        let now_epoch_secs = current_epoch_secs();
+        let args_hash = crate::agent::episodic::counter_who::compute_approach_hash(
+            "definitely_unknown_tool",
+            "{}",
+        );
+        let scope = crate::agent::orchestrator_policy::PolicyDecisionScope {
+            thread_id: thread_id.to_string(),
+            goal_run_id: Some("goal-1".to_string()),
+        };
+        engine.record_retry_guard(&scope, &args_hash, now_epoch_secs).await;
+        {
+            let mut stores = engine.episodic_store.write().await;
+            let store = stores.entry(crate::agent::agent_identity::MAIN_AGENT_ID.to_string()).or_default();
+            store.counter_who.tried_approaches = VecDeque::from(vec![
+                crate::agent::episodic::TriedApproach {
+                    approach_hash: args_hash.clone(),
+                    description: "definitely_unknown_tool({})".to_string(),
+                    outcome: crate::agent::episodic::EpisodeOutcome::Failure,
+                    timestamp: 1,
+                },
+                crate::agent::episodic::TriedApproach {
+                    approach_hash: args_hash.clone(),
+                    description: "definitely_unknown_tool({})".to_string(),
+                    outcome: crate::agent::episodic::EpisodeOutcome::Failure,
+                    timestamp: 2,
+                },
+            ])
+            .into_iter()
+            .collect();
+        }
+        {
+            let mut awareness = engine.awareness.write().await;
+            for ts in 1..=4 {
+                awareness.record_outcome(
+                    thread_id,
+                    "thread",
+                    "definitely_unknown_tool",
+                    &args_hash,
+                    false,
+                    false,
+                    ts,
+                );
+            }
+        }
+
+        let outcome = engine
+            .send_message_inner(
+                Some(thread_id),
+                "Investigate the failure",
+                Some("task-policy-loop-proof"),
+                None,
+                None,
+                None,
+                None,
+                true,
+            )
+            .await
+            .expect("send message should complete");
+
+        assert!(!outcome.interrupted_for_approval);
+
+        let mut seen_tool_result = false;
+        let mut buffered = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let AgentEvent::ToolResult {
+                thread_id: event_thread_id,
+                name,
+                is_error,
+                ..
+            } = &event
+            {
+                if event_thread_id == thread_id && name == "definitely_unknown_tool" && *is_error {
+                    seen_tool_result = true;
+                }
+            }
+            buffered.push(event);
+        }
+        assert!(seen_tool_result, "expected failing tool result event before loop abort");
+
+        let threads = engine.threads.read().await;
+        let thread = threads.get(thread_id).expect("thread");
+        assert!(thread.messages.iter().any(|message| {
+            message.role == MessageRole::Tool
+                && message.tool_name.as_deref() == Some("definitely_unknown_tool")
+                && message.tool_status.as_deref() == Some("error")
+        }));
+        drop(threads);
+
+        let tasks = engine.tasks.lock().await;
+        let task = tasks
+            .iter()
+            .find(|task| task.id == "task-policy-loop-proof")
+            .expect("task");
+        assert_eq!(task.status, TaskStatus::Failed);
+        drop(tasks);
+
+        let trace_outcome = latest_trace_outcome_for_task(root.path(), "task-policy-loop-proof").await;
+        assert_eq!(trace_outcome.as_deref(), Some("failure"));
     }
 }
