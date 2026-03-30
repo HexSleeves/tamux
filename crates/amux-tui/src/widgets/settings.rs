@@ -864,6 +864,16 @@ fn render_provider_tab<'a>(
     };
     let transport_hint = if uses_fixed_anthropic_messages {
         ""
+    } else if providers::supported_transports_for(&config.provider).len() <= 1 {
+        match providers::supported_transports_for(&config.provider)
+            .first()
+            .copied()
+            .unwrap_or("chat_completions")
+        {
+            "native_assistant" => " [native assistant only]",
+            "responses" => " [responses only]",
+            _ => " [chat completions only]",
+        }
     } else {
         " [Enter: cycle]"
     };

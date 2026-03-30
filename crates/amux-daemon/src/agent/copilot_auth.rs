@@ -149,9 +149,9 @@ pub fn resolve_github_copilot_auth(
 ) -> Option<ResolvedGithubCopilotAuth> {
     match auth_source {
         AuthSource::GithubCopilot => {
-            let stored = read_stored_github_copilot_auth().or_else(import_gh_cli_auth_if_present)?;
+            let stored = read_stored_github_copilot_auth()?;
             Some(ResolvedGithubCopilotAuth {
-                access_token: None,
+                access_token: Some(stored.access_token),
                 auth_source: AuthSource::GithubCopilot,
                 source: stored.source,
                 use_logged_in_user: true,
@@ -176,9 +176,9 @@ pub fn resolve_github_copilot_auth(
                 });
             }
 
-            let stored = read_stored_github_copilot_auth().or_else(import_gh_cli_auth_if_present)?;
+            let stored = read_stored_github_copilot_auth()?;
             Some(ResolvedGithubCopilotAuth {
-                access_token: None,
+                access_token: Some(stored.access_token),
                 auth_source: AuthSource::GithubCopilot,
                 source: stored.source,
                 use_logged_in_user: true,

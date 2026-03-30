@@ -957,6 +957,22 @@ fn apply_openai_auth_headers(
     provider: &str,
     config: &ProviderConfig,
 ) -> reqwest::RequestBuilder {
+    if provider == "github-copilot" {
+        if let Some(resolved) =
+            super::copilot_auth::resolve_github_copilot_auth(&config.api_key, config.auth_source)
+        {
+            if let Some(token) = resolved
+                .access_token
+                .as_deref()
+                .filter(|token| !token.trim().is_empty())
+            {
+                return req
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Accept", "application/json");
+            }
+        }
+    }
+
     if !config.api_key.is_empty() {
         let auth_method = get_provider_definition(provider)
             .map(|d| d.auth_method)
@@ -3005,6 +3021,58 @@ mod tests {
             build_chat_completion_url("https://models.github.ai/inference"),
             "https://models.github.ai/inference/chat/completions"
         );
+    }
+
+    #[test]
+    fn github_copilot_stored_auth_adds_bearer_header_to_requests() {
+        let root = tempdir().unwrap();
+        let db_path = root.path().join("provider-auth.db");
+        std::env::set_var("TAMUX_PROVIDER_AUTH_DB_PATH", &db_path);
+        std::env::set_var("TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI", "1");
+        let auth = serde_json::json!({
+            "auth_mode": "github_copilot",
+            "access_token": "ghu_browser_token",
+            "source": "test",
+            "updated_at": 1,
+            "created_at": 1
+        });
+        provider_auth_store::save_provider_auth_state(
+            "github-copilot",
+            "github_copilot",
+            &auth,
+        )
+        .unwrap();
+
+        let client = reqwest::Client::new();
+        let config = ProviderConfig {
+            base_url: "https://models.github.ai".to_string(),
+            model: "openai/gpt-4.1".to_string(),
+            api_key: String::new(),
+            assistant_id: String::new(),
+            auth_source: AuthSource::GithubCopilot,
+            api_transport: ApiTransport::ChatCompletions,
+            reasoning_effort: String::new(),
+            context_window_tokens: 0,
+            response_schema: None,
+        };
+        let request = apply_openai_auth_headers(
+            client.get("https://models.github.ai/inference/chat/completions"),
+            "github-copilot",
+            &config,
+        )
+        .build()
+        .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer ghu_browser_token")
+        );
+
+        std::env::remove_var("TAMUX_PROVIDER_AUTH_DB_PATH");
+        std::env::remove_var("TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI");
     }
 
     #[tokio::test]
