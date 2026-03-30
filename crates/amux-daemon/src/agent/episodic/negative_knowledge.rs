@@ -83,6 +83,129 @@ pub(crate) fn related_for_propagation(source: &NegativeConstraint, target: &Nega
     }
 }
 
+pub(crate) fn build_direct_constraint_from_episode(
+    episode: &Episode,
+    now_ms: u64,
+    valid_until: u64,
+    id: String,
+) -> NegativeConstraint {
+    let subject = if episode.summary.len() > 200 {
+        format!("{}...", &episode.summary[..197])
+    } else {
+        episode.summary.clone()
+    };
+    let confidence = episode.confidence.unwrap_or(0.7);
+
+    NegativeConstraint {
+        id,
+        episode_id: Some(episode.id.clone()),
+        constraint_type: ConstraintType::RuledOut,
+        related_subject_tokens: normalize_subject_tokens(&subject),
+        subject,
+        solution_class: episode.solution_class.clone(),
+        description: episode.root_cause.clone().unwrap_or_default(),
+        confidence,
+        state: next_constraint_state(ConstraintState::Dying, 1, true, confidence),
+        evidence_count: 1,
+        direct_observation: true,
+        derived_from_constraint_ids: Vec::new(),
+        valid_until: Some(valid_until),
+        created_at: now_ms,
+    }
+}
+
+fn effective_related_subject_tokens(constraint: &NegativeConstraint) -> Vec<String> {
+    if constraint.related_subject_tokens.is_empty() {
+        normalize_subject_tokens(&constraint.subject)
+    } else {
+        constraint.related_subject_tokens.clone()
+    }
+}
+
+pub(crate) fn merge_constraint_evidence(
+    existing: &NegativeConstraint,
+    incoming: &NegativeConstraint,
+) -> NegativeConstraint {
+    let mut related_subject_tokens = effective_related_subject_tokens(existing);
+    related_subject_tokens.extend(effective_related_subject_tokens(incoming));
+    related_subject_tokens.sort();
+    related_subject_tokens.dedup();
+
+    let direct_observation = existing.direct_observation || incoming.direct_observation;
+    let confidence = existing.confidence.max(incoming.confidence);
+    let evidence_count = existing.evidence_count.saturating_add(1);
+
+    NegativeConstraint {
+        id: existing.id.clone(),
+        episode_id: incoming
+            .episode_id
+            .clone()
+            .or_else(|| existing.episode_id.clone()),
+        constraint_type: existing.constraint_type,
+        subject: existing.subject.clone(),
+        solution_class: existing.solution_class.clone(),
+        description: incoming.description.clone(),
+        confidence,
+        state: next_constraint_state(existing.state, evidence_count, direct_observation, confidence),
+        evidence_count,
+        direct_observation,
+        derived_from_constraint_ids: existing.derived_from_constraint_ids.clone(),
+        related_subject_tokens,
+        valid_until: incoming.valid_until.or(existing.valid_until),
+        created_at: existing.created_at,
+    }
+}
+
+pub(crate) fn propagate_dead_constraint(
+    source: &NegativeConstraint,
+    constraints: &[NegativeConstraint],
+) -> Vec<NegativeConstraint> {
+    if source.state != ConstraintState::Dead {
+        return Vec::new();
+    }
+
+    let mut candidates: Vec<NegativeConstraint> = constraints
+        .iter()
+        .filter(|target| target.id != source.id)
+        .filter(|target| target.state != ConstraintState::Dead)
+        .filter(|target| related_for_propagation(source, target))
+        .cloned()
+        .collect();
+
+    candidates.sort_by(|a, b| {
+        constraint_state_rank(a.state)
+            .cmp(&constraint_state_rank(b.state))
+            .then_with(|| b.created_at.cmp(&a.created_at))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    candidates
+        .into_iter()
+        .take(10)
+        .map(|mut target| {
+            if !target
+                .derived_from_constraint_ids
+                .iter()
+                .any(|existing_id| existing_id == &source.id)
+            {
+                target
+                    .derived_from_constraint_ids
+                    .push(source.id.clone());
+            }
+
+            if target.state == ConstraintState::Suspicious {
+                target.state = ConstraintState::Dying;
+            }
+
+            if !target.direct_observation {
+                target.direct_observation = false;
+            }
+
+            target
+        })
+        .collect()
+}
+
 /// Check if a constraint is still active (not expired).
 pub fn is_constraint_active(constraint: &NegativeConstraint, now_ms: u64) -> bool {
     match constraint.valid_until {
@@ -244,58 +367,127 @@ fn str_to_constraint_type(s: &str) -> ConstraintType {
     }
 }
 
+fn persist_constraint(
+    conn: &rusqlite::Connection,
+    constraint: &NegativeConstraint,
+    agent_id: &str,
+) -> rusqlite::Result<()> {
+    let derived_from_constraint_ids = serde_json::to_string(&constraint.derived_from_constraint_ids)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+    let related_subject_tokens = serde_json::to_string(&constraint.related_subject_tokens)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO negative_knowledge
+         (id, agent_id, episode_id, constraint_type, subject, solution_class,
+          description, confidence, state, evidence_count, direct_observation,
+          derived_from_constraint_ids, related_subject_tokens, valid_until, created_at)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        params![
+            constraint.id,
+            agent_id,
+            constraint.episode_id,
+            constraint_type_to_str(&constraint.constraint_type),
+            constraint.subject,
+            constraint.solution_class,
+            constraint.description,
+            constraint.confidence,
+            constraint_state_to_str(&constraint.state),
+            constraint.evidence_count,
+            if constraint.direct_observation { 1 } else { 0 },
+            derived_from_constraint_ids,
+            related_subject_tokens,
+            constraint.valid_until.map(|v| v as i64),
+            constraint.created_at as i64,
+        ],
+    )?;
+
+    Ok(())
+}
+
 impl AgentEngine {
     /// Add a negative knowledge constraint (NKNO-01).
     pub(crate) async fn add_negative_constraint(
         &self,
         constraint: NegativeConstraint,
     ) -> Result<()> {
-        let c = constraint.clone();
-        let ct_str = constraint_type_to_str(&c.constraint_type).to_string();
-        let state_str = constraint_state_to_str(&c.state).to_string();
-        let derived_from_constraint_ids = serde_json::to_string(&c.derived_from_constraint_ids)?;
-        let related_subject_tokens = serde_json::to_string(&c.related_subject_tokens)?;
         let agent_id = crate::agent::agent_identity::current_agent_scope_id();
+        let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+        let now_ms = super::super::now_millis();
+
+        let cached_constraints = {
+            let stores = self.episodic_store.read().await;
+            stores
+                .get(&scope_id)
+                .map(|store| {
+                    store
+                        .cached_constraints
+                        .iter()
+                        .filter(|constraint| is_constraint_active(constraint, now_ms))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+
+        let mut active_constraints = if cached_constraints.is_empty() {
+            self.query_active_constraints(None).await?
+        } else {
+            cached_constraints
+        };
+
+        let merge_idx = active_constraints
+            .iter()
+            .position(|existing| constraints_match_for_merge(existing, &constraint));
+
+        let (persisted_constraint, reached_dead) = if let Some(idx) = merge_idx {
+            let existing = active_constraints[idx].clone();
+            let merged = merge_constraint_evidence(&existing, &constraint);
+            let reached_dead = existing.state != ConstraintState::Dead && merged.state == ConstraintState::Dead;
+            active_constraints[idx] = merged.clone();
+            (merged, reached_dead)
+        } else {
+            let reached_dead = constraint.state == ConstraintState::Dead;
+            active_constraints.push(constraint.clone());
+            (constraint, reached_dead)
+        };
+
+        let propagated_constraints = if reached_dead {
+            let propagated = propagate_dead_constraint(&persisted_constraint, &active_constraints);
+            for propagated_constraint in &propagated {
+                if let Some(idx) = active_constraints
+                    .iter()
+                    .position(|existing| existing.id == propagated_constraint.id)
+                {
+                    active_constraints[idx] = propagated_constraint.clone();
+                }
+            }
+            propagated
+        } else {
+            Vec::new()
+        };
+
+        let persisted_constraint_for_db = persisted_constraint.clone();
+        let propagated_for_db = propagated_constraints.clone();
+        let agent_id_for_db = agent_id.clone();
 
         self.history
             .conn
             .call(move |conn| {
-                conn.execute(
-                    "INSERT OR REPLACE INTO negative_knowledge
-                     (id, agent_id, episode_id, constraint_type, subject, solution_class,
-                      description, confidence, state, evidence_count, direct_observation,
-                      derived_from_constraint_ids, related_subject_tokens, valid_until, created_at)
-                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-                    params![
-                        c.id,
-                        agent_id,
-                        c.episode_id,
-                        ct_str,
-                        c.subject,
-                        c.solution_class,
-                        c.description,
-                        c.confidence,
-                        state_str,
-                        c.evidence_count,
-                        if c.direct_observation { 1 } else { 0 },
-                        derived_from_constraint_ids,
-                        related_subject_tokens,
-                        c.valid_until.map(|v| v as i64),
-                        c.created_at as i64,
-                    ],
-                )?;
+                persist_constraint(conn, &persisted_constraint_for_db, &agent_id_for_db)?;
+                for propagated_constraint in &propagated_for_db {
+                    persist_constraint(conn, propagated_constraint, &agent_id_for_db)?;
+                }
                 Ok(())
             })
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        // Update cached constraints
-        let scope_id = crate::agent::agent_identity::current_agent_scope_id();
         let mut stores = self.episodic_store.write().await;
         let store = stores.entry(scope_id).or_default();
-        store.cached_constraints.push(constraint.clone());
+        store.cached_constraints = active_constraints;
 
-        tracing::info!(subject = %constraint.subject, "Added negative knowledge constraint");
+        tracing::info!(subject = %persisted_constraint.subject, "Added negative knowledge constraint");
 
         Ok(())
     }
@@ -318,28 +510,12 @@ impl AgentEngine {
         let now_ms = super::super::now_millis();
         let valid_until = now_ms + constraint_ttl_days * 86400 * 1000;
 
-        let subject = if episode.summary.len() > 200 {
-            format!("{}...", &episode.summary[..197])
-        } else {
-            episode.summary.clone()
-        };
-
-        let constraint = NegativeConstraint {
-            id: format!("nc_{}", uuid::Uuid::new_v4()),
-            episode_id: Some(episode.id.clone()),
-            constraint_type: ConstraintType::RuledOut,
-            subject,
-            solution_class: episode.solution_class.clone(),
-            description: episode.root_cause.clone().unwrap_or_default(),
-            confidence: episode.confidence.unwrap_or(0.7),
-            state: ConstraintState::Dying,
-            evidence_count: 1,
-            direct_observation: true,
-            derived_from_constraint_ids: Vec::new(),
-            related_subject_tokens: Vec::new(),
-            valid_until: Some(valid_until),
-            created_at: now_ms,
-        };
+        let constraint = build_direct_constraint_from_episode(
+            episode,
+            now_ms,
+            valid_until,
+            format!("nc_{}", uuid::Uuid::new_v4()),
+        );
 
         self.add_negative_constraint(constraint).await
     }
@@ -520,6 +696,31 @@ mod tests {
                 .collect(),
             valid_until: Some(2_000_000_000),
             ..make_constraint(subject, Some(2_000_000_000))
+        }
+    }
+
+    fn make_failure_episode(summary: &str, confidence: Option<f64>) -> Episode {
+        Episode {
+            id: "ep-failure".to_string(),
+            goal_run_id: None,
+            thread_id: None,
+            session_id: None,
+            goal_text: None,
+            goal_type: None,
+            episode_type: super::super::EpisodeType::GoalFailure,
+            summary: summary.to_string(),
+            outcome: EpisodeOutcome::Failure,
+            root_cause: Some("root cause".to_string()),
+            entities: Vec::new(),
+            causal_chain: Vec::new(),
+            solution_class: Some("test-class".to_string()),
+            duration_ms: None,
+            tokens_used: None,
+            confidence,
+            confidence_before: None,
+            confidence_after: None,
+            created_at: 1_000,
+            expires_at: None,
         }
     }
 
@@ -934,5 +1135,202 @@ mod tests {
             next_constraint_state(ConstraintState::Suspicious, 1, false, 0.4),
             ConstraintState::Suspicious
         );
+    }
+
+    #[test]
+    fn propagation_direct_failure_derived_constraint_defaults_to_dying() {
+        let episode = make_failure_episode("deploy config rollback failed", Some(0.7));
+
+        let constraint =
+            build_direct_constraint_from_episode(&episode, 10_000, 20_000, "nc-new".to_string());
+
+        assert_eq!(constraint.state, ConstraintState::Dying);
+        assert_eq!(constraint.evidence_count, 1);
+        assert!(constraint.direct_observation);
+    }
+
+    #[test]
+    fn propagation_high_confidence_direct_evidence_yields_dead() {
+        let episode = make_failure_episode("deploy config rollback failed", Some(0.93));
+
+        let constraint =
+            build_direct_constraint_from_episode(&episode, 10_000, 20_000, "nc-new".to_string());
+
+        assert_eq!(constraint.state, ConstraintState::Dead);
+        assert!(constraint.direct_observation);
+    }
+
+    #[test]
+    fn propagation_merge_matching_evidence_upgrades_suspicious_to_dying() {
+        let existing = NegativeConstraint {
+            state: ConstraintState::Suspicious,
+            evidence_count: 1,
+            confidence: 0.4,
+            direct_observation: false,
+            ..make_constraint_with_class("deploy config rollback", Some("deploy-fix"))
+        };
+        let incoming = NegativeConstraint {
+            confidence: 0.7,
+            ..make_constraint_with_class("rollback deploy config", Some("deploy-fix"))
+        };
+
+        let merged = merge_constraint_evidence(&existing, &incoming);
+
+        assert_eq!(merged.state, ConstraintState::Dying);
+        assert_eq!(merged.evidence_count, 2);
+    }
+
+    #[test]
+    fn propagation_repeated_matching_evidence_upgrades_to_dead_at_three() {
+        let existing = NegativeConstraint {
+            state: ConstraintState::Dying,
+            evidence_count: 2,
+            confidence: 0.7,
+            direct_observation: true,
+            ..make_constraint_with_class("deploy config rollback", Some("deploy-fix"))
+        };
+        let incoming = NegativeConstraint {
+            confidence: 0.72,
+            ..make_constraint_with_class("rollback deploy config", Some("deploy-fix"))
+        };
+
+        let merged = merge_constraint_evidence(&existing, &incoming);
+
+        assert_eq!(merged.state, ConstraintState::Dead);
+        assert_eq!(merged.evidence_count, 3);
+    }
+
+    #[test]
+    fn propagation_dead_source_upgrades_related_suspicious_targets_to_dying() {
+        let source = NegativeConstraint {
+            id: "nc-source".to_string(),
+            state: ConstraintState::Dead,
+            ..make_constraint_with_class("deploy config prod fix", Some("deploy-fix"))
+        };
+        let target = NegativeConstraint {
+            id: "nc-target".to_string(),
+            state: ConstraintState::Suspicious,
+            direct_observation: false,
+            ..make_constraint_with_class("deploy config rollback", Some("deploy-fix"))
+        };
+
+        let propagated = propagate_dead_constraint(&source, &[source.clone(), target]);
+
+        assert_eq!(propagated.len(), 1);
+        assert_eq!(propagated[0].id, "nc-target");
+        assert_eq!(propagated[0].state, ConstraintState::Dying);
+    }
+
+    #[test]
+    fn propagation_appends_source_id_to_derived_from_constraint_ids() {
+        let source = NegativeConstraint {
+            id: "nc-source".to_string(),
+            state: ConstraintState::Dead,
+            ..make_constraint_with_class("deploy config prod fix", Some("deploy-fix"))
+        };
+        let target = NegativeConstraint {
+            id: "nc-target".to_string(),
+            state: ConstraintState::Suspicious,
+            direct_observation: false,
+            derived_from_constraint_ids: vec!["nc-other".to_string()],
+            ..make_constraint_with_class("deploy config rollback", Some("deploy-fix"))
+        };
+
+        let propagated = propagate_dead_constraint(&source, &[source.clone(), target]);
+
+        assert_eq!(
+            propagated[0].derived_from_constraint_ids,
+            vec!["nc-other".to_string(), "nc-source".to_string()]
+        );
+    }
+
+    #[test]
+    fn propagation_does_not_overwrite_direct_observation_true() {
+        let source = NegativeConstraint {
+            id: "nc-source".to_string(),
+            state: ConstraintState::Dead,
+            ..make_constraint_with_class("deploy config prod fix", Some("deploy-fix"))
+        };
+        let target = NegativeConstraint {
+            id: "nc-target".to_string(),
+            state: ConstraintState::Suspicious,
+            direct_observation: true,
+            ..make_constraint_with_class("deploy config rollback", Some("deploy-fix"))
+        };
+
+        let propagated = propagate_dead_constraint(&source, &[source.clone(), target]);
+
+        assert!(propagated[0].direct_observation);
+    }
+
+    #[test]
+    fn propagation_sets_direct_observation_false_only_for_targets_without_direct_evidence() {
+        let source = NegativeConstraint {
+            id: "nc-source".to_string(),
+            state: ConstraintState::Dead,
+            ..make_constraint_with_class("deploy config prod fix", Some("deploy-fix"))
+        };
+        let inferred_target = NegativeConstraint {
+            id: "nc-inferred".to_string(),
+            state: ConstraintState::Suspicious,
+            direct_observation: false,
+            created_at: 200,
+            ..make_constraint_with_class("deploy config rollback", Some("deploy-fix"))
+        };
+        let direct_target = NegativeConstraint {
+            id: "nc-direct".to_string(),
+            state: ConstraintState::Suspicious,
+            direct_observation: true,
+            created_at: 100,
+            ..make_constraint_with_class("deploy config fallback", Some("deploy-fix"))
+        };
+
+        let propagated =
+            propagate_dead_constraint(&source, &[source.clone(), inferred_target, direct_target]);
+
+        assert_eq!(propagated.len(), 2);
+        assert!(!propagated.iter().find(|c| c.id == "nc-inferred").unwrap().direct_observation);
+        assert!(propagated.iter().find(|c| c.id == "nc-direct").unwrap().direct_observation);
+    }
+
+    #[test]
+    fn propagation_is_capped_at_ten_targets_and_does_not_recurse() {
+        let source = NegativeConstraint {
+            id: "nc-source".to_string(),
+            state: ConstraintState::Dead,
+            ..make_constraint_with_class("alpha beta gamma root", Some("deploy-fix"))
+        };
+        let mut constraints = vec![source.clone()];
+
+        for idx in 0..11 {
+            constraints.push(NegativeConstraint {
+                id: format!("nc-related-{idx}"),
+                state: ConstraintState::Suspicious,
+                direct_observation: false,
+                created_at: 100 + idx,
+                ..make_constraint_with_class(
+                    &format!("alpha beta related {idx}"),
+                    Some("deploy-fix")
+                )
+            });
+        }
+
+        constraints.push(NegativeConstraint {
+            id: "nc-second-hop".to_string(),
+            state: ConstraintState::Suspicious,
+            direct_observation: false,
+            created_at: 10_000,
+            subject: "alpha related branch leaf".to_string(),
+            ..make_constraint_with_class("alpha related branch leaf", Some("deploy-fix"))
+        });
+
+        let propagated = propagate_dead_constraint(&source, &constraints);
+        let propagated_ids: Vec<&str> = propagated.iter().map(|constraint| constraint.id.as_str()).collect();
+
+        assert_eq!(propagated.len(), 10);
+        assert!(propagated.iter().all(|constraint| constraint.state == ConstraintState::Dying));
+        assert!(!propagated_ids.contains(&"nc-related-0"));
+        assert!(propagated_ids.contains(&"nc-related-10"));
+        assert!(!propagated_ids.contains(&"nc-second-hop"));
     }
 }
