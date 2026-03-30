@@ -207,6 +207,10 @@ fn gateway_reply_args(platform: &str, channel: &str, message: &str) -> serde_jso
     }
 }
 
+fn gateway_thread_title(msg: &gateway::IncomingMessage) -> String {
+    format!("{} {}", msg.platform, msg.sender)
+}
+
 const GATEWAY_TRIAGE_TIMEOUT_SECS: u64 = 12;
 const GATEWAY_AGENT_TIMEOUT_SECS: u64 = 120;
 // Allow enough headroom for provider-side rate limiting and chunked deliveries.
@@ -447,6 +451,59 @@ impl AgentEngine {
             replay_msgs.extend(platform_msgs);
         }
         replay_msgs
+    }
+
+    async fn persist_gateway_fast_path_exchange(
+        &self,
+        channel_key: &str,
+        msg: &gateway::IncomingMessage,
+        reply_text: &str,
+    ) -> Result<String> {
+        let existing_thread = self.gateway_threads.read().await.get(channel_key).cloned();
+        let (thread_id, is_new_thread) =
+            self.get_or_create_thread(existing_thread.as_deref(), &msg.content).await;
+        self.ensure_thread_identity(&thread_id, &gateway_thread_title(msg), false)
+            .await;
+
+        {
+            let mut threads = self.threads.write().await;
+            let thread = threads
+                .get_mut(&thread_id)
+                .ok_or_else(|| anyhow::anyhow!("gateway thread missing after creation"))?;
+            thread
+                .messages
+                .push(AgentMessage::user(msg.content.trim(), now_millis()));
+            thread.updated_at = now_millis();
+        }
+        self.persist_thread_by_id(&thread_id).await;
+        self.record_operator_message(&thread_id, &msg.content, is_new_thread)
+            .await?;
+        if let Err(error) = self.maybe_sync_thread_to_honcho(&thread_id).await {
+            tracing::warn!(thread_id = %thread_id, error = %error, "failed to sync gateway thread to Honcho");
+        }
+
+        self.add_assistant_message(
+            &thread_id,
+            reply_text,
+            0,
+            0,
+            None,
+            Some("concierge".to_string()),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        self.gateway_threads
+            .write()
+            .await
+            .insert(channel_key.to_string(), thread_id.clone());
+        self.history
+            .upsert_gateway_thread_binding(channel_key, &thread_id, now_millis())
+            .await?;
+
+        Ok(thread_id)
     }
 
     pub async fn enqueue_gateway_message(&self, msg: gateway::IncomingMessage) -> Result<()> {
@@ -1405,7 +1462,7 @@ impl AgentEngine {
                     }
                 );
 
-                if let Err(e) = self.send_message(None, &prompt).await {
+                if let Err(e) = Box::pin(self.send_message(None, &prompt)).await {
                     tracing::error!(error = %e, "gateway: failed to send reset confirmation");
                 }
                 self.gateway_inflight_channels
@@ -1454,6 +1511,25 @@ impl AgentEngine {
 
                 if request.ack_only {
                     let response_text = gateway_route_confirmation(request.mode);
+                    let thread_id = match self
+                        .persist_gateway_fast_path_exchange(&channel_key, &msg, &response_text)
+                        .await
+                    {
+                        Ok(thread_id) => thread_id,
+                        Err(error) => {
+                            tracing::error!(
+                                platform = %msg.platform,
+                                channel = %msg.channel,
+                                %error,
+                                "gateway: failed to persist route switch exchange"
+                            );
+                            self.gateway_inflight_channels
+                                .lock()
+                                .await
+                                .remove(&channel_key);
+                            continue;
+                        }
+                    };
                     let auto_tool = ToolCall {
                         id: format!("gateway_route_{}", uuid::Uuid::new_v4()),
                         function: ToolFunction {
@@ -1466,10 +1542,10 @@ impl AgentEngine {
                             .to_string(),
                         },
                     };
-                    let tool_result = tool_executor::execute_tool(
+                    let tool_result = Box::pin(tool_executor::execute_tool(
                         &auto_tool,
                         self,
-                        "",
+                        &thread_id,
                         None,
                         &self.session_manager,
                         None,
@@ -1477,7 +1553,7 @@ impl AgentEngine {
                         &self.data_dir,
                         &self.http_client,
                         None,
-                    )
+                    ))
                     .await;
                     if tool_result.is_error {
                         tracing::error!(
@@ -1562,7 +1638,7 @@ impl AgentEngine {
             if route_mode == gateway::GatewayRouteMode::Rarog {
                 // Triage via concierge — simple messages get a direct response,
                 // complex ones fall through to the full agent loop.
-                let triage = match tokio::time::timeout(
+                let triage = match Box::pin(tokio::time::timeout(
                     std::time::Duration::from_secs(GATEWAY_TRIAGE_TIMEOUT_SECS),
                     self.concierge.triage_gateway_message(
                         self,
@@ -1574,7 +1650,7 @@ impl AgentEngine {
                         &self.threads,
                         &self.tasks,
                     ),
-                )
+                ))
                 .await
                 {
                     Ok(result) => result,
@@ -1596,6 +1672,25 @@ impl AgentEngine {
                             sender = %msg.sender,
                             "gateway: concierge handled simple message"
                         );
+                        let thread_id = match self
+                            .persist_gateway_fast_path_exchange(&channel_key, &msg, &response_text)
+                            .await
+                        {
+                            Ok(thread_id) => thread_id,
+                            Err(error) => {
+                                tracing::error!(
+                                    platform = %msg.platform,
+                                    channel = %msg.channel,
+                                    %error,
+                                    "gateway: failed to persist concierge fast-path exchange"
+                                );
+                                self.gateway_inflight_channels
+                                    .lock()
+                                    .await
+                                    .remove(&channel_key);
+                                continue;
+                            }
+                        };
                         let auto_tool = ToolCall {
                             id: format!("concierge_{}", uuid::Uuid::new_v4()),
                             function: ToolFunction {
@@ -1608,10 +1703,10 @@ impl AgentEngine {
                                 .to_string(),
                             },
                         };
-                        let tool_result = tool_executor::execute_tool(
+                        let tool_result = Box::pin(tool_executor::execute_tool(
                             &auto_tool,
                             self,
-                            "",
+                            &thread_id,
                             None,
                             &self.session_manager,
                             None,
@@ -1619,7 +1714,7 @@ impl AgentEngine {
                             &self.data_dir,
                             &self.http_client,
                             None,
-                        )
+                        ))
                         .await;
                         if tool_result.is_error {
                             tracing::error!(
@@ -1655,10 +1750,10 @@ impl AgentEngine {
                 prompt
             };
 
-            let send_result = tokio::time::timeout(
+            let send_result = Box::pin(tokio::time::timeout(
                 std::time::Duration::from_secs(GATEWAY_AGENT_TIMEOUT_SECS),
                 self.send_message(existing_thread.as_deref(), &enriched_prompt),
-            )
+            ))
             .await;
 
             match send_result {
@@ -1693,7 +1788,7 @@ impl AgentEngine {
                             arguments: fallback_args.to_string(),
                         },
                     };
-                    let tool_result = tool_executor::execute_tool(
+                    let tool_result = Box::pin(tool_executor::execute_tool(
                         &fallback_tool,
                         self,
                         "",
@@ -1704,7 +1799,7 @@ impl AgentEngine {
                         &self.data_dir,
                         &self.http_client,
                         None,
-                    )
+                    ))
                     .await;
                     if tool_result.is_error {
                         tracing::error!(
@@ -1789,7 +1884,7 @@ impl AgentEngine {
                                     },
                                 };
 
-                                let _ = tool_executor::execute_tool(
+                                let _ = Box::pin(tool_executor::execute_tool(
                                     &auto_tool,
                                     self,
                                     "",
@@ -1800,7 +1895,7 @@ impl AgentEngine {
                                     &self.data_dir,
                                     &self.http_client,
                                     None,
-                                )
+                                ))
                                 .await;
                             }
                         }
@@ -2193,6 +2288,55 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[tokio::test]
+    async fn gateway_fast_path_reply_creates_thread_binding_and_history() {
+        let root = make_test_root("gateway-fast-path-persists-history");
+        let manager = SessionManager::new_test(&root).await;
+        let mut config = AgentConfig::default();
+        config.gateway.enabled = true;
+        let engine = AgentEngine::new_test(manager, config, &root).await;
+        let msg = super::gateway::IncomingMessage {
+            platform: "Discord".into(),
+            sender: "alice".into(),
+            content: "switch to swarog".into(),
+            channel: "D123".into(),
+            message_id: Some("discord:msg-1".into()),
+            thread_context: Some(super::gateway::ThreadContext {
+                discord_message_id: Some("discord:msg-1".into()),
+                ..Default::default()
+            }),
+        };
+        let thread_id = engine
+            .persist_gateway_fast_path_exchange(
+                "Discord:D123",
+                &msg,
+                &gateway_route_confirmation(gateway::GatewayRouteMode::Swarog),
+            )
+            .await
+            .expect("persist fast-path exchange");
+
+        let messages = engine
+            .history
+            .list_recent_messages(&thread_id, 10)
+            .await
+            .expect("list thread messages");
+        assert!(
+            messages.iter().any(|msg| {
+                msg.role == "user" && msg.content == "switch to swarog"
+            }),
+            "fast-path gateway thread should persist the inbound user message"
+        );
+        assert!(
+            messages.iter().any(|msg| {
+                msg.role == "assistant"
+                    && msg.content
+                        == gateway_route_confirmation(gateway::GatewayRouteMode::Swarog)
+            }),
+            "fast-path gateway thread should persist the assistant reply"
+        );
+        fs::remove_dir_all(&root).expect("cleanup test root");
+    }
+
     #[test]
     fn daemon_gateway_loop_no_longer_polls_slack_discord_or_telegram() {
         let source =
@@ -2242,6 +2386,30 @@ mod tests {
             !tool_source.contains("gateway_format::"),
             "daemon send path still depends on daemon-owned gateway formatting"
         );
+    }
+
+    #[test]
+    fn daemon_gateway_loop_boxes_large_delivery_futures() {
+        let source =
+            fs::read_to_string(repo_root().join("crates/amux-daemon/src/agent/gateway_loop.rs"))
+                .expect("read gateway_loop.rs");
+        let production_source = source
+            .split("\n#[cfg(test)]")
+            .next()
+            .unwrap_or(source.as_str());
+
+        for required in [
+            "if let Err(e) = Box::pin(self.send_message(None, &prompt)).await",
+            "let tool_result = Box::pin(tool_executor::execute_tool(",
+            "let triage = match Box::pin(tokio::time::timeout(",
+            "let send_result = Box::pin(tokio::time::timeout(",
+            "let _ = Box::pin(tool_executor::execute_tool(",
+        ] {
+            assert!(
+                production_source.contains(required),
+                "gateway loop hot path should box oversized future: {required}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------

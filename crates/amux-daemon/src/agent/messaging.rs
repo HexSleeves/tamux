@@ -270,10 +270,11 @@ impl AgentEngine {
 
     /// Run a complete agent turn in a thread.
     pub async fn send_message(&self, thread_id: Option<&str>, content: &str) -> Result<String> {
-        Ok(self
-            .send_message_inner(thread_id, content, None, None, None, true)
-            .await?
-            .thread_id)
+        Ok(
+            Box::pin(self.send_message_inner(thread_id, content, None, None, None, true))
+                .await?
+                .thread_id,
+        )
     }
 
     pub async fn send_message_with_session(
@@ -282,10 +283,18 @@ impl AgentEngine {
         preferred_session_hint: Option<&str>,
         content: &str,
     ) -> Result<String> {
-        Ok(self
-            .send_message_inner(thread_id, content, None, preferred_session_hint, None, true)
+        Ok(
+            Box::pin(self.send_message_inner(
+                thread_id,
+                content,
+                None,
+                preferred_session_hint,
+                None,
+                true,
+            ))
             .await?
-            .thread_id)
+            .thread_id,
+        )
     }
 
     pub(super) async fn send_task_message(
@@ -296,14 +305,14 @@ impl AgentEngine {
         backend_override: Option<&str>,
         content: &str,
     ) -> Result<SendMessageOutcome> {
-        self.send_message_inner(
+        Box::pin(self.send_message_inner(
             thread_id,
             content,
             Some(task_id),
             preferred_session_hint,
             backend_override,
             true,
-        )
+        ))
         .await
     }
 
@@ -335,10 +344,16 @@ impl AgentEngine {
             return Ok((target_thread_id, response));
         }
 
-        let target_thread_id = self
-            .send_message_inner(thread_id, content, None, preferred_session_hint, None, true)
-            .await?
-            .thread_id;
+        let target_thread_id = Box::pin(self.send_message_inner(
+            thread_id,
+            content,
+            None,
+            preferred_session_hint,
+            None,
+            true,
+        ))
+        .await?
+        .thread_id;
         let response = self
             .latest_assistant_message_text(&target_thread_id)
             .await
@@ -587,7 +602,52 @@ impl AgentEngine {
 mod tests {
     use super::*;
     use crate::session_manager::SessionManager;
+    use std::fs;
+    use std::path::PathBuf;
     use tempfile::tempdir;
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("daemon crate dir")
+            .parent()
+            .expect("workspace root")
+            .to_path_buf()
+    }
+
+    #[test]
+    fn direct_message_entrypoints_box_large_send_message_futures() {
+        let messaging_source =
+            fs::read_to_string(repo_root().join("crates/amux-daemon/src/agent/messaging.rs"))
+                .expect("read messaging.rs");
+        let messaging_production = messaging_source
+            .split("\n#[cfg(test)]")
+            .next()
+            .unwrap_or(messaging_source.as_str());
+        let agent_loop_source =
+            fs::read_to_string(repo_root().join("crates/amux-daemon/src/agent/agent_loop.rs"))
+                .expect("read agent_loop.rs");
+        let agent_loop_production = agent_loop_source
+            .split("\n#[cfg(test)]")
+            .next()
+            .unwrap_or(agent_loop_source.as_str());
+
+        for required in [
+            "Box::pin(self.send_message_inner(thread_id, content, None, None, None, true))",
+            "Box::pin(self.send_message_inner(",
+            "let target_thread_id = Box::pin(self.send_message_inner(",
+        ] {
+            assert!(
+                messaging_production.contains(required),
+                "messaging entrypoint should box oversized future: {required}"
+            );
+        }
+
+        assert!(
+            agent_loop_production.contains("Box::pin(run_with_agent_scope(agent_scope_id, async {"),
+            "send_message_inner should box the oversized agent loop future"
+        );
+    }
 
     #[tokio::test]
     async fn delete_thread_messages_updates_live_thread_and_persisted_history() {

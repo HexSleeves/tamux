@@ -684,11 +684,21 @@ mod tests {
     };
     use futures::{SinkExt, StreamExt};
     use std::collections::HashSet;
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tokio::io::DuplexStream;
     use tokio::task::JoinHandle;
     use tokio::time::{timeout, Duration};
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("daemon crate dir")
+            .parent()
+            .expect("workspace root")
+            .to_path_buf()
+    }
     use tokio_util::codec::Framed;
 
     #[test]
@@ -1071,6 +1081,24 @@ mod tests {
         }));
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn daemon_boxes_large_gateway_hot_path_futures() {
+        let source = fs::read_to_string(repo_root().join("crates/amux-daemon/src/server.rs"))
+            .expect("read server.rs");
+
+        for required in [
+            "Box::pin(loop_agent.run_loop(shutdown_rx)).await;",
+            "Box::pin(handle_connection(stream, manager, agent, plugin_manager)).await",
+            "if let Err(e) = Box::pin(agent.send_message_with_session(",
+            "match Box::pin(agent.send_direct_message(",
+        ] {
+            assert!(
+                source.contains(required),
+                "server hot path should box oversized future: {required}"
+            );
+        }
     }
 
     struct TestConnection {
@@ -1908,7 +1936,7 @@ pub async fn run() -> Result<()> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let loop_agent = agent.clone();
     tokio::spawn(async move {
-        loop_agent.run_loop(shutdown_rx).await;
+        Box::pin(loop_agent.run_loop(shutdown_rx)).await;
     });
 
     #[cfg(unix)]
@@ -1973,7 +2001,8 @@ async fn accept_loop_unix(
                 let agent = agent.clone();
                 let plugin_manager = plugin_manager.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, manager, agent, plugin_manager).await
+                    if let Err(e) =
+                        Box::pin(handle_connection(stream, manager, agent, plugin_manager)).await
                     {
                         if is_expected_disconnect_error(&e) {
                             tracing::debug!(error = %e, "client disconnected");
@@ -2055,7 +2084,8 @@ async fn accept_loop_tcp(
                 let agent = agent.clone();
                 let plugin_manager = plugin_manager.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, manager, agent, plugin_manager).await
+                    if let Err(e) =
+                        Box::pin(handle_connection(stream, manager, agent, plugin_manager)).await
                     {
                         if is_expected_disconnect_error(&e) {
                             tracing::debug!(%addr, error = %e, "client disconnected");
@@ -3508,13 +3538,12 @@ where
                                 }
                             }
                         }
-                        if let Err(e) = agent
-                            .send_message_with_session(
-                                effective_thread_id.as_deref(),
-                                session_id.as_deref(),
-                                &content,
-                            )
-                            .await
+                        if let Err(e) = Box::pin(agent.send_message_with_session(
+                            effective_thread_id.as_deref(),
+                            session_id.as_deref(),
+                            &content,
+                        ))
+                        .await
                         {
                             tracing::warn!(error = %e, "agent send_message_with_session failed");
                         }
@@ -3528,14 +3557,13 @@ where
                     session_id,
                 } => {
                     agent.mark_operator_present("direct_message").await;
-                    match agent
-                        .send_direct_message(
-                            &target,
-                            thread_id.as_deref(),
-                            session_id.as_deref(),
-                            &content,
-                        )
-                        .await
+                    match Box::pin(agent.send_direct_message(
+                        &target,
+                        thread_id.as_deref(),
+                        session_id.as_deref(),
+                        &content,
+                    ))
+                    .await
                     {
                         Ok((thread_id, response)) => {
                             client_agent_threads.insert(thread_id.clone());

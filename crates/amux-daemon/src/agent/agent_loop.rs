@@ -19,7 +19,7 @@ impl AgentEngine {
             MAIN_AGENT_ID.to_string()
         };
 
-        run_with_agent_scope(agent_scope_id, async {
+        Box::pin(run_with_agent_scope(agent_scope_id, async {
         if thread_id == Some(crate::agent::concierge::CONCIERGE_THREAD_ID) {
             self.send_concierge_message_on_thread(
                 crate::agent::concierge::CONCIERGE_THREAD_ID,
@@ -1481,7 +1481,7 @@ impl AgentEngine {
             thread_id: tid,
             interrupted_for_approval,
         })
-        })
+        }))
         .await
     }
 
