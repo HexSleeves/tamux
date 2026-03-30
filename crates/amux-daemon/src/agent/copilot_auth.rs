@@ -1,12 +1,10 @@
 use super::types::AuthSource;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::process::Command;
 
 const GITHUB_COPILOT_DISABLE_GH_CLI_ENV: &str = "TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI";
 const GITHUB_COPILOT_DISABLE_ENV_AUTH_ENV: &str = "TAMUX_GITHUB_COPILOT_DISABLE_ENV_AUTH";
-const GITHUB_COPILOT_MOCK_MODELS_ENV: &str = "TAMUX_GITHUB_COPILOT_MOCK_MODELS_JSON";
 const GITHUB_COPILOT_ENV_KEYS: &[&str] = &["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,17 +38,6 @@ pub enum GithubCopilotAuthFlowResult {
     AlreadyAvailable,
     ImportedFromGhCli,
     Started,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CopilotSdkAuthMode {
-    LoggedInUser,
-    ExplicitToken,
-}
-
-#[derive(Debug, Deserialize)]
-struct CopilotSdkModelsResponse {
-    models: Vec<GithubCopilotModel>,
 }
 
 fn now_millis() -> i64 {
@@ -191,158 +178,20 @@ pub fn has_github_copilot_auth(api_key: &str, auth_source: AuthSource) -> bool {
     resolve_github_copilot_auth(api_key, auth_source).is_some()
 }
 
-fn copilot_cli_entry_path() -> Result<PathBuf> {
-    let output = Command::new("which")
-        .arg("copilot")
-        .output()
-        .context("failed to locate GitHub Copilot CLI")?;
-    if !output.status.success() {
-        anyhow::bail!("GitHub Copilot CLI is not installed");
-    }
-
-    let raw_path = String::from_utf8(output.stdout)
-        .context("GitHub Copilot CLI path was not valid UTF-8")?
-        .trim()
-        .to_string();
-    if raw_path.is_empty() {
-        anyhow::bail!("GitHub Copilot CLI path was empty");
-    }
-    let entry = std::fs::canonicalize(&raw_path)
-        .with_context(|| format!("failed to resolve GitHub Copilot CLI path '{raw_path}'"))?;
-    if entry
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == "npm-loader.js")
-    {
-        return Ok(entry);
-    }
-
-    anyhow::bail!(
-        "unsupported GitHub Copilot CLI entry path '{}'",
-        entry.display()
-    );
-}
-
-fn copilot_sdk_entry_path() -> Result<PathBuf> {
-    let cli_entry = copilot_cli_entry_path()?;
-    let package_root = cli_entry
-        .parent()
-        .context("GitHub Copilot CLI package root unavailable")?;
-    let sdk_path = package_root.join("copilot-sdk").join("index.js");
-    if sdk_path.is_file() {
-        Ok(sdk_path)
-    } else {
-        anyhow::bail!(
-            "GitHub Copilot SDK entry '{}' does not exist",
-            sdk_path.display()
-        );
-    }
-}
-
-fn mock_models_if_present() -> Result<Option<Vec<GithubCopilotModel>>> {
-    let Some(raw) = std::env::var(GITHUB_COPILOT_MOCK_MODELS_ENV).ok() else {
-        return Ok(None);
-    };
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Ok(Some(Vec::new()));
-    }
-    serde_json::from_str::<Vec<GithubCopilotModel>>(trimmed)
-        .map(Some)
-        .context("failed to parse TAMUX_GITHUB_COPILOT_MOCK_MODELS_JSON")
-}
-
-fn run_copilot_sdk_model_list(
-    auth_mode: CopilotSdkAuthMode,
-    token: Option<&str>,
-) -> Result<Vec<GithubCopilotModel>> {
-    let sdk_path = copilot_sdk_entry_path()?;
-    let mode_arg = match auth_mode {
-        CopilotSdkAuthMode::LoggedInUser => "logged_in_user",
-        CopilotSdkAuthMode::ExplicitToken => "explicit_token",
-    };
-    let token_arg = token.unwrap_or("");
-    let script = r#"
-const [sdkPath, mode, token] = process.argv.slice(1);
-
-(async () => {
-  const { CopilotClient } = await import(`file://${sdkPath}`);
-  const options = { useStdio: true };
-  if (mode === "logged_in_user") {
-    options.useLoggedInUser = true;
-  } else {
-    options.githubToken = token;
-    options.useLoggedInUser = false;
-  }
-
-  const client = new CopilotClient(options);
-  try {
-    await client.start();
-    const models = await client.listModels();
-    const simplified = models
-      .filter((model) => !model.policy || model.policy.state !== "disabled")
-      .map((model) => ({
-        id: model.id,
-        name: model.name || null,
-        context_window:
-          model.capabilities?.limits?.max_context_window_tokens
-          ?? model.capabilities?.limits?.max_prompt_tokens
-          ?? null,
-      }));
-    console.log(JSON.stringify({ models: simplified }));
-  } finally {
-    try {
-      await client.stop();
-    } catch {}
-  }
-})().catch((error) => {
-  console.error(error?.message || String(error));
-  process.exit(1);
-});
-"#;
-
-    let output = Command::new("node")
-        .arg("-e")
-        .arg(script)
-        .arg(sdk_path.as_os_str())
-        .arg(mode_arg)
-        .arg(token_arg)
-        .output()
-        .context("failed to run GitHub Copilot SDK model listing")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "GitHub Copilot model discovery failed: {}",
-            stderr.trim().trim_matches('"')
-        );
-    }
-
-    let stdout = String::from_utf8(output.stdout)
-        .context("GitHub Copilot SDK output was not valid UTF-8")?;
-    let response: CopilotSdkModelsResponse = serde_json::from_str(stdout.trim())
-        .context("failed to parse GitHub Copilot SDK model list")?;
-    Ok(response.models)
-}
-
 pub fn list_github_copilot_models(
     api_key: &str,
     auth_source: AuthSource,
 ) -> Result<Vec<GithubCopilotModel>> {
-    if let Some(mocked) = mock_models_if_present()? {
-        return Ok(mocked);
-    }
-
-    let resolved = resolve_github_copilot_auth(api_key, auth_source)
+    let _resolved = resolve_github_copilot_auth(api_key, auth_source)
         .context("GitHub Copilot auth is not available")?;
-    if resolved.use_logged_in_user {
-        run_copilot_sdk_model_list(CopilotSdkAuthMode::LoggedInUser, None)
-    } else {
-        let token = resolved
-            .access_token
-            .as_deref()
-            .context("GitHub Copilot token auth is missing a token")?;
-        run_copilot_sdk_model_list(CopilotSdkAuthMode::ExplicitToken, Some(token))
-    }
+    Ok(super::types::GITHUB_COPILOT_MODELS
+        .iter()
+        .map(|model| GithubCopilotModel {
+            id: model.id.to_string(),
+            name: Some(model.name.to_string()),
+            context_window: Some(model.context_window),
+        })
+        .collect())
 }
 
 pub fn github_copilot_has_available_models(api_key: &str, auth_source: AuthSource) -> bool {

@@ -354,6 +354,49 @@ pub fn known_models_for_provider_auth(provider: &str, auth_source: &str) -> Vec<
             ("gpt-4o", "GPT-4o", 128_000),
             ("gpt-4o-mini", "GPT-4o Mini", 128_000),
         ],
+        "github-copilot" => &[
+            ("anthropic/claude-haiku-4.5", "Claude Haiku 4.5", 160_000),
+            ("anthropic/claude-opus-4.5", "Claude Opus 4.5", 160_000),
+            ("anthropic/claude-opus-4.6", "Claude Opus 4.6", 192_000),
+            (
+                "anthropic/claude-opus-4.6-fast",
+                "Claude Opus 4.6 (fast mode) (Preview)",
+                192_000,
+            ),
+            ("anthropic/claude-sonnet-4", "Claude Sonnet 4", 144_000),
+            ("anthropic/claude-sonnet-4.5", "Claude Sonnet 4.5", 160_000),
+            ("anthropic/claude-sonnet-4.6", "Claude Sonnet 4.6", 160_000),
+            ("google/gemini-2.5-pro", "Gemini 2.5 Pro", 173_000),
+            (
+                "google/gemini-3-flash-preview",
+                "Gemini 3 Flash (Preview)",
+                173_000,
+            ),
+            (
+                "google/gemini-3.1-pro-preview",
+                "Gemini 3.1 Pro (Preview)",
+                173_000,
+            ),
+            ("openai/gpt-4.1", "GPT-4.1", 128_000),
+            ("openai/gpt-4o", "GPT-4o", 128_000),
+            ("openai/gpt-5-mini", "GPT-5 mini", 192_000),
+            ("openai/gpt-5.1", "GPT-5.1", 192_000),
+            ("openai/gpt-5.1-codex", "GPT-5.1-Codex", 256_000),
+            ("openai/gpt-5.1-codex-max", "GPT-5.1-Codex-Max", 256_000),
+            (
+                "openai/gpt-5.1-codex-mini",
+                "GPT-5.1-Codex-Mini (Preview)",
+                256_000,
+            ),
+            ("openai/gpt-5.2", "GPT-5.2", 192_000),
+            ("openai/gpt-5.2-codex", "GPT-5.2-Codex", 400_000),
+            ("openai/gpt-5.3-codex", "GPT-5.3-Codex", 400_000),
+            ("openai/gpt-5.4", "GPT-5.4", 400_000),
+            ("openai/gpt-5.4-mini", "GPT-5.4 mini", 400_000),
+            ("xai/grok-code-fast-1", "Grok Code Fast 1", 173_000),
+            ("github/raptor-mini", "Raptor mini (Preview)", 264_000),
+            ("github/goldeneye", "Goldeneye", 524_000),
+        ],
         "groq" => &[
             ("llama-3.3-70b-versatile", "Llama 3.3 70B", 128_000),
             ("llama-3.1-8b-instant", "Llama 3.1 8B", 131_072),
@@ -535,5 +578,18 @@ mod tests {
         let provider = find_by_id("github-copilot").unwrap();
         assert_eq!(provider.default_auth_source, "github_copilot");
         assert_eq!(provider.supported_auth_sources, GITHUB_COPILOT_AUTH_SOURCES);
+    }
+
+    #[test]
+    fn known_models_github_copilot_matches_static_catalog() {
+        let models = known_models_for_provider_auth("github-copilot", "github_copilot");
+        assert!(models.len() > 10);
+        assert!(models.iter().any(|model| model.id == "openai/gpt-4.1"));
+        assert!(models.iter().any(|model| model.id == "openai/gpt-5.4-mini"));
+        assert!(models
+            .iter()
+            .any(|model| model.id == "anthropic/claude-sonnet-4.6"));
+        assert!(models.iter().any(|model| model.id == "github/raptor-mini"));
+        assert!(models.iter().any(|model| model.id == "github/goldeneye"));
     }
 }

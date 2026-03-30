@@ -2525,18 +2525,19 @@ pub async fn fetch_models(
     api_key: &str,
 ) -> Result<Vec<FetchedModel>> {
     if provider_id == "github-copilot" {
-        return super::copilot_auth::list_github_copilot_models(api_key, AuthSource::ApiKey).map(
-            |models| {
-                models
-                    .into_iter()
+        return get_provider_definition(provider_id)
+            .map(|definition| {
+                definition
+                    .models
+                    .iter()
                     .map(|model| FetchedModel {
-                        id: model.id,
-                        name: model.name,
-                        context_window: model.context_window,
+                        id: model.id.to_string(),
+                        name: Some(model.name.to_string()),
+                        context_window: Some(model.context_window),
                     })
                     .collect()
-            },
-        );
+            })
+            .ok_or_else(|| anyhow::anyhow!("Unknown provider '{}'", provider_id));
     }
 
     let def = super::types::get_provider_definition(provider_id);
@@ -2719,7 +2720,40 @@ mod tests {
     use super::*;
     use crate::agent::provider_auth_store;
     use crate::agent::types::{AgentMessage, AuthSource, MessageRole, ToolCall, ToolFunction};
+    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
+
+    fn auth_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvGuard {
+        vars: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn new(names: &[&'static str]) -> Self {
+            Self {
+                vars: names
+                    .iter()
+                    .map(|name| (*name, std::env::var(name).ok()))
+                    .collect(),
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (name, value) in self.vars.drain(..) {
+                if let Some(value) = value {
+                    std::env::set_var(name, value);
+                } else {
+                    std::env::remove_var(name);
+                }
+            }
+        }
+    }
 
     #[test]
     fn anthropic_groups_consecutive_tool_results_into_one_user_message() {
@@ -3025,10 +3059,20 @@ mod tests {
 
     #[test]
     fn github_copilot_stored_auth_adds_bearer_header_to_requests() {
+        let _lock = auth_env_lock().lock().expect("lock auth env");
+        let _guard = EnvGuard::new(&[
+            "TAMUX_PROVIDER_AUTH_DB_PATH",
+            "TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI",
+            "TAMUX_GITHUB_COPILOT_DISABLE_ENV_AUTH",
+            "COPILOT_GITHUB_TOKEN",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+        ]);
         let root = tempdir().unwrap();
         let db_path = root.path().join("provider-auth.db");
         std::env::set_var("TAMUX_PROVIDER_AUTH_DB_PATH", &db_path);
         std::env::set_var("TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI", "1");
+        std::env::set_var("TAMUX_GITHUB_COPILOT_DISABLE_ENV_AUTH", "1");
         let auth = serde_json::json!({
             "auth_mode": "github_copilot",
             "access_token": "ghu_browser_token",
@@ -3070,21 +3114,24 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("Bearer ghu_browser_token")
         );
-
-        std::env::remove_var("TAMUX_PROVIDER_AUTH_DB_PATH");
-        std::env::remove_var("TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI");
     }
 
     #[tokio::test]
-    async fn copilot_validation_returns_models_when_sdk_lists_them() {
+    async fn copilot_validation_returns_static_catalog_models() {
+        let _lock = auth_env_lock().lock().expect("lock auth env");
+        let _guard = EnvGuard::new(&[
+            "TAMUX_PROVIDER_AUTH_DB_PATH",
+            "TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI",
+            "TAMUX_GITHUB_COPILOT_DISABLE_ENV_AUTH",
+            "COPILOT_GITHUB_TOKEN",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+        ]);
         let root = tempdir().unwrap();
         let db_path = root.path().join("provider-auth.db");
         std::env::set_var("TAMUX_PROVIDER_AUTH_DB_PATH", &db_path);
         std::env::set_var("TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI", "1");
-        std::env::set_var(
-            "TAMUX_GITHUB_COPILOT_MOCK_MODELS_JSON",
-            r#"[{"id":"gpt-5.4","name":"GPT-5.4","context_window":400000}]"#,
-        );
+        std::env::set_var("TAMUX_GITHUB_COPILOT_DISABLE_ENV_AUTH", "1");
         let auth = serde_json::json!({
             "auth_mode": "github_copilot",
             "access_token": "ghu_browser_token",
@@ -3109,12 +3156,12 @@ mod tests {
         .expect("validation should succeed")
         .expect("copilot validation should return models");
 
-        std::env::remove_var("TAMUX_PROVIDER_AUTH_DB_PATH");
-        std::env::remove_var("TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI");
-        std::env::remove_var("TAMUX_GITHUB_COPILOT_MOCK_MODELS_JSON");
-
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, "gpt-5.4");
+        assert!(models.len() > 10);
+        assert!(models.iter().any(|model| model.id == "openai/gpt-4.1"));
+        assert!(models.iter().any(|model| model.id == "openai/gpt-5.4"));
+        assert!(models.iter().any(|model| model.id == "anthropic/claude-sonnet-4.6"));
+        assert!(models.iter().any(|model| model.id == "github/raptor-mini"));
+        assert!(models.iter().any(|model| model.id == "github/goldeneye"));
     }
 
 }

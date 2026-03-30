@@ -22,6 +22,12 @@ const GITHUB_CLI_PATH_ENV: &str = "TAMUX_GH_CLI_PATH";
 
 static AUTH_FLOW_ACTIVE: OnceLock<Mutex<bool>> = OnceLock::new();
 
+#[cfg(test)]
+pub(crate) fn auth_test_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 #[derive(Debug)]
 pub enum OpenAICodexAuthFlowResult {
     AlreadyAvailable,
@@ -544,8 +550,11 @@ mod tests {
     fn github_copilot_flow_imports_existing_gh_token() {
         use std::os::unix::fs::PermissionsExt;
 
+        let _lock = auth_test_env_lock().lock().expect("lock auth env");
         let db_path = unique_test_db_path("gh-import");
         let script_path = std::env::temp_dir().join(format!("tamux-gh-{}", Uuid::new_v4()));
+        let old_db_path = std::env::var(PROVIDER_AUTH_DB_PATH_ENV).ok();
+        let old_gh_cli_path = std::env::var(GITHUB_CLI_PATH_ENV).ok();
         std::fs::write(
             &script_path,
             "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"token\" ]; then\n  printf 'ghu_test_token\\n'\n  exit 0\nfi\nexit 1\n",
@@ -567,8 +576,16 @@ mod tests {
         assert_eq!(stored.access_token, "ghu_test_token");
         assert_eq!(stored.source, "gh_cli_import");
 
-        std::env::remove_var(PROVIDER_AUTH_DB_PATH_ENV);
-        std::env::remove_var(GITHUB_CLI_PATH_ENV);
+        if let Some(value) = old_db_path {
+            std::env::set_var(PROVIDER_AUTH_DB_PATH_ENV, value);
+        } else {
+            std::env::remove_var(PROVIDER_AUTH_DB_PATH_ENV);
+        }
+        if let Some(value) = old_gh_cli_path {
+            std::env::set_var(GITHUB_CLI_PATH_ENV, value);
+        } else {
+            std::env::remove_var(GITHUB_CLI_PATH_ENV);
+        }
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_file(&script_path);
     }

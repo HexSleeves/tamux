@@ -1971,7 +1971,6 @@ mod tests {
     use rusqlite::{params, Connection};
     use std::ffi::OsString;
     use std::path::PathBuf;
-    use std::sync::{Mutex, OnceLock};
     use tokio::sync::mpsc::unbounded_channel;
 
     fn make_model() -> (
@@ -1984,8 +1983,7 @@ mod tests {
     }
 
     fn auth_env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        crate::auth::auth_test_env_lock().lock().unwrap()
     }
 
     struct EnvGuard {
