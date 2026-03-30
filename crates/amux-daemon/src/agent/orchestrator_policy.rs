@@ -581,7 +581,7 @@ fn summarize_recent_policy_decision(recent: &RecentPolicyDecision) -> String {
     }
 }
 
-fn decision_matches_runtime_context(
+fn retry_guard_matches_runtime_context(
     decision: &PolicyDecision,
     context: &PolicyEvaluationContext,
 ) -> bool {
@@ -903,7 +903,8 @@ impl AgentEngine {
         let recent = self.latest_policy_decision(scope, now_epoch_secs).await;
         if let Some(recent) = recent.as_ref() {
             if recent.decision.action != PolicyAction::Continue
-                && decision_matches_runtime_context(&recent.decision, &context)
+                && recent.decision.retry_guard.is_some()
+                && retry_guard_matches_runtime_context(&recent.decision, &context)
             {
                 return Ok(SelectedPolicyDecision {
                     source: PolicyDecisionSource::ReusedRecent,
@@ -917,7 +918,9 @@ impl AgentEngine {
         let evaluated = normalize_policy_eval_decision(
             self.request_orchestrator_policy_decision(&prompt).await?,
         );
-        let selection = if decision_matches_runtime_context(&evaluated, &context) {
+        let selection = if evaluated.retry_guard.is_none()
+            || retry_guard_matches_runtime_context(&evaluated, &context)
+        {
             select_orchestrator_policy_decision(recent.as_ref(), &context.trigger, evaluated.clone())
         } else {
             SelectedPolicyDecision {

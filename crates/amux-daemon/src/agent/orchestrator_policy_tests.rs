@@ -1321,6 +1321,89 @@ async fn evaluate_policy_turn_does_not_reuse_recent_decision_for_different_runti
     );
 }
 
+#[tokio::test]
+async fn evaluate_policy_turn_reuses_recent_non_guarded_decision_for_matching_runtime_candidate() {
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let engine = policy_runtime_engine(
+        r#"{"action":"escalate","reason":"Operator guidance is still needed.","strategy_hint":null,"retry_guard":null}"#,
+        recorded_bodies.clone(),
+    )
+    .await;
+    let scope = scope("thread-runtime-reuse-non-guarded", Some("goal-1"));
+    let persisted = PolicyDecision {
+        action: PolicyAction::Escalate,
+        reason: "Repeated failures need operator guidance now.".to_string(),
+        strategy_hint: None,
+        retry_guard: None,
+    };
+
+    engine
+        .record_policy_decision(&scope, persisted.clone(), 1_000)
+        .await;
+
+    let selection = engine
+        .evaluate_orchestrator_policy_turn(&scope, policy_eval_context(), 1_010)
+        .await
+        .expect("policy evaluation should succeed");
+
+    assert_eq!(selection.source, PolicyDecisionSource::ReusedRecent);
+    assert_eq!(selection.decision, persisted);
+    let recorded = recorded_bodies.lock().expect("lock request log");
+    assert!(
+        recorded.iter().any(|body| {
+            body.contains("structured_output")
+                || body.contains("\"response_format\"")
+                || body.contains("\"text\":{\"format\"")
+        }),
+        "expected runtime evaluation to inspect a fresh structured candidate before reusing the recent non-guarded decision"
+    );
+}
+
+#[tokio::test]
+async fn evaluate_policy_turn_does_not_reuse_recent_non_guarded_decision_for_materially_different_candidate() {
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let engine = policy_runtime_engine(
+        r#"{"action":"pivot","reason":"A different bounded strategy is more appropriate.","strategy_hint":"Inspect the workspace before running commands again.","retry_guard":null}"#,
+        recorded_bodies.clone(),
+    )
+    .await;
+    let scope = scope("thread-runtime-no-reuse-non-guarded", Some("goal-1"));
+
+    engine
+        .record_policy_decision(
+            &scope,
+            PolicyDecision {
+                action: PolicyAction::Escalate,
+                reason: "Repeated failures need operator guidance now.".to_string(),
+                strategy_hint: None,
+                retry_guard: None,
+            },
+            1_000,
+        )
+        .await;
+
+    let selection = engine
+        .evaluate_orchestrator_policy_turn(&scope, policy_eval_context(), 1_010)
+        .await
+        .expect("policy evaluation should succeed");
+
+    assert_eq!(selection.source, PolicyDecisionSource::FreshEvaluation);
+    assert_eq!(selection.decision.action, PolicyAction::Pivot);
+    assert_eq!(
+        selection.decision.strategy_hint.as_deref(),
+        Some("Inspect the workspace before running commands again.")
+    );
+    let recorded = recorded_bodies.lock().expect("lock request log");
+    assert!(
+        recorded.iter().any(|body| {
+            body.contains("structured_output")
+                || body.contains("\"response_format\"")
+                || body.contains("\"text\":{\"format\"")
+        }),
+        "expected a fresh structured policy evaluation request for the materially different non-guarded candidate"
+    );
+}
+
 #[test]
 fn apply_recent_policy_decision_is_not_reused_for_materially_different_retry_guard() {
     let trigger = PolicyTriggerContext {
