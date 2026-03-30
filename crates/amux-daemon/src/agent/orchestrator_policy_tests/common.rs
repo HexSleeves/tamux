@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::ops::Deref;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::agent::{AgentConfig, AgentEngine};
@@ -7,7 +8,7 @@ use crate::agent::types::{
     GoalRunStepKind, GoalRunStepStatus, TaskLogLevel, TaskPriority, TaskStatus,
 };
 use crate::session_manager::SessionManager;
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -97,16 +98,33 @@ pub(super) fn policy_eval_context() -> PolicyEvaluationContext {
     }
 }
 
-pub(super) async fn test_engine() -> Arc<AgentEngine> {
+pub(super) struct TestEngine {
+    engine: Arc<AgentEngine>,
+    _root: TempDir,
+}
+
+impl Deref for TestEngine {
+    type Target = Arc<AgentEngine>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.engine
+    }
+}
+
+pub(super) async fn test_engine() -> TestEngine {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
-    AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    TestEngine {
+        engine,
+        _root: root,
+    }
 }
 
 pub(super) async fn policy_runtime_engine(
     response_json: &str,
     recorded_bodies: Arc<StdMutex<VecDeque<String>>>,
-) -> Arc<AgentEngine> {
+) -> TestEngine {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
     let server_url =
@@ -116,7 +134,11 @@ pub(super) async fn policy_runtime_engine(
     config.base_url = server_url;
     config.model = "gpt-4o-mini".to_string();
     config.api_key = "test-key".to_string();
-    AgentEngine::new_test(manager, config, root.path()).await
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    TestEngine {
+        engine,
+        _root: root,
+    }
 }
 
 pub(super) async fn spawn_policy_recording_server(

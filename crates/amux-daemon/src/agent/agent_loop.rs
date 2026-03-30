@@ -2761,7 +2761,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_loop_records_non_error_stuckness_for_policy_checkpoint() {
+    async fn post_tool_policy_checkpoint_pivots_for_non_error_stuckness_with_runtime_side_effect() {
         let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
         let root = tempdir().unwrap();
         let readable_path = root.path().join("policy-loop-note.txt");
@@ -2782,6 +2782,31 @@ mod tests {
 
         let engine = AgentEngine::new_test(manager, config, root.path()).await;
         let thread_id = "thread-policy-non-error-loop-proof";
+
+        {
+            let mut threads = engine.threads.write().await;
+            threads.insert(
+                thread_id.to_string(),
+                crate::agent::types::AgentThread {
+                    id: thread_id.to_string(),
+                    title: "Policy thread".to_string(),
+                    messages: vec![crate::agent::types::AgentMessage::user(
+                        "Investigate the failure",
+                        1,
+                    )],
+                    pinned: false,
+                    upstream_thread_id: None,
+                    upstream_transport: None,
+                    upstream_provider: None,
+                    upstream_model: None,
+                    upstream_assistant_id: None,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    created_at: 1,
+                    updated_at: 1,
+                },
+            );
+        }
 
         {
             let mut tasks = engine.tasks.lock().await;
@@ -2890,13 +2915,13 @@ mod tests {
             });
         }
 
-        let args_hash = crate::agent::episodic::counter_who::compute_approach_hash(
-            "read_file",
-            &format!(
-                "{{\"path\":\"{}\",\"max_lines\":1}}",
-                readable_path.display()
-            ),
-        );
+        let tool_args = serde_json::json!({
+            "path": readable_path.display().to_string(),
+            "max_lines": 1,
+        })
+        .to_string();
+        let args_hash =
+            crate::agent::episodic::counter_who::compute_approach_hash("read_file", &tool_args);
         {
             let mut stores = engine.episodic_store.write().await;
             let store = stores
@@ -2905,19 +2930,13 @@ mod tests {
             store.counter_who.tried_approaches = VecDeque::from(vec![
                 crate::agent::episodic::TriedApproach {
                     approach_hash: args_hash.clone(),
-                    description: format!(
-                        "read_file({{\"path\":\"{}\",\"max_lines\":1}})",
-                        readable_path.display()
-                    ),
+                    description: format!("read_file({tool_args})"),
                     outcome: crate::agent::episodic::EpisodeOutcome::Failure,
                     timestamp: 1,
                 },
                 crate::agent::episodic::TriedApproach {
                     approach_hash: args_hash.clone(),
-                    description: format!(
-                        "read_file({{\"path\":\"{}\",\"max_lines\":1}})",
-                        readable_path.display()
-                    ),
+                    description: format!("read_file({tool_args})"),
                     outcome: crate::agent::episodic::EpisodeOutcome::Failure,
                     timestamp: 2,
                 },
@@ -2940,78 +2959,59 @@ mod tests {
             }
         }
 
-        let outcome = engine
-            .send_message_inner(
-                Some(thread_id),
-                "Investigate the failure",
-                Some("task-policy-non-error-loop-proof"),
-                None,
-                None,
-                None,
-                None,
-                true,
-            )
-            .await
-            .expect("send message should complete");
+        let task_snapshot = {
+            let tasks = engine.tasks.lock().await;
+            tasks
+                .iter()
+                .find(|task| task.id == "task-policy-non-error-loop-proof")
+                .cloned()
+                .expect("task")
+        };
+        let recent_tool_outcomes = vec![summarize_tool_result_for_policy(
+            "read_file",
+            &ToolResult {
+                tool_call_id: "call_policy_read_1".to_string(),
+                name: "read_file".to_string(),
+                content: "ok\n".to_string(),
+                is_error: false,
+                pending_approval: None,
+            },
+        )];
 
-        assert!(!outcome.interrupted_for_approval);
-
-        let built_context = build_policy_context_for_tool_result(
+        let action = apply_post_tool_policy_checkpoint(
             &engine,
             thread_id,
-            &crate::agent::types::AgentTask {
-                id: "task-policy-non-error-loop-proof".to_string(),
-                title: "Investigate failure".to_string(),
-                description: "Inspect the failing path".to_string(),
-                status: TaskStatus::InProgress,
-                priority: crate::agent::types::TaskPriority::Normal,
-                progress: 0,
-                created_at: 1,
-                started_at: Some(1),
-                completed_at: None,
-                error: None,
-                result: None,
-                thread_id: Some(thread_id.to_string()),
-                source: "goal_run".to_string(),
-                notify_on_complete: false,
-                notify_channels: Vec::new(),
-                dependencies: Vec::new(),
-                command: None,
-                session_id: None,
-                goal_run_id: Some("goal-1".to_string()),
-                goal_run_title: Some("Test goal".to_string()),
-                goal_step_id: Some("step-1".to_string()),
-                goal_step_title: Some("Investigate failure".to_string()),
-                parent_task_id: None,
-                parent_thread_id: None,
-                runtime: "daemon".to_string(),
-                retry_count: 1,
-                max_retries: 2,
-                next_retry_at: None,
-                scheduled_at: None,
-                blocked_reason: None,
-                awaiting_approval_id: None,
-                lane_id: None,
-                last_error: None,
-                logs: Vec::new(),
-                tool_whitelist: None,
-                tool_blacklist: None,
-                override_provider: None,
-                override_model: None,
-                override_system_prompt: None,
-                context_budget_tokens: None,
-                context_overflow_action: None,
-                termination_conditions: None,
-                success_criteria: None,
-                max_duration_secs: None,
-                supervisor_config: None,
-                sub_agent_def_id: None,
-            },
+            "task-policy-non-error-loop-proof",
+            &task_snapshot,
             &args_hash,
-            &[],
+            &recent_tool_outcomes,
+            10,
         )
-        .await;
-        assert!(built_context.is_some(), "expected non-error stuckness to build a policy context");
+        .await
+        .expect("policy checkpoint should succeed")
+        .expect("policy checkpoint should apply an action");
+
+        assert_eq!(action, crate::agent::orchestrator_policy::PolicyLoopAction::RestartLoop);
+
+        let scope = crate::agent::orchestrator_policy::PolicyDecisionScope {
+            thread_id: thread_id.to_string(),
+            goal_run_id: Some("goal-1".to_string()),
+        };
+        let recent_decision = engine
+            .latest_policy_decision(&scope, 10)
+            .await
+            .expect("expected checkpoint to persist a policy decision");
+        assert_eq!(recent_decision.decision.action, crate::agent::orchestrator_policy::PolicyAction::Pivot);
+        assert_eq!(recent_decision.decision.strategy_hint.as_deref(), Some("Inspect the workspace state before more reads."));
+
+        let recorded = recorded_bodies.lock().expect("lock recorded bodies");
+        assert!(
+            recorded.iter().any(|body| {
+                body.contains("tamux orchestrator should continue, pivot, escalate, or halt_retries")
+            }),
+            "expected the policy checkpoint to issue the orchestrator policy evaluation prompt",
+        );
+        drop(recorded);
 
         let threads = engine.threads.read().await;
         let thread = threads.get(thread_id).expect("thread");
@@ -3019,8 +3019,11 @@ mod tests {
             thread
                 .messages
                 .iter()
-                .any(|message| message.role == MessageRole::Assistant),
-            "expected real loop run to finish with an assistant response",
+                .any(|message| {
+                    message.role == MessageRole::System
+                        && message.content.contains("Inspect the workspace state before more reads.")
+                }),
+            "expected pivot application to inject a strategy refresh system message",
         );
     }
 }

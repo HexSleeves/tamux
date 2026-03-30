@@ -63,7 +63,7 @@
 ```bash
 cargo test -p tamux-daemon orchestrator_policy -- --nocapture
 cargo test -p tamux-daemon policy_halt_aborts_before_guarded_tool_execution_and_persists_failure_trace -- --nocapture
-cargo test -p tamux-daemon policy_evaluates_non_error_stuckness_on_real_loop_path -- --nocapture
+cargo test -p tamux-daemon post_tool_policy_checkpoint_pivots_for_non_error_stuckness_with_runtime_side_effect -- --nocapture
 ```
 
 ## Success Criteria
