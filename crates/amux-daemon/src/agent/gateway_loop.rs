@@ -286,9 +286,34 @@ fn build_gateway_agent_prompt(
 
 const GATEWAY_TRIAGE_TIMEOUT_SECS: u64 = 12;
 const GATEWAY_AGENT_TIMEOUT_SECS: u64 = 120;
+const GATEWAY_AGENT_TIMEOUT_HIGH_REASONING_SECS: u64 = 420;
+const GATEWAY_STREAM_TIMEOUT_HIGH_REASONING_SECS: u64 = 300;
 // Allow enough headroom for provider-side rate limiting and chunked deliveries.
 const GATEWAY_SEND_RESULT_TIMEOUT_SECS: u64 = 180;
 const GATEWAY_EVENT_DRAIN_INTERVAL_MS: u64 = 150;
+
+fn is_high_reasoning_effort(effort: &str) -> bool {
+    matches!(
+        effort.trim().to_ascii_lowercase().as_str(),
+        "high" | "very_high" | "xhigh" | "max"
+    )
+}
+
+fn gateway_agent_timeout_for_reasoning(effort: &str) -> std::time::Duration {
+    std::time::Duration::from_secs(if is_high_reasoning_effort(effort) {
+        GATEWAY_AGENT_TIMEOUT_HIGH_REASONING_SECS
+    } else {
+        GATEWAY_AGENT_TIMEOUT_SECS
+    })
+}
+
+fn gateway_stream_timeout_for_reasoning(effort: &str) -> std::time::Duration {
+    std::time::Duration::from_secs(if is_high_reasoning_effort(effort) {
+        GATEWAY_STREAM_TIMEOUT_HIGH_REASONING_SECS
+    } else {
+        GATEWAY_AGENT_TIMEOUT_SECS
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Replay classification
@@ -1777,13 +1802,28 @@ impl AgentEngine {
                 history_window.as_deref(),
                 reply_tool_name,
             );
+            let gateway_timeout_budget = {
+                let config = self.config.read().await.clone();
+                self.resolve_provider_config(&config)
+                    .map(|provider| {
+                        (
+                            gateway_agent_timeout_for_reasoning(&provider.reasoning_effort),
+                            gateway_stream_timeout_for_reasoning(&provider.reasoning_effort),
+                        )
+                    })
+                    .unwrap_or((
+                        std::time::Duration::from_secs(GATEWAY_AGENT_TIMEOUT_SECS),
+                        std::time::Duration::from_secs(GATEWAY_AGENT_TIMEOUT_SECS),
+                    ))
+            };
 
             let send_result = Box::pin(tokio::time::timeout(
-                std::time::Duration::from_secs(GATEWAY_AGENT_TIMEOUT_SECS),
+                gateway_timeout_budget.0,
                 self.send_message_with_ephemeral_user_override(
                     existing_thread.as_deref(),
                     &msg.content,
                     &enriched_prompt,
+                    gateway_timeout_budget.1,
                 ),
             ))
             .await;
@@ -1793,7 +1833,7 @@ impl AgentEngine {
                     tracing::error!(
                         platform = %msg.platform,
                         channel = %msg.channel,
-                        timeout_secs = GATEWAY_AGENT_TIMEOUT_SECS,
+                        timeout_secs = gateway_timeout_budget.0.as_secs(),
                         "gateway: full agent response timed out"
                     );
 
@@ -2392,6 +2432,14 @@ mod tests {
             !prompt.contains("YOU MUST CALL"),
             "gateway prompt should not force a gateway send tool call"
         );
+    }
+
+    #[test]
+    fn gateway_high_reasoning_timeout_budgets_are_extended() {
+        assert_eq!(gateway_agent_timeout_for_reasoning("high").as_secs(), 420);
+        assert_eq!(gateway_stream_timeout_for_reasoning("high").as_secs(), 300);
+        assert_eq!(gateway_agent_timeout_for_reasoning("off").as_secs(), 120);
+        assert_eq!(gateway_stream_timeout_for_reasoning("off").as_secs(), 120);
     }
 
     #[test]

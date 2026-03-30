@@ -272,7 +272,7 @@ impl AgentEngine {
     pub async fn send_message(&self, thread_id: Option<&str>, content: &str) -> Result<String> {
         Ok(
             Box::pin(self.send_message_inner(
-                thread_id, content, None, None, None, None, true,
+                thread_id, content, None, None, None, None, None, true,
             ))
                 .await?
                 .thread_id,
@@ -284,6 +284,7 @@ impl AgentEngine {
         thread_id: Option<&str>,
         stored_content: &str,
         llm_user_override: &str,
+        stream_chunk_timeout: std::time::Duration,
     ) -> Result<String> {
         Ok(
             Box::pin(self.send_message_inner(
@@ -293,6 +294,7 @@ impl AgentEngine {
                 None,
                 None,
                 Some(llm_user_override),
+                Some(stream_chunk_timeout),
                 true,
             ))
             .await?
@@ -312,6 +314,7 @@ impl AgentEngine {
                 content,
                 None,
                 preferred_session_hint,
+                None,
                 None,
                 None,
                 true,
@@ -335,6 +338,7 @@ impl AgentEngine {
             Some(task_id),
             preferred_session_hint,
             backend_override,
+            None,
             None,
             true,
         ))
@@ -376,6 +380,7 @@ impl AgentEngine {
             preferred_session_hint,
             None,
             None,
+            None,
             true,
         ))
         .await?
@@ -411,6 +416,7 @@ impl AgentEngine {
                 &wrapped,
                 None,
                 preferred_session_hint,
+                None,
                 None,
                 None,
                 false,
@@ -713,7 +719,7 @@ mod tests {
             .unwrap_or(agent_loop_source.as_str());
 
         for required in [
-            "Box::pin(self.send_message_inner(\n                thread_id, content, None, None, None, None, true,\n            ))",
+            "Box::pin(self.send_message_inner(\n                thread_id, content, None, None, None, None, None, true,\n            ))",
             "Box::pin(self.send_message_inner(",
             "let target_thread_id = Box::pin(self.send_message_inner(",
         ] {
@@ -811,6 +817,7 @@ mod tests {
                 None,
                 "What model are you bro?",
                 "[discord message from mariuszkurman]: What model are you bro?\nYour final assistant response will be delivered back to the user automatically.",
+                std::time::Duration::from_secs(120),
             )
             .await
             .expect("send message with ephemeral override");
@@ -840,4 +847,5 @@ mod tests {
             "LLM request should replace the raw stored user text with the ephemeral override"
         );
     }
+
 }

@@ -461,7 +461,16 @@ mod tests {
 
         let result = tokio::time::timeout(
             Duration::from_secs(2),
-            engine.send_message_inner(None, "What model are you?", None, None, None, None, true),
+            engine.send_message_inner(
+                None,
+                "What model are you?",
+                None,
+                None,
+                None,
+                None,
+                None,
+                true,
+            ),
         )
         .await
         .expect("hung provider request should time out at the HTTP layer, not the test harness");

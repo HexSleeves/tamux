@@ -11,6 +11,8 @@ fn unexpected_stream_end_message(accumulated_content: &str) -> String {
     }
 }
 
+const DEFAULT_LLM_STREAM_CHUNK_TIMEOUT_SECS: u64 = 120;
+
 impl AgentEngine {
     pub(super) async fn send_message_inner(
         &self,
@@ -20,6 +22,7 @@ impl AgentEngine {
         preferred_session_hint: Option<&str>,
         backend_override: Option<&str>,
         llm_user_content_override: Option<&str>,
+        stream_chunk_timeout_override: Option<std::time::Duration>,
         record_operator: bool,
     ) -> Result<SendMessageOutcome> {
         let stored_user_content = content;
@@ -540,8 +543,9 @@ impl AgentEngine {
 
             // Timeout for individual chunk reads — if a provider stops sending
             // data mid-stream, we don't hang forever. The agent retries automatically.
-            const LLM_STREAM_CHUNK_TIMEOUT: std::time::Duration =
-                std::time::Duration::from_secs(120);
+            let llm_stream_chunk_timeout = stream_chunk_timeout_override.unwrap_or_else(|| {
+                std::time::Duration::from_secs(DEFAULT_LLM_STREAM_CHUNK_TIMEOUT_SECS)
+            });
             const MAX_STREAM_TIMEOUTS: u32 = 3;
             let mut stream_timed_out = false;
 
@@ -551,8 +555,8 @@ impl AgentEngine {
                         was_cancelled = true;
                         break;
                     }
-                    _ = tokio::time::sleep(LLM_STREAM_CHUNK_TIMEOUT) => {
-                        tracing::warn!("LLM stream timeout — no data for {}s", LLM_STREAM_CHUNK_TIMEOUT.as_secs());
+                    _ = tokio::time::sleep(llm_stream_chunk_timeout) => {
+                        tracing::warn!("LLM stream timeout — no data for {}s", llm_stream_chunk_timeout.as_secs());
                         self.record_llm_outcome(&config.provider, false).await;
                         stream_timed_out = true;
                         break;
