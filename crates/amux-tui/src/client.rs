@@ -1503,6 +1503,10 @@ impl DaemonClient {
         })
     }
 
+    pub fn set_provider_model(&self, provider_id: String, model: String) -> Result<()> {
+        self.send(ClientMessage::AgentSetProviderModel { provider_id, model })
+    }
+
     pub fn get_provider_auth_states(&self) -> Result<()> {
         self.send(ClientMessage::AgentGetProviderAuthStates)
     }

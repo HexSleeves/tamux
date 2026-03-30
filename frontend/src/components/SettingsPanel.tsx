@@ -118,15 +118,25 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
     if (lastDaemonConfigJsonRef.current === null) return;
     if (lastDaemonConfigJsonRef.current === nextConfigJson) return;
     const previousConfig = JSON.parse(lastDaemonConfigJsonRef.current);
+    const providerChanged = previousConfig.provider !== nextConfig.provider;
+    const modelChanged = previousConfig.model !== nextConfig.model;
+    const canSwitchProviderModel = (providerChanged || modelChanged)
+      && typeof bridge.agentSetProviderModel === "function";
     const changes = diffDaemonConfigEntries(previousConfig, nextConfig);
-    if (changes.length === 0) {
-      lastDaemonConfigJsonRef.current = nextConfigJson;
-      markAgentSettingsSynced();
-      return;
-    }
-    void Promise.all(
-      changes.map(({ keyPath, value }) => bridge.agentSetConfigItem?.(keyPath, value)),
-    ).then(() => {
+    const remainingChanges = canSwitchProviderModel
+      ? changes.filter(({ keyPath }) => keyPath !== "/provider" && keyPath !== "/model" && keyPath !== "/base_url")
+      : changes;
+    const syncConfig = async () => {
+      if (canSwitchProviderModel) {
+        await bridge.agentSetProviderModel?.(nextConfig.provider, nextConfig.model);
+      }
+      if (remainingChanges.length > 0) {
+        await Promise.all(
+          remainingChanges.map(({ keyPath, value }) => bridge.agentSetConfigItem?.(keyPath, value)),
+        );
+      }
+    };
+    void syncConfig().then(() => {
       lastDaemonConfigJsonRef.current = nextConfigJson;
       markAgentSettingsSynced();
     }).catch(() => {});

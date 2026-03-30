@@ -363,6 +363,29 @@ impl AgentEngine {
         Ok(merged)
     }
 
+    pub async fn set_provider_model_json(
+        &self,
+        provider_id: &str,
+        model: &str,
+    ) -> Result<AgentConfig> {
+        let current = self.get_config().await;
+        let selection = super::provider_resolution::resolve_provider_model_switch(
+            &current,
+            provider_id,
+            model,
+        )?;
+
+        let mut updated = current;
+        updated.provider = selection.provider_id;
+        updated.model = selection.model;
+        updated.base_url = selection.base_url;
+        updated.api_transport = selection.api_transport;
+        updated.context_window_tokens = selection.context_window_tokens;
+
+        self.set_config(updated.clone()).await;
+        Ok(updated)
+    }
+
     pub async fn merge_config_patch_json(&self, patch_json: &str) -> Result<AgentConfig> {
         let mut patch_value: Value =
             serde_json::from_str(patch_json).context("invalid config patch JSON")?;
@@ -692,6 +715,70 @@ mod tests {
             rehydrated.gateway.whatsapp_link_fallback_electron,
             "override should survive sqlite write/read roundtrip"
         );
+    }
+
+    #[tokio::test]
+    async fn set_provider_model_json_updates_provider_and_model_atomically() {
+        let root = tempdir().unwrap();
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+        let mut config = engine.get_config().await;
+        config.api_key = "sk-test".to_string();
+        engine.set_config(config).await;
+
+        engine
+            .set_provider_model_json("openai", "gpt-5.4-mini")
+            .await
+            .unwrap();
+
+        let updated = engine.get_config().await;
+        assert_eq!(updated.provider, "openai");
+        assert_eq!(updated.model, "gpt-5.4-mini");
+    }
+
+    #[tokio::test]
+    async fn set_provider_model_json_restores_canonical_base_url_for_predefined_provider() {
+        let root = tempdir().unwrap();
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+        let mut config = engine.get_config().await;
+        config.api_key = "groq-key".to_string();
+        config.base_url = "https://stale.example.invalid/v1".to_string();
+        engine.set_config(config).await;
+
+        engine
+            .set_provider_model_json("groq", "llama-3.3-70b-versatile")
+            .await
+            .unwrap();
+
+        let updated = engine.get_config().await;
+        assert_eq!(updated.provider, "groq");
+        assert_eq!(updated.model, "llama-3.3-70b-versatile");
+        assert_eq!(updated.base_url, "https://api.groq.com/openai/v1");
+    }
+
+    #[tokio::test]
+    async fn set_provider_model_json_rejects_invalid_model_without_changing_config() {
+        let root = tempdir().unwrap();
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+        let mut config = engine.get_config().await;
+        config.api_key = "sk-test".to_string();
+        engine.set_config(config).await;
+
+        let before = engine.get_config().await;
+        let result = engine
+            .set_provider_model_json("openai", "definitely-not-a-real-model")
+            .await;
+        assert!(result.is_err());
+
+        let after = engine.get_config().await;
+        assert_eq!(before.provider, after.provider);
+        assert_eq!(before.model, after.model);
+        assert_eq!(before.base_url, after.base_url);
     }
 
     #[test]

@@ -1,5 +1,14 @@
 use super::types::*;
-use anyhow::Result;
+use anyhow::{bail, Result};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProviderModelSwitch {
+    pub provider_id: String,
+    pub model: String,
+    pub base_url: String,
+    pub api_transport: ApiTransport,
+    pub context_window_tokens: u32,
+}
 
 fn finalize_resolved_provider(
     provider_id: &str,
@@ -115,6 +124,79 @@ pub(super) fn resolve_candidate_provider_config(
 
 pub(super) fn resolve_active_provider_config(config: &AgentConfig) -> Result<ProviderConfig> {
     resolve_provider_config_for(config, &config.provider, None)
+}
+
+pub(super) fn resolve_provider_model_switch(
+    config: &AgentConfig,
+    provider_id: &str,
+    model: &str,
+) -> Result<ProviderModelSwitch> {
+    let provider_id = provider_id.trim();
+    let model = model.trim();
+
+    if provider_id.is_empty() {
+        bail!("provider id cannot be empty");
+    }
+    if model.is_empty() {
+        bail!("model cannot be empty");
+    }
+
+    let mut base_url = config.base_url.clone();
+    let mut api_transport = config.api_transport;
+    let mut context_window_tokens = config.context_window_tokens;
+
+    if provider_id == "custom" {
+        if base_url.trim().is_empty() {
+            bail!("base URL cannot be empty for provider 'custom'");
+        }
+    } else {
+        let def = get_provider_definition(provider_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown provider '{provider_id}'"))?;
+        if !def.models.is_empty() && !def.models.iter().any(|entry| entry.id == model) {
+            bail!(
+                "model '{}' is not available for provider '{}'",
+                model,
+                provider_id
+            );
+        }
+        base_url = get_provider_base_url(provider_id, model, def.default_base_url);
+        api_transport = if provider_supports_transport(provider_id, config.api_transport) {
+            config.api_transport
+        } else {
+            def.default_transport
+        };
+        if let Some(model_def) = def.models.iter().find(|entry| entry.id == model) {
+            context_window_tokens = model_def.context_window;
+        }
+    }
+
+    match config.auth_source {
+        AuthSource::ApiKey => {
+            if config.api_key.trim().is_empty() {
+                bail!(
+                    "API key is required to switch provider '{}' to model '{}'",
+                    provider_id,
+                    model
+                );
+            }
+        }
+        AuthSource::ChatgptSubscription => {
+            if provider_id != "openai" || !super::llm_client::has_openai_chatgpt_subscription_auth() {
+                bail!(
+                    "ChatGPT subscription auth is not available for provider '{}'",
+                    provider_id
+                );
+            }
+        }
+    }
+
+    Ok(ProviderModelSwitch {
+        provider_id: provider_id.to_string(),
+        model: model.to_string(),
+        base_url,
+        api_transport,
+        context_window_tokens,
+    })
 }
 
 #[cfg(test)]

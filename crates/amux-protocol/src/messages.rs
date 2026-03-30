@@ -511,6 +511,12 @@ pub enum ClientMessage {
         value_json: String,
     },
 
+    /// Atomically switch the active provider and model in the daemon-owned config.
+    AgentSetProviderModel {
+        provider_id: String,
+        model: String,
+    },
+
     /// Fetch available models from a provider.
     AgentFetchModels {
         provider_id: String,

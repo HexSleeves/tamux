@@ -206,15 +206,28 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
         const nextConfig = buildDaemonAgentConfig(agentSettings);
         void amux.agentGetConfig().then((current: any) => {
             const changes = diffDaemonConfigEntries(current ?? {}, nextConfig);
-            if (changes.length === 0) {
+            const providerChanged = (current?.provider ?? null) !== nextConfig.provider;
+            const modelChanged = (current?.model ?? null) !== nextConfig.model;
+            const canSwitchAtomically = (providerChanged || modelChanged)
+                && typeof amux.agentSetProviderModel === "function";
+            const remainingChanges = canSwitchAtomically
+                ? changes.filter(({ keyPath }) => keyPath !== "/provider" && keyPath !== "/model" && keyPath !== "/base_url")
+                : changes;
+            if (remainingChanges.length === 0 && !canSwitchAtomically) {
                 markAgentSettingsSynced();
                 return;
             }
-            return Promise.all(
-                changes.map(({ keyPath, value }) => amux.agentSetConfigItem?.(keyPath, value)),
-            ).then(() => {
+            return (async () => {
+                if (canSwitchAtomically) {
+                    await amux.agentSetProviderModel?.(nextConfig.provider, nextConfig.model);
+                }
+                if (remainingChanges.length > 0) {
+                    await Promise.all(
+                        remainingChanges.map(({ keyPath, value }) => amux.agentSetConfigItem?.(keyPath, value)),
+                    );
+                }
                 markAgentSettingsSynced();
-            });
+            })();
         }).catch(() => { });
     }, [agentSettings, agentSettingsHydrated, agentSettingsDirty, markAgentSettingsSynced]);
 

@@ -161,6 +161,10 @@ enum AgentBridgeCommand {
         key_path: String,
         value_json: String,
     },
+    SetProviderModel {
+        provider_id: String,
+        model: String,
+    },
     HeartbeatGetItems,
     HeartbeatSetItems {
         items_json: String,
@@ -1513,6 +1517,14 @@ pub async fn run_agent_bridge() -> Result<()> {
                                     .send(ClientMessage::AgentSetConfigItem {
                                         key_path,
                                         value_json,
+                                    })
+                                    .await?;
+                            }
+                            AgentBridgeCommand::SetProviderModel { provider_id, model } => {
+                                framed
+                                    .send(ClientMessage::AgentSetProviderModel {
+                                        provider_id,
+                                        model,
                                     })
                                     .await?;
                             }
