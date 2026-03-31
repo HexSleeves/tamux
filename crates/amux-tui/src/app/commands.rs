@@ -1,9 +1,77 @@
 use super::*;
+use std::path::{Path, PathBuf};
 
 #[path = "commands_goal_targets.rs"]
 mod goal_targets;
 
 impl TuiModel {
+    fn resolve_preview_path(path: &str) -> PathBuf {
+        let raw = PathBuf::from(path);
+        if raw.is_absolute() {
+            raw
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(raw)
+        }
+    }
+
+    fn find_repo_root(path: &Path) -> Option<PathBuf> {
+        let mut current = path.parent().or_else(|| Some(path));
+        while let Some(candidate) = current {
+            if candidate.join(".git").exists() {
+                return Some(candidate.to_path_buf());
+            }
+            current = candidate.parent();
+        }
+        None
+    }
+
+    pub(super) fn open_chat_tool_file_preview(&mut self, message_index: usize) {
+        let Some(message) = self
+            .chat
+            .active_thread()
+            .and_then(|thread| thread.messages.get(message_index))
+        else {
+            return;
+        };
+        let Some(chip) = widgets::chat::tool_file_chip(message) else {
+            return;
+        };
+
+        let resolved_path = Self::resolve_preview_path(&chip.path);
+        let repo_root = Self::find_repo_root(&resolved_path);
+        let repo_relative_path = repo_root.as_ref().and_then(|root| {
+            resolved_path
+                .strip_prefix(root)
+                .ok()
+                .map(|path| path.to_string_lossy().to_string())
+        });
+        let target = ChatFilePreviewTarget {
+            path: resolved_path.to_string_lossy().to_string(),
+            repo_root: repo_root
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            repo_relative_path,
+        };
+
+        if let Some(repo_root) = target.repo_root.as_ref() {
+            self.send_daemon_command(DaemonCommand::RequestGitDiff {
+                repo_path: repo_root.clone(),
+                file_path: target.repo_relative_path.clone(),
+            });
+        } else {
+            self.send_daemon_command(DaemonCommand::RequestFilePreview {
+                path: target.path.clone(),
+                max_bytes: Some(65_536),
+            });
+        }
+
+        self.main_pane_view = MainPaneView::FilePreview(target);
+        self.task_view_scroll = 0;
+        self.focus = FocusArea::Chat;
+    }
+
     pub(super) fn filtered_goal_runs(&self) -> Vec<&task::GoalRun> {
         let query = self.modal.command_query().to_lowercase();
         self.tasks
@@ -89,14 +157,7 @@ impl TuiModel {
     }
 
     pub(super) fn sync_thread_picker_item_count(&mut self) {
-        let query = self.modal.command_query().to_lowercase();
-        let count = self
-            .chat
-            .threads()
-            .iter()
-            .filter(|thread| query.is_empty() || thread.title.to_lowercase().contains(&query))
-            .count()
-            + 1;
+        let count = widgets::thread_picker::filtered_threads(&self.chat, &self.modal).len() + 1;
         self.modal.set_picker_item_count(count);
     }
 
@@ -292,7 +353,7 @@ impl TuiModel {
 
         self.cleanup_concierge_on_navigate();
 
-        let final_content = if self.attachments.is_empty() {
+        let content_with_attachments = if self.attachments.is_empty() {
             prompt.clone()
         } else {
             let mut parts: Vec<String> = self
@@ -308,6 +369,9 @@ impl TuiModel {
             parts.push(prompt.clone());
             parts.join("\n\n")
         };
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let final_content =
+            input_refs::append_referenced_files_footer(&content_with_attachments, &cwd);
 
         let thread_id = self.chat.active_thread_id().map(String::from);
         if thread_id.is_none() {

@@ -62,10 +62,18 @@ struct PaneLayout {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct ChatFilePreviewTarget {
+    pub(crate) path: String,
+    pub(crate) repo_root: Option<String>,
+    pub(crate) repo_relative_path: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 enum MainPaneView {
     Conversation,
     Task(sidebar::SidebarItemTarget),
     WorkContext,
+    FilePreview(ChatFilePreviewTarget),
     GoalComposer,
 }
 

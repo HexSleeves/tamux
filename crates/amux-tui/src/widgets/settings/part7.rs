@@ -5,9 +5,9 @@ fn render_concierge_tab<'a>(
 ) -> Vec<Line<'a>> {
     let mut lines = Vec::new();
     lines.push(Line::raw(""));
-    lines.push(Line::from(Span::styled("  Concierge", theme.fg_active)));
+    lines.push(Line::from(Span::styled("  Rarog", theme.fg_active)));
     lines.push(Line::from(Span::styled(
-        "  Welcome agent and operational assistant",
+        "  Welcome agent and operational assistant (Rarog)",
         theme.fg_dim,
     )));
     lines.push(Line::raw(""));

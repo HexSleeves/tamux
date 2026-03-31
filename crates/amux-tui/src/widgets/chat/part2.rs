@@ -17,7 +17,7 @@ fn build_rendered_lines(
     if let Some(thread) = chat.active_thread() {
         for (idx, msg) in thread.messages.iter().enumerate() {
             let start = all_lines.len();
-            let msg_lines = super::message::message_to_lines(
+            let mut msg_lines = super::message::message_to_lines(
                 msg,
                 idx,
                 mode,
@@ -26,6 +26,9 @@ fn build_rendered_lines(
                 expanded,
                 expanded_tools,
             );
+            if let Some(first_line) = msg_lines.first_mut() {
+                append_tool_file_chip(first_line, msg, theme);
+            }
             let mut kinds =
                 classify_message_lines(msg, idx, mode, inner_width, expanded, expanded_tools);
 

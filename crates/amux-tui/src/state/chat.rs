@@ -458,7 +458,7 @@ impl ChatState {
                     thread.messages.push(message);
                 } else {
                     let title = if thread_id == "concierge" {
-                        "Concierge".to_string()
+                        "Rarog".to_string()
                     } else {
                         thread_id.clone()
                     };

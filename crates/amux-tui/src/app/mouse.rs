@@ -45,7 +45,9 @@ impl TuiModel {
                 if cursor_in_chat {
                     if matches!(
                         self.main_pane_view,
-                        MainPaneView::Task(_) | MainPaneView::WorkContext
+                        MainPaneView::Task(_)
+                            | MainPaneView::WorkContext
+                            | MainPaneView::FilePreview(_)
                     ) {
                         self.task_view_scroll = self.task_view_scroll.saturating_sub(3);
                         if self.work_context_drag_anchor.is_some()
@@ -96,7 +98,9 @@ impl TuiModel {
                 if cursor_in_chat {
                     if matches!(
                         self.main_pane_view,
-                        MainPaneView::Task(_) | MainPaneView::WorkContext
+                        MainPaneView::Task(_)
+                            | MainPaneView::WorkContext
+                            | MainPaneView::FilePreview(_)
                     ) {
                         self.task_view_scroll = self.task_view_scroll.saturating_add(3);
                         if self.work_context_drag_anchor.is_some()
@@ -206,6 +210,20 @@ impl TuiModel {
                         );
                         self.work_context_drag_anchor_point = point;
                         self.work_context_drag_current_point = point;
+                    } else if let MainPaneView::FilePreview(target) = &self.main_pane_view {
+                        if let Some(widgets::file_preview::FilePreviewHitTarget::ClosePreview) =
+                            widgets::file_preview::hit_test(
+                                chat_area,
+                                &self.tasks,
+                                target,
+                                Position::new(mouse.column, mouse.row),
+                                &self.theme,
+                            )
+                        {
+                            self.set_main_pane_conversation(FocusArea::Chat);
+                            self.status_line = "Closed preview".to_string();
+                            return;
+                        }
                     } else if let MainPaneView::Task(target) = &self.main_pane_view {
                         if let Some(hit) = widgets::task_view::hit_test(
                             chat_area,

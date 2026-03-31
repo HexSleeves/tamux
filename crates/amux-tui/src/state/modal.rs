@@ -19,6 +19,13 @@ pub enum ModalKind {
     WhatsAppLink,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThreadPickerTab {
+    #[default]
+    Swarog,
+    Rarog,
+}
+
 #[derive(Debug, Clone)]
 pub struct CommandItem {
     pub command: String,
@@ -43,6 +50,7 @@ pub struct ModalState {
     picker_cursor: usize,
     /// Override item count for non-command-palette pickers (providers, models, etc.)
     picker_item_count: Option<usize>,
+    thread_picker_tab: ThreadPickerTab,
     whatsapp_link: WhatsAppLinkState,
 }
 
@@ -90,6 +98,7 @@ impl ModalState {
             filtered_indices: filtered,
             picker_cursor: 0,
             picker_item_count: None,
+            thread_picker_tab: ThreadPickerTab::Swarog,
             whatsapp_link: WhatsAppLinkState::default(),
         }
     }
@@ -120,6 +129,13 @@ impl ModalState {
         } else {
             self.picker_cursor.min(count - 1)
         };
+    }
+    pub fn thread_picker_tab(&self) -> ThreadPickerTab {
+        self.thread_picker_tab
+    }
+    pub fn set_thread_picker_tab(&mut self, tab: ThreadPickerTab) {
+        self.thread_picker_tab = tab;
+        self.picker_cursor = 0;
     }
     pub fn whatsapp_link(&self) -> &WhatsAppLinkState {
         &self.whatsapp_link
@@ -229,6 +245,9 @@ impl ModalState {
                 self.command_query.clear();
                 self.picker_cursor = 0;
                 self.picker_item_count = None;
+                if kind == ModalKind::ThreadPicker {
+                    self.thread_picker_tab = ThreadPickerTab::Swarog;
+                }
                 self.refilter();
             }
             ModalAction::Pop => {

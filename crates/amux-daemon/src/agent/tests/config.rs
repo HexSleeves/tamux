@@ -289,7 +289,10 @@ async fn set_config_item_json_persists_managed_execution_security_level() {
         .expect("managed execution security level should update");
 
     let updated = engine.get_config().await;
-    assert_eq!(updated.managed_execution.security_level, SecurityLevel::Yolo);
+    assert_eq!(
+        updated.managed_execution.security_level,
+        SecurityLevel::Yolo
+    );
 
     let persisted_items = engine
         .history
@@ -298,7 +301,10 @@ async fn set_config_item_json_persists_managed_execution_security_level() {
         .expect("persisted config should be readable");
     let rehydrated =
         load_config_from_items(persisted_items).expect("persisted config should deserialize");
-    assert_eq!(rehydrated.managed_execution.security_level, SecurityLevel::Yolo);
+    assert_eq!(
+        rehydrated.managed_execution.security_level,
+        SecurityLevel::Yolo
+    );
 }
 
 #[tokio::test]

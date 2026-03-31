@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ApprovalDecision, ApprovalPayload, CommunitySkillEntry, GatewayBootstrapPayload,
-    GatewayReloadCommand, GatewaySendRequest, GatewayShutdownCommand, GitInfo, HistorySearchHit,
-    ManagedCommandSource, OscNotificationPayload, PluginCommandInfo, PluginInfo, SessionId,
-    SessionInfo, SkillVariantPublic, SnapshotInfo, SymbolMatch, TelemetryLedgerStatus,
+    ApprovalDecision, ApprovalPayload, AsyncCommandCapability, CommunitySkillEntry,
+    GatewayBootstrapPayload, GatewayReloadCommand, GatewaySendRequest, GatewayShutdownCommand,
+    GitInfo, HistorySearchHit, ManagedCommandSource, OperationStatusSnapshot,
+    OscNotificationPayload, PluginCommandInfo, PluginInfo, SessionId, SessionInfo,
+    SkillVariantPublic, SnapshotInfo, SymbolMatch, TelemetryLedgerStatus,
 };
 
 #[rustfmt::skip]
@@ -51,6 +52,9 @@ pub enum DaemonMessage {
     SessionCheckpointed { id: SessionId, ok: bool, path: Option<String>, message: String },
     Pong,
     Error { message: String },
+    AgentAsyncCommandCapabilityAck { capability: AsyncCommandCapability },
+    OperationAccepted { operation_id: String, kind: String, #[serde(default)] dedup: Option<String>, revision: u64 },
+    OperationStatus { snapshot: OperationStatusSnapshot },
     AgentEvent { event_json: String },
     AgentThreadList { threads_json: String },
     AgentThreadDetail { thread_json: String },

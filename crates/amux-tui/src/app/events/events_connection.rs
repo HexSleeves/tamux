@@ -24,9 +24,6 @@ impl TuiModel {
             cols: self.width.max(80),
             rows: self.height.max(24),
         });
-        self.send_daemon_command(DaemonCommand::RequestConciergeWelcome);
-        self.concierge
-            .reduce(crate::state::ConciergeAction::WelcomeLoading(true));
     }
 
     pub(in crate::app) fn handle_disconnected_event(&mut self) {

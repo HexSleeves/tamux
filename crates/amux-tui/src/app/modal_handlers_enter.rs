@@ -51,9 +51,11 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
             if cursor == 0 {
                 model.start_new_thread_view();
                 model.status_line = "New conversation".to_string();
-            } else if let Some(thread) = model.chat.threads().get(cursor - 1) {
+            } else if let Some(thread) =
+                widgets::thread_picker::filtered_threads(&model.chat, &model.modal).get(cursor - 1)
+            {
                 let tid = thread.id.clone();
-                let title = thread.title.clone();
+                let title = widgets::thread_picker::thread_display_title(thread);
                 model.open_thread_conversation(tid);
                 model.status_line = format!("Thread: {}", title);
             }
@@ -140,7 +142,7 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                             model.concierge.model = Some(default_model);
                         }
                         model.send_concierge_config();
-                        model.status_line = format!("Concierge provider: {}", def.name);
+                        model.status_line = format!("Rarog provider: {}", def.name);
                     }
                     SettingsPickerTarget::Model
                     | SettingsPickerTarget::SubAgentModel
@@ -216,7 +218,7 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                     SettingsPickerTarget::ConciergeModel => {
                         model.concierge.model = Some(model_id.clone());
                         model.send_concierge_config();
-                        model.status_line = format!("Concierge model: {}", model_id);
+                        model.status_line = format!("Rarog model: {}", model_id);
                     }
                     SettingsPickerTarget::Provider
                     | SettingsPickerTarget::SubAgentProvider

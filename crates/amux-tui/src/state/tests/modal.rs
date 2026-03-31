@@ -77,6 +77,16 @@ fn push_resets_query_and_cursor() {
 }
 
 #[test]
+fn thread_picker_push_resets_to_swarog_tab() {
+    let mut state = ModalState::new();
+    state.set_thread_picker_tab(ThreadPickerTab::Rarog);
+
+    state.reduce(ModalAction::Push(ModalKind::ThreadPicker));
+
+    assert_eq!(state.thread_picker_tab(), ThreadPickerTab::Swarog);
+}
+
+#[test]
 fn empty_filter_shows_all_items() {
     let state = ModalState::new();
     assert_eq!(state.filtered_items().len(), state.command_items().len());

@@ -81,6 +81,10 @@ impl TuiModel {
                 self.chat.select_message(Some(idx));
                 self.chat.toggle_tool_expansion(idx);
             }
+            Some(chat::ChatHitTarget::ToolFilePath { message_index }) => {
+                self.chat.select_message(Some(message_index));
+                self.open_chat_tool_file_preview(message_index);
+            }
             Some(chat::ChatHitTarget::RetryStop) => {
                 if let Some(thread_id) = self.chat.active_thread_id().map(str::to_string) {
                     self.cancelled_thread_id = Some(thread_id.clone());
@@ -326,43 +330,21 @@ impl TuiModel {
                     }
                 }
                 modal::ModalKind::ThreadPicker => {
-                    let inner = Block::default()
-                        .borders(Borders::ALL)
-                        .border_type(BorderType::Double)
-                        .inner(overlay_area);
-                    let chunks = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([
-                            Constraint::Length(1),
-                            Constraint::Length(1),
-                            Constraint::Min(1),
-                            Constraint::Length(1),
-                        ])
-                        .split(inner);
-                    if mouse.row >= chunks[2].y
-                        && mouse.row < chunks[2].y.saturating_add(chunks[2].height)
-                    {
-                        let row_idx = mouse.row.saturating_sub(chunks[2].y) as usize;
-                        let query = self.modal.command_query().to_lowercase();
-                        let filtered_threads = self
-                            .chat
-                            .threads()
-                            .iter()
-                            .filter(|thread| {
-                                query.is_empty() || thread.title.to_lowercase().contains(&query)
-                            })
-                            .count();
-                        let total_items = filtered_threads + 1;
-                        let (visible_start, visible_len) = widgets::thread_picker::visible_window(
-                            self.modal.picker_cursor(),
-                            total_items,
-                            chunks[2].height as usize,
-                        );
-                        if row_idx < visible_len {
-                            let idx = visible_start + row_idx;
+                    match widgets::thread_picker::hit_test(
+                        overlay_area,
+                        &self.chat,
+                        &self.modal,
+                        Position::new(mouse.column, mouse.row),
+                    ) {
+                        Some(widgets::thread_picker::ThreadPickerHitTarget::Tab(tab)) => {
+                            self.modal.set_thread_picker_tab(tab);
+                            self.sync_thread_picker_item_count();
+                        }
+                        Some(widgets::thread_picker::ThreadPickerHitTarget::Item(idx)) => {
                             self.modal_navigate_to(idx);
                             self.handle_modal_enter(kind);
                         }
+                        None => {}
                     }
                 }
                 modal::ModalKind::GoalPicker => {

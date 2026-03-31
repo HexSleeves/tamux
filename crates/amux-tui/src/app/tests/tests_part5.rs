@@ -390,3 +390,173 @@
         }
     }
 
+    #[test]
+    fn clicking_chat_file_chip_requests_file_preview() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.show_sidebar_override = Some(false);
+        model.focus = FocusArea::Chat;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+        let temp_path = std::env::temp_dir().join(format!(
+            "tamux-chat-preview-{}.txt",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&temp_path, "preview me\n").expect("fixture file should be writable");
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Tool,
+                tool_name: Some("read_file".to_string()),
+                tool_arguments: Some(
+                    serde_json::json!({ "path": temp_path.display().to_string() }).to_string(),
+                ),
+                tool_status: Some("done".to_string()),
+                content: "preview me".to_string(),
+                ..Default::default()
+            },
+        });
+
+        let input_start_row = model.height.saturating_sub(model.input_height() + 1);
+        let chat_area = Rect::new(0, 3, model.width, input_start_row.saturating_sub(3));
+        let chip_pos = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .find_map(|row| {
+                (chat_area.x..chat_area.x.saturating_add(chat_area.width)).find_map(|column| {
+                    let pos = Position::new(column, row);
+                    if widgets::chat::hit_test(
+                        chat_area,
+                        &model.chat,
+                        &model.theme,
+                        model.tick_counter,
+                        pos,
+                    ) == Some(chat::ChatHitTarget::ToolFilePath { message_index: 0 })
+                    {
+                        Some(pos)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .expect("tool row should expose a clickable file chip");
+
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: chip_pos.x,
+            row: chip_pos.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: chip_pos.x,
+            row: chip_pos.y,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        match cmd_rx.try_recv() {
+            Ok(DaemonCommand::RequestFilePreview { path, max_bytes }) => {
+                assert_eq!(path, temp_path.display().to_string());
+                assert_eq!(max_bytes, Some(65_536));
+            }
+            other => panic!("expected file preview request, got {:?}", other),
+        }
+        assert!(matches!(model.main_pane_view, MainPaneView::FilePreview(_)));
+    }
+
+    #[test]
+    fn clicking_repo_backed_chat_file_chip_requests_git_diff() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.show_sidebar_override = Some(false);
+        model.focus = FocusArea::Chat;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+        let repo_root = "/home/mkurman/gitlab/it/cmux-next";
+        let repo_path = format!("{repo_root}/README.md");
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Tool,
+                tool_name: Some("write_file".to_string()),
+                tool_arguments: Some(serde_json::json!({ "path": repo_path }).to_string()),
+                tool_status: Some("done".to_string()),
+                content: "updated".to_string(),
+                ..Default::default()
+            },
+        });
+
+        let input_start_row = model.height.saturating_sub(model.input_height() + 1);
+        let chat_area = Rect::new(0, 3, model.width, input_start_row.saturating_sub(3));
+        let chip_pos = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .find_map(|row| {
+                (chat_area.x..chat_area.x.saturating_add(chat_area.width)).find_map(|column| {
+                    let pos = Position::new(column, row);
+                    if widgets::chat::hit_test(
+                        chat_area,
+                        &model.chat,
+                        &model.theme,
+                        model.tick_counter,
+                        pos,
+                    ) == Some(chat::ChatHitTarget::ToolFilePath { message_index: 0 })
+                    {
+                        Some(pos)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .expect("tool row should expose a clickable repo-backed file chip");
+
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: chip_pos.x,
+            row: chip_pos.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: chip_pos.x,
+            row: chip_pos.y,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        match cmd_rx.try_recv() {
+            Ok(DaemonCommand::RequestGitDiff { repo_path, file_path }) => {
+                assert_eq!(repo_path, repo_root);
+                assert_eq!(file_path.as_deref(), Some("README.md"));
+            }
+            other => panic!("expected git diff request, got {:?}", other),
+        }
+        assert!(matches!(model.main_pane_view, MainPaneView::FilePreview(_)));
+    }
+
+    #[test]
+    fn closing_chat_file_preview_returns_to_conversation() {
+        let mut model = build_model();
+        model.focus = FocusArea::Chat;
+        model.main_pane_view = MainPaneView::FilePreview(ChatFilePreviewTarget {
+            path: "/tmp/demo.txt".to_string(),
+            repo_root: None,
+            repo_relative_path: None,
+        });
+
+        let handled = model.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+
+        assert!(!handled);
+        assert!(matches!(model.main_pane_view, MainPaneView::Conversation));
+        assert_eq!(model.focus, FocusArea::Chat);
+    }
+

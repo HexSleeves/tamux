@@ -67,6 +67,9 @@ pub enum ChatHitTarget {
     Message(usize),
     ReasoningToggle(usize),
     ToolToggle(usize),
+    ToolFilePath {
+        message_index: usize,
+    },
     RetryStop,
     MessageAction {
         message_index: usize,

@@ -192,6 +192,25 @@
     }
 
     #[test]
+    fn rarog_tab_uses_rarog_label() {
+        let mut settings = SettingsState::new();
+        settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+            SettingsTab::Concierge,
+        ));
+        let concierge = crate::state::concierge::ConciergeState::new();
+
+        let lines = render_concierge_tab(&settings, &concierge, &ThemeTokens::default());
+        let text = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("Rarog"));
+        assert!(!text.contains("Concierge"));
+    }
+
+    #[test]
     fn subagent_editor_shows_live_name_edit_buffer() {
         let mut settings = SettingsState::new();
         settings.reduce(crate::state::settings::SettingsAction::SwitchTab(

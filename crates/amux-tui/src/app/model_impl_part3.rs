@@ -84,6 +84,11 @@ impl TuiModel {
                 self.chat.active_thread_id().map(str::to_string),
                 None,
             ),
+            MainPaneView::FilePreview(target) => (
+                "task:file_preview".to_string(),
+                self.chat.active_thread_id().map(str::to_string),
+                target.repo_relative_path.clone(),
+            ),
             MainPaneView::GoalComposer => (
                 "task:goal_composer".to_string(),
                 self.chat.active_thread_id().map(str::to_string),

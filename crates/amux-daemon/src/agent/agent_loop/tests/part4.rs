@@ -132,7 +132,9 @@ async fn send_message_request_uses_spawned_persona_identity_in_continuity_summar
         .lock()
         .expect("lock recorded assistant bodies");
     assert!(
-        recorded.iter().any(|body| body.contains("## Working Continuity")),
+        recorded
+            .iter()
+            .any(|body| body.contains("## Working Continuity")),
         "expected the execution prompt to include a continuity summary for spawned personas",
     );
     assert!(
@@ -142,13 +144,15 @@ async fn send_message_request_uses_spawned_persona_identity_in_continuity_summar
         "expected continuity summary to use the spawned persona name",
     );
     assert!(
-        recorded.iter().any(|body| body.contains("comparing tradeoffs")),
+        recorded
+            .iter()
+            .any(|body| body.contains("comparing tradeoffs")),
         "expected continuity summary to include the spawned persona guidance",
     );
     assert!(
-        recorded.iter().all(|body| !body.contains(&format!(
-            "I am carrying this forward as {MAIN_AGENT_NAME}."
-        ))),
+        recorded.iter().all(
+            |body| !body.contains(&format!("I am carrying this forward as {MAIN_AGENT_NAME}."))
+        ),
         "spawned persona continuity should not fall back to the main agent name",
     );
 }

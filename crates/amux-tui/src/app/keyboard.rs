@@ -271,6 +271,7 @@ impl TuiModel {
                         match &self.main_pane_view {
                             MainPaneView::Task(_)
                             | MainPaneView::WorkContext
+                            | MainPaneView::FilePreview(_)
                             | MainPaneView::GoalComposer => {}
                             MainPaneView::Conversation => {
                                 if self.chat.selected_message().is_some() {

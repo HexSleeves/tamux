@@ -2,6 +2,55 @@ fn render_streaming_markdown(content: &str, width: usize) -> Vec<Line<'static>> 
     super::message::render_markdown_pub(content, width)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolFileChip {
+    pub path: String,
+    pub tool_name: String,
+}
+
+pub(crate) fn tool_file_chip(message: &AgentMessage) -> Option<ToolFileChip> {
+    let tool_name = message.tool_name.as_deref()?;
+    if !matches!(
+        tool_name,
+        "read_file"
+            | "write_file"
+            | "create_file"
+            | "append_to_file"
+            | "replace_in_file"
+            | "apply_file_patch"
+    ) {
+        return None;
+    }
+
+    let arguments = message.tool_arguments.as_deref()?;
+    let value: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    let path = value
+        .get("path")
+        .or_else(|| value.get("filePath"))
+        .or_else(|| value.get("file_path"))
+        .and_then(|value| value.as_str())?
+        .to_string();
+
+    Some(ToolFileChip {
+        path,
+        tool_name: tool_name.to_string(),
+    })
+}
+
+pub(crate) fn append_tool_file_chip(
+    line: &mut Line<'static>,
+    message: &AgentMessage,
+    theme: &ThemeTokens,
+) {
+    let Some(chip) = tool_file_chip(message) else {
+        return;
+    };
+
+    line.spans.push(Span::raw(" "));
+    line.spans
+        .push(Span::styled(format!("[{}]", chip.path), theme.accent_primary));
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SelectionPoint {
     pub row: usize,

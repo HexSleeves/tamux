@@ -25,6 +25,8 @@ if matches!(
         ClientMessage::AgentResolveTaskApproval{ .. } |
         ClientMessage::AgentSubscribe |
         ClientMessage::AgentUnsubscribe |
+        ClientMessage::AgentDeclareAsyncCommandCapability{ .. } |
+        ClientMessage::AgentGetOperationStatus{ .. } |
         ClientMessage::AgentGetSubagentMetrics{ .. } |
         ClientMessage::AgentListCheckpoints{ .. } |
         ClientMessage::AgentRestoreCheckpoint{ .. } |
@@ -350,6 +352,27 @@ if matches!(
                 ClientMessage::AgentUnsubscribe => {
                     agent_event_rx = None;
                     tracing::info!("client unsubscribed from agent events");
+                }
+
+                ClientMessage::AgentDeclareAsyncCommandCapability { capability } => {
+                    async_command_capability = Some(capability.clone());
+                    framed
+                        .send(DaemonMessage::AgentAsyncCommandCapabilityAck { capability })
+                        .await?;
+                }
+
+                ClientMessage::AgentGetOperationStatus { operation_id } => {
+                    if let Some(snapshot) = operation_registry().snapshot(&operation_id) {
+                        framed
+                            .send(DaemonMessage::OperationStatus { snapshot })
+                            .await?;
+                    } else {
+                        framed
+                            .send(DaemonMessage::AgentError {
+                                message: format!("unknown operation id: {operation_id}"),
+                            })
+                            .await?;
+                    }
                 }
 
                 ClientMessage::AgentGetSubagentMetrics { task_id } => {

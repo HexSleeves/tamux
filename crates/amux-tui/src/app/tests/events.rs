@@ -63,11 +63,19 @@ fn first_raw_config_load_triggers_concierge_welcome_request() {
         }
     }));
 
-    assert!(model.agent_config_loaded, "raw config should mark config as loaded");
+    assert!(
+        model.agent_config_loaded,
+        "raw config should mark config as loaded"
+    );
     assert_eq!(model.config.managed_security_level, "yolo");
-    assert!(model.concierge.loading, "first config load should start concierge welcome");
+    assert!(
+        model.concierge.loading,
+        "first config load should start concierge welcome"
+    );
     assert!(matches!(
-        daemon_rx.try_recv().expect("expected concierge welcome request"),
+        daemon_rx
+            .try_recv()
+            .expect("expected concierge welcome request"),
         DaemonCommand::RequestConciergeWelcome
     ));
 }

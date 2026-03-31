@@ -58,6 +58,107 @@ fn agent_provider_validation_codec_roundtrip() {
     }
 }
 
+#[test]
+fn async_command_capability_roundtrips() {
+    let payload = AsyncCommandCapability {
+        version: 1,
+        supports_operation_acceptance: true,
+    };
+    let bytes = bincode::serialize(&payload).unwrap();
+    let decoded: AsyncCommandCapability = bincode::deserialize(&bytes).unwrap();
+    assert_eq!(decoded.version, 1);
+    assert!(decoded.supports_operation_acceptance);
+}
+
+#[test]
+fn client_message_roundtrips_async_command_capability() {
+    let msg = ClientMessage::AgentDeclareAsyncCommandCapability {
+        capability: AsyncCommandCapability {
+            version: 1,
+            supports_operation_acceptance: true,
+        },
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+    assert!(matches!(
+        decoded,
+        ClientMessage::AgentDeclareAsyncCommandCapability { .. }
+    ));
+}
+
+#[test]
+fn daemon_message_roundtrips_async_command_capability_ack() {
+    let msg = DaemonMessage::AgentAsyncCommandCapabilityAck {
+        capability: AsyncCommandCapability {
+            version: 1,
+            supports_operation_acceptance: true,
+        },
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    assert!(matches!(
+        decoded,
+        DaemonMessage::AgentAsyncCommandCapabilityAck { .. }
+    ));
+}
+
+#[test]
+fn operation_status_snapshot_roundtrips() {
+    let snapshot = OperationStatusSnapshot {
+        operation_id: "op-1".to_string(),
+        kind: "concierge_welcome".to_string(),
+        state: OperationLifecycleState::Accepted,
+        dedup: Some("concierge:default".to_string()),
+        revision: 0,
+    };
+    let bytes = bincode::serialize(&snapshot).unwrap();
+    let decoded: OperationStatusSnapshot = bincode::deserialize(&bytes).unwrap();
+    assert_eq!(decoded.operation_id, "op-1");
+    assert!(matches!(decoded.state, OperationLifecycleState::Accepted));
+}
+
+#[test]
+fn daemon_message_roundtrips_operation_accepted() {
+    let msg = DaemonMessage::OperationAccepted {
+        operation_id: "op-1".to_string(),
+        kind: "concierge_welcome".to_string(),
+        dedup: Some("concierge:default".to_string()),
+        revision: 0,
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    assert!(matches!(decoded, DaemonMessage::OperationAccepted { .. }));
+}
+
+#[test]
+fn client_message_roundtrips_operation_status_query() {
+    let msg = ClientMessage::AgentGetOperationStatus {
+        operation_id: "op-1".to_string(),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+    assert!(matches!(
+        decoded,
+        ClientMessage::AgentGetOperationStatus { .. }
+    ));
+}
+
+#[test]
+fn daemon_message_roundtrips_operation_status_snapshot() {
+    let msg = DaemonMessage::OperationStatus {
+        snapshot: OperationStatusSnapshot {
+            operation_id: "op-1".to_string(),
+            kind: "concierge_welcome".to_string(),
+            state: OperationLifecycleState::Started,
+            dedup: Some("concierge:default".to_string()),
+            revision: 1,
+        },
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    assert!(matches!(decoded, DaemonMessage::OperationStatus { .. }));
+}
+
 fn sample_skill_variant() -> SkillVariantPublic {
     SkillVariantPublic {
         variant_id: "sv-001".to_string(),

@@ -156,6 +156,14 @@ impl TuiModel {
                             })
                         }),
                 ),
+                MainPaneView::FilePreview(target) => widgets::file_preview::render(
+                    frame,
+                    layout.chat,
+                    &self.tasks,
+                    target,
+                    &self.theme,
+                    self.task_view_scroll,
+                ),
                 MainPaneView::GoalComposer => {
                     render_helpers::render_goal_composer(frame, layout.chat, &self.theme)
                 }
@@ -216,6 +224,14 @@ impl TuiModel {
                                 })
                             })
                         }),
+                ),
+                MainPaneView::FilePreview(target) => widgets::file_preview::render(
+                    frame,
+                    layout.chat,
+                    &self.tasks,
+                    target,
+                    &self.theme,
+                    self.task_view_scroll,
                 ),
                 MainPaneView::GoalComposer => {
                     render_helpers::render_goal_composer(frame, layout.chat, &self.theme)

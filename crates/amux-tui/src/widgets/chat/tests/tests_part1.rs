@@ -72,6 +72,124 @@
         assert_eq!(hit, Some(ChatHitTarget::ToolToggle(0)));
     }
 
+#[test]
+fn read_file_tool_row_renders_clickable_path_chip() {
+    let chat = chat_with_messages(vec![AgentMessage {
+        role: MessageRole::Tool,
+        tool_name: Some("read_file".into()),
+        tool_arguments: Some(r#"{"path":"/tmp/demo.txt"}"#.into()),
+        tool_status: Some("done".into()),
+        content: "file contents".into(),
+        ..Default::default()
+    }]);
+
+    let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0);
+    let tool_line = lines
+        .iter()
+        .find(|line| line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ToolToggle))
+        .expect("tool row should be rendered");
+    let text = rendered_line_plain_text(tool_line);
+
+    assert!(text.contains("read_file"));
+    assert!(text.contains("[/tmp/demo.txt]"));
+}
+
+#[test]
+fn edit_tool_row_renders_clickable_path_chip() {
+    let chat = chat_with_messages(vec![AgentMessage {
+        role: MessageRole::Tool,
+        tool_name: Some("write_file".into()),
+        tool_arguments: Some(r#"{"path":"/tmp/demo.txt"}"#.into()),
+        tool_status: Some("done".into()),
+        content: "written".into(),
+        ..Default::default()
+    }]);
+
+    let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0);
+    let tool_line = lines
+        .iter()
+        .find(|line| line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ToolToggle))
+        .expect("tool row should be rendered");
+    let text = rendered_line_plain_text(tool_line);
+
+    assert!(text.contains("write_file"));
+    assert!(text.contains("[/tmp/demo.txt]"));
+}
+
+#[test]
+fn invalid_tool_arguments_do_not_create_file_chip() {
+    let chat = chat_with_messages(vec![AgentMessage {
+        role: MessageRole::Tool,
+        tool_name: Some("read_file".into()),
+        tool_arguments: Some("{not json}".into()),
+        tool_status: Some("done".into()),
+        content: "file contents".into(),
+        ..Default::default()
+    }]);
+
+    let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0);
+    let tool_line = lines
+        .iter()
+        .find(|line| line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ToolToggle))
+        .expect("tool row should be rendered");
+    let text = rendered_line_plain_text(tool_line);
+
+    assert!(text.contains("read_file"));
+    assert!(!text.contains("[/tmp/demo.txt]"));
+}
+
+#[test]
+fn hit_test_returns_tool_file_path_target() {
+    let chat = chat_with_messages(vec![AgentMessage {
+        role: MessageRole::Tool,
+        tool_name: Some("read_file".into()),
+        tool_arguments: Some(r#"{"path":"/tmp/demo.txt"}"#.into()),
+        tool_status: Some("done".into()),
+        content: "file contents".into(),
+        ..Default::default()
+    }]);
+
+    let area = Rect::new(0, 0, 100, 6);
+    let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+        .expect("chat should produce visible lines");
+    let tool_row = visible
+        .iter()
+        .position(|line| line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ToolToggle))
+        .expect("tool row should be visible");
+    let hit_line = &visible[tool_row];
+    let (plain, content_start, _) = rendered_line_content_bounds(hit_line);
+    let chip_col = plain
+        .find("[/tmp/demo.txt]")
+        .expect("path chip should be rendered on the tool row");
+
+    let chip_hit = hit_test(
+        area,
+        &chat,
+        &ThemeTokens::default(),
+        0,
+        Position::new(
+            inner.x + chip_col as u16 + 1,
+            inner.y + tool_row as u16,
+        ),
+    );
+    let row_hit = hit_test(
+        area,
+        &chat,
+        &ThemeTokens::default(),
+        0,
+        Position::new(
+            inner.x + content_start as u16 + 4,
+            inner.y + tool_row as u16,
+        ),
+    );
+
+    assert_eq!(
+        chip_hit,
+        Some(ChatHitTarget::ToolFilePath { message_index: 0 })
+    );
+    assert_eq!(row_hit, Some(ChatHitTarget::ToolToggle(0)));
+}
+
     #[test]
     fn streaming_append_preserves_locked_viewport() {
         let mut chat = ChatState::new();

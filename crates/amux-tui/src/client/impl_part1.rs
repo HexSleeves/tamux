@@ -137,6 +137,12 @@ impl DaemonClient {
 
         for request in [
             ClientMessage::AgentSubscribe,
+            ClientMessage::AgentDeclareAsyncCommandCapability {
+                capability: amux_protocol::AsyncCommandCapability {
+                    version: 1,
+                    supports_operation_acceptance: true,
+                },
+            },
             ClientMessage::AgentListThreads,
         ] {
             if let Err(err) = sink.send(request).await {

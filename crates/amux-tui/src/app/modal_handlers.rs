@@ -557,6 +557,16 @@ impl TuiModel {
                 self.close_top_modal();
                 self.input.reduce(input::InputAction::Clear);
             }
+            KeyCode::Left if kind == modal::ModalKind::ThreadPicker => {
+                self.modal
+                    .set_thread_picker_tab(modal::ThreadPickerTab::Swarog);
+                self.sync_thread_picker_item_count();
+            }
+            KeyCode::Right if kind == modal::ModalKind::ThreadPicker => {
+                self.modal
+                    .set_thread_picker_tab(modal::ThreadPickerTab::Rarog);
+                self.sync_thread_picker_item_count();
+            }
             KeyCode::Down => self.modal.reduce(modal::ModalAction::Navigate(1)),
             KeyCode::Up => self.modal.reduce(modal::ModalAction::Navigate(-1)),
             KeyCode::Enter => {

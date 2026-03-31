@@ -22,8 +22,12 @@ impl TuiModel {
     }
 
     pub(in crate::app) fn handle_agent_config_raw_event(&mut self, raw: serde_json::Value) {
+        let was_loaded = self.agent_config_loaded;
         self.apply_config_json(&raw);
         self.agent_config_loaded = true;
+        if self.connected && !was_loaded {
+            self.request_concierge_welcome();
+        }
     }
 
     pub(in crate::app) fn handle_models_fetched_event(

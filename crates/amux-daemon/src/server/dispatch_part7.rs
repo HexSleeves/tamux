@@ -161,78 +161,84 @@ if matches!(
                 ClientMessage::AgentRequestConciergeWelcome => {
                     tracing::info!("server: received AgentRequestConciergeWelcome");
 
-                    // If first-time user (onboarding not completed), deliver tier-adapted onboarding
-                    let (onboarding_done, tier) = {
-                        let cfg = agent.config.read().await;
-                        let done = cfg.tier.onboarding_completed;
-                        let t = cfg
-                            .tier
-                            .user_self_assessment
-                            .unwrap_or(crate::agent::capability_tier::CapabilityTier::Newcomer);
-                        (done, t)
-                    };
-                    let mut onboarding_just_delivered = false;
-                    if !onboarding_done {
-                        if let Err(e) = agent
-                            .concierge
-                            .deliver_onboarding(tier, &agent.threads)
-                            .await
-                        {
-                            tracing::warn!(
-                                "onboarding delivery failed, falling back to generic welcome: {e}"
-                            );
-                        } else {
-                            onboarding_just_delivered = true;
-                            agent
-                                .persist_thread_by_id(crate::agent::concierge::CONCIERGE_THREAD_ID)
-                                .await;
+                    let operation = async_command_capability
+                        .as_ref()
+                        .filter(|capability| capability.version >= 1 && capability.supports_operation_acceptance)
+                        .map(|_| {
+                            operation_registry().accept_operation(
+                                OPERATION_KIND_CONCIERGE_WELCOME,
+                                Some(concierge_welcome_dedup_key(&agent)),
+                            )
+                        });
+
+                    if let Some(operation) = operation.as_ref() {
+                        framed
+                            .send(DaemonMessage::OperationAccepted {
+                                operation_id: operation.operation_id.clone(),
+                                kind: operation.kind.clone(),
+                                dedup: operation.dedup.clone(),
+                                revision: operation.revision,
+                            })
+                            .await?;
+                    }
+
+                    if agent_event_rx.is_none() {
+                        agent_event_rx = Some(agent.subscribe());
+                    }
+
+                    let agent = agent.clone();
+                    let operation_id = operation.map(|record| record.operation_id);
+                    tokio::spawn(async move {
+                        if let Some(operation_id) = operation_id.as_deref() {
+                            operation_registry().mark_started(operation_id);
                         }
-                        // Mark onboarding as completed so it doesn't re-trigger on reconnect
-                        {
+
+                        let (onboarding_done, tier) = {
+                            let cfg = agent.config.read().await;
+                            let done = cfg.tier.onboarding_completed;
+                            let t = cfg
+                                .tier
+                                .user_self_assessment
+                                .unwrap_or(crate::agent::capability_tier::CapabilityTier::Newcomer);
+                            (done, t)
+                        };
+
+                        if !onboarding_done {
+                            if let Err(e) = agent
+                                .concierge
+                                .deliver_onboarding(tier, &agent.threads)
+                                .await
+                            {
+                                tracing::warn!(
+                                    "onboarding delivery failed, falling back to generic welcome: {e}"
+                                );
+                            } else {
+                                agent
+                                    .persist_thread_by_id(crate::agent::concierge::CONCIERGE_THREAD_ID)
+                                    .await;
+                                let mut cfg = agent.config.write().await;
+                                cfg.tier.onboarding_completed = true;
+                                if let Some(operation_id) = operation_id.as_deref() {
+                                    operation_registry().mark_completed(operation_id);
+                                }
+                                return;
+                            }
+
                             let mut cfg = agent.config.write().await;
                             cfg.tier.onboarding_completed = true;
                         }
-                    }
 
-                    // Skip welcome generation if onboarding was just delivered —
-                    // otherwise we'd emit two concierge messages back to back.
-                    if onboarding_just_delivered {
-                        continue;
-                    }
-
-                    // Generate welcome inline (awaits LLM call for non-Minimal levels).
-                    let welcome = agent
-                        .concierge
-                        .generate_welcome(&agent.threads, &agent.tasks)
-                        .await;
-                    if let Some((content, detail_level, actions)) = welcome {
+                        agent
+                            .concierge
+                            .on_client_connected(&agent.threads, &agent.tasks)
+                            .await;
                         agent
                             .persist_thread_by_id(crate::agent::concierge::CONCIERGE_THREAD_ID)
                             .await;
-                        let event = crate::agent::types::AgentEvent::ConciergeWelcome {
-                            thread_id: crate::agent::concierge::CONCIERGE_THREAD_ID.to_string(),
-                            content,
-                            detail_level,
-                            actions,
-                        };
-                        if let Some(fingerprint) = concierge_welcome_fingerprint(&event) {
-                            if last_concierge_welcome_fingerprint.as_deref()
-                                == Some(fingerprint.as_str())
-                            {
-                                tracing::info!(
-                                    "server: suppressed duplicate concierge welcome for client"
-                                );
-                                continue;
-                            }
-                            last_concierge_welcome_fingerprint = Some(fingerprint);
+                        if let Some(operation_id) = operation_id.as_deref() {
+                            operation_registry().mark_completed(operation_id);
                         }
-                        if let Ok(json) = serde_json::to_string(&event) {
-                            framed
-                                .send(DaemonMessage::AgentEvent { event_json: json })
-                                .await
-                                .ok();
-                        }
-                    }
+                    });
                 }
 
                 ClientMessage::AgentDismissConciergeWelcome => {

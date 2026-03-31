@@ -59,7 +59,9 @@ pub(crate) fn format_runtime_continuity_summary(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        bullets.push(format!("- I should lean into this persona's role: {agent_guidance}"));
+        bullets.push(format!(
+            "- I should lean into this persona's role: {agent_guidance}"
+        ));
     }
 
     if let Some(work_scope) = work_scope_label

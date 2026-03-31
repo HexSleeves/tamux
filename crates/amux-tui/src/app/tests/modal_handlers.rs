@@ -224,6 +224,105 @@ fn selecting_custom_provider_focuses_model_field_for_inline_entry() {
 }
 
 #[test]
+fn thread_picker_right_arrow_switches_to_rarog_tab() {
+    let (mut model, _daemon_rx) = make_model();
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ThreadPicker));
+
+    let quit = model.handle_key_modal(
+        KeyCode::Right,
+        KeyModifiers::NONE,
+        modal::ModalKind::ThreadPicker,
+    );
+
+    assert!(!quit);
+    assert_eq!(
+        model.modal.thread_picker_tab(),
+        modal::ThreadPickerTab::Rarog
+    );
+}
+
+#[test]
+fn thread_picker_enter_selects_filtered_rarog_thread() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.concierge.auto_cleanup_on_navigate = false;
+    model.chat.reduce(chat::ChatAction::ThreadListReceived(vec![
+        chat::AgentThread {
+            id: "regular-thread".into(),
+            title: "Regular work".into(),
+            ..Default::default()
+        },
+        chat::AgentThread {
+            id: "heartbeat-1".into(),
+            title: "HEARTBEAT SYNTHESIS".into(),
+            ..Default::default()
+        },
+    ]));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ThreadPicker));
+    model
+        .modal
+        .set_thread_picker_tab(modal::ThreadPickerTab::Rarog);
+    model.sync_thread_picker_item_count();
+    model.modal.reduce(modal::ModalAction::Navigate(1));
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ThreadPicker,
+    );
+
+    assert!(!quit);
+    assert_eq!(model.chat.active_thread_id(), Some("heartbeat-1"));
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::RequestThread(thread_id)) => assert_eq!(thread_id, "heartbeat-1"),
+        other => panic!("expected thread request, got {:?}", other),
+    }
+}
+
+#[test]
+fn thread_picker_mouse_click_switches_to_rarog_tab() {
+    let (mut model, _daemon_rx) = make_model();
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ThreadPicker));
+    let (_, overlay_area) = model
+        .current_modal_area()
+        .expect("thread picker modal should be visible");
+
+    let rarog_pos = (overlay_area.y..overlay_area.y.saturating_add(overlay_area.height))
+        .find_map(|row| {
+            (overlay_area.x..overlay_area.x.saturating_add(overlay_area.width)).find_map(|column| {
+                let pos = Position::new(column, row);
+                if widgets::thread_picker::hit_test(overlay_area, &model.chat, &model.modal, pos)
+                    == Some(widgets::thread_picker::ThreadPickerHitTarget::Tab(
+                        modal::ThreadPickerTab::Rarog,
+                    ))
+                {
+                    Some(pos)
+                } else {
+                    None
+                }
+            })
+        })
+        .expect("thread picker should expose a clickable Rarog tab");
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rarog_pos.x,
+        row: rarog_pos.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(
+        model.modal.thread_picker_tab(),
+        modal::ThreadPickerTab::Rarog
+    );
+}
+
+#[test]
 fn subagent_inline_edit_does_not_sync_main_config() {
     let (mut model, mut daemon_rx) = make_model();
     model.connected = true;

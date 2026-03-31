@@ -167,7 +167,10 @@ fn sync_config_to_daemon_does_not_emit_null_api_key_for_advanced_edits() {
                 key_path,
                 value_json,
             } => {
-                assert_ne!(key_path, "/api_key", "advanced edits must not null out api_key");
+                assert_ne!(
+                    key_path, "/api_key",
+                    "advanced edits must not null out api_key"
+                );
                 if key_path == "/max_context_messages" {
                     emitted_max_context_messages = true;
                     assert_eq!(value_json, "123");

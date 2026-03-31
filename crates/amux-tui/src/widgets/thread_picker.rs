@@ -3,9 +3,90 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
 
-use crate::state::chat::ChatState;
-use crate::state::modal::ModalState;
+use crate::state::chat::{AgentThread, ChatState};
+use crate::state::modal::{ModalState, ThreadPickerTab};
 use crate::theme::ThemeTokens;
+
+const TAB_GAP: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadPickerHitTarget {
+    Tab(ThreadPickerTab),
+    Item(usize),
+}
+
+fn thread_picker_layout(inner: Rect) -> [Rect; 5] {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // tabs
+            Constraint::Length(1), // search
+            Constraint::Length(1), // separator
+            Constraint::Min(1),    // list
+            Constraint::Length(1), // hints
+        ])
+        .split(inner);
+    [chunks[0], chunks[1], chunks[2], chunks[3], chunks[4]]
+}
+
+fn tab_specs() -> [(ThreadPickerTab, &'static str); 2] {
+    [
+        (ThreadPickerTab::Swarog, "[Swarog]"),
+        (ThreadPickerTab::Rarog, "[Rarog]"),
+    ]
+}
+
+fn thread_matches_query(thread: &AgentThread, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let lower = query.to_lowercase();
+    thread.title.to_lowercase().contains(&lower)
+        || thread_display_title(thread).to_lowercase().contains(&lower)
+}
+
+pub(crate) fn is_rarog_thread(thread: &AgentThread) -> bool {
+    thread.id == "concierge"
+        || thread.title.eq_ignore_ascii_case("concierge")
+        || thread.title.starts_with("HEARTBEAT SYNTHESIS")
+        || thread.title.starts_with("Heartbeat check:")
+}
+
+pub(crate) fn thread_display_title(thread: &AgentThread) -> String {
+    if thread.id == "concierge" || thread.title.eq_ignore_ascii_case("concierge") {
+        "Rarog".to_string()
+    } else {
+        thread.title.clone()
+    }
+}
+
+pub(crate) fn filtered_threads<'a>(
+    chat: &'a ChatState,
+    modal: &ModalState,
+) -> Vec<&'a AgentThread> {
+    let query = modal.command_query();
+    chat.threads()
+        .iter()
+        .filter(|thread| match modal.thread_picker_tab() {
+            ThreadPickerTab::Swarog => !is_rarog_thread(thread),
+            ThreadPickerTab::Rarog => is_rarog_thread(thread),
+        })
+        .filter(|thread| thread_matches_query(thread, query))
+        .collect()
+}
+
+fn tab_cells(area: Rect) -> Vec<(ThreadPickerTab, Rect, &'static str)> {
+    let mut x = area.x;
+    tab_specs()
+        .into_iter()
+        .map(|(tab, label)| {
+            let width = label.chars().count() as u16;
+            let rect = Rect::new(x, area.y, width, area.height);
+            x = x.saturating_add(width + TAB_GAP);
+            (tab, rect, label)
+        })
+        .collect()
+}
 
 pub(crate) fn visible_window(
     cursor: usize,
@@ -40,20 +121,31 @@ pub fn render(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.height < 4 {
+    if inner.height < 5 {
         return;
     }
 
-    // Split: search input (1) + separator (1) + list (flex) + hints (1)
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // search
-            Constraint::Length(1), // separator
-            Constraint::Min(1),    // list
-            Constraint::Length(1), // hints
-        ])
-        .split(inner);
+    let [tabs_row, search_row, separator_row, list_row, hints_row] = thread_picker_layout(inner);
+
+    let tab_line = Line::from(
+        tab_cells(tabs_row)
+            .into_iter()
+            .enumerate()
+            .flat_map(|(index, (tab, _, label))| {
+                let style = if tab == modal.thread_picker_tab() {
+                    theme.accent_primary
+                } else {
+                    theme.fg_dim
+                };
+                let mut spans = vec![Span::styled(label, style)];
+                if index + 1 < tab_specs().len() {
+                    spans.push(Span::raw(" "));
+                }
+                spans
+            })
+            .collect::<Vec<_>>(),
+    );
+    frame.render_widget(Paragraph::new(tab_line), tabs_row);
 
     // Search input
     let query = modal.command_query();
@@ -73,27 +165,21 @@ pub fn render(
             Span::raw("\u{2588}")
         },
     ]);
-    frame.render_widget(Paragraph::new(input_line), chunks[0]);
+    frame.render_widget(Paragraph::new(input_line), search_row);
 
     // Separator
     let sep = Line::from(Span::styled(
-        "\u{2500}".repeat(chunks[1].width as usize),
+        "\u{2500}".repeat(separator_row.width as usize),
         theme.fg_dim,
     ));
-    frame.render_widget(Paragraph::new(sep), chunks[1]);
+    frame.render_widget(Paragraph::new(sep), separator_row);
 
     // Build thread list
-    let threads = chat.threads();
     let active_id = chat.active_thread_id();
-    let search = query.to_lowercase();
-
-    let filtered_threads: Vec<_> = threads
-        .iter()
-        .filter(|t| search.is_empty() || t.title.to_lowercase().contains(&search))
-        .collect();
+    let filtered_threads = filtered_threads(chat, modal);
 
     let cursor = modal.picker_cursor();
-    let list_h = chunks[2].height as usize;
+    let list_h = list_row.height as usize;
     let inner_w = inner.width as usize;
     let total_items = filtered_threads.len() + 1;
     let (visible_start, visible_len) = visible_window(cursor, total_items, list_h);
@@ -131,11 +217,18 @@ pub fn render(
                         let tokens = thread.total_input_tokens + thread.total_output_tokens;
                         let token_str = format_tokens(tokens);
 
+                        let display_title = thread_display_title(thread);
                         let max_title = inner_w.saturating_sub(25);
-                        let title = if thread.title.len() > max_title && max_title > 3 {
-                            format!("{}...", &thread.title[..max_title - 3])
+                        let title = if display_title.chars().count() > max_title && max_title > 3 {
+                            format!(
+                                "{}...",
+                                display_title
+                                    .chars()
+                                    .take(max_title - 3)
+                                    .collect::<String>()
+                            )
                         } else {
-                            thread.title.clone()
+                            display_title
                         };
 
                         if is_selected {
@@ -172,19 +265,61 @@ pub fn render(
         .collect();
 
     let list = List::new(list_items);
-    frame.render_widget(list, chunks[2]);
+    frame.render_widget(list, list_row);
 
     // Hints
     let hints = Line::from(vec![
         Span::raw(" "),
         Span::styled("↑↓", theme.fg_active),
         Span::styled(" navigate  ", theme.fg_dim),
+        Span::styled("←→", theme.fg_active),
+        Span::styled(" source  ", theme.fg_dim),
         Span::styled("Enter", theme.fg_active),
         Span::styled(" select  ", theme.fg_dim),
         Span::styled("Esc", theme.fg_active),
         Span::styled(" close", theme.fg_dim),
     ]);
-    frame.render_widget(Paragraph::new(hints), chunks[3]);
+    frame.render_widget(Paragraph::new(hints), hints_row);
+}
+
+pub fn hit_test(
+    area: Rect,
+    chat: &ChatState,
+    modal: &ModalState,
+    mouse: Position,
+) -> Option<ThreadPickerHitTarget> {
+    if !area.contains(mouse) {
+        return None;
+    }
+
+    let inner = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .inner(area);
+    if inner.height < 5 {
+        return None;
+    }
+    let [tabs_row, _, _, list_row, _] = thread_picker_layout(inner);
+
+    if tabs_row.contains(mouse) {
+        for (tab, rect, _) in tab_cells(tabs_row) {
+            if rect.contains(mouse) {
+                return Some(ThreadPickerHitTarget::Tab(tab));
+            }
+        }
+    }
+
+    if list_row.contains(mouse) {
+        let total_items = filtered_threads(chat, modal).len() + 1;
+        let row_idx = mouse.y.saturating_sub(list_row.y) as usize;
+        let (visible_start, visible_len) =
+            visible_window(modal.picker_cursor(), total_items, list_row.height as usize);
+        if row_idx < visible_len {
+            return Some(ThreadPickerHitTarget::Item(visible_start + row_idx));
+        }
+    }
+
+    None
 }
 
 /// Format millisecond timestamp as "Xm ago" or "Xh ago" etc.
@@ -233,6 +368,8 @@ fn now_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::chat::{AgentThread, ChatAction};
+    use crate::state::ModalAction;
 
     #[test]
     fn format_time_ago_zero_returns_empty() {
@@ -254,5 +391,78 @@ mod tests {
     fn format_tokens_small() {
         let s = format_tokens(500);
         assert_eq!(s, "500 tok");
+    }
+
+    fn make_chat(threads: Vec<AgentThread>) -> ChatState {
+        let mut chat = ChatState::new();
+        chat.reduce(ChatAction::ThreadListReceived(threads));
+        chat
+    }
+
+    #[test]
+    fn filtered_threads_default_to_swarog_and_exclude_rarog_threads() {
+        let chat = make_chat(vec![
+            AgentThread {
+                id: "regular-thread".into(),
+                title: "Regular work".into(),
+                ..Default::default()
+            },
+            AgentThread {
+                id: "concierge".into(),
+                title: "Concierge".into(),
+                ..Default::default()
+            },
+            AgentThread {
+                id: "heartbeat-1".into(),
+                title: "HEARTBEAT SYNTHESIS".into(),
+                ..Default::default()
+            },
+        ]);
+        let modal = ModalState::new();
+
+        let threads = filtered_threads(&chat, &modal);
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, "regular-thread");
+    }
+
+    #[test]
+    fn rarog_tab_filters_threads_and_searches_within_tab() {
+        let chat = make_chat(vec![
+            AgentThread {
+                id: "regular-thread".into(),
+                title: "Regular work".into(),
+                ..Default::default()
+            },
+            AgentThread {
+                id: "concierge".into(),
+                title: "Concierge".into(),
+                ..Default::default()
+            },
+            AgentThread {
+                id: "heartbeat-1".into(),
+                title: "HEARTBEAT SYNTHESIS".into(),
+                ..Default::default()
+            },
+        ]);
+        let mut modal = ModalState::new();
+        modal.set_thread_picker_tab(ThreadPickerTab::Rarog);
+        modal.reduce(ModalAction::SetQuery("heart".into()));
+
+        let threads = filtered_threads(&chat, &modal);
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, "heartbeat-1");
+    }
+
+    #[test]
+    fn thread_display_title_renames_concierge_to_rarog() {
+        let thread = AgentThread {
+            id: "concierge".into(),
+            title: "Concierge".into(),
+            ..Default::default()
+        };
+
+        assert_eq!(thread_display_title(&thread), "Rarog");
     }
 }

@@ -74,7 +74,7 @@ impl TuiModel {
                 self.set_main_pane_conversation(focus);
                 true
             }
-            MainPaneView::WorkContext | MainPaneView::GoalComposer => {
+            MainPaneView::WorkContext | MainPaneView::FilePreview(_) | MainPaneView::GoalComposer => {
                 self.set_main_pane_conversation(focus);
                 true
             }
@@ -377,6 +377,10 @@ impl TuiModel {
                 self.chat.select_message(Some(index));
                 self.request_delete_message(index);
                 true
+            }
+            chat::ChatHitTarget::ToolFilePath { message_index } => {
+                self.chat.select_message(Some(message_index));
+                false
             }
             _ => false,
         }

@@ -2,6 +2,31 @@ use serde::{Deserialize, Serialize};
 
 use super::{SessionId, WorkspaceId};
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AsyncCommandCapability {
+    pub version: u32,
+    pub supports_operation_acceptance: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationLifecycleState {
+    Accepted,
+    Started,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationStatusSnapshot {
+    pub operation_id: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dedup: Option<String>,
+    pub state: OperationLifecycleState,
+    pub revision: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntryPublic {
     pub id: String,

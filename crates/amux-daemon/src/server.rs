@@ -24,6 +24,8 @@ use crate::session_manager::SessionManager;
 
 include!("server/helpers_part1.rs");
 include!("server/helpers_part2.rs");
+include!("server/operations.rs");
+include!("server/operations_registry.rs");
 
 #[cfg(test)]
 mod tests {
@@ -50,6 +52,7 @@ where
         Vec::new();
     let mut client_agent_threads: HashSet<String> = HashSet::new();
     let mut last_concierge_welcome_fingerprint: Option<String> = None;
+    let mut async_command_capability: Option<amux_protocol::AsyncCommandCapability> = None;
     let mut agent_event_rx: Option<broadcast::Receiver<crate::agent::types::AgentEvent>> = None;
     let mut whatsapp_link_rx: Option<
         broadcast::Receiver<crate::agent::types::WhatsAppLinkRuntimeEvent>,

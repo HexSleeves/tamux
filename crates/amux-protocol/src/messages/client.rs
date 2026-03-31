@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ApprovalDecision, GatewayAck, GatewayCursorState, GatewayHealthState, GatewayIncomingEvent,
-    GatewayRegistration, GatewayRouteModeState, GatewaySendResult, GatewayThreadBindingState,
-    ManagedCommandRequest, SessionId, WorkspaceId,
+    ApprovalDecision, AsyncCommandCapability, GatewayAck, GatewayCursorState, GatewayHealthState,
+    GatewayIncomingEvent, GatewayRegistration, GatewayRouteModeState, GatewaySendResult,
+    GatewayThreadBindingState, ManagedCommandRequest, SessionId, WorkspaceId,
 };
 
 #[rustfmt::skip]
@@ -79,6 +79,8 @@ pub enum ClientMessage {
     AgentResolveTaskApproval { approval_id: String, decision: String },
     AgentSubscribe,
     AgentUnsubscribe,
+    AgentDeclareAsyncCommandCapability { capability: AsyncCommandCapability },
+    AgentGetOperationStatus { operation_id: String },
     AgentGetSubagentMetrics { task_id: String },
     AgentListCheckpoints { goal_run_id: String },
     AgentRestoreCheckpoint { checkpoint_id: String },

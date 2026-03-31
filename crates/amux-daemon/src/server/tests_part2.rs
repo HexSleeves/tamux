@@ -98,6 +98,26 @@
         spawn_test_connection_with_config(AgentConfig::default()).await
     }
 
+    async fn declare_async_command_capability(conn: &mut TestConnection) {
+        conn.framed
+            .send(ClientMessage::AgentDeclareAsyncCommandCapability {
+                capability: amux_protocol::AsyncCommandCapability {
+                    version: 1,
+                    supports_operation_acceptance: true,
+                },
+            })
+            .await
+            .expect("declare async command capability");
+
+        match conn.recv().await {
+            DaemonMessage::AgentAsyncCommandCapabilityAck { capability } => {
+                assert_eq!(capability.version, 1);
+                assert!(capability.supports_operation_acceptance);
+            }
+            other => panic!("expected async command capability ack, got {other:?}"),
+        }
+    }
+
     async fn register_gateway(conn: &mut TestConnection) -> String {
         conn.framed
             .send(ClientMessage::GatewayRegister {
@@ -312,6 +332,175 @@
                     && route_mode == "swarog")
         );
 
+        conn.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn concierge_welcome_request_does_not_block_ping() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake llm listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let accept_task = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.expect("accept concierge request");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.base_url = format!("http://{addr}");
+        config.api_key = "test-key".to_string();
+        config.model = "gpt-5.4".to_string();
+        config.concierge.detail_level = crate::agent::types::ConciergeDetailLevel::ContextSummary;
+
+        let mut conn = spawn_test_connection_with_config(config).await;
+
+        conn.framed
+            .send(ClientMessage::AgentSubscribe)
+            .await
+            .expect("subscribe to agent events");
+        conn.framed
+            .send(ClientMessage::AgentRequestConciergeWelcome)
+            .await
+            .expect("request concierge welcome");
+        conn.framed
+            .send(ClientMessage::Ping)
+            .await
+            .expect("send ping while concierge work is active");
+
+        let pong_received = timeout(Duration::from_millis(250), async {
+            loop {
+                match conn.recv().await {
+                    DaemonMessage::Pong => return true,
+                    DaemonMessage::AgentEvent { .. } => continue,
+                    other => {
+                        panic!(
+                            "expected Pong while concierge work runs in background, got {other:?}"
+                        )
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap_or(false);
+
+        assert!(
+            pong_received,
+            "ping should not be blocked behind concierge welcome generation"
+        );
+
+        accept_task.abort();
+        conn.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn operation_status_query_returns_current_snapshot() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake llm listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let accept_task = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.expect("accept concierge request");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.base_url = format!("http://{addr}");
+        config.api_key = "test-key".to_string();
+        config.model = "gpt-5.4".to_string();
+        config.concierge.detail_level = crate::agent::types::ConciergeDetailLevel::ContextSummary;
+
+        let mut conn = spawn_test_connection_with_config(config).await;
+        declare_async_command_capability(&mut conn).await;
+
+        conn.framed
+            .send(ClientMessage::AgentRequestConciergeWelcome)
+            .await
+            .expect("request concierge welcome");
+
+        let operation_id = match conn.recv().await {
+            DaemonMessage::OperationAccepted { operation_id, kind, .. } => {
+                assert_eq!(kind, "concierge_welcome");
+                operation_id
+            }
+            other => panic!("expected operation acceptance, got {other:?}"),
+        };
+
+        conn.framed
+            .send(ClientMessage::AgentGetOperationStatus {
+                operation_id: operation_id.clone(),
+            })
+            .await
+            .expect("query operation status");
+
+        match conn.recv().await {
+            DaemonMessage::OperationStatus { snapshot } => {
+                assert_eq!(snapshot.operation_id, operation_id);
+                assert_eq!(snapshot.kind, "concierge_welcome");
+                assert!(matches!(
+                    snapshot.state,
+                    amux_protocol::OperationLifecycleState::Accepted
+                        | amux_protocol::OperationLifecycleState::Started
+                ));
+            }
+            other => panic!("expected operation status snapshot, got {other:?}"),
+        }
+
+        accept_task.abort();
+        conn.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn operation_status_query_survives_reconnect() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake llm listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let accept_task = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.expect("accept concierge request");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.base_url = format!("http://{addr}");
+        config.api_key = "test-key".to_string();
+        config.model = "gpt-5.4".to_string();
+        config.concierge.detail_level = crate::agent::types::ConciergeDetailLevel::ContextSummary;
+
+        let mut conn = spawn_test_connection_with_config(config.clone()).await;
+        declare_async_command_capability(&mut conn).await;
+        conn.framed
+            .send(ClientMessage::AgentRequestConciergeWelcome)
+            .await
+            .expect("request concierge welcome");
+
+        let operation_id = match conn.recv().await {
+            DaemonMessage::OperationAccepted { operation_id, .. } => operation_id,
+            other => panic!("expected operation acceptance, got {other:?}"),
+        };
+
+        let mut reconnect = spawn_test_connection_with_config(config).await;
+        declare_async_command_capability(&mut reconnect).await;
+        reconnect
+            .framed
+            .send(ClientMessage::AgentGetOperationStatus {
+                operation_id: operation_id.clone(),
+            })
+            .await
+            .expect("query operation status after reconnect");
+
+        match reconnect.recv().await {
+            DaemonMessage::OperationStatus { snapshot } => {
+                assert_eq!(snapshot.operation_id, operation_id);
+                assert_eq!(snapshot.kind, "concierge_welcome");
+            }
+            other => panic!("expected operation status snapshot after reconnect, got {other:?}"),
+        }
+
+        accept_task.abort();
+        reconnect.shutdown().await;
         conn.shutdown().await;
     }
 

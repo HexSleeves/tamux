@@ -111,7 +111,7 @@ impl TuiModel {
         if !existing_thread {
             self.chat.reduce(chat::ChatAction::ThreadCreated {
                 thread_id: concierge_thread_id.clone(),
-                title: "Concierge".to_string(),
+                title: "Rarog".to_string(),
             });
         }
         self.chat.reduce(chat::ChatAction::ClearThread {

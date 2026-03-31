@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::ops::Range;
@@ -75,6 +76,44 @@ pub(crate) fn resolve_reference_path_with_home(
 
 pub fn complete_active_at_token(buffer: &str, cursor: usize, cwd: &Path) -> TabCompletionOutcome {
     complete_active_at_token_with_home(buffer, cursor, cwd, home_dir().as_deref())
+}
+
+pub fn resolved_referenced_files(buffer: &str, cwd: &Path) -> Vec<PathBuf> {
+    let mut resolved = Vec::new();
+    let mut seen = HashSet::new();
+
+    for segment in buffer.split_whitespace() {
+        let Some(raw_path) = segment.strip_prefix('@') else {
+            continue;
+        };
+        let Some(path) = resolve_reference_path(raw_path, cwd) else {
+            continue;
+        };
+        let normalized = normalize_resolved_path(path, cwd);
+        if seen.insert(normalized.clone()) {
+            resolved.push(normalized);
+        }
+    }
+
+    resolved
+}
+
+pub fn append_referenced_files_footer(buffer: &str, cwd: &Path) -> String {
+    let referenced_files = resolved_referenced_files(buffer, cwd);
+    if referenced_files.is_empty() {
+        return buffer.to_string();
+    }
+
+    let footer = format!(
+        "Referenced files: {}\nInspect these with read_file before making assumptions.",
+        referenced_files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    format!("{buffer}\n\n{footer}")
 }
 
 pub(crate) fn complete_active_at_token_with_home(
@@ -249,6 +288,14 @@ fn expand_reference_path(raw_path: &str, cwd: &Path, home: Option<&Path>) -> Pat
         path.to_path_buf()
     } else if raw_path.contains('\\') {
         join_normalized(cwd, raw_path)
+    } else {
+        cwd.join(path)
+    }
+}
+
+fn normalize_resolved_path(path: PathBuf, cwd: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path
     } else {
         cwd.join(path)
     }

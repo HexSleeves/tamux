@@ -70,6 +70,32 @@ pub fn hit_test(
     };
     let hit = snapshot.all_lines.get(resolved_row)?;
 
+    if matches!(hit.kind, RenderedLineKind::ToolToggle | RenderedLineKind::MessageBody) {
+        if let Some(message_index) = hit.message_index {
+            let message = chat
+                .active_thread()
+                .and_then(|thread| thread.messages.get(message_index))?;
+            if message.role == MessageRole::Tool {
+                let content_col = mouse.x.saturating_sub(inner.x) as usize;
+                let (_, content_start, _) = rendered_line_content_bounds(hit);
+                let action_col = content_col.saturating_sub(content_start);
+                if let Some(chip) = tool_file_chip(message) {
+                    let line_text = rendered_line_plain_text(hit);
+                    let chip_text = format!("[{}]", chip.path);
+                    if let Some(chip_byte_start) = line_text.find(&chip_text) {
+                        let chip_start = UnicodeWidthStr::width(&line_text[..chip_byte_start]);
+                        let chip_width = UnicodeWidthStr::width(chip_text.as_str());
+                        if action_col >= chip_start
+                            && action_col < chip_start.saturating_add(chip_width)
+                        {
+                            return Some(ChatHitTarget::ToolFilePath { message_index });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     match hit.kind {
         RenderedLineKind::RetryAction => {
             let content_col = mouse.x.saturating_sub(inner.x) as usize;
