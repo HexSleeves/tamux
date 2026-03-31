@@ -1,0 +1,192 @@
+    #[test]
+    fn settings_handles_empty_state() {
+        let settings = SettingsState::new();
+        let config = ConfigState::new();
+        let _theme = ThemeTokens::default();
+        assert_eq!(settings.active_tab(), SettingsTab::Auth);
+        assert_eq!(config.model(), "gpt-5.4");
+    }
+
+    #[test]
+    fn settings_api_key_is_masked() {
+        let masked = mask_api_key("sk-abcdefgh12345678abcd");
+        assert!(!masked.contains("abcdefgh"));
+        assert!(masked.contains("\u{2022}"));
+    }
+
+    #[test]
+    fn mask_api_key_short_returns_dots() {
+        assert_eq!(
+            mask_api_key("short"),
+            "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}"
+        );
+    }
+
+    #[test]
+    fn mask_api_key_empty_returns_not_set() {
+        assert_eq!(mask_api_key(""), "(not set)");
+    }
+
+    #[test]
+    fn tab_hit_test_uses_rendered_label_positions() {
+        let area = Rect::new(10, 3, 80, 1);
+        let visible = visible_tabs(area, active_tab_index(SettingsTab::Concierge));
+        assert!(visible.iter().any(|tab| tab.tab == SettingsTab::Concierge));
+        for tab in visible {
+            assert_eq!(
+                tab_hit_test(area, SettingsTab::Concierge, tab.start_x),
+                Some(tab.tab)
+            );
+        }
+    }
+
+    #[test]
+    fn gateway_tab_mentions_whatsapp_qr_linking_instructions() {
+        let mut settings = SettingsState::new();
+        settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+            SettingsTab::Gateway,
+        ));
+        let config = ConfigState::new();
+        let modal = ModalState::new();
+        let lines = render_gateway_tab(&settings, &config, &modal, &ThemeTokens::default());
+        let text = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("Allowed Contacts accepts comma or newline separated phone numbers."),
+            "Gateway tab should explain how to enter the WhatsApp allowlist"
+        );
+    }
+
+    #[test]
+    fn gateway_tab_shows_allowlist_requirement_before_linking() {
+        let mut settings = SettingsState::new();
+        settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+            SettingsTab::Gateway,
+        ));
+        settings.reduce(crate::state::settings::SettingsAction::NavigateField(12));
+        let config = ConfigState::new();
+        let modal = ModalState::new();
+
+        let lines = render_gateway_tab(&settings, &config, &modal, &ThemeTokens::default());
+        let text = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("> Link Device  [Enter]  (requires allowed contacts)"));
+        assert!(text.contains("Add at least one allowed phone number before QR linking."));
+    }
+
+    #[test]
+    fn gateway_tab_contains_selectable_link_device_row() {
+        let mut settings = SettingsState::new();
+        settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+            SettingsTab::Gateway,
+        ));
+        settings.reduce(crate::state::settings::SettingsAction::NavigateField(12));
+        let config = ConfigState::new();
+        let modal = ModalState::new();
+        let lines = render_gateway_tab(&settings, &config, &modal, &ThemeTokens::default());
+        let text = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("> Link Device"));
+    }
+
+    #[test]
+    fn gateway_tab_shows_connected_whatsapp_status_and_split_actions() {
+        let mut settings = SettingsState::new();
+        settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+            SettingsTab::Gateway,
+        ));
+        settings.reduce(crate::state::settings::SettingsAction::NavigateField(12));
+        let mut config = ConfigState::new();
+        config.whatsapp_allowed_contacts = "+48663977535".to_string();
+        let mut modal = ModalState::new();
+        modal.set_whatsapp_link_connected(Some("+48663977535".to_string()));
+
+        let lines = render_gateway_tab(&settings, &config, &modal, &ThemeTokens::default());
+        let text = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("> Link Status"));
+        assert!(text.contains("Re-link Device"));
+        assert!(text.contains("Linked: +48663977535"));
+        assert!(text.contains("Only allowed numbers will be forwarded and can receive replies."));
+    }
+
+    #[test]
+    fn gateway_tab_renders_whatsapp_allowlist_as_textarea_when_editing() {
+        let mut settings = SettingsState::new();
+        settings.start_editing("whatsapp_allowed_contacts", "+15551234567\n+15557654321");
+        let mut config = ConfigState::new();
+        config.whatsapp_allowed_contacts = "+15551234567\n+15557654321".to_string();
+        let modal = ModalState::new();
+
+        let lines = render_gateway_tab(&settings, &config, &modal, &ThemeTokens::default());
+        let text = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("Allowed Contacts [Ctrl+Enter: save, Esc: cancel]"));
+        assert!(text.contains("+15551234567"));
+        assert!(text.contains("+15557654321"));
+        assert!(text.contains("╭"));
+        assert!(text.contains("╰"));
+    }
+
+    #[test]
+    fn custom_provider_model_field_invites_inline_edit() {
+        let mut settings = SettingsState::new();
+        settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+            SettingsTab::Provider,
+        ));
+        settings.reduce(crate::state::settings::SettingsAction::NavigateField(3));
+        let mut config = ConfigState::new();
+        config.provider = "custom".to_string();
+        config.model = "my-model".to_string();
+
+        let lines = render_provider_tab(&settings, &config, &ThemeTokens::default());
+        let text = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("> Model           my-model [Enter: edit]"));
+        assert!(!text.contains("> Model           my-model [Enter: pick]"));
+    }
+
+    #[test]
+    fn custom_provider_model_row_shows_active_edit_buffer() {
+        let mut settings = SettingsState::new();
+        settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+            SettingsTab::Provider,
+        ));
+        settings.reduce(crate::state::settings::SettingsAction::NavigateField(3));
+        settings.start_editing("custom_model_entry", "my-model");
+        let mut config = ConfigState::new();
+        config.provider = "custom".to_string();
+        config.model = "my-model".to_string();
+
+        let lines = render_provider_tab(&settings, &config, &ThemeTokens::default());
+        let text = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("> Model           my-model█"));
+        assert!(!text.contains("> Provider        custom█"));
+    }

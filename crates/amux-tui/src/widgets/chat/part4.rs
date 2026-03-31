@@ -1,0 +1,152 @@
+fn selection_point_from_snapshot(
+    snapshot: &SelectionSnapshot,
+    mouse: Position,
+) -> Option<SelectionPoint> {
+    let inner = snapshot.inner;
+
+    let clamped_x = mouse.x.clamp(
+        inner.x,
+        inner.x.saturating_add(inner.width).saturating_sub(1),
+    );
+    let clamped_y = mouse.y.clamp(
+        inner.y,
+        inner.y.saturating_add(inner.height).saturating_sub(1),
+    );
+    let rel_row = clamped_y.saturating_sub(inner.y) as usize;
+    let rel_col = clamped_x.saturating_sub(inner.x) as usize;
+
+    if rel_row < snapshot.padding {
+        return None;
+    }
+
+    let row = {
+        let visible_count = snapshot.end_idx.saturating_sub(snapshot.start_idx).max(1);
+        snapshot.start_idx
+            + rel_row
+                .saturating_sub(snapshot.padding)
+                .min(visible_count.saturating_sub(1))
+    };
+    let row = nearest_content_row(&snapshot.all_lines, row)?;
+    let rendered = snapshot.all_lines.get(row)?;
+    let (_, content_start, content_end) = rendered_line_content_bounds(rendered);
+    let content_width = content_end.saturating_sub(content_start);
+    let content_col = rel_col.saturating_sub(content_start).min(content_width);
+
+    Some(SelectionPoint {
+        row,
+        col: content_col,
+    })
+}
+pub fn hit_test(
+    area: Rect,
+    chat: &ChatState,
+    theme: &ThemeTokens,
+    current_tick: u64,
+    mouse: Position,
+) -> Option<ChatHitTarget> {
+    let snapshot = selection_snapshot(area, chat, theme, current_tick)?;
+    let inner = snapshot.inner;
+
+    if mouse.x < inner.x
+        || mouse.y < inner.y
+        || mouse.x >= inner.x.saturating_add(inner.width)
+        || mouse.y >= inner.y.saturating_add(inner.height)
+    {
+        return None;
+    }
+    let rel_row = mouse.y.saturating_sub(inner.y) as usize;
+    if rel_row < snapshot.padding {
+        return None;
+    }
+    let visible_count = snapshot.end_idx.saturating_sub(snapshot.start_idx).max(1);
+    let absolute_row = snapshot.start_idx
+        + rel_row
+            .saturating_sub(snapshot.padding)
+            .min(visible_count.saturating_sub(1));
+    let resolved_row = match snapshot.all_lines.get(absolute_row) {
+        Some(line) if !matches!(line.kind, RenderedLineKind::Padding) => absolute_row,
+        Some(_) => nearest_message_content_row(&snapshot.all_lines, absolute_row)?,
+        None => return None,
+    };
+    let hit = snapshot.all_lines.get(resolved_row)?;
+
+    match hit.kind {
+        RenderedLineKind::RetryAction => {
+            let content_col = mouse.x.saturating_sub(inner.x) as usize;
+            let (_, content_start, _) = rendered_line_content_bounds(hit);
+            let action_col = content_col.saturating_sub(content_start);
+            let status = chat.retry_status()?;
+            match status.phase {
+                RetryPhase::Retrying => {
+                    let label_width = UnicodeWidthStr::width("[Stop]");
+                    if action_col < label_width {
+                        Some(ChatHitTarget::RetryStop)
+                    } else {
+                        None
+                    }
+                }
+                RetryPhase::Waiting => {
+                    let yes_label =
+                        format!("[Yes {}s]", retry_wait_remaining_secs(status, current_tick));
+                    let yes_width = UnicodeWidthStr::width(yes_label.as_str());
+                    let no_start = yes_width.saturating_add(1);
+                    let no_width = UnicodeWidthStr::width("[No]");
+                    if action_col >= no_start && action_col < no_start.saturating_add(no_width) {
+                        Some(ChatHitTarget::RetryStop)
+                    } else {
+                        None
+                    }
+                }
+            }
+        }
+        RenderedLineKind::ReasoningToggle => {
+            Some(ChatHitTarget::ReasoningToggle(hit.message_index?))
+        }
+        RenderedLineKind::ToolToggle => Some(ChatHitTarget::ToolToggle(hit.message_index?)),
+        RenderedLineKind::ActionBar => {
+            let message_index = hit.message_index?;
+            let content_col = mouse.x.saturating_sub(inner.x) as usize;
+            let (_, content_start, _) = rendered_line_content_bounds(hit);
+            let message = chat
+                .active_thread()
+                .and_then(|thread| thread.messages.get(message_index))?;
+            action_hit_target(
+                chat,
+                message_index,
+                message,
+                content_col.saturating_sub(content_start),
+                current_tick,
+            )
+        }
+        RenderedLineKind::MessageBody
+        | RenderedLineKind::ReasoningContent
+        | RenderedLineKind::ToolDetail => Some(ChatHitTarget::Message(hit.message_index?)),
+        RenderedLineKind::Separator
+        | RenderedLineKind::Padding
+        | RenderedLineKind::Streaming
+        | RenderedLineKind::RetryStatus => None,
+    }
+}
+
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    chat: &ChatState,
+    theme: &ThemeTokens,
+    current_tick: u64,
+    _focused: bool,
+    mouse_selection: Option<(SelectionPoint, SelectionPoint)>,
+) {
+    let inner = content_inner(area);
+
+    if chat.active_thread().is_none() && chat.streaming_content().is_empty() {
+        // Render splash
+        super::splash::render(frame, inner, theme);
+        return;
+    }
+    let Some(snapshot) = selection_snapshot(area, chat, theme, current_tick) else {
+        return;
+    };
+    render_snapshot(frame, &snapshot, chat, mouse_selection);
+}
+

@@ -689,17 +689,9 @@ mod tests {
                 };
                 let recorded_bodies = recorded_bodies.clone();
                 tokio::spawn(async move {
-                    let mut buffer = vec![0u8; 65536];
-                    let read = socket
-                        .read(&mut buffer)
+                    let body = read_http_request_body(&mut socket)
                         .await
                         .expect("read request from test client");
-                    let request = String::from_utf8_lossy(&buffer[..read]).to_string();
-                    let body = request
-                        .split("\r\n\r\n")
-                        .nth(1)
-                        .unwrap_or_default()
-                        .to_string();
                     recorded_bodies
                         .lock()
                         .expect("lock request log")
@@ -724,6 +716,45 @@ mod tests {
         });
 
         format!("http://{addr}/v1")
+    }
+
+    async fn read_http_request_body(socket: &mut tokio::net::TcpStream) -> std::io::Result<String> {
+        let mut buffer = Vec::with_capacity(65536);
+        let mut temp = [0u8; 4096];
+        let headers_end = loop {
+            let read = socket.read(&mut temp).await?;
+            if read == 0 {
+                return Ok(String::new());
+            }
+            buffer.extend_from_slice(&temp[..read]);
+            if let Some(index) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+
+        let headers = String::from_utf8_lossy(&buffer[..headers_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let mut parts = line.splitn(2, ':');
+                let name = parts.next()?.trim();
+                let value = parts.next()?.trim();
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+
+        while buffer.len().saturating_sub(headers_end) < content_length {
+            let read = socket.read(&mut temp).await?;
+            if read == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&temp[..read]);
+        }
+
+        let available = buffer.len().saturating_sub(headers_end).min(content_length);
+        Ok(String::from_utf8_lossy(&buffer[headers_end..headers_end + available]).to_string())
     }
 
     #[test]

@@ -1,0 +1,130 @@
+import { getBridge } from "../bridge";
+import { isValidProviderAuthStates } from "./history";
+import type { AgentState, AgentStoreGet, AgentStoreSet } from "./storeTypes";
+import type { ProviderAuthState, SubAgentDefinition } from "./types";
+
+type ProviderActionKeys =
+  | "refreshProviderAuthStates"
+  | "validateProvider"
+  | "loginProvider"
+  | "logoutProvider"
+  | "addSubAgent"
+  | "removeSubAgent"
+  | "updateSubAgent"
+  | "refreshSubAgents";
+
+export function createProviderActions(
+  set: AgentStoreSet,
+  get: AgentStoreGet,
+): Pick<AgentState, ProviderActionKeys> {
+  return {
+    refreshProviderAuthStates: async () => {
+      const bridge = getBridge();
+      if (!bridge?.agentGetProviderAuthStates) {
+        return;
+      }
+      try {
+        const states = await bridge.agentGetProviderAuthStates();
+        if (isValidProviderAuthStates(states)) {
+          set({ providerAuthStates: states as ProviderAuthState[] });
+        }
+      } catch {
+        // Ignore bridge failures and keep current UI state.
+      }
+    },
+    validateProvider: async (providerId, base_url, api_key, auth_source) => {
+      const bridge = getBridge();
+      if (!bridge?.agentValidateProvider) {
+        return { valid: false, error: "Bridge not available" };
+      }
+      try {
+        return await bridge.agentValidateProvider(providerId, base_url, api_key, auth_source);
+      } catch (error) {
+        return { valid: false, error: String(error) };
+      }
+    },
+    loginProvider: async (providerId, api_key, base_url) => {
+      const bridge = getBridge();
+      if (!bridge?.agentLoginProvider) {
+        return;
+      }
+      try {
+        const result = await bridge.agentLoginProvider(providerId, api_key, base_url);
+        if (isValidProviderAuthStates(result)) {
+          set({ providerAuthStates: result as ProviderAuthState[] });
+        }
+      } catch {
+        // Ignore bridge failures and keep current UI state.
+      }
+    },
+    logoutProvider: async (providerId) => {
+      const bridge = getBridge();
+      if (!bridge?.agentLogoutProvider) {
+        return;
+      }
+      try {
+        const result = await bridge.agentLogoutProvider(providerId);
+        if (isValidProviderAuthStates(result)) {
+          set({ providerAuthStates: result as ProviderAuthState[] });
+        }
+      } catch {
+        // Ignore bridge failures and keep current UI state.
+      }
+    },
+    addSubAgent: async (definition) => {
+      const bridge = getBridge();
+      if (!bridge?.agentSetSubAgent) {
+        return;
+      }
+      const fullDefinition: SubAgentDefinition = {
+        ...definition,
+        id: `subagent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        created_at: Math.floor(Date.now() / 1000),
+      };
+      try {
+        await bridge.agentSetSubAgent(JSON.stringify(fullDefinition));
+        await get().refreshSubAgents();
+      } catch {
+        // Ignore bridge failures and keep current UI state.
+      }
+    },
+    removeSubAgent: async (id) => {
+      const bridge = getBridge();
+      if (!bridge?.agentRemoveSubAgent) {
+        return;
+      }
+      try {
+        await bridge.agentRemoveSubAgent(id);
+        await get().refreshSubAgents();
+      } catch {
+        // Ignore bridge failures and keep current UI state.
+      }
+    },
+    updateSubAgent: async (definition) => {
+      const bridge = getBridge();
+      if (!bridge?.agentSetSubAgent) {
+        return;
+      }
+      try {
+        await bridge.agentSetSubAgent(JSON.stringify(definition));
+        await get().refreshSubAgents();
+      } catch {
+        // Ignore bridge failures and keep current UI state.
+      }
+    },
+    refreshSubAgents: async () => {
+      const bridge = getBridge();
+      if (!bridge?.agentListSubAgents) {
+        return;
+      }
+      try {
+        const list = await bridge.agentListSubAgents();
+        if (Array.isArray(list)) {
+          set({ subAgents: list as SubAgentDefinition[] });
+        }
+      } catch {
+        // Ignore bridge failures and keep current UI state.
+      }
+    },
+  };
+}

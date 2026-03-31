@@ -1,0 +1,374 @@
+impl TuiModel {
+    fn commit_subagent_editor(&mut self) {
+        let Some(editor) = self.subagents.editor.clone() else {
+            return;
+        };
+        if editor.name.trim().is_empty() {
+            self.status_line = "Sub-agent name is required".to_string();
+            return;
+        }
+        if editor.provider.trim().is_empty() {
+            self.status_line = "Sub-agent provider is required".to_string();
+            return;
+        }
+        if editor.model.trim().is_empty() {
+            self.status_line = "Sub-agent model is required".to_string();
+            return;
+        }
+
+        let id = editor.id.unwrap_or_else(|| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            format!("subagent-{now}")
+        });
+        let raw = serde_json::json!({
+            "id": id,
+            "name": editor.name.trim(),
+            "provider": editor.provider,
+            "model": editor.model,
+            "role": if editor.role.trim().is_empty() { serde_json::Value::Null } else { serde_json::Value::String(editor.role.trim().to_string()) },
+            "system_prompt": if editor.system_prompt.trim().is_empty() { serde_json::Value::Null } else { serde_json::Value::String(editor.system_prompt.trim().to_string()) },
+            "enabled": editor.enabled,
+            "created_at": editor.created_at,
+        });
+        self.send_daemon_command(DaemonCommand::SetSubAgent(raw.to_string()));
+
+        let optimistic = crate::state::SubAgentEntry {
+            id: raw
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            name: raw
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            provider: raw
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            model: raw
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            role: raw
+                .get("role")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            enabled: raw.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+            raw_json: Some(raw),
+        };
+        if self
+            .subagents
+            .entries
+            .iter()
+            .any(|entry| entry.id == optimistic.id)
+        {
+            self.subagents
+                .reduce(crate::state::subagents::SubAgentsAction::Updated(
+                    optimistic,
+                ));
+            self.status_line = "Updated sub-agent".to_string();
+        } else {
+            self.subagents
+                .reduce(crate::state::subagents::SubAgentsAction::Added(optimistic));
+            self.status_line = "Added sub-agent".to_string();
+        }
+        self.subagents.editor = None;
+        self.settings.reduce(SettingsAction::CancelEdit);
+    }
+
+    fn cycle_subagent_role(&mut self, delta: i32) {
+        let Some(editor) = self.subagents.editor.as_mut() else {
+            return;
+        };
+        let len = crate::state::subagents::SUBAGENT_ROLE_PRESETS.len();
+        if len == 0 {
+            return;
+        }
+        let current = editor.role_preset_index().unwrap_or(0);
+        let next = if delta >= 0 {
+            (current + delta as usize) % len
+        } else {
+            current.saturating_sub((-delta) as usize)
+        };
+        editor.apply_role_preset_by_index(next);
+    }
+
+    fn open_subagent_provider_picker(&mut self) {
+        self.settings_picker_target = Some(SettingsPickerTarget::SubAgentProvider);
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::ProviderPicker));
+        self.modal
+            .set_picker_item_count(providers::PROVIDERS.len().max(1));
+    }
+
+    fn open_subagent_model_picker(&mut self) {
+        let Some(editor) = self.subagents.editor.as_ref() else {
+            return;
+        };
+        let models = self.subagent_known_models_for(&editor.provider);
+        self.config
+            .reduce(config::ConfigAction::ModelsFetched(models.clone()));
+        self.settings_picker_target = Some(SettingsPickerTarget::SubAgentModel);
+        let count = widgets::model_picker::available_models(&self.config).len() + 1;
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
+        self.modal.set_picker_item_count(count);
+    }
+
+    pub(super) fn send_concierge_config(&mut self) {
+        let config = serde_json::json!({
+            "enabled": self.concierge.enabled,
+            "detail_level": self.concierge.detail_level,
+            "provider": self.concierge.provider,
+            "model": self.concierge.model,
+            "auto_cleanup_on_navigate": self.concierge.auto_cleanup_on_navigate,
+        });
+        self.send_daemon_command(DaemonCommand::SetConciergeConfig(config.to_string()));
+    }
+
+    pub(super) fn refresh_provider_models_for_current_auth(&mut self) {
+        let models = providers::known_models_for_provider_auth(
+            &self.config.provider,
+            &self.config.auth_source,
+        );
+        if !models.is_empty() {
+            self.config
+                .reduce(config::ConfigAction::ModelsFetched(models.clone()));
+            if !models.iter().any(|model| model.id == self.config.model) {
+                let fallback = providers::default_model_for_provider_auth(
+                    &self.config.provider,
+                    &self.config.auth_source,
+                );
+                self.config.reduce(config::ConfigAction::SetModel(fallback));
+            }
+        }
+    }
+
+    fn show_openai_auth_modal(&mut self, url: String, status_text: &str) {
+        self.openai_auth_url = Some(url);
+        self.openai_auth_status_text = Some(status_text.to_string());
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::OpenAIAuth));
+    }
+
+    pub(super) fn apply_provider_selection(&mut self, provider_id: &str) {
+        self.apply_provider_selection_internal(provider_id, true);
+    }
+
+    pub(super) fn run_auth_tab_action(&mut self) {
+        let Some(entry) = self.auth.entries.get(self.auth.selected).cloned() else {
+            return;
+        };
+
+        match self.auth.action_cursor {
+            0 => {
+                if entry.authenticated {
+                    if entry.provider_id == "openai" && entry.auth_source == "chatgpt_subscription"
+                    {
+                        match crate::auth::clear_openai_codex_auth() {
+                            Ok(()) => {
+                                self.refresh_openai_auth_status();
+                                self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
+                                self.status_line = "ChatGPT subscription auth cleared".to_string();
+                            }
+                            Err(err) => {
+                                self.status_line = format!("Failed to clear ChatGPT auth: {err}");
+                            }
+                        }
+                    } else if entry.provider_id == "github-copilot"
+                        && entry.auth_source == "github_copilot"
+                    {
+                        match crate::auth::clear_github_copilot_auth() {
+                            Ok(()) => {
+                                self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
+                                self.status_line = "GitHub Copilot auth cleared".to_string();
+                            }
+                            Err(err) => {
+                                self.status_line =
+                                    format!("Failed to clear GitHub Copilot auth: {err}");
+                            }
+                        }
+                    } else {
+                        if self.config.provider == entry.provider_id {
+                            self.config.api_key.clear();
+                        }
+                        self.clear_saved_provider_api_key(&entry.provider_id);
+                        if let Ok(value_json) =
+                            serde_json::to_string(&serde_json::Value::String(String::new()))
+                        {
+                            self.send_daemon_command(DaemonCommand::SetConfigItem {
+                                key_path: format!("/providers/{}/api_key", entry.provider_id),
+                                value_json: value_json.clone(),
+                            });
+                            self.send_daemon_command(DaemonCommand::SetConfigItem {
+                                key_path: format!("/{}/api_key", entry.provider_id),
+                                value_json: value_json.clone(),
+                            });
+                            if self.config.provider == entry.provider_id {
+                                self.send_daemon_command(DaemonCommand::SetConfigItem {
+                                    key_path: "/api_key".to_string(),
+                                    value_json,
+                                });
+                            }
+                        }
+                        self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
+                        self.status_line =
+                            format!("Cleared credentials for {}", entry.provider_name);
+                    }
+                } else if entry.provider_id == "openai"
+                    && entry.auth_source == "chatgpt_subscription"
+                {
+                    match crate::auth::begin_openai_codex_auth_flow() {
+                        Ok(crate::auth::OpenAICodexAuthFlowResult::AlreadyAvailable) => {
+                            self.refresh_openai_auth_status();
+                            self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
+                            self.status_line =
+                                "ChatGPT subscription auth already available".to_string();
+                        }
+                        Ok(crate::auth::OpenAICodexAuthFlowResult::ImportedFromCodexCli) => {
+                            self.refresh_openai_auth_status();
+                            self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
+                            self.status_line =
+                                "Imported ChatGPT auth from ~/.codex/auth.json".to_string();
+                        }
+                        Ok(crate::auth::OpenAICodexAuthFlowResult::Started { url }) => {
+                            self.show_openai_auth_modal(
+                                url,
+                                "Open this URL in your browser to complete ChatGPT authentication.",
+                            );
+                        }
+                        Err(err) => {
+                            self.status_line = format!("Failed to start ChatGPT auth: {err}");
+                        }
+                    }
+                } else if entry.provider_id == "github-copilot"
+                    && entry.auth_source == "github_copilot"
+                {
+                    self.start_auth_login(&entry.provider_id, &entry.provider_name);
+                } else {
+                    self.start_auth_login(&entry.provider_id, &entry.provider_name);
+                }
+            }
+            1 => {
+                if !entry.authenticated && entry.provider_id == "openai" {
+                    match crate::auth::begin_openai_codex_auth_flow() {
+                        Ok(crate::auth::OpenAICodexAuthFlowResult::AlreadyAvailable) => {
+                            self.refresh_openai_auth_status();
+                            self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
+                            self.status_line =
+                                "ChatGPT subscription auth already available".to_string();
+                        }
+                        Ok(crate::auth::OpenAICodexAuthFlowResult::ImportedFromCodexCli) => {
+                            self.refresh_openai_auth_status();
+                            self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
+                            self.status_line =
+                                "Imported ChatGPT auth from ~/.codex/auth.json".to_string();
+                        }
+                        Ok(crate::auth::OpenAICodexAuthFlowResult::Started { url }) => {
+                            self.show_openai_auth_modal(
+                                url,
+                                "Open this URL in your browser to complete ChatGPT authentication.",
+                            );
+                        }
+                        Err(err) => {
+                            self.status_line = format!("Failed to start ChatGPT auth: {err}");
+                        }
+                    }
+                } else if !entry.authenticated
+                    && entry.provider_id == "github-copilot"
+                    && entry.auth_source == "github_copilot"
+                {
+                    match crate::auth::begin_github_copilot_auth_flow() {
+                        Ok(crate::auth::GithubCopilotAuthFlowResult::AlreadyAvailable) => {
+                            self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
+                            self.status_line = "GitHub Copilot auth already available".to_string();
+                        }
+                        Ok(crate::auth::GithubCopilotAuthFlowResult::ImportedFromGhCli) => {
+                            self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
+                            self.status_line =
+                                "Imported GitHub Copilot auth from GitHub CLI".to_string();
+                        }
+                        Ok(crate::auth::GithubCopilotAuthFlowResult::Started) => {
+                            self.status_line =
+                                "Started GitHub Copilot browser login. Refresh after completing it."
+                                    .to_string();
+                        }
+                        Err(err) => {
+                            self.status_line =
+                                format!("Failed to start GitHub Copilot auth: {err}");
+                        }
+                    }
+                } else {
+                    let (base_url, api_key, auth_source) =
+                        self.provider_auth_snapshot(&entry.provider_id);
+                    if entry.provider_id == "openai" && auth_source == "chatgpt_subscription" {
+                        self.refresh_openai_auth_status();
+                        self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
+                        self.status_line = if self.config.chatgpt_auth_available {
+                            "ChatGPT subscription auth is available".to_string()
+                        } else {
+                            "ChatGPT subscription auth is not configured".to_string()
+                        };
+                    } else {
+                        self.auth.validating = Some(entry.provider_id.clone());
+                        self.send_daemon_command(DaemonCommand::ValidateProvider {
+                            provider_id: entry.provider_id,
+                            base_url,
+                            api_key,
+                            auth_source,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn run_subagent_action(&mut self) {
+        match self.subagents.action_cursor {
+            0 => {
+                self.open_subagent_editor_new();
+            }
+            1 => {
+                self.open_subagent_editor_existing();
+            }
+            2 => {
+                if let Some(entry) = self.subagents.entries.get(self.subagents.selected) {
+                    self.send_daemon_command(DaemonCommand::RemoveSubAgent(entry.id.clone()));
+                    self.subagents
+                        .reduce(crate::state::subagents::SubAgentsAction::Removed(
+                            entry.id.clone(),
+                        ));
+                }
+            }
+            3 => {
+                if let Some(entry) = self.subagents.entries.get(self.subagents.selected) {
+                    if let Some(ref raw) = entry.raw_json {
+                        let mut updated = raw.clone();
+                        if let Some(obj) = updated.as_object_mut() {
+                            obj.insert(
+                                "enabled".to_string(),
+                                serde_json::Value::Bool(!entry.enabled),
+                            );
+                        }
+                        self.send_daemon_command(DaemonCommand::SetSubAgent(updated.to_string()));
+                        self.subagents.reduce(
+                            crate::state::subagents::SubAgentsAction::ToggleEnabled(
+                                entry.id.clone(),
+                            ),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+}
