@@ -92,6 +92,27 @@ fn completion_extends_single_match_and_keeps_directory_trailing_slash() {
 }
 
 #[test]
+fn backslash_completion_preserves_separator_style() {
+    let cwd = make_temp_dir();
+    let foo_dir = cwd.join("foo");
+    let bar_dir = foo_dir.join("bar");
+    fs::create_dir_all(&bar_dir).expect("nested test directory should be creatable");
+
+    let buffer = "@foo\\ba";
+    let outcome = crate::state::input_refs::complete_active_at_token(buffer, buffer.len(), &cwd);
+
+    assert!(outcome.consumed);
+    assert_eq!(
+        outcome
+            .replacement
+            .as_ref()
+            .expect("single match should produce a replacement")
+            .text,
+        "@foo\\bar\\"
+    );
+}
+
+#[test]
 fn ambiguous_matches_extend_shared_prefix() {
     let cwd = make_temp_dir();
     fs::write(cwd.join("alpha-one"), "one").expect("first file should be writable");

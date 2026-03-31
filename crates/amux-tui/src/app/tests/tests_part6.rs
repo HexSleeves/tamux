@@ -1,9 +1,26 @@
 use std::fs;
+use std::path::{Path, PathBuf};
 
 fn make_temp_dir() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("tamux-tui-tab-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&dir).expect("temporary directory should be creatable");
     dir
+}
+
+struct CurrentDirGuard(PathBuf);
+
+impl CurrentDirGuard {
+    fn enter(dir: &Path) -> Self {
+        let previous = std::env::current_dir().expect("current dir should be readable");
+        std::env::set_current_dir(dir).expect("temporary dir should be settable");
+        Self(previous)
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.0);
+    }
 }
 
 #[test]
@@ -185,6 +202,8 @@ fn tab_focus_cycles_when_not_inside_file_reference() {
 #[test]
 fn tab_inside_unmatched_file_reference_keeps_input_focus() {
     let mut model = build_model();
+    let cwd = make_temp_dir();
+    let _guard = CurrentDirGuard::enter(&cwd);
     model.focus = FocusArea::Input;
     model.input.set_text("@missing");
 

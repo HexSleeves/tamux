@@ -144,7 +144,7 @@ fn complete_reference_path(raw_path: &str, cwd: &Path, home: Option<&Path>) -> O
         let (name, is_dir) = &matches[0];
         let mut name = name.clone();
         if *is_dir {
-            name.push(std::path::MAIN_SEPARATOR);
+            name.push(preferred_separator(raw_path));
         }
         name
     } else {
@@ -267,6 +267,19 @@ fn split_path_text(raw_path: &str) -> (String, String) {
             raw_path[index + 1..].to_string(),
         ),
         None => (String::new(), raw_path.to_string()),
+    }
+}
+
+fn preferred_separator(raw_path: &str) -> char {
+    let last_forward = raw_path.rfind('/');
+    let last_backslash = raw_path.rfind('\\');
+
+    match (last_forward, last_backslash) {
+        (Some(forward), Some(backslash)) if backslash > forward => '\\',
+        (Some(_), Some(_)) => '/',
+        (None, Some(_)) => '\\',
+        (Some(_), None) => '/',
+        (None, None) => std::path::MAIN_SEPARATOR,
     }
 }
 
