@@ -39,6 +39,9 @@ pub enum ClientEvent {
         thread_id: String,
         title: String,
     },
+    ThreadReloadRequired {
+        thread_id: String,
+    },
     TaskList(Vec<AgentTask>),
     TaskUpdate(AgentTask),
     GoalRunList(Vec<GoalRun>),
@@ -1023,6 +1026,13 @@ impl DaemonClient {
                         thread_id: get_string(&event, "thread_id").unwrap_or_default(),
                         title: get_string(&event, "title")
                             .unwrap_or_else(|| "New Conversation".to_string()),
+                    })
+                    .await;
+            }
+            "thread_reload_required" => {
+                let _ = event_tx
+                    .send(ClientEvent::ThreadReloadRequired {
+                        thread_id: get_string(&event, "thread_id").unwrap_or_default(),
                     })
                     .await;
             }

@@ -181,6 +181,12 @@ impl TuiModel {
                 self.chat
                     .reduce(chat::ChatAction::ThreadCreated { thread_id, title });
             }
+            ClientEvent::ThreadReloadRequired { thread_id } => {
+                self.send_daemon_command(DaemonCommand::RequestThread(thread_id.clone()));
+                self.send_daemon_command(DaemonCommand::RequestThreadTodos(thread_id.clone()));
+                self.send_daemon_command(DaemonCommand::RequestThreadWorkContext(thread_id));
+                self.status_line = "Thread reloaded from daemon".to_string();
+            }
             ClientEvent::TaskList(tasks) => {
                 let tasks = tasks.into_iter().map(conversion::convert_task).collect();
                 self.tasks.reduce(task::TaskAction::TaskListReceived(tasks));

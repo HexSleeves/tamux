@@ -21,6 +21,100 @@ use super::types::{
     CompletionChunk, ProviderConfig, ToolCall, ToolDefinition, ToolFunction,
 };
 
+pub(crate) const UPSTREAM_DIAGNOSTICS_MARKER: &str = "\n\n[amux-upstream-diagnostics]";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpstreamFailureClass {
+    RequestInvalid,
+    AuthConfiguration,
+    TransportIncompatible,
+    TemporaryUpstream,
+    TransientTransport,
+    RateLimit,
+    Unknown,
+}
+
+impl UpstreamFailureClass {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RequestInvalid => "request_invalid",
+            Self::AuthConfiguration => "auth_configuration",
+            Self::TransportIncompatible => "transport_incompatible",
+            Self::TemporaryUpstream => "temporary_upstream",
+            Self::TransientTransport => "transient_transport",
+            Self::RateLimit => "rate_limit",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StructuredUpstreamFailure {
+    pub class: String,
+    pub summary: String,
+    pub diagnostics: serde_json::Value,
+}
+
+#[derive(Debug)]
+struct UpstreamFailureError {
+    class: UpstreamFailureClass,
+    summary: String,
+    diagnostics: serde_json::Value,
+}
+
+impl UpstreamFailureError {
+    fn new(
+        class: UpstreamFailureClass,
+        summary: impl Into<String>,
+        diagnostics: serde_json::Value,
+    ) -> Self {
+        Self {
+            class,
+            summary: summary.into(),
+            diagnostics,
+        }
+    }
+
+    fn structured(&self) -> StructuredUpstreamFailure {
+        StructuredUpstreamFailure {
+            class: self.class.as_str().to_string(),
+            summary: self.summary.clone(),
+            diagnostics: self.diagnostics.clone(),
+        }
+    }
+
+    fn operator_message(&self) -> String {
+        format!(
+            "{}{}{}",
+            self.summary,
+            UPSTREAM_DIAGNOSTICS_MARKER,
+            serde_json::to_string(&self.structured())
+                .unwrap_or_else(|_| "{\"class\":\"unknown\"}".to_string())
+        )
+    }
+}
+
+impl fmt::Display for UpstreamFailureError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.summary)
+    }
+}
+
+impl std::error::Error for UpstreamFailureError {}
+
+pub(crate) fn parse_structured_upstream_failure(
+    message: &str,
+) -> Option<StructuredUpstreamFailure> {
+    let (_, diagnostics) = message.split_once(UPSTREAM_DIAGNOSTICS_MARKER)?;
+    serde_json::from_str(diagnostics).ok()
+}
+
+pub(crate) fn sanitize_upstream_failure_message(message: &str) -> String {
+    parse_structured_upstream_failure(message)
+        .map(|structured| structured.summary)
+        .unwrap_or_else(|| message.to_string())
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum RetryStrategy {
     Bounded {
@@ -89,24 +183,6 @@ impl fmt::Display for RateLimitError {
 
 impl std::error::Error for RateLimitError {}
 
-#[derive(Debug)]
-struct TransportCompatibilityError {
-    provider: String,
-    details: String,
-}
-
-impl fmt::Display for TransportCompatibilityError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} transport incompatibility: {}",
-            self.provider, self.details
-        )
-    }
-}
-
-impl std::error::Error for TransportCompatibilityError {}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredOpenAICodexAuth {
@@ -138,22 +214,138 @@ struct OpenAICodexRequestAuth {
     account_id: String,
 }
 
-/// Build an appropriate error for a non-success API response, distinguishing
-/// rate-limit (429) errors for retry handling.
-fn check_rate_limit_response(
+fn summarize_upstream_body(body_text: &str) -> String {
+    let trimmed = body_text.trim();
+    if trimmed.is_empty() {
+        "upstream returned an empty error body".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn raw_upstream_message(body_text: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body_text)
+        .ok()
+        .and_then(|value| {
+            value.pointer("/error/message")
+                .and_then(|value| value.as_str())
+                .or_else(|| value.get("message").and_then(|value| value.as_str()))
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| summarize_upstream_body(body_text))
+}
+
+fn classify_http_failure(
     status: reqwest::StatusCode,
     provider: &str,
     body_text: &str,
 ) -> anyhow::Error {
-    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        RateLimitError {
-            provider: provider.to_string(),
-            details: body_text.to_string(),
-        }
-        .into()
+    let raw_message = raw_upstream_message(body_text);
+    let lower = raw_message.to_ascii_lowercase();
+    let request_invalid_like = lower.contains("invalid '")
+        || lower.contains("invalid request")
+        || lower.contains("request body")
+        || lower.contains("malformed")
+        || lower.contains("empty string")
+        || lower.contains("tool")
+        || lower.contains("required")
+        || lower.contains("missing");
+    let transport_incompatible_like = lower.contains("not supported")
+        || lower.contains("does not support")
+        || lower.contains("incompatible");
+    let class = if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        UpstreamFailureClass::RateLimit
+    } else if matches!(status, reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)
+    {
+        UpstreamFailureClass::AuthConfiguration
+    } else if (matches!(status, reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNPROCESSABLE_ENTITY)
+        && request_invalid_like)
+        || (status == reqwest::StatusCode::UNPROCESSABLE_ENTITY && !transport_incompatible_like)
+    {
+        UpstreamFailureClass::RequestInvalid
+    } else if matches!(
+        status,
+        reqwest::StatusCode::NOT_FOUND
+            | reqwest::StatusCode::METHOD_NOT_ALLOWED
+            | reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
+    ) || lower.contains("not supported")
+        || lower.contains("does not support")
+        || lower.contains("incompatible")
+    {
+        UpstreamFailureClass::TransportIncompatible
+    } else if matches!(
+        status,
+        reqwest::StatusCode::REQUEST_TIMEOUT
+            | reqwest::StatusCode::CONFLICT
+            | reqwest::StatusCode::TOO_EARLY
+            | reqwest::StatusCode::INTERNAL_SERVER_ERROR
+            | reqwest::StatusCode::BAD_GATEWAY
+            | reqwest::StatusCode::SERVICE_UNAVAILABLE
+            | reqwest::StatusCode::GATEWAY_TIMEOUT
+    ) || lower.contains("service unavailable")
+        || lower.contains("temporarily unavailable")
+        || lower.contains("overloaded")
+        || lower.contains("try again later")
+    {
+        UpstreamFailureClass::TemporaryUpstream
     } else {
-        anyhow::anyhow!("{provider} API returned {status}: {body_text}")
-    }
+        UpstreamFailureClass::Unknown
+    };
+
+    let summary = match class {
+        UpstreamFailureClass::RequestInvalid => {
+            format!("{provider} rejected the daemon request as invalid: {raw_message}")
+        }
+        UpstreamFailureClass::AuthConfiguration => {
+            format!("{provider} rejected the request because authentication or provider configuration is invalid: {raw_message}")
+        }
+        UpstreamFailureClass::TransportIncompatible => {
+            format!("The selected provider/transport combination is incompatible for {provider}: {raw_message}")
+        }
+        UpstreamFailureClass::TemporaryUpstream => {
+            format!("{provider} is temporarily unavailable upstream: {raw_message}")
+        }
+        UpstreamFailureClass::RateLimit => format!("{provider} API returned 429: {raw_message}"),
+        UpstreamFailureClass::TransientTransport => {
+            format!("{provider} transport error: {raw_message}")
+        }
+        UpstreamFailureClass::Unknown => format!("{provider} API returned {status}: {raw_message}"),
+    };
+
+    UpstreamFailureError::new(
+        class,
+        summary,
+        serde_json::json!({
+            "provider": provider,
+            "status": status.as_u16(),
+            "raw_message": raw_message,
+            "body": summarize_upstream_body(body_text),
+        }),
+    )
+    .into()
+}
+
+fn transport_incompatibility_error(
+    provider: &str,
+    details: impl Into<String>,
+) -> anyhow::Error {
+    let details = details.into();
+    UpstreamFailureError::new(
+        UpstreamFailureClass::TransportIncompatible,
+        format!(
+            "The selected provider/transport combination is incompatible for {provider}: {details}"
+        ),
+        serde_json::json!({
+            "provider": provider,
+            "details": details,
+        }),
+    )
+    .into()
+}
+
+fn upstream_failure_error(err: &anyhow::Error) -> Option<&UpstreamFailureError> {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<UpstreamFailureError>())
 }
 
 fn is_timeout_error(err: &anyhow::Error) -> bool {
@@ -224,6 +416,12 @@ fn summarize_transport_error(err: &anyhow::Error) -> String {
 }
 
 fn is_temporary_upstream_error(err: &anyhow::Error) -> bool {
+    if upstream_failure_error(err)
+        .map(|failure| failure.class == UpstreamFailureClass::TemporaryUpstream)
+        .unwrap_or(false)
+    {
+        return true;
+    }
     let message = err.to_string().to_ascii_lowercase();
     message.contains(" 408")
         || message.contains(" 409")
@@ -466,7 +664,7 @@ pub fn send_completion_request(
             } else {
                 match transport {
                     ApiTransport::NativeAssistant => {
-                        match run_native_assistant(
+                        run_native_assistant(
                             &client,
                             &provider,
                             &config,
@@ -475,32 +673,6 @@ pub fn send_completion_request(
                             &tx,
                         )
                         .await
-                        {
-                            Ok(()) => Ok(()),
-                            Err(err)
-                                if err.downcast_ref::<TransportCompatibilityError>().is_some() =>
-                            {
-                                let reason = err.to_string();
-                                let _ = tx
-                                    .send(Ok(CompletionChunk::TransportFallback {
-                                        from: ApiTransport::NativeAssistant,
-                                        to: ApiTransport::ChatCompletions,
-                                        message: reason,
-                                    }))
-                                    .await;
-                                run_openai_chat_completions(
-                                    &client,
-                                    &provider,
-                                    &config,
-                                    &system_prompt,
-                                    &messages,
-                                    &tools,
-                                    &tx,
-                                )
-                                .await
-                            }
-                            Err(err) => Err(err),
-                        }
                     }
                     ApiTransport::ChatCompletions => {
                         run_openai_chat_completions(
@@ -515,7 +687,7 @@ pub fn send_completion_request(
                         .await
                     }
                     ApiTransport::Responses => {
-                        match run_openai_responses(
+                        run_openai_responses(
                             &client,
                             &provider,
                             &config,
@@ -525,33 +697,7 @@ pub fn send_completion_request(
                             previous_response_id.as_deref(),
                             &tx,
                         )
-                        .await {
-                            Ok(()) => Ok(()),
-                            Err(err)
-                                if err.downcast_ref::<TransportCompatibilityError>().is_some()
-                                    && should_fallback_responses_to_chat(&provider) =>
-                            {
-                                let reason = err.to_string();
-                                let _ = tx
-                                    .send(Ok(CompletionChunk::TransportFallback {
-                                        from: ApiTransport::Responses,
-                                        to: ApiTransport::ChatCompletions,
-                                        message: reason,
-                                    }))
-                                    .await;
-                                run_openai_chat_completions(
-                                    &client,
-                                    &provider,
-                                    &config,
-                                    &system_prompt,
-                                    &messages,
-                                    &tools,
-                                    &tx,
-                                )
-                                .await
-                            }
-                            Err(err) => Err(err),
-                        }
+                        .await
                     }
                 }
             };
@@ -559,9 +705,13 @@ pub fn send_completion_request(
             match result {
                 Ok(()) => break,
                 Err(e) => {
-                    let is_rate_limited = e.downcast_ref::<RateLimitError>().is_some();
-                    let is_transient_transport = is_transient_transport_error(&e);
-                    let is_temporary_upstream = is_temporary_upstream_error(&e);
+                    let structured_failure = upstream_failure_error(&e);
+                    let failure_class = structured_failure.map(|failure| failure.class);
+                    let is_rate_limited = matches!(failure_class, Some(UpstreamFailureClass::RateLimit));
+                    let is_transient_transport = matches!(failure_class, Some(UpstreamFailureClass::TransientTransport))
+                        || is_transient_transport_error(&e);
+                    let is_temporary_upstream = matches!(failure_class, Some(UpstreamFailureClass::TemporaryUpstream))
+                        || is_temporary_upstream_error(&e);
                     if is_rate_limited || is_transient_transport || is_temporary_upstream {
                         let failure_class = if is_rate_limited {
                             "rate_limit"
@@ -608,7 +758,9 @@ pub fn send_completion_request(
                         }
                     }
 
-                    let message = if let Some(rate_limit) = e.downcast_ref::<RateLimitError>() {
+                    let message = if let Some(failure) = structured_failure {
+                        failure.operator_message()
+                    } else if let Some(rate_limit) = e.downcast_ref::<RateLimitError>() {
                         rate_limit.to_string()
                     } else if is_timeout_error(&e) {
                         format!(
@@ -876,10 +1028,6 @@ fn copilot_reasoning_summary(effort: &str) -> Option<&'static str> {
     normalize_reasoning_effort(effort).map(|_| "auto")
 }
 
-fn should_fallback_responses_to_chat(provider: &str) -> bool {
-    provider != "github-copilot"
-}
-
 fn build_openai_responses_body(
     provider: &str,
     config: &ProviderConfig,
@@ -1118,18 +1266,16 @@ async fn run_native_assistant(
         anyhow::anyhow!("native assistant transport is not defined for provider '{provider}'")
     })?;
     if definition.native_transport_kind.is_none() {
-        return Err(TransportCompatibilityError {
-            provider: provider.to_string(),
-            details: "provider does not expose a native assistant API".to_string(),
-        }
-        .into());
+        return Err(transport_incompatibility_error(
+            provider,
+            "provider does not expose a native assistant API",
+        ));
     }
     if config.assistant_id.trim().is_empty() {
-        return Err(TransportCompatibilityError {
-            provider: provider.to_string(),
-            details: "native assistant requires assistant_id".to_string(),
-        }
-        .into());
+        return Err(transport_incompatibility_error(
+            provider,
+            "native assistant requires assistant_id",
+        ));
     }
     let base_url = build_native_assistant_base_url(provider, config).ok_or_else(|| {
         anyhow::anyhow!("native assistant base URL is not configured for provider '{provider}'")
@@ -1167,15 +1313,12 @@ async fn run_native_assistant(
                         | reqwest::StatusCode::UNPROCESSABLE_ENTITY
                 );
                 if is_compatibility_error {
-                    return Err(TransportCompatibilityError {
-                        provider: provider.to_string(),
-                        details: format!(
-                            "native assistant thread creation failed ({status}): {text}"
-                        ),
-                    }
-                    .into());
+                    return Err(transport_incompatibility_error(
+                        provider,
+                        format!("native assistant thread creation failed ({status}): {text}"),
+                    ));
                 }
-                return Err(check_rate_limit_response(status, provider, &text));
+                return Err(classify_http_failure(status, provider, &text));
             }
             let payload: serde_json::Value = response.json().await?;
             payload
@@ -1214,13 +1357,12 @@ async fn run_native_assistant(
                 | reqwest::StatusCode::UNPROCESSABLE_ENTITY
         );
         if is_compatibility_error {
-            return Err(TransportCompatibilityError {
-                provider: provider.to_string(),
-                details: format!("native assistant message append failed ({status}): {text}"),
-            }
-            .into());
+            return Err(transport_incompatibility_error(
+                provider,
+                format!("native assistant message append failed ({status}): {text}"),
+            ));
         }
-        return Err(check_rate_limit_response(status, provider, &text));
+        return Err(classify_http_failure(status, provider, &text));
     }
 
     let run_url = format!("{base_url}/threads/{thread_id}/runs");
@@ -1248,13 +1390,12 @@ async fn run_native_assistant(
                 | reqwest::StatusCode::UNPROCESSABLE_ENTITY
         );
         if is_compatibility_error {
-            return Err(TransportCompatibilityError {
-                provider: provider.to_string(),
-                details: format!("native assistant run creation failed ({status}): {text}"),
-            }
-            .into());
+            return Err(transport_incompatibility_error(
+                provider,
+                format!("native assistant run creation failed ({status}): {text}"),
+            ));
         }
-        return Err(check_rate_limit_response(status, provider, &text));
+        return Err(classify_http_failure(status, provider, &text));
     }
     let run_payload: serde_json::Value = run_response.json().await?;
     let run_id = run_payload
@@ -1281,7 +1422,7 @@ async fn run_native_assistant(
                 .chars()
                 .take(240)
                 .collect::<String>();
-            return Err(check_rate_limit_response(status, provider, &text));
+            return Err(classify_http_failure(status, provider, &text));
         }
         let run_status: serde_json::Value = status_response.json().await?;
         if let Some(usage) = run_status.get("usage") {
@@ -1364,7 +1505,7 @@ async fn fetch_native_assistant_message(
             .chars()
             .take(240)
             .collect::<String>();
-        return Err(check_rate_limit_response(status, provider, &text));
+        return Err(classify_http_failure(status, provider, &text));
     }
     let payload: serde_json::Value = response.json().await?;
     let data = payload
@@ -1477,7 +1618,7 @@ async fn run_openai_chat_completions(
             .chars()
             .take(200)
             .collect::<String>();
-        return Err(check_rate_limit_response(status, provider, &text));
+        return Err(classify_http_failure(status, provider, &text));
     }
 
     parse_openai_sse(response, tx).await
@@ -1788,13 +1929,9 @@ async fn run_openai_responses(
                 | reqwest::StatusCode::UNPROCESSABLE_ENTITY
         );
         if is_compatibility_error {
-            return Err(TransportCompatibilityError {
-                provider: provider.to_string(),
-                details: format!("Responses API rejected the request ({status}): {text}"),
-            }
-            .into());
+            return Err(classify_http_failure(status, provider, &text));
         }
-        return Err(check_rate_limit_response(status, provider, &text));
+        return Err(classify_http_failure(status, provider, &text));
     }
 
     parse_openai_responses_sse(response, provider, tx).await
@@ -2033,12 +2170,10 @@ async fn parse_openai_responses_sse(
             saw_any_json = true;
 
             if parsed.get("choices").is_some() {
-                return Err(TransportCompatibilityError {
-                    provider: provider.to_string(),
-                    details: "endpoint returned Chat Completions events for a Responses request"
-                        .to_string(),
-                }
-                .into());
+                return Err(transport_incompatibility_error(
+                    provider,
+                    "endpoint returned Chat Completions events for a Responses request",
+                ));
             }
 
             let event_type = parsed
@@ -2202,11 +2337,10 @@ async fn parse_openai_responses_sse(
     }
 
     if saw_any_json && !saw_responses_event {
-        return Err(TransportCompatibilityError {
-            provider: provider.to_string(),
-            details: "stream did not contain recognizable Responses API events".to_string(),
-        }
-        .into());
+        return Err(transport_incompatibility_error(
+            provider,
+            "stream did not contain recognizable Responses API events",
+        ));
     }
 
     if !pending_tool_calls.is_empty() {
@@ -2342,7 +2476,7 @@ async fn run_anthropic(
             .chars()
             .take(200)
             .collect::<String>();
-        return Err(check_rate_limit_response(status, "Anthropic", &text));
+        return Err(classify_http_failure(status, "Anthropic", &text));
     }
 
     parse_anthropic_sse(response, tx).await
@@ -2835,12 +2969,129 @@ mod tests {
     use super::*;
     use crate::agent::provider_auth_store;
     use crate::agent::types::{AgentMessage, AuthSource, MessageRole, ToolCall, ToolFunction};
+    use futures::StreamExt;
+    use serde::Deserialize;
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
+
+    const STRUCTURED_ERROR_MARKER: &str = "\n\n[amux-upstream-diagnostics]";
+
+    #[derive(Debug, Deserialize)]
+    struct StructuredErrorEnvelope {
+        class: String,
+        summary: String,
+        diagnostics: serde_json::Value,
+    }
 
     fn auth_env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn parse_structured_error(message: &str) -> StructuredErrorEnvelope {
+        let (summary, diagnostics) = message
+            .split_once(STRUCTURED_ERROR_MARKER)
+            .expect("structured diagnostics marker should be present");
+        let envelope: StructuredErrorEnvelope =
+            serde_json::from_str(diagnostics).expect("diagnostics should decode as json");
+        assert_eq!(summary, envelope.summary);
+        envelope
+    }
+
+    async fn collect_chunks(mut stream: CompletionStream) -> Vec<CompletionChunk> {
+        let mut chunks = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            chunks.push(chunk.expect("chunk should be ok"));
+        }
+        chunks
+    }
+
+    async fn spawn_responses_error_server(
+        responses_status_line: &'static str,
+        responses_body: String,
+        chat_body: Option<String>,
+        request_paths: Arc<Mutex<VecDeque<String>>>,
+        chat_requests: Arc<AtomicUsize>,
+    ) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind error server");
+        let addr = listener.local_addr().expect("error server addr");
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let request_paths = request_paths.clone();
+                let chat_requests = chat_requests.clone();
+                let responses_body = responses_body.clone();
+                let chat_body = chat_body.clone();
+                tokio::spawn(async move {
+                    let mut buffer = vec![0u8; 65536];
+                    let read = tokio::io::AsyncReadExt::read(&mut socket, &mut buffer)
+                        .await
+                        .expect("read error server request");
+                    let request = String::from_utf8_lossy(&buffer[..read]);
+                    let path = request
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("/")
+                        .to_string();
+                    request_paths
+                        .lock()
+                        .expect("lock request paths")
+                        .push_back(path.clone());
+
+                    let response = if path.ends_with("/chat/completions") {
+                        chat_requests.fetch_add(1, Ordering::SeqCst);
+                        let body = chat_body.clone().unwrap_or_else(|| {
+                            concat!(
+                                "data: {\"choices\":[{\"delta\":{\"content\":\"fallback\"}}]}\n\n",
+                                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n",
+                                "data: [DONE]\n\n"
+                            )
+                            .to_string()
+                        });
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                    } else {
+                        format!(
+                            "HTTP/1.1 {responses_status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                            responses_body.len(),
+                            responses_body
+                        )
+                    };
+
+                    tokio::io::AsyncWriteExt::write_all(&mut socket, response.as_bytes())
+                        .await
+                        .expect("write error server response");
+                });
+            }
+        });
+
+        format!("http://{addr}/v1")
+    }
+
+    fn responses_test_config(base_url: String, auth_source: AuthSource) -> ProviderConfig {
+        ProviderConfig {
+            base_url,
+            model: "gpt-4.1".to_string(),
+            api_key: "test-key".to_string(),
+            assistant_id: String::new(),
+            auth_source,
+            api_transport: ApiTransport::Responses,
+            reasoning_effort: String::new(),
+            context_window_tokens: 0,
+            response_schema: None,
+        }
     }
 
     struct EnvGuard {
@@ -3342,10 +3593,191 @@ mod tests {
         assert_eq!(body["reasoning"]["summary"], "auto");
     }
 
-    #[test]
-    fn github_copilot_does_not_fallback_responses_to_chat() {
-        assert!(!should_fallback_responses_to_chat("github-copilot"));
-        assert!(should_fallback_responses_to_chat("openai"));
+    #[tokio::test]
+    async fn request_invalid_responses_400_malformed_body_is_classified_request_invalid() {
+        let request_paths = Arc::new(Mutex::new(VecDeque::new()));
+        let chat_requests = Arc::new(AtomicUsize::new(0));
+        let base_url = spawn_responses_error_server(
+            "400 Bad Request",
+            r#"{"error":{"message":"Invalid 'input[12].name': empty string"}}"#.to_string(),
+            None,
+            request_paths,
+            chat_requests,
+        )
+        .await;
+
+        let stream = send_completion_request(
+            &reqwest::Client::new(),
+            "github-copilot",
+            &responses_test_config(base_url, AuthSource::GithubCopilot),
+            "system",
+            &[ApiMessage {
+                role: "user".to_string(),
+                content: ApiContent::Text("hello".to_string()),
+                tool_call_id: None,
+                name: None,
+                tool_calls: None,
+            }],
+            &[],
+            ApiTransport::Responses,
+            None,
+            None,
+            RetryStrategy::Bounded {
+                max_retries: 0,
+                retry_delay_ms: 0,
+            },
+        );
+
+        let chunks = collect_chunks(stream).await;
+        let message = match chunks.last().expect("terminal chunk") {
+            CompletionChunk::Error { message } => message,
+            other => panic!("expected error chunk, got {other:?}"),
+        };
+        let diagnostics = parse_structured_error(message);
+        assert_eq!(diagnostics.class, "request_invalid");
+        assert!(diagnostics.diagnostics.to_string().contains("input[12].name"));
+    }
+
+    #[tokio::test]
+    async fn temporary_upstream_responses_503_is_classified_temporary_upstream() {
+        let request_paths = Arc::new(Mutex::new(VecDeque::new()));
+        let chat_requests = Arc::new(AtomicUsize::new(0));
+        let base_url = spawn_responses_error_server(
+            "503 Service Unavailable",
+            r#"{"error":{"message":"Service unavailable, try again later"}}"#.to_string(),
+            None,
+            request_paths,
+            chat_requests,
+        )
+        .await;
+
+        let stream = send_completion_request(
+            &reqwest::Client::new(),
+            "openai",
+            &responses_test_config(base_url, AuthSource::ApiKey),
+            "system",
+            &[ApiMessage {
+                role: "user".to_string(),
+                content: ApiContent::Text("hello".to_string()),
+                tool_call_id: None,
+                name: None,
+                tool_calls: None,
+            }],
+            &[],
+            ApiTransport::Responses,
+            None,
+            None,
+            RetryStrategy::Bounded {
+                max_retries: 0,
+                retry_delay_ms: 0,
+            },
+        );
+
+        let chunks = collect_chunks(stream).await;
+        let message = match chunks.last().expect("terminal chunk") {
+            CompletionChunk::Error { message } => message,
+            other => panic!("expected error chunk, got {other:?}"),
+        };
+        let diagnostics = parse_structured_error(message);
+        assert_eq!(diagnostics.class, "temporary_upstream");
+        assert!(diagnostics.diagnostics.to_string().contains("503"));
+    }
+
+    #[tokio::test]
+    async fn request_invalid_responses_422_invalid_payload_is_classified_request_invalid() {
+        let request_paths = Arc::new(Mutex::new(VecDeque::new()));
+        let chat_requests = Arc::new(AtomicUsize::new(0));
+        let base_url = spawn_responses_error_server(
+            "422 Unprocessable Entity",
+            r#"{"error":{"message":"Invalid request body: input[3].content is required"}}"#
+                .to_string(),
+            None,
+            request_paths,
+            chat_requests,
+        )
+        .await;
+
+        let stream = send_completion_request(
+            &reqwest::Client::new(),
+            "openai",
+            &responses_test_config(base_url, AuthSource::ApiKey),
+            "system",
+            &[ApiMessage {
+                role: "user".to_string(),
+                content: ApiContent::Text("hello".to_string()),
+                tool_call_id: None,
+                name: None,
+                tool_calls: None,
+            }],
+            &[],
+            ApiTransport::Responses,
+            None,
+            None,
+            RetryStrategy::Bounded {
+                max_retries: 0,
+                retry_delay_ms: 0,
+            },
+        );
+
+        let chunks = collect_chunks(stream).await;
+        let message = match chunks.last().expect("terminal chunk") {
+            CompletionChunk::Error { message } => message,
+            other => panic!("expected error chunk, got {other:?}"),
+        };
+        let diagnostics = parse_structured_error(message);
+        assert_eq!(diagnostics.class, "request_invalid");
+        assert!(diagnostics.summary.contains("invalid"));
+        assert!(diagnostics.diagnostics.to_string().contains("input[3].content"));
+    }
+
+    #[tokio::test]
+    async fn transport_incompatibility_responses_does_not_fallback_to_chat_completions() {
+        let request_paths = Arc::new(Mutex::new(VecDeque::new()));
+        let chat_requests = Arc::new(AtomicUsize::new(0));
+        let base_url = spawn_responses_error_server(
+            "405 Method Not Allowed",
+            r#"{"error":{"message":"Responses API not supported here"}}"#.to_string(),
+            Some(
+                concat!(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"legacy fallback\"}}]}\n\n",
+                    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n",
+                    "data: [DONE]\n\n"
+                )
+                .to_string(),
+            ),
+            request_paths.clone(),
+            chat_requests.clone(),
+        )
+        .await;
+
+        let stream = send_completion_request(
+            &reqwest::Client::new(),
+            "openai",
+            &responses_test_config(base_url, AuthSource::ApiKey),
+            "system",
+            &[ApiMessage {
+                role: "user".to_string(),
+                content: ApiContent::Text("hello".to_string()),
+                tool_call_id: None,
+                name: None,
+                tool_calls: None,
+            }],
+            &[],
+            ApiTransport::Responses,
+            None,
+            None,
+            RetryStrategy::Bounded {
+                max_retries: 0,
+                retry_delay_ms: 0,
+            },
+        );
+
+        let chunks = collect_chunks(stream).await;
+        assert!(matches!(chunks.last(), Some(CompletionChunk::Error { .. })));
+        assert_eq!(chat_requests.load(Ordering::SeqCst), 0);
+        let paths = request_paths.lock().expect("lock request paths");
+        assert!(paths.iter().any(|path| path.ends_with("/responses")));
+        assert!(!paths.iter().any(|path| path.ends_with("/chat/completions")));
     }
 
     #[test]

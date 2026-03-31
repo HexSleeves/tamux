@@ -45,6 +45,10 @@ const ONECONTEXT_TOOL_OUTPUT_MAX_CHARS: usize = 12_000;
 const DEFAULT_DAEMON_TOOL_TIMEOUT_SECS: u64 = 120;
 const MAX_DAEMON_TOOL_TIMEOUT_SECS: u64 = 600;
 const SESSION_SEARCH_OUTPUT_MAX_CHARS: usize = 12_000;
+const SEARCH_FILES_MAX_RESULTS_CAP: u64 = 200;
+const SEARCH_FILES_PROGRAM: &str = "rg";
+const SEARCH_FILES_MAX_LINE_BYTES: usize = 64 * 1024;
+const SEARCH_FILES_MAX_STDERR_BYTES: usize = 64 * 1024;
 
 #[derive(Clone)]
 struct OnecontextSearchRequest {
@@ -61,6 +65,13 @@ struct SearchFilesRequest {
     file_pattern: Option<String>,
     max_results: u64,
     timeout_seconds: u64,
+}
+
+struct SearchFilesCommandOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    truncated: bool,
 }
 
 #[derive(Clone)]
@@ -140,7 +151,12 @@ fn search_files_request(args: &serde_json::Value) -> Result<SearchFilesRequest> 
     let pattern = args
         .get("pattern")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("missing 'pattern' argument"))?;
+        .ok_or_else(|| anyhow::anyhow!("missing 'pattern' argument"))?
+        .trim();
+
+    if pattern.is_empty() {
+        return Err(anyhow::anyhow!("'pattern' must not be empty"));
+    }
 
     if args.get("timeout_seconds").is_some_and(|value| value.as_u64().is_none()) {
         return Err(anyhow::anyhow!(
@@ -148,23 +164,56 @@ fn search_files_request(args: &serde_json::Value) -> Result<SearchFilesRequest> 
         ));
     }
 
+    if args.get("max_results").is_some_and(|value| value.as_u64().is_none()) {
+        return Err(anyhow::anyhow!(
+            "'max_results' must be a non-negative integer"
+        ));
+    }
+
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or(".")
+        .to_string();
+    validate_read_path(&path)?;
+    let path = resolve_search_files_path(&path)?;
+
+    let max_results = args
+        .get("max_results")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(50)
+        .max(1)
+        .min(SEARCH_FILES_MAX_RESULTS_CAP);
+
     Ok(SearchFilesRequest {
         pattern: pattern.to_string(),
-        path: args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".")
-            .to_string(),
+        path,
         file_pattern: args
             .get("file_pattern")
             .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
             .map(str::to_string),
-        max_results: args
-            .get("max_results")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(50),
+        max_results,
         timeout_seconds: daemon_tool_timeout_seconds("search_files", args),
     })
+}
+
+fn build_search_files_rg_args(request: &SearchFilesRequest) -> Vec<String> {
+    let mut cmd_args = vec![
+        "--line-number".to_string(),
+        "--with-filename".to_string(),
+        "--color=never".to_string(),
+    ];
+
+    if let Some(file_pattern) = &request.file_pattern {
+        cmd_args.push(format!("--glob={file_pattern}"));
+    }
+
+    cmd_args.push("--".to_string());
+    cmd_args.push(request.pattern.clone());
+    cmd_args.push(request.path.clone());
+    cmd_args
 }
 
 fn web_search_request(args: &serde_json::Value) -> Result<WebSearchRequest> {
@@ -218,17 +267,238 @@ fn fetch_url_request(args: &serde_json::Value) -> Result<FetchUrlRequest> {
 
 async fn run_search_files_subprocess(
     request: SearchFilesRequest,
-) -> Result<std::process::Output> {
-    let mut cmd_args = vec!["-rn".to_string(), "--color=never".to_string()];
-    if let Some(file_pattern) = &request.file_pattern {
-        cmd_args.push(format!("--include={file_pattern}"));
-    }
-    cmd_args.push(request.pattern.clone());
-    cmd_args.push(request.path.clone());
+) -> Result<SearchFilesCommandOutput> {
+    let mut command = tokio::process::Command::new(SEARCH_FILES_PROGRAM);
+    configure_search_files_command(&mut command, &request);
+    run_search_files_command_bounded(command, request.max_results).await
+}
 
-    let mut command = tokio::process::Command::new("grep");
-    command.args(&cmd_args);
-    run_search_files_command(command).await
+fn configure_search_files_command(
+    command: &mut tokio::process::Command,
+    request: &SearchFilesRequest,
+) {
+    if request.file_pattern.is_some() {
+        if let Some((cwd, search_path)) = search_files_command_root_override(&request.path) {
+            command.current_dir(cwd);
+            let mut rooted_request = request.clone();
+            rooted_request.path = search_path;
+            command.args(build_search_files_rg_args(&rooted_request));
+            return;
+        }
+    }
+
+    command.args(build_search_files_rg_args(request));
+}
+
+fn search_files_command_root_override(path: &str) -> Option<(PathBuf, String)> {
+    let path = PathBuf::from(path);
+    let metadata = std::fs::metadata(&path).ok()?;
+
+    if metadata.is_dir() {
+        return Some((path, ".".to_string()));
+    }
+
+    let parent = path.parent()?.to_path_buf();
+    let file_name = path.file_name()?.to_string_lossy().into_owned();
+    Some((parent, file_name))
+}
+
+fn search_files_success_exit_status() -> std::process::ExitStatus {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(0)
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(0)
+    }
+}
+
+async fn run_search_files_command_bounded(
+    mut command: tokio::process::Command,
+    max_results: u64,
+) -> Result<SearchFilesCommandOutput> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = command
+        .spawn()
+        .context("failed to spawn search_files subprocess")?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("failed to capture search_files stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("failed to capture search_files stderr"))?;
+
+    let stderr_task = tokio::spawn(async move {
+        let mut stderr = stderr;
+        read_search_files_stream_bounded(&mut stderr, SEARCH_FILES_MAX_STDERR_BYTES).await
+    });
+
+    let mut line_buffers = Vec::new();
+    let max_results = max_results as usize;
+    let mut truncated = false;
+    let status = loop {
+        if line_buffers.len() < max_results {
+            match read_search_files_line(&mut stdout, SEARCH_FILES_MAX_LINE_BYTES).await {
+                Ok(Some(line)) => {
+                    line_buffers.push(line);
+                    continue;
+                }
+                Ok(None) => break child.wait().await?,
+                Err(error) => {
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    let _ = stderr_task.await;
+                    return Err(error);
+                }
+            }
+        }
+
+        let mut child_wait = Box::pin(child.wait());
+        tokio::select! {
+            next_line = read_search_files_line(&mut stdout, SEARCH_FILES_MAX_LINE_BYTES) => {
+                match next_line {
+                    Ok(Some(_)) => {
+                        truncated = true;
+                        drop(child_wait);
+                        let _ = child.start_kill();
+                        let _ = child.wait().await;
+                        break search_files_success_exit_status();
+                    }
+                    Ok(None) => break child_wait.await?,
+                    Err(error) => {
+                        drop(child_wait);
+                        let _ = child.start_kill();
+                        let _ = child.wait().await;
+                        let _ = stderr_task.await;
+                        return Err(error);
+                    }
+                }
+            }
+            status = &mut child_wait => {
+                let status = status?;
+                match read_search_files_line(&mut stdout, SEARCH_FILES_MAX_LINE_BYTES).await {
+                    Ok(Some(_)) => {
+                        truncated = true;
+                        break status;
+                    }
+                    Ok(None) => break status,
+                    Err(error) => {
+                        let _ = stderr_task.await;
+                        return Err(error);
+                    }
+                }
+            }
+        }
+    };
+
+    if truncated {
+        let stderr = stderr_task
+            .await
+            .map_err(|error| anyhow::anyhow!("failed to join search_files stderr task: {error}"))??;
+        let stderr_trimmed = String::from_utf8_lossy(&stderr).trim().to_string();
+        if !stderr_trimmed.is_empty() {
+            return Err(anyhow::anyhow!("search failed: {stderr_trimmed}"));
+        }
+        return Ok(SearchFilesCommandOutput {
+            status: search_files_success_exit_status(),
+            stdout: render_search_files_lines(&line_buffers),
+            stderr,
+            truncated: true,
+        });
+    }
+
+    let stderr = stderr_task
+        .await
+        .map_err(|error| anyhow::anyhow!("failed to join search_files stderr task: {error}"))??;
+    Ok(SearchFilesCommandOutput {
+        status,
+        stdout: render_search_files_lines(&line_buffers),
+        stderr,
+        truncated: false,
+    })
+}
+
+async fn read_search_files_line<R>(reader: &mut R, max_line_bytes: usize) -> Result<Option<Vec<u8>>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut line = Vec::new();
+    let mut byte = [0_u8; 1];
+
+    loop {
+        match reader.read(&mut byte).await? {
+            0 if line.is_empty() => return Ok(None),
+            0 => return Ok(Some(line)),
+            _ => {
+                if byte[0] == b'\n' {
+                    return Ok(Some(line));
+                }
+                if line.len() >= max_line_bytes {
+                    return Err(anyhow::anyhow!(
+                        "search output line exceeded {} bytes",
+                        max_line_bytes
+                    ));
+                }
+                line.push(byte[0]);
+            }
+        }
+    }
+}
+
+async fn read_search_files_stream_bounded<R>(reader: &mut R, max_bytes: usize) -> Result<Vec<u8>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 4096];
+
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            break;
+        }
+
+        let remaining = max_bytes.saturating_sub(buffer.len());
+        let bytes_to_copy = remaining.min(read);
+        if bytes_to_copy > 0 {
+            buffer.extend_from_slice(&chunk[..bytes_to_copy]);
+        }
+    }
+
+    Ok(buffer)
+}
+
+fn resolve_search_files_path(path: &str) -> Result<String> {
+    let path = PathBuf::from(path);
+    if path.is_absolute() {
+        return Ok(path.to_string_lossy().into_owned());
+    }
+
+    Ok(std::env::current_dir()
+        .context("failed to resolve current directory for search_files path")?
+        .join(path)
+        .to_string_lossy()
+        .into_owned())
+}
+
+fn render_search_files_lines(lines: &[Vec<u8>]) -> Vec<u8> {
+    lines
+        .iter()
+        .map(|line| String::from_utf8_lossy(line).into_owned())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .into_bytes()
 }
 
 async fn run_search_files_command(
@@ -252,7 +522,7 @@ async fn execute_search_files_with_runner<F, Fut>(
 ) -> Result<String>
 where
     F: FnOnce(SearchFilesRequest) -> Fut,
-    Fut: Future<Output = Result<std::process::Output>>,
+    Fut: Future<Output = Result<SearchFilesCommandOutput>>,
 {
     let request = search_files_request(args)?;
     let timeout_seconds = request.timeout_seconds;
@@ -263,22 +533,46 @@ where
         runner(request),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("search timed out after {timeout_seconds} seconds"))??;
+    .map_err(|_| anyhow::anyhow!("search timed out after {timeout_seconds} seconds"))?;
+
+    let output = match output {
+        Ok(output) => output,
+        Err(error) if search_files_runner_error_is_missing_program(&error) => {
+            return Err(anyhow::anyhow!(
+                "search_files requires `rg` (ripgrep) on PATH"
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+
+    let truncated_stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if output.truncated && !truncated_stderr.is_empty() {
+        if search_files_stderr_looks_like_invalid_regex(&truncated_stderr) {
+            return Err(anyhow::anyhow!("invalid regex: {truncated_stderr}"));
+        }
+        return Err(anyhow::anyhow!("search failed: {truncated_stderr}"));
+    }
 
     match output.status.code() {
         Some(1) => return Ok("No matches found.".into()),
         Some(0) => {}
         Some(code) => {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if search_files_stderr_looks_like_invalid_regex(&stderr) {
+                return Err(anyhow::anyhow!("invalid regex: {stderr}"));
+            }
             if stderr.is_empty() {
-                return Err(anyhow::anyhow!("search failed with grep exit code {code}"));
+                return Err(anyhow::anyhow!("search failed with rg exit code {code}"));
             }
             return Err(anyhow::anyhow!("search failed: {stderr}"));
         }
         None => {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             if stderr.is_empty() {
-                return Err(anyhow::anyhow!("search failed: grep terminated by signal"));
+                return Err(anyhow::anyhow!("search failed: rg terminated by signal"));
+            }
+            if search_files_stderr_looks_like_invalid_regex(&stderr) {
+                return Err(anyhow::anyhow!("invalid regex: {stderr}"));
             }
             return Err(anyhow::anyhow!("search failed: {stderr}"));
         }
@@ -292,11 +586,28 @@ where
         Ok("No matches found.".into())
     } else {
         let mut result = lines.join("\n");
-        if total > lines.len() {
+        if output.truncated {
+            result.push_str("\n\n... (more matches)");
+        } else if total > lines.len() {
             result.push_str(&format!("\n\n... ({} more matches)", total - lines.len()));
         }
         Ok(result)
     }
+}
+
+fn search_files_runner_error_is_missing_program(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_error| io_error.kind() == std::io::ErrorKind::NotFound)
+    })
+}
+
+fn search_files_stderr_looks_like_invalid_regex(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("regex parse error")
+        || lower.contains("invalid regular expression")
+        || lower.contains("error parsing regex")
 }
 
 async fn run_onecontext_search_subprocess(
@@ -647,14 +958,14 @@ pub fn get_available_tools(
 
         tools.push(tool_def(
             "search_files",
-            "Search for a pattern in files using grep. Returns matching lines with file paths and line numbers.",
+            "Search for a pattern in files using ripgrep. Returns matching lines with file paths and line numbers.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "pattern": { "type": "string", "description": "Regex pattern to search for" },
                     "path": { "type": "string", "description": "Directory to search in (default: current directory)" },
                     "file_pattern": { "type": "string", "description": "Glob pattern to filter files (e.g. '*.rs', '*.ts')" },
-                    "max_results": { "type": "integer", "description": "Max results to return (default: 50)" },
+                    "max_results": { "type": "integer", "description": "Max results to return (default: 50, max: 200)" },
                     "timeout_seconds": { "type": "integer", "minimum": 0, "maximum": 600, "description": "Max time to wait for completion (default: 120, max: 600)" }
                 },
                 "required": ["pattern"]
@@ -827,6 +1138,19 @@ pub fn get_available_tools(
                 "target": { "type": "string", "description": "Package, service, file path fragment, or module name depending on the selected semantic query mode" },
                 "path": { "type": "string", "description": "Optional workspace root directory; defaults to the active session cwd or current directory" },
                 "limit": { "type": "integer", "description": "Max results to list for list-oriented semantic modes (default: 20)" }
+            }
+        }),
+    ));
+
+    tools.push(tool_def(
+        "summary",
+        "Backward-compatible alias for semantic_query with kind set to summary. Use this to get a workspace summary while preserving legacy tool callers.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "target": { "type": "string", "description": "Optional package, service, file path fragment, or module name to focus the summary" },
+                "path": { "type": "string", "description": "Optional workspace root directory; defaults to the active session cwd or current directory" },
+                "limit": { "type": "integer", "description": "Max results to list for list-oriented summary output (default: 20)" }
             }
         }),
     ));
@@ -1380,6 +1704,7 @@ pub async fn execute_tool(
             };
         }
     };
+    let (dispatch_tool_name, dispatch_args) = normalize_tool_dispatch(tool_call.function.name.as_str(), &args);
 
     if !thread_id.trim().is_empty()
         && matches!(
@@ -1429,7 +1754,7 @@ pub async fn execute_tool(
 
     let mut pending_approval = None;
 
-    let result = match tool_call.function.name.as_str() {
+    let result = match dispatch_tool_name.as_str() {
         // Terminal/session tools (daemon owns sessions directly)
         "list_terminals" | "list_sessions" => execute_list_sessions(session_manager).await,
         "read_active_terminal_content" => execute_read_terminal(&args, session_manager).await,
@@ -1573,7 +1898,7 @@ pub async fn execute_tool(
         "list_skills" => execute_list_skills(&args, agent_data_dir, &agent.history).await,
         "semantic_query" => {
             execute_semantic_query(
-                &args,
+                &dispatch_args,
                 session_manager,
                 session_id,
                 &agent.history,
@@ -1718,8 +2043,8 @@ pub async fn execute_tool(
             emit_workflow_notice_for_tool(
                 event_tx,
                 thread_id,
-                tool_call.function.name.as_str(),
-                &args,
+                dispatch_tool_name.as_str(),
+                &dispatch_args,
             );
             tracing::info!(tool = %tool_call.function.name, result_len = content.len(), "agent tool result: ok");
             ToolResult {
@@ -1741,6 +2066,22 @@ pub async fn execute_tool(
                 pending_approval: None,
             }
         }
+    }
+}
+
+fn normalize_tool_dispatch(tool_name: &str, args: &serde_json::Value) -> (String, serde_json::Value) {
+    match tool_name {
+        "summary" => {
+            let mut normalized = args.clone();
+            if let serde_json::Value::Object(ref mut map) = normalized {
+                map.insert(
+                    "kind".to_string(),
+                    serde_json::Value::String("summary".to_string()),
+                );
+            }
+            ("semantic_query".to_string(), normalized)
+        }
+        _ => (tool_name.to_string(), args.clone()),
     }
 }
 
@@ -6226,6 +6567,7 @@ mod tests {
         build_list_files_script, build_write_file_command, build_write_file_script,
         command_looks_interactive, command_matches_policy_risk, command_requires_managed_state,
         daemon_tool_timeout_seconds, default_timeout_seconds_for_tool,
+        execute_tool,
         execute_fetch_url_with_runner, execute_gateway_message, execute_get_divergent_session,
         execute_headless_shell_command, execute_onecontext_search_with_runner,
         execute_search_files_with_runner, execute_web_search_with_runner,
@@ -6234,7 +6576,10 @@ mod tests {
         resolve_skill_path, should_use_linked_whatsapp_transport, should_use_managed_execution,
         validate_read_path, validate_write_path, wait_for_managed_command_outcome,
     };
-    use crate::agent::{types::AgentConfig, AgentEngine};
+    use crate::agent::{
+        types::{AgentConfig, AgentEvent, ToolCall, ToolFunction},
+        AgentEngine,
+    };
     use crate::history::SkillVariantRecord;
     use crate::session_manager::SessionManager;
     use amux_protocol::{DaemonMessage, GatewaySendResult, SessionId};
@@ -6411,6 +6756,101 @@ mod tests {
             .is_some_and(|value| value.contains("default: 120") && value.contains("max: 600")));
     }
 
+    #[test]
+    fn summary_alias_tool_is_exposed() {
+        let config = AgentConfig::default();
+        let temp_dir = std::env::temp_dir();
+        let tools = get_available_tools(&config, &temp_dir, false);
+
+        assert!(tools.iter().any(|tool| tool.function.name == "summary"));
+    }
+
+    #[tokio::test]
+    async fn summary_alias_dispatches_to_semantic_query_summary_kind() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+        let (event_tx, mut event_rx) = broadcast::channel(8);
+        let http_client = reqwest::Client::new();
+
+        let alias_args = serde_json::json!({
+            "path": root.path(),
+            "limit": 5
+        });
+        let semantic_args = serde_json::json!({
+            "kind": "summary",
+            "path": root.path(),
+            "limit": 5
+        });
+
+        let alias_result = execute_tool(
+            &ToolCall {
+                id: "call-summary".to_string(),
+                function: ToolFunction {
+                    name: "summary".to_string(),
+                    arguments: alias_args.to_string(),
+                },
+            },
+            &engine,
+            "thread-summary",
+            None,
+            &manager,
+            None,
+            &event_tx,
+            root.path(),
+            &http_client,
+            None,
+        )
+        .await;
+
+        let semantic_result = execute_tool(
+            &ToolCall {
+                id: "call-semantic-summary".to_string(),
+                function: ToolFunction {
+                    name: "semantic_query".to_string(),
+                    arguments: semantic_args.to_string(),
+                },
+            },
+            &engine,
+            "thread-semantic",
+            None,
+            &manager,
+            None,
+            &event_tx,
+            root.path(),
+            &http_client,
+            None,
+        )
+        .await;
+
+        assert!(!alias_result.is_error, "summary alias should succeed: {}", alias_result.content);
+        assert!(!semantic_result.is_error, "semantic_query summary should succeed: {}", semantic_result.content);
+        assert_eq!(alias_result.content, semantic_result.content);
+
+        let workflow_notice = timeout(Duration::from_millis(250), event_rx.recv())
+            .await
+            .expect("summary alias should emit workflow notice")
+            .expect("workflow notice should be received");
+        match workflow_notice {
+            AgentEvent::WorkflowNotice {
+                kind,
+                details: Some(details),
+                ..
+            } => {
+                assert_eq!(kind, "semantic-query");
+                let details: serde_json::Value =
+                    serde_json::from_str(&details).expect("workflow notice details should be json");
+                assert_eq!(details.get("kind").and_then(|value| value.as_str()), Some("summary"));
+                assert_eq!(details.get("limit").and_then(|value| value.as_u64()), Some(5));
+                assert!(details
+                    .get("path")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|value| value == root.path().to_string_lossy()));
+            }
+            other => panic!("expected workflow notice, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn onecontext_search_runtime_uses_default_timeout_on_caller_path() {
         let observed_timeout = Arc::new(Mutex::new(None));
@@ -6484,10 +6924,11 @@ mod tests {
                 async move {
                     *observed_timeout.lock().expect("timeout lock should succeed") =
                         Some(request.timeout_seconds);
-                    Ok::<std::process::Output, anyhow::Error>(std::process::Output {
+                    Ok::<super::SearchFilesCommandOutput, anyhow::Error>(super::SearchFilesCommandOutput {
                         status: successful_exit_status(),
                         stdout: Vec::new(),
                         stderr: Vec::new(),
+                        truncated: false,
                     })
                 }
             },
@@ -6500,6 +6941,242 @@ mod tests {
             Some(120)
         );
         assert_eq!(result, "No matches found.");
+    }
+
+    #[test]
+    fn search_files_rejects_empty_pattern() {
+        let error = super::search_files_request(&serde_json::json!({ "pattern": "   " }))
+            .err()
+            .expect("blank patterns should be rejected");
+
+        assert!(error.to_string().contains("must not be empty"));
+    }
+
+    #[test]
+    fn search_files_clamps_max_results() {
+        let request = super::search_files_request(&serde_json::json!({
+            "pattern": "needle",
+            "max_results": 9_999
+        }))
+        .expect("request should parse");
+
+        assert!(request.max_results <= 200);
+    }
+
+    #[test]
+    fn search_files_clamps_zero_max_results_to_one() {
+        let request = super::search_files_request(&serde_json::json!({
+            "pattern": "needle",
+            "max_results": 0
+        }))
+        .expect("request should parse");
+
+        assert_eq!(request.max_results, 1);
+    }
+
+    #[test]
+    fn search_files_resolves_relative_path_to_absolute_root() {
+        let request = super::search_files_request(&serde_json::json!({
+            "pattern": "needle",
+            "path": "nested/src"
+        }))
+        .expect("request should parse");
+
+        let expected = std::env::current_dir()
+            .expect("current dir should resolve")
+            .join("nested/src");
+        assert_eq!(std::path::PathBuf::from(&request.path), expected);
+        assert!(std::path::Path::new(&request.path).is_absolute());
+    }
+
+    #[test]
+    fn search_files_rejects_invalid_max_results_type() {
+        for invalid in [serde_json::json!(-1), serde_json::json!("many")] {
+            let error = super::search_files_request(&serde_json::json!({
+                "pattern": "needle",
+                "max_results": invalid,
+            }))
+            .err()
+            .expect("invalid max_results should be rejected");
+
+            assert!(error
+                .to_string()
+                .contains("'max_results' must be a non-negative integer"));
+        }
+    }
+
+    #[tokio::test]
+    async fn search_files_reports_invalid_regex() {
+        let error = execute_search_files_with_runner(
+            &serde_json::json!({ "pattern": "[" }),
+            |_| async move {
+                Ok::<super::SearchFilesCommandOutput, anyhow::Error>(super::SearchFilesCommandOutput {
+                    status: exit_status_with_code(2),
+                    stdout: Vec::new(),
+                    stderr: b"regex parse error:\n    [\n    ^\nerror: unclosed character class".to_vec(),
+                    truncated: false,
+                })
+            },
+        )
+        .await
+        .expect_err("invalid regex should return an error");
+
+        assert!(error.to_string().contains("invalid regex"));
+    }
+
+    #[tokio::test]
+    async fn search_files_passes_file_pattern_and_root_path_to_runner() {
+        let observed_request = Arc::new(Mutex::new(None));
+        let observed_request_clone = observed_request.clone();
+
+        let result = execute_search_files_with_runner(
+            &serde_json::json!({
+                "pattern": "needle",
+                "path": "/tmp/workspace",
+                "file_pattern": "*.rs"
+            }),
+            move |request| {
+                let observed_request = observed_request_clone.clone();
+                async move {
+                    *observed_request.lock().expect("request lock should succeed") = Some(request);
+                    Ok::<super::SearchFilesCommandOutput, anyhow::Error>(super::SearchFilesCommandOutput {
+                        status: successful_exit_status(),
+                        stdout: Vec::new(),
+                        stderr: Vec::new(),
+                        truncated: false,
+                    })
+                }
+            },
+        )
+        .await
+        .expect("search_files should succeed");
+
+        let request = observed_request
+            .lock()
+            .expect("request lock should succeed")
+            .clone()
+            .expect("runner should receive a request");
+        assert_eq!(request.file_pattern.as_deref(), Some("*.rs"));
+        assert_eq!(request.path, "/tmp/workspace");
+        assert_eq!(result, "No matches found.");
+    }
+
+    #[tokio::test]
+    async fn search_files_subprocess_supports_nested_glob_with_absolute_root_path() {
+        let root = tempdir().expect("tempdir should succeed");
+        let nested_dir = root.path().join("src/nested");
+        fs::create_dir_all(&nested_dir).expect("nested dir should be created");
+        fs::write(nested_dir.join("lib.rs"), "const NEEDLE: &str = \"needle\";\n")
+            .expect("matching rust file should be written");
+        fs::write(root.path().join("src/ignore.txt"), "needle\n")
+            .expect("non-rust file should be written");
+        fs::write(root.path().join("top.rs"), "needle\n")
+            .expect("outside-glob rust file should be written");
+
+        let result = execute_search_files_with_runner(
+            &serde_json::json!({
+                "pattern": "needle",
+                "path": root.path().to_string_lossy(),
+                "file_pattern": "src/**/*.rs",
+            }),
+            super::run_search_files_subprocess,
+        )
+        .await
+        .expect("nested glob search should succeed");
+
+        assert!(result.contains("src/nested/lib.rs:1:"));
+        assert!(!result.contains("src/ignore.txt"));
+        assert!(!result.contains("top.rs"));
+    }
+
+    #[test]
+    fn search_files_builds_rg_args_with_file_pattern_and_root_path() {
+        let args = super::build_search_files_rg_args(&super::SearchFilesRequest {
+            pattern: "needle".to_string(),
+            path: "/tmp/workspace".to_string(),
+            file_pattern: Some("*.rs".to_string()),
+            max_results: 17,
+            timeout_seconds: 120,
+        });
+
+        assert!(args.contains(&"--glob=*.rs".to_string()));
+        assert!(args.contains(&"/tmp/workspace".to_string()));
+        assert!(args.contains(&"--".to_string()));
+        assert_eq!(args.last().map(String::as_str), Some("/tmp/workspace"));
+    }
+
+    #[test]
+    fn search_files_builds_rg_args_with_positional_separator_before_pattern_and_path() {
+        let args = super::build_search_files_rg_args(&super::SearchFilesRequest {
+            pattern: "--type-add=bad".to_string(),
+            path: "-definitely-a-path".to_string(),
+            file_pattern: None,
+            max_results: 5,
+            timeout_seconds: 120,
+        });
+
+        let separator_index = args
+            .iter()
+            .position(|arg| arg == "--")
+            .expect("rg args should contain positional separator");
+        assert_eq!(args.get(separator_index + 1).map(String::as_str), Some("--type-add=bad"));
+        assert_eq!(args.get(separator_index + 2).map(String::as_str), Some("-definitely-a-path"));
+    }
+
+    #[tokio::test]
+    async fn search_files_enforces_global_result_cap() {
+        let result = execute_search_files_with_runner(
+            &serde_json::json!({ "pattern": "needle", "max_results": 2 }),
+            |_| async move {
+                Ok::<super::SearchFilesCommandOutput, anyhow::Error>(super::SearchFilesCommandOutput {
+                    status: successful_exit_status(),
+                    stdout: b"a:1:needle\nb:2:needle\nc:3:needle\n".to_vec(),
+                    stderr: Vec::new(),
+                    truncated: true,
+                })
+            },
+        )
+        .await
+        .expect("search_files should succeed");
+
+        assert_eq!(result, "a:1:needle\nb:2:needle\n\n... (more matches)");
+    }
+
+    #[tokio::test]
+    async fn search_files_surfaces_truncated_rg_stderr_failure() {
+        let error = execute_search_files_with_runner(
+            &serde_json::json!({ "pattern": "needle", "max_results": 2 }),
+            |_| async move {
+                Ok::<super::SearchFilesCommandOutput, anyhow::Error>(super::SearchFilesCommandOutput {
+                    status: successful_exit_status(),
+                    stdout: b"a:1:needle\nb:2:needle\n".to_vec(),
+                    stderr: b"rg: permission denied".to_vec(),
+                    truncated: true,
+                })
+            },
+        )
+        .await
+        .expect_err("truncated stderr failure should surface");
+
+        assert!(error.to_string().contains("search failed"));
+        assert!(error.to_string().contains("permission denied"));
+    }
+
+    #[tokio::test]
+    async fn search_files_reports_missing_rg() {
+        let error = execute_search_files_with_runner(
+            &serde_json::json!({ "pattern": "needle" }),
+            |_| async move {
+                Err::<super::SearchFilesCommandOutput, anyhow::Error>(
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "No such file or directory")
+                        .into(),
+                )
+            },
+        )
+        .await
+        .expect_err("missing rg should return an error");
+
+        assert!(error.to_string().contains("rg"));
     }
 
     #[tokio::test]
@@ -6803,10 +7480,11 @@ mod tests {
                 async move {
                     *observed_timeout.lock().expect("timeout lock should succeed") =
                         Some(request.timeout_seconds);
-                    Ok::<std::process::Output, anyhow::Error>(std::process::Output {
+                    Ok::<super::SearchFilesCommandOutput, anyhow::Error>(super::SearchFilesCommandOutput {
                         status: successful_exit_status(),
                         stdout: b"file.rs:1:needle\n".to_vec(),
                         stderr: Vec::new(),
+                        truncated: false,
                     })
                 }
             },
@@ -6827,10 +7505,11 @@ mod tests {
             &serde_json::json!({ "pattern": "needle", "timeout_seconds": 0 }),
             |_| async move {
                 tokio::time::sleep(Duration::from_millis(10)).await;
-                Ok::<std::process::Output, anyhow::Error>(std::process::Output {
+                Ok::<super::SearchFilesCommandOutput, anyhow::Error>(super::SearchFilesCommandOutput {
                     status: successful_exit_status(),
                     stdout: Vec::new(),
                     stderr: Vec::new(),
+                    truncated: false,
                 })
             },
         )
@@ -6846,35 +7525,37 @@ mod tests {
         let result = execute_search_files_with_runner(
             &serde_json::json!({ "pattern": "needle" }),
             |_| async move {
-                Ok::<std::process::Output, anyhow::Error>(std::process::Output {
+                Ok::<super::SearchFilesCommandOutput, anyhow::Error>(super::SearchFilesCommandOutput {
                     status: exit_status_with_code(1),
                     stdout: Vec::new(),
                     stderr: Vec::new(),
+                    truncated: false,
                 })
             },
         )
         .await
-        .expect("grep exit code 1 should be treated as no matches");
+        .expect("rg exit code 1 should be treated as no matches");
 
         assert_eq!(result, "No matches found.");
     }
 
     #[tokio::test]
-    async fn search_files_runtime_surfaces_real_grep_failures() {
+    async fn search_files_runtime_surfaces_real_rg_failures() {
         let error = execute_search_files_with_runner(
             &serde_json::json!({ "pattern": "[" }),
             |_| async move {
-                Ok::<std::process::Output, anyhow::Error>(std::process::Output {
+                Ok::<super::SearchFilesCommandOutput, anyhow::Error>(super::SearchFilesCommandOutput {
                     status: exit_status_with_code(2),
                     stdout: Vec::new(),
                     stderr: b"grep: Invalid regular expression".to_vec(),
+                    truncated: false,
                 })
             },
         )
         .await
-        .expect_err("grep exit code >1 should be treated as a real failure");
+        .expect_err("rg exit code >1 should be treated as a real failure");
 
-        assert!(error.to_string().contains("search failed"));
+        assert!(error.to_string().contains("invalid regex"));
         assert!(error.to_string().contains("Invalid regular expression"));
     }
 
@@ -6923,6 +7604,133 @@ mod tests {
         })
         .await
         .expect("timed out subprocess should be killed when future is dropped");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn search_files_bounded_subprocess_kills_child_when_global_cap_is_hit() {
+        let dir = tempdir().expect("tempdir should succeed");
+        let pid_path = dir.path().join("search-files-bounded.pid");
+        let script = format!(
+            "import os, pathlib, sys, time; pathlib.Path(r\"{}\").write_text(str(os.getpid())); print('first:1:needle', flush=True); print('second:2:needle', flush=True); time.sleep(30)",
+            pid_path.display()
+        );
+
+        let mut command = tokio::process::Command::new("python3");
+        command.arg("-c").arg(script);
+
+        let started = std::time::Instant::now();
+        let output = super::run_search_files_command_bounded(command, 1)
+            .await
+            .expect("bounded helper should succeed");
+
+        assert!(output.truncated, "bounded helper should mark output truncated");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "first:1:needle");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "bounded helper should terminate promptly after reaching the cap"
+        );
+
+        let pid = timeout(Duration::from_secs(1), async {
+            loop {
+                if let Ok(raw) = fs::read_to_string(&pid_path) {
+                    break raw
+                        .trim()
+                        .parse::<u32>()
+                        .expect("pid file should contain a valid pid");
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("pid file should be written promptly");
+
+        let proc_path = std::path::PathBuf::from(format!("/proc/{pid}"));
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if !proc_path.exists() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("bounded helper should kill subprocess once cap is reached");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn search_files_bounded_subprocess_does_not_truncate_slow_exact_cap() {
+        let script =
+            "import sys, time; print('first:1:needle', flush=True); time.sleep(0.2)";
+
+        let mut command = tokio::process::Command::new("python3");
+        command.arg("-c").arg(script);
+
+        let output = super::run_search_files_command_bounded(command, 1)
+            .await
+            .expect("bounded helper should succeed");
+
+        assert!(!output.truncated, "exact-cap output should not be marked truncated");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "first:1:needle");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn search_files_bounded_subprocess_handles_non_utf8_output_lossily() {
+        let script =
+            "import os, sys; os.write(sys.stdout.fileno(), b'bad\\xffpath:1:needle\\n')";
+
+        let mut command = tokio::process::Command::new("python3");
+        command.arg("-c").arg(script);
+
+        let output = super::run_search_files_command_bounded(command, 1)
+            .await
+            .expect("bounded helper should succeed");
+
+        assert!(!output.truncated, "single non-utf8 line should not be truncated");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "bad\u{fffd}path:1:needle");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn search_files_bounded_subprocess_rejects_huge_single_line() {
+        let oversized_line_len = 70_000usize;
+        let script = format!(
+            "import sys; sys.stdout.write('x' * {}); sys.stdout.flush()",
+            oversized_line_len
+        );
+
+        let mut command = tokio::process::Command::new("python3");
+        command.arg("-c").arg(script);
+
+        let error = super::run_search_files_command_bounded(command, 1)
+            .await
+            .err()
+            .expect("oversized single line should be rejected");
+
+        assert!(error.to_string().contains("search output line exceeded"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn search_files_bounded_subprocess_limits_captured_stderr_bytes() {
+        let noisy_stderr_len = 70_000usize;
+        let script = format!(
+            "import sys; print('ok:1:needle'); sys.stderr.write('e' * {}); sys.stderr.flush()",
+            noisy_stderr_len
+        );
+
+        let mut command = tokio::process::Command::new("python3");
+        command.arg("-c").arg(script);
+
+        let output = super::run_search_files_command_bounded(command, 1)
+            .await
+            .expect("bounded helper should succeed");
+
+        assert!(!output.truncated, "stderr overflow alone should not mark stdout truncated");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "ok:1:needle");
+        assert!(output.stderr.len() < noisy_stderr_len);
     }
 
     #[tokio::test]

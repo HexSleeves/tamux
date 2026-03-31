@@ -2324,6 +2324,9 @@ pub enum AgentEvent {
         thread_id: String,
         title: String,
     },
+    ThreadReloadRequired {
+        thread_id: String,
+    },
     TaskUpdate {
         task_id: String,
         status: TaskStatus,

@@ -399,6 +399,13 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
                     }
                     break;
                 }
+                case "thread_reload_required": {
+                    const reloadThreadId = typeof event.thread_id === "string" ? event.thread_id : null;
+                    if (reloadThreadId) {
+                        void reloadDaemonThreadIntoLocalState(reloadThreadId);
+                    }
+                    break;
+                }
                 case "task_update": {
                     const task = event.task;
                     if (!task) break;
@@ -853,6 +860,42 @@ export function AgentChatPanelProvider({ children }: { children?: React.ReactNod
             totalTokens: 0,
             isCompactionSummary: false,
         });
+    }
+
+    async function reloadDaemonThreadIntoLocalState(daemonThreadId: string) {
+        const amux = getAgentBridge();
+        if (!amux?.agentGetThread) return;
+
+        const localThreadId = useAgentStore.getState().threads.find(
+            (thread) => thread.daemonThreadId === daemonThreadId,
+        )?.id;
+        if (!localThreadId) return;
+
+        const remoteThread = await amux.agentGetThread(daemonThreadId).catch(() => null) as any;
+        if (!remoteThread?.thread) return;
+
+        const reloadedThread = {
+            ...remoteThread.thread,
+            daemonThreadId,
+        } as AgentThread;
+        const reloadedMessages = (Array.isArray(remoteThread.messages) ? remoteThread.messages : []).map(
+            (message: any) => ({
+                ...message,
+                threadId: localThreadId,
+            }),
+        ) as AgentMessage[];
+
+        useAgentStore.setState((state) => ({
+            threads: state.threads.map((thread) => thread.id === localThreadId ? reloadedThread : thread),
+            messages: {
+                ...state.messages,
+                [localThreadId]: reloadedMessages,
+            },
+        }));
+
+        const todos = await fetchThreadTodos(daemonThreadId).catch(() => []);
+        setThreadTodos(localThreadId, todos);
+        setDaemonTodosByThread((current) => ({ ...current, [daemonThreadId]: todos }));
     }
 
     function normalizeBridgePayload(payload: any) {
