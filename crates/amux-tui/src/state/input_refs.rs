@@ -61,11 +61,28 @@ pub fn active_at_token(buffer: &str, cursor: usize) -> Option<ActiveToken> {
 }
 
 pub fn resolve_reference_path(raw_path: &str, cwd: &Path) -> Option<PathBuf> {
-    let expanded = expand_reference_path(raw_path, cwd);
+    resolve_reference_path_with_home(raw_path, cwd, home_dir().as_deref())
+}
+
+pub(crate) fn resolve_reference_path_with_home(
+    raw_path: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Option<PathBuf> {
+    let expanded = expand_reference_path(raw_path, cwd, home);
     expanded.exists().then_some(expanded)
 }
 
 pub fn complete_active_at_token(buffer: &str, cursor: usize, cwd: &Path) -> TabCompletionOutcome {
+    complete_active_at_token_with_home(buffer, cursor, cwd, home_dir().as_deref())
+}
+
+pub(crate) fn complete_active_at_token_with_home(
+    buffer: &str,
+    cursor: usize,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> TabCompletionOutcome {
     let Some(token) = active_at_token(buffer, cursor) else {
         return TabCompletionOutcome {
             consumed: false,
@@ -74,16 +91,16 @@ pub fn complete_active_at_token(buffer: &str, cursor: usize, cwd: &Path) -> TabC
         };
     };
 
-    let Some(completed_path) = complete_reference_path(&token.path, cwd) else {
+    let Some(completed_path) = complete_reference_path(&token.path, cwd, home) else {
         return TabCompletionOutcome {
-            consumed: false,
-            notice: None,
+            consumed: true,
+            notice: Some(format!("No matches for {}", token.text)),
             replacement: None,
         };
     };
 
     let completed_text = format!("@{}", completed_path);
-    let notice = completion_notice(&token.path, cwd);
+    let notice = completion_notice(&token.path, cwd, home);
     if completed_text == token.text {
         return TabCompletionOutcome {
             consumed: true,
@@ -102,12 +119,15 @@ pub fn complete_active_at_token(buffer: &str, cursor: usize, cwd: &Path) -> TabC
     }
 }
 
-fn complete_reference_path(raw_path: &str, cwd: &Path) -> Option<String> {
-    let (search_dir, typed_prefix, raw_prefix, _raw_suffix) = completion_parts(raw_path, cwd)?;
+fn complete_reference_path(raw_path: &str, cwd: &Path, home: Option<&Path>) -> Option<String> {
+    let (search_dir, typed_prefix, raw_prefix, _raw_suffix) =
+        completion_parts(raw_path, cwd, home)?;
     let mut matches = Vec::new();
 
     for entry in fs::read_dir(search_dir).ok()? {
-        let entry = entry.ok()?;
+        let Ok(entry) = entry else {
+            continue;
+        };
         let file_name = entry.file_name().to_string_lossy().to_string();
         if !file_name.starts_with(&typed_prefix) {
             continue;
@@ -135,12 +155,14 @@ fn complete_reference_path(raw_path: &str, cwd: &Path) -> Option<String> {
     Some(format!("{raw_prefix}{suffix}"))
 }
 
-fn completion_notice(raw_path: &str, cwd: &Path) -> Option<String> {
-    let (search_dir, typed_prefix, _, _) = completion_parts(raw_path, cwd)?;
+fn completion_notice(raw_path: &str, cwd: &Path, home: Option<&Path>) -> Option<String> {
+    let (search_dir, typed_prefix, _, _) = completion_parts(raw_path, cwd, home)?;
     let mut matches = Vec::new();
 
     for entry in fs::read_dir(search_dir).ok()? {
-        let entry = entry.ok()?;
+        let Ok(entry) = entry else {
+            continue;
+        };
         let file_name = entry.file_name().to_string_lossy().to_string();
         if file_name.starts_with(&typed_prefix) {
             matches.push(file_name);
@@ -157,7 +179,11 @@ fn completion_notice(raw_path: &str, cwd: &Path) -> Option<String> {
     }
 }
 
-fn completion_parts(raw_path: &str, cwd: &Path) -> Option<(PathBuf, String, String, String)> {
+fn completion_parts(
+    raw_path: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Option<(PathBuf, String, String, String)> {
     if raw_path.is_empty() {
         return Some((
             cwd.to_path_buf(),
@@ -168,12 +194,12 @@ fn completion_parts(raw_path: &str, cwd: &Path) -> Option<(PathBuf, String, Stri
     }
 
     if raw_path == "~" {
-        let home = home_dir()?;
+        let home = home.map(Path::to_path_buf).or_else(home_dir)?;
         return Some((home, String::new(), "~".to_string(), String::new()));
     }
 
     if raw_path.ends_with('/') || raw_path.ends_with('\\') {
-        let search_dir = expand_reference_path(raw_path, cwd);
+        let search_dir = expand_reference_path(raw_path, cwd, home);
         return Some((
             search_dir,
             String::new(),
@@ -182,44 +208,47 @@ fn completion_parts(raw_path: &str, cwd: &Path) -> Option<(PathBuf, String, Stri
         ));
     }
 
-    let expanded = expand_reference_path(raw_path, cwd);
+    let expanded = expand_reference_path(raw_path, cwd, home);
     let (raw_prefix, raw_suffix) = split_path_text(raw_path);
 
-    let search_dir = if raw_path.starts_with('~') && !raw_path.starts_with("~/") {
-        home_dir()?
-    } else {
-        expanded
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| cwd.to_path_buf())
-    };
+    let search_dir = expanded
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| cwd.to_path_buf());
 
-    let typed_prefix = if raw_path.starts_with('~') && raw_path.len() > 1 {
-        raw_suffix.clone()
-    } else {
-        expanded
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| raw_suffix.clone())
-    };
+    let typed_prefix = expanded
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| raw_suffix.clone());
 
     Some((search_dir, typed_prefix, raw_prefix, raw_suffix))
 }
 
-fn expand_reference_path(raw_path: &str, cwd: &Path) -> PathBuf {
-    if raw_path.starts_with('~') {
-        if let Some(home) = home_dir() {
-            return if raw_path == "~" {
-                home
-            } else {
-                home.join(raw_path.trim_start_matches("~/"))
-            };
+fn expand_reference_path(raw_path: &str, cwd: &Path, home: Option<&Path>) -> PathBuf {
+    if raw_path == "~" {
+        if let Some(home) = home {
+            return home.to_path_buf();
         }
+        if let Some(home) = home_dir() {
+            return home;
+        }
+    }
+
+    if let Some(rest) = raw_path
+        .strip_prefix("~/")
+        .or_else(|| raw_path.strip_prefix("~\\"))
+    {
+        let Some(home) = home.map(Path::to_path_buf).or_else(home_dir) else {
+            return cwd.join(raw_path);
+        };
+        return join_normalized(&home, rest);
     }
 
     let path = Path::new(raw_path);
     if path.is_absolute() {
         path.to_path_buf()
+    } else if raw_path.contains('\\') {
+        join_normalized(cwd, raw_path)
     } else {
         cwd.join(path)
     }
@@ -239,6 +268,21 @@ fn split_path_text(raw_path: &str) -> (String, String) {
         ),
         None => (String::new(), raw_path.to_string()),
     }
+}
+
+fn join_normalized(base: &Path, raw_path: &str) -> PathBuf {
+    let mut path = base.to_path_buf();
+    for component in raw_path.split(['/', '\\']) {
+        if component.is_empty() || component == "." {
+            continue;
+        }
+        if component == ".." {
+            path.pop();
+            continue;
+        }
+        path.push(component);
+    }
+    path
 }
 
 fn last_separator_index(raw_path: &str) -> Option<usize> {

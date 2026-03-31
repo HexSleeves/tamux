@@ -91,6 +91,55 @@ fn completion_extends_single_match_and_keeps_directory_trailing_slash() {
     assert_eq!(replacement.range.end, buffer.len());
 }
 
+#[test]
+fn ambiguous_matches_extend_shared_prefix() {
+    let cwd = make_temp_dir();
+    fs::write(cwd.join("alpha-one"), "one").expect("first file should be writable");
+    fs::write(cwd.join("alpha-two"), "two").expect("second file should be writable");
+
+    let buffer = "@alp";
+    let outcome = crate::state::input_refs::complete_active_at_token(buffer, buffer.len(), &cwd);
+
+    assert!(outcome.consumed);
+    assert_eq!(
+        outcome
+            .replacement
+            .as_ref()
+            .expect("shared prefix should produce a replacement")
+            .text,
+        "@alpha-"
+    );
+    assert!(outcome
+        .notice
+        .as_deref()
+        .expect("ambiguous matches should report a notice")
+        .contains("Multiple matches"));
+}
+
+#[test]
+fn tilde_resolution_handles_forward_and_backslash_separators() {
+    let cwd = make_temp_dir();
+    let home = make_temp_dir();
+    let documents = home.join("Documents");
+    fs::create_dir_all(&documents).expect("documents directory should be creatable");
+
+    let forward = crate::state::input_refs::resolve_reference_path_with_home(
+        "~/Documents",
+        &cwd,
+        Some(home.as_path()),
+    )
+    .expect("forward-slash home path should resolve");
+    let backslash = crate::state::input_refs::resolve_reference_path_with_home(
+        "~\\Documents",
+        &cwd,
+        Some(home.as_path()),
+    )
+    .expect("backslash home path should resolve");
+
+    assert_eq!(forward, documents);
+    assert_eq!(backslash, documents);
+}
+
 // ── UTF-8 cursor tests ───────────────────────────────────────────────────
 
 #[test]

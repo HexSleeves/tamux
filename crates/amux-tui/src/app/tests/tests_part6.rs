@@ -181,3 +181,20 @@ fn tab_focus_cycles_when_not_inside_file_reference() {
     assert_eq!(model.focus, FocusArea::Chat);
     assert_eq!(model.input.buffer(), "hello world");
 }
+
+#[test]
+fn tab_inside_unmatched_file_reference_keeps_input_focus() {
+    let mut model = build_model();
+    model.focus = FocusArea::Input;
+    model.input.set_text("@missing");
+
+    let handled = model.handle_key(KeyCode::Tab, KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(model.focus, FocusArea::Input);
+    assert_eq!(model.input.buffer(), "@missing");
+    assert!(
+        model.status_line.contains("No matches"),
+        "unmatched completion should surface a notice"
+    );
+}
