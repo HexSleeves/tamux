@@ -183,3 +183,67 @@ fn sync_config_to_daemon_does_not_emit_null_api_key_for_advanced_edits() {
         "expected max_context_messages update to be emitted"
     );
 }
+
+#[test]
+fn sync_config_to_daemon_emits_managed_execution_security_level_for_advanced_toggle() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+    model.agent_config_loaded = true;
+    model.config.provider = "openai".to_string();
+    model.config.base_url = "https://api.openai.com/v1".to_string();
+    model.config.model = "gpt-5.4".to_string();
+    model.config.api_key = "sk-live".to_string();
+    model.config.auth_source = "api_key".to_string();
+    model.config.api_transport = "responses".to_string();
+    model.config.managed_security_level = "yolo".to_string();
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "provider": "openai",
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-5.4",
+        "api_key": "sk-live",
+        "auth_source": "api_key",
+        "api_transport": "responses",
+        "managed_execution": {
+            "sandbox_enabled": false,
+            "security_level": "highest"
+        },
+        "providers": {
+            "openai": {
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-5.4",
+                "api_key": "sk-live",
+                "auth_source": "api_key",
+                "api_transport": "responses",
+                "reasoning_effort": ""
+            }
+        }
+    }));
+
+    model.sync_config_to_daemon();
+
+    let mut emitted_security_level = false;
+    while let Ok(command) = daemon_rx.try_recv() {
+        match command {
+            DaemonCommand::SetConfigItem {
+                key_path,
+                value_json,
+            } => {
+                assert_ne!(
+                    key_path, "/managed_security_level",
+                    "advanced tab should use canonical managed_execution path"
+                );
+                if key_path == "/managed_execution/security_level" {
+                    emitted_security_level = true;
+                    assert_eq!(value_json, "\"yolo\"");
+                }
+            }
+            DaemonCommand::SetProviderModel { .. } => {}
+            other => panic!("unexpected daemon command: {other:?}"),
+        }
+    }
+
+    assert!(
+        emitted_security_level,
+        "expected managed_execution security level update to be emitted"
+    );
+}

@@ -296,6 +296,10 @@ impl TuiModel {
             "mode": normalize_compliance_mode(&self.config.compliance_mode),
             "sign_all_events": self.config.compliance_sign_all_events,
         });
+        patch["managed_execution"] = serde_json::json!({
+            "sandbox_enabled": self.config.managed_sandbox_enabled,
+            "security_level": self.config.managed_security_level,
+        });
         patch["gateway"] = serde_json::json!({
             "enabled": self.config.gateway_enabled,
             "prefix": self.config.gateway_prefix,
