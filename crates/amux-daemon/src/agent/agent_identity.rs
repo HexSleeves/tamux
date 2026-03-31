@@ -119,6 +119,17 @@ pub(super) fn canonical_agent_name(alias: &str) -> &'static str {
     }
 }
 
+pub(super) fn canonical_agent_guidance(alias: &str) -> Option<&'static str> {
+    let normalized = alias.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        MAIN_AGENT_ID | MAIN_AGENT_ALIAS | MAIN_AGENT_LEGACY_ALIAS | MAIN_AGENT_FALLBACK_ALIAS => {
+            None
+        }
+        CONCIERGE_AGENT_ID | CONCIERGE_AGENT_ALIAS | CONCIERGE_AGENT_LEGACY_ALIAS => None,
+        _ => persona_by_alias(&normalized).map(|persona| persona.guidance),
+    }
+}
+
 pub(super) fn is_concierge_target(alias: &str) -> bool {
     canonical_agent_id(alias) == CONCIERGE_AGENT_ID
 }
@@ -318,5 +329,17 @@ mod tests {
         assert_eq!(canonical_agent_id(RADOGOST_AGENT_ID), RADOGOST_AGENT_ID);
         assert_eq!(canonical_agent_id("Radogost"), RADOGOST_AGENT_ID);
         assert_eq!(canonical_agent_name(RADOGOST_AGENT_ID), RADOGOST_AGENT_NAME);
+    }
+
+    #[test]
+    fn canonical_agent_guidance_resolves_spawned_personas_only() {
+        assert!(canonical_agent_guidance(MAIN_AGENT_ID).is_none());
+        assert!(canonical_agent_guidance(CONCIERGE_AGENT_ID).is_none());
+        assert_eq!(
+            canonical_agent_guidance(RADOGOST_AGENT_ID),
+            Some(
+                "You specialize in negotiation between options, comparing tradeoffs, and surfacing the strongest route forward."
+            )
+        );
     }
 }

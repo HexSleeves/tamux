@@ -72,18 +72,20 @@ fn render_line_clipped(frame: &mut Frame, area: Rect, row: u16, line: &Line<'_>)
     }
 }
 
+fn centered_line_rect(content_area: Rect, row: u16, line: &Line<'_>) -> Rect {
+    let width = content_width(line).min(content_area.width).max(1);
+    let x = content_area
+        .x
+        .saturating_add(content_area.width.saturating_sub(width) / 2);
+    Rect::new(x, content_area.y.saturating_add(row), width, 1)
+}
+
 pub fn render(frame: &mut Frame, area: Rect, theme: &ThemeTokens) {
     if area.width == 0 || area.height == 0 {
         return;
     }
 
-    let height = area.height as usize;
     let mut lines: Vec<Line<'static>> = Vec::new();
-
-    let pad_top = height.saturating_div(4);
-    for _ in 0..pad_top {
-        lines.push(Line::raw(""));
-    }
 
     lines.push(Line::from(vec![
         Span::styled("\u{2591}", Style::default().fg(Color::Indexed(24))),
@@ -121,23 +123,39 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &ThemeTokens) {
         Span::styled(" threads", theme.fg_dim),
     ]));
 
-    while lines.len() < height {
-        lines.push(Line::raw(""));
-    }
-    lines.truncate(height);
-
     let content_area = centered_content_rect(area, &lines);
     for (row, line) in lines.iter().enumerate() {
         if row >= content_area.height as usize {
             break;
         }
-        render_line_clipped(frame, content_area, row as u16, line);
+        let line_area = centered_line_rect(content_area, row as u16, line);
+        render_line_clipped(frame, line_area, 0, line);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn render_rows(width: u16, height: u16) -> Vec<String> {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        terminal
+            .draw(|frame| render(frame, frame.area(), &ThemeTokens::default()))
+            .expect("landing render should succeed");
+
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                    .collect::<String>()
+            })
+            .collect()
+    }
 
     #[test]
     fn centered_content_rect_stays_inside_target_area() {
@@ -163,5 +181,68 @@ mod tests {
         ]);
 
         assert_eq!(content_width(&line), 6);
+    }
+
+    #[test]
+    fn centered_line_rect_centers_shorter_lines_within_content_area() {
+        let content_area = Rect::new(10, 5, 30, 8);
+        let line = Line::from("short");
+
+        let rect = centered_line_rect(content_area, 2, &line);
+
+        assert_eq!(rect.y, 7);
+        assert!(rect.x > content_area.x);
+        assert_eq!(rect.width, 5);
+    }
+
+    #[test]
+    fn landing_render_balances_vertical_space() {
+        let rows = render_rows(80, 24);
+        let visible_rows: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, row)| (!row.trim().is_empty()).then_some(idx))
+            .collect();
+
+        let first = *visible_rows
+            .first()
+            .expect("landing should render visible rows");
+        let last = *visible_rows
+            .last()
+            .expect("landing should render visible rows");
+        let top_padding = first;
+        let bottom_padding = rows.len().saturating_sub(last + 1);
+
+        assert!(
+            top_padding.abs_diff(bottom_padding) <= 1,
+            "landing should be vertically centered, got top={top_padding} bottom={bottom_padding}"
+        );
+    }
+
+    #[test]
+    fn landing_render_centers_each_line_individually() {
+        let rows = render_rows(80, 24);
+        let tag_row = rows
+            .iter()
+            .find(|row| row.contains("think · plan · ship"))
+            .expect("tag row should be rendered");
+        let body_row = rows
+            .iter()
+            .find(|row| row.contains("Clean thread. No concierge noise. Type to begin."))
+            .expect("body row should be rendered");
+
+        let tag_start = tag_row
+            .chars()
+            .position(|ch| ch != ' ')
+            .expect("tag row should have visible content");
+        let body_start = body_row
+            .chars()
+            .position(|ch| ch != ' ')
+            .expect("body row should have visible content");
+
+        assert!(
+            tag_start > body_start,
+            "shorter landing rows should be centered independently"
+        );
     }
 }

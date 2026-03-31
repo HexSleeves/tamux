@@ -296,9 +296,11 @@ async fn post_tool_policy_checkpoint_pivots_for_non_error_stuckness_with_runtime
         recorded
             .iter()
             .any(|body| body.contains("Continuity summary")
+                && body.contains("I am carrying this forward as")
+                && body.contains(MAIN_AGENT_NAME)
                 && body.contains("Test goal")
                 && body.contains("Investigate failure")),
-        "expected the policy continuity summary to include explicit goal and task titles",
+        "expected the policy continuity summary to include persona identity plus explicit goal and task titles",
     );
     assert!(
         recorded

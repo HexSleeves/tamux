@@ -43,12 +43,24 @@ pub(crate) fn format_runtime_work_scope_label(
 }
 
 pub(crate) fn format_runtime_continuity_summary(
+    agent_name: Option<&str>,
+    agent_guidance: Option<&str>,
     work_scope_label: Option<&str>,
     counter_who: &CounterWhoState,
     constraints: &[NegativeConstraint],
     now_ms: u64,
 ) -> String {
     let mut bullets = Vec::new();
+
+    if let Some(agent_name) = agent_name.map(str::trim).filter(|value| !value.is_empty()) {
+        bullets.push(format!("- I am carrying this forward as {agent_name}."));
+    }
+    if let Some(agent_guidance) = agent_guidance
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        bullets.push(format!("- I should lean into this persona's role: {agent_guidance}"));
+    }
 
     if let Some(work_scope) = work_scope_label
         .map(str::trim)
@@ -131,6 +143,8 @@ pub(crate) async fn build_runtime_continuity_context(
 ) -> RuntimeContinuityContext {
     let now_ms = super::now_millis();
     let scope_id = crate::agent::agent_identity::current_agent_scope_id();
+    let agent_name = canonical_agent_name(&scope_id);
+    let agent_guidance = canonical_agent_guidance(&scope_id);
     let counter_who = {
         let stores = engine.episodic_store.read().await;
         stores
@@ -145,8 +159,14 @@ pub(crate) async fn build_runtime_continuity_context(
     }
     .unwrap_or_default();
 
-    let continuity_summary =
-        format_runtime_continuity_summary(work_scope_label, &counter_who, &constraints, now_ms);
+    let continuity_summary = format_runtime_continuity_summary(
+        Some(agent_name),
+        agent_guidance,
+        work_scope_label,
+        &counter_who,
+        &constraints,
+        now_ms,
+    );
     let negative_constraints_context =
         super::episodic::negative_knowledge::format_negative_constraints(&constraints, now_ms);
 
@@ -160,7 +180,7 @@ pub(crate) async fn build_runtime_continuity_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::agent_identity::MAIN_AGENT_ID;
+    use crate::agent::agent_identity::{MAIN_AGENT_ID, MAIN_AGENT_NAME};
 
     fn sample_constraint(description: &str) -> NegativeConstraint {
         NegativeConstraint {
@@ -251,6 +271,8 @@ mod tests {
         ];
 
         let summary = format_runtime_continuity_summary(
+            Some(MAIN_AGENT_NAME),
+            None,
             Some(
                 "goal \"Test goal\" / step \"Investigate failure\" / task \"Inspect the failing path\"",
             ),
@@ -261,11 +283,30 @@ mod tests {
 
         assert!(summary.contains("## Working Continuity"));
         assert!(summary.contains("Carry this forward from the last attempts"));
+        assert!(summary.contains(&format!("I am carrying this forward as {MAIN_AGENT_NAME}.")));
         assert!(summary.contains("I am continuing the same workstream: goal \"Test goal\" / step \"Investigate failure\" / task \"Inspect the failing path\""));
         assert!(summary.contains("I am still focused on: Tool: bash"));
         assert!(summary.contains("Repeated failure detected"));
         assert!(summary.contains("I should keep these operator corrections active"));
         assert!(summary.contains("I already ruled out: Retrying the old sync path keeps failing."));
+    }
+
+    #[test]
+    fn format_runtime_continuity_summary_includes_spawned_persona_guidance() {
+        let summary = format_runtime_continuity_summary(
+            Some(crate::agent::agent_identity::RADOGOST_AGENT_NAME),
+            Some(
+                "You specialize in negotiation between options, comparing tradeoffs, and surfacing the strongest route forward.",
+            ),
+            Some("goal \"Spawned goal\" / step \"Investigate failure\" / task \"Investigate failure\""),
+            &CounterWhoState::default(),
+            &[],
+            1_000_000_500,
+        );
+
+        assert!(summary.contains("I am carrying this forward as Radogost."));
+        assert!(summary.contains("I should lean into this persona's role:"));
+        assert!(summary.contains("comparing tradeoffs"));
     }
 
     #[test]

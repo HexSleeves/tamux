@@ -1,6 +1,236 @@
 use super::*;
 
 #[tokio::test]
+async fn send_message_request_includes_runtime_continuity_and_negative_knowledge() {
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = "openai".to_string();
+    config.base_url = spawn_recording_assistant_server(recorded_bodies.clone()).await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread-runtime-continuity-request";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            crate::agent::types::AgentThread {
+                id: thread_id.to_string(),
+                title: "Runtime continuity thread".to_string(),
+                messages: vec![crate::agent::types::AgentMessage::user(
+                    "Investigate the failure",
+                    1,
+                )],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+    }
+
+    {
+        let mut tasks = engine.tasks.lock().await;
+        tasks.push_back(crate::agent::types::AgentTask {
+            id: "task-runtime-continuity-request".to_string(),
+            title: "Investigate failure".to_string(),
+            description: "Inspect the failing path".to_string(),
+            status: TaskStatus::InProgress,
+            priority: crate::agent::types::TaskPriority::Normal,
+            progress: 0,
+            created_at: 1,
+            started_at: Some(1),
+            completed_at: None,
+            error: None,
+            result: None,
+            thread_id: Some(thread_id.to_string()),
+            source: "goal_run".to_string(),
+            notify_on_complete: false,
+            notify_channels: Vec::new(),
+            dependencies: Vec::new(),
+            command: None,
+            session_id: None,
+            goal_run_id: Some("goal-runtime-1".to_string()),
+            goal_run_title: Some("Test goal".to_string()),
+            goal_step_id: Some("step-runtime-1".to_string()),
+            goal_step_title: Some("Investigate failure".to_string()),
+            parent_task_id: None,
+            parent_thread_id: None,
+            runtime: "daemon".to_string(),
+            retry_count: 1,
+            max_retries: 2,
+            next_retry_at: None,
+            scheduled_at: None,
+            blocked_reason: None,
+            awaiting_approval_id: None,
+            lane_id: None,
+            last_error: None,
+            logs: Vec::new(),
+            tool_whitelist: None,
+            tool_blacklist: None,
+            override_provider: None,
+            override_model: None,
+            override_system_prompt: None,
+            context_budget_tokens: None,
+            context_overflow_action: None,
+            termination_conditions: None,
+            success_criteria: None,
+            max_duration_secs: None,
+            supervisor_config: None,
+            sub_agent_def_id: None,
+        });
+    }
+
+    {
+        let mut goal_runs = engine.goal_runs.lock().await;
+        goal_runs.push_back(crate::agent::types::GoalRun {
+            id: "goal-runtime-1".to_string(),
+            title: "Test goal".to_string(),
+            goal: "Recover from repeated failure".to_string(),
+            client_request_id: None,
+            status: crate::agent::types::GoalRunStatus::Running,
+            priority: crate::agent::types::TaskPriority::Normal,
+            created_at: 1,
+            updated_at: 1,
+            started_at: Some(1),
+            completed_at: None,
+            thread_id: Some(thread_id.to_string()),
+            session_id: None,
+            current_step_index: 0,
+            current_step_title: Some("Investigate failure".to_string()),
+            current_step_kind: Some(crate::agent::types::GoalRunStepKind::Research),
+            replan_count: 0,
+            max_replans: 2,
+            plan_summary: None,
+            reflection_summary: None,
+            memory_updates: Vec::new(),
+            generated_skill_path: None,
+            last_error: None,
+            failure_cause: None,
+            child_task_ids: vec!["task-runtime-continuity-request".to_string()],
+            child_task_count: 1,
+            approval_count: 0,
+            awaiting_approval_id: None,
+            active_task_id: Some("task-runtime-continuity-request".to_string()),
+            duration_ms: None,
+            steps: vec![crate::agent::types::GoalRunStep {
+                id: "step-runtime-1".to_string(),
+                position: 0,
+                title: "Investigate failure".to_string(),
+                instructions: "Inspect the failing path".to_string(),
+                kind: crate::agent::types::GoalRunStepKind::Research,
+                success_criteria: "Know why it failed".to_string(),
+                session_id: None,
+                status: crate::agent::types::GoalRunStepStatus::InProgress,
+                task_id: Some("task-runtime-continuity-request".to_string()),
+                summary: None,
+                error: None,
+                started_at: Some(1),
+                completed_at: None,
+            }],
+            events: Vec::new(),
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            estimated_cost_usd: None,
+            autonomy_level: Default::default(),
+            authorship_tag: None,
+        });
+    }
+
+    {
+        let mut stores = engine.episodic_store.write().await;
+        let store = stores
+            .entry(crate::agent::agent_identity::MAIN_AGENT_ID.to_string())
+            .or_default();
+        store.counter_who.current_focus = Some("Tool: read_file".to_string());
+        store.counter_who.correction_patterns = vec![crate::agent::episodic::CorrectionPattern {
+            pattern: "Inspect workspace state before retrying".to_string(),
+            correction_count: 2,
+            last_correction_at: 3,
+        }];
+    }
+    engine
+        .add_negative_constraint(crate::agent::episodic::NegativeConstraint {
+            id: "nk-runtime-test-1".to_string(),
+            episode_id: None,
+            constraint_type: crate::agent::episodic::ConstraintType::RuledOut,
+            subject: "Investigate failure".to_string(),
+            solution_class: Some("recovery".to_string()),
+            description: "The old recovery path already failed twice.".to_string(),
+            confidence: 0.95,
+            state: crate::agent::episodic::ConstraintState::Dead,
+            evidence_count: 2,
+            direct_observation: true,
+            derived_from_constraint_ids: Vec::new(),
+            related_subject_tokens: vec!["investigate".to_string(), "failure".to_string()],
+            valid_until: Some(crate::agent::now_millis() + 60_000),
+            created_at: crate::agent::now_millis(),
+        })
+        .await
+        .expect("seed negative knowledge for runtime prompt");
+
+    let outcome = engine
+        .send_message_inner(
+            Some(thread_id),
+            "Investigate the failure",
+            Some("task-runtime-continuity-request"),
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect("send message should complete");
+
+    assert!(!outcome.interrupted_for_approval);
+
+    let recorded = recorded_bodies
+        .lock()
+        .expect("lock recorded assistant bodies");
+    assert!(
+        recorded
+            .iter()
+            .any(|body| body.contains("## Working Continuity")),
+        "expected the execution prompt to include the continuity summary section",
+    );
+    assert!(
+        recorded.iter().any(|body| body.contains("I am carrying this forward as")
+            && body.contains(MAIN_AGENT_NAME)
+            && body.contains("Test goal")
+            && body.contains("Investigate failure")
+            && body.contains("I am continuing the same workstream")),
+        "expected the execution prompt to include active persona identity plus explicit goal, step, and task titles",
+    );
+    assert!(
+        recorded
+            .iter()
+            .any(|body| body.contains("## Ruled-Out Approaches (Negative Knowledge)")),
+        "expected the execution prompt to include ruled-out approaches",
+    );
+    assert!(
+        recorded
+            .iter()
+            .any(|body| body.contains("The old recovery path already failed twice.")),
+        "expected the execution prompt to include matching negative knowledge",
+    );
+}
+
+#[tokio::test]
 async fn transport_incompatibility_does_not_mutate_persisted_config_and_emits_notice() {
     let root = tempdir().unwrap();
     let manager = SessionManager::new_test(root.path()).await;

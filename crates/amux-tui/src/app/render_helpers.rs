@@ -309,7 +309,7 @@ pub(super) fn render_chat_action_confirm_modal(
         Span::raw(" "),
         Span::styled(" [Cancel] ", cancel_style),
     ]);
-    frame.render_widget(Paragraph::new(action_line), layout[1]);
+    frame.render_widget(Paragraph::new(action_line).centered(), layout[1]);
 }
 
 pub(super) fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
@@ -329,4 +329,43 @@ pub(super) fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect 
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    #[test]
+    fn chat_action_confirm_button_bounds_match_rendered_buttons() {
+        let backend = TestBackend::new(100, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        let area = centered_rect(48, 28, Rect::new(0, 0, 100, 40));
+
+        terminal
+            .draw(|frame| {
+                render_chat_action_confirm_modal(
+                    frame,
+                    area,
+                    Some(("delete", 1)),
+                    true,
+                    &ThemeTokens::default(),
+                );
+            })
+            .expect("confirm modal render should succeed");
+
+        let (confirm_rect, cancel_rect) =
+            chat_action_confirm_button_bounds(area).expect("button bounds should be available");
+        let buffer = terminal.backend().buffer();
+        let confirm_text = (confirm_rect.x..confirm_rect.x.saturating_add(confirm_rect.width))
+            .filter_map(|x| buffer.cell((x, confirm_rect.y)).map(|cell| cell.symbol()))
+            .collect::<String>();
+        let cancel_text = (cancel_rect.x..cancel_rect.x.saturating_add(cancel_rect.width))
+            .filter_map(|x| buffer.cell((x, cancel_rect.y)).map(|cell| cell.symbol()))
+            .collect::<String>();
+
+        assert!(confirm_text.contains("[Confirm]"));
+        assert!(cancel_text.contains("[Cancel]"));
+    }
 }

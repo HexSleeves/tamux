@@ -12,6 +12,7 @@ use tokio::net::TcpListener;
 mod part1;
 mod part2;
 mod part3;
+mod part4;
 
 async fn spawn_tool_call_server() -> String {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -41,6 +42,60 @@ async fn spawn_tool_call_server() -> String {
                     .write_all(response.as_bytes())
                     .await
                     .expect("write tool call response");
+            });
+        }
+    });
+
+    format!("http://{addr}/v1")
+}
+
+async fn spawn_recording_assistant_server(
+    recorded_bodies: Arc<StdMutex<VecDeque<String>>>,
+) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind recording assistant server");
+    let addr = listener
+        .local_addr()
+        .expect("recording assistant server local addr");
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let recorded_bodies = recorded_bodies.clone();
+            tokio::spawn(async move {
+                let mut buffer = vec![0u8; 65536];
+                let read = socket
+                    .read(&mut buffer)
+                    .await
+                    .expect("read recording assistant request");
+                let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let body = request
+                    .split("\r\n\r\n")
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_string();
+                recorded_bodies
+                    .lock()
+                    .expect("lock recorded assistant request log")
+                    .push_back(body);
+
+                let response = concat!(
+                    "HTTP/1.1 200 OK\r\n",
+                    "content-type: text/event-stream\r\n",
+                    "cache-control: no-cache\r\n",
+                    "connection: close\r\n",
+                    "\r\n",
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"Acknowledged.\"}}]}\n\n",
+                    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+                    "data: [DONE]\n\n"
+                );
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write recording assistant response");
             });
         }
     });
