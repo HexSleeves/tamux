@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::agent::{AgentConfig, AgentEngine};
 use crate::agent::types::{
-    AgentMessage, AgentTask, AgentTaskLogEntry, GoalRun, GoalRunStatus, GoalRunStep,
+    AgentMessage, AgentTask, AgentTaskLogEntry, ApiTransport, GoalRun, GoalRunStatus, GoalRunStep,
     GoalRunStepKind, GoalRunStepStatus, TaskLogLevel, TaskPriority, TaskStatus,
 };
 use crate::session_manager::SessionManager;
@@ -134,6 +134,7 @@ pub(super) async fn policy_runtime_engine(
     config.base_url = server_url;
     config.model = "gpt-4o-mini".to_string();
     config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
     let engine = AgentEngine::new_test(manager, config, root.path()).await;
     TestEngine {
         engine,

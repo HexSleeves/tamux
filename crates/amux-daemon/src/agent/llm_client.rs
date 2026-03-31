@@ -2974,7 +2974,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
     use tempfile::tempdir;
 
     const STRUCTURED_ERROR_MARKER: &str = "\n\n[amux-upstream-diagnostics]";
@@ -2984,11 +2984,6 @@ mod tests {
         class: String,
         summary: String,
         diagnostics: serde_json::Value,
-    }
-
-    fn auth_env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     fn parse_structured_error(message: &str) -> StructuredErrorEnvelope {
@@ -3435,7 +3430,7 @@ mod tests {
 
     #[test]
     fn github_copilot_stored_auth_adds_bearer_header_to_requests() {
-        let _lock = auth_env_lock().lock().expect("lock auth env");
+        let _lock = crate::agent::provider_auth_store::provider_auth_test_env_lock();
         let _guard = EnvGuard::new(&[
             "TAMUX_PROVIDER_AUTH_DB_PATH",
             "TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI",
@@ -3494,7 +3489,7 @@ mod tests {
 
     #[test]
     fn github_copilot_requests_include_copilot_headers() {
-        let _lock = auth_env_lock().lock().expect("lock auth env");
+        let _lock = crate::agent::provider_auth_store::provider_auth_test_env_lock();
         let _guard = EnvGuard::new(&[
             "TAMUX_PROVIDER_AUTH_DB_PATH",
             "TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI",
@@ -3899,7 +3894,7 @@ mod tests {
 
     #[tokio::test]
     async fn copilot_validation_returns_static_catalog_models() {
-        let _lock = auth_env_lock().lock().expect("lock auth env");
+        let _lock = crate::agent::provider_auth_store::provider_auth_test_env_lock();
         let _guard = EnvGuard::new(&[
             "TAMUX_PROVIDER_AUTH_DB_PATH",
             "TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI",

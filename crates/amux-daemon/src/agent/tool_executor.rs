@@ -7653,21 +7653,16 @@ mod tests {
         let dir = tempdir().expect("tempdir should succeed");
         let pid_path = dir.path().join("search-files-timeout.pid");
         let script = format!(
-            "import os, pathlib, time; pathlib.Path(r\"{}\").write_text(str(os.getpid())); time.sleep(30)",
+            "import os, pathlib, time; pid_path = pathlib.Path(r\"{}\"); pid_path.parent.mkdir(parents=True, exist_ok=True); pid_path.write_text(str(os.getpid())); time.sleep(30)",
             pid_path.display()
         );
 
         let mut command = tokio::process::Command::new("python3");
         command.arg("-c").arg(script);
 
-        let timed_out: Result<_, tokio::time::error::Elapsed> = timeout(
-            Duration::from_millis(20),
-            run_search_files_command(command),
-        )
-        .await;
-        assert!(timed_out.is_err(), "helper future should time out");
+        let task = tokio::spawn(run_search_files_command(command));
 
-        let pid = timeout(Duration::from_secs(1), async {
+        let pid = timeout(Duration::from_secs(2), async {
             loop {
                 if let Ok(raw) = fs::read_to_string(&pid_path) {
                     break raw
@@ -7679,7 +7674,11 @@ mod tests {
             }
         })
         .await
-        .expect("pid file should be written promptly");
+            .expect("pid file should be written promptly");
+
+        task.abort();
+        let join_error = task.await.expect_err("aborted task should not complete successfully");
+        assert!(join_error.is_cancelled(), "task abort should cancel the future");
 
         let proc_path = std::path::PathBuf::from(format!("/proc/{pid}"));
         timeout(Duration::from_secs(1), async {
