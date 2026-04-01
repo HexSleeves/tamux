@@ -373,3 +373,246 @@
 
         conn.shutdown().await;
     }
+
+    struct EnvGuard {
+        vars: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn new(names: &[&'static str]) -> Self {
+            Self {
+                vars: names
+                    .iter()
+                    .map(|name| (*name, std::env::var(name).ok()))
+                    .collect(),
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (name, value) in self.vars.drain(..) {
+                if let Some(value) = value {
+                    std::env::set_var(name, value);
+                } else {
+                    std::env::remove_var(name);
+                }
+            }
+        }
+    }
+
+    fn prepare_server_openai_codex_auth_test(root: &std::path::Path) {
+        std::env::set_var("TAMUX_PROVIDER_AUTH_DB_PATH", root.join("provider-auth.db"));
+        std::env::set_var(
+            "TAMUX_CODEX_CLI_AUTH_PATH",
+            root.join("missing-codex-auth.json"),
+        );
+        crate::agent::openai_codex_auth::clear_openai_codex_auth_test_state();
+    }
+
+    fn server_openai_codex_auth_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn parse_json(raw: &str) -> serde_json::Value {
+        serde_json::from_str(raw).expect("json payload should decode")
+    }
+
+    #[tokio::test]
+    async fn openai_codex_auth_status_request_returns_status_payload() {
+        let _lock = server_openai_codex_auth_test_lock();
+        let temp_dir = tempfile::tempdir().expect("tempdir should succeed");
+        let _env_guard =
+            EnvGuard::new(&["TAMUX_PROVIDER_AUTH_DB_PATH", "TAMUX_CODEX_CLI_AUTH_PATH"]);
+        prepare_server_openai_codex_auth_test(temp_dir.path());
+        let mut conn = spawn_test_connection().await;
+
+        conn.framed
+            .send(ClientMessage::AgentGetOpenAICodexAuthStatus)
+            .await
+            .expect("send auth status request");
+
+        let status = match conn.recv().await {
+            DaemonMessage::AgentOpenAICodexAuthStatus { status_json } => parse_json(&status_json),
+            other => panic!("expected AgentOpenAICodexAuthStatus, got {other:?}"),
+        };
+        assert_eq!(status.get("available").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(status.get("status").and_then(|v| v.as_str()), None);
+        assert!(status.get("authUrl").is_none());
+        assert!(status.get("error").is_none());
+
+        conn.shutdown().await;
+        crate::agent::openai_codex_auth::clear_openai_codex_auth_test_state();
+    }
+
+    #[tokio::test]
+    async fn openai_codex_auth_login_request_returns_login_payload() {
+        let _lock = server_openai_codex_auth_test_lock();
+        let temp_dir = tempfile::tempdir().expect("tempdir should succeed");
+        let _env_guard =
+            EnvGuard::new(&["TAMUX_PROVIDER_AUTH_DB_PATH", "TAMUX_CODEX_CLI_AUTH_PATH"]);
+        prepare_server_openai_codex_auth_test(temp_dir.path());
+        let mut conn = spawn_test_connection().await;
+
+        conn.framed
+            .send(ClientMessage::AgentLoginOpenAICodex)
+            .await
+            .expect("send auth login request");
+
+        let login = match conn.recv().await {
+            DaemonMessage::AgentOpenAICodexAuthLoginResult { result_json } => {
+                parse_json(&result_json)
+            }
+            other => panic!("expected AgentOpenAICodexAuthLoginResult, got {other:?}"),
+        };
+        assert_eq!(login.get("available").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(login.get("status").and_then(|v| v.as_str()), Some("pending"));
+        assert!(login
+            .get("authUrl")
+            .and_then(|v| v.as_str())
+            .is_some_and(|value| value.starts_with("https://auth.openai.com/oauth/authorize")));
+        assert!(login.get("error").is_none());
+
+        conn.shutdown().await;
+        crate::agent::openai_codex_auth::clear_openai_codex_auth_test_state();
+    }
+
+    #[tokio::test]
+    async fn openai_codex_auth_login_request_replies_immediately_without_operation_accepted() {
+        let _lock = server_openai_codex_auth_test_lock();
+        let temp_dir = tempfile::tempdir().expect("tempdir should succeed");
+        let _env_guard =
+            EnvGuard::new(&["TAMUX_PROVIDER_AUTH_DB_PATH", "TAMUX_CODEX_CLI_AUTH_PATH"]);
+        prepare_server_openai_codex_auth_test(temp_dir.path());
+        let mut conn = spawn_test_connection().await;
+
+        conn.framed
+            .send(ClientMessage::AgentLoginOpenAICodex)
+            .await
+            .expect("send auth login request");
+
+        match conn.recv_with_timeout(Duration::from_millis(250)).await {
+            DaemonMessage::AgentOpenAICodexAuthLoginResult { .. } => {}
+            DaemonMessage::OperationAccepted { .. } => {
+                panic!("login should reply immediately instead of OperationAccepted")
+            }
+            other => panic!("expected immediate login reply, got {other:?}"),
+        }
+
+        conn.shutdown().await;
+        crate::agent::openai_codex_auth::clear_openai_codex_auth_test_state();
+    }
+
+    #[tokio::test]
+    async fn openai_codex_auth_logout_request_returns_logout_payload() {
+        let _lock = server_openai_codex_auth_test_lock();
+        let temp_dir = tempfile::tempdir().expect("tempdir should succeed");
+        let _env_guard =
+            EnvGuard::new(&["TAMUX_PROVIDER_AUTH_DB_PATH", "TAMUX_CODEX_CLI_AUTH_PATH"]);
+        prepare_server_openai_codex_auth_test(temp_dir.path());
+        let mut conn = spawn_test_connection().await;
+
+        conn.framed
+            .send(ClientMessage::AgentLogoutOpenAICodex)
+            .await
+            .expect("send auth logout request");
+
+        match conn.recv().await {
+            DaemonMessage::AgentOpenAICodexAuthLogoutResult { ok, error } => {
+                assert!(ok);
+                assert!(error.is_none());
+            }
+            other => panic!("expected AgentOpenAICodexAuthLogoutResult, got {other:?}"),
+        }
+
+        conn.shutdown().await;
+        crate::agent::openai_codex_auth::clear_openai_codex_auth_test_state();
+    }
+
+    #[tokio::test]
+    async fn openai_codex_auth_logout_during_pending_clears_pending_state() {
+        let _lock = server_openai_codex_auth_test_lock();
+        let temp_dir = tempfile::tempdir().expect("tempdir should succeed");
+        let _env_guard =
+            EnvGuard::new(&["TAMUX_PROVIDER_AUTH_DB_PATH", "TAMUX_CODEX_CLI_AUTH_PATH"]);
+        prepare_server_openai_codex_auth_test(temp_dir.path());
+        let mut conn = spawn_test_connection().await;
+
+        conn.framed
+            .send(ClientMessage::AgentLoginOpenAICodex)
+            .await
+            .expect("send auth login request");
+        match conn.recv().await {
+            DaemonMessage::AgentOpenAICodexAuthLoginResult { .. } => {}
+            other => panic!("expected AgentOpenAICodexAuthLoginResult, got {other:?}"),
+        }
+
+        conn.framed
+            .send(ClientMessage::AgentLogoutOpenAICodex)
+            .await
+            .expect("send auth logout request while pending");
+        match conn.recv().await {
+            DaemonMessage::AgentOpenAICodexAuthLogoutResult { ok, error } => {
+                assert!(ok);
+                assert!(error.is_none());
+            }
+            other => panic!("expected AgentOpenAICodexAuthLogoutResult, got {other:?}"),
+        }
+
+        conn.framed
+            .send(ClientMessage::AgentGetOpenAICodexAuthStatus)
+            .await
+            .expect("send auth status request after logout");
+        let status = match conn.recv().await {
+            DaemonMessage::AgentOpenAICodexAuthStatus { status_json } => parse_json(&status_json),
+            other => panic!("expected AgentOpenAICodexAuthStatus, got {other:?}"),
+        };
+        assert_eq!(status.get("status").and_then(|v| v.as_str()), None);
+        assert!(status.get("authUrl").is_none());
+
+        conn.shutdown().await;
+        crate::agent::openai_codex_auth::clear_openai_codex_auth_test_state();
+    }
+
+    #[tokio::test]
+    async fn openai_codex_auth_login_after_error_returns_fresh_pending_payload() {
+        let _lock = server_openai_codex_auth_test_lock();
+        let temp_dir = tempfile::tempdir().expect("tempdir should succeed");
+        let _env_guard =
+            EnvGuard::new(&["TAMUX_PROVIDER_AUTH_DB_PATH", "TAMUX_CODEX_CLI_AUTH_PATH"]);
+        prepare_server_openai_codex_auth_test(temp_dir.path());
+        let mut conn = spawn_test_connection().await;
+
+        conn.framed
+            .send(ClientMessage::AgentLoginOpenAICodex)
+            .await
+            .expect("send auth login request");
+        let first_login = match conn.recv().await {
+            DaemonMessage::AgentOpenAICodexAuthLoginResult { result_json } => {
+                parse_json(&result_json)
+            }
+            other => panic!("expected AgentOpenAICodexAuthLoginResult, got {other:?}"),
+        };
+        crate::agent::openai_codex_auth::mark_openai_codex_auth_timeout_for_tests();
+
+        conn.framed
+            .send(ClientMessage::AgentLoginOpenAICodex)
+            .await
+            .expect("send auth login request after error");
+        let second_login = match conn.recv().await {
+            DaemonMessage::AgentOpenAICodexAuthLoginResult { result_json } => {
+                parse_json(&result_json)
+            }
+            other => panic!("expected AgentOpenAICodexAuthLoginResult, got {other:?}"),
+        };
+
+        assert_eq!(second_login.get("status").and_then(|v| v.as_str()), Some("pending"));
+        assert!(second_login.get("error").is_none());
+        assert_ne!(second_login.get("authUrl"), first_login.get("authUrl"));
+
+        conn.shutdown().await;
+        crate::agent::openai_codex_auth::clear_openai_codex_auth_test_state();
+    }

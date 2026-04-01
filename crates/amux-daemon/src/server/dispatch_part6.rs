@@ -17,7 +17,10 @@ if matches!(
         ClientMessage::AgentActivateGeneratedTool{ .. } |
         ClientMessage::AgentGetProviderAuthStates |
         ClientMessage::AgentLoginProvider{ .. } |
-        ClientMessage::AgentLogoutProvider{ .. }
+        ClientMessage::AgentLogoutProvider{ .. } |
+        ClientMessage::AgentGetOpenAICodexAuthStatus |
+        ClientMessage::AgentLoginOpenAICodex |
+        ClientMessage::AgentLogoutOpenAICodex
     ) {
         match msg {
                 ClientMessage::AgentSetOperatorProfileConsent {
@@ -488,6 +491,60 @@ if matches!(
                     framed
                         .send(DaemonMessage::AgentProviderAuthStates { states_json: json })
                         .await?;
+                }
+
+                ClientMessage::AgentGetOpenAICodexAuthStatus => {
+                    let status_json = serde_json::to_string(
+                        &crate::agent::openai_codex_auth::openai_codex_auth_status(true),
+                    )
+                    .unwrap_or_else(|_| "{}".to_string());
+                    framed
+                        .send(DaemonMessage::AgentOpenAICodexAuthStatus { status_json })
+                        .await?;
+                }
+
+                ClientMessage::AgentLoginOpenAICodex => {
+                    match crate::agent::openai_codex_auth::begin_openai_codex_auth_login() {
+                        Ok(result) => {
+                            let result_json = serde_json::to_string(&result)
+                                .unwrap_or_else(|_| "{}".to_string());
+                            framed
+                                .send(DaemonMessage::AgentOpenAICodexAuthLoginResult {
+                                    result_json,
+                                })
+                                .await?;
+                        }
+                        Err(error) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!(
+                                        "failed to begin OpenAI Codex auth login: {error}"
+                                    ),
+                                })
+                                .await?;
+                        }
+                    }
+                }
+
+                ClientMessage::AgentLogoutOpenAICodex => {
+                    match crate::agent::openai_codex_auth::logout_openai_codex_auth() {
+                        Ok(()) => {
+                            framed
+                                .send(DaemonMessage::AgentOpenAICodexAuthLogoutResult {
+                                    ok: true,
+                                    error: None,
+                                })
+                                .await?;
+                        }
+                        Err(error) => {
+                            framed
+                                .send(DaemonMessage::AgentOpenAICodexAuthLogoutResult {
+                                    ok: false,
+                                    error: Some(error.to_string()),
+                                })
+                                .await?;
+                        }
+                    }
                 }
 
             _ => unreachable!("message chunk should be exhaustive"),
