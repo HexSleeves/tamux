@@ -13,11 +13,12 @@ use super::{
     auth_runtime, error_status, exchange_client, metadata_from_auth, openai_codex_auth_status,
     pending_status, sanitized_auth_failure_message, OpenAICodexAuthStatus, OpenAICodexExchange,
     OpenAICodexTokenResponse, PendingOpenAICodexAuth, StoredOpenAICodexAuth, OPENAI_AUTH_MODE,
-    OPENAI_CODEX_AUTH_AUTHORIZE_URL, OPENAI_CODEX_AUTH_CLIENT_ID, OPENAI_CODEX_AUTH_REDIRECT_URI,
-    OPENAI_CODEX_AUTH_SCOPE, OPENAI_CODEX_AUTH_TOKEN_URL,
+    OPENAI_CODEX_AUTH_AUTHORIZE_URL, OPENAI_CODEX_AUTH_CLIENT_ID, OPENAI_CODEX_AUTH_PROVIDER,
+    OPENAI_CODEX_AUTH_REDIRECT_URI, OPENAI_CODEX_AUTH_SCOPE, OPENAI_CODEX_AUTH_TOKEN_URL,
 };
 
 const OPENAI_CODEX_CALLBACK_TIMEOUT: Duration = Duration::from_secs(60);
+const OPENAI_CODEX_CALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 pub(super) fn build_pending_auth_flow() -> Result<PendingOpenAICodexAuth> {
     let (verifier, challenge) = generate_pkce_pair();
@@ -91,7 +92,7 @@ fn stored_auth_from_token_response(
         .context("OpenAI OAuth exchange returned no ChatGPT account id")?;
     let now = now_millis() as i64;
     Ok(StoredOpenAICodexAuth {
-        provider: Some("openai-codex".to_string()),
+        provider: Some(OPENAI_CODEX_AUTH_PROVIDER.to_string()),
         auth_mode: Some(OPENAI_AUTH_MODE.to_string()),
         access_token: payload.access_token,
         refresh_token: payload.refresh_token,
@@ -204,20 +205,60 @@ fn write_callback_success(stream: &mut TcpStream) {
     );
 }
 
-fn await_browser_callback(listener: &TcpListener, timeout: Duration) -> Result<TcpStream> {
+fn pending_flow_matches(flow_id: &str) -> bool {
+    let runtime = auth_runtime()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    matches!(runtime.pending.as_ref(), Some(current) if current.flow_id == flow_id)
+}
+
+fn bind_callback_listener(flow_id: &str, timeout: Duration) -> Result<TcpListener> {
+    let deadline = std::time::Instant::now() + timeout;
+
+    loop {
+        if !pending_flow_matches(flow_id) {
+            anyhow::bail!("OpenAI OAuth callback canceled");
+        }
+
+        match TcpListener::bind("127.0.0.1:1455") {
+            Ok(listener) => return Ok(listener),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(error)
+                        .context("failed to bind localhost callback listener on port 1455");
+                }
+                std::thread::sleep(OPENAI_CODEX_CALLBACK_POLL_INTERVAL);
+            }
+            Err(error) => {
+                return Err(error)
+                    .context("failed to bind localhost callback listener on port 1455")
+            }
+        }
+    }
+}
+
+fn await_browser_callback(
+    listener: &TcpListener,
+    timeout: Duration,
+    flow_id: &str,
+) -> Result<TcpStream> {
     listener
         .set_nonblocking(true)
         .context("failed to configure callback listener")?;
     let deadline = std::time::Instant::now() + timeout;
 
     loop {
+        if !pending_flow_matches(flow_id) {
+            anyhow::bail!("OpenAI OAuth callback canceled");
+        }
+
         match listener.accept() {
             Ok((stream, _)) => return Ok(stream),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 if std::time::Instant::now() >= deadline {
                     anyhow::bail!("OpenAI OAuth callback timed out");
                 }
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(OPENAI_CODEX_CALLBACK_POLL_INTERVAL);
             }
             Err(error) => return Err(error).context("failed to accept OpenAI OAuth callback"),
         }
@@ -227,6 +268,14 @@ fn await_browser_callback(listener: &TcpListener, timeout: Duration) -> Result<T
 fn complete_browser_auth_with_timeout(
     exchange: &dyn OpenAICodexExchange,
     timeout: Duration,
+) -> OpenAICodexAuthStatus {
+    complete_browser_auth_with_timeout_inner(exchange, timeout, None)
+}
+
+fn complete_browser_auth_with_timeout_inner(
+    exchange: &dyn OpenAICodexExchange,
+    timeout: Duration,
+    ready_signal: Option<std::sync::mpsc::Sender<()>>,
 ) -> OpenAICodexAuthStatus {
     let pending = {
         let runtime = auth_runtime()
@@ -239,9 +288,11 @@ fn complete_browser_auth_with_timeout(
     };
 
     let result = (|| -> Result<StoredOpenAICodexAuth> {
-        let listener = TcpListener::bind("127.0.0.1:1455")
-            .context("failed to bind localhost callback listener on port 1455")?;
-        let mut stream = await_browser_callback(&listener, timeout)?;
+        let listener = bind_callback_listener(&pending.flow_id, timeout)?;
+        if let Some(signal) = ready_signal {
+            let _ = signal.send(());
+        }
+        let mut stream = await_browser_callback(&listener, timeout, &pending.flow_id)?;
         let (callback_state, code) = read_callback_request(&mut stream)?;
 
         if callback_state != pending.state || code.is_empty() {
@@ -322,4 +373,13 @@ pub(crate) fn complete_browser_auth_with_timeout_for_tests(
     timeout: Duration,
 ) -> OpenAICodexAuthStatus {
     complete_browser_auth_with_timeout(exchange, timeout)
+}
+
+#[cfg(test)]
+pub(crate) fn complete_browser_auth_with_timeout_ready_signal_for_tests(
+    exchange: &dyn OpenAICodexExchange,
+    timeout: Duration,
+    ready_signal: std::sync::mpsc::Sender<()>,
+) -> OpenAICodexAuthStatus {
+    complete_browser_auth_with_timeout_inner(exchange, timeout, Some(ready_signal))
 }

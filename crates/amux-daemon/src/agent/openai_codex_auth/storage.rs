@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use super::{
     auth_runtime, now_millis, tombstone_auth_mode, CodexCliAuthFile, OpenAICodexAuthRuntime,
-    OpenAICodexAuthTombstone, StoredOpenAICodexAuth, OPENAI_AUTH_MODE, OPENAI_PROVIDER_ID,
+    OpenAICodexAuthTombstone, StoredOpenAICodexAuth, OPENAI_AUTH_MODE, OPENAI_CODEX_AUTH_PROVIDER,
+    OPENAI_PROVIDER_ID,
 };
 use crate::agent::provider_auth_store;
 
@@ -23,7 +24,7 @@ fn load_tombstone() -> Option<OpenAICodexAuthTombstone> {
 
 pub(super) fn save_tombstone() -> Result<()> {
     let tombstone = OpenAICodexAuthTombstone {
-        provider: "openai-codex".to_string(),
+        provider: OPENAI_CODEX_AUTH_PROVIDER.to_string(),
         auth_mode: OPENAI_AUTH_MODE.to_string(),
         tombstoned_at: now_millis() as i64,
         source: "tamux-daemon".to_string(),
@@ -80,7 +81,7 @@ fn read_codex_cli_auth_from_disk() -> Option<StoredOpenAICodexAuth> {
 
     let now = now_millis() as i64;
     Some(StoredOpenAICodexAuth {
-        provider: Some("openai-codex".to_string()),
+        provider: Some(OPENAI_CODEX_AUTH_PROVIDER.to_string()),
         auth_mode: Some(OPENAI_AUTH_MODE.to_string()),
         access_token,
         refresh_token,

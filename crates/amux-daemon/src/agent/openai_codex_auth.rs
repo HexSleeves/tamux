@@ -8,13 +8,14 @@ use super::task_prompt::now_millis;
 mod flow;
 mod storage;
 
-const OPENAI_CODEX_AUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+pub(crate) const OPENAI_CODEX_AUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_CODEX_AUTH_AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
-const OPENAI_CODEX_AUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+pub(crate) const OPENAI_CODEX_AUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const OPENAI_CODEX_AUTH_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const OPENAI_CODEX_AUTH_SCOPE: &str = "openid profile email offline_access";
 const OPENAI_PROVIDER_ID: &str = "openai";
-const OPENAI_AUTH_MODE: &str = "chatgpt_subscription";
+pub(crate) const OPENAI_AUTH_MODE: &str = "chatgpt_subscription";
+pub(crate) const OPENAI_CODEX_AUTH_PROVIDER: &str = "openai-codex";
 const OPENAI_CODEX_AUTH_FAILED_MESSAGE: &str =
     "OpenAI authentication failed. Please try signing in again.";
 const OPENAI_CODEX_AUTH_TIMEOUT_MESSAGE: &str =
@@ -237,6 +238,7 @@ pub(crate) fn complete_browser_auth() -> OpenAICodexAuthStatus {
 #[cfg(test)]
 pub(crate) use flow::{
     complete_browser_auth_with_timeout_for_tests,
+    complete_browser_auth_with_timeout_ready_signal_for_tests,
     complete_openai_codex_auth_flow_with_result_for_tests,
     complete_openai_codex_auth_with_code_for_tests, current_pending_openai_codex_flow_id_for_tests,
     mark_openai_codex_auth_timeout_for_tests,

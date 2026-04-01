@@ -1,6 +1,8 @@
 use super::openai_codex_auth::{
     extract_openai_codex_account_id, import_codex_cli_auth_if_present,
     read_stored_openai_codex_auth, write_stored_openai_codex_auth, StoredOpenAICodexAuth,
+    OPENAI_AUTH_MODE, OPENAI_CODEX_AUTH_CLIENT_ID, OPENAI_CODEX_AUTH_PROVIDER,
+    OPENAI_CODEX_AUTH_TOKEN_URL,
 };
 
 fn classify_http_failure(
@@ -226,11 +228,11 @@ async fn refresh_openai_codex_auth(
     auth: &StoredOpenAICodexAuth,
 ) -> Result<StoredOpenAICodexAuth> {
     let response = client
-        .post("https://auth.openai.com/oauth/token")
+        .post(OPENAI_CODEX_AUTH_TOKEN_URL)
         .form(&[
             ("grant_type", "refresh_token"),
             ("refresh_token", auth.refresh_token.as_str()),
-            ("client_id", "app_EMoamEEZ73f0CkXaXp7hrann"),
+            ("client_id", OPENAI_CODEX_AUTH_CLIENT_ID),
         ])
         .send()
         .await?;
@@ -261,8 +263,8 @@ async fn refresh_openai_codex_auth(
         .saturating_mul(1000);
     let now = now_millis() as i64;
     let refreshed = StoredOpenAICodexAuth {
-        provider: Some("openai-codex".to_string()),
-        auth_mode: Some("chatgpt_subscription".to_string()),
+        provider: Some(OPENAI_CODEX_AUTH_PROVIDER.to_string()),
+        auth_mode: Some(OPENAI_AUTH_MODE.to_string()),
         access_token,
         refresh_token,
         account_id: Some(account_id),

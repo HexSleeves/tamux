@@ -177,6 +177,57 @@ fn browser_callback_timeout_sets_error_state() {
 }
 
 #[test]
+fn logout_releases_browser_callback_listener_for_immediate_retry() {
+    let _lock = provider_auth_store::provider_auth_test_env_lock();
+    let temp_dir = tempdir().expect("tempdir should succeed");
+    let _env_guard = EnvGuard::new(&["TAMUX_PROVIDER_AUTH_DB_PATH", "TAMUX_CODEX_CLI_AUTH_PATH"]);
+    prepare_openai_auth_test(temp_dir.path(), "missing-codex-auth.json");
+    begin_openai_codex_auth_login().expect("login should start");
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let wait_thread = std::thread::spawn(move || {
+        complete_browser_auth_with_timeout_ready_signal_for_tests(
+            &TestExchange {
+                result: Ok(stored_auth_fixture()),
+            },
+            Duration::from_secs(1),
+            ready_tx,
+        )
+    });
+
+    ready_rx
+        .recv_timeout(Duration::from_millis(500))
+        .expect("listener should become ready");
+
+    logout_openai_codex_auth().expect("logout should succeed");
+    begin_openai_codex_auth_login().expect("replacement login should start");
+
+    let retry_status = complete_browser_auth_with_timeout_for_tests(
+        &TestExchange {
+            result: Ok(stored_auth_fixture()),
+        },
+        Duration::from_millis(25),
+    );
+
+    let original_status = wait_thread.join().expect("wait thread should join");
+
+    assert_eq!(retry_status.status.as_deref(), Some("error"));
+    assert!(retry_status
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("timed out"));
+    assert_ne!(
+        retry_status.error.as_deref(),
+        Some("OpenAI authentication failed. Please try signing in again.")
+    );
+
+    assert!(
+        original_status.status.is_none() || original_status.status.as_deref() == Some("pending")
+    );
+}
+
+#[test]
 fn stale_flow_completion_returns_current_pending_status() {
     let _lock = provider_auth_store::provider_auth_test_env_lock();
     let temp_dir = tempdir().expect("tempdir should succeed");
