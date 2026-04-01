@@ -5,11 +5,37 @@ use tokio_util::codec::Framed;
 
 use super::emit_agent_event;
 
+fn bridge_event_from_daemon_message(message: &DaemonMessage) -> Option<serde_json::Value> {
+    match message {
+        DaemonMessage::AgentOpenAICodexAuthStatus { status_json } => Some(serde_json::json!({
+            "type": "openai-codex-auth-status",
+            "data": serde_json::from_str::<serde_json::Value>(status_json).unwrap_or_default(),
+        })),
+        DaemonMessage::AgentOpenAICodexAuthLoginResult { result_json } => Some(serde_json::json!({
+            "type": "openai-codex-auth-login-result",
+            "data": serde_json::from_str::<serde_json::Value>(result_json).unwrap_or_default(),
+        })),
+        DaemonMessage::AgentOpenAICodexAuthLogoutResult { ok, error } => Some(serde_json::json!({
+            "type": "openai-codex-auth-logout-result",
+            "data": {
+                "ok": ok,
+                "error": error,
+            }
+        })),
+        _ => None,
+    }
+}
+
 pub(super) async fn handle_message<T>(framed: &mut Framed<T, AmuxCodec>) -> Result<bool>
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     match framed.next().await {
+        Some(Ok(message)) if bridge_event_from_daemon_message(&message).is_some() => {
+            let event = bridge_event_from_daemon_message(&message)
+                .expect("bridge event must exist for matched daemon message");
+            emit_agent_event(&event.to_string())?;
+        }
         Some(Ok(DaemonMessage::AgentEvent { event_json })) => {
             emit_agent_event(&event_json)?;
         }
@@ -438,4 +464,75 @@ where
     }
 
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use amux_protocol::DaemonMessage;
+
+    use super::bridge_event_from_daemon_message;
+
+    #[test]
+    fn translates_openai_codex_auth_status_event() {
+        let event = bridge_event_from_daemon_message(&DaemonMessage::AgentOpenAICodexAuthStatus {
+            status_json: r#"{"available":false,"authMode":"chatgpt_subscription"}"#
+                .to_string(),
+        })
+        .expect("status event should translate");
+
+        assert_eq!(
+            event,
+            serde_json::json!({
+                "type": "openai-codex-auth-status",
+                "data": {
+                    "available": false,
+                    "authMode": "chatgpt_subscription"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn translates_openai_codex_auth_login_result_event() {
+        let event = bridge_event_from_daemon_message(
+            &DaemonMessage::AgentOpenAICodexAuthLoginResult {
+                result_json: r#"{"status":"pending","authUrl":"https://example.test/auth"}"#
+                    .to_string(),
+            },
+        )
+        .expect("login result event should translate");
+
+        assert_eq!(
+            event,
+            serde_json::json!({
+                "type": "openai-codex-auth-login-result",
+                "data": {
+                    "status": "pending",
+                    "authUrl": "https://example.test/auth"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn translates_openai_codex_auth_logout_result_event() {
+        let event = bridge_event_from_daemon_message(
+            &DaemonMessage::AgentOpenAICodexAuthLogoutResult {
+                ok: true,
+                error: None,
+            },
+        )
+        .expect("logout result event should translate");
+
+        assert_eq!(
+            event,
+            serde_json::json!({
+                "type": "openai-codex-auth-logout-result",
+                "data": {
+                    "ok": true,
+                    "error": null
+                }
+            })
+        );
+    }
 }
