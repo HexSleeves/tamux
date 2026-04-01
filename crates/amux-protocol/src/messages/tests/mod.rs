@@ -322,6 +322,33 @@ fn client_message_roundtrips_subsystem_metrics_query() {
 }
 
 #[test]
+fn client_message_roundtrips_get_openai_codex_auth_status() {
+    let msg = ClientMessage::AgentGetOpenAICodexAuthStatus;
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+    assert!(matches!(
+        decoded,
+        ClientMessage::AgentGetOpenAICodexAuthStatus
+    ));
+}
+
+#[test]
+fn client_message_roundtrips_login_openai_codex() {
+    let msg = ClientMessage::AgentLoginOpenAICodex;
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+    assert!(matches!(decoded, ClientMessage::AgentLoginOpenAICodex));
+}
+
+#[test]
+fn client_message_roundtrips_logout_openai_codex() {
+    let msg = ClientMessage::AgentLogoutOpenAICodex;
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+    assert!(matches!(decoded, ClientMessage::AgentLogoutOpenAICodex));
+}
+
+#[test]
 fn daemon_message_roundtrips_subsystem_metrics_response() {
     let msg = DaemonMessage::AgentSubsystemMetrics {
         metrics_json: r#"{"plugin_io":{"current_depth":1,"max_depth":2,"rejection_count":1,"accepted_count":3,"started_count":3,"completed_count":1,"failed_count":2,"accepted_to_started_samples":3,"started_to_terminal_samples":3,"last_accepted_to_started_ms":1,"last_started_to_terminal_ms":2}}"#.to_string(),
@@ -331,6 +358,46 @@ fn daemon_message_roundtrips_subsystem_metrics_response() {
     assert!(matches!(
         decoded,
         DaemonMessage::AgentSubsystemMetrics { .. }
+    ));
+}
+
+#[test]
+fn daemon_message_roundtrips_openai_codex_auth_status() {
+    let msg = DaemonMessage::AgentOpenAICodexAuthStatus {
+        status_json: "{}".into(),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    assert!(matches!(
+        decoded,
+        DaemonMessage::AgentOpenAICodexAuthStatus { .. }
+    ));
+}
+
+#[test]
+fn daemon_message_roundtrips_openai_codex_auth_login_result() {
+    let msg = DaemonMessage::AgentOpenAICodexAuthLoginResult {
+        result_json: "{}".into(),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    assert!(matches!(
+        decoded,
+        DaemonMessage::AgentOpenAICodexAuthLoginResult { .. }
+    ));
+}
+
+#[test]
+fn daemon_message_roundtrips_openai_codex_auth_logout_result() {
+    let msg = DaemonMessage::AgentOpenAICodexAuthLogoutResult {
+        ok: true,
+        error: None,
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    assert!(matches!(
+        decoded,
+        DaemonMessage::AgentOpenAICodexAuthLogoutResult { .. }
     ));
 }
 
