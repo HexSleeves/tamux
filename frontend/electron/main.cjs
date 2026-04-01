@@ -1,15 +1,12 @@
 const { app, BrowserWindow, Menu, clipboard, ipcMain, screen, shell, session } = require('electron');
 const { spawn, spawnSync, execSync, execFileSync, execFile } = require('child_process');
 const { promisify } = require('util');
-const { DatabaseSync } = require('node:sqlite');
 const execFileAsync = promisify(execFile);
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const path = require('path');
 const net = require('net');
-const http = require('http');
 const fs = require('fs');
 const os = require('os');
-const crypto = require('crypto');
 const { pathToFileURL } = require('url');
 
 const DAEMON_NAME = 'tamux-daemon';
@@ -20,17 +17,11 @@ const CLONE_SESSION_PREFIX = 'clone:';
 const MAX_TERMINAL_HISTORY_BYTES = 1024 * 1024;
 const MAX_REATTACH_HISTORY_BYTES = 64 * 1024;
 const VISION_SCREENSHOT_TTL_MS = 10 * 60 * 1000;
-const OPENAI_CODEX_AUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
-const OPENAI_CODEX_AUTH_AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize';
-const OPENAI_CODEX_AUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token';
-const OPENAI_CODEX_AUTH_REDIRECT_URI = 'http://localhost:1455/auth/callback';
-const OPENAI_CODEX_AUTH_SCOPE = 'openid profile email offline_access';
 let mainWindow = null;
 const terminalBridges = new Map();
 const paneSessionHints = new Map();
 let agentBridge = null;
 let dbBridge = null;
-let pendingOpenAICodexAuth = null;
 // Module-level reference to sendAgentCommand (set during registerIpcHandlers)
 let sendAgentCommandFn = null;
 
@@ -713,418 +704,6 @@ function ensureTamuxDataDir() {
     }
     fs.mkdirSync(dataDir, { recursive: true });
     return dataDir;
-}
-
-function getProviderAuthDbPath() {
-    return process.env.TAMUX_PROVIDER_AUTH_DB_PATH
-        ? path.resolve(process.env.TAMUX_PROVIDER_AUTH_DB_PATH)
-        : path.join(ensureTamuxDataDir(), 'history', 'command-history.db');
-}
-
-function withProviderAuthDb(callback) {
-    const dbPath = getProviderAuthDbPath();
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-    const db = new DatabaseSync(dbPath);
-    try {
-        db.exec(`
-            CREATE TABLE IF NOT EXISTS provider_auth_state (
-                provider_id TEXT NOT NULL,
-                auth_mode   TEXT NOT NULL,
-                state_json  TEXT NOT NULL,
-                updated_at  INTEGER NOT NULL,
-                PRIMARY KEY (provider_id, auth_mode)
-            );
-            CREATE INDEX IF NOT EXISTS idx_provider_auth_state_updated
-            ON provider_auth_state(updated_at DESC);
-        `);
-        return callback(db);
-    } finally {
-        db.close();
-    }
-}
-
-function decodeJwtPayload(token) {
-    if (typeof token !== 'string' || !token.includes('.')) {
-        return null;
-    }
-    try {
-        const parts = token.split('.');
-        if (parts.length !== 3) {
-            return null;
-        }
-        const payload = Buffer.from(parts[1], 'base64url').toString('utf8');
-        return JSON.parse(payload);
-    } catch {
-        return null;
-    }
-}
-
-function extractOpenAICodexAccountId(accessToken) {
-    const payload = decodeJwtPayload(accessToken);
-    const accountId = payload?.['https://api.openai.com/auth']?.chatgpt_account_id;
-    return typeof accountId === 'string' && accountId.trim() ? accountId.trim() : null;
-}
-
-function extractJwtExpiry(accessToken) {
-    const payload = decodeJwtPayload(accessToken);
-    const exp = payload?.exp;
-    return typeof exp === 'number' && Number.isFinite(exp) ? exp * 1000 : null;
-}
-
-function readJsonFileSafe(filePath) {
-    try {
-        if (!fs.existsSync(filePath)) return null;
-        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    } catch {
-        return null;
-    }
-}
-
-function readStoredOpenAICodexAuth() {
-    const parsed = withProviderAuthDb((db) => {
-        const row = db
-            .prepare('SELECT state_json FROM provider_auth_state WHERE provider_id = ? AND auth_mode = ?')
-            .get('openai', 'chatgpt_subscription');
-        return typeof row?.state_json === 'string' ? JSON.parse(row.state_json) : null;
-    });
-    if (!parsed || typeof parsed !== 'object') {
-        return null;
-    }
-    if (typeof parsed.accessToken !== 'string' || typeof parsed.refreshToken !== 'string') {
-        return null;
-    }
-    return parsed;
-}
-
-function writeStoredOpenAICodexAuth(auth) {
-    const payload = JSON.stringify({
-        provider: 'openai-codex',
-        authMode: 'chatgpt_subscription',
-        accessToken: auth.accessToken,
-        refreshToken: auth.refreshToken,
-        accountId: auth.accountId,
-        expiresAt: auth.expiresAt,
-        source: auth.source || 'tamux',
-        updatedAt: Date.now(),
-        createdAt: auth.createdAt || Date.now(),
-    });
-    withProviderAuthDb((db) => {
-        db.prepare(`
-            INSERT OR REPLACE INTO provider_auth_state
-            (provider_id, auth_mode, state_json, updated_at)
-            VALUES (?, ?, ?, ?)
-        `).run('openai', 'chatgpt_subscription', payload, Date.now());
-    });
-}
-
-function deleteStoredOpenAICodexAuth() {
-    withProviderAuthDb((db) => {
-        db.prepare('DELETE FROM provider_auth_state WHERE provider_id = ? AND auth_mode = ?')
-            .run('openai', 'chatgpt_subscription');
-    });
-}
-
-function importCodexCliAuthIfPresent() {
-    const existing = readStoredOpenAICodexAuth();
-    if (existing) {
-        return existing;
-    }
-
-    const codexAuthPath = path.join(os.homedir(), '.codex', 'auth.json');
-    const parsed = readJsonFileSafe(codexAuthPath);
-    if (!parsed || typeof parsed !== 'object') {
-        return null;
-    }
-
-    const accessToken = parsed?.tokens?.access_token;
-    const refreshToken = parsed?.tokens?.refresh_token;
-    const accountId = extractOpenAICodexAccountId(accessToken);
-    const expiresAt = extractJwtExpiry(accessToken);
-    if (typeof accessToken !== 'string' || typeof refreshToken !== 'string' || !accountId || !expiresAt) {
-        return null;
-    }
-
-    const imported = {
-        accessToken,
-        refreshToken,
-        accountId,
-        expiresAt,
-        source: 'codex_import',
-        createdAt: Date.now(),
-    };
-    writeStoredOpenAICodexAuth(imported);
-    return readStoredOpenAICodexAuth();
-}
-
-async function refreshOpenAICodexAuth(auth) {
-    const body = new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: auth.refreshToken,
-        client_id: OPENAI_CODEX_AUTH_CLIENT_ID,
-    });
-
-    const response = await fetch(OPENAI_CODEX_AUTH_TOKEN_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-    });
-
-    if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`OpenAI token refresh failed: HTTP ${response.status}${text ? ` ${text}` : ''}`);
-    }
-
-    const payload = await response.json();
-    if (typeof payload?.access_token !== 'string' || typeof payload?.refresh_token !== 'string' || typeof payload?.expires_in !== 'number') {
-        throw new Error('OpenAI token refresh returned incomplete credentials');
-    }
-
-    const accountId = extractOpenAICodexAccountId(payload.access_token);
-    if (!accountId) {
-        throw new Error('OpenAI token refresh returned no ChatGPT account id');
-    }
-
-    const next = {
-        accessToken: payload.access_token,
-        refreshToken: payload.refresh_token,
-        accountId,
-        expiresAt: Date.now() + payload.expires_in * 1000,
-        source: auth.source || 'tamux',
-        createdAt: auth.createdAt || Date.now(),
-    };
-    writeStoredOpenAICodexAuth(next);
-    return next;
-}
-
-async function getOpenAICodexAuthStatus(options = {}) {
-    const allowRefresh = options.refresh !== false;
-    let auth = readStoredOpenAICodexAuth() || importCodexCliAuthIfPresent();
-    if (!auth) {
-        return {
-            available: false,
-            authMode: 'chatgpt_subscription',
-            error: 'No ChatGPT subscription auth found',
-        };
-    }
-
-    const expiresAt = Number(auth.expiresAt || 0);
-    const shouldRefresh = allowRefresh && (!Number.isFinite(expiresAt) || expiresAt <= Date.now() + 60_000);
-    if (shouldRefresh) {
-        try {
-            auth = await refreshOpenAICodexAuth(auth);
-        } catch (error) {
-            return {
-                available: false,
-                authMode: 'chatgpt_subscription',
-                error: error?.message || String(error),
-            };
-        }
-    }
-
-    return {
-        available: true,
-        authMode: 'chatgpt_subscription',
-        accountId: auth.accountId,
-        expiresAt: auth.expiresAt,
-        source: auth.source || 'tamux',
-        apiKey: auth.accessToken,
-    };
-}
-
-function generatePkcePair() {
-    const verifier = crypto.randomBytes(32).toString('base64url');
-    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
-    return { verifier, challenge };
-}
-
-function startOpenAICodexCallbackServer(expectedState) {
-    let settled = false;
-    let resolveCode;
-    let rejectCode;
-    const codePromise = new Promise((resolve, reject) => {
-        resolveCode = resolve;
-        rejectCode = reject;
-    });
-
-    const server = http.createServer((req, res) => {
-        try {
-            const url = new URL(req.url || '', 'http://127.0.0.1');
-            if (url.pathname !== '/auth/callback') {
-                res.statusCode = 404;
-                res.end('Not found');
-                return;
-            }
-
-            const state = url.searchParams.get('state');
-            const code = url.searchParams.get('code');
-            if (state !== expectedState) {
-                res.statusCode = 400;
-                res.end('State mismatch');
-                if (!settled) {
-                    settled = true;
-                    rejectCode(new Error('OpenAI OAuth state mismatch'));
-                }
-                return;
-            }
-            if (!code) {
-                res.statusCode = 400;
-                res.end('Missing authorization code');
-                if (!settled) {
-                    settled = true;
-                    rejectCode(new Error('OpenAI OAuth callback missing authorization code'));
-                }
-                return;
-            }
-
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'text/html; charset=utf-8');
-            res.end('<!doctype html><html><body><p>Authentication successful. Return to tamux.</p></body></html>');
-            if (!settled) {
-                settled = true;
-                resolveCode(code);
-            }
-        } catch (error) {
-            res.statusCode = 500;
-            res.end('Internal error');
-            if (!settled) {
-                settled = true;
-                rejectCode(error);
-            }
-        }
-    });
-
-    return {
-        waitForCode: () => codePromise,
-        listen: () => new Promise((resolve, reject) => {
-            server.once('error', reject);
-            server.listen(1455, '127.0.0.1', () => {
-                server.removeListener('error', reject);
-                resolve();
-            });
-        }),
-        close: () => {
-            try {
-                server.close();
-            } catch {
-                // Ignore shutdown errors.
-            }
-        },
-    };
-}
-
-async function exchangeOpenAICodexAuthorizationCode(code, verifier) {
-    const body = new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: OPENAI_CODEX_AUTH_CLIENT_ID,
-        code,
-        code_verifier: verifier,
-        redirect_uri: OPENAI_CODEX_AUTH_REDIRECT_URI,
-    });
-
-    const response = await fetch(OPENAI_CODEX_AUTH_TOKEN_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-    });
-
-    if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`OpenAI OAuth exchange failed: HTTP ${response.status}${text ? ` ${text}` : ''}`);
-    }
-
-    const payload = await response.json();
-    if (typeof payload?.access_token !== 'string' || typeof payload?.refresh_token !== 'string' || typeof payload?.expires_in !== 'number') {
-        throw new Error('OpenAI OAuth exchange returned incomplete credentials');
-    }
-
-    const accountId = extractOpenAICodexAccountId(payload.access_token);
-    if (!accountId) {
-        throw new Error('OpenAI OAuth exchange returned no ChatGPT account id');
-    }
-
-    const auth = {
-        accessToken: payload.access_token,
-        refreshToken: payload.refresh_token,
-        accountId,
-        expiresAt: Date.now() + payload.expires_in * 1000,
-        source: 'tamux',
-        createdAt: Date.now(),
-    };
-    writeStoredOpenAICodexAuth(auth);
-    return auth;
-}
-
-async function loginOpenAICodexInteractive() {
-    if (pendingOpenAICodexAuth?.authUrl) {
-        return {
-            available: false,
-            authMode: 'chatgpt_subscription',
-            authUrl: pendingOpenAICodexAuth.authUrl,
-            status: pendingOpenAICodexAuth.status || 'pending',
-            error: pendingOpenAICodexAuth.error || null,
-        };
-    }
-
-    const { verifier, challenge } = generatePkcePair();
-    const state = crypto.randomBytes(16).toString('hex');
-    const authUrl = new URL(OPENAI_CODEX_AUTH_AUTHORIZE_URL);
-    authUrl.searchParams.set('response_type', 'code');
-    authUrl.searchParams.set('client_id', OPENAI_CODEX_AUTH_CLIENT_ID);
-    authUrl.searchParams.set('redirect_uri', OPENAI_CODEX_AUTH_REDIRECT_URI);
-    authUrl.searchParams.set('scope', OPENAI_CODEX_AUTH_SCOPE);
-    authUrl.searchParams.set('code_challenge', challenge);
-    authUrl.searchParams.set('code_challenge_method', 'S256');
-    authUrl.searchParams.set('state', state);
-    authUrl.searchParams.set('id_token_add_organizations', 'true');
-    authUrl.searchParams.set('codex_cli_simplified_flow', 'true');
-    authUrl.searchParams.set('originator', 'tamux');
-
-    const callbackServer = startOpenAICodexCallbackServer(state);
-    await callbackServer.listen();
-    pendingOpenAICodexAuth = {
-        authUrl: authUrl.toString(),
-        status: 'pending',
-        error: null,
-        startedAt: Date.now(),
-    };
-    void shell.openExternal(authUrl.toString()).catch(() => {});
-
-    void (async () => {
-        try {
-            const code = await Promise.race([
-                callbackServer.waitForCode(),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('OpenAI OAuth timed out waiting for browser callback')), 5 * 60 * 1000)),
-            ]);
-            await exchangeOpenAICodexAuthorizationCode(code, verifier);
-            pendingOpenAICodexAuth = {
-                authUrl: authUrl.toString(),
-                status: 'completed',
-                error: null,
-                startedAt: pendingOpenAICodexAuth?.startedAt || Date.now(),
-            };
-        } catch (error) {
-            pendingOpenAICodexAuth = {
-                authUrl: authUrl.toString(),
-                status: 'error',
-                error: error?.message || String(error),
-                startedAt: pendingOpenAICodexAuth?.startedAt || Date.now(),
-            };
-        } finally {
-            callbackServer.close();
-            setTimeout(() => {
-                if (pendingOpenAICodexAuth?.authUrl === authUrl.toString()) {
-                    pendingOpenAICodexAuth = null;
-                }
-            }, 30_000);
-        }
-    })();
-
-    return {
-        available: false,
-        authMode: 'chatgpt_subscription',
-        authUrl: authUrl.toString(),
-        status: 'pending',
-    };
 }
 
 function getVisionTempDir() {
@@ -4009,6 +3588,9 @@ function registerIpcHandlers() {
                     'plugin-action-result',
                     'plugin-test-connection-result',
                     'plugin-oauth-url',
+                    'openai-codex-auth-status',
+                    'openai-codex-auth-login-result',
+                    'openai-codex-auth-logout-result',
                     'agent-explanation',
                     'agent-divergent-session-started',
                     'agent-divergent-session',
@@ -4886,7 +4468,14 @@ function registerIpcHandlers() {
 
     ipcMain.handle('openai-codex-auth-status', async (_event, options) => {
         try {
-            return await getOpenAICodexAuthStatus(options || {});
+            return await sendAgentQuery(
+                {
+                    type: 'openai-codex-auth-status',
+                    refresh: options?.refresh !== false,
+                },
+                'openai-codex-auth-status',
+                30000,
+            );
         } catch (err) {
             return {
                 available: false,
@@ -4898,7 +4487,11 @@ function registerIpcHandlers() {
 
     ipcMain.handle('openai-codex-auth-login', async () => {
         try {
-            return await loginOpenAICodexInteractive();
+            return await sendAgentQuery(
+                { type: 'openai-codex-auth-login' },
+                'openai-codex-auth-login-result',
+                30000,
+            );
         } catch (err) {
             return {
                 available: false,
@@ -4909,8 +4502,15 @@ function registerIpcHandlers() {
     });
 
     ipcMain.handle('openai-codex-auth-logout', async () => {
-        deleteStoredOpenAICodexAuth();
-        return { ok: true };
+        try {
+            return await sendAgentQuery(
+                { type: 'openai-codex-auth-logout' },
+                'openai-codex-auth-logout-result',
+                30000,
+            );
+        } catch (err) {
+            return { ok: false, error: err?.message || String(err) };
+        }
     });
 
     ipcMain.handle('agent-heartbeat-get-items', async () => {
