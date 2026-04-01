@@ -120,7 +120,7 @@ export function AgentTab({
                     setSubscriptionAuthStatus(status);
                     setSubscriptionAuthUrl(null);
                 }
-            }).catch(() => {});
+            }).catch(() => { });
         }, 2000);
 
         return () => window.clearInterval(timer);
@@ -328,16 +328,16 @@ export function AgentTab({
                                 onChange={(e) => updateSetting(settings.active_provider, {
                                     ...providerConfig,
                                     auth_source: supportedAuthSources.includes(e.target.value as any)
-                                      ? e.target.value as AgentProviderConfig["auth_source"]
-                                      : getDefaultAuthSource(settings.active_provider),
+                                        ? e.target.value as AgentProviderConfig["auth_source"]
+                                        : getDefaultAuthSource(settings.active_provider),
                                     model: (() => {
                                         const nextAuthSource = supportedAuthSources.includes(e.target.value as any)
-                                          ? e.target.value as AgentProviderConfig["auth_source"]
-                                          : getDefaultAuthSource(settings.active_provider);
+                                            ? e.target.value as AgentProviderConfig["auth_source"]
+                                            : getDefaultAuthSource(settings.active_provider);
                                         const supportedModels = getProviderModels(settings.active_provider, nextAuthSource);
                                         return supportedModels.some((entry) => entry.id === providerConfig.model)
-                                          ? providerConfig.model
-                                          : getDefaultModelForProvider(settings.active_provider, nextAuthSource);
+                                            ? providerConfig.model
+                                            : getDefaultModelForProvider(settings.active_provider, nextAuthSource);
                                     })(),
                                 })}
                                 style={inputStyle}
@@ -406,7 +406,7 @@ export function AgentTab({
                                                         void amux.writeClipboardText(subscriptionAuthUrl);
                                                         return;
                                                     }
-                                                    void navigator.clipboard?.writeText(subscriptionAuthUrl).catch(() => {});
+                                                    void navigator.clipboard?.writeText(subscriptionAuthUrl).catch(() => { });
                                                 }}
                                                 style={smallBtnStyle}
                                             >
@@ -430,18 +430,18 @@ export function AgentTab({
                                 onChange={(e) => updateSetting(settings.active_provider, {
                                     ...providerConfig,
                                     api_transport: supportedTransports.includes(e.target.value as any)
-                                      ? (e.target.value as AgentProviderConfig["api_transport"])
-                                      : getDefaultApiTransport(settings.active_provider),
+                                        ? (e.target.value as AgentProviderConfig["api_transport"])
+                                        : getDefaultApiTransport(settings.active_provider),
                                 })}
                                 style={inputStyle}
                             >
                                 {supportedTransports.map((transport) => (
                                     <option key={transport} value={transport}>
                                         {transport === "native_assistant"
-                                          ? "Native Assistant"
-                                          : transport === "responses"
-                                            ? "Responses"
-                                            : "Legacy Chat Completions"}
+                                            ? "Native Assistant"
+                                            : transport === "responses"
+                                                ? "Responses"
+                                                : "Legacy Chat Completions"}
                                     </option>
                                 ))}
                             </select>

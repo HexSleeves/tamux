@@ -85,7 +85,7 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
         });
         bridge?.getAvailableShells?.().then(
           (shells: { name: string; path: string; args?: string }[]) => setAvailableShells(shells),
-        ).catch(() => {});
+        ).catch(() => { });
       }
     }
   }, [open]);
@@ -139,7 +139,7 @@ export function SettingsPanel({ style, className }: SettingsPanelProps = {}) {
     void syncConfig().then(() => {
       lastDaemonConfigJsonRef.current = nextConfigJson;
       markAgentSettingsSynced();
-    }).catch(() => {});
+    }).catch(() => { });
   }, [
     open,
     settings,
