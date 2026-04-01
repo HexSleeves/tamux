@@ -7,6 +7,34 @@ impl TuiModel {
     fn apply_openai_codex_auth_status(&mut self, status: &crate::client::OpenAICodexAuthStatusVm) {
         self.config.chatgpt_auth_available = status.available;
         self.config.chatgpt_auth_source = status.source.clone();
+
+        self.openai_auth_url = status.auth_url.clone();
+        self.openai_auth_status_text =
+            status
+                .error
+                .clone()
+                .or_else(|| match status.status.as_deref() {
+                    Some("pending") if status.auth_url.is_some() => Some(
+                        "Open this URL in your browser to complete ChatGPT authentication."
+                            .to_string(),
+                    ),
+                    Some("completed") if status.available => {
+                        Some("ChatGPT subscription auth is available.".to_string())
+                    }
+                    Some("error") => Some(
+                        "OpenAI authentication failed. Please try signing in again.".to_string(),
+                    ),
+                    _ => None,
+                });
+
+        if status.auth_url.is_some() || status.error.is_some() {
+            if self.modal.top() != Some(modal::ModalKind::OpenAIAuth) {
+                self.modal
+                    .reduce(modal::ModalAction::Push(modal::ModalKind::OpenAIAuth));
+            }
+        } else if self.modal.top() == Some(modal::ModalKind::OpenAIAuth) {
+            self.close_top_modal();
+        }
     }
 
     pub(in crate::app) fn handle_provider_auth_states_event(
@@ -36,6 +64,13 @@ impl TuiModel {
         status: crate::client::OpenAICodexAuthStatusVm,
     ) {
         self.apply_openai_codex_auth_status(&status);
+        if let Some(error) = status.error {
+            self.status_line = error;
+        } else if status.available {
+            self.status_line = "ChatGPT subscription auth available".to_string();
+        } else if matches!(status.status.as_deref(), Some("pending")) {
+            self.status_line = "ChatGPT subscription login pending".to_string();
+        }
     }
 
     pub(in crate::app) fn handle_openai_codex_auth_login_result_event(
@@ -44,15 +79,7 @@ impl TuiModel {
     ) {
         self.apply_openai_codex_auth_status(&status);
 
-        if let Some(url) = status.auth_url {
-            self.openai_auth_url = Some(url);
-            self.openai_auth_status_text = Some(
-                "Open this URL in your browser to complete ChatGPT authentication.".to_string(),
-            );
-            if self.modal.top() != Some(modal::ModalKind::OpenAIAuth) {
-                self.modal
-                    .reduce(modal::ModalAction::Push(modal::ModalKind::OpenAIAuth));
-            }
+        if status.auth_url.is_some() {
             self.status_line = "ChatGPT subscription login started".to_string();
         } else if let Some(error) = status.error {
             self.status_line = error;
@@ -71,8 +98,13 @@ impl TuiModel {
             self.config.chatgpt_auth_source = None;
             self.openai_auth_url = None;
             self.openai_auth_status_text = None;
+            if self.modal.top() == Some(modal::ModalKind::OpenAIAuth) {
+                self.close_top_modal();
+            }
             self.status_line = "ChatGPT subscription auth cleared".to_string();
         } else {
+            self.openai_auth_url = None;
+            self.openai_auth_status_text = error.clone();
             self.status_line = error.unwrap_or_else(|| {
                 "OpenAI authentication failed. Please try signing in again.".to_string()
             });

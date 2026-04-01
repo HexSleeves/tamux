@@ -162,6 +162,57 @@ fn apply_config_json_uses_daemon_retry_delay_default_when_missing() {
 }
 
 #[test]
+fn load_saved_settings_requests_daemon_openai_auth_status() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+
+    model.load_saved_settings();
+
+    let mut saw_auth_status = false;
+    while let Ok(command) = daemon_rx.try_recv() {
+        if matches!(command, DaemonCommand::GetOpenAICodexAuthStatus) {
+            saw_auth_status = true;
+            break;
+        }
+    }
+
+    assert!(saw_auth_status, "expected daemon auth status refresh");
+}
+
+#[test]
+fn apply_config_json_does_not_consult_local_openai_auth_state() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.config.chatgpt_auth_available = true;
+    model.config.chatgpt_auth_source = Some("stale-local".to_string());
+
+    model.apply_config_json(&serde_json::json!({
+        "provider": "openai",
+        "providers": {
+            "openai": {
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-5.4",
+                "auth_source": "chatgpt_subscription",
+                "api_transport": "responses"
+            }
+        }
+    }));
+
+    let mut saw_auth_status = false;
+    while let Ok(command) = daemon_rx.try_recv() {
+        if matches!(command, DaemonCommand::GetOpenAICodexAuthStatus) {
+            saw_auth_status = true;
+            break;
+        }
+    }
+
+    assert!(saw_auth_status, "expected daemon auth status refresh");
+    assert!(model.config.chatgpt_auth_available);
+    assert_eq!(
+        model.config.chatgpt_auth_source.as_deref(),
+        Some("stale-local")
+    );
+}
+
+#[test]
 fn sync_config_to_daemon_does_not_emit_null_api_key_for_advanced_edits() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
     model.connected = true;

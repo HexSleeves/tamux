@@ -72,12 +72,14 @@ fn first_raw_config_load_triggers_concierge_welcome_request() {
         model.concierge.loading,
         "first config load should start concierge welcome"
     );
-    assert!(matches!(
-        daemon_rx
-            .try_recv()
-            .expect("expected concierge welcome request"),
-        DaemonCommand::RequestConciergeWelcome
-    ));
+    let mut saw_welcome = false;
+    while let Ok(command) = daemon_rx.try_recv() {
+        if matches!(command, DaemonCommand::RequestConciergeWelcome) {
+            saw_welcome = true;
+            break;
+        }
+    }
+    assert!(saw_welcome, "expected concierge welcome request");
 }
 
 #[test]
@@ -655,4 +657,55 @@ fn openai_codex_auth_events_update_config_and_modal_state() {
     assert!(model.openai_auth_url.is_none());
     assert!(model.openai_auth_status_text.is_none());
     assert_eq!(model.status_line, "ChatGPT subscription auth cleared");
+}
+
+#[test]
+fn connected_event_requests_openai_codex_auth_status_from_daemon() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+
+    model.handle_connected_event();
+
+    let mut saw_auth_status = false;
+    while let Ok(command) = daemon_rx.try_recv() {
+        if matches!(command, DaemonCommand::GetOpenAICodexAuthStatus) {
+            saw_auth_status = true;
+            break;
+        }
+    }
+
+    assert!(saw_auth_status, "connect should request codex auth status");
+}
+
+#[test]
+fn openai_codex_auth_status_event_clears_stale_modal_state() {
+    let mut model = make_model();
+    model.openai_auth_url = Some("https://stale.example/login".to_string());
+    model.openai_auth_status_text = Some("stale".to_string());
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::OpenAIAuth));
+
+    model.handle_client_event(ClientEvent::OpenAICodexAuthStatus(
+        crate::client::OpenAICodexAuthStatusVm {
+            available: false,
+            auth_mode: Some("chatgpt_subscription".to_string()),
+            account_id: None,
+            expires_at: None,
+            source: Some("tamux-daemon".to_string()),
+            error: Some("Timed out waiting for callback".to_string()),
+            auth_url: None,
+            status: Some("error".to_string()),
+        },
+    ));
+
+    assert!(model.openai_auth_url.is_none());
+    assert_eq!(
+        model.openai_auth_status_text.as_deref(),
+        Some("Timed out waiting for callback")
+    );
+    assert_eq!(
+        model.modal.top(),
+        Some(crate::state::modal::ModalKind::OpenAIAuth)
+    );
+    assert_eq!(model.status_line, "Timed out waiting for callback");
 }

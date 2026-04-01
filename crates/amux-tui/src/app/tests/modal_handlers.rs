@@ -106,6 +106,10 @@ fn command_palette_tools_opens_settings_tools_tab() {
         DaemonCommand::GetProviderAuthStates
     ));
     assert!(matches!(
+        daemon_rx.try_recv().expect("expected codex auth refresh"),
+        DaemonCommand::GetOpenAICodexAuthStatus
+    ));
+    assert!(matches!(
         daemon_rx.try_recv().expect("expected sub-agent refresh"),
         DaemonCommand::ListSubAgents
     ));
@@ -113,6 +117,29 @@ fn command_palette_tools_opens_settings_tools_tab() {
         daemon_rx.try_recv().expect("expected rarog refresh"),
         DaemonCommand::GetConciergeConfig
     ));
+}
+
+#[test]
+fn openai_auth_modal_enter_uses_daemon_provided_url() {
+    let (mut model, _daemon_rx) = make_model();
+    model.openai_auth_url = Some("https://auth.openai.com/oauth/authorize?flow=daemon".to_string());
+    model.openai_auth_status_text =
+        Some("Open this URL in your browser to complete ChatGPT authentication.".to_string());
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::OpenAIAuth));
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::OpenAIAuth,
+    );
+
+    assert!(!quit);
+    assert_eq!(
+        model.openai_auth_url.as_deref(),
+        Some("https://auth.openai.com/oauth/authorize?flow=daemon")
+    );
 }
 
 #[test]

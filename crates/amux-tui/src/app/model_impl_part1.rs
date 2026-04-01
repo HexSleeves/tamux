@@ -415,6 +415,7 @@ impl TuiModel {
         }
         self.settings.reduce(SettingsAction::SwitchTab(tab));
         self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
+        self.send_daemon_command(DaemonCommand::GetOpenAICodexAuthStatus);
         self.send_daemon_command(DaemonCommand::ListSubAgents);
         self.send_daemon_command(DaemonCommand::GetConciergeConfig);
         if matches!(tab, SettingsTab::Gateway) {
@@ -439,6 +440,10 @@ impl TuiModel {
     }
 
     fn close_top_modal(&mut self) {
+        if self.modal.top() == Some(modal::ModalKind::OpenAIAuth) {
+            self.openai_auth_url = None;
+            self.openai_auth_status_text = None;
+        }
         if self.modal.top() == Some(modal::ModalKind::WhatsAppLink) {
             if self.modal.whatsapp_link().phase() != modal::WhatsAppLinkPhase::Connected {
                 self.send_daemon_command(DaemonCommand::WhatsAppLinkStop);

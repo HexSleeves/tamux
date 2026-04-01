@@ -75,9 +75,7 @@ impl TuiModel {
     }
 
     pub(in super::super) fn refresh_openai_auth_status(&mut self) {
-        let status = crate::auth::openai_codex_auth_status();
-        self.config.chatgpt_auth_available = status.available;
-        self.config.chatgpt_auth_source = status.source;
+        self.send_daemon_command(DaemonCommand::GetOpenAICodexAuthStatus);
     }
 
     pub(in super::super) fn effective_context_window_for_provider_value(

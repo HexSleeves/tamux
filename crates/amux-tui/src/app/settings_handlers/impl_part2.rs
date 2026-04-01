@@ -272,16 +272,7 @@ impl TuiModel {
                 if entry.authenticated {
                     if entry.provider_id == "openai" && entry.auth_source == "chatgpt_subscription"
                     {
-                        match crate::auth::clear_openai_codex_auth() {
-                            Ok(()) => {
-                                self.refresh_openai_auth_status();
-                                self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
-                                self.status_line = "ChatGPT subscription auth cleared".to_string();
-                            }
-                            Err(err) => {
-                                self.status_line = format!("Failed to clear ChatGPT auth: {err}");
-                            }
-                        }
+                        self.send_daemon_command(DaemonCommand::LogoutOpenAICodex);
                     } else if entry.provider_id == "github-copilot"
                         && entry.auth_source == "github_copilot"
                     {
@@ -325,29 +316,7 @@ impl TuiModel {
                 } else if entry.provider_id == "openai"
                     && entry.auth_source == "chatgpt_subscription"
                 {
-                    match crate::auth::begin_openai_codex_auth_flow() {
-                        Ok(crate::auth::OpenAICodexAuthFlowResult::AlreadyAvailable) => {
-                            self.refresh_openai_auth_status();
-                            self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
-                            self.status_line =
-                                "ChatGPT subscription auth already available".to_string();
-                        }
-                        Ok(crate::auth::OpenAICodexAuthFlowResult::ImportedFromCodexCli) => {
-                            self.refresh_openai_auth_status();
-                            self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
-                            self.status_line =
-                                "Imported ChatGPT auth from ~/.codex/auth.json".to_string();
-                        }
-                        Ok(crate::auth::OpenAICodexAuthFlowResult::Started { url }) => {
-                            self.show_openai_auth_modal(
-                                url,
-                                "Open this URL in your browser to complete ChatGPT authentication.",
-                            );
-                        }
-                        Err(err) => {
-                            self.status_line = format!("Failed to start ChatGPT auth: {err}");
-                        }
-                    }
+                    self.send_daemon_command(DaemonCommand::LoginOpenAICodex);
                 } else if entry.provider_id == "github-copilot"
                     && entry.auth_source == "github_copilot"
                 {
@@ -357,30 +326,11 @@ impl TuiModel {
                 }
             }
             1 => {
-                if !entry.authenticated && entry.provider_id == "openai" {
-                    match crate::auth::begin_openai_codex_auth_flow() {
-                        Ok(crate::auth::OpenAICodexAuthFlowResult::AlreadyAvailable) => {
-                            self.refresh_openai_auth_status();
-                            self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
-                            self.status_line =
-                                "ChatGPT subscription auth already available".to_string();
-                        }
-                        Ok(crate::auth::OpenAICodexAuthFlowResult::ImportedFromCodexCli) => {
-                            self.refresh_openai_auth_status();
-                            self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
-                            self.status_line =
-                                "Imported ChatGPT auth from ~/.codex/auth.json".to_string();
-                        }
-                        Ok(crate::auth::OpenAICodexAuthFlowResult::Started { url }) => {
-                            self.show_openai_auth_modal(
-                                url,
-                                "Open this URL in your browser to complete ChatGPT authentication.",
-                            );
-                        }
-                        Err(err) => {
-                            self.status_line = format!("Failed to start ChatGPT auth: {err}");
-                        }
-                    }
+                if !entry.authenticated
+                    && entry.provider_id == "openai"
+                    && entry.auth_source == "chatgpt_subscription"
+                {
+                    self.send_daemon_command(DaemonCommand::GetOpenAICodexAuthStatus);
                 } else if !entry.authenticated
                     && entry.provider_id == "github-copilot"
                     && entry.auth_source == "github_copilot"
