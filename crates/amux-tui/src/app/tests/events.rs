@@ -595,3 +595,64 @@ fn subagent_error_requests_refresh_to_clear_rejected_optimistic_state() {
         DaemonCommand::ListSubAgents
     ));
 }
+
+#[test]
+fn openai_codex_auth_events_update_config_and_modal_state() {
+    let mut model = make_model();
+
+    model.handle_client_event(ClientEvent::OpenAICodexAuthStatus(
+        crate::client::OpenAICodexAuthStatusVm {
+            available: false,
+            auth_mode: Some("chatgpt_subscription".to_string()),
+            account_id: None,
+            expires_at: None,
+            source: Some("tamux-daemon".to_string()),
+            error: None,
+            auth_url: None,
+            status: Some("pending".to_string()),
+        },
+    ));
+
+    assert!(!model.config.chatgpt_auth_available);
+    assert_eq!(
+        model.config.chatgpt_auth_source.as_deref(),
+        Some("tamux-daemon")
+    );
+
+    model.handle_client_event(ClientEvent::OpenAICodexAuthLoginResult(
+        crate::client::OpenAICodexAuthStatusVm {
+            available: false,
+            auth_mode: Some("chatgpt_subscription".to_string()),
+            account_id: None,
+            expires_at: None,
+            source: Some("tamux-daemon".to_string()),
+            error: None,
+            auth_url: Some("https://auth.openai.com/oauth/authorize?flow=tui".to_string()),
+            status: Some("pending".to_string()),
+        },
+    ));
+
+    assert_eq!(
+        model.modal.top(),
+        Some(crate::state::modal::ModalKind::OpenAIAuth)
+    );
+    assert_eq!(
+        model.openai_auth_url.as_deref(),
+        Some("https://auth.openai.com/oauth/authorize?flow=tui")
+    );
+    assert!(model
+        .openai_auth_status_text
+        .as_deref()
+        .is_some_and(|text| text.contains("complete ChatGPT authentication")));
+
+    model.handle_client_event(ClientEvent::OpenAICodexAuthLogoutResult {
+        ok: true,
+        error: None,
+    });
+
+    assert!(!model.config.chatgpt_auth_available);
+    assert!(model.config.chatgpt_auth_source.is_none());
+    assert!(model.openai_auth_url.is_none());
+    assert!(model.openai_auth_status_text.is_none());
+    assert_eq!(model.status_line, "ChatGPT subscription auth cleared");
+}

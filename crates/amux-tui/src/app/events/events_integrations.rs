@@ -4,6 +4,11 @@ use serde_json::Value;
 use amux_protocol::AGENT_NAME_RAROG;
 
 impl TuiModel {
+    fn apply_openai_codex_auth_status(&mut self, status: &crate::client::OpenAICodexAuthStatusVm) {
+        self.config.chatgpt_auth_available = status.available;
+        self.config.chatgpt_auth_source = status.source.clone();
+    }
+
     pub(in crate::app) fn handle_provider_auth_states_event(
         &mut self,
         entries: Vec<crate::state::ProviderAuthEntry>,
@@ -24,6 +29,54 @@ impl TuiModel {
                 valid,
                 error,
             });
+    }
+
+    pub(in crate::app) fn handle_openai_codex_auth_status_event(
+        &mut self,
+        status: crate::client::OpenAICodexAuthStatusVm,
+    ) {
+        self.apply_openai_codex_auth_status(&status);
+    }
+
+    pub(in crate::app) fn handle_openai_codex_auth_login_result_event(
+        &mut self,
+        status: crate::client::OpenAICodexAuthStatusVm,
+    ) {
+        self.apply_openai_codex_auth_status(&status);
+
+        if let Some(url) = status.auth_url {
+            self.openai_auth_url = Some(url);
+            self.openai_auth_status_text = Some(
+                "Open this URL in your browser to complete ChatGPT authentication.".to_string(),
+            );
+            if self.modal.top() != Some(modal::ModalKind::OpenAIAuth) {
+                self.modal
+                    .reduce(modal::ModalAction::Push(modal::ModalKind::OpenAIAuth));
+            }
+            self.status_line = "ChatGPT subscription login started".to_string();
+        } else if let Some(error) = status.error {
+            self.status_line = error;
+        } else if status.available {
+            self.status_line = "ChatGPT subscription auth available".to_string();
+        }
+    }
+
+    pub(in crate::app) fn handle_openai_codex_auth_logout_result_event(
+        &mut self,
+        ok: bool,
+        error: Option<String>,
+    ) {
+        if ok {
+            self.config.chatgpt_auth_available = false;
+            self.config.chatgpt_auth_source = None;
+            self.openai_auth_url = None;
+            self.openai_auth_status_text = None;
+            self.status_line = "ChatGPT subscription auth cleared".to_string();
+        } else {
+            self.status_line = error.unwrap_or_else(|| {
+                "OpenAI authentication failed. Please try signing in again.".to_string()
+            });
+        }
     }
 
     pub(in crate::app) fn handle_subagent_list_event(

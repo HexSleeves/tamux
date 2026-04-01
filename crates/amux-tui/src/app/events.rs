@@ -311,6 +311,15 @@ impl TuiModel {
             ClientEvent::ProviderAuthStates(entries) => {
                 self.handle_provider_auth_states_event(entries);
             }
+            ClientEvent::OpenAICodexAuthStatus(status) => {
+                self.handle_openai_codex_auth_status_event(status);
+            }
+            ClientEvent::OpenAICodexAuthLoginResult(status) => {
+                self.handle_openai_codex_auth_login_result_event(status);
+            }
+            ClientEvent::OpenAICodexAuthLogoutResult { ok, error } => {
+                self.handle_openai_codex_auth_logout_result_event(ok, error);
+            }
             ClientEvent::ProviderValidation {
                 provider_id,
                 valid,

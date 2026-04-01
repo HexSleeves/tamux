@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
+use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -36,6 +37,19 @@ pub struct WelesHealthVm {
     pub state: String,
     pub reason: Option<String>,
     pub checked_at: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAICodexAuthStatusVm {
+    pub available: bool,
+    pub auth_mode: Option<String>,
+    pub account_id: Option<String>,
+    pub expires_at: Option<i64>,
+    pub source: Option<String>,
+    pub error: Option<String>,
+    pub auth_url: Option<String>,
+    pub status: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -210,6 +224,12 @@ pub enum ClientEvent {
     },
 
     ProviderAuthStates(Vec<crate::state::ProviderAuthEntry>),
+    OpenAICodexAuthStatus(OpenAICodexAuthStatusVm),
+    OpenAICodexAuthLoginResult(OpenAICodexAuthStatusVm),
+    OpenAICodexAuthLogoutResult {
+        ok: bool,
+        error: Option<String>,
+    },
     ProviderValidation {
         provider_id: String,
         valid: bool,

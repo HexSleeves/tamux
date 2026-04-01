@@ -263,6 +263,31 @@ impl DaemonClient {
                     .send(ClientEvent::ProviderAuthStates(entries))
                     .await;
             }
+            DaemonMessage::AgentOpenAICodexAuthStatus { status_json } => {
+                match serde_json::from_str::<OpenAICodexAuthStatusVm>(&status_json) {
+                    Ok(status) => {
+                        let _ = event_tx
+                            .send(ClientEvent::OpenAICodexAuthStatus(status))
+                            .await;
+                    }
+                    Err(err) => warn!("Failed to parse OpenAI Codex auth status: {}", err),
+                }
+            }
+            DaemonMessage::AgentOpenAICodexAuthLoginResult { result_json } => {
+                match serde_json::from_str::<OpenAICodexAuthStatusVm>(&result_json) {
+                    Ok(status) => {
+                        let _ = event_tx
+                            .send(ClientEvent::OpenAICodexAuthLoginResult(status))
+                            .await;
+                    }
+                    Err(err) => warn!("Failed to parse OpenAI Codex auth login result: {}", err),
+                }
+            }
+            DaemonMessage::AgentOpenAICodexAuthLogoutResult { ok, error } => {
+                let _ = event_tx
+                    .send(ClientEvent::OpenAICodexAuthLogoutResult { ok, error })
+                    .await;
+            }
             DaemonMessage::AgentProviderValidation {
                 operation_id: _,
                 provider_id,

@@ -101,6 +101,9 @@ pub enum DaemonCommand {
         rows: u16,
     },
     GetProviderAuthStates,
+    GetOpenAICodexAuthStatus,
+    LoginOpenAICodex,
+    LogoutOpenAICodex,
     ValidateProvider {
         provider_id: String,
         base_url: String,
@@ -240,3 +243,19 @@ pub enum AppAction {
 
 #[allow(unused_imports)]
 pub use AppAction as Action;
+
+#[cfg(test)]
+mod tests {
+    use super::DaemonCommand;
+
+    #[test]
+    fn daemon_command_openai_codex_auth_variants_are_constructible() {
+        let commands = [
+            DaemonCommand::GetOpenAICodexAuthStatus,
+            DaemonCommand::LoginOpenAICodex,
+            DaemonCommand::LogoutOpenAICodex,
+        ];
+
+        assert_eq!(commands.len(), 3);
+    }
+}

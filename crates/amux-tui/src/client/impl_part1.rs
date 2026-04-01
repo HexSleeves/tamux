@@ -242,6 +242,9 @@ impl DaemonClient {
                 Self::handle_daemon_message_part1(message, event_tx).await
             }
             message @ (DaemonMessage::AgentProviderAuthStates { .. }
+            | DaemonMessage::AgentOpenAICodexAuthStatus { .. }
+            | DaemonMessage::AgentOpenAICodexAuthLoginResult { .. }
+            | DaemonMessage::AgentOpenAICodexAuthLogoutResult { .. }
             | DaemonMessage::AgentProviderValidation { .. }
             | DaemonMessage::AgentSubAgentList { .. }
             | DaemonMessage::AgentSubAgentUpdated { .. }

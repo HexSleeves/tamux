@@ -41,6 +41,31 @@
         ));
     }
 
+    #[test]
+    fn openai_codex_auth_methods_send_expected_protocol_messages() {
+        let (event_tx, _event_rx) = mpsc::channel(8);
+        let client = DaemonClient::new(event_tx);
+        let mut rx = client.request_rx.lock().unwrap().take().unwrap();
+
+        client.get_openai_codex_auth_status().unwrap();
+        assert!(matches!(
+            drain_request(&mut rx),
+            ClientMessage::AgentGetOpenAICodexAuthStatus
+        ));
+
+        client.login_openai_codex().unwrap();
+        assert!(matches!(
+            drain_request(&mut rx),
+            ClientMessage::AgentLoginOpenAICodex
+        ));
+
+        client.logout_openai_codex().unwrap();
+        assert!(matches!(
+            drain_request(&mut rx),
+            ClientMessage::AgentLogoutOpenAICodex
+        ));
+    }
+
     #[tokio::test]
     async fn done_event_parses_reasoning_payload() {
         let (event_tx, mut event_rx) = mpsc::channel(8);
@@ -174,6 +199,87 @@
                 assert_eq!(models[0].context_window, None);
             }
             other => panic!("expected models fetched event, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn daemon_openai_codex_auth_replies_emit_client_events() {
+        let (event_tx, mut event_rx) = mpsc::channel(8);
+
+        let should_continue = DaemonClient::handle_daemon_message(
+            DaemonMessage::AgentOpenAICodexAuthStatus {
+                status_json: serde_json::json!({
+                    "available": false,
+                    "authMode": "chatgpt_subscription",
+                    "source": "tamux-daemon",
+                    "status": "pending",
+                    "authUrl": "https://auth.openai.com/oauth/authorize?code=123"
+                })
+                .to_string(),
+            },
+            &event_tx,
+        )
+        .await;
+
+        assert!(should_continue);
+        match event_rx.recv().await.expect("expected auth status event") {
+            ClientEvent::OpenAICodexAuthStatus(status) => {
+                assert!(!status.available);
+                assert_eq!(status.auth_mode.as_deref(), Some("chatgpt_subscription"));
+                assert_eq!(status.source.as_deref(), Some("tamux-daemon"));
+                assert_eq!(status.status.as_deref(), Some("pending"));
+                assert!(status
+                    .auth_url
+                    .as_deref()
+                    .is_some_and(|url| url.starts_with("https://auth.openai.com/oauth/authorize")));
+            }
+            other => panic!("expected auth status event, got {:?}", other),
+        }
+
+        let should_continue = DaemonClient::handle_daemon_message(
+            DaemonMessage::AgentOpenAICodexAuthLoginResult {
+                result_json: serde_json::json!({
+                    "available": false,
+                    "authMode": "chatgpt_subscription",
+                    "source": "tamux-daemon",
+                    "status": "pending",
+                    "authUrl": "https://auth.openai.com/oauth/authorize?code=456"
+                })
+                .to_string(),
+            },
+            &event_tx,
+        )
+        .await;
+
+        assert!(should_continue);
+        match event_rx.recv().await.expect("expected auth login event") {
+            ClientEvent::OpenAICodexAuthLoginResult(status) => {
+                assert_eq!(status.status.as_deref(), Some("pending"));
+                assert_eq!(status.source.as_deref(), Some("tamux-daemon"));
+                assert!(status
+                    .auth_url
+                    .as_deref()
+                    .is_some_and(|url| url.contains("code=456")));
+            }
+            other => panic!("expected auth login event, got {:?}", other),
+        }
+
+        let should_continue = DaemonClient::handle_daemon_message(
+            DaemonMessage::AgentOpenAICodexAuthLogoutResult {
+                ok: true,
+                error: None,
+            },
+            &event_tx,
+        )
+        .await;
+
+        assert!(should_continue);
+        match event_rx.recv().await.expect("expected auth logout event") {
+            ClientEvent::OpenAICodexAuthLogoutResult { ok, error } => {
+                assert!(ok);
+                assert!(error.is_none());
+            }
+            other => panic!("expected auth logout event, got {:?}", other),
         }
     }
 

@@ -276,6 +276,15 @@ fn start_daemon_bridge(
                             DaemonCommand::GetProviderAuthStates => {
                                 let _ = client.get_provider_auth_states();
                             }
+                            DaemonCommand::GetOpenAICodexAuthStatus => {
+                                let _ = client.get_openai_codex_auth_status();
+                            }
+                            DaemonCommand::LoginOpenAICodex => {
+                                let _ = client.login_openai_codex();
+                            }
+                            DaemonCommand::LogoutOpenAICodex => {
+                                let _ = client.logout_openai_codex();
+                            }
                             DaemonCommand::ValidateProvider { provider_id, base_url, api_key, auth_source } => {
                                 let _ = client.validate_provider(provider_id, base_url, api_key, auth_source);
                             }

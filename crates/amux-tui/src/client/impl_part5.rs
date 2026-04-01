@@ -92,6 +92,18 @@ impl DaemonClient {
         self.send(ClientMessage::AgentGetProviderAuthStates)
     }
 
+    pub fn get_openai_codex_auth_status(&self) -> Result<()> {
+        self.send(ClientMessage::AgentGetOpenAICodexAuthStatus)
+    }
+
+    pub fn login_openai_codex(&self) -> Result<()> {
+        self.send(ClientMessage::AgentLoginOpenAICodex)
+    }
+
+    pub fn logout_openai_codex(&self) -> Result<()> {
+        self.send(ClientMessage::AgentLogoutOpenAICodex)
+    }
+
     pub fn validate_provider(
         &self,
         provider_id: String,
