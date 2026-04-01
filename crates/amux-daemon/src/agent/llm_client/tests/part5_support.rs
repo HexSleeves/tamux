@@ -49,3 +49,41 @@ pub(super) fn prepare_openai_auth_test(
     clear_openai_codex_auth_test_state();
     cli_auth_path
 }
+
+pub(super) fn extract_state_from_auth_url(auth_url: &str) -> String {
+    url::Url::parse(auth_url)
+        .expect("auth url should parse")
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .map(|(_, value)| value.to_string())
+        .expect("auth url should contain state")
+}
+
+pub(super) fn wait_for_listener_and_send_callback(state: &str, code: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+
+    loop {
+        match std::net::TcpStream::connect("127.0.0.1:1455") {
+            Ok(mut stream) => {
+                use std::io::{Read, Write};
+
+                let request = format!(
+                    "GET /auth/callback?state={state}&code={code} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+                );
+                stream
+                    .write_all(request.as_bytes())
+                    .expect("callback request should write");
+                let mut response = String::new();
+                let _ = stream.read_to_string(&mut response);
+                return;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                if std::time::Instant::now() >= deadline {
+                    panic!("callback listener did not become ready in time");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => panic!("callback connection should succeed: {error}"),
+        }
+    }
+}

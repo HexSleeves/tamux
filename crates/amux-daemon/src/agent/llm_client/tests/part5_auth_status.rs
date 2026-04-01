@@ -177,6 +177,119 @@ fn browser_callback_timeout_sets_error_state() {
 }
 
 #[test]
+fn browser_callback_success_via_local_listener_completes_auth() {
+    let _lock = provider_auth_store::provider_auth_test_env_lock();
+    let temp_dir = tempdir().expect("tempdir should succeed");
+    let _env_guard = EnvGuard::new(&["TAMUX_PROVIDER_AUTH_DB_PATH", "TAMUX_CODEX_CLI_AUTH_PATH"]);
+    prepare_openai_auth_test(temp_dir.path(), "missing-codex-auth.json");
+    let login = begin_openai_codex_auth_login().expect("login should start");
+    let state = extract_state_from_auth_url(login.auth_url.as_deref().expect("auth url should exist"));
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let wait_thread = std::thread::spawn(move || {
+        complete_browser_auth_with_timeout_ready_signal_for_tests(
+            &TestExchange {
+                result: Ok(stored_auth_fixture()),
+            },
+            Duration::from_secs(1),
+            ready_tx,
+        )
+    });
+
+    ready_rx
+        .recv_timeout(Duration::from_millis(500))
+        .expect("listener should become ready");
+    wait_for_listener_and_send_callback(&state, "good-code");
+
+    let status = wait_thread.join().expect("wait thread should join");
+
+    assert_eq!(status.status.as_deref(), Some("completed"));
+    assert!(status.available);
+    assert_eq!(status.account_id.as_deref(), Some("acct-1"));
+}
+
+#[test]
+fn browser_callback_invalid_state_returns_error() {
+    let _lock = provider_auth_store::provider_auth_test_env_lock();
+    let temp_dir = tempdir().expect("tempdir should succeed");
+    let _env_guard = EnvGuard::new(&["TAMUX_PROVIDER_AUTH_DB_PATH", "TAMUX_CODEX_CLI_AUTH_PATH"]);
+    prepare_openai_auth_test(temp_dir.path(), "missing-codex-auth.json");
+    begin_openai_codex_auth_login().expect("login should start");
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let wait_thread = std::thread::spawn(move || {
+        complete_browser_auth_with_timeout_ready_signal_for_tests(
+            &TestExchange {
+                result: Ok(stored_auth_fixture()),
+            },
+            Duration::from_secs(1),
+            ready_tx,
+        )
+    });
+
+    ready_rx
+        .recv_timeout(Duration::from_millis(500))
+        .expect("listener should become ready");
+    wait_for_listener_and_send_callback("wrong-state", "good-code");
+
+    let status = wait_thread.join().expect("wait thread should join");
+
+    assert_eq!(status.status.as_deref(), Some("error"));
+    assert_eq!(
+        status.error.as_deref(),
+        Some("OpenAI authentication failed. Please try signing in again.")
+    );
+    assert!(read_stored_openai_codex_auth().is_none());
+}
+
+#[test]
+fn complete_browser_auth_does_not_block_tokio_worker() {
+    let _lock = provider_auth_store::provider_auth_test_env_lock();
+    let temp_dir = tempdir().expect("tempdir should succeed");
+    let _env_guard = EnvGuard::new(&["TAMUX_PROVIDER_AUTH_DB_PATH", "TAMUX_CODEX_CLI_AUTH_PATH"]);
+    prepare_openai_auth_test(temp_dir.path(), "missing-codex-auth.json");
+
+    let _login = begin_openai_codex_auth_login().expect("login should start");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+
+    let timer_fired = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let timer_flag = timer_fired.clone();
+
+    let timer = runtime.spawn(async move {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        timer_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+
+    let callback_thread = std::thread::spawn(move || {
+        wait_for_listener_and_send_callback("wrong-state", "good-code");
+    });
+
+    runtime.block_on(async {
+        let auth_task = tokio::spawn(async move { complete_browser_auth() });
+
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(
+            timer_fired.load(std::sync::atomic::Ordering::SeqCst),
+            "tokio timer should still progress while browser auth waits"
+        );
+
+        let status = auth_task.await.expect("auth task should join");
+        timer.await.expect("timer task should join");
+        callback_thread.join().expect("callback thread should join");
+
+        assert_eq!(status.status.as_deref(), Some("error"));
+        assert_eq!(
+            status.error.as_deref(),
+            Some("OpenAI authentication failed. Please try signing in again.")
+        );
+    });
+}
+
+#[test]
 fn logout_releases_browser_callback_listener_for_immediate_retry() {
     let _lock = provider_auth_store::provider_auth_test_env_lock();
     let temp_dir = tempdir().expect("tempdir should succeed");

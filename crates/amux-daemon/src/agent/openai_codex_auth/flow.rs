@@ -265,14 +265,7 @@ fn await_browser_callback(
     }
 }
 
-fn complete_browser_auth_with_timeout(
-    exchange: &dyn OpenAICodexExchange,
-    timeout: Duration,
-) -> OpenAICodexAuthStatus {
-    complete_browser_auth_with_timeout_inner(exchange, timeout, None)
-}
-
-fn complete_browser_auth_with_timeout_inner(
+fn complete_browser_auth_with_timeout_sync(
     exchange: &dyn OpenAICodexExchange,
     timeout: Duration,
     ready_signal: Option<std::sync::mpsc::Sender<()>>,
@@ -307,6 +300,24 @@ fn complete_browser_auth_with_timeout_inner(
     complete_pending_flow_with_result(result, &pending.flow_id)
 }
 
+fn complete_browser_auth_with_timeout(
+    exchange: &'static dyn OpenAICodexExchange,
+    timeout: Duration,
+) -> OpenAICodexAuthStatus {
+    let run_blocking = move || complete_browser_auth_with_timeout_sync(exchange, timeout, None);
+
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| {
+            handle
+                .block_on(tokio::task::spawn_blocking(run_blocking))
+                .unwrap_or_else(|error| {
+                    set_runtime_error(format!("OpenAI authentication failed: {error}"))
+                })
+        }),
+        Err(_) => run_blocking(),
+    }
+}
+
 pub(crate) fn complete_browser_auth() -> OpenAICodexAuthStatus {
     complete_browser_auth_with_timeout(exchange_client(), OPENAI_CODEX_CALLBACK_TIMEOUT)
 }
@@ -315,7 +326,7 @@ pub(crate) fn complete_browser_auth() -> OpenAICodexAuthStatus {
 pub(crate) fn complete_browser_auth_with(
     exchange: &dyn OpenAICodexExchange,
 ) -> OpenAICodexAuthStatus {
-    complete_browser_auth_with_timeout(exchange, OPENAI_CODEX_CALLBACK_TIMEOUT)
+    complete_browser_auth_with_timeout_sync(exchange, OPENAI_CODEX_CALLBACK_TIMEOUT, None)
 }
 
 #[cfg(test)]
@@ -372,7 +383,7 @@ pub(crate) fn complete_browser_auth_with_timeout_for_tests(
     exchange: &dyn OpenAICodexExchange,
     timeout: Duration,
 ) -> OpenAICodexAuthStatus {
-    complete_browser_auth_with_timeout(exchange, timeout)
+    complete_browser_auth_with_timeout_sync(exchange, timeout, None)
 }
 
 #[cfg(test)]
@@ -381,5 +392,5 @@ pub(crate) fn complete_browser_auth_with_timeout_ready_signal_for_tests(
     timeout: Duration,
     ready_signal: std::sync::mpsc::Sender<()>,
 ) -> OpenAICodexAuthStatus {
-    complete_browser_auth_with_timeout_inner(exchange, timeout, Some(ready_signal))
+    complete_browser_auth_with_timeout_sync(exchange, timeout, Some(ready_signal))
 }
