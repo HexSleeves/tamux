@@ -206,7 +206,7 @@ fn logout_releases_browser_callback_listener_for_immediate_retry() {
         &TestExchange {
             result: Ok(stored_auth_fixture()),
         },
-        Duration::from_millis(25),
+        Duration::from_millis(150),
     );
 
     let original_status = wait_thread.join().expect("wait thread should join");
