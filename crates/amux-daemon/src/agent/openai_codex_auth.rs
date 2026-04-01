@@ -213,7 +213,10 @@ fn empty_status() -> OpenAICodexAuthStatus {
     }
 }
 
-pub(crate) use flow::{complete_browser_auth, complete_browser_auth_with};
+pub(crate) fn complete_browser_auth() -> OpenAICodexAuthStatus {
+    flow::complete_browser_auth()
+}
+
 #[cfg(test)]
 pub(crate) use flow::{
     complete_browser_auth_with_timeout_for_tests,

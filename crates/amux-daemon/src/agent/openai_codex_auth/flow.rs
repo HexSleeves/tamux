@@ -157,9 +157,21 @@ fn complete_pending_flow_with_result(
 
 fn read_callback_request(stream: &mut TcpStream) -> Result<(String, String)> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    let mut buffer = [0u8; 8192];
-    let read = stream.read(&mut buffer)?;
-    let request = String::from_utf8_lossy(&buffer[..read]);
+    let mut buffer = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
+
+    loop {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        if buffer.windows(4).any(|window| window == b"\r\n\r\n") || buffer.len() >= 8192 {
+            break;
+        }
+    }
+
+    let request = String::from_utf8_lossy(&buffer);
     let target = request
         .lines()
         .next()
@@ -247,6 +259,7 @@ pub(crate) fn complete_browser_auth() -> OpenAICodexAuthStatus {
     complete_browser_auth_with_timeout(exchange_client(), OPENAI_CODEX_CALLBACK_TIMEOUT)
 }
 
+#[cfg(test)]
 pub(crate) fn complete_browser_auth_with(
     exchange: &dyn OpenAICodexExchange,
 ) -> OpenAICodexAuthStatus {
