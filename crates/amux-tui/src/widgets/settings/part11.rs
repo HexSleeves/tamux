@@ -148,7 +148,7 @@ fn render_agent_tab<'a>(
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled("  Swarog", theme.fg_active)));
     lines.push(Line::from(Span::styled(
-        "  Main agent identity and behavior (Swarog)",
+        "  Main agent identity and behavior",
         theme.fg_dim,
     )));
     lines.push(Line::raw(""));
