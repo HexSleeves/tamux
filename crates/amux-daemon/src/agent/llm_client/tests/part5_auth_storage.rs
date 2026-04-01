@@ -72,11 +72,10 @@ fn successful_login_reports_error_when_persistence_fails() {
 
     assert_eq!(status.status.as_deref(), Some("error"));
     assert!(!status.available);
-    assert!(status
-        .error
-        .as_deref()
-        .unwrap_or_default()
-        .contains("persist"));
+    assert_eq!(
+        status.error.as_deref(),
+        Some("OpenAI authentication could not be saved. Please try again.")
+    );
 }
 
 #[test]
@@ -99,11 +98,10 @@ fn status_refresh_reports_import_persistence_failure() {
 
     assert_eq!(status.status.as_deref(), Some("error"));
     assert!(!status.available);
-    assert!(status
-        .error
-        .as_deref()
-        .unwrap_or_default()
-        .contains("persist"));
+    assert_eq!(
+        status.error.as_deref(),
+        Some("OpenAI authentication could not be saved. Please try again.")
+    );
 }
 
 #[test]

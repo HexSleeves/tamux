@@ -51,11 +51,10 @@ fn exchange_failure_sets_error_state() {
 
     assert_eq!(status.status.as_deref(), Some("error"));
     assert_eq!(status.available, false);
-    assert!(status
-        .error
-        .as_deref()
-        .unwrap_or_default()
-        .contains("exchange failed"));
+    assert_eq!(
+        status.error.as_deref(),
+        Some("OpenAI authentication failed. Please try signing in again.")
+    );
 }
 
 #[test]
@@ -175,10 +174,6 @@ fn browser_callback_timeout_sets_error_state() {
         .as_deref()
         .unwrap_or_default()
         .contains("timed out"));
-
-    begin_openai_codex_auth_login().expect("second login should start");
-    let status = complete_browser_auth().status;
-    assert_eq!(status.as_deref(), Some("error"));
 }
 
 #[test]

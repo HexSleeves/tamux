@@ -15,6 +15,12 @@ const OPENAI_CODEX_AUTH_REDIRECT_URI: &str = "http://localhost:1455/auth/callbac
 const OPENAI_CODEX_AUTH_SCOPE: &str = "openid profile email offline_access";
 const OPENAI_PROVIDER_ID: &str = "openai";
 const OPENAI_AUTH_MODE: &str = "chatgpt_subscription";
+const OPENAI_CODEX_AUTH_FAILED_MESSAGE: &str =
+    "OpenAI authentication failed. Please try signing in again.";
+const OPENAI_CODEX_AUTH_TIMEOUT_MESSAGE: &str =
+    "OpenAI authentication timed out. Please try again.";
+const OPENAI_CODEX_AUTH_PERSIST_MESSAGE: &str =
+    "OpenAI authentication could not be saved. Please try again.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -200,6 +206,17 @@ fn error_status(message: String) -> OpenAICodexAuthStatus {
     }
 }
 
+fn sanitized_auth_failure_message(message: &str) -> String {
+    let lowered = message.to_ascii_lowercase();
+    if lowered.contains("timed out") {
+        OPENAI_CODEX_AUTH_TIMEOUT_MESSAGE.to_string()
+    } else if lowered.contains("persist") || lowered.contains("save") {
+        OPENAI_CODEX_AUTH_PERSIST_MESSAGE.to_string()
+    } else {
+        OPENAI_CODEX_AUTH_FAILED_MESSAGE.to_string()
+    }
+}
+
 fn empty_status() -> OpenAICodexAuthStatus {
     OpenAICodexAuthStatus {
         available: false,
@@ -256,11 +273,7 @@ pub(crate) fn openai_codex_auth_status(refresh_from_import: bool) -> OpenAICodex
         match import_codex_cli_auth_if_present() {
             Ok(Some(auth)) => return metadata_from_auth(&auth),
             Ok(None) => {}
-            Err(error) => {
-                return error_status(format!(
-                    "Failed to persist imported OpenAI Codex auth: {error}"
-                ));
-            }
+            Err(error) => return error_status(sanitized_auth_failure_message(&error.to_string())),
         }
     }
 

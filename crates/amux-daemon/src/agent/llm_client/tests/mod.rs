@@ -1,6 +1,6 @@
 use super::*;
 use crate::agent::openai_codex_auth::{
-    begin_openai_codex_auth_login, clear_openai_codex_auth_test_state, complete_browser_auth,
+    begin_openai_codex_auth_login, clear_openai_codex_auth_test_state,
     complete_browser_auth_with_timeout_for_tests,
     complete_openai_codex_auth_flow_with_result_for_tests,
     complete_openai_codex_auth_with_code_for_tests, current_pending_openai_codex_flow_id_for_tests,

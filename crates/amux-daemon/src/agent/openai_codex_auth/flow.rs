@@ -11,8 +11,8 @@ use super::now_millis;
 use super::storage::persist_stored_openai_codex_auth;
 use super::{
     auth_runtime, error_status, exchange_client, metadata_from_auth, openai_codex_auth_status,
-    pending_status, OpenAICodexAuthStatus, OpenAICodexExchange, OpenAICodexTokenResponse,
-    PendingOpenAICodexAuth, StoredOpenAICodexAuth, OPENAI_AUTH_MODE,
+    pending_status, sanitized_auth_failure_message, OpenAICodexAuthStatus, OpenAICodexExchange,
+    OpenAICodexTokenResponse, PendingOpenAICodexAuth, StoredOpenAICodexAuth, OPENAI_AUTH_MODE,
     OPENAI_CODEX_AUTH_AUTHORIZE_URL, OPENAI_CODEX_AUTH_CLIENT_ID, OPENAI_CODEX_AUTH_REDIRECT_URI,
     OPENAI_CODEX_AUTH_SCOPE, OPENAI_CODEX_AUTH_TOKEN_URL,
 };
@@ -104,11 +104,12 @@ fn stored_auth_from_token_response(
 }
 
 fn set_runtime_error(message: String) -> OpenAICodexAuthStatus {
+    let sanitized = sanitized_auth_failure_message(&message);
     let mut runtime = auth_runtime()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    runtime.last_error = Some(message.clone());
-    error_status(message)
+    runtime.last_error = Some(sanitized.clone());
+    error_status(sanitized)
 }
 
 fn clear_runtime_error() {
@@ -148,7 +149,7 @@ fn complete_pending_flow_with_result(
                 metadata_from_auth(&persisted)
             }
             Err(error) => {
-                set_runtime_error(format!("Failed to persist OpenAI Codex auth: {error}"))
+                set_runtime_error(format!("failed to persist OpenAI Codex auth: {error}"))
             }
         },
         Err(error) => set_runtime_error(error.to_string()),
