@@ -18,7 +18,7 @@ pub(super) fn begin_custom_model_edit(model: &mut TuiModel) {
     }
     model
         .settings
-        .reduce(SettingsAction::SwitchTab(SettingsTab::Provider));
+        .reduce(SettingsAction::SwitchTab(SettingsTab::Agent));
     model.settings_navigate_to(3);
     model.settings.start_editing("custom_model_entry", &current);
     model.status_line = "Enter custom model as `Name | ID` or just `ID`".to_string();

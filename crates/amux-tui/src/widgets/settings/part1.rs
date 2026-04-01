@@ -33,8 +33,8 @@ pub enum SubAgentTabAction {
     Toggle,
 }
 
-const TAB_LABELS: [&str; 12] = [
-    "Auth", "Prov", "Tools", "Search", "Chat", "GW", "Swar", "Sub", "Rar", "Feat", "Adv", "Plug",
+const TAB_LABELS: [&str; 11] = [
+    "Auth", "Swar", "Rar", "Tools", "Search", "Chat", "GW", "Sub", "Feat", "Adv", "Plug",
 ];
 const TAB_DIVIDER: &str = " | ";
 
@@ -126,20 +126,7 @@ pub fn render(
 
     // Tab bar
     let active = settings.active_tab();
-    let tab_index = match active {
-        SettingsTab::Auth => 0,
-        SettingsTab::Provider => 1,
-        SettingsTab::Tools => 2,
-        SettingsTab::WebSearch => 3,
-        SettingsTab::Chat => 4,
-        SettingsTab::Gateway => 5,
-        SettingsTab::Agent => 6,
-        SettingsTab::SubAgents => 7,
-        SettingsTab::Concierge => 8,
-        SettingsTab::Features => 9,
-        SettingsTab::Advanced => 10,
-        SettingsTab::Plugins => 11,
-    };
+    let tab_index = active_tab_index(active);
     let tabs = visible_tabs(chunks[0], tab_index);
     frame.render_widget(
         Paragraph::new(render_tabs_line(&tabs, settings, theme)),
@@ -271,17 +258,16 @@ fn tab_hit_test(tab_area: Rect, active_tab: SettingsTab, mouse_x: u16) -> Option
 fn active_tab_index(tab: SettingsTab) -> usize {
     match tab {
         SettingsTab::Auth => 0,
-        SettingsTab::Provider => 1,
-        SettingsTab::Tools => 2,
-        SettingsTab::WebSearch => 3,
-        SettingsTab::Chat => 4,
-        SettingsTab::Gateway => 5,
-        SettingsTab::Agent => 6,
+        SettingsTab::Provider | SettingsTab::Agent => 1,
+        SettingsTab::Concierge => 2,
+        SettingsTab::Tools => 3,
+        SettingsTab::WebSearch => 4,
+        SettingsTab::Chat => 5,
+        SettingsTab::Gateway => 6,
         SettingsTab::SubAgents => 7,
-        SettingsTab::Concierge => 8,
-        SettingsTab::Features => 9,
-        SettingsTab::Advanced => 10,
-        SettingsTab::Plugins => 11,
+        SettingsTab::Features => 8,
+        SettingsTab::Advanced => 9,
+        SettingsTab::Plugins => 10,
     }
 }
 

@@ -252,7 +252,7 @@ impl TuiModel {
                 self.modal.set_picker_item_count(count);
             }
             "tools" => {
-                self.status_line = "Tools config: use /settings -> Tools tab".to_string();
+                self.open_settings_tab(SettingsTab::Tools);
             }
             "effort" => {
                 self.modal

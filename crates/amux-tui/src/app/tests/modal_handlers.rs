@@ -84,6 +84,37 @@ fn whatsapp_modal_cancel_sends_stop_and_closes() {
 }
 
 #[test]
+fn command_palette_tools_opens_settings_tools_tab() {
+    let (mut model, mut daemon_rx) = make_model();
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
+    model.modal.reduce(modal::ModalAction::Navigate(2));
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::CommandPalette,
+    );
+
+    assert!(!quit);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::Settings));
+    assert_eq!(model.settings.active_tab(), SettingsTab::Tools);
+    assert!(matches!(
+        daemon_rx.try_recv().expect("expected auth refresh"),
+        DaemonCommand::GetProviderAuthStates
+    ));
+    assert!(matches!(
+        daemon_rx.try_recv().expect("expected sub-agent refresh"),
+        DaemonCommand::ListSubAgents
+    ));
+    assert!(matches!(
+        daemon_rx.try_recv().expect("expected rarog refresh"),
+        DaemonCommand::GetConciergeConfig
+    ));
+}
+
+#[test]
 fn stacked_modal_pop_only_cleans_whatsapp_when_top() {
     let (mut model, mut daemon_rx) = make_model();
     model

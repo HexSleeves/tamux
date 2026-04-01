@@ -143,7 +143,7 @@ fn render_agent_tab<'a>(
     config: &'a ConfigState,
     theme: &ThemeTokens,
 ) -> Vec<Line<'a>> {
-    let mut lines = Vec::new();
+    let mut lines = render_provider_tab(settings, config, theme);
 
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled("  Swarog", theme.fg_active)));
@@ -169,7 +169,7 @@ fn render_agent_tab<'a>(
 
     // (field_index, label, value, field_name, hint)
     let editable_fields: [(usize, &str, String, &str, &str); 1] = [(
-        0,
+        8,
         "System Prompt ",
         system_prompt,
         "system_prompt",
@@ -282,9 +282,9 @@ fn render_agent_tab<'a>(
         lines.push(Line::from(spans));
     }
 
-    // Field 1: backend (read-only)
+    // Field 9: backend (read-only)
     {
-        let is_selected = settings.field_cursor() == 1;
+        let is_selected = settings.field_cursor() == 9;
         let marker = if is_selected { "> " } else { "  " };
         let marker_style = if is_selected {
             theme.accent_primary

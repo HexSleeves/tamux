@@ -54,6 +54,11 @@
         assert!(text.contains("Swar"));
         assert!(text.contains("Rar"));
         assert!(!text.contains("Con"));
+        assert!(!text.contains("Prov"));
+        let auth_idx = text.find("Auth").expect("auth tab should be visible");
+        let swar_idx = text.find("Swar").expect("swarog tab should be visible");
+        let rar_idx = text.find("Rar").expect("rarog tab should be visible");
+        assert!(auth_idx < swar_idx && swar_idx < rar_idx);
     }
 
     #[test]
@@ -241,6 +246,26 @@
             .join("\n");
 
         assert!(text.contains("Swarog"));
+    }
+
+    #[test]
+    fn agent_tab_includes_provider_controls() {
+        let mut settings = SettingsState::new();
+        settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+            SettingsTab::Agent,
+        ));
+        let config = ConfigState::new();
+
+        let lines = render_agent_tab(&settings, &config, &ThemeTokens::default());
+        let text = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("Swarog Provider"));
+        assert!(text.contains("Provider"));
+        assert!(text.contains("System Prompt"));
     }
 
     #[test]

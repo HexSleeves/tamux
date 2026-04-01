@@ -39,6 +39,10 @@ fn single_line_edit_layout(settings: &SettingsState, field: &str) -> Option<(usi
         },
         SettingsTab::Auth => None,
         SettingsTab::Agent => match field {
+            "base_url" => Some((5, 19)),
+            "custom_model_entry" => Some((7, 19)),
+            "assistant_id" => Some((9, 19)),
+            "context_window_tokens" => Some((11, 19)),
             _ => None,
         },
         SettingsTab::SubAgents => None,
@@ -73,7 +77,7 @@ fn single_line_edit_layout(settings: &SettingsState, field: &str) -> Option<(usi
 
 fn textarea_edit_layout(settings: &SettingsState, field: &str) -> Option<(usize, usize)> {
     match settings.active_tab() {
-        SettingsTab::Agent if field == "system_prompt" => Some((7, 4)),
+        SettingsTab::Agent if field == "system_prompt" => Some((17, 4)),
         SettingsTab::Gateway if field == "whatsapp_allowed_contacts" => Some((23, 4)),
         _ => None,
     }
@@ -163,15 +167,16 @@ fn settings_row_hit(
             {
                 let prompt_lines = settings.edit_buffer().lines().count().max(1);
                 match row {
-                    5..=6 => Some((0, None)),
-                    r if r <= 8 + prompt_lines => Some((0, None)),
-                    r if r == 9 + prompt_lines => Some((1, None)),
+                    4..=11 => Some((row - 4, None)),
+                    r if (17..=20 + prompt_lines).contains(&r) => Some((8, None)),
+                    r if r == 21 + prompt_lines => Some((9, None)),
                     _ => None,
                 }
             } else {
                 match row {
-                    5 => Some((0, None)),
-                    6 => Some((1, None)),
+                    4..=11 => Some((row - 4, None)),
+                    17 => Some((8, None)),
+                    18 => Some((9, None)),
                     _ => None,
                 }
             }

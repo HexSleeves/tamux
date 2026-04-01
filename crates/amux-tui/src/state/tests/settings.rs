@@ -32,7 +32,7 @@ fn switch_tab_resets_cursor_and_editing() {
 #[test]
 fn navigate_field_increases_cursor() {
     let mut state = SettingsState::new();
-    state.reduce(SettingsAction::SwitchTab(SettingsTab::Provider));
+    state.reduce(SettingsAction::SwitchTab(SettingsTab::Agent));
     state.reduce(SettingsAction::NavigateField(2));
     assert_eq!(state.field_cursor(), 2);
     state.reduce(SettingsAction::NavigateField(1));
@@ -130,8 +130,12 @@ fn close_clears_editing_and_dropdown() {
 }
 
 #[test]
-fn all_tabs_covers_twelve_variants() {
-    assert_eq!(SettingsTab::all().len(), 12);
+fn all_tabs_hide_provider_variant() {
+    assert_eq!(SettingsTab::all().len(), 11);
+    assert!(!SettingsTab::all().contains(&SettingsTab::Provider));
+    assert_eq!(SettingsTab::all()[0], SettingsTab::Auth);
+    assert_eq!(SettingsTab::all()[1], SettingsTab::Agent);
+    assert_eq!(SettingsTab::all()[2], SettingsTab::Concierge);
 }
 
 #[test]
@@ -291,6 +295,10 @@ fn current_field_name_gateway_tab() {
 fn current_field_name_agent_tab() {
     let mut state = SettingsState::new();
     state.reduce(SettingsAction::SwitchTab(SettingsTab::Agent));
+    assert_eq!(state.current_field_name(), "provider");
+    state.reduce(SettingsAction::NavigateField(7));
+    assert_eq!(state.current_field_name(), "context_window_tokens");
+    state.reduce(SettingsAction::NavigateField(1));
     assert_eq!(state.current_field_name(), "system_prompt");
     state.reduce(SettingsAction::NavigateField(1));
     assert_eq!(state.current_field_name(), "backend");
@@ -387,7 +395,7 @@ fn field_count_per_tab() {
     state.reduce(SettingsAction::SwitchTab(SettingsTab::Auth));
     assert_eq!(state.field_count(), 1);
     state.reduce(SettingsAction::SwitchTab(SettingsTab::Agent));
-    assert_eq!(state.field_count(), 2);
+    assert_eq!(state.field_count(), 10);
     state.reduce(SettingsAction::SwitchTab(SettingsTab::SubAgents));
     assert_eq!(state.field_count(), 1);
     state.reduce(SettingsAction::SwitchTab(SettingsTab::Concierge));

@@ -393,7 +393,7 @@ impl TuiModel {
     }
 
     fn open_provider_setup(&mut self) {
-        self.open_settings_tab(SettingsTab::Provider);
+        self.open_settings_tab(SettingsTab::Agent);
         self.status_line = "Configure provider credentials to start chatting".to_string();
     }
 
