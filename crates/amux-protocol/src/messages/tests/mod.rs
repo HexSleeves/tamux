@@ -364,41 +364,54 @@ fn daemon_message_roundtrips_subsystem_metrics_response() {
 #[test]
 fn daemon_message_roundtrips_openai_codex_auth_status() {
     let msg = DaemonMessage::AgentOpenAICodexAuthStatus {
-        status_json: "{}".into(),
+        status_json: r#"{"provider":"openai_codex","state":"authenticated","last_checked_at":"2026-04-01T12:00:00Z"}"#.to_string(),
     };
     let bytes = bincode::serialize(&msg).unwrap();
     let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
-    assert!(matches!(
-        decoded,
-        DaemonMessage::AgentOpenAICodexAuthStatus { .. }
-    ));
+    match decoded {
+        DaemonMessage::AgentOpenAICodexAuthStatus { status_json } => {
+            assert_eq!(
+                status_json,
+                r#"{"provider":"openai_codex","state":"authenticated","last_checked_at":"2026-04-01T12:00:00Z"}"#
+            );
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
 }
 
 #[test]
 fn daemon_message_roundtrips_openai_codex_auth_login_result() {
     let msg = DaemonMessage::AgentOpenAICodexAuthLoginResult {
-        result_json: "{}".into(),
+        result_json: r#"{"provider":"openai_codex","login_url":"https://auth.openai.example/device","expires_in_seconds":900}"#.to_string(),
     };
     let bytes = bincode::serialize(&msg).unwrap();
     let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
-    assert!(matches!(
-        decoded,
-        DaemonMessage::AgentOpenAICodexAuthLoginResult { .. }
-    ));
+    match decoded {
+        DaemonMessage::AgentOpenAICodexAuthLoginResult { result_json } => {
+            assert_eq!(
+                result_json,
+                r#"{"provider":"openai_codex","login_url":"https://auth.openai.example/device","expires_in_seconds":900}"#
+            );
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
 }
 
 #[test]
 fn daemon_message_roundtrips_openai_codex_auth_logout_result() {
     let msg = DaemonMessage::AgentOpenAICodexAuthLogoutResult {
         ok: true,
-        error: None,
+        error: Some("token cache cleared".to_string()),
     };
     let bytes = bincode::serialize(&msg).unwrap();
     let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
-    assert!(matches!(
-        decoded,
-        DaemonMessage::AgentOpenAICodexAuthLogoutResult { .. }
-    ));
+    match decoded {
+        DaemonMessage::AgentOpenAICodexAuthLogoutResult { ok, error } => {
+            assert!(ok);
+            assert_eq!(error.as_deref(), Some("token cache cleared"));
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
 }
 
 #[test]
