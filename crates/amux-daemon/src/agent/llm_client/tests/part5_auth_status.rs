@@ -16,6 +16,36 @@ fn pending_login_reuses_flow() {
 }
 
 #[test]
+fn auth_error_message_helper_sanitizes_known_failures() {
+    assert_eq!(
+        openai_codex_auth_error_message("request timed out while waiting for callback"),
+        "OpenAI authentication timed out. Please try again."
+    );
+    assert_eq!(
+        openai_codex_auth_error_message("failed to persist auth state"),
+        "OpenAI authentication could not be saved. Please try again."
+    );
+    assert_eq!(
+        openai_codex_auth_error_message("unexpected exchange failure"),
+        "OpenAI authentication failed. Please try signing in again."
+    );
+}
+
+#[test]
+fn auth_error_status_helper_returns_sanitized_error_payload() {
+    let status = openai_codex_auth_error_status("failed to save auth state");
+
+    assert!(!status.available);
+    assert_eq!(status.auth_mode.as_deref(), Some("chatgpt_subscription"));
+    assert_eq!(status.source.as_deref(), Some("tamux-daemon"));
+    assert_eq!(status.status.as_deref(), Some("error"));
+    assert_eq!(
+        status.error.as_deref(),
+        Some("OpenAI authentication could not be saved. Please try again.")
+    );
+}
+
+#[test]
 fn login_timeout_sets_error_state() {
     let _lock = provider_auth_store::provider_auth_test_env_lock();
     let temp_dir = tempdir().expect("tempdir should succeed");

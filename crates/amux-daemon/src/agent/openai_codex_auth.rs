@@ -218,6 +218,14 @@ fn sanitized_auth_failure_message(message: &str) -> String {
     }
 }
 
+pub(crate) fn openai_codex_auth_error_message(message: &str) -> String {
+    sanitized_auth_failure_message(message)
+}
+
+pub(crate) fn openai_codex_auth_error_status(message: &str) -> OpenAICodexAuthStatus {
+    error_status(openai_codex_auth_error_message(message))
+}
+
 fn empty_status() -> OpenAICodexAuthStatus {
     OpenAICodexAuthStatus {
         available: false,
@@ -275,7 +283,7 @@ pub(crate) fn openai_codex_auth_status(refresh_from_import: bool) -> OpenAICodex
         match import_codex_cli_auth_if_present() {
             Ok(Some(auth)) => return metadata_from_auth(&auth),
             Ok(None) => {}
-            Err(error) => return error_status(sanitized_auth_failure_message(&error.to_string())),
+            Err(error) => return openai_codex_auth_error_status(&error.to_string()),
         }
     }
 

@@ -514,14 +514,12 @@ if matches!(
                                 })
                                 .await?;
                         }
-                        Err(_) => {
-                            let result_json = serde_json::to_string(&serde_json::json!({
-                                "available": false,
-                                "authMode": "chatgpt_subscription",
-                                "source": "tamux-daemon",
-                                "error": "OpenAI authentication failed. Please try signing in again.",
-                                "status": "error"
-                            }))
+                        Err(error) => {
+                            let result_json = serde_json::to_string(
+                                &crate::agent::openai_codex_auth::openai_codex_auth_error_status(
+                                    &error.to_string(),
+                                ),
+                            )
                             .unwrap_or_else(|_| "{}".to_string());
                             framed
                                 .send(DaemonMessage::AgentOpenAICodexAuthLoginResult {
@@ -547,24 +545,9 @@ if matches!(
                                 .send(DaemonMessage::AgentOpenAICodexAuthLogoutResult {
                                     ok: false,
                                     error: Some(
-                                        if error.to_string().to_ascii_lowercase().contains("timed out") {
-                                            "OpenAI authentication timed out. Please try again."
-                                                .to_string()
-                                        } else if error
-                                            .to_string()
-                                            .to_ascii_lowercase()
-                                            .contains("persist")
-                                            || error
-                                                .to_string()
-                                                .to_ascii_lowercase()
-                                                .contains("save")
-                                        {
-                                            "OpenAI authentication could not be saved. Please try again."
-                                                .to_string()
-                                        } else {
-                                            "OpenAI authentication failed. Please try signing in again."
-                                                .to_string()
-                                        },
+                                        crate::agent::openai_codex_auth::openai_codex_auth_error_message(
+                                            &error.to_string(),
+                                        ),
                                     ),
                                 })
                                 .await?;
