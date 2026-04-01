@@ -64,43 +64,22 @@ pub(super) fn persist_stored_openai_codex_auth(
     read_stored_openai_codex_auth().context("persisted OpenAI Codex auth missing after save")
 }
 
-pub(crate) fn import_codex_cli_auth_if_present() -> Result<Option<StoredOpenAICodexAuth>> {
-    if let Some(existing) = read_stored_openai_codex_auth() {
-        return Ok(Some(existing));
-    }
+fn read_codex_cli_auth_from_disk() -> Option<StoredOpenAICodexAuth> {
     if load_tombstone().is_some() {
-        return Ok(None);
+        return None;
     }
 
-    let Some(path) = codex_cli_auth_path() else {
-        return Ok(None);
-    };
-    let raw = match std::fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(_) => return Ok(None),
-    };
-    let parsed: CodexCliAuthFile = match serde_json::from_str(&raw) {
-        Ok(parsed) => parsed,
-        Err(_) => return Ok(None),
-    };
-    let Some(tokens) = parsed.tokens else {
-        return Ok(None);
-    };
-    let Some(access_token) = tokens.access_token else {
-        return Ok(None);
-    };
-    let Some(refresh_token) = tokens.refresh_token else {
-        return Ok(None);
-    };
-    let Some(account_id) = super::extract_openai_codex_account_id(&access_token) else {
-        return Ok(None);
-    };
-    let Some(expires_at) = super::extract_jwt_expiry(&access_token) else {
-        return Ok(None);
-    };
+    let path = codex_cli_auth_path()?;
+    let raw = std::fs::read_to_string(path).ok()?;
+    let parsed: CodexCliAuthFile = serde_json::from_str(&raw).ok()?;
+    let tokens = parsed.tokens?;
+    let access_token = tokens.access_token?;
+    let refresh_token = tokens.refresh_token?;
+    let account_id = super::extract_openai_codex_account_id(&access_token)?;
+    let expires_at = super::extract_jwt_expiry(&access_token)?;
 
     let now = now_millis() as i64;
-    let imported = StoredOpenAICodexAuth {
+    Some(StoredOpenAICodexAuth {
         provider: Some("openai-codex".to_string()),
         auth_mode: Some(OPENAI_AUTH_MODE.to_string()),
         access_token,
@@ -110,8 +89,23 @@ pub(crate) fn import_codex_cli_auth_if_present() -> Result<Option<StoredOpenAICo
         source: Some("codex_import".to_string()),
         updated_at: Some(now),
         created_at: Some(now),
-    };
+    })
+}
 
+pub(crate) fn read_codex_cli_auth_if_present() -> Option<StoredOpenAICodexAuth> {
+    if let Some(existing) = read_stored_openai_codex_auth() {
+        return Some(existing);
+    }
+    read_codex_cli_auth_from_disk()
+}
+
+pub(crate) fn import_codex_cli_auth_if_present() -> Result<Option<StoredOpenAICodexAuth>> {
+    if let Some(existing) = read_stored_openai_codex_auth() {
+        return Ok(Some(existing));
+    }
+    let Some(imported) = read_codex_cli_auth_from_disk() else {
+        return Ok(None);
+    };
     Ok(Some(persist_stored_openai_codex_auth(&imported)?))
 }
 

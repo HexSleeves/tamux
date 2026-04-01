@@ -223,12 +223,16 @@ pub(crate) use flow::{
 };
 pub(crate) use storage::{
     clear_openai_codex_auth_test_state, import_codex_cli_auth_if_present,
-    read_stored_openai_codex_auth, reset_openai_codex_auth_runtime_for_tests,
-    tombstone_present_for_tests, write_stored_openai_codex_auth,
+    read_codex_cli_auth_if_present, read_stored_openai_codex_auth,
+    reset_openai_codex_auth_runtime_for_tests, tombstone_present_for_tests,
+    write_stored_openai_codex_auth,
 };
 
 pub(crate) fn has_openai_chatgpt_subscription_auth() -> bool {
-    metadata_available(&openai_codex_auth_status(true))
+    read_stored_openai_codex_auth()
+        .or_else(read_codex_cli_auth_if_present)
+        .map(|auth| metadata_available(&metadata_from_auth(&auth)))
+        .unwrap_or(false)
 }
 
 pub(crate) fn openai_codex_auth_status(refresh_from_import: bool) -> OpenAICodexAuthStatus {
@@ -239,9 +243,7 @@ pub(crate) fn openai_codex_auth_status(refresh_from_import: bool) -> OpenAICodex
     if let Some(pending) = runtime.pending.as_ref() {
         return pending_status(pending);
     }
-    if let Some(error) = runtime.last_error.clone() {
-        return error_status(error);
-    }
+    let runtime_error = runtime.last_error.clone();
     drop(runtime);
 
     if let Some(auth) = read_stored_openai_codex_auth() {
@@ -257,6 +259,10 @@ pub(crate) fn openai_codex_auth_status(refresh_from_import: bool) -> OpenAICodex
                 ));
             }
         }
+    }
+
+    if let Some(error) = runtime_error {
+        return error_status(error);
     }
 
     empty_status()

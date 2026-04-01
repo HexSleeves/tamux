@@ -8,6 +8,7 @@ use crate::agent::openai_codex_auth::{
 };
 use crate::agent::types::{AgentConfig, ApiTransport, ProviderConfig};
 use crate::agent::AgentEngine;
+use crate::agent::openai_codex_auth::provider_auth_state_authenticated;
 use crate::session_manager::SessionManager;
 use std::time::Duration;
 
@@ -228,7 +229,34 @@ fn helper_reports_available_when_only_codex_cli_auth_exists() {
 
     assert!(read_stored_openai_codex_auth().is_none());
     assert!(has_openai_chatgpt_subscription_auth());
-    assert!(read_stored_openai_codex_auth().is_some());
+    assert!(read_stored_openai_codex_auth().is_none());
+}
+
+#[test]
+fn failed_login_does_not_hide_stored_auth_status() {
+    let _lock = provider_auth_store::provider_auth_test_env_lock();
+    let temp_dir = tempdir().expect("tempdir should succeed");
+    let _env_guard = EnvGuard::new(&[
+        "TAMUX_PROVIDER_AUTH_DB_PATH",
+        "TAMUX_CODEX_CLI_AUTH_PATH",
+    ]);
+    prepare_openai_auth_test(temp_dir.path(), "missing-codex-auth.json");
+    write_stored_openai_codex_auth(&stored_auth_fixture()).expect("stored auth should persist");
+    begin_openai_codex_auth_login().expect("login should start");
+
+    let failed = complete_openai_codex_auth_with_code_for_tests(
+        "bad-code",
+        &TestExchange {
+            result: Err("exchange failed".to_string()),
+        },
+    );
+
+    assert_eq!(failed.status.as_deref(), Some("error"));
+    let status = openai_codex_auth_status(false);
+    assert!(status.available);
+    assert_eq!(status.status.as_deref(), Some("completed"));
+    assert_eq!(status.account_id.as_deref(), Some("acct-1"));
+    assert!(provider_auth_state_authenticated());
 }
 
 #[test]
@@ -482,7 +510,7 @@ async fn provider_auth_states_use_codex_cli_auth_when_storage_is_empty() {
         .expect("openai state should exist");
 
     assert!(openai.authenticated);
-    assert!(read_stored_openai_codex_auth().is_some());
+    assert!(read_stored_openai_codex_auth().is_none());
 }
 
 #[test]
