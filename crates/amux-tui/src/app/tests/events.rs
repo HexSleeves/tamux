@@ -746,6 +746,44 @@ fn openai_codex_auth_status_event_clears_stale_modal_state() {
 }
 
 #[test]
+fn openai_codex_auth_status_event_removes_all_stale_nested_openai_modals() {
+    let mut model = make_model();
+    model.openai_auth_url = Some("https://stale.example/login".to_string());
+    model.openai_auth_status_text = Some("stale".to_string());
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::Settings));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::OpenAIAuth));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::OpenAIAuth));
+
+    model.handle_client_event(ClientEvent::OpenAICodexAuthStatus(
+        crate::client::OpenAICodexAuthStatusVm {
+            available: false,
+            auth_mode: Some("chatgpt_subscription".to_string()),
+            account_id: None,
+            expires_at: None,
+            source: Some("tamux-daemon".to_string()),
+            error: Some("Timed out waiting for callback".to_string()),
+            auth_url: None,
+            status: Some("error".to_string()),
+        },
+    ));
+
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::OpenAIAuth));
+    model.close_top_modal();
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::CommandPalette));
+    model.close_top_modal();
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::Settings));
+}
+
+#[test]
 fn disconnect_and_reconnect_clear_openai_auth_modal_even_when_nested() {
     let mut model = make_model();
     model.openai_auth_url = Some("https://auth.openai.com/oauth/authorize?flow=tui".to_string());

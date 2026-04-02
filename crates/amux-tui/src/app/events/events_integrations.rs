@@ -19,6 +19,9 @@ impl TuiModel {
         self.config.chatgpt_auth_available = status.available;
         self.config.chatgpt_auth_source = status.source.clone();
 
+        self.modal
+            .reduce(modal::ModalAction::RemoveAll(modal::ModalKind::OpenAIAuth));
+
         self.openai_auth_url = status.auth_url.clone();
         self.openai_auth_status_text =
             status

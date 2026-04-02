@@ -251,13 +251,6 @@ impl TuiModel {
         }
     }
 
-    fn show_openai_auth_modal(&mut self, url: String, status_text: &str) {
-        self.openai_auth_url = Some(url);
-        self.openai_auth_status_text = Some(status_text.to_string());
-        self.modal
-            .reduce(modal::ModalAction::Push(modal::ModalKind::OpenAIAuth));
-    }
-
     pub(super) fn apply_provider_selection(&mut self, provider_id: &str) {
         self.apply_provider_selection_internal(provider_id, true);
     }

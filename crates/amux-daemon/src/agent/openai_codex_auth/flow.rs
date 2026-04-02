@@ -29,6 +29,7 @@ pub(super) fn build_pending_auth_flow() -> Result<PendingOpenAICodexAuth> {
         auth_url,
         verifier,
         state,
+        completion_started: false,
     })
 }
 
@@ -307,13 +308,18 @@ fn complete_browser_auth_with_timeout(
     let run_blocking = move || complete_browser_auth_with_timeout_sync(exchange, timeout, None);
 
     match tokio::runtime::Handle::try_current() {
-        Ok(handle) => tokio::task::block_in_place(|| {
-            handle
-                .block_on(tokio::task::spawn_blocking(run_blocking))
-                .unwrap_or_else(|error| {
-                    set_runtime_error(format!("OpenAI authentication failed: {error}"))
-                })
-        }),
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| {
+                handle
+                    .block_on(tokio::task::spawn_blocking(run_blocking))
+                    .unwrap_or_else(|error| {
+                        set_runtime_error(format!("OpenAI authentication failed: {error}"))
+                    })
+            })
+        }
+        Ok(_) => std::thread::spawn(run_blocking)
+            .join()
+            .unwrap_or_else(|_| set_runtime_error("OpenAI authentication failed".to_string())),
         Err(_) => run_blocking(),
     }
 }

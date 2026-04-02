@@ -422,6 +422,44 @@
         serde_json::from_str(raw).expect("json payload should decode")
     }
 
+    fn extract_state_from_auth_url(auth_url: &str) -> String {
+        url::Url::parse(auth_url)
+            .expect("auth url should parse")
+            .query_pairs()
+            .find(|(key, _)| key == "state")
+            .map(|(_, value)| value.to_string())
+            .expect("auth url should contain state")
+    }
+
+    fn wait_for_listener_and_send_callback(state: &str, code: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+
+        loop {
+            match std::net::TcpStream::connect("127.0.0.1:1455") {
+                Ok(mut stream) => {
+                    use std::io::{Read, Write};
+
+                    let request = format!(
+                        "GET /auth/callback?state={state}&code={code} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+                    );
+                    stream
+                        .write_all(request.as_bytes())
+                        .expect("callback request should write");
+                    let mut response = String::new();
+                    let _ = stream.read_to_string(&mut response);
+                    return;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    if std::time::Instant::now() >= deadline {
+                        panic!("callback listener did not become ready in time");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("callback connection should succeed: {error}"),
+            }
+        }
+    }
+
     #[tokio::test]
     async fn openai_codex_auth_status_request_returns_status_payload() {
         let _lock = crate::agent::provider_auth_test_env_lock();
@@ -470,6 +508,53 @@
             .and_then(|v| v.as_str())
             .is_some_and(|value| value.starts_with("https://auth.openai.com/oauth/authorize")));
         assert!(login.get("error").is_none());
+
+        conn.shutdown().await;
+        crate::agent::openai_codex_auth::clear_openai_codex_auth_test_state();
+    }
+
+    #[tokio::test]
+    async fn openai_codex_auth_login_request_starts_browser_callback_completion_flow() {
+        let _lock = crate::agent::provider_auth_test_env_lock();
+        let (_temp_dir, _env_guard) = setup_server_openai_codex_auth_test();
+        let mut conn = spawn_test_connection().await;
+
+        conn.framed
+            .send(ClientMessage::AgentLoginOpenAICodex)
+            .await
+            .expect("send auth login request");
+
+        let state = match conn.recv().await {
+            DaemonMessage::AgentOpenAICodexAuthLoginResult { result_json } => {
+                let login = parse_json(&result_json);
+                extract_state_from_auth_url(
+                    login
+                        .get("authUrl")
+                        .and_then(|value| value.as_str())
+                        .expect("login should include auth url"),
+                )
+            }
+            other => panic!("expected AgentOpenAICodexAuthLoginResult, got {other:?}"),
+        };
+
+        let callback_thread = std::thread::spawn(|| {
+            wait_for_listener_and_send_callback("wrong-state", "bad-code");
+        });
+
+        let status = match conn.recv_with_timeout(Duration::from_secs(1)).await {
+            DaemonMessage::AgentOpenAICodexAuthStatus { status_json } => parse_json(&status_json),
+            other => panic!("expected AgentOpenAICodexAuthStatus, got {other:?}"),
+        };
+        callback_thread
+            .join()
+            .expect("callback thread should join");
+
+        assert_eq!(state.is_empty(), false);
+        assert_eq!(status.get("status").and_then(|value| value.as_str()), Some("error"));
+        assert_eq!(
+            status.get("error").and_then(|value| value.as_str()),
+            Some("OpenAI authentication failed. Please try signing in again.")
+        );
 
         conn.shutdown().await;
         crate::agent::openai_codex_auth::clear_openai_codex_auth_test_state();

@@ -513,6 +513,24 @@ if matches!(
                                     result_json,
                                 })
                                 .await?;
+
+                            if result.auth_url.is_some()
+                                && crate::agent::openai_codex_auth::mark_openai_codex_auth_completion_started()
+                            {
+                                let background_daemon_tx =
+                                    background_daemon_queues.sender(BackgroundSubsystem::AgentWork);
+                                background_daemon_pending.increment(BackgroundSubsystem::AgentWork);
+                                std::thread::spawn(move || {
+                                    let status_json = serde_json::to_string(
+                                        &crate::agent::openai_codex_auth::complete_browser_auth(),
+                                    )
+                                    .unwrap_or_else(|_| "{}".to_string());
+                                    let _ = background_daemon_tx.send(BackgroundSignal::Deliver(
+                                        DaemonMessage::AgentOpenAICodexAuthStatus { status_json },
+                                    ));
+                                    let _ = background_daemon_tx.send(BackgroundSignal::Finished);
+                                });
+                            }
                         }
                         Err(error) => {
                             let result_json = serde_json::to_string(

@@ -64,6 +64,7 @@ struct PendingOpenAICodexAuth {
     auth_url: String,
     verifier: String,
     state: String,
+    completion_started: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -310,6 +311,23 @@ pub(crate) fn begin_openai_codex_auth_login() -> Result<OpenAICodexAuthStatus> {
     let status = pending_status(&pending);
     runtime.pending = Some(pending);
     Ok(status)
+}
+
+pub(crate) fn mark_openai_codex_auth_completion_started() -> bool {
+    let mut runtime = auth_runtime()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let Some(pending) = runtime.pending.as_mut() else {
+        return false;
+    };
+
+    if pending.completion_started {
+        return false;
+    }
+
+    pending.completion_started = true;
+    true
 }
 
 pub(crate) fn logout_openai_codex_auth() -> Result<()> {
