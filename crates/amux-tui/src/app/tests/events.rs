@@ -200,6 +200,20 @@ fn repeated_gateway_status_does_not_keep_overwriting_status_line() {
 }
 
 #[test]
+fn upgrade_notification_updates_status_line_and_inbox() {
+    let mut model = make_model();
+
+    model.handle_client_event(ClientEvent::NotificationUpsert(
+        amux_protocol::TamuxUpdateStatus::from_versions("0.2.3", "0.2.4")
+            .expect("status should parse valid versions")
+            .into_notification(100),
+    ));
+
+    assert_eq!(model.notifications.unread_count(), 1);
+    assert_eq!(model.status_line, "🔔 tamux 0.2.4 is available");
+}
+
+#[test]
 fn operator_profile_question_event_shows_onboarding_notice() {
     let mut model = make_model();
     model.handle_client_event(ClientEvent::OperatorProfileSessionStarted {

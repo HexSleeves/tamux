@@ -12,6 +12,7 @@
 #   - Cargo.toml                  (workspace version)
 #   - frontend/package.json       (npm version + triggers lock update)
 #   - npm-package/package.json    (npm wrapper package version)
+#   - npm-package/PUBLISH.md      (npm publish and release examples)
 #   - frontend/src/components/settings-panel/AboutTab.tsx
 #   - frontend/src/plugins/coding-agents/registerPlugin.ts
 #   - frontend/src/plugins/ai-training/registerPlugin.ts
@@ -111,6 +112,14 @@ bump_file "frontend/package.json" \
 bump_file "npm-package/package.json" \
   "\"version\": \"$CURRENT\"" \
   "\"version\": \"$NEXT\""
+
+bump_file "npm-package/PUBLISH.md" \
+  "v$CURRENT" \
+  "v$NEXT"
+
+bump_file "npm-package/PUBLISH.md" \
+  "$CURRENT" \
+  "$NEXT"
 
 # ---------------------------------------------------------------------------
 # AboutTab.tsx — displayed version string

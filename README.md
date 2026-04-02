@@ -42,8 +42,23 @@ Together they give the system a little presence without hiding what it is doing.
 ### NPM
 
 ```bash
+npm install -g tamux
+tamux --help
+
+# or install locally in a project:
 npm install tamux
+npx tamux --help
 ```
+
+If `npm install -g tamux` succeeds but `tamux` is still not found on macOS, your npm global bin directory is not on `PATH` yet:
+
+```bash
+export PATH="$(npm config get prefix)/bin:$PATH"
+exec $SHELL -l
+tamux --help
+```
+
+If the bin directory is already on `PATH`, opening a new shell is still useful because `zsh` and `bash` can cache command lookups.
 
 ### From sources
 

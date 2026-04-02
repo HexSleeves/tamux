@@ -594,7 +594,8 @@ impl TuiModel {
                     return false;
                 }
                 KeyCode::Up => {
-                    self.settings.navigate_field(-1, self.settings_field_count());
+                    self.settings
+                        .navigate_field(-1, self.settings_field_count());
                     return false;
                 }
                 KeyCode::Enter => {

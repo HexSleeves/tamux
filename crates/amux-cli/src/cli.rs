@@ -148,6 +148,9 @@ pub(crate) enum Commands {
     /// Ping the daemon (health check).
     Ping,
 
+    /// Upgrade tamux to the npm registry's current @latest release.
+    Upgrade,
+
     /// Start the daemon (if not already running).
     #[command(name = "daemon")]
     StartDaemon,

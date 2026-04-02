@@ -349,13 +349,8 @@ impl AgentEngine {
         preferred_session_hint: Option<&str>,
         content: &str,
     ) -> Result<String> {
-        self.send_message_with_session_and_surface(
-            thread_id,
-            preferred_session_hint,
-            content,
-            None,
-        )
-        .await
+        self.send_message_with_session_and_surface(thread_id, preferred_session_hint, content, None)
+            .await
     }
 
     pub async fn send_message_with_session_and_surface(
@@ -393,7 +388,8 @@ impl AgentEngine {
         } else {
             let goal_run_id = {
                 let tasks = self.tasks.lock().await;
-                tasks.iter()
+                tasks
+                    .iter()
                     .find(|task| task.id == task_id)
                     .and_then(|task| task.goal_run_id.clone())
             };

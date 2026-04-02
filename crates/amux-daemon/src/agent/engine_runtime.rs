@@ -336,7 +336,9 @@ impl AgentEngine {
             let engine = Arc::clone(self);
             let thread_id = thread_id.to_string();
             tokio::spawn(async move {
-                if let Err(error) = engine.resend_existing_user_message(&thread_id, &content).await
+                if let Err(error) = engine
+                    .resend_existing_user_message(&thread_id, &content)
+                    .await
                 {
                     tracing::warn!(thread_id = %thread_id, error = %error, "retry-now fresh resend failed");
                 }

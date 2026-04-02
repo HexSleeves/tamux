@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use amux_protocol::{AGENT_ID_RAROG, AGENT_ID_SWAROG};
@@ -14,16 +14,40 @@ pub(crate) enum LaunchTarget {
 
 /// Find a binary by checking the same directory as the current executable first,
 /// then falling back to the bare name (which uses PATH lookup).
-pub(crate) fn find_sibling_binary(name: &str) -> PathBuf {
-    if let Ok(current) = std::env::current_exe() {
+pub(crate) fn resolve_sibling_binary(current_exe: Option<&Path>, name: &str) -> PathBuf {
+    let binary_name = platform_binary_name(name);
+
+    if let Some(current) = current_exe {
         if let Some(dir) = current.parent() {
-            let sibling = dir.join(name);
+            let sibling = dir.join(&binary_name);
             if sibling.exists() {
                 return sibling;
             }
         }
     }
-    PathBuf::from(name)
+
+    PathBuf::from(binary_name)
+}
+
+pub(crate) fn find_sibling_binary(name: &str) -> PathBuf {
+    let current_exe = std::env::current_exe().ok();
+    resolve_sibling_binary(current_exe.as_deref(), name)
+}
+
+fn platform_binary_name(name: &str) -> String {
+    #[cfg(windows)]
+    {
+        if Path::new(name).extension().is_some() {
+            name.to_string()
+        } else {
+            format!("{name}.exe")
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        name.to_string()
+    }
 }
 
 pub(crate) fn resolve_dm_target(

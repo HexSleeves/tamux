@@ -91,7 +91,8 @@ impl<'a> SendMessageRunner<'a> {
 
     pub(super) async fn stream_once(&mut self) -> Result<StreamIteration> {
         let prepared_request = self.prepare_request().await?;
-        if let Some(delay) = inter_request_delay(self.loop_count, self.config.message_loop_delay_ms) {
+        if let Some(delay) = inter_request_delay(self.loop_count, self.config.message_loop_delay_ms)
+        {
             tokio::time::sleep(delay).await;
         }
 
@@ -124,7 +125,8 @@ impl<'a> SendMessageRunner<'a> {
         let llm_started_at = Instant::now();
         let mut first_token_at: Option<Instant> = None;
         let effective_transport_for_turn = prepared_request.transport;
-        let provider_is_anthropic = provider_uses_anthropic_api(&self.config, &self.provider_config);
+        let provider_is_anthropic =
+            provider_uses_anthropic_api(&self.config, &self.provider_config);
         let llm_retry_strategy = if provider_is_anthropic {
             match self.retry_strategy {
                 RetryStrategy::Bounded { retry_delay_ms, .. } => RetryStrategy::Bounded {
@@ -669,7 +671,10 @@ mod tests {
     #[test]
     fn inter_request_delay_uses_configured_delay_after_first_loop() {
         assert_eq!(inter_request_delay(1, 500), None);
-        assert_eq!(inter_request_delay(2, 500), Some(Duration::from_millis(500)));
+        assert_eq!(
+            inter_request_delay(2, 500),
+            Some(Duration::from_millis(500))
+        );
         assert_eq!(inter_request_delay(2, 0), None);
     }
 }

@@ -230,7 +230,11 @@ pub type ExpandedReasoning = std::collections::HashSet<usize>;
 pub type ExpandedTools = std::collections::HashSet<usize>;
 
 fn toggle_glyph(expanded: bool) -> &'static str {
-    if expanded { "\u{25be}" } else { "\u{25b6}" }
+    if expanded {
+        "\u{25be}"
+    } else {
+        "\u{25b6}"
+    }
 }
 
 /// Convert a message into ratatui Lines (all owned/static)

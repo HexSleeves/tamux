@@ -4,6 +4,7 @@ mod commands;
 mod output;
 mod plugins;
 mod setup_wizard;
+mod update;
 
 use anyhow::Result;
 use clap::Parser;

@@ -321,7 +321,8 @@ async fn execute_tool_unavailable_guarded_review_blocks_closed_normally_and_degr
 }
 
 #[tokio::test]
-async fn execute_tool_weles_internal_task_allows_low_risk_shell_python_without_recursive_governance_review() {
+async fn execute_tool_weles_internal_task_allows_low_risk_shell_python_without_recursive_governance_review(
+) {
     let root = tempdir().expect("tempdir should succeed");
     let manager = SessionManager::new_test(root.path()).await;
     let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
@@ -399,7 +400,10 @@ async fn execute_tool_weles_internal_task_allows_low_risk_shell_python_without_r
         "low-risk shell python should stay allowed inside WELES internal tasks: {}",
         result.content
     );
-    assert!(marker.exists(), "low-risk shell python should still execute");
+    assert!(
+        marker.exists(),
+        "low-risk shell python should still execute"
+    );
     let review = result
         .weles_review
         .expect("internal WELES runtime should keep governance metadata");

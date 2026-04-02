@@ -467,8 +467,14 @@ mod tests {
     #[test]
     fn inter_tool_call_delay_uses_configured_delay_between_consecutive_tools() {
         assert_eq!(inter_tool_call_delay(0, 500), None);
-        assert_eq!(inter_tool_call_delay(1, 500), Some(Duration::from_millis(500)));
-        assert_eq!(inter_tool_call_delay(2, 500), Some(Duration::from_millis(500)));
+        assert_eq!(
+            inter_tool_call_delay(1, 500),
+            Some(Duration::from_millis(500))
+        );
+        assert_eq!(
+            inter_tool_call_delay(2, 500),
+            Some(Duration::from_millis(500))
+        );
         assert_eq!(inter_tool_call_delay(1, 0), None);
     }
 }

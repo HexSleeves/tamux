@@ -93,7 +93,9 @@ pub(super) fn parse_thread_metadata(metadata_json: Option<&str>) -> ParsedThread
     let client_surface = metadata
         .as_ref()
         .and_then(|value| value.get("client_surface"))
-        .and_then(|value| serde_json::from_value::<amux_protocol::ClientSurface>(value.clone()).ok());
+        .and_then(|value| {
+            serde_json::from_value::<amux_protocol::ClientSurface>(value.clone()).ok()
+        });
 
     ParsedThreadMetadata {
         client_surface,

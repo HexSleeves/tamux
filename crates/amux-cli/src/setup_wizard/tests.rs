@@ -189,6 +189,25 @@ fn wizard_declares_async_command_capability_on_connect() {
 }
 
 #[test]
+fn wizard_ignores_async_command_capability_ack_messages() {
+    let ignored = should_ignore_wizard_message(&DaemonMessage::AgentAsyncCommandCapabilityAck {
+        capability: amux_protocol::AsyncCommandCapability {
+            version: 1,
+            supports_operation_acceptance: true,
+        },
+    });
+    assert!(ignored, "handshake ack should not surface to setup flows");
+
+    let forwarded = should_ignore_wizard_message(&DaemonMessage::AgentProviderAuthStates {
+        states_json: "[]".to_string(),
+    });
+    assert!(
+        !forwarded,
+        "real daemon payloads must still reach setup flows"
+    );
+}
+
+#[test]
 fn provider_validation_terminal_response_ignores_operation_acceptance() {
     let response = parse_provider_validation_terminal_response(DaemonMessage::OperationAccepted {
         operation_id: "op-provider-validation-1".to_string(),

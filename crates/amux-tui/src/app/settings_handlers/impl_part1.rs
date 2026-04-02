@@ -161,7 +161,11 @@ impl TuiModel {
         };
 
         if let Some(raw) = &self.config.agent_config_raw {
-            if let Some(provider_config) = raw.get(def.id) {
+            if let Some(provider_config) = raw
+                .get("providers")
+                .and_then(|providers| providers.get(def.id))
+                .or_else(|| raw.get(def.id))
+            {
                 // For predefined providers, always use the canonical base_url
                 // from the definition — stale DB values must not override it.
                 if def.id == "custom" {

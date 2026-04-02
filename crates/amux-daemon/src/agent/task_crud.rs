@@ -192,7 +192,8 @@ impl AgentEngine {
 
         let now = now_millis();
         if let (Some(thread_id), Some(client_surface)) = (thread_id.as_deref(), client_surface) {
-            self.set_thread_client_surface(thread_id, client_surface).await;
+            self.set_thread_client_surface(thread_id, client_surface)
+                .await;
         }
         let normalized_title = title
             .as_deref()

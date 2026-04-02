@@ -109,11 +109,13 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                                     .config
                                     .reduce(config::ConfigAction::ModelsFetched(models));
                             }
-                            model.send_daemon_command(DaemonCommand::FetchModels {
-                                provider_id: model.config.provider.clone(),
-                                base_url: model.config.base_url.clone(),
-                                api_key: model.config.api_key.clone(),
-                            });
+                            if providers::supports_model_fetch_for(&model.config.provider) {
+                                model.send_daemon_command(DaemonCommand::FetchModels {
+                                    provider_id: model.config.provider.clone(),
+                                    base_url: model.config.base_url.clone(),
+                                    api_key: model.config.api_key.clone(),
+                                });
+                            }
                             let count =
                                 widgets::model_picker::available_models(&model.config).len() + 1;
                             model

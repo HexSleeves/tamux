@@ -55,14 +55,14 @@ impl TuiModel {
         }
 
         if code == KeyCode::Char('e') && ctrl {
-            if self.last_error.is_some() {
-                if self.modal.top() == Some(modal::ModalKind::ErrorViewer) {
-                    self.close_top_modal();
-                } else {
-                    self.modal
-                        .reduce(modal::ModalAction::Push(modal::ModalKind::ErrorViewer));
-                    self.error_active = false;
-                }
+            if self.modal.top() == Some(modal::ModalKind::ErrorViewer) {
+                self.last_error = None;
+                self.error_active = false;
+                self.close_top_modal();
+            } else if self.last_error.is_some() {
+                self.modal
+                    .reduce(modal::ModalAction::Push(modal::ModalKind::ErrorViewer));
+                self.error_active = false;
             }
             return false;
         }
@@ -115,8 +115,8 @@ impl TuiModel {
                 .chat
                 .retry_status()
                 .is_some_and(|status| matches!(status.phase, chat::RetryPhase::Waiting));
-        let retry_wait_accepts_keyboard = retry_waiting
-            && matches!(self.focus, FocusArea::Chat | FocusArea::Input);
+        let retry_wait_accepts_keyboard =
+            retry_waiting && matches!(self.focus, FocusArea::Chat | FocusArea::Input);
         if retry_wait_accepts_keyboard {
             match code {
                 KeyCode::Left | KeyCode::Char('h') if matches!(self.focus, FocusArea::Chat) => {
