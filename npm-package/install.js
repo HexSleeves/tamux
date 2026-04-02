@@ -152,6 +152,33 @@ function getReleaseAssetInfo(platform, arch, version) {
   };
 }
 
+function getInstallUsageHint(isGlobalInstall) {
+  if (isGlobalInstall) {
+    return "tamux: run 'tamux --help' once your npm prefix bin directory is on PATH";
+  }
+
+  return "tamux: run with 'npx tamux --help' (or 'npm exec tamux -- --help') after a local install";
+}
+
+function prependDirectoryToPath(env, directory) {
+  var nextEnv = Object.assign({}, env);
+  var pathKey =
+    Object.keys(nextEnv).find(function (key) {
+      return key.toUpperCase() === "PATH";
+    }) || "PATH";
+  var currentPath = nextEnv[pathKey] || "";
+  var nextPath = currentPath
+    ? directory + path.delimiter + currentPath
+    : directory;
+
+  nextEnv[pathKey] = nextPath;
+  if (pathKey !== "PATH" && nextEnv.PATH === undefined) {
+    nextEnv.PATH = nextPath;
+  }
+
+  return nextEnv;
+}
+
 function extractRequiredBinaries(archiveData, releaseInfo) {
   var AdmZip = require("adm-zip");
   var archive = new AdmZip(archiveData);
@@ -277,13 +304,16 @@ async function main() {
   }
 
   console.log("tamux: installation complete");
+  console.log(getInstallUsageHint(process.env.npm_config_global === "true"));
 }
 
 module.exports = main;
 module.exports.GITHUB_OWNER = GITHUB_OWNER;
 module.exports.GITHUB_REPO = GITHUB_REPO;
 module.exports.getReleaseAssetInfo = getReleaseAssetInfo;
+module.exports.getInstallUsageHint = getInstallUsageHint;
 module.exports.parseChecksumFile = parseChecksumFile;
+module.exports.prependDirectoryToPath = prependDirectoryToPath;
 
 // Auto-run only when executed directly (postinstall) or via tryFallbackDownload,
 // not when required just for the exported constants.

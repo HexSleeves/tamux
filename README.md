@@ -42,7 +42,12 @@ Together they give the system a little presence without hiding what it is doing.
 ### NPM
 
 ```bash
+npm install -g tamux
+tamux --help
+
+# or install locally in a project:
 npm install tamux
+npx tamux --help
 ```
 
 ### From sources

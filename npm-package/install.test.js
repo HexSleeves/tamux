@@ -30,3 +30,36 @@ test("getReleaseAssetInfo maps windows x64 to published zip asset names", functi
 test("getReleaseAssetInfo returns null for unsupported targets", function () {
   assert.equal(install.getReleaseAssetInfo("linux", "ppc64"), null);
 });
+
+test("getInstallUsageHint recommends npx for local installs", function () {
+  assert.equal(
+    install.getInstallUsageHint(false),
+    "tamux: run with 'npx tamux --help' (or 'npm exec tamux -- --help') after a local install"
+  );
+});
+
+test("getInstallUsageHint recommends tamux for global installs", function () {
+  assert.equal(
+    install.getInstallUsageHint(true),
+    "tamux: run 'tamux --help' once your npm prefix bin directory is on PATH"
+  );
+});
+
+test("prependDirectoryToPath prefixes PATH values", function () {
+  const updated = install.prependDirectoryToPath(
+    { PATH: "/usr/bin" },
+    "/tmp/tamux-bin"
+  );
+
+  assert.equal(updated.PATH, "/tmp/tamux-bin:/usr/bin");
+});
+
+test("prependDirectoryToPath preserves existing PATH key casing", function () {
+  const updated = install.prependDirectoryToPath(
+    { Path: "C:\\Windows\\System32" },
+    "C:\\tamux\\bin"
+  );
+
+  assert.equal(updated.Path, "C:\\tamux\\bin:C:\\Windows\\System32");
+  assert.equal(updated.PATH, "C:\\tamux\\bin:C:\\Windows\\System32");
+});

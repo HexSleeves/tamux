@@ -3,7 +3,8 @@ use clap::Parser;
 
 use crate::cli::{Cli, Commands, InstallTarget, SettingsAction};
 use crate::commands::common::{
-    handle_post_setup_action, launch_gui, launch_tui, resolve_dm_target, LaunchTarget,
+    find_sibling_binary, handle_post_setup_action, launch_gui, launch_tui, resolve_dm_target,
+    LaunchTarget,
 };
 use crate::output::audit::{
     format_timestamp, parse_duration_ago, print_audit_detail, print_audit_row,
@@ -337,7 +338,7 @@ pub(crate) async fn run(command: Commands) -> Result<()> {
         }
         Commands::StartDaemon => {
             println!("Starting daemon...");
-            let mut command = std::process::Command::new("tamux-daemon");
+            let mut command = std::process::Command::new(find_sibling_binary("tamux-daemon"));
             command
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())

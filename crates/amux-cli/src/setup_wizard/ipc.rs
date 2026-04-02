@@ -1,4 +1,5 @@
 use super::*;
+use crate::commands::common::find_sibling_binary;
 
 pub(super) fn wizard_startup_messages() -> Vec<ClientMessage> {
     vec![ClientMessage::AgentDeclareAsyncCommandCapability {
@@ -135,7 +136,7 @@ pub(super) async fn ensure_daemon_running() -> Result<()> {
     }
 
     println!("Starting daemon...");
-    let mut cmd = std::process::Command::new("tamux-daemon");
+    let mut cmd = std::process::Command::new(find_sibling_binary("tamux-daemon"));
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
