@@ -38,7 +38,10 @@ async fn execute_tool_allows_low_risk_shell_python_without_forcing_python_execut
         "low-risk shell python should execute: {}",
         result.content
     );
-    assert!(marker.exists(), "shell python should be allowed when not suspicious");
+    assert!(
+        marker.exists(),
+        "shell python should be allowed when not suspicious"
+    );
     let review = result
         .weles_review
         .expect("allowed shell python result should carry governance metadata");
@@ -156,7 +159,10 @@ async fn execute_tool_suspicious_shell_python_uses_weles_runtime_structured_bloc
         .expect("runtime shell python block should carry governance metadata");
     assert!(review.weles_reviewed);
     assert_eq!(review.verdict, crate::agent::types::WelesVerdict::Block);
-    assert_eq!(review.audit_id.as_deref(), Some("audit-weles-shell-python-block"));
+    assert_eq!(
+        review.audit_id.as_deref(),
+        Some("audit-weles-shell-python-block")
+    );
     assert!(review
         .reasons
         .iter()

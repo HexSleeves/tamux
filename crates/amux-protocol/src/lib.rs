@@ -8,6 +8,7 @@ mod codec;
 mod config;
 mod logging;
 mod messages;
+mod update;
 
 pub use codec::{AmuxCodec, DaemonCodec};
 pub use config::{
@@ -17,3 +18,4 @@ pub use config::{
 };
 pub use logging::{dated_log_file_name, dated_log_file_path, DailyLogWriter};
 pub use messages::*;
+pub use update::*;

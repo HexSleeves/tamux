@@ -120,6 +120,32 @@ fn command_palette_tools_opens_settings_tools_tab() {
 }
 
 #[test]
+fn ctrl_e_in_error_modal_clears_error() {
+    let (mut model, _daemon_rx) = make_model();
+    model.last_error = Some("boom".to_string());
+    model.error_active = true;
+
+    let handled = model.handle_key(KeyCode::Char('e'), KeyModifiers::CONTROL);
+
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ErrorViewer));
+    assert_eq!(model.last_error.as_deref(), Some("boom"));
+
+    let handled = model.handle_key(KeyCode::Char('e'), KeyModifiers::CONTROL);
+
+    assert!(!handled);
+    assert!(model.modal.top().is_none());
+    assert!(
+        model.last_error.is_none(),
+        "second Ctrl+E should clear the stored error"
+    );
+    assert!(
+        !model.error_active,
+        "clearing the error should also clear the active error badge"
+    );
+}
+
+#[test]
 fn openai_auth_modal_enter_uses_daemon_provided_url() {
     let (mut model, _daemon_rx) = make_model();
     model.openai_auth_url = Some("https://auth.openai.com/oauth/authorize?flow=daemon".to_string());
@@ -372,6 +398,70 @@ fn provider_picker_filters_to_authenticated_entries_plus_custom() {
     assert!(defs.iter().any(|provider| provider.id == "openai"));
     assert!(defs.iter().any(|provider| provider.id == "custom"));
     assert!(!defs.iter().any(|provider| provider.id == "groq"));
+}
+
+#[test]
+fn model_command_skips_remote_fetch_for_static_provider_catalogs() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.config.provider = "alibaba-coding-plan".to_string();
+    model.config.base_url = "https://coding-intl.dashscope.aliyuncs.com/v1".to_string();
+    model.config.model = "qwen3.5-plus".to_string();
+    model.config.auth_source = "api_key".to_string();
+    model.config.api_key = "dashscope-key".to_string();
+
+    model.execute_command("model");
+
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+    while let Ok(command) = daemon_rx.try_recv() {
+        if let DaemonCommand::FetchModels { .. } = command {
+            panic!("static providers should not trigger remote model fetches");
+        }
+    }
+}
+
+#[test]
+fn provider_picker_skips_remote_fetch_for_static_provider_catalogs() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.auth.entries = vec![crate::state::auth::ProviderAuthEntry {
+        provider_id: "alibaba-coding-plan".to_string(),
+        provider_name: "Alibaba Coding Plan".to_string(),
+        authenticated: true,
+        auth_source: "api_key".to_string(),
+        model: "qwen3.5-plus".to_string(),
+    }];
+
+    let alibaba_index = widgets::provider_picker::available_provider_defs(&model.auth)
+        .iter()
+        .position(|provider| provider.id == "alibaba-coding-plan")
+        .expect("alibaba-coding-plan to exist");
+
+    model.settings_picker_target = Some(SettingsPickerTarget::Provider);
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ProviderPicker));
+    model.modal.set_picker_item_count(
+        widgets::provider_picker::available_provider_defs(&model.auth).len(),
+    );
+    if alibaba_index > 0 {
+        model
+            .modal
+            .reduce(modal::ModalAction::Navigate(alibaba_index as i32));
+    }
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ProviderPicker,
+    );
+
+    assert!(!quit);
+    assert_eq!(model.config.provider, "alibaba-coding-plan");
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+    while let Ok(command) = daemon_rx.try_recv() {
+        if let DaemonCommand::FetchModels { .. } = command {
+            panic!("static providers should not trigger remote model fetches");
+        }
+    }
 }
 
 #[test]

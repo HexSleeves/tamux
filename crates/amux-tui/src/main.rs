@@ -7,6 +7,7 @@ mod projection;
 mod providers;
 mod state;
 mod theme;
+mod update;
 mod widgets;
 mod wire;
 
@@ -67,6 +68,7 @@ fn main() -> Result<()> {
     let (daemon_event_tx, daemon_event_rx) = mpsc::channel();
     let (daemon_cmd_tx, daemon_cmd_rx) = tokio_mpsc::unbounded_channel();
     start_daemon_bridge(daemon_event_tx, daemon_cmd_rx);
+    update::spawn_update_check(daemon_cmd_tx.clone());
 
     // Create model
     let mut model = TuiModel::new(daemon_event_rx, daemon_cmd_tx);

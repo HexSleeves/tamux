@@ -329,6 +329,7 @@ impl TuiModel {
                 }
                 if !(self.config.provider == "openai"
                     && self.config.auth_source == "chatgpt_subscription")
+                    && providers::supports_model_fetch_for(&self.config.provider)
                 {
                     self.send_daemon_command(DaemonCommand::FetchModels {
                         provider_id: self.config.provider.clone(),

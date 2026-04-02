@@ -137,10 +137,7 @@ fn build_config_patch_value_covers_all_daemon_backed_tabs() {
     assert_eq!(json["bash_timeout_seconds"], 77);
     assert_eq!(json["compaction"]["strategy"], "custom_model");
     assert_eq!(json["compaction"]["weles"]["model"], "gpt-5.4-mini");
-    assert_eq!(
-        json["compaction"]["custom_model"]["provider"],
-        "openrouter"
-    );
+    assert_eq!(json["compaction"]["custom_model"]["provider"], "openrouter");
     assert_eq!(
         json["compaction"]["custom_model"]["context_window_tokens"],
         333000
@@ -188,6 +185,36 @@ fn apply_config_json_uses_daemon_retry_delay_default_when_missing() {
     assert_eq!(model.config.retry_delay_ms, 5_000);
     assert_eq!(model.config.message_loop_delay_ms, 500);
     assert_eq!(model.config.tool_call_delay_ms, 500);
+}
+
+#[test]
+fn apply_provider_selection_reads_nested_provider_config_values() {
+    let mut model = make_model();
+
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "provider": "openai",
+        "providers": {
+            "alibaba-coding-plan": {
+                "base_url": "https://coding-intl.dashscope.aliyuncs.com/v1",
+                "model": "qwen3-coder-next",
+                "api_key": "dashscope-key",
+                "assistant_id": "",
+                "auth_source": "api_key",
+                "api_transport": "chat_completions",
+                "context_window_tokens": 204800
+            }
+        }
+    }));
+
+    model.apply_provider_selection("alibaba-coding-plan");
+
+    assert_eq!(model.config.provider, "alibaba-coding-plan");
+    assert_eq!(model.config.api_key, "dashscope-key");
+    assert_eq!(model.config.model, "qwen3-coder-next");
+    assert_eq!(
+        model.config.base_url,
+        "https://coding-intl.dashscope.aliyuncs.com/v1"
+    );
 }
 
 #[test]
@@ -249,7 +276,10 @@ fn apply_config_json_loads_nested_compaction_settings() {
         model.config.compaction_custom_assistant_id,
         "assistant-compaction"
     );
-    assert_eq!(model.config.compaction_custom_api_transport, "chat_completions");
+    assert_eq!(
+        model.config.compaction_custom_api_transport,
+        "chat_completions"
+    );
     assert_eq!(model.config.compaction_custom_reasoning_effort, "xhigh");
     assert_eq!(model.config.compaction_custom_context_window_tokens, 222000);
 }
@@ -428,4 +458,82 @@ fn sync_config_to_daemon_emits_managed_execution_security_level_for_advanced_tog
         emitted_security_level,
         "expected managed_execution security level update to be emitted"
     );
+}
+
+#[test]
+fn sync_config_to_daemon_emits_provider_model_and_base_url_items_for_provider_switch() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+    model.agent_config_loaded = true;
+    model.config.provider = "openrouter".to_string();
+    model.config.base_url = "https://openrouter.ai/api/v1".to_string();
+    model.config.model = "arcee-ai/trinity-large-preview:free".to_string();
+    model.config.auth_source = "api_key".to_string();
+    model.config.api_transport = "chat_completions".to_string();
+    model.config.reasoning_effort = "high".to_string();
+    model.config.context_window_tokens = 1_000_000;
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "provider": "minimax-coding-plan",
+        "base_url": "https://api.minimax.io/anthropic",
+        "model": "MiniMax-M2.7",
+        "api_key": "sk-cp-test",
+        "auth_source": "api_key",
+        "api_transport": "chat_completions",
+        "providers": {
+            "minimax-coding-plan": {
+                "base_url": "https://api.minimax.io/anthropic",
+                "model": "MiniMax-M2.7",
+                "api_key": "sk-cp-test",
+                "auth_source": "api_key",
+                "api_transport": "chat_completions",
+                "reasoning_effort": "high",
+                "context_window_tokens": 205000
+            },
+            "openrouter": {
+                "base_url": "https://openrouter.ai/api/v1",
+                "model": "arcee-ai/trinity-large-preview:free",
+                "api_key": "sk-or-test",
+                "auth_source": "api_key",
+                "api_transport": "chat_completions",
+                "reasoning_effort": "high",
+                "context_window_tokens": 1000000
+            }
+        }
+    }));
+
+    model.sync_config_to_daemon();
+
+    let mut saw_provider = false;
+    let mut saw_model = false;
+    let mut saw_base_url = false;
+    while let Ok(command) = daemon_rx.try_recv() {
+        match command {
+            DaemonCommand::SetConfigItem {
+                key_path,
+                value_json,
+            } => match key_path.as_str() {
+                "/provider" => {
+                    saw_provider = true;
+                    assert_eq!(value_json, "\"openrouter\"");
+                }
+                "/model" => {
+                    saw_model = true;
+                    assert_eq!(value_json, "\"arcee-ai/trinity-large-preview:free\"");
+                }
+                "/base_url" => {
+                    saw_base_url = true;
+                    assert_eq!(value_json, "\"https://openrouter.ai/api/v1\"");
+                }
+                _ => {}
+            },
+            DaemonCommand::SetProviderModel { .. } => {
+                panic!("provider switches should persist through config items")
+            }
+            other => panic!("unexpected daemon command: {other:?}"),
+        }
+    }
+
+    assert!(saw_provider, "expected /provider update to be emitted");
+    assert!(saw_model, "expected /model update to be emitted");
+    assert!(saw_base_url, "expected /base_url update to be emitted");
 }

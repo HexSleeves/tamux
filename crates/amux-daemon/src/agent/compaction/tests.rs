@@ -254,7 +254,10 @@ fn agent_config_roundtrip_preserves_nested_compaction_provider_settings() {
         ApiTransport::ChatCompletions
     );
     assert_eq!(config.compaction.custom_model.reasoning_effort, "medium");
-    assert_eq!(config.compaction.custom_model.context_window_tokens, 256_000);
+    assert_eq!(
+        config.compaction.custom_model.context_window_tokens,
+        256_000
+    );
 
     let serialized = serde_json::to_value(&config).expect("config should serialize");
     assert_eq!(serialized["compaction"]["strategy"], "custom_model");
@@ -302,9 +305,13 @@ fn compaction_artifact_message_roundtrip_preserves_runtime_metadata() {
         "Older context compacted for continuity"
     );
 
-    let decoded: AgentMessage = serde_json::from_value(encoded).expect("message should deserialize");
+    let decoded: AgentMessage =
+        serde_json::from_value(encoded).expect("message should deserialize");
     assert_eq!(decoded.message_kind, AgentMessageKind::CompactionArtifact);
-    assert_eq!(decoded.compaction_strategy, Some(CompactionStrategy::Heuristic));
+    assert_eq!(
+        decoded.compaction_strategy,
+        Some(CompactionStrategy::Heuristic)
+    );
     assert_eq!(
         decoded.compaction_payload.as_deref(),
         Some("Older context compacted for continuity")
@@ -401,12 +408,10 @@ async fn heuristic_compaction_artifact_persists_and_request_uses_hidden_payload(
         artifact.compaction_strategy,
         Some(CompactionStrategy::Heuristic)
     );
-    assert!(
-        artifact
-            .compaction_payload
-            .as_deref()
-            .is_some_and(|payload| payload.contains("[Compacted earlier context]"))
-    );
+    assert!(artifact
+        .compaction_payload
+        .as_deref()
+        .is_some_and(|payload| payload.contains("[Compacted earlier context]")));
 
     let compacted = compact_messages_for_request(&thread.messages, &config, &provider);
     assert_eq!(compacted.len(), 2);

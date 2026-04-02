@@ -6,12 +6,17 @@ mod skills;
 use anyhow::Result;
 
 use crate::cli::{Commands, PluginAction, SkillAction};
+use crate::update;
 
 pub(crate) async fn run_default() -> Result<()> {
     core::run_default().await
 }
 
 pub(crate) async fn run(command: Commands) -> Result<()> {
+    if matches!(&command, Commands::Skill { .. } | Commands::Plugin { .. }) {
+        update::print_upgrade_notice_if_available(env!("CARGO_PKG_VERSION")).await;
+    }
+
     match command {
         Commands::Skill { action } => run_skill(action).await,
         Commands::Plugin { action } => run_plugin(action).await,

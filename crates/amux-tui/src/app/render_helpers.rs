@@ -160,7 +160,7 @@ pub(super) fn render_error_modal(
         Span::styled("Esc", theme.fg_active),
         Span::styled(" close  ", theme.fg_dim),
         Span::styled("Ctrl+E", theme.fg_active),
-        Span::styled(" toggle", theme.fg_dim),
+        Span::styled(" clear", theme.fg_dim),
     ]);
     frame.render_widget(Paragraph::new(hints), layout[1]);
 }

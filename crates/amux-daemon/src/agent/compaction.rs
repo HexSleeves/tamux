@@ -1,7 +1,7 @@
 //! Context compaction — token-aware message compression for LLM requests.
 
-use super::*;
 use super::llm_client::messages_to_api_format;
+use super::*;
 
 const HEURISTIC_COMPACTION_VISIBLE_TEXT: &str = "rule based";
 const COMPACTION_NOTICE_KIND: &str = "auto-compaction";
@@ -203,7 +203,8 @@ pub(super) fn compact_messages_for_request(
     let mut has_summary = false;
 
     if split_at > 0 {
-        let summary = build_compaction_summary(&runtime_messages[..split_at], candidate.target_tokens);
+        let summary =
+            build_compaction_summary(&runtime_messages[..split_at], candidate.target_tokens);
         if !summary.is_empty() {
             has_summary = true;
             compacted.push(AgentMessage {
@@ -253,7 +254,9 @@ pub(super) fn compaction_candidate(
 
     let max_messages = config.max_context_messages.max(1) as usize;
     let target_tokens = effective_context_target_tokens(config, provider_config);
-    if active_messages.len() <= max_messages && estimate_message_tokens(active_messages) <= target_tokens {
+    if active_messages.len() <= max_messages
+        && estimate_message_tokens(active_messages) <= target_tokens
+    {
         return None;
     }
 
@@ -447,7 +450,10 @@ fn summarize_compacted_message(message: &AgentMessage) -> String {
     }
 }
 
-fn select_compaction_transport(provider_id: &str, provider_config: &ProviderConfig) -> ApiTransport {
+fn select_compaction_transport(
+    provider_id: &str,
+    provider_config: &ProviderConfig,
+) -> ApiTransport {
     if provider_id == "openai" && provider_config.auth_source == AuthSource::ChatgptSubscription {
         return ApiTransport::Responses;
     }
@@ -525,7 +531,8 @@ impl AgentEngine {
             return Ok(false);
         };
         let (window_start, _) = active_compaction_window(&thread.messages);
-        let Some(candidate) = compaction_candidate(&thread.messages, config, provider_config) else {
+        let Some(candidate) = compaction_candidate(&thread.messages, config, provider_config)
+        else {
             return Ok(false);
         };
         let split_at = window_start + candidate.split_at;
@@ -613,7 +620,8 @@ impl AgentEngine {
         let payload = match strategy_used {
             CompactionStrategy::Heuristic => heuristic_payload.clone(),
             CompactionStrategy::Weles => {
-                let (provider_id, provider_config) = self.resolve_weles_compaction_provider(config)?;
+                let (provider_id, provider_config) =
+                    self.resolve_weles_compaction_provider(config)?;
                 match self
                     .run_llm_compaction(&provider_id, &provider_config, messages, target_tokens)
                     .await
@@ -621,8 +629,10 @@ impl AgentEngine {
                     Ok(payload) if !payload.trim().is_empty() => payload,
                     Ok(_) | Err(_) => {
                         strategy_used = CompactionStrategy::Heuristic;
-                        fallback_notice =
-                            Some("WELES compaction failed; fell back to rule based compaction.".to_string());
+                        fallback_notice = Some(
+                            "WELES compaction failed; fell back to rule based compaction."
+                                .to_string(),
+                        );
                         heuristic_payload.clone()
                     }
                 }
@@ -673,7 +683,10 @@ impl AgentEngine {
                 message_kind: AgentMessageKind::CompactionArtifact,
                 compaction_strategy: Some(strategy_used),
                 compaction_payload: Some(payload),
-                timestamp: messages.last().map(|message| message.timestamp).unwrap_or_else(now_millis),
+                timestamp: messages
+                    .last()
+                    .map(|message| message.timestamp)
+                    .unwrap_or_else(now_millis),
             },
             strategy_used,
             fallback_notice,
@@ -764,12 +777,7 @@ impl AgentEngine {
         &self,
         config: &AgentConfig,
     ) -> Result<(String, ProviderConfig)> {
-        let provider_id = config
-            .compaction
-            .weles
-            .provider
-            .trim()
-            .to_string();
+        let provider_id = config.compaction.weles.provider.trim().to_string();
         let provider_id = if provider_id.is_empty() {
             config
                 .builtin_sub_agents

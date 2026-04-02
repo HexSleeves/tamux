@@ -207,7 +207,9 @@ impl TuiModel {
                                 self.tick_counter,
                                 pos,
                             ),
-                            Some(chat::ChatHitTarget::RetryStartNow | chat::ChatHitTarget::RetryStop)
+                            Some(
+                                chat::ChatHitTarget::RetryStartNow | chat::ChatHitTarget::RetryStop
+                            )
                         ) {
                             self.clear_chat_drag_selection();
                             self.handle_chat_click(chat_area, pos);

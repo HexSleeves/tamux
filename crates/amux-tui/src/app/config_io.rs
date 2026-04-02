@@ -35,28 +35,7 @@ impl TuiModel {
         flatten_config_value(&after, "", &mut after_items);
         let mut changed = 0usize;
 
-        let provider_changed = before.get("provider") != after.get("provider");
-        let model_changed = before.get("model") != after.get("model");
-        let use_atomic_provider_switch = provider_changed || model_changed;
-        if use_atomic_provider_switch {
-            if let (Some(provider_id), Some(model)) = (
-                after.get("provider").and_then(|value| value.as_str()),
-                after.get("model").and_then(|value| value.as_str()),
-            ) {
-                self.send_daemon_command(DaemonCommand::SetProviderModel {
-                    provider_id: provider_id.to_string(),
-                    model: model.to_string(),
-                });
-                changed += 1;
-            }
-        }
-
         for (key_path, value) in after_items {
-            if use_atomic_provider_switch
-                && (key_path == "/provider" || key_path == "/model" || key_path == "/base_url")
-            {
-                continue;
-            }
             if before_map.get(&key_path) == Some(&value) {
                 continue;
             }

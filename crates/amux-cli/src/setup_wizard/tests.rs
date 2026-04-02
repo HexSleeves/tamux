@@ -201,7 +201,10 @@ fn wizard_ignores_async_command_capability_ack_messages() {
     let forwarded = should_ignore_wizard_message(&DaemonMessage::AgentProviderAuthStates {
         states_json: "[]".to_string(),
     });
-    assert!(!forwarded, "real daemon payloads must still reach setup flows");
+    assert!(
+        !forwarded,
+        "real daemon payloads must still reach setup flows"
+    );
 }
 
 #[test]

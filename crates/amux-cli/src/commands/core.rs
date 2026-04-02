@@ -10,9 +10,30 @@ use crate::output::audit::{
     format_timestamp, parse_duration_ago, print_audit_detail, print_audit_row,
 };
 use crate::output::settings::{flatten_json, is_sensitive_key, resolve_dot_path};
-use crate::{client, plugins, setup_wizard};
+use crate::{client, plugins, setup_wizard, update};
+
+pub(crate) fn should_check_for_updates(command: &Commands) -> bool {
+    matches!(
+        command,
+        Commands::List
+            | Commands::Clone { .. }
+            | Commands::Kill { .. }
+            | Commands::Git { .. }
+            | Commands::Audit { .. }
+            | Commands::Status
+            | Commands::Stats
+            | Commands::Settings { .. }
+            | Commands::Dm { .. }
+            | Commands::Setup
+            | Commands::Ping
+            | Commands::StartDaemon
+            | Commands::Plugin { .. }
+            | Commands::Install { .. }
+    )
+}
 
 pub(crate) async fn run_default() -> Result<()> {
+    update::print_upgrade_notice_if_available(env!("CARGO_PKG_VERSION")).await;
     let needs = setup_wizard::needs_setup_via_ipc().await;
 
     if needs {
@@ -39,6 +60,10 @@ pub(crate) async fn run_default() -> Result<()> {
 }
 
 pub(crate) async fn run(command: Commands) -> Result<()> {
+    if should_check_for_updates(&command) {
+        update::print_upgrade_notice_if_available(env!("CARGO_PKG_VERSION")).await;
+    }
+
     match command {
         Commands::Tui => {
             launch_tui();
@@ -335,6 +360,9 @@ pub(crate) async fn run(command: Commands) -> Result<()> {
         Commands::Ping => {
             client::ping().await?;
             println!("Daemon is alive (pong).");
+        }
+        Commands::Upgrade => {
+            update::run_upgrade()?;
         }
         Commands::StartDaemon => {
             println!("Starting daemon...");

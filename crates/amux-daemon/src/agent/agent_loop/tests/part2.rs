@@ -402,7 +402,17 @@ async fn auto_retry_wait_repeats_scheduled_retry_cycles_until_cancelled() {
         let engine = engine.clone();
         async move {
             engine
-                .send_message_inner(Some(thread_id), "hello", None, None, None, None, None, None, true)
+                .send_message_inner(
+                    Some(thread_id),
+                    "hello",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    true,
+                )
                 .await
         }
     });
@@ -567,7 +577,17 @@ async fn retry_stream_now_replaces_waiting_stream_with_fresh_send_generation() {
         let engine = engine.clone();
         async move {
             engine
-                .send_message_inner(Some(thread_id), "hello", None, None, None, None, None, None, true)
+                .send_message_inner(
+                    Some(thread_id),
+                    "hello",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    true,
+                )
                 .await
         }
     });
@@ -678,7 +698,17 @@ async fn anthropic_transport_retry_restarts_with_fresh_runner_state() {
         let engine = engine.clone();
         async move {
             engine
-                .send_message_inner(Some(thread_id), "hello", None, None, None, None, None, None, true)
+                .send_message_inner(
+                    Some(thread_id),
+                    "hello",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    true,
+                )
                 .await
         }
     });
@@ -779,7 +809,17 @@ async fn anthropic_outer_auto_retry_restarts_with_fresh_runner_state() {
         let engine = engine.clone();
         async move {
             engine
-                .send_message_inner(Some(thread_id), "hello", None, None, None, None, None, None, true)
+                .send_message_inner(
+                    Some(thread_id),
+                    "hello",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    true,
+                )
                 .await
         }
     });

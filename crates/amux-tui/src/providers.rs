@@ -306,6 +306,22 @@ pub fn default_auth_source_for(provider: &str) -> &'static str {
         .unwrap_or("api_key")
 }
 
+pub fn supports_model_fetch_for(provider: &str) -> bool {
+    !matches!(
+        provider,
+        "custom"
+            | "featherless"
+            | "kimi-coding-plan"
+            | "z.ai"
+            | "z.ai-coding-plan"
+            | "chutes"
+            | "huggingface"
+            | "minimax"
+            | "minimax-coding-plan"
+            | "alibaba-coding-plan"
+    )
+}
+
 pub fn default_model_for_provider_auth(provider: &str, auth_source: &str) -> String {
     known_models_for_provider_auth(provider, auth_source)
         .first()

@@ -1,0 +1,16 @@
+use crate::cli::Commands;
+use crate::commands::core::should_check_for_updates;
+
+#[test]
+fn checks_updates_for_user_facing_commands() {
+    assert!(should_check_for_updates(&Commands::Status));
+    assert!(should_check_for_updates(&Commands::Setup));
+    assert!(should_check_for_updates(&Commands::List));
+}
+
+#[test]
+fn skips_update_checks_for_internal_and_upgrade_commands() {
+    assert!(!should_check_for_updates(&Commands::Upgrade));
+    assert!(!should_check_for_updates(&Commands::AgentBridge));
+    assert!(!should_check_for_updates(&Commands::DbBridge));
+}
