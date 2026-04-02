@@ -1,10 +1,11 @@
-import type { AgentProviderConfig, AgentSettings } from "./agentStore";
+import type { AgentSettings } from "./agentStore/settings.ts";
 import {
   getDefaultAuthSource,
   getEffectiveContextWindow,
   normalizeAuthSource,
-} from "./agentStore";
-import { getBridge } from "./bridge";
+} from "./agentStore/providers.ts";
+import type { AgentProviderConfig } from "./agentStore/types.ts";
+import { getBridge } from "./bridge.ts";
 
 export type DaemonOwnedAuthCapability = {
   daemonOwnedAuthAvailable: boolean;

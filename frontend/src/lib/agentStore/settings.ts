@@ -3,17 +3,17 @@ import {
   normalizeApiTransport,
   normalizeAuthSource,
   normalizeProviderConfig,
-} from "./providers";
-import { normalizeDaemonBackedAgentMode } from "./daemonBackedSettings";
+} from "./providers.ts";
+import { normalizeDaemonBackedAgentMode } from "./daemonBackedSettings.ts";
 import type {
   AgentBackend,
   AgentProviderConfig,
   AgentProviderId,
   ApiTransportMode,
   AuthSource,
-} from "./types";
+} from "./types.ts";
 
-import { PRIMARY_AGENT_NAME } from "../agentNames";
+import { PRIMARY_AGENT_NAME } from "../agentNames.ts";
 
 export interface AgentSettings {
   enabled: boolean;

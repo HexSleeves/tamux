@@ -1,13 +1,13 @@
 import {
   buildDaemonAgentConfig,
   getDaemonOwnedAuthCapability,
-} from "./agentDaemonConfig";
-import { DEFAULT_AGENT_SETTINGS } from "./agentStore/settings";
+} from "./agentDaemonConfig.ts";
+import { DEFAULT_AGENT_SETTINGS } from "./agentStore/settings.ts";
 import {
   getDefaultAuthSource,
   getSupportedAuthSources,
   normalizeAuthSource,
-} from "./agentStore/providers";
+} from "./agentStore/providers.ts";
 
 function assert(condition: unknown, message: string): void {
   if (!condition) {

@@ -7,8 +7,8 @@ import type {
   ModelDefinition,
   Modality,
   ProviderDefinition,
-} from "./types";
-import { AGENT_PROVIDER_IDS } from "./types";
+} from "./types.ts";
+import { AGENT_PROVIDER_IDS } from "./types.ts";
 
 type AuthSourceSupportOptions = {
   daemonOwnedAuthAvailable?: boolean;
