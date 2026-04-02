@@ -20,27 +20,27 @@ const PLATFORM_MAP = {
   "linux-x64": {
     archivePlatform: "linux-x86_64",
     checksumPlatform: "linux-x86_64",
-    requiredBinaries: ["tamux", "tamux-daemon", "tamux-tui"],
+    requiredBinaries: ["tamux", "tamux-daemon", "tamux-tui", "tamux-gateway", "tamux-mcp"],
   },
   "linux-arm64": {
     archivePlatform: "linux-aarch64",
     checksumPlatform: "linux-aarch64",
-    requiredBinaries: ["tamux", "tamux-daemon", "tamux-tui"],
+    requiredBinaries: ["tamux", "tamux-daemon", "tamux-tui", "tamux-gateway", "tamux-mcp"],
   },
   "darwin-arm64": {
     archivePlatform: "darwin-arm64",
     checksumPlatform: "darwin-arm64",
-    requiredBinaries: ["tamux", "tamux-daemon", "tamux-tui"],
+    requiredBinaries: ["tamux", "tamux-daemon", "tamux-tui", "tamux-gateway", "tamux-mcp"],
   },
   "darwin-x64": {
     archivePlatform: "darwin-x86_64",
     checksumPlatform: "darwin-x86_64",
-    requiredBinaries: ["tamux", "tamux-daemon", "tamux-tui"],
+    requiredBinaries: ["tamux", "tamux-daemon", "tamux-tui", "tamux-gateway", "tamux-mcp"],
   },
   "win32-x64": {
     archivePlatform: "windows-x64",
     checksumPlatform: "windows-x64",
-    requiredBinaries: ["tamux.exe", "tamux-daemon.exe", "tamux-tui.exe"],
+    requiredBinaries: ["tamux.exe", "tamux-daemon.exe", "tamux-tui.exe", "tamux-gateway.exe", "tamux-mcp.exe"],
   },
 };
 

@@ -12,7 +12,13 @@ test("getReleaseAssetInfo maps linux x64 to published zip asset names", function
     archiveName: "tamux-0.2.0-linux-x86_64.zip",
     checksumName: "SHA256SUMS-linux-x86_64.txt",
     bundleChecksumName: "SHA256SUMS.txt",
-    requiredBinaries: ["tamux", "tamux-daemon", "tamux-tui"],
+    requiredBinaries: [
+      "tamux",
+      "tamux-daemon",
+      "tamux-tui",
+      "tamux-gateway",
+      "tamux-mcp",
+    ],
   });
 });
 
@@ -23,7 +29,13 @@ test("getReleaseAssetInfo maps windows x64 to published zip asset names", functi
     archiveName: "tamux-0.2.0-windows-x64.zip",
     checksumName: "SHA256SUMS-windows-x64.txt",
     bundleChecksumName: "SHA256SUMS.txt",
-    requiredBinaries: ["tamux.exe", "tamux-daemon.exe", "tamux-tui.exe"],
+    requiredBinaries: [
+      "tamux.exe",
+      "tamux-daemon.exe",
+      "tamux-tui.exe",
+      "tamux-gateway.exe",
+      "tamux-mcp.exe",
+    ],
   });
 });
 
