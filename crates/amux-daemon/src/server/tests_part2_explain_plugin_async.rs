@@ -109,13 +109,13 @@ async fn plugin_oauth_async_request_does_not_block_ping() {
         .await
         .expect("request plugin oauth start");
 
-    let first = conn.recv().await;
+    let first = conn.recv_with_timeout(Duration::from_secs(2)).await;
     let (operation_id, auth_url) = match first {
         DaemonMessage::OperationAccepted {
             operation_id, kind, ..
         } => {
             assert_eq!(kind, "plugin_oauth_start");
-            match conn.recv().await {
+            match conn.recv_with_timeout(Duration::from_secs(2)).await {
                 DaemonMessage::PluginOAuthUrl { name, url } => {
                     assert_eq!(name, "oauth-test");
                     (Some(operation_id), url)
@@ -137,7 +137,7 @@ async fn plugin_oauth_async_request_does_not_block_ping() {
 
     let pong_received = timeout(Duration::from_millis(250), async {
         loop {
-            match conn.recv().await {
+            match conn.recv_with_timeout(Duration::from_secs(2)).await {
                 DaemonMessage::Pong => return true,
                 DaemonMessage::PluginOAuthComplete { .. } => continue,
                 other => {
@@ -168,7 +168,7 @@ async fn plugin_oauth_async_request_does_not_block_ping() {
             .await
             .expect("query plugin oauth status");
 
-        match conn.recv().await {
+        match conn.recv_with_timeout(Duration::from_secs(2)).await {
             DaemonMessage::OperationStatus { snapshot } => {
                 assert_eq!(snapshot.kind, "plugin_oauth_start");
                 assert!(matches!(
@@ -185,7 +185,7 @@ async fn plugin_oauth_async_request_does_not_block_ping() {
 
     let _ = timeout(Duration::from_secs(1), async {
         loop {
-            match conn.recv().await {
+            match conn.recv_with_timeout(Duration::from_secs(2)).await {
                 DaemonMessage::PluginOAuthComplete {
                     operation_id: result_operation_id,
                     name,
@@ -217,12 +217,12 @@ async fn plugin_oauth_request_without_declared_capability_still_returns_operatio
         .await
         .expect("request plugin oauth start without declared capability");
 
-    let (operation_id, auth_url) = match conn.recv().await {
+    let (operation_id, auth_url) = match conn.recv_with_timeout(Duration::from_secs(2)).await {
         DaemonMessage::OperationAccepted {
             operation_id, kind, ..
         } => {
             assert_eq!(kind, "plugin_oauth_start");
-            match conn.recv().await {
+            match conn.recv_with_timeout(Duration::from_secs(2)).await {
                 DaemonMessage::PluginOAuthUrl { name, url } => {
                     assert_eq!(name, "oauth-test-legacy");
                     (operation_id, url)
@@ -240,7 +240,7 @@ async fn plugin_oauth_request_without_declared_capability_still_returns_operatio
 
     let pong_received = timeout(Duration::from_millis(250), async {
         loop {
-            match conn.recv().await {
+            match conn.recv_with_timeout(Duration::from_secs(2)).await {
                 DaemonMessage::Pong => return true,
                 DaemonMessage::PluginOAuthComplete { .. } => continue,
                 other => {
@@ -261,7 +261,7 @@ async fn plugin_oauth_request_without_declared_capability_still_returns_operatio
 
     let _ = timeout(Duration::from_secs(1), async {
         loop {
-            match conn.recv().await {
+            match conn.recv_with_timeout(Duration::from_secs(2)).await {
                 DaemonMessage::PluginOAuthComplete {
                     operation_id: result_operation_id,
                     name,

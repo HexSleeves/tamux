@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::agent::{copilot_auth, llm_client, provider_resolution};
+use crate::agent::{copilot_auth, openai_codex_auth, provider_resolution};
 
 impl AgentEngine {
     pub async fn set_provider_model_json(
@@ -100,7 +100,7 @@ impl AgentEngine {
                     )
                 } else if def.id == "openai" && pc.auth_source == AuthSource::ChatgptSubscription {
                     (
-                        super::openai_codex_auth::provider_auth_state_authenticated(),
+                        openai_codex_auth::provider_auth_state_authenticated(),
                         pc.auth_source,
                         pc.model.clone(),
                         pc.base_url.clone(),
@@ -132,7 +132,7 @@ impl AgentEngine {
                     && config.auth_source == AuthSource::ChatgptSubscription
                 {
                     (
-                        super::openai_codex_auth::provider_auth_state_authenticated(),
+                        openai_codex_auth::provider_auth_state_authenticated(),
                         config.auth_source,
                         config.model.clone(),
                         config.base_url.clone(),

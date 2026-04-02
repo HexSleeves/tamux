@@ -225,12 +225,13 @@ async fn gateway_runtime_delivers_outbound_response_to_origin_provider() {
 
 #[test]
 fn gateway_process_full_round_trip_uses_single_transport_owner() {
+    let daemon_root = repo_root().join("crates/amux-daemon/src/agent");
     let daemon_gateway_source =
-        fs::read_to_string(repo_root().join("crates/amux-daemon/src/agent/gateway.rs"))
+        fs::read_to_string(daemon_root.join("gateway.rs"))
             .expect("read daemon gateway source");
-    let daemon_loop_source =
-        fs::read_to_string(repo_root().join("crates/amux-daemon/src/agent/gateway_loop.rs"))
-            .expect("read daemon gateway loop source");
+    let daemon_loop_source = fs::read_to_string(daemon_root.join("gateway_loop.rs"))
+        .or_else(|_| fs::read_to_string(daemon_root.join("gateway_loop/mod.rs")))
+        .expect("read daemon gateway loop source");
     let daemon_loop_production_source = daemon_loop_source
         .split("\n#[cfg(test)]")
         .next()

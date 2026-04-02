@@ -60,7 +60,11 @@ impl TestConnection {
             .await
             .expect("server task did not shut down in time")
             .expect("server task join failed");
-        join.expect("server task returned error");
+        if let Err(error) = join {
+            if !is_expected_disconnect_error(&error) {
+                panic!("server task returned error: {error}");
+            }
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 }
