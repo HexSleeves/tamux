@@ -170,11 +170,11 @@ function getInstallUsageHint(isGlobalInstall, globalBinDir) {
       return (
         "tamux: if 'tamux' is not found, add '" +
         globalBinDir +
-        "' to PATH, then run 'tamux --help'"
+        "' to PATH, then open a new shell and run 'tamux --help'"
       );
     }
 
-    return "tamux: run 'tamux --help' once your npm global bin directory is on PATH";
+    return "tamux: run 'tamux --help' once your npm global bin directory is on PATH, and open a new shell if it is not recognized immediately";
   }
 
   return "tamux: run with 'npx tamux --help' (or 'npm exec tamux -- --help') after a local install";

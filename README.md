@@ -54,8 +54,11 @@ If `npm install -g tamux` succeeds but `tamux` is still not found on macOS, your
 
 ```bash
 export PATH="$(npm config get prefix)/bin:$PATH"
+exec $SHELL -l
 tamux --help
 ```
+
+If the bin directory is already on `PATH`, opening a new shell is still useful because `zsh` and `bash` can cache command lookups.
 
 ### From sources
 
