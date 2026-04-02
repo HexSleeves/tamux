@@ -10,6 +10,10 @@ import type {
 } from "./types";
 import { AGENT_PROVIDER_IDS } from "./types";
 
+type AuthSourceSupportOptions = {
+  daemonOwnedAuthAvailable?: boolean;
+};
+
 const API_KEY_ONLY_AUTH_SOURCES: AuthSource[] = ["api_key"];
 const OPENAI_AUTH_SOURCES: AuthSource[] = ["chatgpt_subscription", "api_key"];
 const GITHUB_COPILOT_AUTH_SOURCES: AuthSource[] = ["github_copilot", "api_key"];
@@ -159,15 +163,16 @@ export function normalizeApiTransport(
 export function normalizeAuthSource(
   providerId: AgentProviderId,
   value: unknown,
+  options?: AuthSourceSupportOptions,
 ): AuthSource {
   const normalized = value === "chatgpt_subscription"
     ? "chatgpt_subscription"
     : value === "github_copilot"
       ? "github_copilot"
       : "api_key";
-  return getSupportedAuthSources(providerId).includes(normalized)
+  return getSupportedAuthSources(providerId, options).includes(normalized)
     ? normalized
-    : getDefaultAuthSource(providerId);
+    : getDefaultAuthSource(providerId, options);
 }
 
 export function normalizeProviderConfig(
@@ -249,12 +254,25 @@ export function getDefaultApiTransport(providerId: AgentProviderId): ApiTranspor
   return getProviderDefinition(providerId)?.defaultTransport ?? "chat_completions";
 }
 
-export function getSupportedAuthSources(providerId: AgentProviderId): AuthSource[] {
-  return getProviderDefinition(providerId)?.supportedAuthSources ?? API_KEY_ONLY_AUTH_SOURCES;
+export function getSupportedAuthSources(
+  providerId: AgentProviderId,
+  options?: AuthSourceSupportOptions,
+): AuthSource[] {
+  const supported = getProviderDefinition(providerId)?.supportedAuthSources ?? API_KEY_ONLY_AUTH_SOURCES;
+  if (providerId === "openai" && options?.daemonOwnedAuthAvailable === false) {
+    return supported.filter((source) => source !== "chatgpt_subscription");
+  }
+  return supported;
 }
 
-export function getDefaultAuthSource(providerId: AgentProviderId): AuthSource {
-  return getProviderDefinition(providerId)?.defaultAuthSource ?? "api_key";
+export function getDefaultAuthSource(
+  providerId: AgentProviderId,
+  options?: AuthSourceSupportOptions,
+): AuthSource {
+  const defaultSource = getProviderDefinition(providerId)?.defaultAuthSource ?? "api_key";
+  return getSupportedAuthSources(providerId, options).includes(defaultSource)
+    ? defaultSource
+    : "api_key";
 }
 
 export function getProviderModels(

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { getDaemonOwnedAuthCapability } from "@/lib/agentDaemonConfig";
 import { getBridge } from "@/lib/bridge";
 import { useAgentStore } from "../../lib/agentStore";
 import { deriveOpenAICodexAuthUi } from "./openaiSubscriptionAuth";
 import { Section, inputStyle, smallBtnStyle } from "./shared";
 
 export function ProviderAuthTab() {
+    const agentBackend = useAgentStore((s) => s.agentSettings.agent_backend);
     const providerAuthStates = useAgentStore((s) => s.providerAuthStates);
     const refreshProviderAuthStates = useAgentStore((s) => s.refreshProviderAuthStates);
     const validateProvider = useAgentStore((s) => s.validateProvider);
@@ -21,6 +23,7 @@ export function ProviderAuthTab() {
     const [chatgptAuthStatus, setChatgptAuthStatus] = useState<AmuxOpenAICodexAuthLogin | AmuxOpenAICodexAuthStatus | null>(null);
     const [chatgptAuthBusy, setChatgptAuthBusy] = useState(false);
     const chatgptAuthUi = deriveOpenAICodexAuthUi(chatgptAuthStatus);
+    const authCapability = getDaemonOwnedAuthCapability(agentBackend);
 
     const openChatgptAuthUrl = (url: string) => {
         if (!url) return;
@@ -70,6 +73,10 @@ export function ProviderAuthTab() {
     };
 
     const handleChatgptLogin = async () => {
+        if (!authCapability.chatgptSubscriptionAvailable) {
+            setChatgptAuthStatus({ available: false, authMode: "chatgpt_subscription", status: "error", error: "ChatGPT subscription auth requires daemon-backed execution" } as AmuxOpenAICodexAuthStatus);
+            return;
+        }
         const amux = getBridge();
         if (!amux?.openAICodexAuthLogin) return;
         setChatgptAuthBusy(true);
@@ -91,6 +98,10 @@ export function ProviderAuthTab() {
     };
 
     const handleChatgptLogout = async () => {
+        if (!authCapability.chatgptSubscriptionAvailable) {
+            setChatgptAuthStatus({ available: false, authMode: "chatgpt_subscription", status: "error", error: "ChatGPT subscription auth requires daemon-backed execution" } as AmuxOpenAICodexAuthStatus);
+            return;
+        }
         const amux = getBridge();
         if (!amux?.openAICodexAuthLogout) return;
         setChatgptAuthBusy(true);
@@ -109,6 +120,13 @@ export function ProviderAuthTab() {
         const usesChatgptSubscription = providerId === "openai" && state?.auth_source === "chatgpt_subscription";
         try {
             if (usesChatgptSubscription) {
+                if (!authCapability.chatgptSubscriptionAvailable) {
+                    setValidationResult((prev) => ({
+                        ...prev,
+                        [providerId]: { valid: false, error: "ChatGPT subscription auth requires daemon-backed execution" },
+                    }));
+                    return;
+                }
                 const amux = getBridge();
                 if (!amux?.openAICodexAuthStatus) {
                     setValidationResult((prev) => ({
@@ -164,6 +182,7 @@ export function ProviderAuthTab() {
                         const isOpenAI = state.provider_id === "openai";
                         const isGithubCopilot = state.provider_id === "github-copilot";
                         const usesChatgptSubscription = isOpenAI && state.auth_source === "chatgpt_subscription";
+                        const canUseChatgptSubscription = isOpenAI && authCapability.chatgptSubscriptionAvailable;
                         const authButtonLabel = isGithubCopilot ? "Token" : "API Key";
                         const keyPlaceholder = isOpenAI
                             ? "OpenAI API Key"
@@ -231,7 +250,7 @@ export function ProviderAuthTab() {
                                                 >
                                                     {isExpanded ? "Cancel" : authButtonLabel}
                                                 </button>
-                                                {isOpenAI && (
+                                                {canUseChatgptSubscription && (
                                                     <button
                                                         onClick={handleChatgptLogin}
                                                         disabled={chatgptAuthBusy}
@@ -251,6 +270,11 @@ export function ProviderAuthTab() {
                                         color: vr.valid ? "#4ade80" : "#ef4444",
                                     }}>
                                         {vr.valid ? "Connection OK" : `Error: ${vr.error || "unknown"}`}
+                                    </div>
+                                )}
+                                {isOpenAI && !authCapability.chatgptSubscriptionAvailable && (
+                                    <div style={{ fontSize: 10, marginTop: 4, color: "var(--text-secondary)" }}>
+                                        ChatGPT Subscription is unavailable for the current backend. Switch to daemon-backed execution to enable it.
                                     </div>
                                 )}
                                 {isOpenAI && chatgptAuthUi.authUrl && (

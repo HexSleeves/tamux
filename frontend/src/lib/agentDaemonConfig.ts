@@ -1,6 +1,15 @@
 import type { AgentProviderConfig, AgentSettings } from "./agentStore";
-import { getEffectiveContextWindow } from "./agentStore";
+import {
+  getDefaultAuthSource,
+  getEffectiveContextWindow,
+  normalizeAuthSource,
+} from "./agentStore";
 import { getBridge } from "./bridge";
+
+export type DaemonOwnedAuthCapability = {
+  daemonOwnedAuthAvailable: boolean;
+  chatgptSubscriptionAvailable: boolean;
+};
 
 export function getAgentBridge() {
   return getBridge();
@@ -19,6 +28,28 @@ export function shouldUseDaemonRuntime(
     return true;
   }
   return Boolean(getAgentBridge()?.agentSendMessage);
+}
+
+export function getDaemonOwnedAuthCapability(
+  backend: AgentSettings["agent_backend"],
+  bridge: AmuxBridge | null = getAgentBridge(),
+): DaemonOwnedAuthCapability {
+  const daemonOwnedAuthAvailable = backend === "daemon"
+    || (backend === "legacy" && Boolean(bridge?.agentSendMessage));
+
+  return {
+    daemonOwnedAuthAvailable,
+    chatgptSubscriptionAvailable: daemonOwnedAuthAvailable,
+  };
+}
+
+export function getProviderAuthSupportOptions(
+  backend: AgentSettings["agent_backend"],
+  bridge: AmuxBridge | null = getAgentBridge(),
+): { daemonOwnedAuthAvailable: boolean } {
+  return {
+    daemonOwnedAuthAvailable: getDaemonOwnedAuthCapability(backend, bridge).daemonOwnedAuthAvailable,
+  };
 }
 
 function escapeJsonPointerSegment(segment: string): string {
@@ -69,6 +100,10 @@ export function buildDaemonAgentConfig(
   const daemonBackend = resolveDaemonBackend(agentSettings.agent_backend);
   const providerKey = agentSettings.active_provider;
   const providerConfig = agentSettings[providerKey] as AgentProviderConfig | undefined;
+  const authSupportOptions = getProviderAuthSupportOptions(agentSettings.agent_backend);
+  const authSource = providerConfig
+    ? normalizeAuthSource(providerKey, providerConfig.auth_source, authSupportOptions)
+    : getDefaultAuthSource(providerKey, authSupportOptions);
   const providerConfigs = providerConfig
     ? {
       [providerKey]: {
@@ -76,7 +111,7 @@ export function buildDaemonAgentConfig(
         model: providerConfig.model || "",
         assistant_id: providerConfig.assistant_id || "",
         api_transport: providerConfig.api_transport || "chat_completions",
-        auth_source: providerConfig.auth_source || "api_key",
+        auth_source: authSource,
         context_window_tokens: getEffectiveContextWindow(providerKey, providerConfig),
         reasoning_effort: agentSettings.reasoning_effort || "high",
       },
@@ -91,7 +126,7 @@ export function buildDaemonAgentConfig(
     model: providerConfig?.model || "",
     assistant_id: providerConfig?.assistant_id || "",
     api_transport: providerConfig?.api_transport || "chat_completions",
-    auth_source: providerConfig?.auth_source || "api_key",
+    auth_source: authSource,
     reasoning_effort: agentSettings.reasoning_effort || "high",
     system_prompt: agentSettings.system_prompt,
     auto_compact_context: agentSettings.auto_compact_context,

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import { getDaemonOwnedAuthCapability, getProviderAuthSupportOptions } from "@/lib/agentDaemonConfig";
 import { getBridge } from "@/lib/bridge";
 import { PRIMARY_AGENT_NAME } from "@/lib/agentNames";
 import type { AgentProviderConfig, AgentProviderId, AgentSettings } from "../../lib/agentStore";
-import { getDefaultApiTransport, getDefaultAuthSource, getDefaultModelForProvider, getEffectiveContextWindow, getProviderApiType, getProviderDefinition, getProviderModels, getSupportedApiTransports, getSupportedAuthSources } from "../../lib/agentStore";
+import { getDefaultApiTransport, getDefaultAuthSource, getDefaultModelForProvider, getEffectiveContextWindow, getProviderApiType, getProviderDefinition, getProviderModels, getSupportedApiTransports, getSupportedAuthSources, normalizeAuthSource } from "../../lib/agentStore";
 import { useAgentStore } from "../../lib/agentStore";
 import { deriveOpenAICodexAuthUi } from "./openaiSubscriptionAuth";
 import { addBtnStyle, ModelSelector, NumberInput, PasswordInput, Section, SelectInput, SettingRow, TextInput, Toggle, inputStyle, smallBtnStyle } from "./shared";
@@ -61,6 +62,8 @@ export function AgentTab({
     );
 
     const providerConfig = settings[settings.active_provider] as AgentProviderConfig;
+    const authCapability = getDaemonOwnedAuthCapability(settings.agent_backend);
+    const authSupportOptions = getProviderAuthSupportOptions(settings.agent_backend);
     const providerDef = getProviderDefinition(settings.active_provider);
     const providerApiType = getProviderApiType(
         settings.active_provider,
@@ -68,15 +71,16 @@ export function AgentTab({
         providerConfig.base_url,
     );
     const supportedTransports = getSupportedApiTransports(settings.active_provider);
-    const supportedAuthSources = getSupportedAuthSources(settings.active_provider);
+    const supportedAuthSources = getSupportedAuthSources(settings.active_provider, authSupportOptions);
+    const effectiveAuthSource = normalizeAuthSource(settings.active_provider, providerConfig.auth_source, authSupportOptions);
     const isCustomProvider = settings.active_provider === "custom";
     const showUrlEditor = isCustomProvider || useCustomUrl || Boolean(providerConfig.base_url && providerConfig.base_url !== providerDef?.defaultBaseUrl);
     const effectiveContextWindow = getEffectiveContextWindow(settings.active_provider, providerConfig);
     const activeProviderAuthState = providerAuthStates.find((state) => state.provider_id === settings.active_provider);
     const subscriptionAuthUi = deriveOpenAICodexAuthUi(subscriptionAuthStatus);
-    const providerAuthenticated = providerConfig.auth_source === "chatgpt_subscription"
+    const providerAuthenticated = effectiveAuthSource === "chatgpt_subscription"
         ? Boolean(subscriptionAuthStatus?.available)
-        : providerConfig.auth_source === "github_copilot"
+        : effectiveAuthSource === "github_copilot"
             ? Boolean(activeProviderAuthState?.authenticated)
             : Boolean(providerConfig.api_key);
 
@@ -85,7 +89,11 @@ export function AgentTab({
     }, [refreshProviderAuthStates]);
 
     useEffect(() => {
-        if (settings.active_provider !== "openai" || providerConfig.auth_source !== "chatgpt_subscription") {
+        if (
+            settings.active_provider !== "openai"
+            || effectiveAuthSource !== "chatgpt_subscription"
+            || !authCapability.chatgptSubscriptionAvailable
+        ) {
             setSubscriptionAuthStatus(null);
             return;
         }
@@ -110,7 +118,7 @@ export function AgentTab({
         return () => {
             cancelled = true;
         };
-    }, [settings.active_provider, providerConfig.auth_source]);
+    }, [authCapability.chatgptSubscriptionAvailable, effectiveAuthSource, settings.active_provider]);
 
     useEffect(() => {
         if (!subscriptionAuthUi.shouldPoll) {
@@ -131,6 +139,10 @@ export function AgentTab({
     }, [subscriptionAuthUi.shouldPoll]);
 
     const triggerSubscriptionAuth = async () => {
+        if (!authCapability.chatgptSubscriptionAvailable) {
+            setSubscriptionAuthStatus({ ok: false, available: false, error: "ChatGPT subscription auth requires daemon-backed execution" });
+            return;
+        }
         const amux = getBridge();
         if (!amux?.openAICodexAuthLogin) {
             setSubscriptionAuthStatus({ ok: false, available: false, error: "ChatGPT auth bridge unavailable" });
@@ -153,6 +165,10 @@ export function AgentTab({
     };
 
     const clearSubscriptionAuth = async () => {
+        if (!authCapability.chatgptSubscriptionAvailable) {
+            setSubscriptionAuthStatus({ ok: false, available: false, error: "ChatGPT subscription auth requires daemon-backed execution" });
+            return;
+        }
         const amux = getBridge();
         if (!amux?.openAICodexAuthLogout) {
             setSubscriptionAuthStatus({ ok: false, available: false, error: "ChatGPT auth bridge unavailable" });
@@ -320,22 +336,22 @@ export function AgentTab({
                             })}
                             base_url={providerConfig.base_url || providerDef?.defaultBaseUrl}
                             api_key={providerConfig.api_key}
-                            auth_source={providerConfig.auth_source}
+                            auth_source={effectiveAuthSource}
                         />
                     </SettingRow>
                     {providerApiType === "openai" ? (
                         <SettingRow label="Auth">
                             <select
-                                value={providerConfig.auth_source}
+                                value={effectiveAuthSource}
                                 onChange={(e) => updateSetting(settings.active_provider, {
                                     ...providerConfig,
                                     auth_source: supportedAuthSources.includes(e.target.value as any)
                                         ? e.target.value as AgentProviderConfig["auth_source"]
-                                        : getDefaultAuthSource(settings.active_provider),
+                                        : getDefaultAuthSource(settings.active_provider, authSupportOptions),
                                     model: (() => {
                                         const nextAuthSource = supportedAuthSources.includes(e.target.value as any)
                                             ? e.target.value as AgentProviderConfig["auth_source"]
-                                            : getDefaultAuthSource(settings.active_provider);
+                                            : getDefaultAuthSource(settings.active_provider, authSupportOptions);
                                         const supportedModels = getProviderModels(settings.active_provider, nextAuthSource);
                                         return supportedModels.some((entry) => entry.id === providerConfig.model)
                                             ? providerConfig.model
@@ -356,10 +372,17 @@ export function AgentTab({
                             </select>
                         </SettingRow>
                     ) : null}
+                    {settings.active_provider === "openai"
+                        && providerConfig.auth_source === "chatgpt_subscription"
+                        && effectiveAuthSource !== "chatgpt_subscription" ? (
+                        <div style={{ marginTop: 2, marginBottom: 8, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                            ChatGPT Subscription is unavailable for the current backend. Switch to daemon-backed execution to re-enable it.
+                        </div>
+                    ) : null}
                     <div style={{ marginTop: 2, marginBottom: 8, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
                         Credentials are managed in the <strong>Auth</strong> tab. Keep provider selection, model, base URL, and transport here.
                     </div>
-                    {settings.active_provider === "openai" && providerConfig.auth_source === "chatgpt_subscription" ? (
+                    {settings.active_provider === "openai" && effectiveAuthSource === "chatgpt_subscription" ? (
                         <SettingRow label="ChatGPT Auth">
                             <div style={{ display: "grid", gap: 6, width: "100%" }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
