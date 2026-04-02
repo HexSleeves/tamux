@@ -1,4 +1,17 @@
 declare global {
+    type AmuxOpenAICodexAuthStatus = {
+        available: boolean;
+        authMode?: string;
+        accountId?: string;
+        expiresAt?: number;
+        source?: string;
+        error?: string;
+    };
+
+    type AmuxOpenAICodexAuthLogin = AmuxOpenAICodexAuthStatus & {
+        authUrl?: string;
+    };
+
     type AmuxCodingAgentCheck = {
         label: string;
         path: string;
@@ -292,25 +305,8 @@ declare global {
         agentSendMessage?: (threadId: string | null, content: string, sessionId?: string | null, contextMessages?: unknown[]) => Promise<{ ok?: boolean; error?: string } | unknown>;
         agentListThreads?: () => Promise<unknown[]>;
         agentGetThread?: (threadId: string) => Promise<unknown | null>;
-        openAICodexAuthStatus?: (options?: { refresh?: boolean }) => Promise<{
-            available: boolean;
-            authMode?: string;
-            accountId?: string;
-            expiresAt?: number;
-            source?: string;
-            api_key?: string;
-            error?: string;
-        }>;
-        openAICodexAuthLogin?: () => Promise<{
-            available: boolean;
-            authMode?: string;
-            accountId?: string;
-            expiresAt?: number;
-            source?: string;
-            api_key?: string;
-            error?: string;
-            authUrl?: string;
-        }>;
+        openAICodexAuthStatus?: (options?: { refresh?: boolean }) => Promise<AmuxOpenAICodexAuthStatus>;
+        openAICodexAuthLogin?: () => Promise<AmuxOpenAICodexAuthLogin>;
         openAICodexAuthLogout?: () => Promise<{ ok: boolean }>;
         agentFetchModels?: (providerId: string, base_url: string, api_key: string) => Promise<{ models?: Array<{ id: string; name?: string; context_window?: number }>; error?: string } | unknown>;
         agentGetProviderAuthStates?: () => Promise<unknown[]>;

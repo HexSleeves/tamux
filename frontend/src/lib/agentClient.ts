@@ -8,6 +8,7 @@
  * All providers are called directly from the frontend via fetch().
  */
 import { getBridge } from "./bridge";
+import { resolveProviderAuthDecision } from "./agentClientAuth.js";
 
 import type {
   AgentProviderId,
@@ -77,10 +78,10 @@ export interface PreparedOpenAIRequest {
 type OpenAICodexAuthStatus = {
   available?: boolean;
   authMode?: string;
+  status?: string;
   accountId?: string;
   expiresAt?: number;
   source?: string;
-  api_key?: string;
   error?: string;
 };
 
@@ -140,26 +141,26 @@ export interface ContextCompactionSettings {
 export async function* sendChatCompletion(
   req: ChatRequest,
 ): AsyncGenerator<ChatChunk> {
-  const resolvedAuth = await resolveProviderAuth(req);
-  const resolvedRequest: ChatRequest = {
-    ...req,
-    config: {
-      ...req.config,
-      api_key: resolvedAuth.api_key,
-    },
-  };
-
-  if (!resolvedRequest.config.api_key && resolvedRequest.provider !== "ollama") {
-    yield { type: "error", content: `No API key configured for ${req.provider}. Open Settings > Agent to add your key.` };
-    return;
-  }
-
-  if (!resolvedRequest.config.base_url) {
-    yield { type: "error", content: `No base URL configured for ${req.provider}.` };
-    return;
-  }
-
   try {
+    const resolvedAuth = await resolveProviderAuth(req);
+    const resolvedRequest: ChatRequest = {
+      ...req,
+      config: {
+        ...req.config,
+        api_key: resolvedAuth.api_key,
+      },
+    };
+
+    if (!resolvedRequest.config.api_key && resolvedRequest.provider !== "ollama") {
+      yield { type: "error", content: `No API key configured for ${req.provider}. Open Settings > Agent to add your key.` };
+      return;
+    }
+
+    if (!resolvedRequest.config.base_url) {
+      yield { type: "error", content: `No base URL configured for ${req.provider}.` };
+      return;
+    }
+
     const supportedTransports = getSupportedApiTransports(resolvedRequest.provider);
     const selectedTransport = supportedTransports.includes(resolvedRequest.config.api_transport)
       ? resolvedRequest.config.api_transport
@@ -229,24 +230,32 @@ export async function* sendChatCompletion(
 }
 
 async function resolveProviderAuth(req: ChatRequest): Promise<ResolvedProviderAuth> {
-  if (req.provider !== "openai" || req.config.auth_source !== "chatgpt_subscription") {
-    return { api_key: req.config.api_key };
-  }
-
   const amux = getBridge();
-  if (!amux?.openAICodexAuthStatus) {
-    throw new Error("ChatGPT subscription auth is unavailable in this build.");
+  const isChatGptSubscription = req.provider === "openai" && req.config.auth_source === "chatgpt_subscription";
+  const status = isChatGptSubscription && amux?.openAICodexAuthStatus
+    ? await amux.openAICodexAuthStatus({ refresh: true }) as OpenAICodexAuthStatus
+    : undefined;
+  const resolution = resolveProviderAuthDecision({
+    provider: req.provider,
+    authSource: req.config.auth_source,
+    configuredApiKey: req.config.api_key,
+    hasCodexStatusBridge: Boolean(amux?.openAICodexAuthStatus),
+    usesDaemonExecution: Boolean(amux?.agentSendMessage),
+    status,
+  });
+
+  if (resolution.mode === "error") {
+    throw new Error(resolution.error);
   }
 
-  const status = await amux.openAICodexAuthStatus({ refresh: true }) as OpenAICodexAuthStatus;
-  if (status?.available && typeof status.api_key === "string" && status.api_key.trim()) {
-    return {
-      api_key: status.api_key.trim(),
-      accountId: typeof status.accountId === "string" ? status.accountId.trim() : undefined,
-    };
+  if (resolution.mode === "daemon") {
+    throw new Error("ChatGPT subscription auth requires daemon-backed execution. This renderer path is API-key only.");
   }
 
-  throw new Error(status?.error || "ChatGPT subscription auth not found. Authenticate in Settings > Agent.");
+  return {
+    api_key: resolution.apiKey,
+    accountId: resolution.accountId,
+  };
 }
 
 // ---------------------------------------------------------------------------
