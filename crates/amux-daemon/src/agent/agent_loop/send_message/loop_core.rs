@@ -285,7 +285,6 @@ impl<'a> SendMessageRunner<'a> {
                             if self.task_id.is_none()
                                 && self.config.auto_retry
                                 && is_transient_retry_message(&message)
-                                && self.scheduled_retry_cycles == 0
                             {
                                 let delay_ms = if cfg!(test) {
                                     u64::from(self.config.retry_delay_ms).max(1)
@@ -293,7 +292,7 @@ impl<'a> SendMessageRunner<'a> {
                                     30_000u64
                                 };
                                 let attempt = self.scheduled_retry_cycles.saturating_add(1);
-                                let max_retries = 1;
+                                let max_retries = 0;
                                 let _ = self.engine.event_tx.send(AgentEvent::RetryStatus {
                                     thread_id: self.tid.clone(),
                                     phase: "waiting".to_string(),

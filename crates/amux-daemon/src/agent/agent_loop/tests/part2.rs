@@ -344,7 +344,7 @@ async fn transport_incompatibility_does_not_mutate_persisted_config_and_emits_no
 }
 
 #[tokio::test]
-async fn auto_retry_wait_finishes_after_one_scheduled_retry_cycle() {
+async fn auto_retry_wait_repeats_scheduled_retry_cycles_until_cancelled() {
     let root = tempdir().unwrap();
     let manager = SessionManager::new_test(root.path()).await;
     let request_counter = Arc::new(AtomicUsize::new(0));
@@ -374,36 +374,66 @@ async fn auto_retry_wait_finishes_after_one_scheduled_retry_cycle() {
     );
 
     let engine = AgentEngine::new_test(manager, config, root.path()).await;
-    let task = tokio::spawn({
+    let thread_id = "thread-auto-retry-loop";
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            crate::agent::types::AgentThread {
+                id: thread_id.to_string(),
+                title: "Auto retry loop".to_string(),
+                messages: vec![crate::agent::types::AgentMessage::user("hello", 1)],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+    }
+
+    let mut task = tokio::spawn({
         let engine = engine.clone();
         async move {
             engine
-                .send_message_inner(None, "hello", None, None, None, None, None, true)
+                .send_message_inner(Some(thread_id), "hello", None, None, None, None, None, true)
                 .await
         }
     });
 
-    let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
-        .await
-        .expect("turn should stop retrying and finish");
-    let joined = result.expect("join send task");
-    let error = match joined {
-        Ok(_) => panic!("transient failures should still fail the turn"),
-        Err(error) => error,
-    };
-    let message = error.to_string();
-
     assert!(
-        message.contains("LLM error")
-            || message.contains("transport error")
-            || message.contains("timed out"),
-        "unexpected error: {message}"
+        tokio::time::timeout(std::time::Duration::from_millis(1700), async {
+            loop {
+                if request_counter.load(Ordering::SeqCst) > 4 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .is_ok(),
+        "expected multiple scheduled retry cycles to perform real reconnect attempts"
     );
-    assert_eq!(
-        request_counter.load(Ordering::SeqCst),
-        4,
-        "expected one bounded retry plus one scheduled retry cycle"
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), &mut task)
+            .await
+            .is_err(),
+        "send loop should keep retrying until explicitly cancelled"
     );
+    assert!(engine.stop_stream(thread_id).await, "stream should be cancellable");
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+        .await
+        .expect("cancelled retry loop should finish");
+    let joined = result.expect("join send task");
+    if let Err(error) = joined {
+        panic!("cancelled retry loop should end cleanly: {error}");
+    }
 }
 
 #[tokio::test]

@@ -20,6 +20,8 @@ pub struct DiscordProvider {
     pending_events: VecDeque<GatewayProviderEvent>,
     health: PlatformHealthState,
     rate_limiter: TokenBucket,
+    last_poll_ms: Option<u64>,
+    poll_interval_ms: u64,
 }
 
 impl DiscordProvider {
@@ -55,6 +57,10 @@ impl DiscordProvider {
                 replay_cursors.insert(cursor.channel_id.clone(), cursor.cursor_value.clone());
             }
         }
+        let poll_interval_ms = config
+            .get("poll_interval_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(5_000);
 
         Ok(Some(Self {
             token: token.to_string(),
@@ -83,6 +89,8 @@ impl DiscordProvider {
             pending_events: VecDeque::new(),
             health: PlatformHealthState::new(),
             rate_limiter: TokenBucket::discord(),
+            last_poll_ms: None,
+            poll_interval_ms,
         }))
     }
 
@@ -270,6 +278,12 @@ impl GatewayProvider for DiscordProvider {
             if !self.health.should_retry(now) {
                 return Ok(None);
             }
+            if let Some(last_poll_ms) = self.last_poll_ms {
+                if now.saturating_sub(last_poll_ms) < self.poll_interval_ms {
+                    return Ok(None);
+                }
+            }
+            self.last_poll_ms = Some(now);
 
             let old_status = self.health.status;
             let channels = self.channels.clone();
