@@ -50,6 +50,13 @@ npm install tamux
 npx tamux --help
 ```
 
+If `npm install -g tamux` succeeds but `tamux` is still not found on macOS, your npm global bin directory is not on `PATH` yet:
+
+```bash
+export PATH="$(npm config get prefix)/bin:$PATH"
+tamux --help
+```
+
 ### From sources
 
 ```bash

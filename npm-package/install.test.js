@@ -41,7 +41,22 @@ test("getInstallUsageHint recommends npx for local installs", function () {
 test("getInstallUsageHint recommends tamux for global installs", function () {
   assert.equal(
     install.getInstallUsageHint(true),
-    "tamux: run 'tamux --help' once your npm prefix bin directory is on PATH"
+    "tamux: run 'tamux --help' once your npm global bin directory is on PATH"
+  );
+});
+
+test("getGlobalBinDir appends bin on unix platforms", function () {
+  assert.equal(
+    install.getGlobalBinDir("/opt/homebrew", "darwin"),
+    "/opt/homebrew/bin"
+  );
+  assert.equal(install.getGlobalBinDir("/usr/local", "linux"), "/usr/local/bin");
+});
+
+test("getInstallUsageHint includes explicit global bin directory when known", function () {
+  assert.equal(
+    install.getInstallUsageHint(true, "/opt/homebrew/bin"),
+    "tamux: if 'tamux' is not found, add '/opt/homebrew/bin' to PATH, then run 'tamux --help'"
   );
 });
 

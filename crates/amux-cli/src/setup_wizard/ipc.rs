@@ -53,11 +53,23 @@ pub(super) async fn wizard_send(
 pub(super) async fn wizard_recv(
     framed: &mut Framed<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin, AmuxCodec>,
 ) -> Result<DaemonMessage> {
-    framed
-        .next()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("daemon closed connection"))?
-        .map_err(Into::into)
+    loop {
+        let msg = framed
+            .next()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("daemon closed connection"))?
+            .map_err(anyhow::Error::from)?;
+
+        if should_ignore_wizard_message(&msg) {
+            continue;
+        }
+
+        return Ok(msg);
+    }
+}
+
+pub(super) fn should_ignore_wizard_message(msg: &DaemonMessage) -> bool {
+    matches!(msg, DaemonMessage::AgentAsyncCommandCapabilityAck { .. })
 }
 
 pub(super) fn parse_provider_validation_terminal_response(

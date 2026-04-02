@@ -152,9 +152,29 @@ function getReleaseAssetInfo(platform, arch, version) {
   };
 }
 
-function getInstallUsageHint(isGlobalInstall) {
+function getGlobalBinDir(prefix, platform) {
+  if (!prefix) {
+    return null;
+  }
+
+  if (platform === "win32") {
+    return prefix;
+  }
+
+  return path.join(prefix, "bin");
+}
+
+function getInstallUsageHint(isGlobalInstall, globalBinDir) {
   if (isGlobalInstall) {
-    return "tamux: run 'tamux --help' once your npm prefix bin directory is on PATH";
+    if (globalBinDir) {
+      return (
+        "tamux: if 'tamux' is not found, add '" +
+        globalBinDir +
+        "' to PATH, then run 'tamux --help'"
+      );
+    }
+
+    return "tamux: run 'tamux --help' once your npm global bin directory is on PATH";
   }
 
   return "tamux: run with 'npx tamux --help' (or 'npm exec tamux -- --help') after a local install";
@@ -268,6 +288,8 @@ async function main() {
 
   var archiveUrl = BASE_URL + "/" + releaseInfo.archiveName;
   var checksumsUrl = BASE_URL + "/" + releaseInfo.checksumName;
+  var isGlobalInstall = process.env.npm_config_global === "true";
+  var globalBinDir = getGlobalBinDir(process.env.npm_config_prefix, os.platform());
 
   // 1. Ensure bin directory exists
   fs.mkdirSync(BIN_DIR, { recursive: true });
@@ -304,12 +326,13 @@ async function main() {
   }
 
   console.log("tamux: installation complete");
-  console.log(getInstallUsageHint(process.env.npm_config_global === "true"));
+  console.log(getInstallUsageHint(isGlobalInstall, globalBinDir));
 }
 
 module.exports = main;
 module.exports.GITHUB_OWNER = GITHUB_OWNER;
 module.exports.GITHUB_REPO = GITHUB_REPO;
+module.exports.getGlobalBinDir = getGlobalBinDir;
 module.exports.getReleaseAssetInfo = getReleaseAssetInfo;
 module.exports.getInstallUsageHint = getInstallUsageHint;
 module.exports.parseChecksumFile = parseChecksumFile;
