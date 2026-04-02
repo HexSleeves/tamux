@@ -78,30 +78,6 @@ pub(crate) fn security_level_for_tool_call(
     }
 }
 
-fn has_shell_python_bypass(command: &str) -> bool {
-    let normalized = command.trim().to_ascii_lowercase();
-    [
-        "python ",
-        "python3 ",
-        "python\n",
-        "python3\n",
-        "python<<",
-        "python3<<",
-        "python <<",
-        "python3 <<",
-        "uv run python",
-        "uv run python3",
-        "python -c",
-        "python3 -c",
-        "python - <<",
-        "python3 - <<",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
-        || normalized == "python"
-        || normalized == "python3"
-}
-
 fn shell_suspicion_reasons(command: &str, tool_args: &serde_json::Value) -> Vec<String> {
     let normalized = command.trim().to_ascii_lowercase();
     let mut reasons = Vec::new();
@@ -226,15 +202,6 @@ pub(crate) fn classify_tool_call(
             .get("command")
             .and_then(|value| value.as_str())
             .unwrap_or_default();
-        if has_shell_python_bypass(command) {
-            return WelesToolClassification {
-                class: WelesGovernanceClass::RejectBypass,
-                reasons: vec![
-                    "shell-based Python execution bypasses governance; use python_execute instead"
-                        .to_string(),
-                ],
-            };
-        }
         return WelesToolClassification {
             class: WelesGovernanceClass::GuardIfSuspicious,
             reasons: shell_suspicion_reasons(command, tool_args),

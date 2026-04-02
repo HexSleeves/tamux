@@ -21,7 +21,7 @@ pub fn reasoning_lines<'a>(
     if expanded {
         // Header line
         lines.push(Line::from(vec![Span::styled(
-            format!("\u{25be} [-] Reasoning {}", stats),
+            format!("\u{25be} Reasoning {}", stats),
             theme.fg_dim,
         )]));
 
@@ -44,7 +44,7 @@ pub fn reasoning_lines<'a>(
     } else {
         // Collapsed single line
         lines.push(Line::from(Span::styled(
-            format!("\u{25b8} [+] Reasoning {}", stats),
+            format!("\u{25b8} Reasoning {}", stats),
             theme.fg_dim,
         )));
     }

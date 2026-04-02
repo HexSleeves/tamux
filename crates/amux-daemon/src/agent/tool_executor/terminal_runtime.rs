@@ -65,7 +65,8 @@ async fn execute_run_terminal_command(
     thread_id: &str,
     cancel_token: Option<CancellationToken>,
 ) -> Result<(String, Option<ToolPendingApproval>)> {
-    if should_use_managed_execution(args) {
+    let client_surface = agent.get_thread_client_surface(thread_id).await;
+    if should_use_managed_execution_for_surface(client_surface, args) {
         let managed_args =
             managed_alias_args(args, "Run a shell command in a managed terminal session");
         execute_managed_command(
@@ -99,7 +100,8 @@ async fn execute_bash_command(
     thread_id: &str,
     cancel_token: Option<CancellationToken>,
 ) -> Result<(String, Option<ToolPendingApproval>)> {
-    if should_use_managed_execution(args) {
+    let client_surface = agent.get_thread_client_surface(thread_id).await;
+    if should_use_managed_execution_for_surface(client_surface, args) {
         let managed_args =
             managed_alias_args(args, "Run a shell command in a managed terminal session");
         execute_managed_command(
@@ -125,6 +127,17 @@ async fn execute_bash_command(
 }
 
 fn should_use_managed_execution(args: &serde_json::Value) -> bool {
+    should_use_managed_execution_for_surface(None, args)
+}
+
+fn should_use_managed_execution_for_surface(
+    client_surface: Option<amux_protocol::ClientSurface>,
+    args: &serde_json::Value,
+) -> bool {
+    if matches!(client_surface, Some(amux_protocol::ClientSurface::Tui)) {
+        return false;
+    }
+
     if args
         .get("__weles_force_headless")
         .and_then(|value| value.as_bool())
@@ -264,13 +277,26 @@ fn command_has_followup_work(command: &str) -> bool {
 }
 
 fn command_looks_interactive(command: &str) -> bool {
-    let normalized = command.trim().to_ascii_lowercase();
-    [
-        "vim ", "nvim ", "nano ", "less ", "more ", "top", "htop", "watch ", "tail -f", "ssh ",
-        "sftp ", "scp ", "man ", "bash", "zsh", "fish", "python", "ipython", "node",
-    ]
-    .iter()
-    .any(|pattern| normalized == *pattern || normalized.starts_with(pattern))
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let mut parts = trimmed.split_whitespace();
+    let first = parts.next().unwrap_or_default().to_ascii_lowercase();
+    let second = parts.next().map(|value| value.to_ascii_lowercase());
+
+    match first.as_str() {
+        "vim" | "nvim" | "nano" | "less" | "more" | "top" | "htop" | "watch" => true,
+        "tail" => matches!(second.as_deref(), Some("-f")),
+        "ssh" | "sftp" | "scp" | "man" => true,
+        "bash" | "zsh" | "fish" => matches!(
+            second.as_deref(),
+            None | Some("-i") | Some("--interactive") | Some("-l") | Some("--login")
+        ),
+        "python" | "python3" | "ipython" | "node" => second.is_none(),
+        _ => false,
+    }
 }
 
 async fn execute_headless_shell_command(

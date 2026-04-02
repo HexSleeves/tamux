@@ -452,6 +452,7 @@ impl DaemonClient {
             priority: None,
             client_request_id: None,
             autonomy_level: None,
+            client_surface: Some(amux_protocol::ClientSurface::Tui),
         })
     }
 

@@ -4,6 +4,14 @@ pub(super) fn inter_request_delay(loop_count: u32) -> Option<std::time::Duration
     (loop_count > 1).then(|| std::time::Duration::from_millis(500))
 }
 
+fn provider_uses_anthropic_api(config: &AgentConfig, provider_config: &ProviderConfig) -> bool {
+    crate::agent::types::get_provider_api_type(
+        &config.provider,
+        &provider_config.model,
+        &provider_config.base_url,
+    ) == ApiType::Anthropic
+}
+
 impl<'a> SendMessageRunner<'a> {
     async fn prepare_request(&mut self) -> Result<PreparedLlmRequest> {
         let threads = self.engine.threads.read().await;
@@ -100,6 +108,21 @@ impl<'a> SendMessageRunner<'a> {
         let llm_started_at = Instant::now();
         let mut first_token_at: Option<Instant> = None;
         let effective_transport_for_turn = prepared_request.transport;
+        let provider_is_anthropic = provider_uses_anthropic_api(&self.config, &self.provider_config);
+        let llm_retry_strategy = if provider_is_anthropic {
+            match self.retry_strategy {
+                RetryStrategy::Bounded { retry_delay_ms, .. } => RetryStrategy::Bounded {
+                    max_retries: 0,
+                    retry_delay_ms,
+                },
+                RetryStrategy::DurableRateLimited => RetryStrategy::Bounded {
+                    max_retries: 0,
+                    retry_delay_ms: 5_000,
+                },
+            }
+        } else {
+            self.retry_strategy
+        };
         let mut stream = send_completion_request(
             &self.engine.http_client,
             &self.config.provider,
@@ -110,7 +133,7 @@ impl<'a> SendMessageRunner<'a> {
             prepared_request.transport,
             prepared_request.previous_response_id.clone(),
             prepared_request.upstream_thread_id.clone(),
-            self.retry_strategy,
+            llm_retry_strategy,
         );
 
         let mut accumulated_content = String::new();
@@ -215,6 +238,16 @@ impl<'a> SendMessageRunner<'a> {
                             failure_class,
                             message,
                         } => {
+                            tracing::info!(
+                                thread_id = %self.tid,
+                                provider = %self.config.provider,
+                                attempt,
+                                max_retries,
+                                delay_ms,
+                                failure_class = %failure_class,
+                                message = %sanitize_upstream_failure_message(&message),
+                                "provider-level retry requested by llm client"
+                            );
                             let _ = self.engine.event_tx.send(AgentEvent::RetryStatus {
                                 thread_id: self.tid.clone(),
                                 phase: "retrying".to_string(),
@@ -237,12 +270,13 @@ impl<'a> SendMessageRunner<'a> {
                         }
                         CompletionChunk::Error { message } => {
                             let visible_message = sanitize_upstream_failure_message(&message);
-                            if let Some(structured) = parse_structured_upstream_failure(&message) {
+                            let structured_failure = parse_structured_upstream_failure(&message);
+                            if let Some(structured) = structured_failure.as_ref() {
                                 let recovery = self
                                     .engine
                                     .maybe_recover_fixable_upstream_failure(
                                         &self.tid,
-                                        &structured,
+                                        structured,
                                         self.assistant_output_visible,
                                         self.tool_side_effect_committed,
                                         &mut self.attempted_recovery_signatures,
@@ -282,6 +316,123 @@ impl<'a> SendMessageRunner<'a> {
                                     ),
                                 );
                             }
+                            let structured_retry_after_ms = structured_failure.as_ref().and_then(|failure| {
+                                failure
+                                    .diagnostics
+                                    .get("retry_after_ms")
+                                    .and_then(|value| value.as_u64())
+                            });
+                            let structured_retryable = structured_failure
+                                .as_ref()
+                                .map(|failure| {
+                                    matches!(
+                                        failure.class.as_str(),
+                                        "rate_limit" | "temporary_upstream" | "transient_transport"
+                                    )
+                                })
+                                .unwrap_or(false);
+                            if provider_is_anthropic
+                                && (structured_retryable || is_transient_retry_message(&message))
+                            {
+                                match self.retry_strategy {
+                                    RetryStrategy::Bounded {
+                                        max_retries,
+                                        retry_delay_ms,
+                                    } if self.scheduled_retry_cycles < max_retries => {
+                                        let attempt = self.scheduled_retry_cycles.saturating_add(1);
+                                        let delay_ms = structured_retry_after_ms.unwrap_or_else(|| {
+                                            crate::agent::llm_client::compute_retry_delay_ms_for_attempt(
+                                                retry_delay_ms,
+                                                attempt,
+                                            )
+                                        });
+                                        tracing::warn!(
+                                            thread_id = %self.tid,
+                                            provider = %self.config.provider,
+                                            attempt,
+                                            max_retries,
+                                            delay_ms,
+                                            failure_class = %retry_failure_class_from_message(&message),
+                                            visible_message = %visible_message,
+                                            "fresh-runner retry scheduled for anthropic request"
+                                        );
+                                        let _ = self.engine.event_tx.send(AgentEvent::RetryStatus {
+                                            thread_id: self.tid.clone(),
+                                            phase: "retrying".to_string(),
+                                            attempt,
+                                            max_retries,
+                                            delay_ms,
+                                            failure_class: retry_failure_class_from_message(&message).to_string(),
+                                            message: visible_message.clone(),
+                                        });
+                                        self.retry_status_visible = true;
+                                        self.scheduled_retry_cycles = attempt;
+                                        tokio::select! {
+                                            _ = self.stream_cancel_token.cancelled() => {
+                                                self.was_cancelled = true;
+                                                return Err(anyhow::anyhow!("fresh-runner retry cancelled"));
+                                            }
+                                            _ = tokio::time::sleep(std::time::Duration::from_millis(delay_ms)) => {
+                                                return Err(
+                                                    FreshRunnerRetrySignal {
+                                                        scheduled_retry_cycles: attempt,
+                                                    }
+                                                    .into(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    RetryStrategy::DurableRateLimited
+                                        if structured_failure
+                                            .as_ref()
+                                            .map(|failure| failure.class == "rate_limit")
+                                            .unwrap_or(false) =>
+                                    {
+                                        let attempt = self.scheduled_retry_cycles.saturating_add(1);
+                                        let delay_ms = structured_retry_after_ms.unwrap_or_else(|| {
+                                            crate::agent::llm_client::compute_retry_delay_ms_for_attempt(
+                                                5_000,
+                                                attempt,
+                                            )
+                                        });
+                                        tracing::warn!(
+                                            thread_id = %self.tid,
+                                            provider = %self.config.provider,
+                                            attempt,
+                                            delay_ms,
+                                            failure_class = %retry_failure_class_from_message(&message),
+                                            visible_message = %visible_message,
+                                            "durable fresh-runner retry scheduled for anthropic request"
+                                        );
+                                        let _ = self.engine.event_tx.send(AgentEvent::RetryStatus {
+                                            thread_id: self.tid.clone(),
+                                            phase: "retrying".to_string(),
+                                            attempt,
+                                            max_retries: 0,
+                                            delay_ms,
+                                            failure_class: retry_failure_class_from_message(&message).to_string(),
+                                            message: visible_message.clone(),
+                                        });
+                                        self.retry_status_visible = true;
+                                        self.scheduled_retry_cycles = attempt;
+                                        tokio::select! {
+                                            _ = self.stream_cancel_token.cancelled() => {
+                                                self.was_cancelled = true;
+                                                return Err(anyhow::anyhow!("fresh-runner retry cancelled"));
+                                            }
+                                            _ = tokio::time::sleep(std::time::Duration::from_millis(delay_ms)) => {
+                                                return Err(
+                                                    FreshRunnerRetrySignal {
+                                                        scheduled_retry_cycles: attempt,
+                                                    }
+                                                    .into(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
                             if self.task_id.is_none()
                                 && self.config.auto_retry
                                 && is_transient_retry_message(&message)
@@ -293,6 +444,15 @@ impl<'a> SendMessageRunner<'a> {
                                 };
                                 let attempt = self.scheduled_retry_cycles.saturating_add(1);
                                 let max_retries = 0;
+                                tracing::warn!(
+                                    thread_id = %self.tid,
+                                    provider = %self.config.provider,
+                                    attempt,
+                                    delay_ms,
+                                    failure_class = %retry_failure_class_from_message(&message),
+                                    visible_message = %visible_message,
+                                    "outer auto-retry wait scheduled after terminal llm error"
+                                );
                                 let _ = self.engine.event_tx.send(AgentEvent::RetryStatus {
                                     thread_id: self.tid.clone(),
                                     phase: "waiting".to_string(),
@@ -310,6 +470,12 @@ impl<'a> SendMessageRunner<'a> {
                                         break;
                                     }
                                     _ = self.stream_retry_now.notified() => {
+                                        tracing::info!(
+                                            thread_id = %self.tid,
+                                            provider = %self.config.provider,
+                                            attempt,
+                                            "outer auto-retry resumed immediately by operator request"
+                                        );
                                         let _ = self.engine.event_tx.send(AgentEvent::RetryStatus {
                                             thread_id: self.tid.clone(),
                                             phase: "retrying".to_string(),
@@ -319,6 +485,14 @@ impl<'a> SendMessageRunner<'a> {
                                             failure_class: retry_failure_class_from_message(&message).to_string(),
                                             message: visible_message.clone(),
                                         });
+                                        if provider_is_anthropic {
+                                            return Err(
+                                                FreshRunnerRetrySignal {
+                                                    scheduled_retry_cycles: attempt,
+                                                }
+                                                .into(),
+                                            );
+                                        }
                                         return Ok(StreamIteration {
                                             prepared_request,
                                             llm_started_at,
@@ -332,6 +506,21 @@ impl<'a> SendMessageRunner<'a> {
                                         });
                                     }
                                     _ = tokio::time::sleep(std::time::Duration::from_millis(delay_ms)) => {
+                                        tracing::info!(
+                                            thread_id = %self.tid,
+                                            provider = %self.config.provider,
+                                            attempt,
+                                            delay_ms,
+                                            "outer auto-retry resumed after wait timer"
+                                        );
+                                        if provider_is_anthropic {
+                                            return Err(
+                                                FreshRunnerRetrySignal {
+                                                    scheduled_retry_cycles: attempt,
+                                                }
+                                                .into(),
+                                            );
+                                        }
                                         return Ok(StreamIteration {
                                             prepared_request,
                                             llm_started_at,

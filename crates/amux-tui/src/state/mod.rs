@@ -204,11 +204,7 @@ pub use input::{InputAction, InputMode, InputState};
 #[allow(unused_imports)]
 pub use modal::{CommandItem, ModalAction, ModalKind, ModalState};
 #[allow(unused_imports)]
-pub use notifications::{
-    NotificationsAction,
-    NotificationsHeaderAction,
-    NotificationsState,
-};
+pub use notifications::{NotificationsAction, NotificationsHeaderAction, NotificationsState};
 #[allow(unused_imports)]
 pub use settings::{SettingsAction, SettingsState, SettingsTab};
 #[allow(unused_imports)]

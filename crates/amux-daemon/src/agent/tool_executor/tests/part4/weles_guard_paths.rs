@@ -321,7 +321,7 @@ async fn execute_tool_unavailable_guarded_review_blocks_closed_normally_and_degr
 }
 
 #[tokio::test]
-async fn execute_tool_weles_internal_task_does_not_spawn_recursive_governance_review() {
+async fn execute_tool_weles_internal_task_allows_low_risk_shell_python_without_recursive_governance_review() {
     let root = tempdir().expect("tempdir should succeed");
     let manager = SessionManager::new_test(root.path()).await;
     let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
@@ -358,18 +358,22 @@ async fn execute_tool_weles_internal_task_does_not_spawn_recursive_governance_re
         "bash_command",
         &serde_json::json!({"command": "python3 -c \"print('hi')\""}),
         SecurityLevel::Highest,
-        &["shell python bypass".to_string()],
+        &[],
     )
     .await
     .expect("daemon-owned WELES governance spawn should succeed");
 
     let before_tasks = engine.list_tasks().await.len();
+    let marker = root.path().join("weles-internal-shell-python.txt");
     let tool_call = ToolCall::with_default_weles_review(
         "tool-weles-recursion-guard".to_string(),
         ToolFunction {
             name: "bash_command".to_string(),
             arguments: serde_json::json!({
-                "command": "python3 -c \"print('hi')\"",
+                "command": format!(
+                    "python3 -c \"from pathlib import Path; Path(r'{}').write_text('hi')\"",
+                    marker.display()
+                ),
                 "timeout_seconds": 5
             })
             .to_string(),
@@ -391,15 +395,15 @@ async fn execute_tool_weles_internal_task_does_not_spawn_recursive_governance_re
     .await;
 
     assert!(
-        result.is_error,
-        "shell python bypass should still be blocked"
+        !result.is_error,
+        "low-risk shell python should stay allowed inside WELES internal tasks: {}",
+        result.content
     );
+    assert!(marker.exists(), "low-risk shell python should still execute");
     let review = result
         .weles_review
         .expect("internal WELES runtime should keep governance metadata");
-    assert!(review.weles_reviewed);
-    assert_eq!(review.verdict, crate::agent::types::WelesVerdict::Block);
-    assert!(review.reasons.iter().any(|reason| reason
-        .contains("daemon-owned WELES internal scope skips recursive governance review")));
+    assert!(!review.weles_reviewed);
+    assert_eq!(review.verdict, crate::agent::types::WelesVerdict::Allow);
     assert_eq!(engine.list_tasks().await.len(), before_tasks);
 }

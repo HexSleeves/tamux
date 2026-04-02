@@ -3,6 +3,7 @@ fn build_rendered_lines(
     theme: &ThemeTokens,
     inner_width: usize,
     current_tick: u64,
+    retry_wait_start_selected: bool,
 ) -> (Vec<RenderedChatLine>, Vec<(usize, usize)>) {
     #[cfg(test)]
     BUILD_RENDERED_LINES_CALLS.with(|calls| calls.set(calls.get() + 1));
@@ -210,7 +211,7 @@ fn build_rendered_lines(
         });
         all_lines.push(RenderedChatLine {
             line: pad_message_line(
-                retry_action_line(status, theme, current_tick),
+                retry_action_line(status, theme, current_tick, retry_wait_start_selected),
                 inner_width,
                 assistant_style,
             ),
@@ -229,8 +230,10 @@ pub fn build_selection_snapshot(
     chat: &ChatState,
     theme: &ThemeTokens,
     current_tick: u64,
+    retry_wait_start_selected: bool,
 ) -> Option<CachedSelectionSnapshot> {
-    selection_snapshot(area, chat, theme, current_tick).map(CachedSelectionSnapshot)
+    selection_snapshot(area, chat, theme, current_tick, retry_wait_start_selected)
+        .map(CachedSelectionSnapshot)
 }
 
 pub fn cached_snapshot_matches_area(snapshot: &CachedSelectionSnapshot, area: Rect) -> bool {
@@ -419,4 +422,3 @@ pub fn reset_build_rendered_lines_call_count() {
 pub fn build_rendered_lines_call_count() -> usize {
     BUILD_RENDERED_LINES_CALLS.with(std::cell::Cell::get)
 }
-

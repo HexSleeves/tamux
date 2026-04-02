@@ -1,5 +1,15 @@
 use super::*;
 
+#[test]
+fn safe_snippet_preview_truncates_multibyte_text_on_char_boundaries() {
+    let text = format!("{}’suffix", "a".repeat(299));
+
+    let snippet = super::safe_snippet_preview(&text, 300);
+
+    assert_eq!(snippet.chars().count(), 303);
+    assert!(snippet.ends_with("’..."));
+}
+
 #[tokio::test]
 async fn search_files_runtime_returns_no_matches_only_for_grep_exit_code_one() {
     let result = execute_search_files_with_runner(

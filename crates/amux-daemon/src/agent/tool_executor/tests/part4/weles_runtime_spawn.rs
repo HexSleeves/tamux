@@ -264,6 +264,7 @@ async fn weles_governance_runtime_path_uses_daemon_owned_core_and_suffix_only_ov
             None,
             None,
             None,
+            None,
             true,
         )
         .await
@@ -380,6 +381,7 @@ async fn weles_runtime_ignores_forged_operator_marker_payload_and_keeps_suffix_o
             Some(thread_id),
             "Inspect this tool call",
             Some(&task_id),
+            None,
             None,
             None,
             None,

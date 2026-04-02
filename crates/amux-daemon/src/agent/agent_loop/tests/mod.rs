@@ -280,6 +280,110 @@ async fn spawn_transient_transport_failure_server(request_counter: Arc<AtomicUsi
     format!("http://{addr}/v1")
 }
 
+async fn spawn_transient_failure_then_blocking_server(
+    request_counter: Arc<AtomicUsize>,
+    release_second_request: Arc<tokio::sync::Notify>,
+) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind transient blocking retry server");
+    let addr = listener
+        .local_addr()
+        .expect("transient blocking retry server addr");
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let request_counter = request_counter.clone();
+            let release_second_request = release_second_request.clone();
+            tokio::spawn(async move {
+                let attempt = request_counter.fetch_add(1, Ordering::SeqCst);
+                let mut buffer = vec![0u8; 65536];
+                let _ = socket
+                    .read(&mut buffer)
+                    .await
+                    .expect("read transient blocking retry request");
+
+                if attempt == 0 {
+                    let _ = socket.shutdown().await;
+                    return;
+                }
+
+                release_second_request.notified().await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+
+    format!("http://{addr}/v1")
+}
+
+async fn spawn_anthropic_rebuild_sensitive_retry_server(
+    recorded_bodies: Arc<StdMutex<VecDeque<String>>>,
+) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind anthropic fresh retry server");
+    let addr = listener
+        .local_addr()
+        .expect("anthropic fresh retry server addr");
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let recorded_bodies = recorded_bodies.clone();
+            tokio::spawn(async move {
+                let mut buffer = vec![0u8; 65536];
+                let read = socket
+                    .read(&mut buffer)
+                    .await
+                    .expect("read anthropic fresh retry request");
+                let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let body = request
+                    .split("\r\n\r\n")
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_string();
+                recorded_bodies
+                    .lock()
+                    .expect("lock recorded anthropic bodies")
+                    .push_back(body.clone());
+
+                if body.contains("hello again") {
+                    let response_body = concat!(
+                        "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n",
+                        "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n\n",
+                        "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"recovered\"}}\n\n",
+                        "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":1}}\n\n",
+                        "data: {\"type\":\"message_stop\"}\n\n"
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        response_body.len(),
+                        response_body
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("write anthropic recovery response");
+                    return;
+                }
+
+                socket
+                    .write_all(b"HTTP/9.9 200 OK\r\ncontent-length: 0\r\n\r\n")
+                    .await
+                    .expect("write malformed anthropic retry response");
+            });
+        }
+    });
+
+    format!("http://{addr}/anthropic")
+}
+
 async fn latest_trace_outcome_for_task(root: &std::path::Path, task_id: &str) -> Option<String> {
     let store = crate::history::HistoryStore::new_test_store(root)
         .await

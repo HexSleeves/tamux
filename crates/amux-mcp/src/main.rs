@@ -433,6 +433,7 @@ async fn tool_start_goal_run(args: &Value) -> Result<Value> {
         priority,
         client_request_id,
         autonomy_level,
+        client_surface: None,
     })
     .await?;
 

@@ -71,13 +71,12 @@ pub async fn fetch_models(
             .ok_or_else(|| anyhow::anyhow!("Unknown provider '{}'", provider_id));
     }
 
-    let def = super::types::get_provider_definition(provider_id);
+    let def = super::types::get_provider_definition(provider_id)
+        .ok_or_else(|| anyhow::anyhow!("Unknown provider '{}'", provider_id))?;
 
-    if !def.map(|d| d.supports_model_fetch).unwrap_or(false) {
-        return Err(anyhow::anyhow!(
-            "Provider '{}' does not support model fetching",
-            provider_id
-        ));
+    if !def.supports_model_fetch {
+        tracing::warn!(provider_id, "provider does not support remote model fetching");
+        return Ok(Vec::new());
     }
 
     let client = reqwest::Client::new();
@@ -86,8 +85,7 @@ pub async fn fetch_models(
     let mut req = client.get(&url).header("Content-Type", "application/json");
 
     if !api_key.is_empty() {
-        let auth_method = def.map(|d| d.auth_method).unwrap_or(AuthMethod::Bearer);
-        req = auth_method.apply(req, api_key);
+        req = def.auth_method.apply(req, api_key);
     }
 
     let response = req.send().await?;

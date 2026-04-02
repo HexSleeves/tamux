@@ -177,7 +177,7 @@ fn render_header(frame: &mut Frame, inner: Rect, state: &NotificationsState, the
                 button.label.to_string(),
                 header_button_style(&button, theme),
             )))
-                .alignment(Alignment::Left),
+            .alignment(Alignment::Left),
             Rect::new(x, inner.y, width, 1),
         );
         x = x.saturating_add(width + 1);
@@ -334,12 +334,7 @@ fn render_row(
                 button.label.clone(),
                 row_action_button_style(&button, theme).patch(bg),
             ))),
-            Rect::new(
-                x,
-                layout.action_y,
-                button.label.chars().count() as u16,
-                1,
-            ),
+            Rect::new(x, layout.action_y, button.label.chars().count() as u16, 1),
         );
         x = x.saturating_add(button.label.chars().count() as u16 + 1);
     }
@@ -430,11 +425,17 @@ fn row_action_buttons(
             selected: focused_row_action == Some(3),
         },
     ];
-    labels.extend(notification.actions.iter().enumerate().map(|(index, action)| RowActionButton {
-        label: format!("[{}]", action.label),
-        enabled: true,
-        selected: focused_row_action == Some(index + 4),
-    }));
+    labels.extend(
+        notification
+            .actions
+            .iter()
+            .enumerate()
+            .map(|(index, action)| RowActionButton {
+                label: format!("[{}]", action.label),
+                enabled: true,
+                selected: focused_row_action == Some(index + 4),
+            }),
+    );
     labels
 }
 
@@ -617,12 +618,18 @@ mod tests {
         assert_eq!(buttons[0].action, NotificationsHeaderAction::MarkAllRead);
         assert!(buttons[0].enabled);
         assert!(buttons[0].selected);
-        assert_eq!(header_button_style(&buttons[0], &theme), theme.fg_active.bg(Color::Indexed(236)));
+        assert_eq!(
+            header_button_style(&buttons[0], &theme),
+            theme.fg_active.bg(Color::Indexed(236))
+        );
 
         assert_eq!(buttons[1].action, NotificationsHeaderAction::ArchiveRead);
         assert!(!buttons[1].enabled);
         assert!(!buttons[1].selected);
-        assert_eq!(header_button_style(&buttons[1], &theme), Style::default().fg(Color::DarkGray));
+        assert_eq!(
+            header_button_style(&buttons[1], &theme),
+            Style::default().fg(Color::DarkGray)
+        );
 
         assert_eq!(buttons[2].action, NotificationsHeaderAction::Close);
         assert!(buttons[2].enabled);
@@ -635,7 +642,9 @@ mod tests {
         let mut state = state_with_notification();
         state.reduce(crate::state::NotificationsAction::FocusRowAction(Some(1)));
 
-        let notification = state.selected_item().expect("notification should be selected");
+        let notification = state
+            .selected_item()
+            .expect("notification should be selected");
         let buttons = row_action_buttons(notification, false, state.selected_row_action_index());
         let theme = ThemeTokens::default();
 

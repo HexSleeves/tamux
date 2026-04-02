@@ -324,6 +324,7 @@ async fn policy_halt_aborts_before_guarded_tool_execution_and_persists_failure_t
             None,
             None,
             None,
+            None,
             true,
         )
         .await

@@ -61,6 +61,7 @@ pub(super) struct SendMessageRunner<'a> {
     pub(super) attempted_recovery_signatures: std::collections::HashSet<String>,
     pub(super) recent_policy_tool_outcomes:
         VecDeque<super::orchestrator_policy::PolicyToolOutcomeSummary>,
+    pub(super) fresh_runner_retry: Option<FreshRunnerRetryRequest>,
 }
 
 pub(super) struct StreamIteration {
@@ -85,3 +86,20 @@ pub(super) enum ToolCallDisposition {
     RestartLoop,
     BreakLoop,
 }
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct FreshRunnerRetrySignal {
+    pub(super) scheduled_retry_cycles: u32,
+}
+
+impl std::fmt::Display for FreshRunnerRetrySignal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "restart send with a fresh runner after retry cycle {}",
+            self.scheduled_retry_cycles
+        )
+    }
+}
+
+impl std::error::Error for FreshRunnerRetrySignal {}

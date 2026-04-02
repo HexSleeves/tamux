@@ -192,6 +192,7 @@ async fn send_message_request_includes_runtime_continuity_and_negative_knowledge
             None,
             None,
             None,
+            None,
             true,
         )
         .await
@@ -264,7 +265,7 @@ async fn transport_incompatibility_does_not_mutate_persisted_config_and_emits_no
     let mut events = engine.subscribe();
 
     let _error = match engine
-        .send_message_inner(None, "hello", None, None, None, None, None, true)
+        .send_message_inner(None, "hello", None, None, None, None, None, None, true)
         .await
     {
         Ok(_) => panic!("transport incompatibility should fail the turn"),
@@ -401,7 +402,7 @@ async fn auto_retry_wait_repeats_scheduled_retry_cycles_until_cancelled() {
         let engine = engine.clone();
         async move {
             engine
-                .send_message_inner(Some(thread_id), "hello", None, None, None, None, None, true)
+                .send_message_inner(Some(thread_id), "hello", None, None, None, None, None, None, true)
                 .await
         }
     });
@@ -458,7 +459,7 @@ async fn structured_upstream_diagnostics_are_not_persisted_or_streamed_to_user()
     let mut events = engine.subscribe();
 
     let error = match engine
-        .send_message_inner(None, "hello", None, None, None, None, None, true)
+        .send_message_inner(None, "hello", None, None, None, None, None, None, true)
         .await
     {
         Ok(_) => panic!("structured upstream failure should fail the turn"),
@@ -499,6 +500,339 @@ async fn structured_upstream_diagnostics_are_not_persisted_or_streamed_to_user()
             .content
             .contains(UPSTREAM_DIAGNOSTICS_MARKER),
         "persisted assistant error should not include structured diagnostics"
+    );
+}
+
+#[tokio::test]
+async fn retry_stream_now_replaces_waiting_stream_with_fresh_send_generation() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let request_counter = Arc::new(AtomicUsize::new(0));
+    let release_second_request = Arc::new(tokio::sync::Notify::new());
+    let mut config = AgentConfig::default();
+    config.provider = "custom".to_string();
+    config.base_url = spawn_transient_failure_then_blocking_server(
+        request_counter.clone(),
+        release_second_request.clone(),
+    )
+    .await;
+    config.model = "gpt-4.1".to_string();
+    config.api_key = "test-key".to_string();
+    config.auth_source = AuthSource::ApiKey;
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = true;
+    config.max_retries = 0;
+    config.retry_delay_ms = 10_000;
+    config.providers.insert(
+        "custom".to_string(),
+        ProviderConfig {
+            base_url: config.base_url.clone(),
+            model: config.model.clone(),
+            api_key: config.api_key.clone(),
+            assistant_id: String::new(),
+            auth_source: AuthSource::ApiKey,
+            api_transport: ApiTransport::ChatCompletions,
+            reasoning_effort: String::new(),
+            context_window_tokens: 0,
+            response_schema: None,
+        },
+    );
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread-retry-now-refreshes-stream";
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            crate::agent::types::AgentThread {
+                id: thread_id.to_string(),
+                title: "Retry refresh".to_string(),
+                messages: vec![crate::agent::types::AgentMessage::user("hello", 1)],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+    }
+
+    let mut events = engine.subscribe();
+    let mut send_task = tokio::spawn({
+        let engine = engine.clone();
+        async move {
+            engine
+                .send_message_inner(Some(thread_id), "hello", None, None, None, None, None, None, true)
+                .await
+        }
+    });
+
+    let waiting_generation = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            match events.recv().await {
+                Ok(AgentEvent::RetryStatus {
+                    thread_id: event_thread_id,
+                    phase,
+                    ..
+                }) if event_thread_id == thread_id && phase == "waiting" => {
+                    let streams = engine.stream_cancellations.lock().await;
+                    break streams
+                        .get(thread_id)
+                        .map(|entry| entry.generation)
+                        .expect("waiting retry stream should be registered");
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+    })
+    .await
+    .expect("retry waiting status should appear");
+
+    assert!(
+        engine.retry_stream_now(thread_id).await,
+        "retry-now should start a fresh resend"
+    );
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while request_counter.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("retry-now should perform a second request");
+
+    let refreshed_generation = {
+        let streams = engine.stream_cancellations.lock().await;
+        streams
+            .get(thread_id)
+            .map(|entry| entry.generation)
+            .expect("fresh resend should replace the active stream entry")
+    };
+    assert!(
+        refreshed_generation > waiting_generation,
+        "retry-now should replace the waiting stream with a fresh generation"
+    );
+
+    let original = tokio::time::timeout(std::time::Duration::from_secs(1), &mut send_task)
+        .await
+        .expect("original send task should stop once retry-now spawns a fresh send")
+        .expect("original send join should succeed");
+    if let Err(error) = original {
+        panic!("original send task should finish cleanly after retry-now: {error}");
+    }
+
+    assert!(
+        engine.stop_stream(thread_id).await,
+        "fresh resend stream should still be cancellable"
+    );
+    release_second_request.notify_waiters();
+}
+
+#[tokio::test]
+async fn anthropic_transport_retry_restarts_with_fresh_runner_state() {
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = "minimax-coding-plan".to_string();
+    config.base_url = spawn_anthropic_rebuild_sensitive_retry_server(recorded_bodies.clone()).await;
+    config.model = "MiniMax-M2.7".to_string();
+    config.api_key = "test-key".to_string();
+    config.auth_source = AuthSource::ApiKey;
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = true;
+    config.max_retries = 1;
+    config.retry_delay_ms = 10;
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread-anthropic-fresh-retry";
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            crate::agent::types::AgentThread {
+                id: thread_id.to_string(),
+                title: "Anthropic fresh retry".to_string(),
+                messages: vec![crate::agent::types::AgentMessage::user("hello", 1)],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+    }
+
+    let send_task = tokio::spawn({
+        let engine = engine.clone();
+        async move {
+            engine
+                .send_message_inner(Some(thread_id), "hello", None, None, None, None, None, None, true)
+                .await
+        }
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if recorded_bodies
+                .lock()
+                .expect("lock recorded anthropic bodies")
+                .len()
+                >= 1
+            {
+                let mut threads = engine.threads.write().await;
+                let thread = threads.get_mut(thread_id).expect("thread should exist");
+                let last_user = thread
+                    .messages
+                    .iter_mut()
+                    .rev()
+                    .find(|message| message.role == MessageRole::User)
+                    .expect("user message should exist");
+                last_user.content = "hello again".to_string();
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("first anthropic request should be recorded");
+
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), send_task)
+        .await
+        .expect("send task should complete")
+        .expect("send task join should succeed")
+        .expect("fresh runner retry should succeed");
+
+    assert_eq!(outcome.thread_id, thread_id);
+
+    let recorded = recorded_bodies
+        .lock()
+        .expect("lock recorded anthropic bodies");
+    assert!(
+        recorded.len() >= 2,
+        "expected at least two anthropic requests, saw {recorded:?}"
+    );
+    assert!(
+        recorded[0].contains("\"hello\""),
+        "expected the initial anthropic request to use the original thread content: {}",
+        recorded[0]
+    );
+    assert!(
+        recorded[1].contains("hello again"),
+        "expected the retried anthropic request to rebuild from fresh thread state: {}",
+        recorded[1]
+    );
+}
+
+#[tokio::test]
+async fn anthropic_outer_auto_retry_restarts_with_fresh_runner_state() {
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = "custom".to_string();
+    config.base_url = spawn_anthropic_rebuild_sensitive_retry_server(recorded_bodies.clone()).await;
+    config.model = "claude-test".to_string();
+    config.api_key = "test-key".to_string();
+    config.auth_source = AuthSource::ApiKey;
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = true;
+    config.max_retries = 0;
+    config.retry_delay_ms = 10;
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread-anthropic-outer-fresh-retry";
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            crate::agent::types::AgentThread {
+                id: thread_id.to_string(),
+                title: "Anthropic outer fresh retry".to_string(),
+                messages: vec![crate::agent::types::AgentMessage::user("hello", 1)],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+    }
+
+    let send_task = tokio::spawn({
+        let engine = engine.clone();
+        async move {
+            engine
+                .send_message_inner(Some(thread_id), "hello", None, None, None, None, None, None, true)
+                .await
+        }
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if recorded_bodies
+                .lock()
+                .expect("lock recorded anthropic bodies")
+                .len()
+                >= 1
+            {
+                let mut threads = engine.threads.write().await;
+                let thread = threads.get_mut(thread_id).expect("thread should exist");
+                let last_user = thread
+                    .messages
+                    .iter_mut()
+                    .rev()
+                    .find(|message| message.role == MessageRole::User)
+                    .expect("user message should exist");
+                last_user.content = "hello again".to_string();
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("first anthropic request should be recorded");
+
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), send_task)
+        .await
+        .expect("send task should complete")
+        .expect("send task join should succeed")
+        .expect("outer fresh runner retry should succeed");
+
+    assert_eq!(outcome.thread_id, thread_id);
+
+    let recorded = recorded_bodies
+        .lock()
+        .expect("lock recorded anthropic bodies");
+    assert!(
+        recorded.len() >= 2,
+        "expected at least two anthropic requests, saw {recorded:?}"
+    );
+    assert!(
+        recorded[0].contains("\"hello\""),
+        "expected the initial anthropic request to use the original thread content: {}",
+        recorded[0]
+    );
+    assert!(
+        recorded[1].contains("hello again"),
+        "expected the outer auto-retry anthropic request to rebuild from fresh thread state: {}",
+        recorded[1]
     );
 }
 

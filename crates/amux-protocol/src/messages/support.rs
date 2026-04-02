@@ -10,6 +10,13 @@ pub struct AsyncCommandCapability {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ClientSurface {
+    Tui,
+    Electron,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OperationLifecycleState {
     Accepted,
     Started,

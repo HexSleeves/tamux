@@ -450,7 +450,7 @@ impl TuiModel {
             self.status_line = "Not connected to daemon".to_string();
             return;
         }
-        if self.queue_barrier_active() {
+        if self.should_queue_submitted_prompt() {
             self.queue_prompt(prompt);
             return;
         }

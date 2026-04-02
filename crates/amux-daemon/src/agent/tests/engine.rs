@@ -281,6 +281,7 @@ async fn send_message_times_out_hung_provider_request() {
             None,
             None,
             None,
+            None,
             true,
         ),
     )

@@ -116,9 +116,7 @@ impl TuiModel {
                 .retry_status()
                 .is_some_and(|status| matches!(status.phase, chat::RetryPhase::Waiting));
         let retry_wait_accepts_keyboard = retry_waiting
-            && (matches!(self.focus, FocusArea::Chat)
-                || (matches!(self.focus, FocusArea::Input)
-                    && self.input.buffer().trim().is_empty()));
+            && matches!(self.focus, FocusArea::Chat | FocusArea::Input);
         if retry_wait_accepts_keyboard {
             match code {
                 KeyCode::Left | KeyCode::Char('h') if matches!(self.focus, FocusArea::Chat) => {
@@ -144,8 +142,11 @@ impl TuiModel {
                 KeyCode::Enter | KeyCode::Char(' ') => {
                     if let Some(thread_id) = self.chat.active_thread_id().map(str::to_string) {
                         if self.retry_wait_start_selected {
+                            self.chat.reduce(chat::ChatAction::ClearRetryStatus {
+                                thread_id: thread_id.clone(),
+                            });
                             self.send_daemon_command(DaemonCommand::RetryStreamNow { thread_id });
-                            self.status_line = "Retrying now…".to_string();
+                            self.status_line = "Retrying now...".to_string();
                             self.agent_activity = Some("retrying".to_string());
                         } else {
                             self.cancelled_thread_id = Some(thread_id.clone());

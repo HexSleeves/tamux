@@ -21,6 +21,7 @@ impl DaemonClient {
             content,
             session_id,
             context_messages_json: None,
+            client_surface: Some(amux_protocol::ClientSurface::Tui),
         })
     }
 

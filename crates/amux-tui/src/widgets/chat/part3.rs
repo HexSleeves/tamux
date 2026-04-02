@@ -76,6 +76,7 @@ fn visible_rendered_lines(
     chat: &ChatState,
     theme: &ThemeTokens,
     current_tick: u64,
+    retry_wait_start_selected: bool,
 ) -> Option<(Rect, Vec<RenderedChatLine>)> {
     if (chat.active_thread().is_none() && chat.streaming_content().is_empty())
         || area.width == 0
@@ -85,8 +86,13 @@ fn visible_rendered_lines(
     }
 
     let inner = content_inner(area);
-    let (all_lines, message_line_ranges) =
-        build_rendered_lines(chat, theme, inner.width as usize, current_tick);
+    let (all_lines, message_line_ranges) = build_rendered_lines(
+        chat,
+        theme,
+        inner.width as usize,
+        current_tick,
+        retry_wait_start_selected,
+    );
     let scroll = resolved_scroll(
         chat,
         all_lines.len(),
@@ -103,14 +109,20 @@ fn selection_snapshot(
     chat: &ChatState,
     theme: &ThemeTokens,
     current_tick: u64,
+    retry_wait_start_selected: bool,
 ) -> Option<SelectionSnapshot> {
     let inner = content_inner(area);
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
 
-    let (all_lines, message_line_ranges) =
-        build_rendered_lines(chat, theme, inner.width as usize, current_tick);
+    let (all_lines, message_line_ranges) = build_rendered_lines(
+        chat,
+        theme,
+        inner.width as usize,
+        current_tick,
+        retry_wait_start_selected,
+    );
     if all_lines.is_empty() {
         return None;
     }
@@ -344,7 +356,7 @@ pub fn selected_text(
 ) -> Option<String> {
     let inner = content_inner(area);
     let (all_lines, message_line_ranges) =
-        build_rendered_lines(chat, theme, inner.width as usize, current_tick);
+        build_rendered_lines(chat, theme, inner.width as usize, current_tick, false);
     if all_lines.is_empty() {
         return None;
     }
@@ -409,7 +421,7 @@ pub fn selection_point_from_mouse(
     current_tick: u64,
     mouse: Position,
 ) -> Option<SelectionPoint> {
-    let snapshot = selection_snapshot(area, chat, theme, current_tick)?;
+    let snapshot = selection_snapshot(area, chat, theme, current_tick, false)?;
     selection_point_from_snapshot(&snapshot, mouse)
 }
 
@@ -420,11 +432,12 @@ pub fn selection_points_from_mouse(
     current_tick: u64,
     start: Position,
     end: Position,
+    retry_wait_start_selected: bool,
 ) -> Option<(SelectionPoint, SelectionPoint)> {
-    let snapshot = selection_snapshot(area, chat, theme, current_tick)?;
+    let snapshot =
+        selection_snapshot(area, chat, theme, current_tick, retry_wait_start_selected)?;
     Some((
         selection_point_from_snapshot(&snapshot, start)?,
         selection_point_from_snapshot(&snapshot, end)?,
     ))
 }
-

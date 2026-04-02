@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ApprovalDecision, AsyncCommandCapability, GatewayAck, GatewayCursorState, GatewayHealthState,
-    GatewayIncomingEvent, GatewayRegistration, GatewayRouteModeState, GatewaySendResult,
-    GatewayThreadBindingState, ManagedCommandRequest, SessionId, WorkspaceId,
+    ApprovalDecision, AsyncCommandCapability, ClientSurface, GatewayAck, GatewayCursorState,
+    GatewayHealthState, GatewayIncomingEvent, GatewayRegistration, GatewayRouteModeState,
+    GatewaySendResult, GatewayThreadBindingState, ManagedCommandRequest, SessionId, WorkspaceId,
 };
 
 #[rustfmt::skip]
@@ -15,7 +15,7 @@ pub enum ClientMessage {
     DetachSession { id: SessionId },
     KillSession { id: SessionId },
     Input { id: SessionId, data: Vec<u8> },
-    ExecuteManagedCommand { id: SessionId, request: ManagedCommandRequest },
+    ExecuteManagedCommand { id: SessionId, request: ManagedCommandRequest, #[serde(default, skip_serializing_if = "Option::is_none")] client_surface: Option<ClientSurface> },
     ResolveApproval { id: SessionId, approval_id: String, decision: ApprovalDecision },
     Resize { id: SessionId, cols: u16, rows: u16 },
     ListSessions,
@@ -52,7 +52,7 @@ pub enum ClientMessage {
     VerifyTelemetryIntegrity,
     CheckpointSession { id: SessionId },
     Ping,
-    AgentSendMessage { thread_id: Option<String>, content: String, session_id: Option<String>, context_messages_json: Option<String> },
+    AgentSendMessage { thread_id: Option<String>, content: String, session_id: Option<String>, context_messages_json: Option<String>, #[serde(default, skip_serializing_if = "Option::is_none")] client_surface: Option<ClientSurface> },
     AgentDirectMessage { target: String, thread_id: Option<String>, content: String, session_id: Option<String> },
     AgentStopStream { thread_id: String },
     AgentRetryStreamNow { thread_id: String },
@@ -60,7 +60,7 @@ pub enum ClientMessage {
     AgentGetThread { thread_id: String },
     AgentDeleteThread { thread_id: String },
     AgentAddTask { title: String, description: String, priority: String, command: Option<String>, session_id: Option<String>, scheduled_at: Option<u64>, #[serde(default)] dependencies: Vec<String> },
-    AgentStartGoalRun { goal: String, title: Option<String>, thread_id: Option<String>, session_id: Option<String>, priority: Option<String>, client_request_id: Option<String>, #[serde(default, skip_serializing_if = "Option::is_none")] autonomy_level: Option<String> },
+    AgentStartGoalRun { goal: String, title: Option<String>, thread_id: Option<String>, session_id: Option<String>, priority: Option<String>, client_request_id: Option<String>, #[serde(default, skip_serializing_if = "Option::is_none")] autonomy_level: Option<String>, #[serde(default, skip_serializing_if = "Option::is_none")] client_surface: Option<ClientSurface> },
     AgentCancelTask { task_id: String },
     AgentListTasks,
     AgentListRuns,

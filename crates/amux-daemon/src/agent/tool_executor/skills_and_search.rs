@@ -276,6 +276,24 @@ where
     .map_err(|_| anyhow::anyhow!("web search timed out after {timeout_seconds} seconds"))?
 }
 
+fn safe_snippet_preview(text: &str, max_chars: usize) -> String {
+    truncate_on_char_boundary(text, max_chars, "...")
+}
+
+fn safe_text_excerpt(text: &str, max_chars: usize) -> String {
+    truncate_on_char_boundary(text, max_chars, "")
+}
+
+fn truncate_on_char_boundary(text: &str, max_chars: usize, suffix: &str) -> String {
+    if let Some((idx, _)) = text.char_indices().nth(max_chars) {
+        let mut truncated = text[..idx].to_string();
+        truncated.push_str(suffix);
+        truncated
+    } else {
+        text.to_string()
+    }
+}
+
 async fn execute_exa_search(
     http_client: &reqwest::Client,
     query: &str,
@@ -305,7 +323,7 @@ async fn execute_exa_search(
         let text = resp.text().await.unwrap_or_default();
         anyhow::bail!(
             "Exa API returned {status}: {}",
-            &text[..text.len().min(200)]
+            safe_text_excerpt(&text, 200)
         );
     }
 
@@ -322,11 +340,7 @@ async fn execute_exa_search(
                         .as_str()
                         .or_else(|| r["published_date"].as_str())
                         .or_else(|| r["publishedAt"].as_str());
-                    let snippet = if text.len() > 300 {
-                        format!("{}...", &text[..300])
-                    } else {
-                        text.to_string()
-                    };
+                    let snippet = safe_snippet_preview(text, 300);
                     format_result_with_metadata(title, url, &snippet, published_at)
                 })
                 .collect::<Vec<_>>()
@@ -368,7 +382,7 @@ async fn execute_tavily_search(
         let text = resp.text().await.unwrap_or_default();
         anyhow::bail!(
             "Tavily API returned {status}: {}",
-            &text[..text.len().min(200)]
+            safe_text_excerpt(&text, 200)
         );
     }
 
@@ -385,11 +399,7 @@ async fn execute_tavily_search(
                         .as_str()
                         .or_else(|| r["publishedDate"].as_str())
                         .or_else(|| r["publishedAt"].as_str());
-                    let snippet = if content.len() > 300 {
-                        format!("{}...", &content[..300])
-                    } else {
-                        content.to_string()
-                    };
+                    let snippet = safe_snippet_preview(content, 300);
                     format_result_with_metadata(title, url, &snippet, published_at)
                 })
                 .collect::<Vec<_>>()

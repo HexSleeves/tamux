@@ -262,6 +262,52 @@
         assert_eq!(body["reasoning"]["summary"], "auto");
     }
 
+    #[test]
+    fn responses_request_sets_tool_choice_when_tools_are_present() {
+        let config = ProviderConfig {
+            base_url: "https://api.openai.com".to_string(),
+            model: "gpt-5.4".to_string(),
+            api_key: String::new(),
+            assistant_id: String::new(),
+            auth_source: AuthSource::ApiKey,
+            api_transport: ApiTransport::Responses,
+            reasoning_effort: "off".to_string(),
+            context_window_tokens: 0,
+            response_schema: None,
+        };
+
+        let body = build_openai_responses_body(
+            "openai",
+            &config,
+            "system prompt",
+            &[ApiMessage {
+                role: "user".to_string(),
+                content: ApiContent::Text("hello".to_string()),
+                tool_call_id: None,
+                name: None,
+                tool_calls: None,
+            }],
+            &[ToolDefinition {
+                tool_type: "function".to_string(),
+                function: ToolFunctionDef {
+                    name: "update_memory".to_string(),
+                    description: "Store durable memory".to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "content": { "type": "string" }
+                        },
+                        "required": ["content"]
+                    }),
+                },
+            }],
+            None,
+            false,
+        );
+
+        assert_eq!(body["tool_choice"], "auto");
+    }
+
     #[tokio::test]
     async fn request_invalid_responses_400_malformed_body_is_classified_request_invalid() {
         let request_paths = Arc::new(Mutex::new(VecDeque::new()));

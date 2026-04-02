@@ -231,18 +231,11 @@ pub(super) fn skills_dir(agent_data_dir: &std::path::Path) -> std::path::PathBuf
 /// Seed built-in skill documents into `~/.tamux/skills/builtin/`.
 pub(super) fn seed_builtin_skills(agent_data_dir: &std::path::Path) {
     let root = skills_dir(agent_data_dir);
-    let source = std::path::Path::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../../skills"
-    ));
+    let source = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../skills"));
     let target = root.join("builtin");
 
     match seed_skills_tree(source, &target) {
-        Ok(count) => tracing::debug!(
-            "seeded {} built-in skills into {}",
-            count,
-            target.display()
-        ),
+        Ok(count) => tracing::debug!("seeded {} built-in skills into {}", count, target.display()),
         Err(e) => tracing::warn!(
             "failed to seed built-in skills from {} to {}: {e}",
             source.display(),

@@ -13,6 +13,7 @@ pub(super) struct ParsedMessageMetadata {
 }
 
 pub(super) struct ParsedThreadMetadata {
+    pub client_surface: Option<amux_protocol::ClientSurface>,
     pub upstream_thread_id: Option<String>,
     pub upstream_transport: Option<ApiTransport>,
     pub upstream_provider: Option<String>,
@@ -74,8 +75,13 @@ pub(super) fn parse_thread_metadata(metadata_json: Option<&str>) -> ParsedThread
         .as_ref()
         .and_then(|value| value.get("upstream_transport"))
         .and_then(|value| serde_json::from_value::<ApiTransport>(value.clone()).ok());
+    let client_surface = metadata
+        .as_ref()
+        .and_then(|value| value.get("client_surface"))
+        .and_then(|value| serde_json::from_value::<amux_protocol::ClientSurface>(value.clone()).ok());
 
     ParsedThreadMetadata {
+        client_surface,
         upstream_thread_id: get_str("upstream_thread_id"),
         upstream_transport,
         upstream_provider: get_str("upstream_provider"),
@@ -99,8 +105,13 @@ pub(super) fn build_message_metadata_json(message: &AgentMessage) -> Option<Stri
     .ok()
 }
 
-pub(super) fn build_thread_metadata_json(thread: &AgentThread) -> Option<String> {
+pub(super) fn build_thread_metadata_json(
+    thread: &AgentThread,
+    client_surface: Option<amux_protocol::ClientSurface>,
+) -> Option<String> {
     serde_json::to_string(&serde_json::json!({
+        "client_surface": client_surface,
+        "clientSurface": client_surface,
         "upstream_thread_id": thread.upstream_thread_id,
         "upstreamThreadId": thread.upstream_thread_id,
         "upstream_transport": thread.upstream_transport,

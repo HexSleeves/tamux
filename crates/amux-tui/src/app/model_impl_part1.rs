@@ -121,6 +121,10 @@ impl TuiModel {
         self.chat.has_running_tool_calls()
     }
 
+    fn should_queue_submitted_prompt(&self) -> bool {
+        self.chat.is_streaming()
+    }
+
     fn clear_expired_queued_prompt_copy_feedback(&mut self) {
         for prompt in &mut self.queued_prompts {
             prompt.clear_expired_copy_feedback(self.tick_counter);

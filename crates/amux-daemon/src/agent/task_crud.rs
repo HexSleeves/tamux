@@ -125,6 +125,30 @@ impl AgentEngine {
         client_request_id: Option<String>,
         autonomy_level: Option<String>,
     ) -> GoalRun {
+        self.start_goal_run_with_surface(
+            goal,
+            title,
+            thread_id,
+            session_id,
+            priority,
+            client_request_id,
+            autonomy_level,
+            None,
+        )
+        .await
+    }
+
+    pub async fn start_goal_run_with_surface(
+        &self,
+        goal: String,
+        title: Option<String>,
+        thread_id: Option<String>,
+        session_id: Option<String>,
+        priority: Option<&str>,
+        client_request_id: Option<String>,
+        autonomy_level: Option<String>,
+        client_surface: Option<amux_protocol::ClientSurface>,
+    ) -> GoalRun {
         let normalized_goal_key = normalize_goal_key(&goal);
         let normalized_request_id = client_request_id
             .as_deref()
@@ -164,6 +188,9 @@ impl AgentEngine {
         }
 
         let now = now_millis();
+        if let (Some(thread_id), Some(client_surface)) = (thread_id.as_deref(), client_surface) {
+            self.set_thread_client_surface(thread_id, client_surface).await;
+        }
         let normalized_title = title
             .as_deref()
             .map(str::trim)
@@ -213,6 +240,10 @@ impl AgentEngine {
         };
 
         self.goal_runs.lock().await.push_back(goal_run.clone());
+        if let Some(client_surface) = client_surface {
+            self.set_goal_run_client_surface(&goal_run.id, client_surface)
+                .await;
+        }
         self.persist_goal_runs().await;
         self.emit_goal_run_update(&goal_run, Some("Goal queued".into()));
         self.record_provenance_event(

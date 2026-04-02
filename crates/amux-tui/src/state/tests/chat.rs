@@ -152,6 +152,33 @@ fn thread_list_received_replaces_threads() {
 }
 
 #[test]
+fn thread_list_received_preserves_existing_messages_when_summary_is_empty() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "First".into(),
+        messages: vec![AgentMessage {
+            role: MessageRole::Assistant,
+            content: "Existing detail".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    state.reduce(ChatAction::ThreadListReceived(vec![AgentThread {
+        id: "t1".into(),
+        title: "First renamed".into(),
+        messages: Vec::new(),
+        ..Default::default()
+    }]));
+
+    let thread = state.threads().first().expect("thread should exist");
+    assert_eq!(thread.title, "First renamed");
+    assert_eq!(thread.messages.len(), 1);
+    assert_eq!(thread.messages[0].content, "Existing detail");
+}
+
+#[test]
 fn tool_call_tracks_running_tool() {
     let mut state = ChatState::new();
     state.reduce(ChatAction::ThreadCreated {

@@ -148,6 +148,57 @@ async fn delete_thread_messages_updates_live_thread_and_persisted_history() {
 }
 
 #[tokio::test]
+async fn thread_client_surface_persists_with_thread_metadata() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let thread_id = "thread_surface";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            AgentThread {
+                id: thread_id.to_string(),
+                title: "Surface".to_string(),
+                created_at: 1,
+                updated_at: 1,
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                messages: vec![AgentMessage::user("hello", 1)],
+            },
+        );
+    }
+    engine
+        .set_thread_client_surface(thread_id, amux_protocol::ClientSurface::Tui)
+        .await;
+    engine.persist_thread_by_id(thread_id).await;
+
+    let persisted = engine
+        .history
+        .get_thread(thread_id)
+        .await
+        .expect("read thread")
+        .expect("thread should persist");
+    let metadata = persisted.metadata_json.expect("thread metadata");
+    assert!(metadata.contains("\"client_surface\":\"tui\""));
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let rehydrated = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    rehydrated.hydrate().await.expect("hydrate");
+    assert_eq!(
+        rehydrated.get_thread_client_surface(thread_id).await,
+        Some(amux_protocol::ClientSurface::Tui)
+    );
+}
+
+#[tokio::test]
 async fn delete_thread_messages_rehydrates_and_clears_invalid_continuation() {
     let root = tempdir().unwrap();
     let manager = SessionManager::new_test(root.path()).await;

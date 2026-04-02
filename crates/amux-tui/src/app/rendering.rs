@@ -59,6 +59,7 @@ impl TuiModel {
                             self.tick_counter,
                             anchor,
                             current,
+                            self.retry_wait_start_selected,
                         )
                     })
                 })
@@ -83,6 +84,7 @@ impl TuiModel {
             &self.chat,
             &self.theme,
             self.tick_counter,
+            self.retry_wait_start_selected,
             self.focus == FocusArea::Chat,
             mouse_selection,
         );

@@ -190,6 +190,7 @@ async fn execute_tool_weles_scope_blocks_shell_python_without_recursive_spawn_fr
             None,
             None,
             None,
+            None,
             true,
         )
         .await

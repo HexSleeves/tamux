@@ -260,6 +260,15 @@
     }
 
     #[tokio::test]
+    async fn unsupported_provider_model_fetch_returns_empty_catalog() {
+        let models = fetch_models("featherless", "http://127.0.0.1:9", "")
+            .await
+            .expect("unsupported providers should not surface a fetch error");
+
+        assert!(models.is_empty());
+    }
+
+    #[tokio::test]
     async fn copilot_responses_parser_collects_reasoning_summary_parts() {
         let client = reqwest::Client::new();
         let body = concat!(

@@ -17,6 +17,12 @@ pub(in crate::agent) use helpers::{
 pub(super) struct SendMessageOutcome {
     pub thread_id: String,
     pub interrupted_for_approval: bool,
+    pub fresh_runner_retry: Option<FreshRunnerRetryRequest>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct FreshRunnerRetryRequest {
+    pub scheduled_retry_cycles: u32,
 }
 
 #[derive(Clone)]
@@ -74,10 +80,12 @@ pub struct AgentEngine {
     pub session_manager: Arc<SessionManager>,
     pub history: HistoryStore,
     pub threads: RwLock<HashMap<String, AgentThread>>,
+    pub thread_client_surfaces: RwLock<HashMap<String, amux_protocol::ClientSurface>>,
     pub thread_todos: RwLock<HashMap<String, Vec<TodoItem>>>,
     pub thread_work_contexts: RwLock<HashMap<String, ThreadWorkContext>>,
     pub tasks: Mutex<VecDeque<AgentTask>>,
     pub goal_runs: Mutex<VecDeque<GoalRun>>,
+    pub goal_run_client_surfaces: RwLock<HashMap<String, amux_protocol::ClientSurface>>,
     pub inflight_goal_runs: Mutex<HashSet<String>>,
     pub heartbeat_items: RwLock<Vec<HeartbeatItem>>,
     pub event_tx: broadcast::Sender<AgentEvent>,
@@ -236,10 +244,12 @@ impl AgentEngine {
             session_manager,
             history,
             threads: RwLock::new(HashMap::new()),
+            thread_client_surfaces: RwLock::new(HashMap::new()),
             thread_todos: RwLock::new(HashMap::new()),
             thread_work_contexts: RwLock::new(HashMap::new()),
             tasks: Mutex::new(VecDeque::new()),
             goal_runs: Mutex::new(VecDeque::new()),
+            goal_run_client_surfaces: RwLock::new(HashMap::new()),
             inflight_goal_runs: Mutex::new(HashSet::new()),
             heartbeat_items: RwLock::new(Vec::new()),
             event_tx,

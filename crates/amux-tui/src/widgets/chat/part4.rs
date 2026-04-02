@@ -37,6 +37,14 @@ fn selection_point_from_snapshot(
         col: content_col,
     })
 }
+
+fn toggle_button_hit(hit: &RenderedChatLine, inner: Rect, mouse: Position) -> bool {
+    let content_col = mouse.x.saturating_sub(inner.x) as usize;
+    let (_, content_start, _) = rendered_line_content_bounds(hit);
+    content_col >= content_start
+        && content_col < content_start.saturating_add(TOGGLE_BUTTON_HIT_WIDTH)
+}
+
 pub fn hit_test(
     area: Rect,
     chat: &ChatState,
@@ -44,7 +52,7 @@ pub fn hit_test(
     current_tick: u64,
     mouse: Position,
 ) -> Option<ChatHitTarget> {
-    let snapshot = selection_snapshot(area, chat, theme, current_tick)?;
+    let snapshot = selection_snapshot(area, chat, theme, current_tick, false)?;
     let inner = snapshot.inner;
 
     if mouse.x < inner.x
@@ -130,9 +138,21 @@ pub fn hit_test(
             }
         }
         RenderedLineKind::ReasoningToggle => {
-            Some(ChatHitTarget::ReasoningToggle(hit.message_index?))
+            let message_index = hit.message_index?;
+            if toggle_button_hit(hit, inner, mouse) {
+                Some(ChatHitTarget::ReasoningToggle(message_index))
+            } else {
+                Some(ChatHitTarget::Message(message_index))
+            }
         }
-        RenderedLineKind::ToolToggle => Some(ChatHitTarget::ToolToggle(hit.message_index?)),
+        RenderedLineKind::ToolToggle => {
+            let message_index = hit.message_index?;
+            if toggle_button_hit(hit, inner, mouse) {
+                Some(ChatHitTarget::ToolToggle(message_index))
+            } else {
+                Some(ChatHitTarget::Message(message_index))
+            }
+        }
         RenderedLineKind::ActionBar => {
             let message_index = hit.message_index?;
             let content_col = mouse.x.saturating_sub(inner.x) as usize;
@@ -164,6 +184,7 @@ pub fn render(
     chat: &ChatState,
     theme: &ThemeTokens,
     current_tick: u64,
+    retry_wait_start_selected: bool,
     _focused: bool,
     mouse_selection: Option<(SelectionPoint, SelectionPoint)>,
 ) {
@@ -174,7 +195,9 @@ pub fn render(
         super::splash::render(frame, inner, theme);
         return;
     }
-    let Some(snapshot) = selection_snapshot(area, chat, theme, current_tick) else {
+    let Some(snapshot) =
+        selection_snapshot(area, chat, theme, current_tick, retry_wait_start_selected)
+    else {
         return;
     };
     render_snapshot(frame, &snapshot, chat, mouse_selection);

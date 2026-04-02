@@ -7,7 +7,7 @@ fn add_available_tools_part_a(
     if config.tools.bash {
         tools.push(tool_def(
             "bash_command",
-            "Execute a shell command through a tamux-managed terminal session. This does not run as a daemon-native headless subprocess. Omit `session` in normal TUI/chat turns unless you intentionally target a known live terminal. For large or awkward file writes, prefer a minimal Python writer over fragile shell escaping, but inspect the Python carefully so it only performs the intended write.",
+            "Execute a shell command. TUI-originated turns run headless by default; Electron-originated turns may use a managed terminal when the command needs terminal state or interactivity. Omit `session` in normal TUI/chat turns unless you intentionally target a known live terminal. For large or awkward file writes, prefer a minimal Python writer over fragile shell escaping, but inspect the Python carefully so it only performs the intended write.",
             serde_json::json!({
                 "type": "object",
                 "properties": {

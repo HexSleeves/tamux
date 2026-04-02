@@ -123,7 +123,9 @@ impl NotificationsState {
                 } else {
                     let current = self
                         .header_action
-                        .and_then(|action| actions.iter().position(|candidate| *candidate == action))
+                        .and_then(|action| {
+                            actions.iter().position(|candidate| *candidate == action)
+                        })
                         .unwrap_or(0);
                     let next = if delta < 0 {
                         current.saturating_sub((-delta) as usize)
@@ -368,7 +370,9 @@ mod tests {
     #[test]
     fn step_header_skips_disabled_actions() {
         let mut state = NotificationsState::new();
-        state.reduce(NotificationsAction::Replace(vec![notification("active", 10)]));
+        state.reduce(NotificationsAction::Replace(vec![notification(
+            "active", 10,
+        )]));
 
         state.reduce(NotificationsAction::StepHeader(1));
         assert_eq!(

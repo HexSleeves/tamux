@@ -472,7 +472,7 @@ fn queued_prompt_flushes_after_last_tool_result_before_turn_done() {
 }
 
 #[test]
-fn prompt_during_text_stream_without_running_tools_sends_immediately() {
+fn prompt_during_text_stream_without_running_tools_waits_for_done() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
     model.connected = true;
     model.concierge.auto_cleanup_on_navigate = false;
@@ -494,6 +494,20 @@ fn prompt_during_text_stream_without_running_tools_sends_immediately() {
     );
 
     model.submit_prompt("switch to the auth bug instead".to_string());
+    assert_eq!(model.queued_prompts.len(), 1);
+    assert!(daemon_rx.try_recv().is_err());
+
+    model.handle_client_event(ClientEvent::Done {
+        thread_id: "thread-1".to_string(),
+        input_tokens: 10,
+        output_tokens: 20,
+        cost: None,
+        provider: None,
+        model: None,
+        tps: None,
+        generation_ms: None,
+        reasoning: None,
+    });
 
     match daemon_rx.try_recv() {
         Ok(DaemonCommand::SendMessage {
@@ -503,13 +517,13 @@ fn prompt_during_text_stream_without_running_tools_sends_immediately() {
             assert_eq!(content, "switch to the auth bug instead");
         }
         other => panic!(
-            "expected immediate send when no tool is running, got {:?}",
+            "expected queued send after done when text is streaming, got {:?}",
             other
         ),
     }
     assert!(
         model.queued_prompts.is_empty(),
-        "message should not be queued once tool execution has finished"
+        "message should flush once the streaming assistant message completes"
     );
 }
 

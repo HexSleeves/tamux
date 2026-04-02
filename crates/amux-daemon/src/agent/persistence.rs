@@ -103,9 +103,13 @@ impl AgentEngine {
         match self.history.list_threads().await {
             Ok(thread_rows) if !thread_rows.is_empty() => {
                 let mut threads = HashMap::new();
+                let mut thread_client_surfaces = HashMap::new();
                 for thread_row in thread_rows {
                     let thread_metadata =
                         parse_thread_metadata(thread_row.metadata_json.as_deref());
+                    if let Some(client_surface) = thread_metadata.client_surface {
+                        thread_client_surfaces.insert(thread_row.id.clone(), client_surface);
+                    }
                     let messages = self
                         .history
                         .list_messages(&thread_row.id, None)
@@ -164,6 +168,7 @@ impl AgentEngine {
                     );
                 }
                 *self.threads.write().await = threads;
+                *self.thread_client_surfaces.write().await = thread_client_surfaces;
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("failed to load agent threads from sqlite: {e}"),

@@ -11,6 +11,63 @@ fn provider_requires_fresh_anthropic_connection(provider: &str) -> bool {
     matches!(provider, "minimax" | "minimax-coding-plan")
 }
 
+fn build_fresh_anthropic_http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .http1_only()
+        .pool_max_idle_per_host(0)
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .read_timeout(std::time::Duration::from_secs(125))
+        .build()
+        .map_err(Into::into)
+}
+
+fn short_sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(bytes);
+    format!("{:x}", digest)[..16].to_string()
+}
+
+fn redacted_header_value(name: &str, value: &reqwest::header::HeaderValue) -> String {
+    match name {
+        "authorization" | "x-api-key" | "proxy-authorization" | "cookie" | "set-cookie" => {
+            "<redacted>".to_string()
+        }
+        _ => value
+            .to_str()
+            .map(|text| text.to_string())
+            .unwrap_or_else(|_| "<binary>".to_string()),
+    }
+}
+
+fn anthropic_request_fingerprint(request: &reqwest::Request) -> String {
+    let mut header_lines: Vec<String> = request
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            format!(
+                "{}:{}",
+                name.as_str(),
+                redacted_header_value(name.as_str(), value)
+            )
+        })
+        .collect();
+    header_lines.sort();
+
+    let body_bytes = request.body().and_then(|body| body.as_bytes()).unwrap_or(&[]);
+    let canonical = format!(
+        "method={}\nurl={}\nversion={:?}\nheaders={}\nbody_sha256={}\nbody_len={}",
+        request.method(),
+        request.url(),
+        request.version(),
+        header_lines.join("\n"),
+        short_sha256_hex(body_bytes),
+        body_bytes.len()
+    );
+
+    short_sha256_hex(canonical.as_bytes())
+}
+
 fn build_anthropic_request(
     client: &reqwest::Client,
     provider: &str,
@@ -93,14 +150,45 @@ fn build_anthropic_request(
 async fn run_anthropic(
     client: &reqwest::Client,
     provider: &str,
+    attempt: u32,
     config: &ProviderConfig,
     system_prompt: &str,
     messages: &[ApiMessage],
     tools: &[ToolDefinition],
     tx: &mpsc::Sender<Result<CompletionChunk>>,
 ) -> Result<()> {
-    let request = build_anthropic_request(client, provider, config, system_prompt, messages, tools)?;
+    let client = if provider_requires_fresh_anthropic_connection(provider) {
+        build_fresh_anthropic_http_client()?
+    } else {
+        client.clone()
+    };
+    let request =
+        build_anthropic_request(&client, provider, config, system_prompt, messages, tools)?;
+    let request_fingerprint = anthropic_request_fingerprint(&request);
+    tracing::info!(
+        provider = %provider,
+        model = %config.model,
+        attempt,
+        url = %request.url(),
+        version = ?request.version(),
+        request_fingerprint = %request_fingerprint,
+        connection_close = request
+            .headers()
+            .get(reqwest::header::CONNECTION)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or(""),
+        tool_count = tools.len(),
+        "dispatching anthropic request"
+    );
     let response = client.execute(request).await?;
+    tracing::info!(
+        provider = %provider,
+        model = %config.model,
+        attempt,
+        request_fingerprint = %request_fingerprint,
+        status = %response.status(),
+        "anthropic response headers received"
+    );
 
     if !response.status().is_success() {
         let status = response.status();
@@ -112,6 +200,18 @@ async fn run_anthropic(
             .chars()
             .take(200)
             .collect::<String>();
+        tracing::warn!(
+            provider = %provider,
+            model = %config.model,
+            attempt,
+            request_fingerprint = %request_fingerprint,
+            status = %status,
+            retry_after_ms = retry_after_ms
+                .or_else(|| extract_retry_after_ms(None, &text))
+                .unwrap_or(0),
+            body = %summarize_upstream_body(&text),
+            "anthropic request returned non-success response"
+        );
         return Err(classify_http_failure_with_retry_after(
             status,
             "Anthropic",

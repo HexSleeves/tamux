@@ -88,8 +88,11 @@ impl TuiModel {
             Some(chat::ChatHitTarget::RetryStartNow) => {
                 if let Some(thread_id) = self.chat.active_thread_id().map(str::to_string) {
                     self.retry_wait_start_selected = true;
+                    self.chat.reduce(chat::ChatAction::ClearRetryStatus {
+                        thread_id: thread_id.clone(),
+                    });
                     self.send_daemon_command(DaemonCommand::RetryStreamNow { thread_id });
-                    self.status_line = "Retrying now…".to_string();
+                    self.status_line = "Retrying now...".to_string();
                     self.agent_activity = Some("retrying".to_string());
                 }
             }

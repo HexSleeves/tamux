@@ -235,6 +235,12 @@ impl AgentEngine {
             .await
             .ok()?;
         let thread_metadata = parse_thread_metadata(db_thread.metadata_json.as_deref());
+        if let Some(client_surface) = thread_metadata.client_surface {
+            self.thread_client_surfaces
+                .write()
+                .await
+                .insert(thread_id.to_string(), client_surface);
+        }
 
         let messages: Vec<AgentMessage> = db_messages
             .into_iter()
@@ -303,7 +309,7 @@ impl AgentEngine {
     /// Run a complete agent turn in a thread.
     pub async fn send_message(&self, thread_id: Option<&str>, content: &str) -> Result<String> {
         Ok(Box::pin(
-            self.send_message_inner(thread_id, content, None, None, None, None, None, true),
+            self.send_message_inner(thread_id, content, None, None, None, None, None, None, true),
         )
         .await?
         .thread_id)
@@ -324,6 +330,7 @@ impl AgentEngine {
             None,
             Some(llm_user_override),
             Some(stream_chunk_timeout),
+            None,
             true,
         ))
         .await?
@@ -336,6 +343,22 @@ impl AgentEngine {
         preferred_session_hint: Option<&str>,
         content: &str,
     ) -> Result<String> {
+        self.send_message_with_session_and_surface(
+            thread_id,
+            preferred_session_hint,
+            content,
+            None,
+        )
+        .await
+    }
+
+    pub async fn send_message_with_session_and_surface(
+        &self,
+        thread_id: Option<&str>,
+        preferred_session_hint: Option<&str>,
+        content: &str,
+        client_surface: Option<amux_protocol::ClientSurface>,
+    ) -> Result<String> {
         Ok(Box::pin(self.send_message_inner(
             thread_id,
             content,
@@ -344,6 +367,7 @@ impl AgentEngine {
             None,
             None,
             None,
+            client_surface,
             true,
         ))
         .await?
@@ -358,6 +382,20 @@ impl AgentEngine {
         backend_override: Option<&str>,
         content: &str,
     ) -> Result<SendMessageOutcome> {
+        let client_surface = if let Some(thread_id) = thread_id {
+            self.get_thread_client_surface(thread_id).await
+        } else {
+            let goal_run_id = {
+                let tasks = self.tasks.lock().await;
+                tasks.iter()
+                    .find(|task| task.id == task_id)
+                    .and_then(|task| task.goal_run_id.clone())
+            };
+            match goal_run_id {
+                Some(goal_run_id) => self.get_goal_run_client_surface(&goal_run_id).await,
+                None => None,
+            }
+        };
         Box::pin(self.send_message_inner(
             thread_id,
             content,
@@ -366,6 +404,7 @@ impl AgentEngine {
             backend_override,
             None,
             None,
+            client_surface,
             true,
         ))
         .await
@@ -388,6 +427,7 @@ impl AgentEngine {
             Some(task_id),
             preferred_session_hint,
             backend_override,
+            None,
             None,
             None,
             false,
@@ -438,6 +478,7 @@ impl AgentEngine {
             None,
             None,
             None,
+            None,
             true,
         ))
         .await?
@@ -473,6 +514,7 @@ impl AgentEngine {
                 &wrapped,
                 None,
                 preferred_session_hint,
+                None,
                 None,
                 None,
                 None,

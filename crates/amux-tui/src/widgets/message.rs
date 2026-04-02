@@ -229,6 +229,10 @@ pub type ExpandedReasoning = std::collections::HashSet<usize>;
 /// Set of message indices whose tool details are expanded
 pub type ExpandedTools = std::collections::HashSet<usize>;
 
+fn toggle_glyph(expanded: bool) -> &'static str {
+    if expanded { "\u{25be}" } else { "\u{25b6}" }
+}
+
 /// Convert a message into ratatui Lines (all owned/static)
 pub fn message_to_lines(
     msg: &AgentMessage,
@@ -282,7 +286,10 @@ fn render_compact(
         if let Some(name) = &msg.tool_name {
             let status = msg.tool_status.as_deref().unwrap_or("done");
             let (status_text, status_style) = format_tool_status(status, theme);
+            let is_expanded = expanded_tools.contains(&msg_index);
             let mut header_spans = vec![
+                Span::styled(toggle_glyph(is_expanded), theme.fg_dim),
+                Span::raw(" "),
                 Span::styled("\u{2699}", theme.accent_assistant),
                 Span::raw("  "),
                 Span::styled(name.clone(), theme.fg_dim),
@@ -298,7 +305,7 @@ fn render_compact(
             lines.push(Line::from(header_spans));
 
             // Expanded tool details
-            if expanded_tools.contains(&msg_index) {
+            if is_expanded {
                 let detail_indent = 4;
                 let detail_width = width.saturating_sub(detail_indent + 1);
 
@@ -389,7 +396,7 @@ fn render_compact(
         let is_expanded = expanded.contains(&msg_index);
         if is_expanded {
             lines.push(Line::from(vec![Span::styled(
-                "\u{25be} [-] Reasoning",
+                format!("{} Reasoning", toggle_glyph(true)),
                 theme.fg_dim,
             )]));
             let reasoning_width = width.saturating_sub(2).max(1);
@@ -403,7 +410,7 @@ fn render_compact(
             }
         } else {
             lines.push(Line::from(vec![Span::styled(
-                "\u{25b6} [+] Reasoning",
+                format!("{} Reasoning", toggle_glyph(false)),
                 theme.fg_dim,
             )]));
         }

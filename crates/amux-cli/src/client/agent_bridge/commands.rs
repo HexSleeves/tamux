@@ -35,6 +35,7 @@ where
                     content,
                     session_id,
                     context_messages_json,
+                    client_surface: Some(amux_protocol::ClientSurface::Electron),
                 })
                 .await?;
         }
@@ -109,6 +110,7 @@ where
                     priority,
                     client_request_id,
                     autonomy_level,
+                    client_surface: Some(amux_protocol::ClientSurface::Electron),
                 })
                 .await?;
         }

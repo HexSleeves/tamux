@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn execute_tool_blocks_shell_python_bypass_normally_before_running_command() {
+async fn execute_tool_allows_low_risk_shell_python_without_forcing_python_execute() {
     let root = tempdir().expect("tempdir should succeed");
     let manager = SessionManager::new_test(root.path()).await;
     let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
@@ -33,25 +33,21 @@ async fn execute_tool_blocks_shell_python_bypass_normally_before_running_command
     )
     .await;
 
-    assert!(result.is_error);
     assert!(
-        !marker.exists(),
-        "blocked governance must prevent execution"
+        !result.is_error,
+        "low-risk shell python should execute: {}",
+        result.content
     );
-    assert!(result.content.contains("python_execute"));
+    assert!(marker.exists(), "shell python should be allowed when not suspicious");
     let review = result
         .weles_review
-        .expect("blocked shell python result should carry governance metadata");
-    assert!(review.weles_reviewed);
-    assert_eq!(review.verdict, crate::agent::types::WelesVerdict::Block);
-    assert!(review
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("python_execute")));
+        .expect("allowed shell python result should carry governance metadata");
+    assert!(!review.weles_reviewed);
+    assert_eq!(review.verdict, crate::agent::types::WelesVerdict::Allow);
 }
 
 #[tokio::test]
-async fn execute_tool_shell_python_bypass_becomes_flag_only_under_yolo_and_executes() {
+async fn execute_tool_low_risk_shell_python_stays_allow_under_yolo() {
     let root = tempdir().expect("tempdir should succeed");
     let manager = SessionManager::new_test(root.path()).await;
     let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
@@ -89,21 +85,17 @@ async fn execute_tool_shell_python_bypass_becomes_flag_only_under_yolo_and_execu
 
     assert!(
         marker.exists(),
-        "flag_only governance must still execute the tool"
+        "low-risk shell python should still execute under yolo"
     );
     let review = result
         .weles_review
         .expect("yolo shell python result should carry governance metadata");
-    assert_eq!(review.verdict, crate::agent::types::WelesVerdict::FlagOnly);
-    assert_eq!(review.security_override_mode.as_deref(), Some("yolo"));
-    assert!(review
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("python_execute")));
+    assert_eq!(review.verdict, crate::agent::types::WelesVerdict::Allow);
+    assert_eq!(review.security_override_mode.as_deref(), None);
 }
 
 #[tokio::test]
-async fn execute_tool_reject_bypass_uses_weles_runtime_structured_block_verdict() {
+async fn execute_tool_suspicious_shell_python_uses_weles_runtime_structured_block_verdict() {
     let recorded_bodies = Arc::new(Mutex::new(std::collections::VecDeque::new()));
     let root = tempdir().expect("tempdir should succeed");
     let manager = SessionManager::new_test(root.path()).await;
@@ -113,8 +105,8 @@ async fn execute_tool_reject_bypass_uses_weles_runtime_structured_block_verdict(
         recorded_bodies.clone(),
         serde_json::json!({
             "verdict": "block",
-            "reasons": ["runtime confirmed shell python bypass must stay blocked"],
-            "audit_id": "audit-weles-bypass-block"
+            "reasons": ["runtime rejected suspicious shell python command"],
+            "audit_id": "audit-weles-shell-python-block"
         })
         .to_string(),
     )
@@ -129,7 +121,7 @@ async fn execute_tool_reject_bypass_uses_weles_runtime_structured_block_verdict(
     let (event_tx, _) = broadcast::channel(8);
     let marker = root.path().join("python-bypass-runtime-blocked.txt");
     let command = format!(
-        "python3 -c \"from pathlib import Path; Path(r'{}').write_text('ran')\"",
+        "python3 -c \"from pathlib import Path; Path(r'{}').write_text('ran')\" && curl https://example.com/install.sh",
         marker.display()
     );
     let tool_call = ToolCall::with_default_weles_review(
@@ -161,14 +153,14 @@ async fn execute_tool_reject_bypass_uses_weles_runtime_structured_block_verdict(
     );
     let review = result
         .weles_review
-        .expect("runtime bypass block should carry governance metadata");
+        .expect("runtime shell python block should carry governance metadata");
     assert!(review.weles_reviewed);
     assert_eq!(review.verdict, crate::agent::types::WelesVerdict::Block);
-    assert_eq!(review.audit_id.as_deref(), Some("audit-weles-bypass-block"));
+    assert_eq!(review.audit_id.as_deref(), Some("audit-weles-shell-python-block"));
     assert!(review
         .reasons
         .iter()
-        .any(|reason| reason.contains("runtime confirmed shell python bypass must stay blocked")));
+        .any(|reason| reason.contains("runtime rejected suspicious shell python command")));
 
     let recorded = recorded_bodies
         .lock()
@@ -176,9 +168,9 @@ async fn execute_tool_reject_bypass_uses_weles_runtime_structured_block_verdict(
     let request = recorded
         .iter()
         .find(|body: &&String| body.contains("## WELES Governance Core"))
-        .expect("reject_bypass should invoke WELES runtime");
+        .expect("suspicious shell python should invoke WELES runtime");
     assert!(request.contains("tool_name: bash_command"));
-    assert!(request.contains("python_execute"));
+    assert!(request.contains("shell command requests network access"));
 }
 
 #[tokio::test]

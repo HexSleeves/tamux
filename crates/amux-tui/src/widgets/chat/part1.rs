@@ -317,15 +317,26 @@ fn retry_action_line(
     status: &crate::state::chat::RetryStatusVm,
     theme: &ThemeTokens,
     current_tick: u64,
+    retry_wait_start_selected: bool,
 ) -> Line<'static> {
     match status.phase {
         RetryPhase::Retrying => Line::from(vec![Span::styled("[Stop]", theme.accent_primary)]),
         RetryPhase::Waiting => {
             let yes_label = format!("[Yes {}s]", retry_wait_remaining_secs(status, current_tick));
+            let yes_style = if retry_wait_start_selected {
+                theme.accent_primary
+            } else {
+                theme.fg_dim
+            };
+            let no_style = if retry_wait_start_selected {
+                theme.fg_dim
+            } else {
+                theme.accent_primary
+            };
             Line::from(vec![
-                Span::styled(yes_label, theme.fg_dim),
+                Span::styled(yes_label, yes_style),
                 Span::raw(" "),
-                Span::styled("[No]", theme.accent_primary),
+                Span::styled("[No]", no_style),
             ])
         }
     }
@@ -443,4 +454,3 @@ fn classify_message_lines(
         }
     }
 }
-

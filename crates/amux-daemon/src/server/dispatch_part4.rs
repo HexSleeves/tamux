@@ -150,9 +150,10 @@ if matches!(
                     priority,
                     client_request_id,
                     autonomy_level,
+                    client_surface,
                 } => {
                     let goal_run = agent
-                        .start_goal_run(
+                        .start_goal_run_with_surface(
                             goal,
                             title,
                             thread_id,
@@ -160,6 +161,7 @@ if matches!(
                             priority.as_deref(),
                             client_request_id,
                             autonomy_level,
+                            client_surface,
                         )
                         .await;
                     if let Some(thread_id) = goal_run.thread_id.clone() {

@@ -143,6 +143,7 @@ pub async fn run_bridge(
                                             language_hint,
                                             source,
                                         },
+                                        client_surface: Some(amux_protocol::ClientSurface::Electron),
                                     })
                                     .await?;
                             }

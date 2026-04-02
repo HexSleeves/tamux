@@ -111,6 +111,7 @@ fn build_openai_responses_body(
                 })
                 .collect(),
         );
+        body["tool_choice"] = serde_json::json!("auto");
     }
 
     if let Some(ref schema) = config.response_schema {

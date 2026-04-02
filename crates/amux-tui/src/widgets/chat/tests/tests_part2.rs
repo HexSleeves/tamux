@@ -21,7 +21,8 @@
         ]);
 
         let area = Rect::new(0, 0, 80, 10);
-        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+        let (inner, visible) =
+            visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0, false)
             .expect("chat should produce visible lines");
         let last_message_row = visible
             .iter()
@@ -63,7 +64,8 @@
         chat.select_message(Some(1));
 
         let area = Rect::new(0, 0, 80, 4);
-        let (_, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+        let (_, visible) =
+            visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0, false)
             .expect("chat should produce visible lines");
 
         assert!(
@@ -88,7 +90,8 @@
         chat.reduce(ChatAction::ScrollChat(4));
 
         let area = Rect::new(0, 0, 80, 6);
-        let (_, before_visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+        let (_, before_visible) =
+            visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0, false)
             .expect("chat should produce visible lines before selection");
         let before_last_visible_message = before_visible
             .iter()
@@ -98,7 +101,8 @@
 
         chat.select_message(Some(0));
 
-        let (_, after_visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+        let (_, after_visible) =
+            visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0, false)
             .expect("chat should produce visible lines after selection");
         let after_last_visible_message = after_visible
             .iter()

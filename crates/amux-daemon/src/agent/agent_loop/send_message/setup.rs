@@ -10,46 +10,54 @@ impl<'a> SendMessageRunner<'a> {
         task_id: Option<&'a str>,
         preferred_session_hint: Option<&'a str>,
         stream_chunk_timeout_override: Option<std::time::Duration>,
+        client_surface: Option<amux_protocol::ClientSurface>,
         record_operator: bool,
+        reuse_existing_user_message: bool,
+        initial_scheduled_retry_cycles: u32,
     ) -> Result<Self> {
         let config = engine.config.read().await.clone();
 
         let (tid, is_new_thread) = engine
             .get_or_create_thread(thread_id, stored_user_content)
             .await;
-        {
-            let mut threads = engine.threads.write().await;
-            if let Some(thread) = threads.get_mut(&tid) {
-                thread
-                    .messages
-                    .push(AgentMessage::user(stored_user_content, now_millis()));
-                thread.updated_at = now_millis();
-            }
+        if let Some(client_surface) = client_surface {
+            engine.set_thread_client_surface(&tid, client_surface).await;
         }
-        engine.persist_thread_by_id(&tid).await;
-        if record_operator {
-            engine
-                .record_operator_message(&tid, stored_user_content, is_new_thread)
-                .await?;
-            if let Err(error) = engine.maybe_sync_thread_to_honcho(&tid).await {
-                tracing::warn!(thread_id = %tid, error = %error, "failed to sync thread to Honcho");
+        if !reuse_existing_user_message {
+            {
+                let mut threads = engine.threads.write().await;
+                if let Some(thread) = threads.get_mut(&tid) {
+                    thread
+                        .messages
+                        .push(AgentMessage::user(stored_user_content, now_millis()));
+                    thread.updated_at = now_millis();
+                }
             }
-        }
+            engine.persist_thread_by_id(&tid).await;
+            if record_operator {
+                engine
+                    .record_operator_message(&tid, stored_user_content, is_new_thread)
+                    .await?;
+                if let Err(error) = engine.maybe_sync_thread_to_honcho(&tid).await {
+                    tracing::warn!(thread_id = %tid, error = %error, "failed to sync thread to Honcho");
+                }
+            }
 
-        if let Some(ack_message) = engine.take_continuity_acknowledgment(&tid).await {
-            let mut threads = engine.threads.write().await;
-            if let Some(thread) = threads.get_mut(&tid) {
-                let mut msg = AgentMessage::user(&ack_message, now_millis());
-                msg.role = MessageRole::System;
-                thread.messages.push(msg);
+            if let Some(ack_message) = engine.take_continuity_acknowledgment(&tid).await {
+                let mut threads = engine.threads.write().await;
+                if let Some(thread) = threads.get_mut(&tid) {
+                    let mut msg = AgentMessage::user(&ack_message, now_millis());
+                    msg.role = MessageRole::System;
+                    thread.messages.push(msg);
+                }
             }
-        }
-        if let Some(hint) = engine.try_augment_plugin_command(stored_user_content).await {
-            let mut threads = engine.threads.write().await;
-            if let Some(thread) = threads.get_mut(&tid) {
-                let mut msg = AgentMessage::user(&hint, now_millis());
-                msg.role = MessageRole::System;
-                thread.messages.push(msg);
+            if let Some(hint) = engine.try_augment_plugin_command(stored_user_content).await {
+                let mut threads = engine.threads.write().await;
+                if let Some(thread) = threads.get_mut(&tid) {
+                    let mut msg = AgentMessage::user(&hint, now_millis());
+                    msg.role = MessageRole::System;
+                    thread.messages.push(msg);
+                }
             }
         }
 
@@ -457,12 +465,13 @@ impl<'a> SendMessageRunner<'a> {
             stream_timeout_count: 0,
             tool_ack_emitted: false,
             tool_sequence_repaired: false,
-            retry_status_visible: false,
-            scheduled_retry_cycles: 0,
+            retry_status_visible: initial_scheduled_retry_cycles > 0,
+            scheduled_retry_cycles: initial_scheduled_retry_cycles,
             assistant_output_visible: false,
             tool_side_effect_committed: false,
             attempted_recovery_signatures: std::collections::HashSet::new(),
             recent_policy_tool_outcomes: VecDeque::new(),
+            fresh_runner_retry: None,
         })
     }
 }

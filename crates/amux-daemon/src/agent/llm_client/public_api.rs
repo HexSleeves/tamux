@@ -4,6 +4,95 @@
 
 const MAX_RETRY_DELAY_MS: u64 = 60_000;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AttemptTarget {
+    api_type: ApiType,
+    branch: &'static str,
+    url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RetryFailureAnalysis {
+    structured_class: Option<String>,
+    failure_class: &'static str,
+    retry_after_ms: Option<u64>,
+    response_observed: bool,
+    is_rate_limited: bool,
+    is_transient_transport: bool,
+    is_temporary_upstream: bool,
+}
+
+fn effective_attempt_target(
+    provider: &str,
+    config: &ProviderConfig,
+    transport: ApiTransport,
+) -> AttemptTarget {
+    let api_type = get_provider_api_type(provider, &config.model, &config.base_url);
+    if api_type == ApiType::Anthropic {
+        return AttemptTarget {
+            api_type,
+            branch: "anthropic",
+            url: anthropic_messages_url(&config.base_url),
+        };
+    }
+
+    match transport {
+        ApiTransport::NativeAssistant => AttemptTarget {
+            api_type,
+            branch: "native_assistant",
+            url: build_native_assistant_base_url(provider, config)
+                .map(|base| format!("{base}/threads"))
+                .unwrap_or_else(|| config.base_url.clone()),
+        },
+        ApiTransport::ChatCompletions => AttemptTarget {
+            api_type,
+            branch: "chat_completions",
+            url: build_chat_completion_url(&config.base_url),
+        },
+        ApiTransport::Responses => AttemptTarget {
+            api_type,
+            branch: "responses",
+            url: build_responses_url(&config.base_url),
+        },
+    }
+}
+
+fn analyze_retry_failure(err: &anyhow::Error) -> RetryFailureAnalysis {
+    let structured_failure = upstream_failure_error(err);
+    let structured_class = structured_failure.map(|failure| failure.class);
+    let response_observed = structured_class.is_some();
+    let retry_after_ms = structured_failure
+        .and_then(|failure| failure.diagnostics.get("retry_after_ms"))
+        .and_then(|value| value.as_u64());
+    let is_rate_limited = matches!(structured_class, Some(UpstreamFailureClass::RateLimit));
+    let is_transient_transport = matches!(
+        structured_class,
+        Some(UpstreamFailureClass::TransientTransport)
+    ) || is_transient_transport_error(err);
+    let is_temporary_upstream =
+        matches!(structured_class, Some(UpstreamFailureClass::TemporaryUpstream))
+            || is_temporary_upstream_error(err);
+    let failure_class = if is_rate_limited {
+        "rate_limit"
+    } else if is_transient_transport {
+        "transport"
+    } else if is_temporary_upstream {
+        "upstream"
+    } else {
+        "non_retryable"
+    };
+
+    RetryFailureAnalysis {
+        structured_class: structured_class.map(|class| class.as_str().to_string()),
+        failure_class,
+        retry_after_ms,
+        response_observed,
+        is_rate_limited,
+        is_transient_transport,
+        is_temporary_upstream,
+    }
+}
+
 pub(crate) fn compute_retry_delay_ms_for_attempt(base_delay_ms: u64, attempt: u32) -> u64 {
     let multiplier = u64::from(attempt.max(1));
     base_delay_ms
@@ -37,12 +126,29 @@ pub fn send_completion_request(
     tokio::spawn(async move {
         let mut retry_attempt = 0u32;
         loop {
-            let api_type = get_provider_api_type(&provider, &config.model, &config.base_url);
+            let target = effective_attempt_target(&provider, &config, transport);
+            let attempt_number = retry_attempt.saturating_add(1);
+            tracing::info!(
+                provider = %provider,
+                model = %config.model,
+                api_type = ?target.api_type,
+                attempt = attempt_number,
+                branch = target.branch,
+                url = %target.url,
+                configured_transport = ?transport,
+                retry_strategy = ?retry_strategy,
+                previous_response_id = previous_response_id.as_deref().unwrap_or(""),
+                upstream_thread_id = upstream_thread_id.as_deref().unwrap_or(""),
+                message_count = messages.len(),
+                tool_count = tools.len(),
+                "llm attempt start"
+            );
 
-            let result = if api_type == ApiType::Anthropic {
+            let result = if target.api_type == ApiType::Anthropic {
                 run_anthropic(
                     &client,
                     &provider,
+                    attempt_number,
                     &config,
                     &system_prompt,
                     &messages,
@@ -92,30 +198,37 @@ pub fn send_completion_request(
             };
 
             match result {
-                Ok(()) => break,
+                Ok(()) => {
+                    tracing::info!(
+                        provider = %provider,
+                        model = %config.model,
+                        attempt = attempt_number,
+                        branch = target.branch,
+                        url = %target.url,
+                        "llm attempt completed"
+                    );
+                    break;
+                }
                 Err(e) => {
-                    let structured_failure = upstream_failure_error(&e);
-                    let failure_class = structured_failure.map(|failure| failure.class);
-                    let retry_after_ms = structured_failure
-                        .and_then(|failure| failure.diagnostics.get("retry_after_ms"))
-                        .and_then(|value| value.as_u64());
-                    let is_rate_limited =
-                        matches!(failure_class, Some(UpstreamFailureClass::RateLimit));
-                    let is_transient_transport = matches!(
-                        failure_class,
-                        Some(UpstreamFailureClass::TransientTransport)
-                    ) || is_transient_transport_error(&e);
-                    let is_temporary_upstream =
-                        matches!(failure_class, Some(UpstreamFailureClass::TemporaryUpstream))
-                            || is_temporary_upstream_error(&e);
-                    if is_rate_limited || is_transient_transport || is_temporary_upstream {
-                        let failure_class = if is_rate_limited {
-                            "rate_limit"
-                        } else if is_transient_transport {
-                            "transport"
-                        } else {
-                            "upstream"
-                        };
+                    let analysis = analyze_retry_failure(&e);
+                    tracing::warn!(
+                        provider = %provider,
+                        model = %config.model,
+                        attempt = attempt_number,
+                        branch = target.branch,
+                        url = %target.url,
+                        configured_transport = ?transport,
+                        structured_class = analysis.structured_class.as_deref().unwrap_or(""),
+                        failure_class = analysis.failure_class,
+                        response_observed = analysis.response_observed,
+                        retry_after_ms = analysis.retry_after_ms.unwrap_or(0),
+                        error_chain = %summarize_transport_error(&e),
+                        "llm attempt failed"
+                    );
+                    if analysis.is_rate_limited
+                        || analysis.is_transient_transport
+                        || analysis.is_temporary_upstream
+                    {
                         let retry_message = e.to_string();
                         match retry_strategy {
                             RetryStrategy::Bounded {
@@ -123,32 +236,55 @@ pub fn send_completion_request(
                                 retry_delay_ms,
                             } if retry_attempt < max_retries => {
                                 retry_attempt += 1;
-                                let delay_ms = retry_after_ms.unwrap_or_else(|| {
+                                let delay_ms = analysis.retry_after_ms.unwrap_or_else(|| {
                                     compute_retry_delay_ms_for_attempt(retry_delay_ms, retry_attempt)
                                 });
+                                tracing::info!(
+                                    provider = %provider,
+                                    model = %config.model,
+                                    branch = target.branch,
+                                    url = %target.url,
+                                    attempt = retry_attempt,
+                                    max_retries,
+                                    delay_ms,
+                                    failure_class = analysis.failure_class,
+                                    retry_reason = analysis.structured_class.as_deref().unwrap_or("transient"),
+                                    "llm retry scheduled"
+                                );
                                 let _ = tx
                                     .send(Ok(CompletionChunk::Retry {
                                         attempt: retry_attempt,
                                         max_retries,
                                         delay_ms,
-                                        failure_class: failure_class.to_string(),
+                                        failure_class: analysis.failure_class.to_string(),
                                         message: retry_message.clone(),
                                     }))
                                     .await;
                                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                                 continue;
                             }
-                            RetryStrategy::DurableRateLimited if is_rate_limited => {
+                            RetryStrategy::DurableRateLimited if analysis.is_rate_limited => {
                                 retry_attempt = retry_attempt.saturating_add(1);
-                                let delay_ms = retry_after_ms.unwrap_or_else(|| {
+                                let delay_ms = analysis.retry_after_ms.unwrap_or_else(|| {
                                     compute_retry_delay_ms_for_attempt(5_000, retry_attempt)
                                 });
+                                tracing::info!(
+                                    provider = %provider,
+                                    model = %config.model,
+                                    branch = target.branch,
+                                    url = %target.url,
+                                    attempt = retry_attempt,
+                                    delay_ms,
+                                    failure_class = analysis.failure_class,
+                                    retry_reason = analysis.structured_class.as_deref().unwrap_or("rate_limit"),
+                                    "durable llm retry scheduled"
+                                );
                                 let _ = tx
                                     .send(Ok(CompletionChunk::Retry {
                                         attempt: retry_attempt,
                                         max_retries: 0,
                                         delay_ms,
-                                        failure_class: failure_class.to_string(),
+                                        failure_class: analysis.failure_class.to_string(),
                                         message: retry_message.clone(),
                                     }))
                                     .await;
@@ -159,7 +295,7 @@ pub fn send_completion_request(
                         }
                     }
 
-                    let message = if let Some(failure) = structured_failure {
+                    let message = if let Some(failure) = upstream_failure_error(&e) {
                         failure.operator_message()
                     } else if let Some(rate_limit) = e.downcast_ref::<RateLimitError>() {
                         rate_limit.to_string()

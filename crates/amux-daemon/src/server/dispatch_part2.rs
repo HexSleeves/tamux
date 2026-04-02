@@ -70,7 +70,19 @@ if matches!(
                     }
                 }
 
-                ClientMessage::ExecuteManagedCommand { id, request } => {
+                ClientMessage::ExecuteManagedCommand {
+                    id,
+                    request,
+                    client_surface,
+                } => {
+                    if matches!(client_surface, Some(amux_protocol::ClientSurface::Tui)) {
+                        framed
+                            .send(DaemonMessage::Error {
+                                message: "managed terminal execution is reserved for Electron clients".to_string(),
+                            })
+                            .await?;
+                        return Ok(());
+                    }
                     match manager.execute_managed_command(id, request).await {
                         Ok(message) => {
                             if let DaemonMessage::ApprovalRequired { approval, .. } = &message {

@@ -353,7 +353,22 @@ impl ChatState {
                         self.active_thread_id = None;
                     }
                 }
-                self.threads = new_threads;
+
+                let existing_threads = std::mem::take(&mut self.threads);
+                self.threads = new_threads
+                    .into_iter()
+                    .map(|mut incoming| {
+                        if incoming.messages.is_empty() {
+                            if let Some(existing) = existing_threads
+                                .iter()
+                                .find(|thread| thread.id == incoming.id)
+                            {
+                                incoming.messages = existing.messages.clone();
+                            }
+                        }
+                        incoming
+                    })
+                    .collect();
             }
 
             ChatAction::ThreadDetailReceived(incoming) => {

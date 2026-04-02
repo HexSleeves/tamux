@@ -121,6 +121,7 @@ async fn send_message_request_uses_spawned_persona_identity_in_continuity_summar
             None,
             None,
             None,
+            None,
             true,
         )
         .await

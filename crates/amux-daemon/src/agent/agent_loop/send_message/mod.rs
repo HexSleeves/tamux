@@ -11,7 +11,10 @@ mod tool_calls;
 mod tool_results;
 mod types;
 
-use types::{LoopDisposition, SendMessageRunner, StreamIteration, ToolCallDisposition};
+use types::{
+    FreshRunnerRetrySignal, LoopDisposition, SendMessageRunner, StreamIteration,
+    ToolCallDisposition,
+};
 
 pub(super) const DEFAULT_LLM_STREAM_CHUNK_TIMEOUT_SECS: u64 = 120;
 
@@ -24,6 +27,50 @@ pub(super) fn current_epoch_secs() -> u64 {
 }
 
 impl AgentEngine {
+    async fn run_internal_send_loop(
+        &self,
+        initial_thread_id: Option<&str>,
+        stored_user_content: &str,
+        llm_user_content: &str,
+        task_id: Option<&str>,
+        preferred_session_hint: Option<&str>,
+        stream_chunk_timeout_override: Option<std::time::Duration>,
+        client_surface: Option<amux_protocol::ClientSurface>,
+        initial_record_operator: bool,
+        initial_reuse_existing_user_message: bool,
+    ) -> Result<SendMessageOutcome> {
+        let mut thread_id = initial_thread_id.map(str::to_string);
+        let mut record_operator = initial_record_operator;
+        let mut reuse_existing_user_message = initial_reuse_existing_user_message;
+        let mut scheduled_retry_cycles = 0u32;
+
+        loop {
+            let runner = SendMessageRunner::initialize(
+                self,
+                thread_id.as_deref(),
+                stored_user_content,
+                llm_user_content,
+                task_id,
+                preferred_session_hint,
+                stream_chunk_timeout_override,
+                client_surface,
+                record_operator,
+                reuse_existing_user_message,
+                scheduled_retry_cycles,
+            )
+            .await?;
+            let outcome = runner.run().await?;
+            if let Some(retry) = outcome.fresh_runner_retry {
+                thread_id = Some(outcome.thread_id);
+                record_operator = false;
+                reuse_existing_user_message = true;
+                scheduled_retry_cycles = retry.scheduled_retry_cycles;
+                continue;
+            }
+            return Ok(outcome);
+        }
+    }
+
     pub(in crate::agent) async fn send_message_inner(
         &self,
         thread_id: Option<&str>,
@@ -33,6 +80,7 @@ impl AgentEngine {
         backend_override: Option<&str>,
         llm_user_content_override: Option<&str>,
         stream_chunk_timeout_override: Option<std::time::Duration>,
+        client_surface: Option<amux_protocol::ClientSurface>,
         record_operator: bool,
     ) -> Result<SendMessageOutcome> {
         let stored_user_content = content;
@@ -57,6 +105,7 @@ impl AgentEngine {
                 return Ok(SendMessageOutcome {
                     thread_id: crate::agent::concierge::CONCIERGE_THREAD_ID.to_string(),
                     interrupted_for_approval: false,
+                    fresh_runner_retry: None,
                 });
             }
 
@@ -77,24 +126,44 @@ impl AgentEngine {
                         .map(|thread_id| SendMessageOutcome {
                             thread_id,
                             interrupted_for_approval: false,
+                            fresh_runner_retry: None,
                         });
                 }
                 _ => {}
             }
 
-            let runner = SendMessageRunner::initialize(
-                self,
+            self.run_internal_send_loop(
                 thread_id,
                 stored_user_content,
                 llm_user_content,
                 task_id,
                 preferred_session_hint,
                 stream_chunk_timeout_override,
+                client_surface,
                 record_operator,
+                false,
             )
-            .await?;
-            runner.run().await
+            .await
         }))
+        .await
+    }
+
+    pub(in crate::agent) async fn resend_existing_user_message(
+        &self,
+        thread_id: &str,
+        content: &str,
+    ) -> Result<SendMessageOutcome> {
+        self.run_internal_send_loop(
+            Some(thread_id),
+            content,
+            content,
+            None,
+            None,
+            None,
+            None,
+            false,
+            true,
+        )
         .await
     }
 
@@ -125,7 +194,21 @@ impl<'a> SendMessageRunner<'a> {
 
             self.maybe_rebuild_prompt_after_memory_flush().await?;
 
-            let iteration = self.stream_once().await?;
+            let iteration = match self.stream_once().await {
+                Ok(iteration) => iteration,
+                Err(error) => {
+                    if let Some(signal) = error.downcast_ref::<types::FreshRunnerRetrySignal>() {
+                        self.fresh_runner_retry = Some(FreshRunnerRetryRequest {
+                            scheduled_retry_cycles: signal.scheduled_retry_cycles,
+                        });
+                        break;
+                    }
+                    if self.was_cancelled {
+                        break;
+                    }
+                    return Err(error);
+                }
+            };
             if self.was_cancelled {
                 break;
             }

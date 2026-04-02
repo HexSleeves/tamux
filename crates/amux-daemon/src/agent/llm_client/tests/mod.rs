@@ -12,7 +12,7 @@ use crate::agent::openai_codex_auth::{
     reset_openai_codex_auth_runtime_for_tests, tombstone_present_for_tests,
     write_stored_openai_codex_auth, OpenAICodexExchange,
 };
-use crate::agent::types::{AgentConfig, ApiTransport, ProviderConfig};
+use crate::agent::types::{AgentConfig, ApiTransport, ProviderConfig, ToolDefinition, ToolFunctionDef};
 use crate::agent::AgentEngine;
 use crate::session_manager::SessionManager;
 

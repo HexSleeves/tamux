@@ -224,6 +224,7 @@ fn managed_execution_prefers_terminal_for_explicit_session_or_interactive_comman
         "command": "vim Cargo.toml"
     })));
     assert!(command_looks_interactive("top"));
+    assert!(command_looks_interactive("bash"));
 }
 
 #[test]
@@ -261,6 +262,38 @@ fn managed_execution_keeps_self_contained_shell_setup_commands_headless() {
     assert!(!should_use_managed_execution(&serde_json::json!({
         "command": "source ~/.cargo/env && cargo --version"
     })));
+}
+
+#[test]
+fn managed_execution_keeps_non_interactive_bash_scripts_headless() {
+    assert!(
+        !command_looks_interactive("bash /tmp/update.sh 2>&1"),
+        "scripted bash invocations should not be treated as interactive shells"
+    );
+    assert!(!should_use_managed_execution(&serde_json::json!({
+        "command": "bash /tmp/update.sh 2>&1"
+    })));
+}
+
+#[test]
+fn managed_execution_forces_tui_shell_tools_headless() {
+    let args = serde_json::json!({
+        "command": "vim Cargo.toml",
+        "session": "abc",
+        "wait_for_completion": false
+    });
+
+    assert!(
+        !should_use_managed_execution_for_surface(Some(amux_protocol::ClientSurface::Tui), &args),
+        "TUI-originated shell tools must stay headless regardless of command heuristics"
+    );
+    assert!(
+        should_use_managed_execution_for_surface(
+            Some(amux_protocol::ClientSurface::Electron),
+            &args,
+        ),
+        "Electron-originated calls should still honor managed execution heuristics"
+    );
 }
 
 #[test]

@@ -221,6 +221,44 @@ async fn register_test_api_plugin(conn: &TestConnection, name: &str) {
         .expect("register api plugin");
 }
 
+#[tokio::test]
+async fn tui_clients_cannot_execute_managed_terminal_commands() {
+    let mut conn = spawn_test_connection().await;
+    let (session_id, _rx) = conn
+        .agent
+        .session_manager
+        .spawn(Some("/bin/bash".to_string()), None, None, None, 80, 24)
+        .await
+        .expect("spawn session");
+
+    conn.framed
+        .send(ClientMessage::ExecuteManagedCommand {
+            id: session_id,
+            request: amux_protocol::ManagedCommandRequest {
+                command: "pwd".to_string(),
+                rationale: "test".to_string(),
+                allow_network: false,
+                sandbox_enabled: false,
+                security_level: amux_protocol::SecurityLevel::Lowest,
+                cwd: None,
+                language_hint: None,
+                source: amux_protocol::ManagedCommandSource::Human,
+            },
+            client_surface: Some(amux_protocol::ClientSurface::Tui),
+        })
+        .await
+        .expect("send managed command");
+
+    match conn.recv().await {
+        DaemonMessage::Error { message } => {
+            assert!(message.contains("reserved for Electron"));
+        }
+        other => panic!("expected managed-command rejection, got {other:?}"),
+    }
+
+    conn.shutdown().await;
+}
+
 async fn register_publishable_skill_variant(
     conn: &TestConnection,
     skill_name: &str,

@@ -170,6 +170,7 @@ fn stale_cached_snapshot_is_ignored_after_sidebar_layout_change() {
         &model.chat,
         &model.theme,
         model.tick_counter,
+        model.retry_wait_start_selected,
     );
     model.chat_drag_anchor = None;
     model.chat_drag_current = None;

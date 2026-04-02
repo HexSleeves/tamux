@@ -52,6 +52,45 @@
     }
 
     #[test]
+    fn hit_test_reasoning_header_body_selects_message_instead_of_toggling() {
+        let chat = chat_with_messages(vec![AgentMessage {
+            role: MessageRole::Assistant,
+            content: "Answer".into(),
+            reasoning: Some("Think".into()),
+            ..Default::default()
+        }]);
+
+        let area = Rect::new(0, 0, 80, 5);
+        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0, false)
+            .expect("chat should produce visible lines");
+        let header_row = visible
+            .iter()
+            .position(|line| {
+                line.message_index == Some(0)
+                    && matches!(line.kind, RenderedLineKind::ReasoningToggle)
+            })
+            .expect("reasoning header should be visible");
+        let hit_line = &visible[header_row];
+        let (plain, content_start, _) = rendered_line_content_bounds(hit_line);
+        let label_offset = plain
+            .find("Reasoning")
+            .expect("reasoning label should be rendered");
+
+        let hit = hit_test(
+            area,
+            &chat,
+            &ThemeTokens::default(),
+            0,
+            Position::new(
+                inner.x + (content_start + label_offset + 1) as u16,
+                inner.y + header_row as u16,
+            ),
+        );
+
+        assert_eq!(hit, Some(ChatHitTarget::Message(0)));
+    }
+
+    #[test]
     fn hit_test_marks_tool_header_as_toggle() {
         let chat = chat_with_messages(vec![AgentMessage {
             role: MessageRole::Tool,
@@ -72,6 +111,43 @@
         assert_eq!(hit, Some(ChatHitTarget::ToolToggle(0)));
     }
 
+    #[test]
+    fn hit_test_tool_header_body_selects_message_instead_of_toggling() {
+        let chat = chat_with_messages(vec![AgentMessage {
+            role: MessageRole::Tool,
+            tool_name: Some("bash_command".into()),
+            tool_status: Some("done".into()),
+            content: "ok".into(),
+            ..Default::default()
+        }]);
+
+        let area = Rect::new(0, 0, 80, 4);
+        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0, false)
+            .expect("chat should produce visible lines");
+        let header_row = visible
+            .iter()
+            .position(|line| line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ToolToggle))
+            .expect("tool header should be visible");
+        let hit_line = &visible[header_row];
+        let (plain, content_start, _) = rendered_line_content_bounds(hit_line);
+        let gear_offset = plain
+            .find("⚙")
+            .expect("tool gear should be rendered");
+
+        let hit = hit_test(
+            area,
+            &chat,
+            &ThemeTokens::default(),
+            0,
+            Position::new(
+                inner.x + (content_start + gear_offset) as u16,
+                inner.y + header_row as u16,
+            ),
+        );
+
+        assert_eq!(hit, Some(ChatHitTarget::Message(0)));
+    }
+
 #[test]
 fn read_file_tool_row_renders_clickable_path_chip() {
     let chat = chat_with_messages(vec![AgentMessage {
@@ -83,7 +159,7 @@ fn read_file_tool_row_renders_clickable_path_chip() {
         ..Default::default()
     }]);
 
-    let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0);
+    let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0, false);
     let tool_line = lines
         .iter()
         .find(|line| line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ToolToggle))
@@ -93,6 +169,28 @@ fn read_file_tool_row_renders_clickable_path_chip() {
     assert!(text.contains("read_file"));
     assert!(text.contains("[demo.txt]"));
     assert!(!text.contains("[/tmp/demo.txt]"));
+}
+
+#[test]
+fn tool_row_renders_toggle_chevron_before_tool_name() {
+    let chat = chat_with_messages(vec![AgentMessage {
+        role: MessageRole::Tool,
+        tool_name: Some("read_file".into()),
+        tool_arguments: Some(r#"{"path":"/tmp/demo.txt"}"#.into()),
+        tool_status: Some("done".into()),
+        content: "file contents".into(),
+        ..Default::default()
+    }]);
+
+    let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0, false);
+    let tool_line = lines
+        .iter()
+        .find(|line| line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ToolToggle))
+        .expect("tool row should be rendered");
+    let text = rendered_line_plain_text(tool_line);
+
+    assert!(text.contains("▶"), "expected collapsed chevron, got: {text}");
+    assert!(text.contains("⚙"), "expected tool gear, got: {text}");
 }
 
 #[test]
@@ -106,7 +204,7 @@ fn edit_tool_row_renders_clickable_path_chip() {
         ..Default::default()
     }]);
 
-    let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0);
+    let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0, false);
     let tool_line = lines
         .iter()
         .find(|line| line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ToolToggle))
@@ -128,7 +226,7 @@ fn invalid_tool_arguments_do_not_create_file_chip() {
         ..Default::default()
     }]);
 
-    let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0);
+    let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0, false);
     let tool_line = lines
         .iter()
         .find(|line| line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ToolToggle))
@@ -151,7 +249,7 @@ fn hit_test_returns_tool_file_path_target() {
     }]);
 
     let area = Rect::new(0, 0, 100, 6);
-    let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+    let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0, false)
         .expect("chat should produce visible lines");
     let tool_row = visible
         .iter()
@@ -188,7 +286,7 @@ fn hit_test_returns_tool_file_path_target() {
         chip_hit,
         Some(ChatHitTarget::ToolFilePath { message_index: 0 })
     );
-    assert_eq!(row_hit, Some(ChatHitTarget::ToolToggle(0)));
+    assert_eq!(row_hit, Some(ChatHitTarget::Message(0)));
 }
 
     #[test]
@@ -211,7 +309,7 @@ fn hit_test_returns_tool_file_path_target() {
         let inner_width = 80usize;
         chat.reduce(ChatAction::ScrollChat(3));
         let (before_lines, before_ranges) =
-            build_rendered_lines(&chat, &ThemeTokens::default(), inner_width, 0);
+            build_rendered_lines(&chat, &ThemeTokens::default(), inner_width, 0, false);
         let before_scroll =
             resolved_scroll(&chat, before_lines.len(), inner_height, &before_ranges);
         let (_, before_start, _) =
@@ -223,7 +321,7 @@ fn hit_test_returns_tool_file_path_target() {
         });
 
         let (after_lines, after_ranges) =
-            build_rendered_lines(&chat, &ThemeTokens::default(), inner_width, 0);
+            build_rendered_lines(&chat, &ThemeTokens::default(), inner_width, 0, false);
         let after_scroll = resolved_scroll(&chat, after_lines.len(), inner_height, &after_ranges);
         let (_, after_start, _) =
             visible_window_bounds(after_lines.len(), inner_height, after_scroll);
@@ -273,7 +371,7 @@ fn hit_test_returns_tool_file_path_target() {
             received_at_tick: 0,
         });
 
-        let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 20);
+        let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 20, false);
         let action_line = lines
             .iter()
             .find(|line| matches!(line.kind, RenderedLineKind::RetryAction))
@@ -283,7 +381,8 @@ fn hit_test_returns_tool_file_path_target() {
         assert!(action_text.contains("[No]"));
 
         let area = Rect::new(0, 0, 80, 8);
-        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 20)
+        let (inner, visible) =
+            visible_rendered_lines(area, &chat, &ThemeTokens::default(), 20, false)
             .expect("retry state should render visible lines");
         let retry_row = visible
             .iter()
@@ -316,6 +415,46 @@ fn hit_test_returns_tool_file_path_target() {
     }
 
     #[test]
+    fn waiting_retry_row_highlights_yes_when_selected() {
+        let mut chat = ChatState::new();
+        chat.reduce(ChatAction::ThreadCreated {
+            thread_id: "t1".into(),
+            title: "Test".into(),
+        });
+        chat.reduce(ChatAction::SetRetryStatus {
+            thread_id: "t1".into(),
+            phase: RetryPhase::Waiting,
+            attempt: 1,
+            max_retries: 0,
+            delay_ms: 30_000,
+            failure_class: "transport".into(),
+            message: "upstream transport error".into(),
+            received_at_tick: 0,
+        });
+
+        let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0, true);
+        let action_line = lines
+            .iter()
+            .find(|line| matches!(line.kind, RenderedLineKind::RetryAction))
+            .expect("retry action line should be rendered");
+        let yes_span = action_line
+            .line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("[Yes 30s]"))
+            .expect("yes action should be present");
+        let no_span = action_line
+            .line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("[No]"))
+            .expect("no action should be present");
+
+        assert_eq!(yes_span.style.fg, ThemeTokens::default().accent_primary.fg);
+        assert_eq!(no_span.style.fg, ThemeTokens::default().fg_dim.fg);
+    }
+
+    #[test]
     fn hit_test_targets_copy_action_for_selected_message_bar() {
         let mut chat = chat_with_messages(vec![
             AgentMessage {
@@ -332,7 +471,7 @@ fn hit_test_returns_tool_file_path_target() {
         chat.select_message(Some(1));
 
         let area = Rect::new(0, 0, 80, 10);
-        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0, false)
             .expect("chat should produce visible lines");
         let action_row = visible
             .iter()
@@ -366,7 +505,7 @@ fn hit_test_returns_tool_file_path_target() {
         chat.select_message(Some(0));
 
         let area = Rect::new(0, 0, 80, 8);
-        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0, false)
             .expect("chat should produce visible lines");
         let action_row = visible
             .iter()
@@ -403,7 +542,7 @@ fn hit_test_returns_tool_file_path_target() {
         chat.select_message(Some(0));
 
         let area = Rect::new(0, 0, 80, 9);
-        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0)
+        let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0, false)
             .expect("chat should produce visible lines");
         let action_row = visible
             .iter()
@@ -440,7 +579,7 @@ fn hit_test_returns_tool_file_path_target() {
         }]);
         chat.select_message(Some(0));
 
-        let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0);
+        let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0, false);
         let action_line = lines
             .iter()
             .find(|line| matches!(line.kind, RenderedLineKind::ActionBar))
@@ -512,6 +651,7 @@ fn hit_test_returns_tool_file_path_target() {
                     &chat,
                     &ThemeTokens::default(),
                     0,
+                    false,
                     true,
                     Some((start, end)),
                 );

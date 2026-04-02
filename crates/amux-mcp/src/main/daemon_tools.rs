@@ -32,6 +32,7 @@ pub(super) async fn tool_execute_command(args: &Value) -> Result<Value> {
             language_hint: None,
             source: ManagedCommandSource::Agent,
         },
+        client_surface: None,
     };
 
     let mut framed = connect_daemon().await?;

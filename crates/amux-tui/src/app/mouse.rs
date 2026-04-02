@@ -106,6 +106,7 @@ impl TuiModel {
                                 &self.chat,
                                 &self.theme,
                                 self.tick_counter,
+                                self.retry_wait_start_selected,
                             );
                             let pos = Position::new(mouse.column, mouse.row);
                             self.chat_drag_current = Some(pos);
@@ -159,6 +160,7 @@ impl TuiModel {
                                 &self.chat,
                                 &self.theme,
                                 self.tick_counter,
+                                self.retry_wait_start_selected,
                             );
                             let pos = Position::new(mouse.column, mouse.row);
                             self.chat_drag_current = Some(pos);
@@ -197,11 +199,27 @@ impl TuiModel {
                     self.focus = FocusArea::Chat;
                     if matches!(self.main_pane_view, MainPaneView::Conversation) {
                         let pos = Position::new(mouse.column, mouse.row);
+                        if matches!(
+                            widgets::chat::hit_test(
+                                chat_area,
+                                &self.chat,
+                                &self.theme,
+                                self.tick_counter,
+                                pos,
+                            ),
+                            Some(chat::ChatHitTarget::RetryStartNow | chat::ChatHitTarget::RetryStop)
+                        ) {
+                            self.clear_chat_drag_selection();
+                            self.handle_chat_click(chat_area, pos);
+                            self.input.set_mode(input::InputMode::Insert);
+                            return;
+                        }
                         self.chat_selection_snapshot = widgets::chat::build_selection_snapshot(
                             chat_area,
                             &self.chat,
                             &self.theme,
                             self.tick_counter,
+                            self.retry_wait_start_selected,
                         );
                         self.chat_drag_anchor = Some(pos);
                         self.chat_drag_current = Some(pos);
@@ -361,6 +379,7 @@ impl TuiModel {
                             &self.chat,
                             &self.theme,
                             self.tick_counter,
+                            self.retry_wait_start_selected,
                         );
                     }
                     let pos = Position::new(mouse.column, mouse.row);
