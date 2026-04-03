@@ -25,7 +25,6 @@
   "files": [
     "install.js",
     "bin/",
-    "../README.md",
-    "../LICENSE"
+    "README.md"
   ]
 }
