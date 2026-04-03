@@ -273,6 +273,17 @@ fn render_advanced_tab<'a>(
         "  [Enter: edit]",
         theme,
     );
+    render_advanced_value(
+        &mut lines,
+        settings,
+        config,
+        16,
+        "WELES Reviews:  ",
+        config.weles_max_concurrent_reviews.to_string(),
+        "weles_max_concurrent_reviews",
+        "  [Enter: edit]",
+        theme,
+    );
 
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
@@ -286,7 +297,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                16,
+                17,
                 "WELES Provider: ",
                 config.compaction_weles_provider.clone(),
                 "compaction_weles_provider",
@@ -297,7 +308,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                17,
+                18,
                 "WELES Model:    ",
                 config.compaction_weles_model.clone(),
                 "compaction_weles_model",
@@ -308,21 +319,21 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                18,
+                19,
                 "WELES Reasoning:",
                 config.compaction_weles_reasoning_effort.clone(),
                 "compaction_weles_reasoning_effort",
                 "  [Enter/Space: cycle]",
                 theme,
             );
-            19
+            20
         }
         "custom_model" => {
             render_advanced_value(
                 &mut lines,
                 settings,
                 config,
-                16,
+                17,
                 "Custom Provider:",
                 config.compaction_custom_provider.clone(),
                 "compaction_custom_provider",
@@ -333,7 +344,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                17,
+                18,
                 "Custom Base URL:",
                 config.compaction_custom_base_url.clone(),
                 "compaction_custom_base_url",
@@ -344,7 +355,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                18,
+                19,
                 "Custom Auth:    ",
                 config.compaction_custom_auth_source.clone(),
                 "compaction_custom_auth_source",
@@ -355,7 +366,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                19,
+                20,
                 "Custom Model:   ",
                 config.compaction_custom_model.clone(),
                 "compaction_custom_model",
@@ -366,7 +377,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                20,
+                21,
                 "Custom Transport:",
                 config.compaction_custom_api_transport.clone(),
                 "compaction_custom_api_transport",
@@ -377,7 +388,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                21,
+                22,
                 "Custom API Key: ",
                 if config.compaction_custom_api_key.is_empty() {
                     "(empty)".to_string()
@@ -392,7 +403,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                22,
+                23,
                 "Assistant ID:   ",
                 if config.compaction_custom_assistant_id.is_empty() {
                     "(empty)".to_string()
@@ -407,7 +418,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                23,
+                24,
                 "Custom Reasoning:",
                 config.compaction_custom_reasoning_effort.clone(),
                 "compaction_custom_reasoning_effort",
@@ -418,21 +429,21 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                24,
+                25,
                 "Custom Ctx Tok: ",
                 config.compaction_custom_context_window_tokens.to_string(),
                 "compaction_custom_context_window_tokens",
                 "  [Enter: edit]",
                 theme,
             );
-            25
+            26
         }
         _ => {
             lines.push(Line::from(Span::styled(
                 "  Heuristic compaction uses the built-in rule based summary path.",
                 theme.fg_dim,
             )));
-            16
+            17
         }
     };
 

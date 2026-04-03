@@ -372,6 +372,8 @@ fn current_field_name_advanced_tab() {
     state.reduce(SettingsAction::NavigateField(1));
     assert_eq!(state.current_field_name(), "bash_timeout_secs");
     state.reduce(SettingsAction::NavigateField(1));
+    assert_eq!(state.current_field_name(), "weles_max_concurrent_reviews");
+    state.reduce(SettingsAction::NavigateField(1));
     assert_eq!(state.current_field_name(), "snapshot_auto_cleanup");
     state.reduce(SettingsAction::NavigateField(1));
     assert_eq!(state.current_field_name(), "snapshot_max_count");
@@ -381,7 +383,7 @@ fn current_field_name_advanced_tab() {
     assert_eq!(state.current_field_name(), "snapshot_stats");
     state.reduce(SettingsAction::NavigateField(5));
     assert_eq!(state.current_field_name(), "snapshot_stats");
-    assert_eq!(state.field_cursor(), 19);
+    assert_eq!(state.field_cursor(), 20);
 }
 
 #[test]
@@ -409,7 +411,7 @@ fn field_count_per_tab() {
     state.reduce(SettingsAction::SwitchTab(SettingsTab::Features));
     assert_eq!(state.field_count(), 14);
     state.reduce(SettingsAction::SwitchTab(SettingsTab::Advanced));
-    assert_eq!(state.field_count(), 20);
+    assert_eq!(state.field_count(), 21);
     state.reduce(SettingsAction::SwitchTab(SettingsTab::Plugins));
     assert_eq!(state.field_count(), 1);
 }

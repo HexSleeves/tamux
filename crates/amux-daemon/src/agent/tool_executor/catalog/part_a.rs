@@ -58,6 +58,20 @@ fn add_available_tools_part_a(
         ));
 
         tools.push(tool_def(
+            "get_git_line_statuses",
+            "Report git statuses for the current file lines in a bounded window. Use this when you need to know which current lines are unchanged, modified, or added without parsing a full diff.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "File path to inspect inside a git repository" },
+                    "start_line": { "type": "integer", "description": "1-based starting line number for the window (default: 1)" },
+                    "limit": { "type": "integer", "description": "Maximum number of current lines to inspect (default: 250, max: 500)" }
+                },
+                "required": ["path"]
+            }),
+        ));
+
+        tools.push(tool_def(
             "write_file",
             "Write content to a file. Supports JSON args or a multipart-style payload with path/file parts so larger content does not have to fit inside one giant JSON string.",
             serde_json::json!({

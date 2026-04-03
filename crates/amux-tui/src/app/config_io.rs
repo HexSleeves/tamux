@@ -388,6 +388,13 @@ impl TuiModel {
         self.config.keep_recent_on_compact =
             get_u32("keep_recent_on_compact", "keep_recent_on_compact", 10);
         self.config.bash_timeout_secs = get_u32("bash_timeout_seconds", "bash_timeout_seconds", 30);
+        self.config.weles_max_concurrent_reviews = json
+            .get("builtin_sub_agents")
+            .and_then(|value| value.get("weles"))
+            .and_then(|value| value.get("max_concurrent_reviews"))
+            .and_then(|value| value.as_u64())
+            .map(|value| value.clamp(1, 16) as u32)
+            .unwrap_or(2);
 
         let compaction = json.get("compaction");
         let builtin_weles = json

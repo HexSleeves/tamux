@@ -281,8 +281,9 @@ impl AgentEngine {
 
     pub(super) async fn snapshot_tasks(&self) -> Vec<AgentTask> {
         let sessions = self.session_manager.list().await;
+        let config = self.config.read().await.clone();
         let mut tasks = self.tasks.lock().await;
-        let changed = refresh_task_queue_state(&mut tasks, now_millis(), &sessions);
+        let changed = refresh_task_queue_state(&mut tasks, now_millis(), &sessions, &config);
         let snapshot = tasks
             .iter()
             .cloned()

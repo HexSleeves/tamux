@@ -770,6 +770,14 @@ export function AgentTab({
                     <NumberInput value={settings.keep_recent_on_compact} min={1} max={50}
                         onChange={(value) => updateSetting("keep_recent_on_compact", value)} />
                 </SettingRow>
+                <SettingRow label="WELES Max Reviews">
+                    <NumberInput
+                        value={settings.weles_max_concurrent_reviews}
+                        min={1}
+                        max={16}
+                        onChange={(value) => updateSetting("weles_max_concurrent_reviews", value)}
+                    />
+                </SettingRow>
 
                 {settings.compaction.strategy === "weles" ? (
                     <>

@@ -1,6 +1,7 @@
 // Widget modules
 pub mod anticipatory;
 pub mod approval;
+pub mod approval_center;
 pub mod audit_feed;
 pub mod chat;
 pub mod command_palette;

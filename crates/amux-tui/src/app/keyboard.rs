@@ -85,6 +85,15 @@ impl TuiModel {
             self.open_queued_prompts_modal();
             return false;
         }
+        if code == KeyCode::Char('a') && ctrl {
+            match self.modal.top() {
+                Some(modal::ModalKind::ApprovalOverlay) => {}
+                Some(modal::ModalKind::ApprovalCenter) => self.close_top_modal(),
+                None => self.toggle_approval_center(),
+                _ => {}
+            }
+            return false;
+        }
         if let Some(modal_kind) = self.modal.top() {
             return self.handle_key_modal(code, modifiers, modal_kind);
         }

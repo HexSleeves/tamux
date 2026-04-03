@@ -33,11 +33,22 @@ impl TuiModel {
             if let Some(widgets::header::HeaderHitTarget::NotificationBell) =
                 widgets::header::hit_test(
                     header_area,
+                    self.approval.pending_approvals().len(),
                     self.notifications.unread_count(),
                     Position::new(mouse.column, mouse.row),
                 )
             {
                 self.toggle_notifications_modal();
+                self.input.set_mode(input::InputMode::Insert);
+                return;
+            }
+            if let Some(widgets::header::HeaderHitTarget::ApprovalBadge) = widgets::header::hit_test(
+                header_area,
+                self.approval.pending_approvals().len(),
+                self.notifications.unread_count(),
+                Position::new(mouse.column, mouse.row),
+            ) {
+                self.toggle_approval_center();
                 self.input.set_mode(input::InputMode::Insert);
                 return;
             }

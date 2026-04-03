@@ -272,8 +272,7 @@ impl TuiModel {
         patch["tavily_api_key"] = serde_json::Value::String(self.config.tavily_api_key.clone());
         patch["search_max_results"] = serde_json::Value::from(self.config.search_max_results);
         patch["search_timeout_secs"] = serde_json::Value::from(self.config.search_timeout_secs);
-        patch["browse_provider"] =
-            serde_json::Value::String(self.config.browse_provider.clone());
+        patch["browse_provider"] = serde_json::Value::String(self.config.browse_provider.clone());
         patch["enable_streaming"] = serde_json::Value::Bool(self.config.enable_streaming);
         patch["enable_conversation_memory"] =
             serde_json::Value::Bool(self.config.enable_conversation_memory);
@@ -348,6 +347,14 @@ impl TuiModel {
         patch["keep_recent_on_compact"] =
             serde_json::Value::from(self.config.keep_recent_on_compact);
         patch["bash_timeout_seconds"] = serde_json::Value::from(self.config.bash_timeout_secs);
+        if patch.get("builtin_sub_agents").is_none() {
+            patch["builtin_sub_agents"] = serde_json::json!({});
+        }
+        if patch["builtin_sub_agents"].get("weles").is_none() {
+            patch["builtin_sub_agents"]["weles"] = serde_json::json!({});
+        }
+        patch["builtin_sub_agents"]["weles"]["max_concurrent_reviews"] =
+            serde_json::Value::from(self.config.weles_max_concurrent_reviews);
         patch["compaction"] = serde_json::json!({
             "strategy": self.config.compaction_strategy,
             "weles": {

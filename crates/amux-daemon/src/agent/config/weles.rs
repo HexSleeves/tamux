@@ -88,6 +88,10 @@ pub(super) fn resolve_weles_reasoning_effort(overrides: &WelesBuiltinOverrides) 
         .unwrap_or_else(|| "medium".to_string())
 }
 
+pub(crate) fn resolve_weles_max_concurrent_reviews(overrides: &WelesBuiltinOverrides) -> usize {
+    overrides.max_concurrent_reviews.unwrap_or(2).clamp(1, 16) as usize
+}
+
 pub(super) fn default_weles_tool_whitelist() -> Vec<String> {
     DEFAULT_WELES_TOOL_WHITELIST
         .iter()

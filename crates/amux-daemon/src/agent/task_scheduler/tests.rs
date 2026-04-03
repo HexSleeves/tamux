@@ -51,6 +51,10 @@ fn make_task(id: &str, status: TaskStatus, goal_run_id: Option<&str>) -> AgentTa
     }
 }
 
+fn make_default_config() -> AgentConfig {
+    AgentConfig::default()
+}
+
 #[test]
 fn select_ready_task_indices_excludes_queued_tasks_for_awaiting_approval_goal_runs() {
     let mut tasks = VecDeque::new();
@@ -66,11 +70,12 @@ fn select_ready_task_indices_excludes_queued_tasks_for_awaiting_approval_goal_ru
         "goal-awaiting-approval".to_string(),
         GoalRunStatus::AwaitingApproval,
     );
-    let selected = select_ready_task_indices(&tasks, &[], &goal_run_statuses);
+    let selected =
+        select_ready_task_indices(&tasks, &[], &goal_run_statuses, &make_default_config());
 
     assert_eq!(
         selected,
-        vec![1],
+        vec![(1, "daemon-main".to_string())],
         "goal-linked queued task should stay blocked"
     );
 }
@@ -85,11 +90,73 @@ fn select_ready_task_indices_fail_closed_when_goal_metadata_missing_for_goal_lin
     ));
     tasks.push_back(make_task("independent-task", TaskStatus::Queued, None));
 
-    let selected = select_ready_task_indices(&tasks, &[], &HashMap::new());
+    let selected = select_ready_task_indices(&tasks, &[], &HashMap::new(), &make_default_config());
 
     assert_eq!(
         selected,
-        vec![1],
+        vec![(1, "daemon-main".to_string())],
         "goal-linked queued task should not dispatch when goal status is unavailable"
+    );
+}
+
+#[test]
+fn select_ready_task_indices_assigns_second_weles_lane_when_first_is_busy() {
+    let mut tasks = VecDeque::new();
+    let mut active = make_task("weles-active", TaskStatus::InProgress, None);
+    active.source = "subagent".to_string();
+    active.sub_agent_def_id =
+        Some(crate::agent::agent_identity::WELES_BUILTIN_SUBAGENT_ID.to_string());
+    active.lane_id = Some("weles:0".to_string());
+    tasks.push_back(active);
+
+    let mut queued = make_task("weles-queued", TaskStatus::Queued, None);
+    queued.source = "subagent".to_string();
+    queued.sub_agent_def_id =
+        Some(crate::agent::agent_identity::WELES_BUILTIN_SUBAGENT_ID.to_string());
+    tasks.push_back(queued);
+
+    let selected = select_ready_task_indices(&tasks, &[], &HashMap::new(), &make_default_config());
+
+    assert_eq!(selected, vec![(1, "weles:1".to_string())]);
+}
+
+#[test]
+fn select_ready_task_indices_blocks_weles_when_lane_pool_is_exhausted() {
+    let mut tasks = VecDeque::new();
+    for slot in 0..2 {
+        let mut active = make_task(
+            &format!("weles-active-{slot}"),
+            TaskStatus::InProgress,
+            None,
+        );
+        active.source = "subagent".to_string();
+        active.sub_agent_def_id =
+            Some(crate::agent::agent_identity::WELES_BUILTIN_SUBAGENT_ID.to_string());
+        active.lane_id = Some(format!("weles:{slot}"));
+        tasks.push_back(active);
+    }
+
+    let mut queued = make_task("weles-queued", TaskStatus::Queued, None);
+    queued.source = "subagent".to_string();
+    queued.sub_agent_def_id =
+        Some(crate::agent::agent_identity::WELES_BUILTIN_SUBAGENT_ID.to_string());
+    tasks.push_back(queued.clone());
+
+    let mut changed = tasks.clone();
+    let updates = refresh_task_queue_state(&mut changed, 1, &[], &make_default_config());
+    let selected =
+        select_ready_task_indices(&changed, &[], &HashMap::new(), &make_default_config());
+
+    assert!(
+        selected.is_empty(),
+        "queued WELES task should not dispatch once both lanes are busy"
+    );
+    let blocked = updates
+        .into_iter()
+        .find(|task| task.id == queued.id)
+        .expect("expected blocked task update");
+    assert_eq!(
+        blocked.blocked_reason.as_deref(),
+        Some("waiting for lane availability: weles")
     );
 }

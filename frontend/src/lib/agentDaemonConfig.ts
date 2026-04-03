@@ -144,6 +144,11 @@ export function buildDaemonAgentConfig(
     context_budget_tokens: agentSettings.context_budget_tokens,
     compact_threshold_pct: agentSettings.compact_threshold_pct,
     keep_recent_on_compact: agentSettings.keep_recent_on_compact,
+    builtin_sub_agents: {
+      weles: {
+        max_concurrent_reviews: agentSettings.weles_max_concurrent_reviews,
+      },
+    },
     compaction: {
       strategy: agentSettings.compaction.strategy,
       weles: {

@@ -188,7 +188,7 @@ pub enum DaemonCommand {
 #[allow(unused_imports)]
 pub use anticipatory::{AnticipatoryAction, AnticipatoryState};
 #[allow(unused_imports)]
-pub use approval::{ApprovalAction, ApprovalState, PendingApproval, RiskLevel};
+pub use approval::{ApprovalAction, ApprovalFilter, ApprovalState, PendingApproval, RiskLevel};
 #[allow(unused_imports)]
 pub use audit::{AuditAction, AuditEntryVm, AuditState, EscalationVm, TimeRange};
 #[allow(unused_imports)]

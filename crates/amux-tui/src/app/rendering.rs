@@ -116,6 +116,8 @@ impl TuiModel {
             &self.config,
             &self.chat,
             &self.theme,
+            self.approval.pending_approvals().len(),
+            self.modal.top() == Some(modal::ModalKind::ApprovalCenter),
             self.notifications.unread_count(),
             self.modal.top() == Some(modal::ModalKind::Notifications),
         );
@@ -294,6 +296,7 @@ impl TuiModel {
             let overlay_area = match modal_kind {
                 modal::ModalKind::Settings => render_helpers::centered_rect(90, 88, area),
                 modal::ModalKind::ApprovalOverlay => render_helpers::centered_rect(60, 40, area),
+                modal::ModalKind::ApprovalCenter => render_helpers::centered_rect(86, 82, area),
                 modal::ModalKind::ChatActionConfirm => render_helpers::centered_rect(48, 28, area),
                 modal::ModalKind::CommandPalette => render_helpers::centered_rect(50, 40, area),
                 modal::ModalKind::ThreadPicker => render_helpers::centered_rect(60, 50, area),
@@ -348,6 +351,16 @@ impl TuiModel {
                 }
                 modal::ModalKind::ApprovalOverlay => {
                     widgets::approval::render(frame, overlay_area, &self.approval, &self.theme);
+                }
+                modal::ModalKind::ApprovalCenter => {
+                    widgets::approval_center::render(
+                        frame,
+                        overlay_area,
+                        &self.approval,
+                        self.chat.active_thread_id(),
+                        self.current_workspace_id(),
+                        &self.theme,
+                    );
                 }
                 modal::ModalKind::ChatActionConfirm => {
                     let pending = self.pending_chat_action_confirm.as_ref().map(|pending| {
@@ -450,6 +463,7 @@ impl TuiModel {
         let rect = match kind {
             modal::ModalKind::Settings => render_helpers::centered_rect(90, 88, area),
             modal::ModalKind::ApprovalOverlay => render_helpers::centered_rect(60, 40, area),
+            modal::ModalKind::ApprovalCenter => render_helpers::centered_rect(86, 82, area),
             modal::ModalKind::ChatActionConfirm => render_helpers::centered_rect(48, 28, area),
             modal::ModalKind::CommandPalette => render_helpers::centered_rect(50, 40, area),
             modal::ModalKind::ThreadPicker => render_helpers::centered_rect(60, 50, area),

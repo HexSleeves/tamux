@@ -60,6 +60,7 @@ pub(super) fn convert_task(t: crate::wire::AgentTask) -> task::AgentTask {
     task::AgentTask {
         id: t.id,
         title: t.title,
+        description: t.description,
         thread_id: t.thread_id,
         status: t.status.map(|s| match s {
             crate::wire::TaskStatus::Queued => task::TaskStatus::Queued,
@@ -75,6 +76,7 @@ pub(super) fn convert_task(t: crate::wire::AgentTask) -> task::AgentTask {
         session_id: t.session_id,
         goal_run_id: t.goal_run_id,
         goal_step_title: t.goal_step_title,
+        command: t.command,
         awaiting_approval_id: t.awaiting_approval_id,
         blocked_reason: t.blocked_reason,
     }

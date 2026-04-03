@@ -405,7 +405,7 @@ fn refresh_task_queue_state_blocks_parent_while_subagents_are_active() {
         sample_subagent("sub-1", "parent", TaskStatus::InProgress),
     ]);
 
-    let changed = refresh_task_queue_state(&mut tasks, 100, &[]);
+    let changed = refresh_task_queue_state(&mut tasks, 100, &[], &AgentConfig::default());
     let parent = tasks.iter().find(|task| task.id == "parent").unwrap();
 
     assert_eq!(parent.status, TaskStatus::Blocked);
@@ -471,7 +471,7 @@ fn refresh_task_queue_state_requeues_parent_after_subagents_finish() {
         sample_subagent("sub-1", "parent", TaskStatus::Completed),
     ]);
 
-    let changed = refresh_task_queue_state(&mut tasks, 100, &[]);
+    let changed = refresh_task_queue_state(&mut tasks, 100, &[], &AgentConfig::default());
     let parent = tasks.iter().find(|task| task.id == "parent").unwrap();
 
     assert_eq!(parent.status, TaskStatus::Queued);

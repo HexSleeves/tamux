@@ -197,29 +197,25 @@ fn messaging_suspicion_reasons(tool_name: &str, tool_args: &serde_json::Value) -
             .and_then(|value| value.as_str())
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false),
-        "send_discord_message" => ["channel_id", "user_id"]
-            .into_iter()
-            .any(|field| {
-                tool_args
-                    .get(field)
-                    .and_then(|value| value.as_str())
-                    .map(|value| !value.trim().is_empty())
-                    .unwrap_or(false)
-            }),
+        "send_discord_message" => ["channel_id", "user_id"].into_iter().any(|field| {
+            tool_args
+                .get(field)
+                .and_then(|value| value.as_str())
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+        }),
         "send_telegram_message" => tool_args
             .get("chat_id")
             .and_then(|value| value.as_str())
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false),
-        "send_whatsapp_message" => ["phone", "to"]
-            .into_iter()
-            .any(|field| {
-                tool_args
-                    .get(field)
-                    .and_then(|value| value.as_str())
-                    .map(|value| !value.trim().is_empty())
-                    .unwrap_or(false)
-            }),
+        "send_whatsapp_message" => ["phone", "to"].into_iter().any(|field| {
+            tool_args
+                .get(field)
+                .and_then(|value| value.as_str())
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+        }),
         _ => false,
     };
     if has_explicit_target {
