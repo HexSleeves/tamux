@@ -1,6 +1,26 @@
 use amux_protocol::{GitChangeEntry, GitInfo};
+use anyhow::{Context, Result};
+use serde::Serialize;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GitLineStatusEntry {
+    pub line: usize,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GitLineStatusReport {
+    pub repo_root: String,
+    pub path: String,
+    pub relative_path: String,
+    pub tracked: bool,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub statuses: Vec<GitLineStatusEntry>,
+}
 
 /// Get git status for a working directory.
 /// Uses `git` CLI to avoid a heavy libgit2 dependency.
@@ -191,6 +211,78 @@ pub fn read_file_preview(path: &str, max_bytes: usize) -> (String, bool, bool) {
     }
 }
 
+pub fn get_git_line_statuses(
+    path: &str,
+    start_line: usize,
+    limit: usize,
+) -> Result<GitLineStatusReport> {
+    let requested_start = start_line.max(1);
+    let requested_limit = limit.max(1);
+    let absolute_path =
+        fs::canonicalize(path).with_context(|| format!("failed to resolve file path `{path}`"))?;
+    let content = fs::read_to_string(&absolute_path)
+        .with_context(|| format!("failed to read text file `{}`", absolute_path.display()))?;
+    let total_lines = content.lines().count();
+    let repo_root = find_git_root(
+        absolute_path
+            .parent()
+            .unwrap_or_else(|| Path::new(path))
+            .to_string_lossy()
+            .as_ref(),
+    )
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "path is not inside a git repository: {}",
+            absolute_path.display()
+        )
+    })?;
+    let relative_path = absolute_path
+        .strip_prefix(&repo_root)
+        .unwrap_or(absolute_path.as_path())
+        .to_string_lossy()
+        .replace('\\', "/");
+    let tracked = is_tracked_path(&repo_root, &relative_path);
+    let end_line = if total_lines == 0 || requested_start > total_lines {
+        requested_start.saturating_sub(1)
+    } else {
+        requested_start
+            .saturating_add(requested_limit.saturating_sub(1))
+            .min(total_lines)
+    };
+
+    let mut statuses = if end_line >= requested_start {
+        (requested_start..=end_line)
+            .map(|line| GitLineStatusEntry {
+                line,
+                status: "unchanged".to_string(),
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    if !statuses.is_empty() {
+        if !tracked {
+            for entry in &mut statuses {
+                entry.status = "added".to_string();
+            }
+        } else {
+            let diff = git_diff_for_line_statuses(&repo_root, &relative_path, &absolute_path);
+            apply_diff_line_statuses(&diff, requested_start, &mut statuses);
+        }
+    }
+
+    Ok(GitLineStatusReport {
+        repo_root,
+        path: absolute_path.to_string_lossy().to_string(),
+        relative_path,
+        tracked,
+        start_line: requested_start,
+        end_line,
+        statuses,
+    })
+}
+
 fn parse_git_change_line(line: &str) -> Option<GitChangeEntry> {
     if line.trim().is_empty() || line.len() < 4 {
         return None;
@@ -242,6 +334,116 @@ fn classify_git_status(code: &str) -> &'static str {
         return "deleted";
     }
     "modified"
+}
+
+fn is_tracked_path(repo_root: &str, relative_path: &str) -> bool {
+    Command::new("git")
+        .args(["ls-files", "--error-unmatch", "--", relative_path])
+        .current_dir(repo_root)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn git_diff_for_line_statuses(
+    repo_root: &str,
+    relative_path: &str,
+    absolute_path: &Path,
+) -> String {
+    let head_exists = Command::new("git")
+        .args(["rev-parse", "--verify", "HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+
+    if !head_exists {
+        return command_stdout_lossy(
+            Command::new("git")
+                .args([
+                    "diff",
+                    "--no-ext-diff",
+                    "--cached",
+                    "--unified=0",
+                    "--",
+                    relative_path,
+                ])
+                .current_dir(repo_root),
+        );
+    }
+
+    let tracked = is_tracked_path(repo_root, relative_path);
+    if !tracked && absolute_path.exists() {
+        return command_stdout_lossy(
+            Command::new("git")
+                .args([
+                    "diff",
+                    "--no-index",
+                    "--no-ext-diff",
+                    "--unified=0",
+                    "--",
+                    "/dev/null",
+                    absolute_path.to_string_lossy().as_ref(),
+                ])
+                .current_dir(repo_root),
+        );
+    }
+
+    command_stdout_lossy(
+        Command::new("git")
+            .args([
+                "diff",
+                "--no-ext-diff",
+                "--unified=0",
+                "HEAD",
+                "--",
+                relative_path,
+            ])
+            .current_dir(repo_root),
+    )
+}
+
+fn apply_diff_line_statuses(diff: &str, start_line: usize, statuses: &mut [GitLineStatusEntry]) {
+    for line in diff.lines() {
+        let Some((old_count, new_start, new_count)) = parse_hunk_header(line) else {
+            continue;
+        };
+        if new_count == 0 {
+            continue;
+        }
+
+        let status = if old_count == 0 { "added" } else { "modified" };
+        let hunk_end = new_start + new_count.saturating_sub(1);
+        let window_end = start_line + statuses.len().saturating_sub(1);
+        let overlap_start = new_start.max(start_line);
+        let overlap_end = hunk_end.min(window_end);
+        if overlap_start > overlap_end {
+            continue;
+        }
+
+        for line_no in overlap_start..=overlap_end {
+            if let Some(entry) = statuses.get_mut(line_no - start_line) {
+                entry.status = status.to_string();
+            }
+        }
+    }
+}
+
+fn parse_hunk_header(line: &str) -> Option<(usize, usize, usize)> {
+    let body = line.strip_prefix("@@ -")?;
+    let (ranges, _) = body.split_once(" @@")?;
+    let (old_range, new_range) = ranges.split_once(" +")?;
+    let (_, old_count) = parse_hunk_range(old_range)?;
+    let (new_start, new_count) = parse_hunk_range(new_range)?;
+    Some((old_count, new_start, new_count))
+}
+
+fn parse_hunk_range(raw: &str) -> Option<(usize, usize)> {
+    if let Some((start, count)) = raw.split_once(',') {
+        Some((start.parse().ok()?, count.parse().ok()?))
+    } else {
+        Some((raw.parse().ok()?, 1))
+    }
 }
 
 fn command_stdout_lossy(command: &mut Command) -> String {

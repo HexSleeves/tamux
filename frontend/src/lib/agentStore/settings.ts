@@ -130,6 +130,7 @@ export interface AgentSettings {
   context_budget_tokens: number;
   compact_threshold_pct: number;
   keep_recent_on_compact: number;
+  weles_max_concurrent_reviews: number;
   compaction: AgentCompactionSettings;
   agent_backend: AgentBackend;
 }
@@ -223,6 +224,7 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   context_budget_tokens: 100000,
   compact_threshold_pct: 80,
   keep_recent_on_compact: 10,
+  weles_max_concurrent_reviews: 2,
   compaction: {
     strategy: "heuristic",
     weles: {
@@ -280,6 +282,12 @@ export type DiskAgentSettings = Partial<AgentSettings> & {
   context_budget_tokens?: number;
   compact_threshold_pct?: number;
   keep_recent_on_compact?: number;
+  weles_max_concurrent_reviews?: number;
+  builtin_sub_agents?: {
+    weles?: {
+      max_concurrent_reviews?: number;
+    };
+  };
   compaction?: {
     strategy?: CompactionStrategy;
     weles?: Partial<AgentCompactionWelesSettings>;
@@ -414,6 +422,10 @@ export function normalizeAgentSettingsFromSource(source: DiskAgentSettings): Age
     context_budget_tokens: source.context_budget_tokens ?? DEFAULT_AGENT_SETTINGS.context_budget_tokens,
     compact_threshold_pct: source.compact_threshold_pct ?? DEFAULT_AGENT_SETTINGS.compact_threshold_pct,
     keep_recent_on_compact: source.keep_recent_on_compact ?? DEFAULT_AGENT_SETTINGS.keep_recent_on_compact,
+    weles_max_concurrent_reviews:
+      source.weles_max_concurrent_reviews
+      ?? source.builtin_sub_agents?.weles?.max_concurrent_reviews
+      ?? DEFAULT_AGENT_SETTINGS.weles_max_concurrent_reviews,
     compaction: {
       strategy: source.compaction?.strategy ?? DEFAULT_AGENT_SETTINGS.compaction.strategy,
       weles: {

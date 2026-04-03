@@ -176,6 +176,9 @@ impl TuiModel {
                     self.notifications
                         .reduce(crate::state::NotificationsAction::Navigate(-1));
                 }
+                modal::ModalKind::ApprovalCenter => {
+                    self.step_approval_selection(-1);
+                }
                 _ => {}
             },
             MouseEventKind::ScrollDown if inside => match kind {
@@ -197,6 +200,9 @@ impl TuiModel {
                     self.notifications
                         .reduce(crate::state::NotificationsAction::Navigate(1));
                 }
+                modal::ModalKind::ApprovalCenter => {
+                    self.step_approval_selection(1);
+                }
                 _ => {}
             },
             MouseEventKind::Down(MouseButton::Left) if !inside => {
@@ -212,6 +218,7 @@ impl TuiModel {
                         | modal::ModalKind::OpenAIAuth
                         | modal::ModalKind::ErrorViewer
                         | modal::ModalKind::Notifications
+                        | modal::ModalKind::ApprovalCenter
                         | modal::ModalKind::EffortPicker
                         | modal::ModalKind::ChatActionConfirm
                 ) {
@@ -420,6 +427,49 @@ impl TuiModel {
                                     &notification_id,
                                     action_index + 4,
                                 );
+                            }
+                        }
+                    }
+                }
+                modal::ModalKind::ApprovalCenter => {
+                    if let Some(target) = widgets::approval_center::hit_test(
+                        overlay_area,
+                        &self.approval,
+                        self.chat.active_thread_id(),
+                        self.current_workspace_id(),
+                        Position::new(mouse.column, mouse.row),
+                    ) {
+                        match target {
+                            widgets::approval_center::ApprovalCenterHitTarget::Filter(filter) => {
+                                self.approval
+                                    .reduce(crate::state::ApprovalAction::SetFilter(filter));
+                            }
+                            widgets::approval_center::ApprovalCenterHitTarget::Row(index) => {
+                                self.select_approval_center_row(index);
+                            }
+                            widgets::approval_center::ApprovalCenterHitTarget::ThreadJump(
+                                thread_id,
+                            ) => {
+                                self.open_thread_conversation(thread_id);
+                                self.close_top_modal();
+                            }
+                            widgets::approval_center::ApprovalCenterHitTarget::ApproveOnce(
+                                approval_id,
+                            ) => {
+                                self.resolve_approval(approval_id, "allow_once");
+                            }
+                            widgets::approval_center::ApprovalCenterHitTarget::ApproveSession(
+                                approval_id,
+                            ) => {
+                                self.resolve_approval(approval_id, "allow_session");
+                            }
+                            widgets::approval_center::ApprovalCenterHitTarget::Deny(
+                                approval_id,
+                            ) => {
+                                self.resolve_approval(approval_id, "reject");
+                            }
+                            widgets::approval_center::ApprovalCenterHitTarget::Close => {
+                                self.close_top_modal();
                             }
                         }
                     }

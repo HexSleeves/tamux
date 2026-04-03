@@ -430,6 +430,7 @@ pub fn execute_tool<'a>(
         }
         "list_files" => execute_list_files(&args, session_manager, session_id).await,
         "read_file" => execute_read_file(&args).await,
+        "get_git_line_statuses" => execute_get_git_line_statuses(&args).await,
         "write_file" => execute_write_file(&args, session_manager, session_id).await,
         "create_file" => execute_create_file(&args).await,
         "append_to_file" => execute_append_to_file(&args).await,

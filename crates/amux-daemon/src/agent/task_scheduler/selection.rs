@@ -22,8 +22,12 @@ pub(in crate::agent) fn refresh_task_queue_state(
     tasks: &mut VecDeque<AgentTask>,
     now: u64,
     sessions: &[amux_protocol::SessionInfo],
+    config: &AgentConfig,
 ) -> Vec<AgentTask> {
     const MAX_CONCURRENT_SUBAGENTS_PER_PARENT: usize = 4;
+    let max_weles_reviews = crate::agent::config::resolve_weles_max_concurrent_reviews(
+        &config.builtin_sub_agents.weles,
+    );
     let completed: HashSet<String> = tasks
         .iter()
         .filter(|task| task.status == TaskStatus::Completed)
@@ -161,39 +165,40 @@ pub(in crate::agent) fn refresh_task_queue_state(
                 continue;
             }
 
-            let resource_reason = if occupied_lanes.contains(&task_lane_key(task)) {
-                Some(format!(
-                    "waiting for lane availability: {}",
-                    task_lane_key(task)
-                ))
-            } else if let Some(parent_key) = subagent_parent_key(task) {
-                if active_subagents_by_parent
-                    .get(&parent_key)
-                    .copied()
-                    .unwrap_or(0)
-                    >= MAX_CONCURRENT_SUBAGENTS_PER_PARENT
-                {
+            let resource_reason =
+                if dispatch_lane_for_task(task, &occupied_lanes, max_weles_reviews).is_none() {
                     Some(format!(
-                        "waiting for subagent slot: {} active children for {}",
-                        MAX_CONCURRENT_SUBAGENTS_PER_PARENT, parent_key
+                        "waiting for lane availability: {}",
+                        task_lane_wait_key(task)
                     ))
+                } else if let Some(parent_key) = subagent_parent_key(task) {
+                    if active_subagents_by_parent
+                        .get(&parent_key)
+                        .copied()
+                        .unwrap_or(0)
+                        >= MAX_CONCURRENT_SUBAGENTS_PER_PARENT
+                    {
+                        Some(format!(
+                            "waiting for subagent slot: {} active children for {}",
+                            MAX_CONCURRENT_SUBAGENTS_PER_PARENT, parent_key
+                        ))
+                    } else {
+                        None
+                    }
+                } else if let Some(workspace_key) = task_workspace_key(task, sessions) {
+                    if task_enforces_workspace_lock(task)
+                        && occupied_workspaces.contains(&workspace_key)
+                    {
+                        Some(format!(
+                            "waiting for workspace lock: {}",
+                            workspace_key.replace("workspace:", "")
+                        ))
+                    } else {
+                        None
+                    }
                 } else {
                     None
-                }
-            } else if let Some(workspace_key) = task_workspace_key(task, sessions) {
-                if task_enforces_workspace_lock(task)
-                    && occupied_workspaces.contains(&workspace_key)
-                {
-                    Some(format!(
-                        "waiting for workspace lock: {}",
-                        workspace_key.replace("workspace:", "")
-                    ))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+                };
 
             if let Some(reason) = resource_reason {
                 if task.status != TaskStatus::Blocked
@@ -254,8 +259,12 @@ pub(in crate::agent) fn select_ready_task_indices(
     tasks: &VecDeque<AgentTask>,
     sessions: &[amux_protocol::SessionInfo],
     goal_run_statuses: &HashMap<String, GoalRunStatus>,
-) -> Vec<usize> {
+    config: &AgentConfig,
+) -> Vec<(usize, String)> {
     const MAX_CONCURRENT_SUBAGENTS_PER_PARENT: usize = 4;
+    let max_weles_reviews = crate::agent::config::resolve_weles_max_concurrent_reviews(
+        &config.builtin_sub_agents.weles,
+    );
     let mut occupied_lanes = tasks
         .iter()
         .filter(|task| {
@@ -307,7 +316,9 @@ pub(in crate::agent) fn select_ready_task_indices(
             }
         }
 
-        let lane = task_lane_key(task);
+        let Some(lane) = dispatch_lane_for_task(task, &occupied_lanes, max_weles_reviews) else {
+            continue;
+        };
         let workspace = if task_enforces_workspace_lock(task) {
             task_workspace_key(task, sessions)
         } else {
@@ -324,7 +335,7 @@ pub(in crate::agent) fn select_ready_task_indices(
                 continue;
             }
         }
-        let lane_available = occupied_lanes.insert(lane);
+        let lane_available = occupied_lanes.insert(lane.clone());
         let workspace_available = workspace
             .as_ref()
             .map(|key| occupied_workspaces.insert(key.clone()))
@@ -333,12 +344,12 @@ pub(in crate::agent) fn select_ready_task_indices(
             if let Some(parent_key) = parent_key {
                 *active_subagents_by_parent.entry(parent_key).or_insert(0) += 1;
             }
-            selected.push(index);
+            selected.push((index, lane));
             continue;
         }
 
         if lane_available {
-            occupied_lanes.remove(current_task_lane_key(task).as_str());
+            occupied_lanes.remove(lane.as_str());
         }
     }
 
@@ -346,6 +357,9 @@ pub(in crate::agent) fn select_ready_task_indices(
 }
 
 pub(in crate::agent) fn task_lane_key(task: &AgentTask) -> String {
+    if is_weles_review_task(task) {
+        return "weles".to_string();
+    }
     task.session_id
         .as_deref()
         .filter(|value| !value.trim().is_empty())
@@ -355,6 +369,42 @@ pub(in crate::agent) fn task_lane_key(task: &AgentTask) -> String {
 
 pub(in crate::agent) fn current_task_lane_key(task: &AgentTask) -> String {
     task.lane_id.clone().unwrap_or_else(|| task_lane_key(task))
+}
+
+fn is_weles_review_task(task: &AgentTask) -> bool {
+    task.sub_agent_def_id.as_deref()
+        == Some(crate::agent::agent_identity::WELES_BUILTIN_SUBAGENT_ID)
+}
+
+fn task_lane_wait_key(task: &AgentTask) -> String {
+    if is_weles_review_task(task) {
+        "weles".to_string()
+    } else {
+        task_lane_key(task)
+    }
+}
+
+fn dispatch_lane_for_task(
+    task: &AgentTask,
+    occupied_lanes: &HashSet<String>,
+    max_weles_reviews: usize,
+) -> Option<String> {
+    if is_weles_review_task(task) {
+        for slot in 0..max_weles_reviews.max(1) {
+            let lane = format!("weles:{slot}");
+            if !occupied_lanes.contains(&lane) {
+                return Some(lane);
+            }
+        }
+        None
+    } else {
+        let lane = task_lane_key(task);
+        if occupied_lanes.contains(&lane) {
+            None
+        } else {
+            Some(lane)
+        }
+    }
 }
 
 pub(in crate::agent) fn is_task_terminal_status(status: TaskStatus) -> bool {

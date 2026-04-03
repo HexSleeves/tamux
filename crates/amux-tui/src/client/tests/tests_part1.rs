@@ -66,6 +66,27 @@
         ));
     }
 
+    #[test]
+    fn resolve_task_approval_uses_agent_protocol_message() {
+        let (event_tx, _event_rx) = mpsc::channel(8);
+        let client = DaemonClient::new(event_tx);
+        let mut rx = client.request_rx.lock().unwrap().take().unwrap();
+
+        client
+            .resolve_task_approval(
+                "policy-escalation-thread_abc-123".to_string(),
+                "allow_session".to_string(),
+            )
+            .unwrap();
+
+        assert!(matches!(
+            drain_request(&mut rx),
+            ClientMessage::AgentResolveTaskApproval { approval_id, decision }
+                if approval_id == "policy-escalation-thread_abc-123"
+                    && decision == "approve-session"
+        ));
+    }
+
     #[tokio::test]
     async fn done_event_parses_reasoning_payload() {
         let (event_tx, mut event_rx) = mpsc::channel(8);

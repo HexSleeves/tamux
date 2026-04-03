@@ -300,18 +300,14 @@ impl DaemonClient {
     }
 
     pub fn resolve_task_approval(&self, approval_id: String, decision: String) -> Result<()> {
-        use amux_protocol::ApprovalDecision;
         let decision = match decision.as_str() {
-            "allow_once" | "approve_once" => ApprovalDecision::ApproveOnce,
-            "allow_session" | "approve_session" => ApprovalDecision::ApproveSession,
-            _ => ApprovalDecision::Deny,
+            "allow_once" | "approve_once" => "approve-once",
+            "allow_session" | "approve_session" => "approve-session",
+            _ => "deny",
         };
-        // ResolveApproval requires a SessionId; we use a nil UUID as placeholder
-        // since the daemon routes by approval_id.
-        self.send(ClientMessage::ResolveApproval {
-            id: uuid::Uuid::nil(),
+        self.send(ClientMessage::AgentResolveTaskApproval {
             approval_id,
-            decision,
+            decision: decision.to_string(),
         })
     }
 }

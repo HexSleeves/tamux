@@ -224,6 +224,7 @@ impl DaemonClient {
                         id: get_string(&event, "task_id").unwrap_or_default(),
                         title: get_string(&event, "message")
                             .unwrap_or_else(|| "Task update".to_string()),
+                        description: String::new(),
                         thread_id: None,
                         status: event
                             .get("status")
@@ -233,6 +234,7 @@ impl DaemonClient {
                         session_id: None,
                         goal_run_id: None,
                         goal_step_title: None,
+                        command: None,
                         awaiting_approval_id: None,
                         blocked_reason: get_string(&event, "message"),
                     });

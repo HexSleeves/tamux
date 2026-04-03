@@ -129,7 +129,11 @@ impl ChatState {
     }
 
     fn move_thread_to_front(&mut self, thread_id: &str) {
-        let Some(index) = self.threads.iter().position(|thread| thread.id == thread_id) else {
+        let Some(index) = self
+            .threads
+            .iter()
+            .position(|thread| thread.id == thread_id)
+        else {
             return;
         };
         if index == 0 {

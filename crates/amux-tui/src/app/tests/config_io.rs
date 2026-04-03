@@ -90,6 +90,7 @@ fn build_config_patch_value_covers_all_daemon_backed_tabs() {
     model.config.compact_threshold_pct = 91;
     model.config.keep_recent_on_compact = 17;
     model.config.bash_timeout_secs = 77;
+    model.config.weles_max_concurrent_reviews = 4;
     model.config.compaction_strategy = "custom_model".to_string();
     model.config.compaction_weles_provider = "openai".to_string();
     model.config.compaction_weles_model = "gpt-5.4-mini".to_string();
@@ -130,7 +131,10 @@ fn build_config_patch_value_covers_all_daemon_backed_tabs() {
     assert_eq!(json["gateway"]["telegram_token"], "telegram-secret");
     assert_eq!(json["gateway"]["telegram_allowed_chats"], "1,2");
     assert_eq!(json["gateway"]["discord_token"], "discord-secret");
-    assert_eq!(json["gateway"]["discord_channel_filter"], "1477397308600619194");
+    assert_eq!(
+        json["gateway"]["discord_channel_filter"],
+        "1477397308600619194"
+    );
     assert_eq!(json["gateway"]["discord_allowed_users"], "alice,bob");
     assert_eq!(json["gateway"]["whatsapp_token"], "whatsapp-secret");
     assert_eq!(json["gateway"]["whatsapp_phone_id"], "phone-1");
@@ -146,6 +150,10 @@ fn build_config_patch_value_covers_all_daemon_backed_tabs() {
     assert_eq!(json["compact_threshold_pct"], 91);
     assert_eq!(json["keep_recent_on_compact"], 17);
     assert_eq!(json["bash_timeout_seconds"], 77);
+    assert_eq!(
+        json["builtin_sub_agents"]["weles"]["max_concurrent_reviews"],
+        4
+    );
     assert_eq!(json["compaction"]["strategy"], "custom_model");
     assert_eq!(json["compaction"]["weles"]["model"], "gpt-5.4-mini");
     assert_eq!(json["compaction"]["custom_model"]["provider"], "openrouter");
@@ -225,6 +233,7 @@ fn build_config_patch_value_round_trips_daemon_backed_settings() {
     model.config.compact_threshold_pct = 91;
     model.config.keep_recent_on_compact = 17;
     model.config.bash_timeout_secs = 77;
+    model.config.weles_max_concurrent_reviews = 4;
     model.config.compaction_strategy = "custom_model".to_string();
     model.config.compaction_weles_provider = "openai".to_string();
     model.config.compaction_weles_model = "gpt-5.4-mini".to_string();
@@ -276,9 +285,15 @@ fn build_config_patch_value_round_trips_daemon_backed_settings() {
     assert_eq!(reloaded.config.anticipatory_predictive_hydration, true);
     assert_eq!(reloaded.config.anticipatory_stuck_detection, true);
     assert_eq!(reloaded.config.operator_model_enabled, true);
-    assert_eq!(reloaded.config.operator_model_allow_message_statistics, true);
+    assert_eq!(
+        reloaded.config.operator_model_allow_message_statistics,
+        true
+    );
     assert_eq!(reloaded.config.operator_model_allow_approval_learning, true);
-    assert_eq!(reloaded.config.operator_model_allow_attention_tracking, true);
+    assert_eq!(
+        reloaded.config.operator_model_allow_attention_tracking,
+        true
+    );
     assert_eq!(reloaded.config.operator_model_allow_implicit_feedback, true);
     assert_eq!(reloaded.config.collaboration_enabled, true);
     assert_eq!(reloaded.config.compliance_mode, "soc2");
@@ -296,7 +311,10 @@ fn build_config_patch_value_round_trips_daemon_backed_settings() {
     assert_eq!(reloaded.config.telegram_token, "telegram-secret");
     assert_eq!(reloaded.config.telegram_allowed_chats, "1,2");
     assert_eq!(reloaded.config.discord_token, "discord-secret");
-    assert_eq!(reloaded.config.discord_channel_filter, "1477397308600619194");
+    assert_eq!(
+        reloaded.config.discord_channel_filter,
+        "1477397308600619194"
+    );
     assert_eq!(reloaded.config.discord_allowed_users, "alice,bob");
     assert_eq!(reloaded.config.whatsapp_allowed_contacts, "15551234567");
     assert_eq!(reloaded.config.whatsapp_token, "whatsapp-secret");
@@ -313,6 +331,7 @@ fn build_config_patch_value_round_trips_daemon_backed_settings() {
     assert_eq!(reloaded.config.compact_threshold_pct, 91);
     assert_eq!(reloaded.config.keep_recent_on_compact, 17);
     assert_eq!(reloaded.config.bash_timeout_secs, 77);
+    assert_eq!(reloaded.config.weles_max_concurrent_reviews, 4);
     assert_eq!(reloaded.config.compaction_strategy, "custom_model");
     assert_eq!(reloaded.config.compaction_weles_provider, "openai");
     assert_eq!(reloaded.config.compaction_weles_model, "gpt-5.4-mini");
@@ -337,7 +356,10 @@ fn build_config_patch_value_round_trips_daemon_backed_settings() {
         "chat_completions"
     );
     assert_eq!(reloaded.config.compaction_custom_reasoning_effort, "high");
-    assert_eq!(reloaded.config.compaction_custom_context_window_tokens, 333_000);
+    assert_eq!(
+        reloaded.config.compaction_custom_context_window_tokens,
+        333_000
+    );
     assert_eq!(reloaded.config.snapshot_max_count, 15);
     assert_eq!(reloaded.config.snapshot_max_size_mb, 2_048);
     assert_eq!(reloaded.config.snapshot_auto_cleanup, false);
@@ -433,7 +455,8 @@ fn apply_config_json_loads_nested_compaction_settings() {
             "weles": {
                 "provider": "openai",
                 "model": "gpt-5.4-mini",
-                "reasoning_effort": "medium"
+                "reasoning_effort": "medium",
+                "max_concurrent_reviews": 5
             }
         },
         "compaction": {
@@ -458,6 +481,7 @@ fn apply_config_json_loads_nested_compaction_settings() {
     }));
 
     assert_eq!(model.config.compaction_strategy, "custom_model");
+    assert_eq!(model.config.weles_max_concurrent_reviews, 5);
     assert_eq!(model.config.compaction_weles_provider, "openai");
     assert_eq!(model.config.compaction_weles_model, "gpt-5.4-mini");
     assert_eq!(model.config.compaction_custom_provider, "openrouter");

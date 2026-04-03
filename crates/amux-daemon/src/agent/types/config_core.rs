@@ -308,6 +308,8 @@ pub struct WelesBuiltinOverrides {
     pub supervisor_config: Option<SupervisorConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_reviews: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

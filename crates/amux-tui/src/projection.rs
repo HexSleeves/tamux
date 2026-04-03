@@ -140,6 +140,8 @@ pub enum ClientEvent {
     ApprovalRequired {
         approval_id: String,
         command: String,
+        rationale: Option<String>,
+        reasons: Vec<String>,
         risk_level: String,
         blast_radius: String,
     },

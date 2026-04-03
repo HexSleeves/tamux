@@ -120,6 +120,7 @@ impl AgentEngine {
     pub(super) async fn dispatch_ready_tasks(self: Arc<Self>) -> Result<()> {
         let now = now_millis();
         let sessions = self.session_manager.list().await;
+        let config = self.config.read().await.clone();
         let goal_run_statuses = {
             let goal_runs = self.goal_runs.lock().await;
             goal_runs
@@ -129,9 +130,11 @@ impl AgentEngine {
         };
         let (changed_before_start, dispatched_tasks) = {
             let mut tasks = self.tasks.lock().await;
-            let changed_before_start = refresh_task_queue_state(&mut tasks, now, &sessions);
-            let next_indices = select_ready_task_indices(&tasks, &sessions, &goal_run_statuses);
-            if next_indices.is_empty() {
+            let changed_before_start =
+                refresh_task_queue_state(&mut tasks, now, &sessions, &config);
+            let next_dispatches =
+                select_ready_task_indices(&tasks, &sessions, &goal_run_statuses, &config);
+            if next_dispatches.is_empty() {
                 drop(tasks);
                 if !changed_before_start.is_empty() {
                     self.persist_tasks().await;
@@ -142,10 +145,9 @@ impl AgentEngine {
                 return Ok(());
             }
 
-            let mut dispatched_tasks = Vec::with_capacity(next_indices.len());
-            for index in next_indices {
+            let mut dispatched_tasks = Vec::with_capacity(next_dispatches.len());
+            for (index, lane_id) in next_dispatches {
                 let task = &mut tasks[index];
-                let lane_id = task_lane_key(task);
                 task.status = TaskStatus::InProgress;
                 task.started_at = Some(now);
                 task.completed_at = None;

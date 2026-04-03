@@ -210,6 +210,8 @@ impl DaemonClient {
                     .send(ClientEvent::ApprovalRequired {
                         approval_id: approval.approval_id,
                         command: approval.command,
+                        rationale: Some(approval.rationale),
+                        reasons: approval.reasons,
                         risk_level: approval.risk_level,
                         blast_radius: approval.blast_radius,
                     })

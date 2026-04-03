@@ -67,10 +67,24 @@ pub struct PendingApproval {
     pub approval_id: String,
     pub task_id: String,
     pub task_title: Option<String>,
+    pub thread_id: Option<String>,
+    pub thread_title: Option<String>,
+    pub workspace_id: Option<String>,
+    pub rationale: Option<String>,
+    pub reasons: Vec<String>,
     /// The command text extracted (heuristically) from blocked_reason.
     pub command: String,
     pub risk_level: RiskLevel,
     pub blast_radius: String,
+    pub received_at: u64,
+    pub seen_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalFilter {
+    AllPending,
+    CurrentThread,
+    CurrentWorkspace,
 }
 
 // ── ApprovalAction ────────────────────────────────────────────────────────────
@@ -78,6 +92,8 @@ pub struct PendingApproval {
 #[derive(Debug, Clone)]
 pub enum ApprovalAction {
     ApprovalRequired(PendingApproval),
+    SelectApproval(String),
+    SetFilter(ApprovalFilter),
     Resolve {
         approval_id: String,
         decision: String,
@@ -91,6 +107,8 @@ pub enum ApprovalAction {
 pub struct ApprovalState {
     pending_approvals: Vec<PendingApproval>,
     session_allowlist: HashSet<String>,
+    selected_approval_id: Option<String>,
+    filter: ApprovalFilter,
 }
 
 impl ApprovalState {
@@ -98,11 +116,68 @@ impl ApprovalState {
         Self {
             pending_approvals: Vec::new(),
             session_allowlist: HashSet::new(),
+            selected_approval_id: None,
+            filter: ApprovalFilter::AllPending,
         }
     }
 
     pub fn pending_approvals(&self) -> &[PendingApproval] {
         &self.pending_approvals
+    }
+
+    pub fn selected_approval_id(&self) -> Option<&str> {
+        self.selected_approval_id.as_deref()
+    }
+
+    pub fn filter(&self) -> ApprovalFilter {
+        self.filter
+    }
+
+    pub fn selected_approval(&self) -> Option<&PendingApproval> {
+        self.selected_approval_id
+            .as_deref()
+            .and_then(|approval_id| self.approval_by_id(approval_id))
+            .or_else(|| self.current_approval())
+    }
+
+    pub fn selected_visible_approval<'a>(
+        &'a self,
+        current_thread_id: Option<&str>,
+        current_workspace_id: Option<&str>,
+    ) -> Option<&'a PendingApproval> {
+        let visible = self.visible_approvals(current_thread_id, current_workspace_id);
+        self.selected_approval_id
+            .as_deref()
+            .and_then(|approval_id| {
+                visible
+                    .iter()
+                    .find(|approval| approval.approval_id == approval_id)
+                    .copied()
+            })
+            .or_else(|| visible.first().copied())
+    }
+
+    pub fn approval_by_id(&self, approval_id: &str) -> Option<&PendingApproval> {
+        self.pending_approvals
+            .iter()
+            .find(|approval| approval.approval_id == approval_id)
+    }
+
+    pub fn visible_approvals<'a>(
+        &'a self,
+        current_thread_id: Option<&str>,
+        current_workspace_id: Option<&str>,
+    ) -> Vec<&'a PendingApproval> {
+        self.pending_approvals
+            .iter()
+            .filter(|approval| match self.filter {
+                ApprovalFilter::AllPending => true,
+                ApprovalFilter::CurrentThread => approval.thread_id.as_deref() == current_thread_id,
+                ApprovalFilter::CurrentWorkspace => {
+                    approval.workspace_id.as_deref() == current_workspace_id
+                }
+            })
+            .collect()
     }
 
     /// The first pending approval (the one currently shown to the user).
@@ -118,7 +193,32 @@ impl ApprovalState {
     pub fn reduce(&mut self, action: ApprovalAction) {
         match action {
             ApprovalAction::ApprovalRequired(approval) => {
-                self.pending_approvals.push(approval);
+                if let Some(existing) = self
+                    .pending_approvals
+                    .iter_mut()
+                    .find(|existing| existing.approval_id == approval.approval_id)
+                {
+                    *existing = approval;
+                } else {
+                    if self.selected_approval_id.is_none() {
+                        self.selected_approval_id = Some(approval.approval_id.clone());
+                    }
+                    self.pending_approvals.push(approval);
+                }
+            }
+
+            ApprovalAction::SelectApproval(approval_id) => {
+                if self
+                    .pending_approvals
+                    .iter()
+                    .any(|approval| approval.approval_id == approval_id)
+                {
+                    self.selected_approval_id = Some(approval_id);
+                }
+            }
+
+            ApprovalAction::SetFilter(filter) => {
+                self.filter = filter;
             }
 
             ApprovalAction::Resolve {
@@ -127,6 +227,12 @@ impl ApprovalState {
             } => {
                 self.pending_approvals
                     .retain(|a| a.approval_id != approval_id);
+                if self.selected_approval_id.as_deref() == Some(approval_id.as_str()) {
+                    self.selected_approval_id = self
+                        .pending_approvals
+                        .first()
+                        .map(|approval| approval.approval_id.clone());
+                }
             }
 
             ApprovalAction::AllowSession(pattern) => {
@@ -136,6 +242,12 @@ impl ApprovalState {
             ApprovalAction::ClearResolved(approval_id) => {
                 self.pending_approvals
                     .retain(|a| a.approval_id != approval_id);
+                if self.selected_approval_id.as_deref() == Some(approval_id.as_str()) {
+                    self.selected_approval_id = self
+                        .pending_approvals
+                        .first()
+                        .map(|approval| approval.approval_id.clone());
+                }
             }
         }
     }
@@ -159,9 +271,16 @@ mod tests {
             approval_id: approval_id.into(),
             task_id: task_id.into(),
             task_title: None,
+            thread_id: None,
+            thread_title: None,
+            workspace_id: None,
+            rationale: None,
+            reasons: Vec::new(),
             command: command.into(),
             risk_level,
             blast_radius: "unknown".into(),
+            received_at: 0,
+            seen_at: None,
         }
     }
 
@@ -233,6 +352,57 @@ mod tests {
         state.reduce(ApprovalAction::AllowSession("git push".into()));
         assert!(state.is_allowed("git push"));
         assert!(!state.is_allowed("rm -rf"));
+    }
+
+    #[test]
+    fn approval_required_upserts_existing_approval_by_id() {
+        let mut state = ApprovalState::new();
+        let mut original = make_approval("a1", "t1", "ls -la");
+        original.task_title = Some("Original".into());
+        let mut updated = make_approval("a1", "t1", "git push --force");
+        updated.task_title = Some("Updated".into());
+        updated.blast_radius = "repo".into();
+
+        state.reduce(ApprovalAction::ApprovalRequired(original));
+        state.reduce(ApprovalAction::ApprovalRequired(updated));
+
+        assert_eq!(state.pending_approvals().len(), 1);
+        let approval = &state.pending_approvals()[0];
+        assert_eq!(approval.task_title.as_deref(), Some("Updated"));
+        assert_eq!(approval.command, "git push --force");
+        assert_eq!(approval.blast_radius, "repo");
+    }
+
+    #[test]
+    fn visible_approvals_can_be_filtered_by_thread_and_workspace() {
+        let mut state = ApprovalState::new();
+        let mut current_thread = make_approval("a1", "t1", "echo 1");
+        current_thread.thread_id = Some("thread-1".into());
+        current_thread.workspace_id = Some("ws-1".into());
+        let mut same_workspace = make_approval("a2", "t2", "echo 2");
+        same_workspace.thread_id = Some("thread-2".into());
+        same_workspace.workspace_id = Some("ws-1".into());
+        let mut other_workspace = make_approval("a3", "t3", "echo 3");
+        other_workspace.thread_id = Some("thread-3".into());
+        other_workspace.workspace_id = Some("ws-2".into());
+
+        state.reduce(ApprovalAction::ApprovalRequired(current_thread));
+        state.reduce(ApprovalAction::ApprovalRequired(same_workspace));
+        state.reduce(ApprovalAction::ApprovalRequired(other_workspace));
+
+        state.reduce(ApprovalAction::SetFilter(ApprovalFilter::CurrentThread));
+        let current_thread_visible = state.visible_approvals(Some("thread-1"), Some("ws-1"));
+        assert_eq!(current_thread_visible.len(), 1);
+        assert_eq!(current_thread_visible[0].approval_id, "a1");
+
+        state.reduce(ApprovalAction::SetFilter(ApprovalFilter::CurrentWorkspace));
+        let current_workspace_visible = state.visible_approvals(Some("thread-1"), Some("ws-1"));
+        assert_eq!(current_workspace_visible.len(), 2);
+        assert_eq!(current_workspace_visible[0].approval_id, "a1");
+        assert_eq!(current_workspace_visible[1].approval_id, "a2");
+
+        state.reduce(ApprovalAction::SelectApproval("a2".into()));
+        assert_eq!(state.selected_approval_id(), Some("a2"));
     }
 
     // ── RiskLevel::classify_command tests ────────────────────────────────────

@@ -68,6 +68,8 @@ impl TuiModel {
         &mut self,
         approval_id: String,
         command: String,
+        rationale: Option<String>,
+        reasons: Vec<String>,
         risk_level: String,
         blast_radius: String,
     ) {
@@ -76,6 +78,9 @@ impl TuiModel {
             .tasks()
             .iter()
             .find(|task| task.awaiting_approval_id.as_deref() == Some(approval_id.as_str()));
+        let thread_id = task_match.and_then(|task| task.thread_id.clone());
+        let thread_title = self.thread_title_for_id(thread_id.as_deref());
+        let is_current_thread = thread_id.as_deref() == self.chat.active_thread_id();
         self.approval
             .reduce(crate::state::ApprovalAction::ApprovalRequired(
                 crate::state::PendingApproval {
@@ -84,17 +89,52 @@ impl TuiModel {
                         .map(|task| task.id.clone())
                         .unwrap_or_else(|| approval_id.clone()),
                     task_title: task_match.map(|task| task.title.clone()),
+                    thread_id: thread_id.clone(),
+                    thread_title: thread_title.clone(),
+                    workspace_id: self.current_workspace_id().map(str::to_string),
+                    rationale,
+                    reasons,
                     command,
                     risk_level: crate::state::RiskLevel::from_str_lossy(&risk_level),
                     blast_radius,
+                    received_at: 0,
+                    seen_at: None,
                 },
             ));
-        if self.modal.top() != Some(crate::state::modal::ModalKind::ApprovalOverlay) {
+        self.approval
+            .reduce(crate::state::ApprovalAction::SelectApproval(
+                approval_id.clone(),
+            ));
+        if is_current_thread
+            && self.modal.top() != Some(crate::state::modal::ModalKind::ApprovalOverlay)
+        {
             self.modal.reduce(crate::state::modal::ModalAction::Push(
                 crate::state::modal::ModalKind::ApprovalOverlay,
             ));
+        } else if !is_current_thread {
+            let thread_label = thread_title
+                .clone()
+                .filter(|title: &String| !title.trim().is_empty())
+                .unwrap_or_else(|| {
+                    thread_id
+                        .clone()
+                        .unwrap_or_else(|| "another thread".to_string())
+                });
+            self.show_input_notice(
+                format!("Approval pending in {thread_label}. Press Ctrl+A."),
+                InputNoticeKind::Warning,
+                160,
+                true,
+            );
         }
-        self.status_line = "Approval required".to_string();
+        self.status_line = if is_current_thread {
+            "Approval required in current thread".to_string()
+        } else {
+            format!(
+                "Approval required in {}",
+                thread_title.unwrap_or_else(|| "background thread".to_string())
+            )
+        };
     }
 
     pub(in crate::app) fn handle_approval_resolved_event(
@@ -106,7 +146,7 @@ impl TuiModel {
             approval_id: approval_id.clone(),
             decision,
         });
-        if self.approval.current_approval().is_none()
+        if self.next_current_thread_approval_id().is_none()
             && self.modal.top() == Some(crate::state::modal::ModalKind::ApprovalOverlay)
         {
             self.close_top_modal();

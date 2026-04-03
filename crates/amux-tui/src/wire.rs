@@ -145,6 +145,8 @@ pub struct AgentTask {
     #[serde(default)]
     pub title: String,
     #[serde(default)]
+    pub description: String,
+    #[serde(default)]
     pub thread_id: Option<String>,
     #[serde(default)]
     pub status: Option<TaskStatus>,
@@ -156,6 +158,8 @@ pub struct AgentTask {
     pub goal_run_id: Option<String>,
     #[serde(default)]
     pub goal_step_title: Option<String>,
+    #[serde(default)]
+    pub command: Option<String>,
     #[serde(default)]
     pub awaiting_approval_id: Option<String>,
     #[serde(default)]

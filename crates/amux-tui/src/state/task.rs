@@ -18,12 +18,14 @@ pub enum TaskStatus {
 pub struct AgentTask {
     pub id: String,
     pub title: String,
+    pub description: String,
     pub thread_id: Option<String>,
     pub status: Option<TaskStatus>,
     pub progress: u8,
     pub session_id: Option<String>,
     pub goal_run_id: Option<String>,
     pub goal_step_title: Option<String>,
+    pub command: Option<String>,
     pub awaiting_approval_id: Option<String>,
     pub blocked_reason: Option<String>,
 }

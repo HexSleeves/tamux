@@ -97,6 +97,7 @@ pub(super) fn apply_weles_allowed_overrides(
         } else {
             def.reasoning_effort.clone()
         },
+        max_concurrent_reviews: None,
     };
     Ok(())
 }

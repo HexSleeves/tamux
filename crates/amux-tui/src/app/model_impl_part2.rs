@@ -434,6 +434,77 @@ impl TuiModel {
         }
     }
 
+    fn toggle_approval_center(&mut self) {
+        if self.modal.top() == Some(modal::ModalKind::ApprovalCenter) {
+            self.close_top_modal();
+        } else {
+            self.modal
+                .reduce(modal::ModalAction::Push(modal::ModalKind::ApprovalCenter));
+        }
+    }
+
+    fn current_workspace_id(&self) -> Option<&str> {
+        let workspace = self.config.honcho_workspace_id.trim();
+        if workspace.is_empty() {
+            None
+        } else {
+            Some(workspace)
+        }
+    }
+
+    fn visible_approval_ids(&self) -> Vec<String> {
+        self.approval
+            .visible_approvals(self.chat.active_thread_id(), self.current_workspace_id())
+            .iter()
+            .map(|approval| approval.approval_id.clone())
+            .collect()
+    }
+
+    fn step_approval_selection(&mut self, delta: i32) {
+        let visible = self.visible_approval_ids();
+        if visible.is_empty() {
+            return;
+        }
+        let current = self
+            .approval
+            .selected_approval_id()
+            .and_then(|approval_id| visible.iter().position(|id| id == approval_id))
+            .unwrap_or(0) as i32;
+        let next = (current + delta).clamp(0, visible.len().saturating_sub(1) as i32) as usize;
+        self.approval.reduce(crate::state::ApprovalAction::SelectApproval(
+            visible[next].clone(),
+        ));
+    }
+
+    fn select_approval_center_row(&mut self, index: usize) {
+        let visible = self.visible_approval_ids();
+        if let Some(approval_id) = visible.get(index) {
+            self.approval.reduce(crate::state::ApprovalAction::SelectApproval(
+                approval_id.clone(),
+            ));
+        }
+    }
+
+    fn resolve_approval(&mut self, approval_id: String, decision: &str) {
+        self.approval.reduce(crate::state::ApprovalAction::Resolve {
+            approval_id: approval_id.clone(),
+            decision: decision.to_string(),
+        });
+        self.send_daemon_command(DaemonCommand::ResolveTaskApproval {
+            approval_id,
+            decision: decision.to_string(),
+        });
+    }
+
+    fn next_current_thread_approval_id(&self) -> Option<String> {
+        let current_thread_id = self.chat.active_thread_id()?;
+        self.approval
+            .pending_approvals()
+            .iter()
+            .find(|approval| approval.thread_id.as_deref() == Some(current_thread_id))
+            .map(|approval| approval.approval_id.clone())
+    }
+
     fn current_unix_ms() -> i64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

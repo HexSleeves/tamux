@@ -11,6 +11,7 @@ pub enum ModalKind {
     ErrorViewer,
     QueuedPrompts,
     ApprovalOverlay,
+    ApprovalCenter,
     ChatActionConfirm,
     Settings,
     EffortPicker,

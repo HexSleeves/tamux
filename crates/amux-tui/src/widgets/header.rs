@@ -9,6 +9,7 @@ use crate::theme::ThemeTokens;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeaderHitTarget {
+    ApprovalBadge,
     NotificationBell,
 }
 
@@ -18,6 +19,8 @@ pub fn render(
     config: &ConfigState,
     chat: &ChatState,
     theme: &ThemeTokens,
+    pending_approvals: usize,
+    approvals_open: bool,
     unread_notifications: usize,
     notifications_open: bool,
 ) {
@@ -28,16 +31,32 @@ pub fn render(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let approvals_width = approval_area_width(pending_approvals);
     let bell_width = bell_area_width(unread_notifications);
     let sections = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(1),
-            Constraint::Length(bell_width.min(inner.width)),
+            Constraint::Length(
+                approvals_width
+                    .saturating_add(1)
+                    .saturating_add(bell_width)
+                    .min(inner.width),
+            ),
         ])
         .split(inner);
     let title_area = sections[0];
-    let bell_area = sections[1];
+    let badges_area = sections[1];
+    let badge_sections = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(approvals_width.min(badges_area.width)),
+            Constraint::Length(1),
+            Constraint::Length(bell_width.min(badges_area.width.saturating_sub(approvals_width))),
+        ])
+        .split(badges_area);
+    let approval_area = badge_sections[0];
+    let bell_area = badge_sections[2];
 
     let model = if config.model.is_empty() {
         "no model"
@@ -104,6 +123,24 @@ pub fn render(
         text_area,
     );
 
+    let approval_style = if approvals_open {
+        theme.accent_primary
+    } else if pending_approvals > 0 {
+        theme.accent_danger
+    } else {
+        theme.fg_dim
+    };
+    let approval_text = if pending_approvals > 0 {
+        format!("⚖ {}", pending_approvals.min(99))
+    } else {
+        "⚖".to_string()
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(approval_text, approval_style)))
+            .alignment(Alignment::Right),
+        approval_area,
+    );
+
     let bell_style = if notifications_open {
         theme.accent_primary
     } else if unread_notifications > 0 {
@@ -124,19 +161,27 @@ pub fn render(
 
 pub fn hit_test(
     area: Rect,
+    pending_approvals: usize,
     unread_notifications: usize,
     position: Position,
 ) -> Option<HeaderHitTarget> {
     let inner = Block::default().borders(Borders::BOTTOM).inner(area);
+    let approvals_width = approval_area_width(pending_approvals).min(inner.width);
     let bell_width = bell_area_width(unread_notifications).min(inner.width);
-    let bell_area = Rect::new(
-        inner.x + inner.width.saturating_sub(bell_width),
-        inner.y,
-        bell_width,
-        inner.height,
-    );
+    let bell_x = inner
+        .x
+        .saturating_add(inner.width.saturating_sub(bell_width));
+    let approval_x = bell_x.saturating_sub(1).saturating_sub(approvals_width);
+    let approval_area = Rect::new(approval_x, inner.y, approvals_width, inner.height);
+    let bell_area = Rect::new(bell_x, inner.y, bell_width, inner.height);
 
-    if position.x >= bell_area.x
+    if position.x >= approval_area.x
+        && position.x < approval_area.x.saturating_add(approval_area.width)
+        && position.y >= approval_area.y
+        && position.y < approval_area.y.saturating_add(approval_area.height)
+    {
+        Some(HeaderHitTarget::ApprovalBadge)
+    } else if position.x >= bell_area.x
         && position.x < bell_area.x.saturating_add(bell_area.width)
         && position.y >= bell_area.y
         && position.y < bell_area.y.saturating_add(bell_area.height)
@@ -144,6 +189,14 @@ pub fn hit_test(
         Some(HeaderHitTarget::NotificationBell)
     } else {
         None
+    }
+}
+
+fn approval_area_width(pending_approvals: usize) -> u16 {
+    if pending_approvals > 9 {
+        6
+    } else {
+        4
     }
 }
 
@@ -162,7 +215,14 @@ mod tests {
     #[test]
     fn bell_hit_test_detects_click_inside_bell_area() {
         let area = Rect::new(0, 0, 80, 3);
-        let hit = hit_test(area, 3, Position::new(78, 1));
+        let hit = hit_test(area, 0, 3, Position::new(78, 1));
         assert_eq!(hit, Some(HeaderHitTarget::NotificationBell));
+    }
+
+    #[test]
+    fn approval_hit_test_detects_click_inside_approval_area() {
+        let area = Rect::new(0, 0, 80, 3);
+        let hit = hit_test(area, 2, 0, Position::new(72, 1));
+        assert_eq!(hit, Some(HeaderHitTarget::ApprovalBadge));
     }
 }

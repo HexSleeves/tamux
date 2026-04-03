@@ -294,6 +294,10 @@ impl TuiModel {
                 "bash_timeout_secs",
                 &self.config.bash_timeout_secs.to_string(),
             ),
+            "weles_max_concurrent_reviews" => self.settings.start_editing(
+                "weles_max_concurrent_reviews",
+                &self.config.weles_max_concurrent_reviews.to_string(),
+            ),
             "compaction_strategy" => self.cycle_compaction_strategy(),
             "compaction_weles_provider" => {
                 self.config.compaction_weles_provider =

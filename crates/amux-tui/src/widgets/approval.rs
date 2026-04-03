@@ -1,12 +1,12 @@
 use ratatui::prelude::*;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
 use crate::state::approval::{ApprovalState, RiskLevel};
 use crate::theme::ThemeTokens;
 
 pub fn render(frame: &mut Frame, area: Rect, approval: &ApprovalState, theme: &ThemeTokens) {
-    let ap = approval.current_approval();
+    let ap = approval.selected_approval();
 
     // Determine border color from risk level
     let (border_style, risk_label, risk_style) = match ap.map(|a| a.risk_level) {
@@ -76,6 +76,22 @@ pub fn render(frame: &mut Frame, area: Rect, approval: &ApprovalState, theme: &T
                 Span::styled(task_title.as_str(), theme.fg_dim),
             ]));
         }
+
+        if let Some(rationale) = &ap.rationale {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("Reason: ", theme.fg_dim),
+                Span::styled(rationale.as_str(), theme.fg_active),
+            ]));
+        }
+
+        if !ap.reasons.is_empty() {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("Signals: ", theme.fg_dim),
+                Span::styled(ap.reasons.join("; "), theme.fg_active),
+            ]));
+        }
     } else {
         lines.push(Line::from(Span::styled(
             "  No pending approvals.",
@@ -106,7 +122,7 @@ pub fn render(frame: &mut Frame, area: Rect, approval: &ApprovalState, theme: &T
         Span::styled(" Reject", theme.fg_active),
     ]));
 
-    let paragraph = Paragraph::new(lines);
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner);
 }
 
@@ -119,9 +135,16 @@ mod tests {
             approval_id: "ap1".into(),
             task_id: "t1".into(),
             task_title: Some("Deploy to production".into()),
+            thread_id: None,
+            thread_title: None,
+            workspace_id: None,
+            rationale: None,
+            reasons: Vec::new(),
             command: command.into(),
             risk_level: risk,
             blast_radius: "production cluster".into(),
+            received_at: 0,
+            seen_at: None,
         }
     }
 
@@ -138,6 +161,6 @@ mod tests {
             RiskLevel::High,
             "kubectl delete pod",
         )));
-        assert!(approval.current_approval().is_some());
+        assert!(approval.selected_approval().is_some());
     }
 }

@@ -78,10 +78,19 @@ impl TuiModel {
             ClientEvent::ApprovalRequired {
                 approval_id,
                 command,
+                rationale,
+                reasons,
                 risk_level,
                 blast_radius,
             } => {
-                self.handle_approval_required_event(approval_id, command, risk_level, blast_radius);
+                self.handle_approval_required_event(
+                    approval_id,
+                    command,
+                    rationale,
+                    reasons,
+                    risk_level,
+                    blast_radius,
+                );
             }
             ClientEvent::ApprovalResolved {
                 approval_id,

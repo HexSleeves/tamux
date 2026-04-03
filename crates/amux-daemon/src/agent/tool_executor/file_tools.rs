@@ -53,6 +53,38 @@ async fn execute_read_file(args: &serde_json::Value) -> Result<String> {
     Ok(result)
 }
 
+async fn execute_get_git_line_statuses(args: &serde_json::Value) -> Result<String> {
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing 'path' argument"))?;
+    validate_read_path(path)?;
+
+    if args
+        .get("start_line")
+        .is_some_and(|value| value.as_u64().is_none())
+    {
+        anyhow::bail!("'start_line' must be a positive integer");
+    }
+    if args.get("limit").is_some_and(|value| value.as_u64().is_none()) {
+        anyhow::bail!("'limit' must be a positive integer");
+    }
+
+    let start_line = args
+        .get("start_line")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1)
+        .max(1) as usize;
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(250)
+        .clamp(1, 500) as usize;
+
+    let report = crate::git::get_git_line_statuses(path, start_line, limit)?;
+    serde_json::to_string_pretty(&report).map_err(Into::into)
+}
+
 async fn execute_create_file(args: &serde_json::Value) -> Result<String> {
     let raw_path = get_file_path_arg(args)
         .ok_or_else(|| anyhow::anyhow!("missing 'path' or 'filename' argument"))?;
@@ -605,4 +637,3 @@ fn build_list_files_script(path_b64: &str, token: &str) -> String {
     script.push('\n');
     script
 }
-

@@ -326,6 +326,143 @@ fn models_fetched_updates_picker_count_for_open_model_picker() {
 }
 
 #[test]
+fn approval_required_in_current_thread_opens_blocking_modal() {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Active Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model.handle_task_list_event(vec![crate::wire::AgentTask {
+        id: "task-1".to_string(),
+        title: "WELES review".to_string(),
+        thread_id: Some("thread-1".to_string()),
+        status: Some(crate::wire::TaskStatus::AwaitingApproval),
+        awaiting_approval_id: Some("approval-1".to_string()),
+        ..Default::default()
+    }]);
+
+    model.handle_client_event(ClientEvent::ApprovalRequired {
+        approval_id: "approval-1".to_string(),
+        command: "git push".to_string(),
+        rationale: Some("Push release branch to origin".to_string()),
+        reasons: vec!["network access requested".to_string()],
+        risk_level: "high".to_string(),
+        blast_radius: "repo".to_string(),
+    });
+
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ApprovalOverlay));
+    assert_eq!(model.approval.selected_approval_id(), Some("approval-1"));
+}
+
+#[test]
+fn approval_required_in_background_thread_shows_notice_without_modal() {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Active Thread".to_string(),
+    });
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-2".to_string(),
+        title: "Background Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model.handle_task_list_event(vec![crate::wire::AgentTask {
+        id: "task-2".to_string(),
+        title: "WELES review".to_string(),
+        thread_id: Some("thread-2".to_string()),
+        status: Some(crate::wire::TaskStatus::AwaitingApproval),
+        awaiting_approval_id: Some("approval-2".to_string()),
+        ..Default::default()
+    }]);
+
+    model.handle_client_event(ClientEvent::ApprovalRequired {
+        approval_id: "approval-2".to_string(),
+        command: "git clone".to_string(),
+        rationale: Some("Clone support repository into workspace".to_string()),
+        reasons: vec!["network access requested".to_string()],
+        risk_level: "medium".to_string(),
+        blast_radius: "workspace".to_string(),
+    });
+
+    assert_eq!(model.modal.top(), None);
+    assert_eq!(model.approval.pending_approvals().len(), 1);
+    assert!(model
+        .input_notice_style()
+        .expect("approval banner should be visible")
+        .0
+        .contains("Ctrl+A"));
+}
+
+#[test]
+fn task_list_hydrates_pending_approvals_from_awaiting_approval_tasks() {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Hydrated Thread".to_string(),
+    });
+
+    model.handle_task_list_event(vec![crate::wire::AgentTask {
+        id: "task-1".to_string(),
+        title: "Hydrated approval".to_string(),
+        thread_id: Some("thread-1".to_string()),
+        status: Some(crate::wire::TaskStatus::AwaitingApproval),
+        awaiting_approval_id: Some("approval-1".to_string()),
+        blocked_reason: Some("waiting for operator approval".to_string()),
+        ..Default::default()
+    }]);
+
+    let approval = model
+        .approval
+        .approval_by_id("approval-1")
+        .expect("task snapshot should hydrate approval queue");
+    assert_eq!(approval.task_id, "task-1");
+    assert_eq!(approval.thread_title.as_deref(), Some("Hydrated Thread"));
+}
+
+#[test]
+fn task_list_hydrates_policy_escalation_rationale_from_thread_messages() {
+    let mut model = make_model();
+    model.handle_thread_detail_event(crate::wire::AgentThread {
+        id: "thread-1".to_string(),
+        title: "Hydrated Thread".to_string(),
+        messages: vec![crate::wire::AgentMessage {
+            role: crate::wire::MessageRole::System,
+            content: "Policy escalation requested operator guidance: Cloning scientific skills repository from GitHub as part of WELES governance review task".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    model.handle_task_list_event(vec![crate::wire::AgentTask {
+        id: "task-1".to_string(),
+        title: "WELES".to_string(),
+        thread_id: Some("thread-1".to_string()),
+        status: Some(crate::wire::TaskStatus::AwaitingApproval),
+        awaiting_approval_id: Some("approval-1".to_string()),
+        blocked_reason: Some(
+            "waiting for operator approval: orchestrator_policy_escalation".to_string(),
+        ),
+        ..Default::default()
+    }]);
+
+    let approval = model
+        .approval
+        .approval_by_id("approval-1")
+        .expect("task snapshot should hydrate approval queue");
+    assert_eq!(
+        approval.rationale.as_deref(),
+        Some(
+            "Cloning scientific skills repository from GitHub as part of WELES governance review task"
+        )
+    );
+}
+
+#[test]
 fn done_event_persists_final_reasoning_into_chat_message() {
     let mut model = make_model();
     model.chat.reduce(chat::ChatAction::ThreadCreated {

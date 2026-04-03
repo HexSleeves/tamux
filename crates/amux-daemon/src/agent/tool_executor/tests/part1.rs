@@ -2,7 +2,7 @@
         build_list_files_script, build_write_file_command, build_write_file_script,
         command_looks_interactive, command_matches_policy_risk, command_requires_managed_state,
         daemon_tool_timeout_seconds, default_timeout_seconds_for_tool,
-        execute_apply_patch,
+        execute_apply_patch, execute_get_git_line_statuses,
         execute_fetch_url_with_runner, execute_gateway_message, execute_get_divergent_session,
         execute_headless_shell_command, execute_onecontext_search_with_runner, execute_read_file,
         execute_search_files_with_runner, execute_tool, execute_web_search_with_runner,
@@ -338,6 +338,125 @@
         .expect("read file should succeed");
 
         assert_eq!(result, "line-005\nline-006\nline-007");
+    }
+
+    #[test]
+    fn get_git_line_statuses_tool_schema_exposes_line_window_arguments() {
+        let config = AgentConfig::default();
+        let temp_dir = std::env::temp_dir();
+        let tools = get_available_tools(&config, &temp_dir, false);
+        let line_statuses = tools
+            .iter()
+            .find(|tool| tool.function.name == "get_git_line_statuses")
+            .expect("get_git_line_statuses tool should be available");
+
+        let properties = line_statuses
+            .function
+            .parameters
+            .get("properties")
+            .expect("get_git_line_statuses schema should expose properties");
+
+        let start_line_schema = properties
+            .get("start_line")
+            .expect("get_git_line_statuses schema should expose start_line");
+        assert_eq!(
+            start_line_schema
+                .get("type")
+                .and_then(|value| value.as_str()),
+            Some("integer")
+        );
+        assert!(start_line_schema
+            .get("description")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.contains("default: 1")));
+
+        let limit_schema = properties
+            .get("limit")
+            .expect("get_git_line_statuses schema should expose limit");
+        assert_eq!(
+            limit_schema.get("type").and_then(|value| value.as_str()),
+            Some("integer")
+        );
+        assert!(limit_schema
+            .get("description")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.contains("default: 250")));
+    }
+
+    #[tokio::test]
+    async fn get_git_line_statuses_reports_modified_and_added_current_lines() {
+        let root = tempdir().expect("tempdir");
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(root.path())
+            .output()
+            .expect("git init should succeed");
+        std::process::Command::new("git")
+            .args(["config", "user.name", "tamux tests"])
+            .current_dir(root.path())
+            .output()
+            .expect("git config user.name should succeed");
+        std::process::Command::new("git")
+            .args(["config", "user.email", "tamux@example.com"])
+            .current_dir(root.path())
+            .output()
+            .expect("git config user.email should succeed");
+
+        let file_path = root.path().join("sample.txt");
+        tokio::fs::write(&file_path, "alpha\nbeta\ngamma\n")
+            .await
+            .expect("write initial file");
+        std::process::Command::new("git")
+            .args(["add", "sample.txt"])
+            .current_dir(root.path())
+            .output()
+            .expect("git add should succeed");
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(root.path())
+            .output()
+            .expect("git commit should succeed");
+
+        tokio::fs::write(&file_path, "alpha\nbeta-updated\ngamma\ndelta\n")
+            .await
+            .expect("write updated file");
+
+        let result = execute_get_git_line_statuses(&serde_json::json!({
+            "path": file_path,
+            "start_line": 1,
+            "limit": 4,
+        }))
+        .await
+        .expect("get_git_line_statuses should succeed");
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&result).expect("tool result should be valid json");
+        let statuses = payload
+            .get("statuses")
+            .and_then(|value| value.as_array())
+            .expect("tool result should include statuses");
+        let compact = statuses
+            .iter()
+            .map(|entry| {
+                (
+                    entry.get("line").and_then(|value| value.as_u64()).unwrap_or(0),
+                    entry
+                        .get("status")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or(""),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            compact,
+            vec![
+                (1, "unchanged"),
+                (2, "modified"),
+                (3, "unchanged"),
+                (4, "added")
+            ]
+        );
     }
 
     #[tokio::test]
