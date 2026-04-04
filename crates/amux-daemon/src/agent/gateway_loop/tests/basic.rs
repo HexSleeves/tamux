@@ -214,6 +214,88 @@ fn gateway_auto_send_ignores_historic_send_tools_from_prior_turns() {
 }
 
 #[test]
+fn gateway_auto_send_keeps_latest_assistant_message_pending_after_earlier_send_tool() {
+    let messages = vec![
+        AgentMessage::user("Can you check this?", 1),
+        AgentMessage {
+            id: "assistant-1".to_string(),
+            role: MessageRole::Assistant,
+            content: "On it, give me a moment...".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_arguments: None,
+            tool_status: None,
+            weles_review: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider: None,
+            model: None,
+            api_transport: None,
+            response_id: None,
+            reasoning: None,
+            message_kind: AgentMessageKind::Normal,
+            compaction_strategy: None,
+            compaction_payload: None,
+            timestamp: 2,
+        },
+        AgentMessage {
+            id: "tool-1".to_string(),
+            role: MessageRole::Tool,
+            content: "Discord message sent".to_string(),
+            tool_calls: None,
+            tool_call_id: Some("call-1".to_string()),
+            tool_name: Some("send_discord_message".to_string()),
+            tool_arguments: Some("{\"channel_id\":\"chan-1\",\"message\":\"On it, give me a moment...\"}".to_string()),
+            tool_status: Some("done".to_string()),
+            weles_review: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider: None,
+            model: None,
+            api_transport: None,
+            response_id: None,
+            reasoning: None,
+            message_kind: AgentMessageKind::Normal,
+            compaction_strategy: None,
+            compaction_payload: None,
+            timestamp: 3,
+        },
+        AgentMessage {
+            id: "assistant-2".to_string(),
+            role: MessageRole::Assistant,
+            content: "I found the issue. The release notes need one more line.".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_arguments: None,
+            tool_status: None,
+            weles_review: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider: None,
+            model: None,
+            api_transport: None,
+            response_id: None,
+            reasoning: None,
+            message_kind: AgentMessageKind::Normal,
+            compaction_strategy: None,
+            compaction_payload: None,
+            timestamp: 4,
+        },
+    ];
+
+    assert!(
+        !gateway_turn_used_send_tool(&messages),
+        "a send tool before the latest assistant message should not suppress auto-send of that later message"
+    );
+    assert_eq!(
+        latest_gateway_turn_assistant_response(&messages).as_deref(),
+        Some("I found the issue. The release notes need one more line.")
+    );
+}
+
+#[test]
 fn daemon_gateway_loop_no_longer_polls_slack_discord_or_telegram() {
     let production_source = gateway_loop_production_source();
     for forbidden in [
