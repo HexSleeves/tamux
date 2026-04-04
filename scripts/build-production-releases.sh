@@ -5,6 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DIST_DIR="$PROJECT_ROOT/dist-release"
 
+export TAMUX_LOG=error
+export AMUX_LOG=error
+export TAMUX_TUI_LOG=error
+export AMUX_GATEWAY_LOG=error
+export RUST_LOG=error
+
 RUN_NATIVE=1
 RUN_WINDOWS=1
 SIGN=0

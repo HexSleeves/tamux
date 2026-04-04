@@ -3,6 +3,7 @@ function createTerminalBridgeRuntime(options) {
         cloneSessionPrefix,
         fs,
         getCliPath,
+        getChildProcessEnv = () => process.env,
         getMainWindow,
         logToFile,
         maxReattachHistoryBytes,
@@ -277,6 +278,7 @@ function createTerminalBridgeRuntime(options) {
             const result = await new Promise((resolve, reject) => {
                 const child = spawn(cliPath, args, {
                     cwd: path.dirname(cliPath),
+                    env: getChildProcessEnv(),
                     windowsHide: true,
                     stdio: ['ignore', 'pipe', 'pipe'],
                 });
@@ -363,6 +365,7 @@ function createTerminalBridgeRuntime(options) {
 
         const bridgeProcess = spawn(cliPath, args, {
             cwd: path.dirname(cliPath),
+            env: getChildProcessEnv(),
             windowsHide: true,
             stdio: ['pipe', 'pipe', 'pipe'],
         });

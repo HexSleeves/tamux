@@ -1,7 +1,10 @@
+use super::StreamProgressKind;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StalledTurnClass {
     PromiseWithoutAction,
     PostToolResultNoFollowThrough,
+    ActiveStreamIdle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +24,7 @@ pub(super) struct ThreadStallObservation {
     pub(super) last_message_at: u64,
     pub(super) last_assistant_message: String,
     pub(super) class: StalledTurnClass,
+    pub(super) stream_progress_kind: Option<StreamProgressKind>,
     pub(super) task_id: Option<String>,
     pub(super) goal_run_id: Option<String>,
 }

@@ -15,6 +15,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+export TAMUX_LOG=error
+export AMUX_LOG=error
+export TAMUX_TUI_LOG=error
+export AMUX_GATEWAY_LOG=error
+export RUST_LOG=error
+
 SIGN=0
 SKIP_RUST=0
 SKIP_FRONTEND=0

@@ -1,22 +1,42 @@
 use super::analysis::classify_stalled_turn;
-use super::types::{ThreadStallObservation, TurnEvidence};
+use super::types::{StalledTurnClass, ThreadStallObservation, TurnEvidence};
 use super::*;
 
 impl AgentEngine {
     pub(super) async fn collect_stalled_turn_observations(&self) -> Vec<ThreadStallObservation> {
         let active_streams = {
             let streams = self.stream_cancellations.lock().await;
-            streams.keys().cloned().collect::<HashSet<_>>()
+            streams
+                .iter()
+                .map(|(thread_id, entry)| (thread_id.clone(), entry.clone()))
+                .collect::<Vec<_>>()
         };
+        let active_stream_ids = active_streams
+            .iter()
+            .map(|(thread_id, _)| thread_id.clone())
+            .collect::<HashSet<_>>();
         let threads = self.threads.read().await;
         let goal_runs = self.goal_runs.lock().await;
         let tasks = self.tasks.lock().await;
+        let now = now_millis();
 
-        threads
+        let mut observations = threads
             .values()
-            .filter(|thread| !active_streams.contains(&thread.id))
+            .filter(|thread| !active_stream_ids.contains(&thread.id))
             .filter_map(|thread| latest_stalled_turn_observation(thread, &tasks, &goal_runs))
-            .collect()
+            .collect::<Vec<_>>();
+
+        observations.extend(active_streams.into_iter().filter_map(|(thread_id, entry)| {
+            if now.saturating_sub(entry.last_progress_at) < super::runtime::INITIAL_GRACE_DELAY_MS
+                || matches!(entry.last_progress_kind, StreamProgressKind::Started)
+            {
+                return None;
+            }
+            let thread = threads.get(&thread_id)?;
+            idle_stream_stall_observation(thread, &tasks, &goal_runs, &entry)
+        }));
+
+        observations
     }
 }
 
@@ -63,6 +83,32 @@ fn latest_stalled_turn_observation(
         last_message_at: last_message.timestamp,
         last_assistant_message: last_message.content.clone(),
         class,
+        stream_progress_kind: None,
+        task_id: active_task_id_for_thread(thread.id.as_str(), tasks),
+        goal_run_id: goal_run_id_for_thread(thread.id.as_str(), goal_runs),
+    })
+}
+
+fn idle_stream_stall_observation(
+    thread: &AgentThread,
+    tasks: &VecDeque<AgentTask>,
+    goal_runs: &VecDeque<GoalRun>,
+    stream: &StreamCancellationEntry,
+) -> Option<ThreadStallObservation> {
+    Some(ThreadStallObservation {
+        thread_id: thread.id.clone(),
+        last_message_id: format!(
+            "stream:{}:{}:{:?}",
+            stream.generation, stream.last_progress_at, stream.last_progress_kind
+        ),
+        last_message_at: stream.last_progress_at,
+        last_assistant_message: if stream.last_progress_excerpt.trim().is_empty() {
+            "Stream went idle before completion.".to_string()
+        } else {
+            stream.last_progress_excerpt.clone()
+        },
+        class: StalledTurnClass::ActiveStreamIdle,
+        stream_progress_kind: Some(stream.last_progress_kind),
         task_id: active_task_id_for_thread(thread.id.as_str(), tasks),
         goal_run_id: goal_run_id_for_thread(thread.id.as_str(), goal_runs),
     })

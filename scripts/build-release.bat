@@ -19,6 +19,11 @@ if "%~1"=="--sign" set SIGN=1
 
 set PROJECT_ROOT=%~dp0..
 set OUT_DIR=%PROJECT_ROOT%\dist-release
+set TAMUX_LOG=error
+set AMUX_LOG=error
+set TAMUX_TUI_LOG=error
+set AMUX_GATEWAY_LOG=error
+set RUST_LOG=error
 
 echo.
 echo ============================================================

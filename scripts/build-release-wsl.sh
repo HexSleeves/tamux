@@ -26,6 +26,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 OUT_DIR="$PROJECT_ROOT/dist-release/windows"
 TARGET="x86_64-pc-windows-gnu"
+
+export TAMUX_LOG=error
+export AMUX_LOG=error
+export TAMUX_TUI_LOG=error
+export AMUX_GATEWAY_LOG=error
+export RUST_LOG=error
+
 APP_VERSION="$(sed -nE 's/^[[:space:]]*"version":[[:space:]]*"([^"]+)".*/\1/p' "$PROJECT_ROOT/frontend/package.json" | head -1)"
 if [[ -z "$APP_VERSION" ]]; then
     APP_VERSION="0.0.0"

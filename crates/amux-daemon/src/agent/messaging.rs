@@ -5,6 +5,28 @@ use super::*;
 mod concierge;
 
 impl AgentEngine {
+    async fn prepare_internal_dm_thread(
+        &self,
+        sender: &str,
+        recipient: &str,
+        wrapped_content: &str,
+    ) -> String {
+        let dm_thread_id = internal_dm_thread_id(sender, recipient);
+        let _ = self
+            .get_or_create_thread_with_target(Some(&dm_thread_id), wrapped_content, Some(recipient))
+            .await;
+        self.set_thread_handoff_state(
+            &dm_thread_id,
+            initial_thread_handoff_state(
+                &dm_thread_id,
+                Some(canonical_agent_name(recipient)),
+                now_millis(),
+            ),
+        )
+        .await;
+        dm_thread_id
+    }
+
     pub async fn delete_thread_messages(
         &self,
         thread_id: &str,
@@ -490,8 +512,10 @@ impl AgentEngine {
         backend_override: Option<&str>,
         content: &str,
     ) -> Result<SendMessageOutcome> {
-        let dm_thread_id = internal_dm_thread_id(sender, recipient);
         let wrapped = wrap_internal_message(sender, recipient, content);
+        let dm_thread_id = self
+            .prepare_internal_dm_thread(sender, recipient, &wrapped)
+            .await;
         let outcome = Box::pin(self.send_message_inner(
             Some(&dm_thread_id),
             &wrapped,
@@ -568,8 +592,10 @@ impl AgentEngine {
         content: &str,
         preferred_session_hint: Option<&str>,
     ) -> Result<(String, String)> {
-        let dm_thread_id = internal_dm_thread_id(sender, recipient);
         let wrapped = wrap_internal_message(sender, recipient, content);
+        let dm_thread_id = self
+            .prepare_internal_dm_thread(sender, recipient, &wrapped)
+            .await;
         if is_concierge_target(recipient) {
             Box::pin(self.send_concierge_message_on_thread(
                 &dm_thread_id,

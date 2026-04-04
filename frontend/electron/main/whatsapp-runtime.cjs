@@ -2,6 +2,7 @@ function createWhatsAppRuntime(options) {
     const {
         electronDir,
         fs,
+        getChildProcessEnv = () => processRef.env,
         getMainWindow,
         logToFile,
         path,
@@ -89,7 +90,7 @@ function createWhatsAppRuntime(options) {
         logToFile('info', 'starting WhatsApp bridge sidecar');
         whatsappProcess = spawn(processRef.execPath, [bridgePath], {
             stdio: ['pipe', 'pipe', 'pipe'],
-            env: { ...processRef.env, ELECTRON_RUN_AS_NODE: '1' },
+            env: { ...getChildProcessEnv(), ELECTRON_RUN_AS_NODE: '1' },
         });
 
         let buffer = '';

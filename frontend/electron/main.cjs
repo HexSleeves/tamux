@@ -53,6 +53,7 @@ const { getAvailableShells, getSystemFonts, getSystemMonitorSnapshot } = require
 const { createTerminalBridgeRuntime } = require('./main/terminal-bridge-runtime.cjs');
 const { createWhatsAppRuntime } = require('./main/whatsapp-runtime.cjs');
 const { createWindowRuntime } = require('./main/window-runtime.cjs');
+const { createChildLogEnv } = require('./main/log-env.cjs');
 
 const DAEMON_NAME = 'tamux-daemon';
 const CLI_NAME = 'tamux';
@@ -66,10 +67,15 @@ let mainWindow = null;
 // Module-level reference to sendAgentCommand (set during registerIpcHandlers)
 let sendAgentCommandFn = null;
 
+function getChildProcessEnv() {
+    return createChildLogEnv(process.env, { isPackaged: app.isPackaged });
+}
+
 const terminalBridgeRuntime = createTerminalBridgeRuntime({
     cloneSessionPrefix: CLONE_SESSION_PREFIX,
     fs,
     getCliPath,
+    getChildProcessEnv,
     getMainWindow: () => mainWindow,
     logToFile,
     maxReattachHistoryBytes: MAX_REATTACH_HISTORY_BYTES,
@@ -108,6 +114,7 @@ async function convertWhatsAppQrToDataUrl(qrPayload) {
 const whatsAppRuntime = createWhatsAppRuntime({
     electronDir: __dirname,
     fs,
+    getChildProcessEnv,
     getMainWindow: () => mainWindow,
     logToFile,
     path,
@@ -119,6 +126,7 @@ const whatsAppRuntime = createWhatsAppRuntime({
 const agentDbBridgeRuntime = createAgentDbBridgeRuntime({
     fs,
     getDaemonPath,
+    getChildProcessEnv,
     getMainWindow: () => mainWindow,
     logToFile,
     pendingHandlerMatchesResponseType,
@@ -369,7 +377,7 @@ async function spawnDaemon() {
         return false;
     }
 
-    const daemonEnv = { ...process.env };
+    const daemonEnv = getChildProcessEnv();
     if (!daemonEnv.TAMUX_WHATSAPP_NODE_BIN || !String(daemonEnv.TAMUX_WHATSAPP_NODE_BIN).trim()) {
         daemonEnv.TAMUX_WHATSAPP_NODE_BIN = process.execPath;
     }

@@ -8,6 +8,11 @@ on:
 env:
   NODE_VERSION: '22'
   RUST_VERSION: stable
+  TAMUX_LOG: error
+  AMUX_LOG: error
+  TAMUX_TUI_LOG: error
+  AMUX_GATEWAY_LOG: error
+  RUST_LOG: error
 
 jobs:
   # ================================================================
@@ -338,3 +343,42 @@ jobs:
             artifacts/**/*.deb
             artifacts/**/*.dmg
             SHA256SUMS.txt
+
+  # ================================================================
+  # Publish npm package via npm trusted publishing (OIDC)
+  # ================================================================
+  publish-npm:
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js for npm publish
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify package version matches tag
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./npm-package/package.json').version")
+          TAG_VERSION="${TAG_NAME#v}"
+          if [ "$PACKAGE_VERSION" != "$TAG_VERSION" ]; then
+            echo "npm-package/package.json version $PACKAGE_VERSION does not match tag $TAG_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Dry-run npm pack
+        run: npm pack --dry-run
+        working-directory: npm-package
+
+      - name: Publish to npm
+        run: npm publish
+        working-directory: npm-package

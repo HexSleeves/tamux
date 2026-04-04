@@ -5,6 +5,10 @@ use crate::agent::types::{
     AgentConfig, AgentMessage, AgentTask, AgentThread, ApiTransport, MessageRole, TaskPriority,
     TaskStatus, ToolCall, ToolFunction,
 };
+use crate::agent::{
+    StreamProgressKind, ThreadHandoffState, ThreadResponderFrame, CONCIERGE_AGENT_ID,
+    CONCIERGE_AGENT_NAME, MAIN_AGENT_ID, MAIN_AGENT_NAME, WELES_AGENT_ID,
+};
 use crate::session_manager::SessionManager;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -281,10 +285,11 @@ async fn collect_stalled_turn_observations_detects_promise_without_action() {
         observations[0].class,
         StalledTurnClass::PromiseWithoutAction
     );
+    assert_eq!(observations[0].stream_progress_kind, None);
 }
 
 #[tokio::test]
-async fn supervise_stalled_turns_retries_with_system_recovery_and_continue() {
+async fn supervise_stalled_turns_retries_with_internal_ping_and_continue() {
     let engine = build_test_engine("Recovered.").await;
     let now = super::now_millis();
     let thread_id = "thread-recovery";
@@ -356,6 +361,190 @@ async fn supervise_stalled_turns_retries_with_system_recovery_and_continue() {
         "stalled-turn retries should not append a synthetic user 'continue' message"
     );
     assert!(thread.messages.iter().any(|message| {
+        message.role == MessageRole::Assistant && message.content.contains("Recovered.")
+    }));
+    drop(threads);
+
+    let dm_thread_id = crate::agent::agent_identity::internal_dm_thread_id(WELES_AGENT_ID, MAIN_AGENT_ID);
+    let threads = engine.threads.read().await;
+    let dm_thread = threads.get(&dm_thread_id).expect("internal recovery DM should exist");
+    assert_eq!(dm_thread.agent_name.as_deref(), Some(MAIN_AGENT_NAME));
+    assert!(dm_thread.messages.iter().any(|message| {
+        message.role == MessageRole::Assistant && message.content.contains("Recovered.")
+    }));
+}
+
+#[tokio::test]
+async fn collect_stalled_turn_observations_detects_idle_active_reasoning_stream() {
+    let engine = build_test_engine("Acknowledged.").await;
+    let now = super::now_millis();
+    let thread_id = "thread-idle-stream";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            AgentThread {
+                id: thread_id.to_string(),
+                agent_name: Some(CONCIERGE_AGENT_NAME.to_string()),
+                title: "Idle stream".to_string(),
+                messages: vec![AgentMessage::user("Keep going", now.saturating_sub(61_000))],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: now,
+                updated_at: now,
+            },
+        );
+    }
+    engine
+        .set_thread_handoff_state(
+            thread_id,
+            ThreadHandoffState {
+                origin_agent_id: MAIN_AGENT_ID.to_string(),
+                active_agent_id: CONCIERGE_AGENT_ID.to_string(),
+                responder_stack: vec![
+                    ThreadResponderFrame {
+                        agent_id: MAIN_AGENT_ID.to_string(),
+                        agent_name: MAIN_AGENT_NAME.to_string(),
+                        entered_at: now.saturating_sub(61_000),
+                        entered_via_handoff_event_id: None,
+                        linked_thread_id: None,
+                    },
+                    ThreadResponderFrame {
+                        agent_id: CONCIERGE_AGENT_ID.to_string(),
+                        agent_name: CONCIERGE_AGENT_NAME.to_string(),
+                        entered_at: now.saturating_sub(60_000),
+                        entered_via_handoff_event_id: None,
+                        linked_thread_id: None,
+                    },
+                ],
+                events: Vec::new(),
+                pending_approval_id: None,
+            },
+        )
+        .await;
+
+    let (generation, _, _) = engine.begin_stream_cancellation(thread_id).await;
+    engine
+        .note_stream_progress(
+            thread_id,
+            generation,
+            StreamProgressKind::Reasoning,
+            "thinking through the next step",
+        )
+        .await;
+    {
+        let mut streams = engine.stream_cancellations.lock().await;
+        let entry = streams.get_mut(thread_id).expect("active stream entry should exist");
+        entry.last_progress_at = now.saturating_sub(31_000);
+    }
+
+    let observations = engine.collect_stalled_turn_observations().await;
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].class, StalledTurnClass::ActiveStreamIdle);
+    assert_eq!(
+        observations[0].stream_progress_kind,
+        Some(StreamProgressKind::Reasoning)
+    );
+}
+
+#[tokio::test]
+async fn supervise_stalled_turns_recovers_idle_reasoning_stream_via_internal_dm() {
+    let engine = build_test_engine("Recovered.").await;
+    let now = super::now_millis();
+    let thread_id = "thread-idle-stream-recovery";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            AgentThread {
+                id: thread_id.to_string(),
+                agent_name: Some(CONCIERGE_AGENT_NAME.to_string()),
+                title: "Idle stream recovery".to_string(),
+                messages: vec![AgentMessage::user("Continue the unfinished job", now.saturating_sub(61_000))],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: now,
+                updated_at: now,
+            },
+        );
+    }
+    engine
+        .set_thread_handoff_state(
+            thread_id,
+            ThreadHandoffState {
+                origin_agent_id: MAIN_AGENT_ID.to_string(),
+                active_agent_id: CONCIERGE_AGENT_ID.to_string(),
+                responder_stack: vec![
+                    ThreadResponderFrame {
+                        agent_id: MAIN_AGENT_ID.to_string(),
+                        agent_name: MAIN_AGENT_NAME.to_string(),
+                        entered_at: now.saturating_sub(61_000),
+                        entered_via_handoff_event_id: None,
+                        linked_thread_id: None,
+                    },
+                    ThreadResponderFrame {
+                        agent_id: CONCIERGE_AGENT_ID.to_string(),
+                        agent_name: CONCIERGE_AGENT_NAME.to_string(),
+                        entered_at: now.saturating_sub(60_000),
+                        entered_via_handoff_event_id: None,
+                        linked_thread_id: None,
+                    },
+                ],
+                events: Vec::new(),
+                pending_approval_id: None,
+            },
+        )
+        .await;
+
+    let (generation, _, _) = engine.begin_stream_cancellation(thread_id).await;
+    engine
+        .note_stream_progress(
+            thread_id,
+            generation,
+            StreamProgressKind::Reasoning,
+            "thinking through the next step",
+        )
+        .await;
+    {
+        let mut streams = engine.stream_cancellations.lock().await;
+        let entry = streams.get_mut(thread_id).expect("active stream entry should exist");
+        entry.last_progress_at = now.saturating_sub(31_000);
+    }
+
+    engine
+        .supervise_stalled_turns()
+        .await
+        .expect("idle active stream should recover");
+
+    let threads = engine.threads.read().await;
+    let thread = threads.get(thread_id).expect("thread should exist");
+    assert!(thread.messages.iter().any(|message| {
+        message.role == MessageRole::System
+            && message.content.contains("stream went idle before completion")
+    }));
+    assert!(thread.messages.iter().any(|message| {
+        message.role == MessageRole::Assistant && message.content.contains("Recovered.")
+    }));
+
+    let dm_thread_id =
+        crate::agent::agent_identity::internal_dm_thread_id(WELES_AGENT_ID, CONCIERGE_AGENT_ID);
+    let dm_thread = threads.get(&dm_thread_id).expect("recovery DM should exist");
+    assert_eq!(dm_thread.agent_name.as_deref(), Some(CONCIERGE_AGENT_NAME));
+    assert!(dm_thread.messages.iter().any(|message| {
         message.role == MessageRole::Assistant && message.content.contains("Recovered.")
     }));
 }
