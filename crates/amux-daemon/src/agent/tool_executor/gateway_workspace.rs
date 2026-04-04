@@ -18,7 +18,7 @@ fn should_use_linked_whatsapp_transport(
     wa_link_state == "connected" || has_native_client || has_sidecar_process
 }
 
-async fn execute_gateway_message(
+pub(in crate::agent) async fn execute_gateway_message(
     tool_name: &str,
     args: &serde_json::Value,
     agent: &AgentEngine,

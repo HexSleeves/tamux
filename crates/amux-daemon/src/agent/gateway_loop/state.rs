@@ -264,15 +264,43 @@ fn latest_gateway_turn_slice(messages: &[AgentMessage]) -> &[AgentMessage] {
     &messages[turn_start..]
 }
 
+fn is_gateway_send_tool_message(message: &AgentMessage) -> bool {
+    message.role == MessageRole::Tool
+        && message
+            .tool_name
+            .as_deref()
+            .map(|name| name.starts_with("send_"))
+            .unwrap_or(false)
+}
+
+fn assistant_message_has_gateway_send_tool_call(message: &AgentMessage) -> bool {
+    message
+        .tool_calls
+        .as_ref()
+        .map(|tool_calls| {
+            tool_calls
+                .iter()
+                .any(|tool_call| tool_call.function.name.starts_with("send_"))
+        })
+        .unwrap_or(false)
+}
+
 pub(super) fn gateway_turn_used_send_tool(messages: &[AgentMessage]) -> bool {
-    latest_gateway_turn_slice(messages).iter().any(|message| {
-        message.role == MessageRole::Tool
-            && message
-                .tool_name
-                .as_deref()
-                .map(|name| name.starts_with("send_"))
-                .unwrap_or(false)
-    })
+    let turn = latest_gateway_turn_slice(messages);
+    let Some(latest_assistant_index) = turn
+        .iter()
+        .rposition(|message| message.role == MessageRole::Assistant && !message.content.is_empty())
+    else {
+        return turn.iter().any(is_gateway_send_tool_message);
+    };
+
+    if assistant_message_has_gateway_send_tool_call(&turn[latest_assistant_index]) {
+        return true;
+    }
+
+    turn[latest_assistant_index + 1..]
+        .iter()
+        .any(is_gateway_send_tool_message)
 }
 
 pub(super) fn latest_gateway_turn_assistant_response(messages: &[AgentMessage]) -> Option<String> {

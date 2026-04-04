@@ -16,28 +16,64 @@ impl AgentEngine {
         msg: &gateway::IncomingMessage,
         response_text: &str,
     ) -> ToolResult {
-        let auto_tool = ToolCall::with_default_weles_review(
-            format!("{tool_id_prefix}_{}", uuid::Uuid::new_v4()),
-            ToolFunction {
-                name: reply_tool_name.to_string(),
-                arguments: gateway_reply_args(&msg.platform, &msg.channel, response_text)
-                    .to_string(),
-            },
-        );
-        let tool_result = Box::pin(tool_executor::execute_tool(
-            &auto_tool,
+        let tool_call_id = format!("{tool_id_prefix}_{}", uuid::Uuid::new_v4());
+        let args = gateway_reply_args(&msg.platform, &msg.channel, response_text);
+        match crate::agent::tool_executor::execute_gateway_message(
+            reply_tool_name,
+            &args,
             self,
-            thread_id,
-            None,
-            &self.session_manager,
-            None,
-            &self.event_tx,
-            &self.data_dir,
             &self.http_client,
-            None,
-        ))
-        .await;
-        tool_result
+        )
+        .await
+        {
+            Ok(content) => ToolResult {
+                tool_call_id,
+                name: reply_tool_name.to_string(),
+                content,
+                is_error: false,
+                weles_review: None,
+                pending_approval: None,
+            },
+            Err(error) => ToolResult {
+                tool_call_id,
+                name: reply_tool_name.to_string(),
+                content: error.to_string(),
+                is_error: true,
+                weles_review: None,
+                pending_approval: None,
+            },
+        }
+    }
+
+    async fn gateway_message_target_for_thread(
+        &self,
+        thread_id: &str,
+    ) -> Option<gateway::IncomingMessage> {
+        let channel_key = {
+            let gateway_threads = self.gateway_threads.read().await;
+            gateway_threads.iter().find_map(|(channel_key, mapped_thread_id)| {
+                (mapped_thread_id == thread_id).then(|| channel_key.clone())
+            })
+        }?;
+
+        let (platform, channel) = channel_key.split_once(':')?;
+        Some(gateway::IncomingMessage {
+            platform: platform.to_string(),
+            sender: String::new(),
+            content: String::new(),
+            channel: channel.to_string(),
+            message_id: None,
+            thread_context: None,
+        })
+    }
+
+    pub(in crate::agent) async fn maybe_auto_send_gateway_thread_response(&self, thread_id: &str) {
+        let Some(msg) = self.gateway_message_target_for_thread(thread_id).await else {
+            return;
+        };
+        let (_, reply_tool_name) = gateway_reply_tool(&msg.platform, &msg.channel);
+        self.auto_send_gateway_response(thread_id, &msg, reply_tool_name)
+            .await;
     }
 
     pub(super) async fn send_gateway_timeout_fallback(
@@ -334,28 +370,15 @@ impl AgentEngine {
                 "gateway: agent forgot to call send tool, auto-sending response"
             );
 
-            let auto_tool = ToolCall::with_default_weles_review(
-                format!("auto_{}", uuid::Uuid::new_v4()),
-                ToolFunction {
-                    name: reply_tool_name.to_string(),
-                    arguments: gateway_reply_args(&msg.platform, &msg.channel, &response_text)
-                        .to_string(),
-                },
-            );
-
-            let _ = Box::pin(tool_executor::execute_tool(
-                &auto_tool,
-                self,
-                "",
-                None,
-                &self.session_manager,
-                None,
-                &self.event_tx,
-                &self.data_dir,
-                &self.http_client,
-                None,
-            ))
-            .await;
+            let _ = self
+                .send_gateway_platform_tool(
+                    thread_id,
+                    "auto",
+                    reply_tool_name,
+                    msg,
+                    &response_text,
+                )
+                .await;
         }
     }
 
@@ -416,8 +439,6 @@ impl AgentEngine {
                 {
                     tracing::warn!(channel_key = %channel_key, %error, "gateway: failed to persist thread binding");
                 }
-                self.auto_send_gateway_response(&thread_id, msg, reply_tool_name)
-                    .await;
             }
         }
     }

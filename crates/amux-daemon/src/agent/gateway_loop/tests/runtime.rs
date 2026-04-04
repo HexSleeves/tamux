@@ -177,6 +177,104 @@ async fn gateway_health_snapshots_survive_gateway_restart() {
     fs::remove_dir_all(&root).expect("cleanup test root");
 }
 
+#[tokio::test]
+async fn gateway_auto_send_thread_response_emits_gateway_request_for_latest_assistant_message() {
+    let root = make_test_root("gateway-auto-send-thread-response");
+    let manager = SessionManager::new_test(&root).await;
+    let mut config = AgentConfig::default();
+    config.gateway.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, &root).await;
+    engine.init_gateway().await;
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    engine.set_gateway_ipc_sender(Some(tx)).await;
+
+    let incoming = gateway::IncomingMessage {
+        platform: "Discord".to_string(),
+        sender: "alice".to_string(),
+        content: "Can you check the release notes?".to_string(),
+        channel: "user:123456789".to_string(),
+        message_id: Some("discord-incoming-1".to_string()),
+        thread_context: None,
+    };
+
+    let thread_id = engine
+        .persist_gateway_fast_path_exchange(
+            "Discord:user:123456789",
+            &incoming,
+            "Initial reply",
+        )
+        .await
+        .expect("persist fast-path exchange");
+
+    {
+        let mut threads = engine.threads.write().await;
+        let thread = threads
+            .get_mut(&thread_id)
+            .expect("gateway thread should exist");
+        thread.messages.push(AgentMessage {
+            id: "assistant-latest".to_string(),
+            role: MessageRole::Assistant,
+            content: "Intermittent update from the agent".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_arguments: None,
+            tool_status: None,
+            weles_review: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider: None,
+            model: None,
+            api_transport: None,
+            response_id: None,
+            reasoning: None,
+            message_kind: AgentMessageKind::Normal,
+            compaction_strategy: None,
+            compaction_payload: None,
+            timestamp: now_millis(),
+        });
+        thread.updated_at = now_millis();
+    }
+    engine.persist_thread_by_id(&thread_id).await;
+
+    let helper_engine = engine.clone();
+    let helper_thread_id = thread_id.clone();
+    let send_task = tokio::spawn(async move {
+        helper_engine
+            .maybe_auto_send_gateway_thread_response(&helper_thread_id)
+            .await;
+    });
+
+    let request = match tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("gateway send request should be emitted")
+        .expect("gateway send request should exist")
+    {
+        amux_protocol::DaemonMessage::GatewaySendRequest { request } => request,
+        other => panic!("expected GatewaySendRequest, got {other:?}"),
+    };
+    assert_eq!(request.platform, "discord");
+    assert_eq!(request.channel_id, "user:123456789");
+    assert_eq!(request.content, "Intermittent update from the agent");
+
+    engine
+        .complete_gateway_send_result(amux_protocol::GatewaySendResult {
+            correlation_id: request.correlation_id.clone(),
+            platform: "discord".to_string(),
+            channel_id: "user:123456789".to_string(),
+            requested_channel_id: Some("user:123456789".to_string()),
+            delivery_id: Some("delivery-1".to_string()),
+            ok: true,
+            error: None,
+            completed_at_ms: now_millis(),
+        })
+        .await;
+
+    send_task.await.expect("auto-send task should join");
+    fs::remove_dir_all(&root).expect("cleanup test root");
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn daemon_respawns_gateway_process_when_enabled() {
