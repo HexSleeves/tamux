@@ -134,6 +134,18 @@ function parseChecksumFile(content, filename) {
   return null;
 }
 
+function getArchiveChecksum(checksumsData, releaseInfo) {
+  if (!releaseInfo) {
+    return null;
+  }
+
+  return parseChecksumFile(checksumsData, releaseInfo.archiveName);
+}
+
+function verifyBufferChecksum(buffer, expectedHash) {
+  return crypto.createHash("sha256").update(buffer).digest("hex") === expectedHash;
+}
+
 function getReleaseAssetInfo(platform, arch, version) {
   var key = platform + "-" + arch;
   var target = PLATFORM_MAP[key];
@@ -259,7 +271,7 @@ async function main() {
   var platformKey = os.platform() + "-" + os.arch();
   var targetLabel = releaseInfo
     ? releaseInfo.archiveName
-        .replace("tamux-" + VERSION + "-", "")
+        .replace("tamux-", "")
         .replace(/\.zip$/, "")
     : "unsupported";
 
@@ -300,14 +312,25 @@ async function main() {
   console.log("tamux: downloading binaries for " + releaseInfo.archiveName + "...");
   try {
     var archiveData = await download(archiveUrl);
+    var archiveChecksum = getArchiveChecksum(checksumsData, releaseInfo);
 
-    // 4. Extract required binaries and verify them against the published manifest
+    if (archiveChecksum) {
+      console.log("tamux: verifying SHA256 checksum...");
+      if (!verifyBufferChecksum(archiveData, archiveChecksum)) {
+        throw new Error("SHA256 checksum mismatch for " + releaseInfo.archiveName);
+      }
+      console.log("tamux: checksum OK");
+    }
+
+    // 4. Extract required binaries, then verify against the published manifest
     console.log("tamux: extracting binaries...");
     extractRequiredBinaries(archiveData, releaseInfo);
 
-    console.log("tamux: verifying SHA256 checksum...");
-    await verifyExtractedBinaries(checksumsData, releaseInfo);
-    console.log("tamux: checksum OK");
+    if (!archiveChecksum) {
+      console.log("tamux: verifying SHA256 checksum...");
+      await verifyExtractedBinaries(checksumsData, releaseInfo);
+      console.log("tamux: checksum OK");
+    }
   } catch (err) {
     cleanupExtractedBinaries(releaseInfo);
     throw err;
@@ -331,6 +354,7 @@ module.exports = main;
 module.exports.GITHUB_OWNER = GITHUB_OWNER;
 module.exports.GITHUB_REPO = GITHUB_REPO;
 module.exports.getGlobalBinDir = getGlobalBinDir;
+module.exports.getArchiveChecksum = getArchiveChecksum;
 module.exports.getReleaseAssetInfo = getReleaseAssetInfo;
 module.exports.getInstallUsageHint = getInstallUsageHint;
 module.exports.parseChecksumFile = parseChecksumFile;
