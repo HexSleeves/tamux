@@ -44,6 +44,18 @@ test("getReleaseAssetInfo returns null for unsupported targets", function () {
   assert.equal(install.getReleaseAssetInfo("linux", "ppc64"), null);
 });
 
+test("getArchiveChecksum returns the published archive hash when the manifest is archive-based", function () {
+  const info = install.getReleaseAssetInfo("linux", "x64", "0.2.0");
+  const checksums = Buffer.from(
+    "2695bdc68f1cbadc803c29cafe26a007472bbd8f30a25d485da18cf9f1ee09f3  tamux-linux-x86_64.zip\n"
+  );
+
+  assert.equal(
+    install.getArchiveChecksum(checksums, info),
+    "2695bdc68f1cbadc803c29cafe26a007472bbd8f30a25d485da18cf9f1ee09f3"
+  );
+});
+
 test("getInstallUsageHint recommends npx for local installs", function () {
   assert.equal(
     install.getInstallUsageHint(false),
