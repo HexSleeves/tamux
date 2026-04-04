@@ -261,6 +261,7 @@ impl AgentEngine {
         let generation = self.stream_generation.fetch_add(1, Ordering::Relaxed);
         let token = CancellationToken::new();
         let retry_now = Arc::new(tokio::sync::Notify::new());
+        let now = now_millis();
         let mut streams = self.stream_cancellations.lock().await;
         if let Some(previous) = streams.insert(
             thread_id.to_string(),
@@ -268,6 +269,10 @@ impl AgentEngine {
                 generation,
                 token: token.clone(),
                 retry_now: retry_now.clone(),
+                started_at: now,
+                last_progress_at: now,
+                last_progress_kind: StreamProgressKind::Started,
+                last_progress_excerpt: String::new(),
             },
         ) {
             previous.token.cancel();
@@ -284,6 +289,25 @@ impl AgentEngine {
         if should_remove {
             streams.remove(thread_id);
         }
+    }
+
+    pub(super) async fn note_stream_progress(
+        &self,
+        thread_id: &str,
+        generation: u64,
+        kind: StreamProgressKind,
+        excerpt: &str,
+    ) {
+        let mut streams = self.stream_cancellations.lock().await;
+        let Some(entry) = streams.get_mut(thread_id) else {
+            return;
+        };
+        if entry.generation != generation {
+            return;
+        }
+        entry.last_progress_at = now_millis();
+        entry.last_progress_kind = kind;
+        entry.last_progress_excerpt = excerpt.chars().take(180).collect();
     }
 
     pub async fn stop_stream(&self, thread_id: &str) -> bool {

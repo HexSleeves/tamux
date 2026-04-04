@@ -1,7 +1,7 @@
 use super::types::{StalledTurnClass, ThreadStallObservation};
 use super::*;
 
-const INITIAL_GRACE_DELAY_MS: u64 = 30_000;
+pub(super) const INITIAL_GRACE_DELAY_MS: u64 = 30_000;
 const SECOND_RETRY_DELAY_MS: u64 = 60_000;
 const THIRD_RETRY_DELAY_MS: u64 = 120_000;
 
@@ -80,6 +80,7 @@ impl StalledTurnClass {
         match self {
             Self::PromiseWithoutAction => "promise_without_action",
             Self::PostToolResultNoFollowThrough => "post_tool_result_no_follow_through",
+            Self::ActiveStreamIdle => "active_stream_idle",
         }
     }
 }

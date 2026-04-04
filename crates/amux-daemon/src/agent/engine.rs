@@ -38,6 +38,18 @@ pub struct StreamCancellationEntry {
     pub generation: u64,
     pub token: CancellationToken,
     pub retry_now: Arc<tokio::sync::Notify>,
+    pub started_at: u64,
+    pub last_progress_at: u64,
+    pub last_progress_kind: StreamProgressKind,
+    pub last_progress_excerpt: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamProgressKind {
+    Started,
+    Reasoning,
+    Content,
+    ToolCalls,
 }
 
 pub struct ThreadRepoWatcher {

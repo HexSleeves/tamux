@@ -248,6 +248,14 @@ impl<'a> SendMessageRunner<'a> {
                             if !content.is_empty() {
                                 self.assistant_output_visible = true;
                                 accumulated_content.push_str(&content);
+                                self.engine
+                                    .note_stream_progress(
+                                        &self.tid,
+                                        self.stream_generation,
+                                        StreamProgressKind::Content,
+                                        &content,
+                                    )
+                                    .await;
                                 let _ = self.engine.event_tx.send(AgentEvent::Delta {
                                     thread_id: self.tid.clone(),
                                     content,
@@ -255,6 +263,14 @@ impl<'a> SendMessageRunner<'a> {
                             }
                             if let Some(r) = reasoning {
                                 accumulated_reasoning.push_str(&r);
+                                self.engine
+                                    .note_stream_progress(
+                                        &self.tid,
+                                        self.stream_generation,
+                                        StreamProgressKind::Reasoning,
+                                        &r,
+                                    )
+                                    .await;
                                 let _ = self.engine.event_tx.send(AgentEvent::Reasoning {
                                     thread_id: self.tid.clone(),
                                     content: r,
@@ -291,10 +307,26 @@ impl<'a> SendMessageRunner<'a> {
                         }
                         CompletionChunk::TransportFallback { .. } => {}
                         chunk @ CompletionChunk::Done { .. } => {
+                            self.engine
+                                .note_stream_progress(
+                                    &self.tid,
+                                    self.stream_generation,
+                                    StreamProgressKind::Content,
+                                    &accumulated_content,
+                                )
+                                .await;
                             final_chunk = Some(chunk);
                             break;
                         }
                         chunk @ CompletionChunk::ToolCalls { .. } => {
+                            self.engine
+                                .note_stream_progress(
+                                    &self.tid,
+                                    self.stream_generation,
+                                    StreamProgressKind::ToolCalls,
+                                    &accumulated_reasoning,
+                                )
+                                .await;
                             final_chunk = Some(chunk);
                             break;
                         }

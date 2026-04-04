@@ -1,4 +1,5 @@
 use super::runtime::StalledTurnCandidate;
+use super::types::StalledTurnClass;
 use super::*;
 
 impl AgentEngine {
@@ -44,6 +45,37 @@ impl AgentEngine {
             thread.updated_at = now_millis();
         }
         self.persist_thread_by_id(&candidate.thread_id).await;
+
+        let responder_agent_id = self
+            .active_agent_id_for_thread(&candidate.thread_id)
+            .await
+            .unwrap_or_else(|| crate::agent::agent_identity::MAIN_AGENT_ID.to_string());
+        if crate::agent::agent_identity::canonical_agent_id(&responder_agent_id)
+            != crate::agent::agent_identity::WELES_AGENT_ID
+        {
+            let internal_message = stalled_turn_internal_dm_message(
+                candidate,
+                attempt,
+                &prior_user_message,
+                &responder_agent_id,
+            );
+            if let Err(error) = self
+                .send_internal_agent_message(
+                    crate::agent::agent_identity::WELES_AGENT_ID,
+                    &responder_agent_id,
+                    &internal_message,
+                    None,
+                )
+                .await
+            {
+                tracing::warn!(
+                    thread_id = %candidate.thread_id,
+                    recipient = %responder_agent_id,
+                    error = %error,
+                    "failed to send stalled-turn internal DM"
+                );
+            }
+        }
 
         self.emit_workflow_notice(
             &candidate.thread_id,
@@ -114,6 +146,20 @@ impl AgentEngine {
 }
 
 fn stalled_turn_system_message(candidate: &StalledTurnCandidate, attempt: u32) -> String {
+    if candidate.class == StalledTurnClass::ActiveStreamIdle {
+        return match attempt {
+            1 => "WELES stalled-turn recovery: Your stream went idle before completion. Resume the unfinished turn now.".to_string(),
+            2 => format!(
+                "WELES stalled-turn recovery: Your stream went idle after partial output (\"{}\"). Continue the unfinished turn now.",
+                candidate.last_message_excerpt
+            ),
+            _ => format!(
+                "WELES stalled-turn recovery: The stream kept stalling before completion. Resume immediately from this unfinished point: {}",
+                candidate.last_message_excerpt
+            ),
+        };
+    }
+
     match attempt {
         1 => "WELES stalled-turn recovery: Continue from your last unfinished action.".to_string(),
         2 => format!(
@@ -123,6 +169,29 @@ fn stalled_turn_system_message(candidate: &StalledTurnCandidate, attempt: u32) -
         _ => format!(
             "WELES stalled-turn recovery: Your previous turn stopped after promising work but before taking action. Resume immediately from this unfinished step: {}",
             candidate.last_message_excerpt
+        ),
+    }
+}
+
+fn stalled_turn_internal_dm_message(
+    candidate: &StalledTurnCandidate,
+    attempt: u32,
+    prior_user_message: &str,
+    responder_agent_id: &str,
+) -> String {
+    let responder_name = crate::agent::agent_identity::canonical_agent_name(responder_agent_id);
+    match candidate.class {
+        StalledTurnClass::ActiveStreamIdle => format!(
+            "WELES stalled-turn recovery for thread `{}`.\nAttempt {attempt}/3.\nYou are the active responder ({responder_name}). Your stream went idle before completion after partial output: \"{}\"\nResume the original operator request immediately: {}",
+            candidate.thread_id,
+            candidate.last_message_excerpt,
+            prior_user_message,
+        ),
+        _ => format!(
+            "WELES stalled-turn recovery for thread `{}`.\nAttempt {attempt}/3.\nYou are the active responder ({responder_name}). Your last unfinished message was: \"{}\"\nContinue the original operator request immediately: {}",
+            candidate.thread_id,
+            candidate.last_message_excerpt,
+            prior_user_message,
         ),
     }
 }

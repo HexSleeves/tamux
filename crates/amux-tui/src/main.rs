@@ -27,6 +27,7 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 use tokio::sync::mpsc as tokio_mpsc;
+use tracing_subscriber::EnvFilter;
 
 use crate::app::TuiModel;
 use crate::client::DaemonClient;
@@ -37,8 +38,14 @@ fn main() -> Result<()> {
     let log_path = log_writer.current_path()?;
     let (log_writer, _log_guard) = tracing_appender::non_blocking(log_writer);
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_env_filter(
+            EnvFilter::try_from_env("TAMUX_TUI_LOG")
+                .or_else(|_| EnvFilter::try_from_env("TAMUX_LOG"))
+                .or_else(|_| EnvFilter::try_from_env("AMUX_LOG"))
+                .unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .with_writer(log_writer)
+        .with_ansi(false)
         .init();
     tracing::info!(path = %log_path.display(), "tui log file initialized");
 

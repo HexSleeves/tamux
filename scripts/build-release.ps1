@@ -69,6 +69,12 @@ $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $OutDir = Join-Path $ProjectRoot "dist-release"
 $FrontendDir = Join-Path $ProjectRoot "frontend"
 
+$env:TAMUX_LOG = "error"
+$env:AMUX_LOG = "error"
+$env:TAMUX_TUI_LOG = "error"
+$env:AMUX_GATEWAY_LOG = "error"
+$env:RUST_LOG = "error"
+
 # ─────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────
