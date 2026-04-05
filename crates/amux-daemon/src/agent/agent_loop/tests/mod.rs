@@ -420,8 +420,7 @@ async fn spawn_anthropic_rebuild_sensitive_retry_server(
             };
             let recorded_bodies = recorded_bodies.clone();
             tokio::spawn(async move {
-                let request =
-                    read_http_request(&mut socket, "anthropic fresh retry request").await;
+                let request = read_http_request(&mut socket, "anthropic fresh retry request").await;
                 let body = request_body(&request);
                 recorded_bodies
                     .lock()

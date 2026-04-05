@@ -272,6 +272,18 @@ pub enum ClientEvent {
     OperatorProfileSummary {
         summary_json: String,
     },
+    OperatorModelSummary {
+        model_json: String,
+    },
+    OperatorModelReset {
+        ok: bool,
+    },
+    CollaborationSessions {
+        sessions_json: String,
+    },
+    GeneratedTools {
+        tools_json: String,
+    },
     OperatorProfileSessionCompleted {
         session_id: String,
         updated_fields: Vec<String>,
@@ -359,4 +371,6 @@ mod tests {
     }
 
     include!("tests/tests_part1.rs");
+    include!("tests/tests_part2.rs");
+    include!("tests/tests_part4.rs");
 }

@@ -146,6 +146,7 @@ async fn set_sub_agent_clears_optional_weles_overrides_when_reverted_to_defaults
                 "list_subagents".to_string(),
                 "read_active_terminal_content".to_string(),
                 "message_agent".to_string(),
+                "handoff_thread_agent".to_string(),
             ][..]
         )
     );

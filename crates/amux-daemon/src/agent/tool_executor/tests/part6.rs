@@ -70,6 +70,200 @@
     }
 
     #[tokio::test]
+    async fn execute_managed_command_auto_approves_learned_git_category() {
+        let recorded_bodies = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let root = tempdir().expect("tempdir should succeed");
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.operator_model.enabled = true;
+        config.operator_model.allow_approval_learning = true;
+        config.provider = "openai".to_string();
+        config.base_url = part4::spawn_stub_assistant_server_for_tool_executor(
+            recorded_bodies,
+            serde_json::json!({
+                "verdict": "allow",
+                "reasons": ["runtime approved managed command test"],
+                "audit_id": "audit-weles-managed-approve"
+            })
+            .to_string(),
+        )
+        .await;
+        config.model = "gpt-4o-mini".to_string();
+        config.api_key = "test-key".to_string();
+        config.api_transport = crate::agent::types::ApiTransport::ChatCompletions;
+        config.auto_retry = false;
+        config.max_retries = 0;
+        config.max_tool_loops = 1;
+        let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+        let (event_tx, _) = broadcast::channel(8);
+        let repo_dir = root.path().join("git-repo");
+        std::fs::create_dir_all(&repo_dir).expect("create repo dir");
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&repo_dir)
+            .output()
+            .expect("git init should succeed");
+        let (session_id, _rx) = manager
+            .spawn(Some("/bin/bash".to_string()), None, None, None, 80, 24)
+            .await
+            .expect("spawn session");
+
+        {
+            let mut model = engine.operator_model.write().await;
+            model.risk_fingerprint.approvals = 3;
+            model
+                .risk_fingerprint
+                .category_requests
+                .insert("git".to_string(), 3);
+            model
+                .risk_fingerprint
+                .category_approvals
+                .insert("git".to_string(), 3);
+            model.risk_fingerprint.auto_approve_categories = vec!["git".to_string()];
+        }
+
+        let tool_call = ToolCall::with_default_weles_review(
+            "tool-managed-auto-approve".to_string(),
+            ToolFunction {
+                name: "execute_managed_command".to_string(),
+                arguments: serde_json::json!({
+                    "session": session_id.to_string(),
+                    "command": "git status --short",
+                    "rationale": "Check repo status",
+                    "cwd": repo_dir,
+                    "allow_network": true,
+                    "timeout_seconds": 5
+                })
+                .to_string(),
+            },
+        );
+
+        let result = execute_tool(
+            &tool_call,
+            &engine,
+            "thread-managed-auto-approve",
+            None,
+            &manager,
+            None,
+            &event_tx,
+            root.path(),
+            &engine.http_client,
+            None,
+        )
+        .await;
+
+        assert!(
+            !result.is_error,
+            "learned auto-approve should execute successfully: {}",
+            result.content
+        );
+        assert!(result.pending_approval.is_none());
+        assert!(result.content.contains("Managed command finished"));
+
+        let model = engine.operator_model.read().await;
+        assert_eq!(model.risk_fingerprint.approval_requests, 1);
+        assert_eq!(model.risk_fingerprint.approvals, 4);
+        assert_eq!(
+            model.risk_fingerprint.auto_approve_categories,
+            vec!["git".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_managed_command_auto_denies_learned_destructive_category() {
+        let recorded_bodies = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let root = tempdir().expect("tempdir should succeed");
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.operator_model.enabled = true;
+        config.operator_model.allow_approval_learning = true;
+        config.provider = "openai".to_string();
+        config.base_url = part4::spawn_stub_assistant_server_for_tool_executor(
+            recorded_bodies,
+            serde_json::json!({
+                "verdict": "allow",
+                "reasons": ["runtime approved managed command test"],
+                "audit_id": "audit-weles-managed-deny"
+            })
+            .to_string(),
+        )
+        .await;
+        config.model = "gpt-4o-mini".to_string();
+        config.api_key = "test-key".to_string();
+        config.api_transport = crate::agent::types::ApiTransport::ChatCompletions;
+        config.auto_retry = false;
+        config.max_retries = 0;
+        config.max_tool_loops = 1;
+        let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+        let (event_tx, _) = broadcast::channel(8);
+        let delete_dir = root.path().join("delete-me");
+        std::fs::create_dir_all(&delete_dir).expect("create delete target");
+        let (session_id, _rx) = manager
+            .spawn(Some("/bin/bash".to_string()), None, None, None, 80, 24)
+            .await
+            .expect("spawn session");
+
+        {
+            let mut model = engine.operator_model.write().await;
+            model.risk_fingerprint.denials = 3;
+            model
+                .risk_fingerprint
+                .category_requests
+                .insert("destructive_delete".to_string(), 3);
+            model.risk_fingerprint.auto_deny_categories =
+                vec!["destructive_delete".to_string()];
+        }
+
+        let tool_call = ToolCall::with_default_weles_review(
+            "tool-managed-auto-deny".to_string(),
+            ToolFunction {
+                name: "execute_managed_command".to_string(),
+                arguments: serde_json::json!({
+                    "session": session_id.to_string(),
+                    "command": format!("rm -rf {}", delete_dir.display()),
+                    "rationale": "Clean up generated scratch directory",
+                    "timeout_seconds": 5
+                })
+                .to_string(),
+            },
+        );
+
+        let result = execute_tool(
+            &tool_call,
+            &engine,
+            "thread-managed-auto-deny",
+            None,
+            &manager,
+            None,
+            &event_tx,
+            root.path(),
+            &engine.http_client,
+            None,
+        )
+        .await;
+
+        assert!(
+            !result.is_error,
+            "learned auto-deny should return a policy message: {}",
+            result.content
+        );
+        assert!(result.pending_approval.is_none());
+        assert!(result.content.contains("auto-denied"));
+        assert!(
+            delete_dir.exists(),
+            "the destructive command should not execute after learned denial"
+        );
+
+        let model = engine.operator_model.read().await;
+        assert_eq!(model.risk_fingerprint.approval_requests, 1);
+        assert_eq!(model.risk_fingerprint.denials, 4);
+        assert_eq!(
+            model.risk_fingerprint.auto_deny_categories,
+            vec!["destructive_delete".to_string()]
+        );
+    }
+
+    #[tokio::test]
     async fn send_telegram_message_emits_gateway_ipc_request() {
         let root = tempdir().expect("tempdir");
         let manager = SessionManager::new_test(root.path()).await;

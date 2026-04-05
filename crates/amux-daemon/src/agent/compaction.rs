@@ -927,6 +927,15 @@ impl AgentEngine {
             None,
         )
         .await;
+        self.persist_context_compression_causal_trace(
+            thread_id,
+            task_id,
+            split_at,
+            message_count,
+            candidate.target_tokens,
+            strategy_used,
+        )
+        .await;
         let _ = self.event_tx.send(AgentEvent::ThreadReloadRequired {
             thread_id: thread_id.to_string(),
         });

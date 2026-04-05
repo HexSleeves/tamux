@@ -571,3 +571,48 @@ async fn heuristic_compaction_artifact_persists_and_request_uses_hidden_payload(
         artifact.compaction_payload
     );
 }
+
+#[tokio::test]
+async fn compaction_persists_context_compression_causal_trace() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.auto_compact_context = true;
+    config.max_context_messages = 2;
+    config.keep_recent_on_compact = 1;
+    config.compaction.strategy = CompactionStrategy::Heuristic;
+    let engine = AgentEngine::new_test(manager, config.clone(), root.path()).await;
+    let provider = sample_provider_config();
+    let thread_id = "compaction-trace-thread";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            sample_thread(vec![
+                sample_message("older one"),
+                sample_message("older two"),
+                sample_message("recent one"),
+            ]),
+        );
+        let thread = threads.get_mut(thread_id).expect("thread should exist");
+        thread.id = thread_id.to_string();
+    }
+
+    let inserted = engine
+        .maybe_persist_compaction_artifact(thread_id, None, &config, &provider)
+        .await
+        .expect("compaction should succeed");
+    assert!(inserted, "compaction artifact should be inserted");
+
+    let records = engine
+        .history
+        .list_recent_causal_trace_records("context_compression", 1)
+        .await
+        .expect("list context compression traces");
+    assert_eq!(
+        records.len(),
+        1,
+        "compaction should persist one context compression causal trace"
+    );
+}

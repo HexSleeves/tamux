@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test]
+<<<<<<< HEAD
 async fn openai_done_event_exposes_provider_final_result() {
     let root = tempdir().unwrap();
     let manager = SessionManager::new_test(root.path()).await;
@@ -205,3 +206,68 @@ async fn anthropic_done_event_exposes_provider_final_result() {
         other => panic!("expected Anthropic final result, got {other:?}"),
     }
 }
+=======
+async fn concierge_recovery_persists_upstream_recovery_causal_trace() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    let structured = StructuredUpstreamFailure {
+        class: "request_invalid".to_string(),
+        summary:
+            "provider rejected the daemon request as invalid: Invalid 'input[12].name': empty string"
+                .to_string(),
+        diagnostics: serde_json::json!({
+            "raw_message": "Invalid 'input[12].name': empty string"
+        }),
+    };
+    let mut attempted = std::collections::HashSet::new();
+
+    let disposition = engine
+        .maybe_recover_fixable_upstream_failure(
+            "thread-recovery-trace",
+            &structured,
+            false,
+            false,
+            &mut attempted,
+        )
+        .await
+        .expect("recovery evaluation should succeed");
+
+    assert!(disposition.started_investigation);
+    assert!(disposition.retry_attempted);
+
+    let records = engine
+        .history
+        .list_recent_causal_trace_records("upstream_recovery", 4)
+        .await
+        .expect("list recovery traces");
+    assert_eq!(records.len(), 1, "expected one persisted recovery trace");
+
+    let factors = serde_json::from_str::<Vec<crate::agent::learning::traces::CausalFactor>>(
+        &records[0].causal_factors_json,
+    )
+    .expect("deserialize recovery factors");
+    assert!(
+        factors.iter().any(|factor| {
+            factor.description == "upstream signature: request-invalid-empty-tool-name"
+        }),
+        "expected the persisted trace to include the upstream recovery signature"
+    );
+
+    let outcome = serde_json::from_str::<crate::agent::learning::traces::CausalTraceOutcome>(
+        &records[0].outcome_json,
+    )
+    .expect("deserialize recovery outcome");
+    match outcome {
+        crate::agent::learning::traces::CausalTraceOutcome::NearMiss {
+            what_went_wrong,
+            how_recovered,
+        } => {
+            assert!(what_went_wrong.contains("empty string"));
+            assert!(how_recovered.contains("repair"));
+        }
+        other => panic!("expected a near-miss recovery trace, got {other:?}"),
+    }
+}
+>>>>>>> dc7cb8b (feat: close moat implementation gaps)

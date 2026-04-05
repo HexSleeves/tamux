@@ -398,6 +398,18 @@ impl TuiModel {
             ClientEvent::OperatorProfileSummary { summary_json } => {
                 self.handle_operator_profile_summary_event(summary_json);
             }
+            ClientEvent::OperatorModelSummary { model_json } => {
+                self.handle_operator_model_summary_event(model_json);
+            }
+            ClientEvent::OperatorModelReset { ok } => {
+                self.handle_operator_model_reset_event(ok);
+            }
+            ClientEvent::CollaborationSessions { sessions_json } => {
+                self.handle_collaboration_sessions_event(sessions_json);
+            }
+            ClientEvent::GeneratedTools { tools_json } => {
+                self.handle_generated_tools_event(tools_json);
+            }
             ClientEvent::OperatorProfileSessionCompleted {
                 session_id,
                 updated_fields,

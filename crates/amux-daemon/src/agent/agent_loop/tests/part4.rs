@@ -248,9 +248,7 @@ async fn auto_compaction_forces_connection_close_on_next_llm_request() {
 
     assert!(!outcome.interrupted_for_approval);
 
-    let recorded = recorded_requests
-        .lock()
-        .expect("lock recorded requests");
+    let recorded = recorded_requests.lock().expect("lock recorded requests");
     let request = recorded
         .back()
         .expect("expected one recorded request")

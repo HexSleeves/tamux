@@ -368,6 +368,18 @@ fn start_daemon_bridge(
                             DaemonCommand::GetOperatorProfileSummary => {
                                 let _ = client.get_operator_profile_summary();
                             }
+                            DaemonCommand::GetOperatorModel => {
+                                let _ = client.get_operator_model();
+                            }
+                            DaemonCommand::ResetOperatorModel => {
+                                let _ = client.reset_operator_model();
+                            }
+                            DaemonCommand::GetCollaborationSessions => {
+                                let _ = client.get_collaboration_sessions();
+                            }
+                            DaemonCommand::GetGeneratedTools => {
+                                let _ = client.get_generated_tools();
+                            }
                             DaemonCommand::SetOperatorProfileConsent {
                                 consent_key,
                                 granted,

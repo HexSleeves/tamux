@@ -225,6 +225,22 @@ impl TuiModel {
                 "honcho_workspace_id",
                 &self.config.honcho_workspace_id.clone(),
             ),
+            "operator_model_inspect" => {
+                self.send_daemon_command(DaemonCommand::GetOperatorModel);
+                self.status_line = "Loading operator model snapshot".to_string();
+            }
+            "operator_model_reset" => {
+                self.send_daemon_command(DaemonCommand::ResetOperatorModel);
+                self.status_line = "Resetting operator model".to_string();
+            }
+            "collaboration_sessions_inspect" => {
+                self.send_daemon_command(DaemonCommand::GetCollaborationSessions);
+                self.status_line = "Loading collaboration sessions".to_string();
+            }
+            "generated_tools_inspect" => {
+                self.send_daemon_command(DaemonCommand::GetGeneratedTools);
+                self.status_line = "Loading generated tools".to_string();
+            }
             "compliance_mode" => {
                 let next = match self.config.compliance_mode.as_str() {
                     "standard" => "soc2",

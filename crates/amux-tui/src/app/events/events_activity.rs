@@ -214,6 +214,56 @@ impl TuiModel {
         }
     }
 
+    pub(in crate::app) fn handle_operator_model_summary_event(&mut self, model_json: String) {
+        let pretty = serde_json::from_str::<serde_json::Value>(&model_json)
+            .ok()
+            .and_then(|value| serde_json::to_string_pretty(&value).ok())
+            .unwrap_or(model_json);
+        self.last_error = Some(pretty);
+        self.error_active = true;
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::ErrorViewer));
+        self.status_line = "Operator model snapshot loaded".to_string();
+    }
+
+    pub(in crate::app) fn handle_operator_model_reset_event(&mut self, ok: bool) {
+        if ok {
+            self.last_error = None;
+            self.error_active = false;
+            self.status_line = "Operator model reset".to_string();
+        } else {
+            self.last_error = Some("Operator model reset failed".to_string());
+            self.error_active = true;
+            self.modal
+                .reduce(modal::ModalAction::Push(modal::ModalKind::ErrorViewer));
+            self.status_line = "Operator model reset failed".to_string();
+        }
+    }
+
+    pub(in crate::app) fn handle_collaboration_sessions_event(&mut self, sessions_json: String) {
+        let pretty = serde_json::from_str::<serde_json::Value>(&sessions_json)
+            .ok()
+            .and_then(|value| serde_json::to_string_pretty(&value).ok())
+            .unwrap_or(sessions_json);
+        self.last_error = Some(pretty);
+        self.error_active = true;
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::ErrorViewer));
+        self.status_line = "Collaboration sessions loaded".to_string();
+    }
+
+    pub(in crate::app) fn handle_generated_tools_event(&mut self, tools_json: String) {
+        let pretty = serde_json::from_str::<serde_json::Value>(&tools_json)
+            .ok()
+            .and_then(|value| serde_json::to_string_pretty(&value).ok())
+            .unwrap_or(tools_json);
+        self.last_error = Some(pretty);
+        self.error_active = true;
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::ErrorViewer));
+        self.status_line = "Generated tools loaded".to_string();
+    }
+
     pub(in crate::app) fn handle_operator_profile_session_completed_event(
         &mut self,
         session_id: String,

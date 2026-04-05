@@ -212,11 +212,13 @@ async fn send_message_request_includes_runtime_continuity_and_negative_knowledge
         "expected the execution prompt to include the continuity summary section",
     );
     assert!(
-        recorded.iter().any(|body| body.contains("I am carrying this forward as")
-            && body.contains(MAIN_AGENT_NAME)
-            && body.contains("Test goal")
-            && body.contains("Investigate failure")
-            && body.contains("I am continuing the same workstream")),
+        recorded
+            .iter()
+            .any(|body| body.contains("I am carrying this forward as")
+                && body.contains(MAIN_AGENT_NAME)
+                && body.contains("Test goal")
+                && body.contains("Investigate failure")
+                && body.contains("I am continuing the same workstream")),
         "expected the execution prompt to include active persona identity plus explicit goal, step, and task titles",
     );
     assert!(
@@ -512,7 +514,7 @@ async fn direct_weles_handoff_turn_uses_weles_provider_override_for_new_request_
 }
 
 #[tokio::test]
-async fn successful_handoff_tool_call_ends_current_turn_without_follow_up_llm_reply() {
+async fn successful_handoff_tool_call_restarts_same_turn_under_requested_agent() {
     let request_counter = Arc::new(AtomicUsize::new(0));
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -547,7 +549,7 @@ async fn successful_handoff_tool_call_ends_current_turn_without_follow_up_llm_re
                             "cache-control: no-cache\r\n",
                             "connection: close\r\n",
                             "\r\n",
-                            "data: {\"choices\":[{\"delta\":{\"content\":\"Done. Thread handed off to Rarog.\"}}]}\n\n",
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"I'm Rarog.\"}}]}\n\n",
                             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
                             "data: [DONE]\n\n"
                         )
@@ -612,16 +614,13 @@ async fn successful_handoff_tool_call_ends_current_turn_without_follow_up_llm_re
             true,
         )
         .await
-        .expect("handoff request should complete");
+        .expect("handoff should restart the same operator turn under Rarog");
 
-    assert_eq!(request_counter.load(Ordering::SeqCst), 1);
+    assert_eq!(request_counter.load(Ordering::SeqCst), 2);
 
     let threads = engine.threads.read().await;
     let thread = threads.get(thread_id).expect("thread should exist");
-    assert!(thread
-        .messages
-        .iter()
-        .all(|message| !message.content.contains("Done. Thread handed off to Rarog.")));
+    assert!(thread.messages.iter().any(|message| message.content == "I'm Rarog."));
 }
 
 #[tokio::test]
@@ -760,10 +759,7 @@ async fn successful_handoff_restarts_same_turn_under_requested_agent_with_summar
                 id: thread_id.to_string(),
                 agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
                 title: "Handoff restart thread".to_string(),
-                messages: vec![crate::agent::types::AgentMessage::user(
-                    "give me Weles",
-                    1,
-                )],
+                messages: vec![crate::agent::types::AgentMessage::user("give me Weles", 1)],
                 pinned: false,
                 upstream_thread_id: None,
                 upstream_transport: None,
@@ -805,11 +801,18 @@ async fn successful_handoff_restarts_same_turn_under_requested_agent_with_summar
     assert!(second_body.contains("You are Weles in tamux."));
     assert!(second_body.contains("weles-model"));
     assert!(second_body.contains("User requested you while talking to Svarog"));
-    assert!(second_body.contains("Switch control to Weles and continue helping from governance scope"));
+    assert!(
+        second_body.contains("Switch control to Weles and continue helping from governance scope")
+    );
 
     let threads = engine.threads.read().await;
     let thread = threads.get(thread_id).expect("thread should exist");
-    assert!(thread.messages.iter().any(|message| message.content == "I'm Weles."));
+    assert!(
+        thread
+            .messages
+            .iter()
+            .any(|message| message.content == "I'm Weles.")
+    );
 }
 
 #[tokio::test]
@@ -818,7 +821,9 @@ async fn direct_rarog_handoff_turn_uses_real_concierge_runtime_config() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind concierge runtime server");
-    let addr = listener.local_addr().expect("concierge runtime server addr");
+    let addr = listener
+        .local_addr()
+        .expect("concierge runtime server addr");
 
     tokio::spawn({
         let recorded_requests = recorded_requests.clone();
@@ -913,10 +918,7 @@ async fn direct_rarog_handoff_turn_uses_real_concierge_runtime_config() {
                 id: thread_id.to_string(),
                 agent_name: Some(crate::agent::agent_identity::CONCIERGE_AGENT_NAME.to_string()),
                 title: "Direct Rarog provider handoff".to_string(),
-                messages: vec![crate::agent::types::AgentMessage::user(
-                    "gimme Rarog",
-                    1,
-                )],
+                messages: vec![crate::agent::types::AgentMessage::user("gimme Rarog", 1)],
                 pinned: false,
                 upstream_thread_id: Some("legacy-upstream-thread".to_string()),
                 upstream_transport: Some(ApiTransport::ChatCompletions),

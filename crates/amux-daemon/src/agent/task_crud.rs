@@ -529,6 +529,8 @@ impl AgentEngine {
             if goal_run.status == GoalRunStatus::Cancelled {
                 self.settle_goal_skill_consultations(&goal_run, "cancelled")
                     .await;
+                self.settle_goal_plan_causal_traces(&goal_run.id, "cancelled", None)
+                    .await;
             }
             self.emit_goal_run_update(&goal_run, Some(goal_run_status_message(&goal_run).into()));
             return true;

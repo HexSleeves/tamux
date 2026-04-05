@@ -407,6 +407,10 @@ pub struct AnticipatoryItem {
     #[serde(default)]
     pub thread_id: Option<String>,
     #[serde(default)]
+    pub preferred_client_surface: Option<String>,
+    #[serde(default)]
+    pub preferred_attention_surface: Option<String>,
+    #[serde(default)]
     pub created_at: u64,
     #[serde(default)]
     pub updated_at: u64,

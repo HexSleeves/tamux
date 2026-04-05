@@ -568,6 +568,10 @@ pub struct AnticipatoryItem {
     pub goal_run_id: Option<String>,
     #[serde(default)]
     pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_client_surface: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_attention_surface: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
 }

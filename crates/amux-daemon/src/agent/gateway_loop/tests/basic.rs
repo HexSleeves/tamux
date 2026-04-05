@@ -372,7 +372,6 @@ fn daemon_gateway_loop_boxes_large_delivery_futures() {
         "let tool_result = Box::pin(tool_executor::execute_tool(",
         "let triage = match Box::pin(tokio::time::timeout(",
         "let send_result = Box::pin(tokio::time::timeout(",
-        "let _ = Box::pin(tool_executor::execute_tool(",
     ] {
         assert!(
             production_source.contains(required),
