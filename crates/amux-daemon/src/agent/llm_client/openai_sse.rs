@@ -3,7 +3,6 @@ async fn parse_openai_sse(
     tx: &mpsc::Sender<Result<CompletionChunk>>,
 ) -> Result<()> {
     use futures::StreamExt;
-
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
     let mut total_content = String::new();
@@ -11,7 +10,9 @@ async fn parse_openai_sse(
     let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
     let mut input_tokens: u64 = 0;
     let mut output_tokens: u64 = 0;
-
+    let mut response_id: Option<String> = None;
+    let mut response_model: Option<String> = None;
+    let mut finish_reason: Option<String> = None;
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result.context("failed to read SSE chunk")?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
@@ -29,6 +30,30 @@ async fn parse_openai_sse(
 
             let data = line[6..].trim();
             if data == "[DONE]" {
+                let provider_final_result = Some(
+                    crate::agent::types::CompletionProviderFinalResult::OpenAiChatCompletions(
+                        crate::agent::types::CompletionOpenAiChatCompletionsFinalResult {
+                            id: response_id.clone(),
+                            model: response_model.clone(),
+                            output_text: total_content.clone(),
+                            reasoning: (!total_reasoning.is_empty()).then(|| total_reasoning.clone()),
+                            tool_calls: pending_tool_calls
+                                .values()
+                                .map(|entry| ToolCall {
+                                    id: entry.id.clone(),
+                                    function: ToolFunction {
+                                        name: entry.name.clone(),
+                                        arguments: entry.arguments.clone(),
+                                    },
+                                    weles_review: None,
+                                })
+                                .collect(),
+                            finish_reason: finish_reason.clone(),
+                            input_tokens: Some(input_tokens),
+                            output_tokens: Some(output_tokens),
+                        },
+                    ),
+                );
                 // Emit final chunk
                 if !pending_tool_calls.is_empty() {
                     let tool_calls = drain_tool_calls(&mut pending_tool_calls);
@@ -47,8 +72,20 @@ async fn parse_openai_sse(
                             },
                             input_tokens: Some(input_tokens),
                             output_tokens: Some(output_tokens),
+                            stop_reason: None,
+                            stop_sequence: None,
                             response_id: None,
+                            request_id: None,
+                            upstream_model: None,
+                            upstream_role: None,
+                            upstream_message_type: None,
+                            upstream_container: None,
+                            upstream_message: None,
+                            provider_final_result: provider_final_result.clone(),
                             upstream_thread_id: None,
+                            cache_creation_input_tokens: None,
+                            cache_read_input_tokens: None,
+                            server_tool_use: None,
                         }))
                         .await;
                 } else {
@@ -62,8 +99,20 @@ async fn parse_openai_sse(
                             },
                             input_tokens,
                             output_tokens,
+                            stop_reason: None,
+                            stop_sequence: None,
                             response_id: None,
+                            request_id: None,
+                            upstream_model: None,
+                            upstream_role: None,
+                            upstream_message_type: None,
+                            upstream_container: None,
+                            upstream_message: None,
+                            provider_final_result,
                             upstream_thread_id: None,
+                            cache_creation_input_tokens: None,
+                            cache_read_input_tokens: None,
+                            server_tool_use: None,
                         }))
                         .await;
                 }
@@ -74,8 +123,16 @@ async fn parse_openai_sse(
                 Ok(v) => v,
                 Err(_) => continue,
             };
-
-            // Extract usage
+            response_id = parsed
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned)
+                .or(response_id);
+            response_model = parsed
+                .get("model")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned)
+                .or(response_model);
             if let Some(usage) = parsed.get("usage") {
                 input_tokens = usage
                     .get("prompt_tokens")
@@ -91,8 +148,11 @@ async fn parse_openai_sse(
                 Some(d) => d,
                 None => continue,
             };
-
-            // Content delta
+            finish_reason = parsed
+                .pointer("/choices/0/finish_reason")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned)
+                .or(finish_reason);
             if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
                 total_content.push_str(content);
                 let _ = tx
@@ -102,8 +162,6 @@ async fn parse_openai_sse(
                     }))
                     .await;
             }
-
-            // Reasoning delta (covers delta.reasoning and delta.reasoning_content)
             let reasoning_text = delta
                 .get("reasoning")
                 .and_then(|v| v.as_str())
@@ -117,8 +175,6 @@ async fn parse_openai_sse(
                     }))
                     .await;
             }
-
-            // Tool call deltas (streamed incrementally)
             if let Some(tcs) = delta.get("tool_calls").and_then(|v| v.as_array()) {
                 for tc in tcs {
                     let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
@@ -144,8 +200,6 @@ async fn parse_openai_sse(
         }
         buffer = remaining;
     }
-
-    // Stream ended without [DONE]
     if !pending_tool_calls.is_empty() {
         let tool_calls = drain_tool_calls(&mut pending_tool_calls);
         let _ = tx
@@ -163,8 +217,20 @@ async fn parse_openai_sse(
                 },
                 input_tokens: Some(input_tokens),
                 output_tokens: Some(output_tokens),
+                stop_reason: None,
+                stop_sequence: None,
                 response_id: None,
+                request_id: None,
+                upstream_model: None,
+                upstream_role: None,
+                upstream_message_type: None,
+                upstream_container: None,
+                upstream_message: None,
+                provider_final_result: None,
                 upstream_thread_id: None,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+                server_tool_use: None,
             }))
             .await;
     } else {
@@ -178,12 +244,23 @@ async fn parse_openai_sse(
                 },
                 input_tokens,
                 output_tokens,
+                stop_reason: None,
+                stop_sequence: None,
                 response_id: None,
+                request_id: None,
+                upstream_model: None,
+                upstream_role: None,
+                upstream_message_type: None,
+                upstream_container: None,
+                upstream_message: None,
+                provider_final_result: None,
                 upstream_thread_id: None,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+                server_tool_use: None,
             }))
             .await;
     }
-
     Ok(())
 }
 
@@ -193,7 +270,6 @@ async fn parse_openai_responses_sse(
     tx: &mpsc::Sender<Result<CompletionChunk>>,
 ) -> Result<()> {
     use futures::StreamExt;
-
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
     let mut total_content = String::new();
@@ -229,7 +305,6 @@ async fn parse_openai_responses_sse(
                 Err(_) => continue,
             };
             saw_any_json = true;
-
             if parsed.get("choices").is_some() {
                 return Err(transport_incompatibility_error(
                     provider,
@@ -244,7 +319,6 @@ async fn parse_openai_responses_sse(
             if event_type.starts_with("response.") || event_type == "error" {
                 saw_responses_event = true;
             }
-
             match event_type {
                 "response.created" => {
                     response_id = parsed
@@ -348,6 +422,19 @@ async fn parse_openai_responses_sse(
 
                     if !pending_tool_calls.is_empty() {
                         let tool_calls = drain_tool_calls(&mut pending_tool_calls);
+                        let provider_final_result = Some(
+                            crate::agent::types::CompletionProviderFinalResult::OpenAiResponses(
+                                crate::agent::types::CompletionOpenAiResponsesFinalResult {
+                                    id: response_id.clone(),
+                                    output_text: total_content.clone(),
+                                    reasoning: (!total_reasoning.is_empty())
+                                        .then(|| total_reasoning.clone()),
+                                    tool_calls: tool_calls.clone(),
+                                    input_tokens: Some(input_tokens),
+                                    output_tokens: Some(output_tokens),
+                                },
+                            ),
+                        );
                         let _ = tx
                             .send(Ok(CompletionChunk::ToolCalls {
                                 tool_calls,
@@ -363,11 +450,36 @@ async fn parse_openai_responses_sse(
                                 },
                                 input_tokens: Some(input_tokens),
                                 output_tokens: Some(output_tokens),
+                                stop_reason: None,
+                                stop_sequence: None,
+                                cache_creation_input_tokens: None,
+                                cache_read_input_tokens: None,
+                                server_tool_use: None,
                                 response_id: response_id.clone(),
+                                request_id: None,
+                                upstream_model: None,
+                                upstream_role: None,
+                                upstream_message_type: None,
+                                upstream_container: None,
+                                upstream_message: None,
+                                provider_final_result: provider_final_result.clone(),
                                 upstream_thread_id: None,
                             }))
                             .await;
                     } else {
+                        let provider_final_result = Some(
+                            crate::agent::types::CompletionProviderFinalResult::OpenAiResponses(
+                                crate::agent::types::CompletionOpenAiResponsesFinalResult {
+                                    id: response_id.clone(),
+                                    output_text: total_content.clone(),
+                                    reasoning: (!total_reasoning.is_empty())
+                                        .then(|| total_reasoning.clone()),
+                                    tool_calls: Vec::new(),
+                                    input_tokens: Some(input_tokens),
+                                    output_tokens: Some(output_tokens),
+                                },
+                            ),
+                        );
                         let _ = tx
                             .send(Ok(CompletionChunk::Done {
                                 content: total_content.clone(),
@@ -378,7 +490,19 @@ async fn parse_openai_responses_sse(
                                 },
                                 input_tokens,
                                 output_tokens,
+                                stop_reason: None,
+                                stop_sequence: None,
+                                cache_creation_input_tokens: None,
+                                cache_read_input_tokens: None,
+                                server_tool_use: None,
                                 response_id: response_id.clone(),
+                                request_id: None,
+                                upstream_model: None,
+                                upstream_role: None,
+                                upstream_message_type: None,
+                                upstream_container: None,
+                                upstream_message: None,
+                                provider_final_result,
                                 upstream_thread_id: None,
                             }))
                             .await;
@@ -424,7 +548,19 @@ async fn parse_openai_responses_sse(
                 },
                 input_tokens: Some(input_tokens),
                 output_tokens: Some(output_tokens),
+                stop_reason: None,
+                stop_sequence: None,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+                server_tool_use: None,
                 response_id,
+                request_id: None,
+                upstream_model: None,
+                upstream_role: None,
+                upstream_message_type: None,
+                upstream_container: None,
+                upstream_message: None,
+                provider_final_result: None,
                 upstream_thread_id: None,
             }))
             .await;
@@ -439,7 +575,19 @@ async fn parse_openai_responses_sse(
                 },
                 input_tokens,
                 output_tokens,
+                stop_reason: None,
+                stop_sequence: None,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+                server_tool_use: None,
                 response_id,
+                request_id: None,
+                upstream_model: None,
+                upstream_role: None,
+                upstream_message_type: None,
+                upstream_container: None,
+                upstream_message: None,
+                provider_final_result: None,
                 upstream_thread_id: None,
             }))
             .await;

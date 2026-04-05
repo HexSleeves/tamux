@@ -2,6 +2,13 @@
 // OpenAI-compatible implementation
 // ---------------------------------------------------------------------------
 
+use amux_shared::providers::{
+    PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_MINIMAX,
+    PROVIDER_ID_MINIMAX_CODING_PLAN, PROVIDER_ID_OPENCODE_ZEN, PROVIDER_ID_OPENAI,
+    PROVIDER_ID_OPENROUTER, PROVIDER_ID_QWEN, PROVIDER_ID_QWEN_DEEPINFRA,
+    PROVIDER_ID_Z_AI, PROVIDER_ID_Z_AI_CODING_PLAN,
+};
+
 const OPENROUTER_ATTRIBUTION_URL: &str = "https://tamux.app";
 const OPENROUTER_ATTRIBUTION_TITLE: &str = "tamux";
 const OPENROUTER_ATTRIBUTION_CATEGORIES: &str = "cli-agent";
@@ -131,7 +138,7 @@ fn build_openai_responses_body(
 
     if let Some(effort) = normalize_reasoning_effort(&config.reasoning_effort) {
         let mut reasoning = serde_json::json!({ "effort": effort });
-        if provider == "github-copilot" {
+        if provider == PROVIDER_ID_GITHUB_COPILOT {
             if let Some(summary) = copilot_reasoning_summary(&config.reasoning_effort) {
                 reasoning["summary"] = serde_json::Value::String(summary.to_string());
             }
@@ -161,19 +168,19 @@ fn build_openai_responses_body(
 fn openai_reasoning_supported(provider: &str, model: &str) -> bool {
     matches!(
         provider,
-        "openai"
-            | "openrouter"
-            | "qwen"
-            | "qwen-deepinfra"
-            | "opencode-zen"
-            | "z.ai"
-            | "z.ai-coding-plan"
+        PROVIDER_ID_OPENAI
+            | PROVIDER_ID_OPENROUTER
+            | PROVIDER_ID_QWEN
+            | PROVIDER_ID_QWEN_DEEPINFRA
+            | PROVIDER_ID_OPENCODE_ZEN
+            | PROVIDER_ID_Z_AI
+            | PROVIDER_ID_Z_AI_CODING_PLAN
     ) || model.starts_with('o')
         || model.starts_with("gpt-5")
 }
 
 fn dashscope_openai_uses_enable_thinking(provider: &str, model: &str) -> bool {
-    matches!(provider, "qwen" | "alibaba-coding-plan")
+    matches!(provider, PROVIDER_ID_QWEN | PROVIDER_ID_ALIBABA_CODING_PLAN)
         && matches!(
             model,
             "qwen3.5-plus" | "qwen3-max-2026-01-23" | "glm-4.7" | "glm-5"
@@ -190,7 +197,7 @@ fn is_dashscope_coding_plan_anthropic_base_url(base_url: &str) -> bool {
 fn needs_coding_plan_sdk_headers(provider: &str) -> bool {
     matches!(
         provider,
-        "alibaba-coding-plan" | "minimax" | "minimax-coding-plan"
+        PROVIDER_ID_ALIBABA_CODING_PLAN | PROVIDER_ID_MINIMAX | PROVIDER_ID_MINIMAX_CODING_PLAN
     )
 }
 
@@ -253,7 +260,7 @@ fn apply_openrouter_attribution_headers(
     req: reqwest::RequestBuilder,
     provider: &str,
 ) -> reqwest::RequestBuilder {
-    if provider != "openrouter" {
+    if provider != PROVIDER_ID_OPENROUTER {
         return req;
     }
 
@@ -281,7 +288,7 @@ fn apply_openai_auth_headers(
     provider: &str,
     config: &ProviderConfig,
 ) -> reqwest::RequestBuilder {
-    if provider == "github-copilot" {
+    if provider == PROVIDER_ID_GITHUB_COPILOT {
         let req = req
             .header("Accept", "application/json")
             .header("Openai-Intent", "conversation-edits")

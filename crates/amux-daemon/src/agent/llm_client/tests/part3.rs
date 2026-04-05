@@ -14,7 +14,7 @@
 
         let stream = send_completion_request(
             &reqwest::Client::new(),
-            "openai",
+                amux_shared::providers::PROVIDER_ID_OPENAI,
             &responses_test_config(base_url, AuthSource::ApiKey),
             "system",
             &[ApiMessage {
@@ -110,10 +110,22 @@
             reasoning_effort: "high".to_string(),
             context_window_tokens: 0,
             response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
         };
 
         let body = build_openai_responses_body(
-            "github-copilot",
+            amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT,
             &config,
             "system prompt",
             &[
@@ -155,10 +167,22 @@
             reasoning_effort: "high".to_string(),
             context_window_tokens: 0,
             response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
         };
 
         let body = build_openai_responses_body(
-            "github-copilot",
+            amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT,
             &config,
             "system prompt",
             &[
@@ -238,11 +262,15 @@
             "updated_at": 1,
             "created_at": 1
         });
-        provider_auth_store::save_provider_auth_state("github-copilot", "github_copilot", &auth)
+        provider_auth_store::save_provider_auth_state(
+            amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT,
+            "github_copilot",
+            &auth,
+        )
             .unwrap();
 
         let models = validate_provider_connection(
-            "github-copilot",
+            amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT,
             "https://api.githubcopilot.com",
             "",
             AuthSource::GithubCopilot,
@@ -299,7 +327,7 @@
             .expect("send test request");
 
         let (tx, mut rx) = mpsc::channel(8);
-        parse_openai_responses_sse(response, "github-copilot", &tx)
+        parse_openai_responses_sse(response, amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT, &tx)
             .await
             .expect("parse should succeed");
         drop(tx);
@@ -355,7 +383,7 @@
             .expect("send test request");
 
         let (tx, mut rx) = mpsc::channel(8);
-        parse_openai_responses_sse(response, "github-copilot", &tx)
+        parse_openai_responses_sse(response, amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT, &tx)
             .await
             .expect("parse should succeed");
         drop(tx);

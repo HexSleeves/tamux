@@ -41,7 +41,7 @@ impl TuiModel {
         self.publish_attention_surface_if_changed();
     }
 
-    fn handle_client_event(&mut self, event: ClientEvent) {
+    pub(crate) fn handle_client_event(&mut self, event: ClientEvent) {
         if let Some(ref cancelled_id) = self.cancelled_thread_id.clone() {
             let skip = match &event {
                 ClientEvent::Delta { thread_id, .. }
@@ -310,6 +310,7 @@ impl TuiModel {
                 tps,
                 generation_ms,
                 reasoning,
+                provider_final_result_json,
             } => {
                 self.handle_done_event(
                     thread_id,
@@ -321,6 +322,7 @@ impl TuiModel {
                     tps,
                     generation_ms,
                     reasoning,
+                    provider_final_result_json,
                 );
             }
             ClientEvent::ProviderAuthStates(entries) => {

@@ -1,3 +1,7 @@
+use amux_shared::providers::{
+    PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI, PROVIDER_ID_OPENROUTER,
+};
+
     #[test]
     fn messages_to_api_format_normalizes_empty_tool_ids() {
         let messages = vec![
@@ -24,6 +28,8 @@
                 model: None,
                 api_transport: None,
                 response_id: None,
+                upstream_message: None,
+                provider_final_result: None,
                 reasoning: None,
                 message_kind: crate::agent::types::AgentMessageKind::Normal,
                 compaction_strategy: None,
@@ -46,6 +52,8 @@
                 model: None,
                 api_transport: None,
                 response_id: None,
+                upstream_message: None,
+                provider_final_result: None,
                 reasoning: None,
                 message_kind: crate::agent::types::AgentMessageKind::Normal,
                 compaction_strategy: None,
@@ -108,7 +116,8 @@
 
     #[test]
     fn github_copilot_default_url_uses_copilot_api_origin() {
-        let provider = get_provider_definition("github-copilot").expect("copilot provider");
+        let provider =
+            get_provider_definition(PROVIDER_ID_GITHUB_COPILOT).expect("copilot provider");
         assert_eq!(provider.default_base_url, "https://api.githubcopilot.com");
         assert_eq!(
             build_chat_completion_url(provider.default_base_url),
@@ -139,7 +148,11 @@
             "updated_at": 1,
             "created_at": 1
         });
-        provider_auth_store::save_provider_auth_state("github-copilot", "github_copilot", &auth)
+        provider_auth_store::save_provider_auth_state(
+            PROVIDER_ID_GITHUB_COPILOT,
+            "github_copilot",
+            &auth,
+        )
             .unwrap();
 
         let client = reqwest::Client::new();
@@ -153,10 +166,22 @@
             reasoning_effort: String::new(),
             context_window_tokens: 0,
             response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
         };
         let request = apply_openai_auth_headers(
             client.get("https://models.github.ai/inference/chat/completions"),
-            "github-copilot",
+            PROVIDER_ID_GITHUB_COPILOT,
             &config,
         )
         .build()
@@ -194,7 +219,11 @@
             "updated_at": 1,
             "created_at": 1
         });
-        provider_auth_store::save_provider_auth_state("github-copilot", "github_copilot", &auth)
+        provider_auth_store::save_provider_auth_state(
+            PROVIDER_ID_GITHUB_COPILOT,
+            "github_copilot",
+            &auth,
+        )
             .unwrap();
 
         let client = reqwest::Client::new();
@@ -208,10 +237,22 @@
             reasoning_effort: String::new(),
             context_window_tokens: 0,
             response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
         };
         let request = apply_openai_auth_headers(
             client.get("https://api.githubcopilot.com/chat/completions"),
-            "github-copilot",
+            PROVIDER_ID_GITHUB_COPILOT,
             &config,
         )
         .build()
@@ -239,7 +280,7 @@
         let client = reqwest::Client::new();
         let config = ProviderConfig {
             base_url: "https://openrouter.ai/api/v1".to_string(),
-            model: "anthropic/claude-sonnet-4".to_string(),
+            model: "arcee-ai/trinity-large-thinking".to_string(),
             api_key: "openrouter-key".to_string(),
             assistant_id: String::new(),
             auth_source: AuthSource::ApiKey,
@@ -247,11 +288,23 @@
             reasoning_effort: String::new(),
             context_window_tokens: 0,
             response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
         };
 
         let request = apply_openai_auth_headers(
             client.get("https://openrouter.ai/api/v1/chat/completions"),
-            "openrouter",
+            PROVIDER_ID_OPENROUTER,
             &config,
         )
         .build()
@@ -292,10 +345,22 @@
             reasoning_effort: "high".to_string(),
             context_window_tokens: 0,
             response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
         };
 
         let body = build_openai_responses_body(
-            "github-copilot",
+            PROVIDER_ID_GITHUB_COPILOT,
             &config,
             "system prompt",
             &[ApiMessage {
@@ -326,10 +391,22 @@
             reasoning_effort: "off".to_string(),
             context_window_tokens: 0,
             response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
         };
 
         let body = build_openai_responses_body(
-            "openai",
+            PROVIDER_ID_OPENAI,
             &config,
             "system prompt",
             &[ApiMessage {
@@ -360,6 +437,65 @@
         assert_eq!(body["tool_choice"], "auto");
     }
 
+    #[test]
+    fn anthropic_request_maps_response_schema_to_output_config_json_schema() {
+        let client = reqwest::Client::new();
+        let config = ProviderConfig {
+            base_url: "https://api.anthropic.com".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            api_key: String::new(),
+            assistant_id: String::new(),
+            auth_source: AuthSource::ApiKey,
+            api_transport: ApiTransport::ChatCompletions,
+            reasoning_effort: "off".to_string(),
+            context_window_tokens: 0,
+            response_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "answer": { "type": "string" }
+                },
+                "required": ["answer"]
+            })),
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
+        };
+
+        let request = build_anthropic_request(
+            &client,
+            "anthropic",
+            &config,
+            "system prompt",
+            &[ApiMessage {
+                role: "user".to_string(),
+                content: ApiContent::Text("hello".to_string()),
+                tool_call_id: None,
+                name: None,
+                tool_calls: None,
+            }],
+            &[],
+            false,
+        )
+        .expect("request should build");
+
+        let body: serde_json::Value = serde_json::from_slice(
+            request.body().and_then(|body| body.as_bytes()).expect("body bytes"),
+        )
+        .expect("json body");
+
+        assert_eq!(body["output_config"]["format"]["type"], "json_schema");
+        assert_eq!(body["output_config"]["format"]["schema"], config.response_schema.unwrap());
+    }
+
     #[tokio::test]
     async fn request_invalid_responses_400_malformed_body_is_classified_request_invalid() {
         let request_paths = Arc::new(Mutex::new(VecDeque::new()));
@@ -375,7 +511,7 @@
 
         let stream = send_completion_request(
             &reqwest::Client::new(),
-            "github-copilot",
+            PROVIDER_ID_GITHUB_COPILOT,
             &responses_test_config(base_url, AuthSource::GithubCopilot),
             "system",
             &[ApiMessage {

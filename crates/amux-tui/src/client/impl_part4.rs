@@ -149,6 +149,9 @@ impl DaemonClient {
                         tps: event.get("tps").and_then(Value::as_f64),
                         generation_ms: event.get("generation_ms").and_then(Value::as_u64),
                         reasoning: get_string(&event, "reasoning"),
+                        provider_final_result_json: event
+                            .get("provider_final_result")
+                            .and_then(|value| serde_json::to_string(value).ok()),
                     })
                     .await;
             }

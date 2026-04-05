@@ -145,6 +145,8 @@ async fn spawn_stub_assistant_server(response_text: &str) -> String {
                     .await
                     .expect("write stub assistant response");
             });
+use amux_shared::providers::PROVIDER_ID_OPENAI;
+
         }
     });
 
@@ -155,7 +157,7 @@ async fn build_test_engine(response_text: &str) -> Arc<crate::agent::AgentEngine
     let root = tempdir().expect("tempdir should succeed").into_path();
     let manager = SessionManager::new_test(&root).await;
     let mut config = AgentConfig::default();
-    config.provider = "openai".to_string();
+    config.provider = amux_shared::providers::PROVIDER_ID_OPENAI.to_string();
     config.base_url = spawn_stub_assistant_server(response_text).await;
     config.model = "gpt-4o-mini".to_string();
     config.api_key = "test-key".to_string();
@@ -202,6 +204,8 @@ async fn collect_stalled_turn_observations_skips_active_tool_turns() {
                     model: None,
                     api_transport: None,
                     response_id: None,
+                    upstream_message: None,
+                    provider_final_result: None,
                     reasoning: None,
                     message_kind: crate::agent::types::AgentMessageKind::Normal,
                     compaction_strategy: None,
@@ -258,6 +262,8 @@ async fn collect_stalled_turn_observations_detects_promise_without_action() {
                         model: None,
                         api_transport: None,
                         response_id: None,
+                        upstream_message: None,
+                        provider_final_result: None,
                         reasoning: None,
                         message_kind: crate::agent::types::AgentMessageKind::Normal,
                         compaction_strategy: None,
@@ -321,6 +327,8 @@ async fn supervise_stalled_turns_retries_with_internal_ping_and_continue() {
                         model: None,
                         api_transport: None,
                         response_id: None,
+                        upstream_message: None,
+                        provider_final_result: None,
                         reasoning: None,
                         message_kind: crate::agent::types::AgentMessageKind::Normal,
                         compaction_strategy: None,
@@ -582,6 +590,8 @@ async fn supervise_stalled_turns_escalates_after_third_retry_window() {
                         model: None,
                         api_transport: None,
                         response_id: None,
+                        upstream_message: None,
+                        provider_final_result: None,
                         reasoning: None,
                         message_kind: crate::agent::types::AgentMessageKind::Normal,
                         compaction_strategy: None,

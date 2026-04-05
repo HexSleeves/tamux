@@ -4,7 +4,6 @@ use super::openai_codex_auth::{
     OPENAI_AUTH_MODE, OPENAI_CODEX_AUTH_CLIENT_ID, OPENAI_CODEX_AUTH_PROVIDER,
     OPENAI_CODEX_AUTH_TOKEN_URL,
 };
-
 fn parse_retry_after_ms_from_value(value: &serde_json::Value) -> Option<u64> {
     if let Some(seconds) = value.as_f64() {
         return Some((seconds * 1000.0).ceil().max(1.0) as u64);
@@ -44,8 +43,22 @@ fn classify_http_failure_with_retry_after(
     body_text: &str,
     retry_after_ms: Option<u64>,
 ) -> anyhow::Error {
+    let parsed_body = serde_json::from_str::<serde_json::Value>(body_text).ok();
     let raw_message = raw_upstream_message(body_text);
     let lower = raw_message.to_ascii_lowercase();
+    let upstream_error_type = parsed_body
+        .as_ref()
+        .and_then(|value| value.pointer("/error/type").and_then(|value| value.as_str()))
+        .map(str::to_string);
+    let upstream_request_id = parsed_body
+        .as_ref()
+        .and_then(|value| {
+            value
+                .get("request_id")
+                .or_else(|| value.get("request-id"))
+                .and_then(|value| value.as_str())
+        })
+        .map(str::to_string);
     let request_invalid_like = lower.contains("invalid '")
         || lower.contains("invalid request")
         || lower.contains("request body")
@@ -57,13 +70,34 @@ fn classify_http_failure_with_retry_after(
     let transport_incompatible_like = lower.contains("not supported")
         || lower.contains("does not support")
         || lower.contains("incompatible");
-    let class = if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+    let class = if matches!(
+        upstream_error_type.as_deref(),
+        Some("rate_limit_error")
+    ) || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+    {
         UpstreamFailureClass::RateLimit
     } else if matches!(
+        upstream_error_type.as_deref(),
+        Some("authentication_error" | "billing_error" | "permission_error")
+    ) || matches!(
         status,
-        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        reqwest::StatusCode::UNAUTHORIZED
+            | reqwest::StatusCode::PAYMENT_REQUIRED
+            | reqwest::StatusCode::FORBIDDEN
     ) {
         UpstreamFailureClass::AuthConfiguration
+    } else if matches!(
+        upstream_error_type.as_deref(),
+        Some("invalid_request_error" | "request_too_large")
+    ) || status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+        UpstreamFailureClass::RequestInvalid
+    } else if matches!(upstream_error_type.as_deref(), Some("not_found_error")) {
+        UpstreamFailureClass::TransportIncompatible
+    } else if matches!(
+        upstream_error_type.as_deref(),
+        Some("api_error" | "overloaded_error")
+    ) {
+        UpstreamFailureClass::TemporaryUpstream
     } else if (matches!(
         status,
         reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNPROCESSABLE_ENTITY
@@ -90,7 +124,8 @@ fn classify_http_failure_with_retry_after(
             | reqwest::StatusCode::BAD_GATEWAY
             | reqwest::StatusCode::SERVICE_UNAVAILABLE
             | reqwest::StatusCode::GATEWAY_TIMEOUT
-    ) || lower.contains("service unavailable")
+    ) || status.as_u16() == 529
+        || lower.contains("service unavailable")
         || lower.contains("temporarily unavailable")
         || lower.contains("overloaded")
         || lower.contains("try again later")
@@ -126,6 +161,12 @@ fn classify_http_failure_with_retry_after(
         "raw_message": raw_message,
         "body": summarize_upstream_body(body_text),
     });
+    if let Some(error_type) = upstream_error_type {
+        diagnostics["error_type"] = serde_json::json!(error_type);
+    }
+    if let Some(request_id) = upstream_request_id {
+        diagnostics["request_id"] = serde_json::json!(request_id);
+    }
     if let Some(retry_after_ms) = retry_after_ms {
         diagnostics["retry_after_ms"] = serde_json::json!(retry_after_ms);
     }
@@ -324,7 +365,9 @@ async fn resolve_openai_codex_request_auth(
     provider: &str,
     config: &ProviderConfig,
 ) -> Result<Option<OpenAICodexRequestAuth>> {
-    if provider != "openai" || config.auth_source != AuthSource::ChatgptSubscription {
+    if provider != amux_shared::providers::PROVIDER_ID_OPENAI
+        || config.auth_source != AuthSource::ChatgptSubscription
+    {
         return Ok(None);
     }
 

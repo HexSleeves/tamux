@@ -84,6 +84,7 @@ impl TuiModel {
         tps: Option<f64>,
         generation_ms: Option<u64>,
         reasoning: Option<String>,
+        provider_final_result_json: Option<String>,
     ) {
         if Self::is_hidden_agent_thread(&thread_id, None) {
             return;
@@ -109,6 +110,7 @@ impl TuiModel {
             tps,
             generation_ms,
             reasoning,
+            provider_final_result_json,
         });
 
         self.dispatch_next_queued_prompt_if_ready();

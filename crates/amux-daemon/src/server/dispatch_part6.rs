@@ -458,6 +458,18 @@ if matches!(
                                 reasoning_effort: "high".into(),
                                 context_window_tokens: 128_000,
                                 response_schema: None,
+                                stop_sequences: None,
+                                temperature: None,
+                                top_p: None,
+                                top_k: None,
+                                metadata: None,
+                                service_tier: None,
+                                container: None,
+                                inference_geo: None,
+                                cache_control: None,
+                                max_tokens: None,
+                                anthropic_tool_choice: None,
+                                output_effort: None,
                             }
                         });
                     entry.api_key = api_key;
@@ -474,7 +486,7 @@ if matches!(
                 }
 
                 ClientMessage::AgentLogoutProvider { provider_id } => {
-                    if provider_id == "github-copilot" {
+                    if provider_id == amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT {
                         let _ = crate::agent::copilot_auth::clear_stored_github_copilot_auth();
                     }
                     let mut config = agent.get_config().await;

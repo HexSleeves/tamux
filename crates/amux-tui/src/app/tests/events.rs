@@ -1,5 +1,6 @@
 #[cfg(test)]
 use super::*;
+use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
 use tokio::sync::mpsc::unbounded_channel;
 
 fn make_model() -> TuiModel {
@@ -54,7 +55,7 @@ fn first_raw_config_load_triggers_concierge_welcome_request() {
     model.agent_config_loaded = false;
 
     model.handle_agent_config_raw_event(serde_json::json!({
-        "provider": "openai",
+        "provider": PROVIDER_ID_OPENAI,
         "base_url": "https://api.openai.com/v1",
         "model": "gpt-5.4",
         "managed_execution": {
@@ -482,11 +483,12 @@ fn done_event_persists_final_reasoning_into_chat_message() {
         input_tokens: 10,
         output_tokens: 20,
         cost: None,
-        provider: Some("github-copilot".to_string()),
+        provider: Some(PROVIDER_ID_GITHUB_COPILOT.to_string()),
         model: Some("gpt-5.4".to_string()),
         tps: None,
         generation_ms: None,
         reasoning: Some("Final reasoning summary".to_string()),
+        provider_final_result_json: Some("result_json".to_string()),
     });
 
     let thread = model.chat.active_thread().expect("thread should exist");
@@ -687,6 +689,7 @@ fn internal_dm_tool_activity_does_not_block_normal_thread_completion() {
         tps: None,
         generation_ms: None,
         reasoning: None,
+        provider_final_result_json: Some("result_json".to_string()),
     });
 
     assert!(
@@ -781,6 +784,7 @@ fn prompt_during_text_stream_without_running_tools_waits_for_done() {
         tps: None,
         generation_ms: None,
         reasoning: None,
+        provider_final_result_json: Some("result_json".to_string()),
     });
 
     match daemon_rx.try_recv() {
@@ -853,7 +857,7 @@ fn subagent_error_requests_refresh_to_clear_rejected_optimistic_state() {
     model.subagents.entries = vec![crate::state::SubAgentEntry {
         id: "weles_builtin".to_string(),
         name: "Legacy WELES".to_string(),
-        provider: "openai".to_string(),
+        provider: PROVIDER_ID_OPENAI.to_string(),
         model: "gpt-5.4-mini".to_string(),
         role: Some("testing".to_string()),
         enabled: true,
@@ -985,13 +989,13 @@ fn connected_event_requests_openai_codex_auth_status_from_daemon() {
 #[test]
 fn provider_auth_states_overlay_chatgpt_auth_when_openai_is_configured_for_chatgpt_subscription() {
     let mut model = make_model();
-    model.config.provider = "openai".to_string();
+    model.config.provider = PROVIDER_ID_OPENAI.to_string();
     model.config.auth_source = "chatgpt_subscription".to_string();
     model.config.chatgpt_auth_available = true;
     model.config.chatgpt_auth_source = Some("tamux-daemon".to_string());
 
     model.handle_provider_auth_states_event(vec![crate::state::ProviderAuthEntry {
-        provider_id: "openai".to_string(),
+        provider_id: PROVIDER_ID_OPENAI.to_string(),
         provider_name: "OpenAI".to_string(),
         authenticated: false,
         auth_source: "api_key".to_string(),
@@ -1002,7 +1006,7 @@ fn provider_auth_states_overlay_chatgpt_auth_when_openai_is_configured_for_chatg
         .auth
         .entries
         .iter()
-        .find(|entry| entry.provider_id == "openai")
+        .find(|entry| entry.provider_id == PROVIDER_ID_OPENAI)
         .expect("openai auth entry should exist");
     assert!(
         openai.authenticated,

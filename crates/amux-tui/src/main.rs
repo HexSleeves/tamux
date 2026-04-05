@@ -508,7 +508,7 @@ mod tests {
 
         daemon_cmd_tx
             .send(DaemonCommand::FetchModels {
-                provider_id: "github-copilot".to_string(),
+                provider_id: amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string(),
                 base_url: format!("http://{addr}"),
                 api_key: "test-key".to_string(),
             })

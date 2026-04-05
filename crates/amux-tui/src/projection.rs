@@ -123,6 +123,7 @@ pub enum ClientEvent {
         tps: Option<f64>,
         generation_ms: Option<u64>,
         reasoning: Option<String>,
+        provider_final_result_json: Option<String>,
     },
     WorkflowNotice {
         kind: String,
@@ -356,6 +357,7 @@ impl DaemonProjection {
                 tps,
                 generation_ms,
                 reasoning,
+                provider_final_result_json,
             } => vec![AppAction::Chat(ChatAction::TurnDone {
                 thread_id,
                 input_tokens,
@@ -366,6 +368,7 @@ impl DaemonProjection {
                 tps,
                 generation_ms,
                 reasoning,
+                provider_final_result_json,
             })],
 
             // Error → Status
@@ -418,11 +421,12 @@ mod tests {
             input_tokens: 100,
             output_tokens: 50,
             cost: Some(0.01),
-            provider: Some("openai".into()),
+            provider: Some(amux_shared::providers::PROVIDER_ID_OPENAI.into()),
             model: Some("gpt-4o".into()),
             tps: Some(45.0),
             generation_ms: Some(1200),
             reasoning: Some("summary".into()),
+            provider_final_result_json: None,
         });
         assert!(actions
             .iter()

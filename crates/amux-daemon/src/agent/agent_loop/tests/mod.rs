@@ -13,6 +13,7 @@ mod part1;
 mod part2;
 mod part3;
 mod part4;
+mod part5;
 
 fn http_request_header_end(buffer: &[u8]) -> Option<usize> {
     buffer.windows(4).position(|window| window == b"\r\n\r\n")

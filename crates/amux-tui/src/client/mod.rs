@@ -193,6 +193,7 @@ pub enum ClientEvent {
         tps: Option<f64>,
         generation_ms: Option<u64>,
         reasoning: Option<String>,
+        provider_final_result_json: Option<String>,
     },
     WorkflowNotice {
         kind: String,

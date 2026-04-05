@@ -4434,6 +4434,7 @@ dependencies = [
  "strip-ansi-escapes",
  "sysinfo",
  "tamux-protocol",
+ "tamux-shared",
  "tar",
  "tempfile",
  "thiserror 2.0.18",
@@ -4512,6 +4513,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "tamux-shared"
+version = "0.2.16"
+
+[[package]]
 name = "tamux-tui"
 version = "0.2.16"
 dependencies = [
@@ -4528,6 +4533,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tamux-protocol",
+ "tamux-shared",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
