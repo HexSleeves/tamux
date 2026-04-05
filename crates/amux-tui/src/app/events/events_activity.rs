@@ -2,7 +2,9 @@ use super::*;
 
 impl TuiModel {
     pub(in crate::app) fn handle_delta_event(&mut self, thread_id: String, content: String) {
-        if Self::is_hidden_agent_thread(&thread_id, None) {
+        if Self::is_hidden_agent_thread(&thread_id, None)
+            || self.should_ignore_internal_thread_activity(&thread_id)
+        {
             return;
         }
         self.agent_activity = Some("writing".to_string());
@@ -13,7 +15,9 @@ impl TuiModel {
     }
 
     pub(in crate::app) fn handle_reasoning_event(&mut self, thread_id: String, content: String) {
-        if Self::is_hidden_agent_thread(&thread_id, None) {
+        if Self::is_hidden_agent_thread(&thread_id, None)
+            || self.should_ignore_internal_thread_activity(&thread_id)
+        {
             return;
         }
         self.agent_activity = Some("reasoning".to_string());
@@ -31,7 +35,9 @@ impl TuiModel {
         arguments: String,
         weles_review: Option<crate::client::WelesReviewMetaVm>,
     ) {
-        if Self::is_hidden_agent_thread(&thread_id, None) {
+        if Self::is_hidden_agent_thread(&thread_id, None)
+            || self.should_ignore_internal_thread_activity(&thread_id)
+        {
             return;
         }
         self.agent_activity = Some(format!("⚙  {}", name));
@@ -55,7 +61,9 @@ impl TuiModel {
         is_error: bool,
         weles_review: Option<crate::client::WelesReviewMetaVm>,
     ) {
-        if Self::is_hidden_agent_thread(&thread_id, None) {
+        if Self::is_hidden_agent_thread(&thread_id, None)
+            || self.should_ignore_internal_thread_activity(&thread_id)
+        {
             return;
         }
         self.agent_activity = Some(format!("⚙  {} ✓", name));
@@ -86,7 +94,9 @@ impl TuiModel {
         reasoning: Option<String>,
         provider_final_result_json: Option<String>,
     ) {
-        if Self::is_hidden_agent_thread(&thread_id, None) {
+        if Self::is_hidden_agent_thread(&thread_id, None)
+            || self.should_ignore_internal_thread_activity(&thread_id)
+        {
             return;
         }
         self.agent_activity = None;

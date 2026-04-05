@@ -631,6 +631,32 @@ fn hidden_handoff_threads_are_filtered_from_thread_list() {
 }
 
 #[test]
+fn internal_dm_threads_are_retained_in_thread_list_for_internal_picker() {
+    let mut model = make_model();
+
+    model.handle_client_event(ClientEvent::ThreadList(vec![
+        crate::wire::AgentThread {
+            id: "thread-user".to_string(),
+            title: "User Thread".to_string(),
+            ..Default::default()
+        },
+        crate::wire::AgentThread {
+            id: "dm:svarog:weles".to_string(),
+            title: "Internal DM · Svarog ↔ WELES".to_string(),
+            ..Default::default()
+        },
+    ]));
+
+    let visible_ids: Vec<&str> = model
+        .chat
+        .threads()
+        .iter()
+        .map(|thread| thread.id.as_str())
+        .collect();
+    assert_eq!(visible_ids, vec!["thread-user", "dm:svarog:weles"]);
+}
+
+#[test]
 fn hidden_handoff_thread_reload_required_is_ignored() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
 
@@ -639,6 +665,43 @@ fn hidden_handoff_thread_reload_required_is_ignored() {
     });
 
     assert!(daemon_rx.try_recv().is_err());
+}
+
+#[test]
+fn selected_internal_dm_thread_detail_is_loaded() {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "dm:svarog:weles".to_string(),
+        title: "Internal DM · Svarog ↔ WELES".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("dm:svarog:weles".to_string()));
+
+    model.handle_client_event(ClientEvent::ThreadDetail(Some(crate::wire::AgentThread {
+        id: "dm:svarog:weles".to_string(),
+        title: "Internal DM · Svarog ↔ WELES".to_string(),
+        messages: vec![crate::wire::AgentMessage {
+            role: crate::wire::MessageRole::Assistant,
+            content: "Keep reviewing the migration plan.".to_string(),
+            timestamp: 1,
+            message_kind: "normal".to_string(),
+            ..Default::default()
+        }],
+        created_at: 1,
+        updated_at: 1,
+        ..Default::default()
+    })));
+
+    let thread = model
+        .chat
+        .threads()
+        .iter()
+        .find(|thread| thread.id == "dm:svarog:weles")
+        .expect("selected internal dm thread should remain in chat state");
+    assert_eq!(model.chat.active_thread_id(), Some("dm:svarog:weles"));
+    assert_eq!(thread.messages.len(), 1);
+    assert_eq!(thread.messages[0].content, "Keep reviewing the migration plan.");
 }
 
 #[test]

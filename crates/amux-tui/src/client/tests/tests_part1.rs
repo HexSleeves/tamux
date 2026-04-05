@@ -387,6 +387,68 @@ use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
         assert!(event_rx.try_recv().is_err());
     }
 
+    #[tokio::test]
+    async fn internal_dm_thread_reload_event_is_forwarded() {
+        let (event_tx, mut event_rx) = mpsc::channel(8);
+
+        DaemonClient::dispatch_agent_event(
+            serde_json::json!({
+                "type": "thread_reload_required",
+                "thread_id": "dm:svarog:weles"
+            }),
+            &event_tx,
+        )
+        .await;
+
+        match tokio::time::timeout(std::time::Duration::from_millis(100), event_rx.recv())
+            .await
+            .expect("internal dm reload event should arrive")
+            .expect("expected internal dm reload event")
+        {
+            ClientEvent::ThreadReloadRequired { thread_id } => {
+                assert_eq!(thread_id, "dm:svarog:weles");
+            }
+            other => panic!("expected thread reload event, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn internal_dm_done_event_is_forwarded() {
+        let (event_tx, mut event_rx) = mpsc::channel(8);
+
+        DaemonClient::dispatch_agent_event(
+            serde_json::json!({
+                "type": "done",
+                "thread_id": "dm:svarog:weles",
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "reasoning": "internal reasoning"
+            }),
+            &event_tx,
+        )
+        .await;
+
+        match tokio::time::timeout(std::time::Duration::from_millis(100), event_rx.recv())
+            .await
+            .expect("internal dm done event should arrive")
+            .expect("expected internal dm done event")
+        {
+            ClientEvent::Done {
+                thread_id,
+                input_tokens,
+                output_tokens,
+                reasoning,
+                ..
+            } => {
+                assert_eq!(thread_id, "dm:svarog:weles");
+                assert_eq!(input_tokens, 1);
+                assert_eq!(output_tokens, 2);
+                assert_eq!(reasoning.as_deref(), Some("internal reasoning"));
+            }
+            other => panic!("expected done event, got {:?}", other),
+        }
+    }
+
     #[test]
     fn list_notifications_sends_agent_event_query() {
         let (event_tx, _event_rx) = mpsc::channel(8);

@@ -297,6 +297,7 @@ async fn collect_stalled_turn_observations_detects_promise_without_action() {
 #[tokio::test]
 async fn supervise_stalled_turns_retries_with_internal_ping_and_continue() {
     let engine = build_test_engine("Recovered.").await;
+    let mut events = engine.subscribe();
     let now = super::now_millis();
     let thread_id = "thread-recovery";
 
@@ -354,6 +355,23 @@ async fn supervise_stalled_turns_retries_with_internal_ping_and_continue() {
         .supervise_stalled_turns()
         .await
         .expect("stalled-turn supervision should retry");
+
+    let mut saw_reload = false;
+    while let Ok(event) = events.try_recv() {
+        if let crate::agent::types::AgentEvent::ThreadReloadRequired {
+            thread_id: event_thread_id,
+        } = event
+        {
+            if event_thread_id == thread_id {
+                saw_reload = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        saw_reload,
+        "stalled-turn retry should emit thread reload so TUI refreshes the recovery message"
+    );
 
     let threads = engine.threads.read().await;
     let thread = threads.get(thread_id).expect("thread should exist");
