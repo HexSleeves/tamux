@@ -185,9 +185,11 @@ impl<'a> SendMessageRunner<'a> {
                 provider_final_result.clone(),
             )
             .await;
-        self.engine
-            .maybe_auto_send_gateway_thread_response(&self.tid)
-            .await;
+        Box::pin(
+            self.engine
+                .maybe_auto_send_gateway_thread_response(&self.tid),
+        )
+        .await;
         self.engine
             .update_thread_upstream_state(
                 &self.tid,

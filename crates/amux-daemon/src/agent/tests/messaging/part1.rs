@@ -63,14 +63,52 @@ fn tool_execution_hot_path_boxes_large_futures() {
         .split("\n#[cfg(test)]")
         .next()
         .unwrap_or(execute_tool_source.as_str());
+    let subagents_source = fs::read_to_string(
+        repo_root().join("crates/amux-daemon/src/agent/tool_executor/subagents.rs"),
+    )
+    .expect("read subagents.rs");
+    let subagents_production = subagents_source
+        .split("\n#[cfg(test)]")
+        .next()
+        .unwrap_or(subagents_source.as_str());
 
     assert!(
         finalize_production.contains("Box::pin(self.handle_tool_calls_chunk("),
         "tool-call iteration handling should box the large handle_tool_calls_chunk future"
     );
     assert!(
+        finalize_production.contains(
+            "Box::pin(self.engine\n            .maybe_auto_send_gateway_thread_response(&self.tid))"
+        ) || finalize_production.contains(
+            "Box::pin(self.engine.maybe_auto_send_gateway_thread_response(&self.tid))"
+        ) || finalize_production.contains(
+            "Box::pin(\n            self.engine\n                .maybe_auto_send_gateway_thread_response(&self.tid),\n        )"
+        ),
+        "done-chunk finalization should box gateway auto-send futures"
+    );
+    assert!(
         tool_calls_production.contains("Box::pin(execute_tool("),
         "tool execution callsites should box execute_tool futures"
+    );
+    assert!(
+        tool_calls_production.contains(
+            "Box::pin(self.engine\n            .maybe_auto_send_gateway_thread_response(&self.tid))"
+        ) || tool_calls_production.contains(
+            "Box::pin(self.engine.maybe_auto_send_gateway_thread_response(&self.tid))"
+        ) || tool_calls_production.contains(
+            "Box::pin(\n            self.engine\n                .maybe_auto_send_gateway_thread_response(&self.tid),\n        )"
+        ),
+        "tool-call chunk handling should box gateway auto-send futures"
+    );
+    assert!(
+        subagents_production.contains(
+            "Box::pin(agent.send_internal_agent_message(&sender, target, message, preferred_session_hint.as_deref()))"
+        ) || subagents_production.contains(
+            "Box::pin(agent\n        .send_internal_agent_message(&sender, target, message, preferred_session_hint.as_deref()))"
+        ) || subagents_production.contains(
+            "let result = Box::pin(agent.send_internal_agent_message(\n        &sender,\n        target,\n        message,\n        preferred_session_hint.as_deref(),\n    ))"
+        ),
+        "message_agent should box the oversized internal-agent send future"
     );
     assert!(
         execute_tool_production.contains("pub fn execute_tool<'a>("),

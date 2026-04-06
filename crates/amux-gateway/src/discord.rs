@@ -19,6 +19,7 @@ pub struct DiscordProvider {
     cursors: HashMap<String, String>,
     pending_events: VecDeque<GatewayProviderEvent>,
     health: PlatformHealthState,
+    self_user_id: Option<String>,
     rate_limiter: TokenBucket,
     last_poll_ms: Option<u64>,
     poll_interval_ms: u64,
@@ -88,6 +89,7 @@ impl DiscordProvider {
             cursors: replay_cursors,
             pending_events: VecDeque::new(),
             health: PlatformHealthState::new(),
+            self_user_id: None,
             rate_limiter: TokenBucket::discord(),
             last_poll_ms: None,
             poll_interval_ms,
@@ -201,7 +203,11 @@ impl DiscordProvider {
 
         let mut newest_cursor = None::<String>;
         for message in messages.iter().rev() {
-            if let Some(normalized) = parse_discord_message(channel_id, message) {
+            if let Some(normalized) = parse_discord_message(
+                channel_id,
+                message,
+                self.self_user_id.as_deref(),
+            ) {
                 newest_cursor = message
                     .get("id")
                     .and_then(Value::as_str)
@@ -255,7 +261,11 @@ impl GatewayProvider for DiscordProvider {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             let url = format!("{}/users/@me", self.api_base);
-            self.get_messages(&url).await?;
+            let body = self.get_messages(&url).await?;
+            self.self_user_id = body
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             self.connected = true;
             Ok(())
         })
@@ -386,25 +396,32 @@ impl GatewayProvider for DiscordProvider {
 fn parse_discord_message(
     channel_id: &str,
     message: &Value,
+    self_user_id: Option<&str>,
 ) -> Option<crate::router::GatewayMessage> {
     let id = message.get("id").and_then(Value::as_str).unwrap_or("");
     let content = message.get("content").and_then(Value::as_str).unwrap_or("");
     let author = message.get("author");
+    let author_id = author
+        .and_then(|value| value.get("id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let is_bot = author
         .and_then(|value| value.get("bot"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if id.is_empty() || content.is_empty() || is_bot {
+    let is_self_authored = self_user_id
+        .filter(|value| !value.is_empty())
+        .is_some_and(|self_user_id| self_user_id == author_id);
+    let is_application_message = message.get("webhook_id").is_some()
+        || message.get("application_id").is_some();
+    if id.is_empty() || content.is_empty() || is_bot || is_self_authored || is_application_message {
         return None;
     }
 
     normalize_message(RawGatewayMessage {
         platform: "discord",
         channel_id,
-        user_id: author
-            .and_then(|value| value.get("username"))
-            .and_then(Value::as_str)
-            .unwrap_or("unknown"),
+        user_id: if author_id.is_empty() { "unknown" } else { author_id },
         sender_display: author
             .and_then(|value| value.get("username"))
             .and_then(Value::as_str)

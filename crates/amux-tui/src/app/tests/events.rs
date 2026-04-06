@@ -596,6 +596,46 @@ fn done_event_persists_final_reasoning_into_chat_message() {
 }
 
 #[test]
+fn header_uses_rarog_daemon_runtime_metadata_after_first_reply() {
+    let mut model = make_model();
+    model.concierge.provider = Some("alibaba-coding-plan".to_string());
+    model.concierge.model = Some("qwen3.5-plus".to_string());
+    model.concierge.reasoning_effort = Some("none".to_string());
+
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-rarog".to_string(),
+        title: "Rarog Thread".to_string(),
+        agent_name: Some("Rarog".to_string()),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-rarog".to_string()));
+    model.handle_client_event(ClientEvent::Delta {
+        thread_id: "thread-rarog".to_string(),
+        content: "Runtime answer".to_string(),
+    });
+
+    model.handle_client_event(ClientEvent::Done {
+        thread_id: "thread-rarog".to_string(),
+        input_tokens: 10,
+        output_tokens: 20,
+        cost: None,
+        provider: Some("alibaba-coding-plan".to_string()),
+        model: Some("MiniMax-M2.5".to_string()),
+        tps: None,
+        generation_ms: None,
+        reasoning: None,
+        provider_final_result_json: Some(r#"{"reasoning":{"effort":"low"}}"#.to_string()),
+    });
+
+    let profile = model.current_header_agent_profile();
+    assert_eq!(profile.agent_label, "Rarog");
+    assert_eq!(profile.provider, "alibaba-coding-plan");
+    assert_eq!(profile.model, "MiniMax-M2.5");
+    assert_eq!(profile.reasoning_effort.as_deref(), Some("low"));
+}
+
+#[test]
 fn internal_dm_thread_created_does_not_hijack_active_thread() {
     let mut model = make_model();
     model.chat.reduce(chat::ChatAction::ThreadCreated {

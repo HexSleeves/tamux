@@ -43,11 +43,16 @@ pub(super) fn resolve_provider_config_for(
     provider_id: &str,
     model_override: Option<&str>,
 ) -> Result<ProviderConfig> {
+    let explicit_model_override = model_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let requested_model = model_override.unwrap_or(&config.model);
 
     if let Some(pc) = config.providers.get(provider_id) {
         let mut resolved = pc.clone();
-        if resolved.model.is_empty() {
+        if let Some(model_override) = explicit_model_override {
+            resolved.model = model_override.to_string();
+        } else if resolved.model.is_empty() {
             if !requested_model.is_empty() {
                 resolved.model = requested_model.to_string();
             } else if let Some(def) = get_provider_definition(provider_id) {
@@ -291,6 +296,49 @@ mod tests {
         assert_eq!(resolved.assistant_id, "assistant-root");
         assert_eq!(resolved.context_window_tokens, 99_999);
         assert_eq!(resolved.api_transport, ApiTransport::ChatCompletions);
+    }
+
+    #[test]
+    fn explicit_model_override_wins_over_stored_provider_model() {
+        let mut config = AgentConfig::default();
+        config.provider = PROVIDER_ID_OPENAI.to_string();
+        config.base_url = "https://api.openai.com/v1".to_string();
+        config.model = "gpt-5.4".to_string();
+        config.providers.insert(
+            PROVIDER_ID_ALIBABA_CODING_PLAN.to_string(),
+            ProviderConfig {
+                base_url: String::new(),
+                model: "MiniMax-M2.5".to_string(),
+                api_key: "dashscope-key".to_string(),
+                assistant_id: String::new(),
+                auth_source: AuthSource::ApiKey,
+                api_transport: ApiTransport::Responses,
+                context_window_tokens: 0,
+                reasoning_effort: String::new(),
+                response_schema: None,
+                stop_sequences: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                metadata: None,
+                service_tier: None,
+                container: None,
+                inference_geo: None,
+                cache_control: None,
+                max_tokens: None,
+                anthropic_tool_choice: None,
+                output_effort: None,
+            },
+        );
+
+        let resolved = resolve_provider_config_for(
+            &config,
+            PROVIDER_ID_ALIBABA_CODING_PLAN,
+            Some("qwen3.5-plus"),
+        )
+        .expect("provider should resolve");
+
+        assert_eq!(resolved.model, "qwen3.5-plus");
     }
 
     #[test]

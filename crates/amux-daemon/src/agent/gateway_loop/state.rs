@@ -317,6 +317,7 @@ pub(super) fn build_gateway_agent_prompt(
     content: &str,
     history_window: Option<&str>,
     reply_tool_name: &str,
+    active_responder_name: Option<&str>,
 ) -> String {
     let mut prompt = format!(
         "[{platform} message from {sender}]: {content}\n\n\
@@ -325,6 +326,15 @@ pub(super) fn build_gateway_agent_prompt(
          Reply naturally in plain text. Your final assistant response will be delivered back to the user automatically.\n\
          If you expect a longer multi-step tool run and want to send an early progress update, you may call {reply_tool_name} first with a brief acknowledgment such as \"On it, give me a moment...\", then continue with the rest of the work.",
     );
+    if let Some(active_responder_name) = active_responder_name.filter(|value| !value.trim().is_empty()) {
+        prompt.push_str("\n\n");
+        prompt.push_str(&format!(
+            "Current active responder for this thread: {active_responder_name}. You are already speaking as {active_responder_name} here. \
+             Do not use `handoff_thread_agent` or `message_agent` to reach {active_responder_name} itself. \
+             If the operator asks to talk to {active_responder_name}, answer directly as {active_responder_name}. \
+             Only use `handoff_thread_agent` when switching ownership to a different agent persona.",
+        ));
+    }
     if let Some(window) = history_window.filter(|value| !value.trim().is_empty()) {
         prompt.push_str("\n\nPrevious 10 messages from this channel (oldest first):\n");
         prompt.push_str(window);

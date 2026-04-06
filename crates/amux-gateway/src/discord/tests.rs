@@ -18,7 +18,7 @@ async fn discord_provider_polls_and_filters_bot_messages() {
                 {
                     "id": "100",
                     "content": "historical",
-                    "author": { "username": "seed-user", "bot": false }
+                    "author": { "id": "seed-user", "username": "seed-user", "bot": false }
                 }
             ])
             .to_string(),
@@ -28,12 +28,12 @@ async fn discord_provider_polls_and_filters_bot_messages() {
                 {
                     "id": "102",
                     "content": "ignore me",
-                    "author": { "username": "gateway-bot", "bot": true }
+                    "author": { "id": "gateway-bot-id", "username": "gateway-bot", "bot": true }
                 },
                 {
                     "id": "101",
                     "content": "hello from discord",
-                    "author": { "username": "alice", "bot": false }
+                    "author": { "id": "101", "username": "alice", "bot": false }
                 }
             ])
             .to_string(),
@@ -71,7 +71,7 @@ async fn discord_provider_polls_and_filters_bot_messages() {
         if let GatewayProviderEvent::Incoming(message) = event {
             assert_eq!(message.platform, "discord");
             assert_eq!(message.channel_id, "D123");
-            assert_eq!(message.user_id, "alice");
+            assert_eq!(message.user_id, "101");
             assert_eq!(message.text, "hello from discord");
             break;
         }
@@ -87,7 +87,7 @@ async fn discord_provider_waits_for_poll_interval_before_refetching() {
                 {
                     "id": "100",
                     "content": "historical",
-                    "author": { "username": "seed-user", "bot": false }
+                    "author": { "id": "seed-user", "username": "seed-user", "bot": false }
                 }
             ])
             .to_string(),
@@ -97,7 +97,7 @@ async fn discord_provider_waits_for_poll_interval_before_refetching() {
                 {
                     "id": "101",
                     "content": "should not be fetched yet",
-                    "author": { "username": "alice", "bot": false }
+                    "author": { "id": "101", "username": "alice", "bot": false }
                 }
             ])
             .to_string(),
@@ -138,4 +138,72 @@ async fn discord_provider_waits_for_poll_interval_before_refetching() {
         2,
         "provider should only perform connect + initial seed requests"
     );
+}
+
+#[tokio::test]
+async fn discord_provider_ignores_messages_authored_by_itself() {
+    let server = TestHttpServer::spawn(vec![
+        HttpResponse::ok(json!({ "id": "bot-user", "username": "tamux" }).to_string()),
+        HttpResponse::ok(
+            json!([
+                {
+                    "id": "100",
+                    "content": "historical",
+                    "author": { "id": "seed-user", "username": "seed-user", "bot": false }
+                }
+            ])
+            .to_string(),
+        ),
+        HttpResponse::ok(
+            json!([
+                {
+                    "id": "102",
+                    "content": "I am tamux and should be ignored",
+                    "author": { "id": "bot-user", "username": "tamux", "bot": false }
+                },
+                {
+                    "id": "101",
+                    "content": "hello from discord",
+                    "author": { "id": "alice-id", "username": "alice", "bot": false }
+                }
+            ])
+            .to_string(),
+        ),
+    ])
+    .await
+    .expect("spawn server");
+
+    let bootstrap = GatewayProviderBootstrap {
+        platform: "discord".to_string(),
+        enabled: true,
+        credentials_json: json!({ "token": "discord-token" }).to_string(),
+        config_json: json!({
+            "api_base": server.base_url,
+            "channel_filter": "D123",
+            "poll_interval_ms": 0
+        })
+        .to_string(),
+    };
+
+    let mut provider = DiscordProvider::from_bootstrap(&bootstrap)
+        .expect("provider bootstrap")
+        .expect("provider enabled");
+    provider.connect().await.expect("connect succeeds");
+
+    let seeded = provider.recv().await.expect("seed poll succeeds");
+    assert!(seeded.is_some(), "first poll should seed a cursor boundary");
+
+    loop {
+        let event = provider
+            .recv()
+            .await
+            .expect("poll succeeds")
+            .expect("provider should emit an event");
+        if let GatewayProviderEvent::Incoming(message) = event {
+            assert_eq!(message.user_id, "alice-id");
+            assert_eq!(message.sender_display.as_deref(), Some("alice"));
+            assert_eq!(message.text, "hello from discord");
+            break;
+        }
+    }
 }

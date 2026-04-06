@@ -485,18 +485,39 @@ impl TuiModel {
         } else {
             None
         };
+        let local_target_agent_name =
+            target_agent_id
+                .as_deref()
+                .and_then(|agent_id| match agent_id {
+                    amux_protocol::AGENT_ID_RAROG => {
+                        Some(amux_protocol::AGENT_NAME_RAROG.to_string())
+                    }
+                    "weles" => Some("Weles".to_string()),
+                    _ => None,
+                });
         if thread_id.as_deref() == self.cancelled_thread_id.as_deref() {
             self.cancelled_thread_id = None;
         }
         if thread_id.is_none() {
+            let local_thread_id = format!("local-{}", self.tick_counter);
+            let local_title = if prompt.len() > 40 {
+                format!("{}...", &prompt[..40])
+            } else {
+                prompt.clone()
+            };
             self.chat.reduce(chat::ChatAction::ThreadCreated {
-                thread_id: format!("local-{}", self.tick_counter),
-                title: if prompt.len() > 40 {
-                    format!("{}...", &prompt[..40])
-                } else {
-                    prompt.clone()
-                },
+                thread_id: local_thread_id.clone(),
+                title: local_title.clone(),
             });
+            if let Some(agent_name) = local_target_agent_name {
+                self.chat
+                    .reduce(chat::ChatAction::ThreadDetailReceived(chat::AgentThread {
+                        id: local_thread_id,
+                        agent_name: Some(agent_name),
+                        title: local_title,
+                        ..Default::default()
+                    }));
+            }
         }
 
         if let Some(thread) = self.chat.active_thread_mut() {

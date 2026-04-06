@@ -516,6 +516,334 @@ async fn direct_weles_handoff_turn_uses_weles_provider_override_for_new_request_
 }
 
 #[tokio::test]
+async fn new_targeted_weles_thread_uses_weles_runtime_provider_and_model() {
+    let recorded_requests = Arc::new(StdMutex::new(VecDeque::new()));
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = "http://127.0.0.1:1/v1".to_string();
+    config.model = "svarog-model".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.reasoning_effort = "high".to_string();
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    config.providers.insert(
+        "custom-weles".to_string(),
+        ProviderConfig {
+            base_url: spawn_recording_request_server(recorded_requests.clone()).await,
+            model: "weles-model".to_string(),
+            api_key: "test-key".to_string(),
+            assistant_id: String::new(),
+            auth_source: AuthSource::ApiKey,
+            api_transport: ApiTransport::ChatCompletions,
+            reasoning_effort: "medium".to_string(),
+            context_window_tokens: 0,
+            response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
+        },
+    );
+    config.builtin_sub_agents.weles.provider = Some("custom-weles".to_string());
+    config.builtin_sub_agents.weles.model = Some("weles-model".to_string());
+    config.builtin_sub_agents.weles.reasoning_effort = Some("medium".to_string());
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let thread_id = engine
+        .send_message_with_session_surface_and_target(
+            None,
+            None,
+            "Review this change",
+            None,
+            Some("weles"),
+        )
+        .await
+        .expect("new targeted Weles thread should complete");
+
+    let recorded = recorded_requests
+        .lock()
+        .expect("lock targeted weles requests");
+    let request = recorded
+        .iter()
+        .find(|request| request.contains("POST /v1/chat/completions"))
+        .expect("expected Weles-targeted thread to use the Weles provider request");
+    let body = request_body(request);
+    assert!(body.contains("You are Weles in tamux."));
+    assert!(body.contains("weles-model"));
+    assert!(!body.contains("svarog-model"));
+
+    let threads = engine.threads.read().await;
+    let thread = threads.get(&thread_id).expect("thread should exist");
+    assert_eq!(thread.agent_name.as_deref(), Some(WELES_AGENT_NAME));
+}
+
+#[tokio::test]
+async fn new_targeted_rarog_thread_uses_concierge_runtime_provider_and_model() {
+    let recorded_requests = Arc::new(StdMutex::new(VecDeque::new()));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind new targeted rarog server");
+    let addr = listener
+        .local_addr()
+        .expect("new targeted rarog server addr");
+
+    tokio::spawn({
+        let recorded_requests = recorded_requests.clone();
+        async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let recorded_requests = recorded_requests.clone();
+                tokio::spawn(async move {
+                    let request =
+                        read_http_request(&mut socket, "new targeted rarog request").await;
+                    recorded_requests
+                        .lock()
+                        .expect("lock targeted rarog requests")
+                        .push_back(request.clone());
+
+                    let request_line = request.lines().next().unwrap_or_default();
+                    if request_line.contains("/v1/chat/completions") {
+                        let response = concat!(
+                            "HTTP/1.1 200 OK\r\n",
+                            "content-type: text/event-stream\r\n",
+                            "cache-control: no-cache\r\n",
+                            "connection: close\r\n",
+                            "\r\n",
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"Acknowledged.\"}}]}\n\n",
+                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+                            "data: [DONE]\n\n"
+                        );
+                        socket
+                            .write_all(response.as_bytes())
+                            .await
+                            .expect("write targeted rarog response");
+                    } else {
+                        socket
+                            .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                            .await
+                            .expect("write targeted rarog 404 response");
+                    }
+                });
+            }
+        }
+    });
+
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_MINIMAX_CODING_PLAN.to_string();
+    config.base_url = format!("http://{addr}/v1");
+    config.model = "svarog-model".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.reasoning_effort = "high".to_string();
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    config.providers.insert(
+        PROVIDER_ID_CUSTOM.to_string(),
+        ProviderConfig {
+            base_url: format!("http://{addr}/v1"),
+            model: "rarog-model".to_string(),
+            api_key: "test-key".to_string(),
+            assistant_id: String::new(),
+            auth_source: AuthSource::ApiKey,
+            api_transport: ApiTransport::ChatCompletions,
+            reasoning_effort: "medium".to_string(),
+            context_window_tokens: 0,
+            response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
+        },
+    );
+    config.concierge.provider = Some(PROVIDER_ID_CUSTOM.to_string());
+    config.concierge.model = Some("rarog-model".to_string());
+    config.concierge.reasoning_effort = Some("medium".to_string());
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let thread_id = engine
+        .send_message_with_session_surface_and_target(
+            None,
+            None,
+            "Triage this issue",
+            None,
+            Some("rarog"),
+        )
+        .await
+        .expect("new targeted Rarog thread should complete");
+
+    let recorded = recorded_requests
+        .lock()
+        .expect("lock targeted rarog requests");
+    let request = recorded
+        .iter()
+        .find(|request| request.contains("POST /v1/chat/completions"))
+        .expect("expected Rarog-targeted thread to use the concierge provider request");
+    let body = request_body(request);
+    let body_json: serde_json::Value =
+        serde_json::from_str(&body).expect("recorded request body should be valid json");
+    assert!(body.contains("You are the tamux concierge"));
+    assert_eq!(
+        body_json.get("model").and_then(|value| value.as_str()),
+        Some("rarog-model")
+    );
+
+    let threads = engine.threads.read().await;
+    let thread = threads.get(&thread_id).expect("thread should exist");
+    assert_eq!(thread.agent_name.as_deref(), Some(CONCIERGE_AGENT_NAME));
+}
+
+#[tokio::test]
+async fn new_targeted_rarog_thread_prefers_concierge_model_override_over_stored_provider_model() {
+    let recorded_requests = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind targeted rarog override server");
+    let addr = listener
+        .local_addr()
+        .expect("targeted rarog override server addr");
+
+    tokio::spawn({
+        let recorded_requests = recorded_requests.clone();
+        async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = vec![0u8; 131072];
+                let n = socket
+                    .read(&mut buf)
+                    .await
+                    .expect("read targeted rarog override request");
+                if n == 0 {
+                    continue;
+                }
+                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                recorded_requests
+                    .lock()
+                    .expect("lock targeted rarog override requests")
+                    .push(request.clone());
+
+                if request.starts_with("POST /v1/chat/completions") {
+                    let response = concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "content-type: text/event-stream\r\n",
+                        "cache-control: no-cache\r\n",
+                        "connection: close\r\n",
+                        "\r\n",
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"Acknowledged.\"}}]}\n\n",
+                        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+                        "data: [DONE]\n\n"
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("write targeted rarog override response");
+                } else {
+                    socket
+                        .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                        .await
+                        .expect("write targeted rarog override 404 response");
+                }
+            }
+        }
+    });
+
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_MINIMAX_CODING_PLAN.to_string();
+    config.base_url = format!("http://{addr}/v1");
+    config.model = "svarog-model".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.reasoning_effort = "high".to_string();
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    config.providers.insert(
+        PROVIDER_ID_CUSTOM.to_string(),
+        ProviderConfig {
+            base_url: format!("http://{addr}/v1"),
+            model: "MiniMax-M2.5".to_string(),
+            api_key: "test-key".to_string(),
+            assistant_id: String::new(),
+            auth_source: AuthSource::ApiKey,
+            api_transport: ApiTransport::ChatCompletions,
+            reasoning_effort: "medium".to_string(),
+            context_window_tokens: 0,
+            response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
+        },
+    );
+    config.concierge.provider = Some(PROVIDER_ID_CUSTOM.to_string());
+    config.concierge.model = Some("qwen3.5-plus".to_string());
+    config.concierge.reasoning_effort = Some("medium".to_string());
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .send_message_with_session_surface_and_target(
+            None,
+            None,
+            "Triage this issue",
+            None,
+            Some("rarog"),
+        )
+        .await
+        .expect("new targeted Rarog thread should honor concierge model override");
+
+    let recorded = recorded_requests
+        .lock()
+        .expect("lock targeted rarog override requests");
+    let request = recorded
+        .iter()
+        .find(|request| request.contains("POST /v1/chat/completions"))
+        .expect("expected targeted Rarog thread to hit concierge provider request");
+    assert!(
+        request.contains("\"model\":\"qwen3.5-plus\""),
+        "targeted Rarog request should carry concierge.model override"
+    );
+}
+
+#[tokio::test]
 async fn successful_handoff_tool_call_restarts_same_turn_under_requested_agent() {
     let request_counter = Arc::new(AtomicUsize::new(0));
     let listener = TcpListener::bind("127.0.0.1:0")

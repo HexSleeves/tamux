@@ -819,6 +819,75 @@ fn thread_picker_new_conversation_uses_selected_agent_for_first_prompt() {
 }
 
 #[test]
+fn new_weles_conversation_uses_weles_profile_before_first_prompt() {
+    let (mut model, _daemon_rx) = make_model();
+    model.config.provider = "openai".to_string();
+    model.config.model = "gpt-5.4".to_string();
+    model.config.custom_model_name.clear();
+    model.subagents.entries.push(crate::state::SubAgentEntry {
+        id: "weles_builtin".to_string(),
+        name: "WELES".to_string(),
+        provider: "anthropic".to_string(),
+        model: "claude-sonnet-4-5".to_string(),
+        role: Some("testing".to_string()),
+        enabled: true,
+        builtin: true,
+        immutable_identity: true,
+        disable_allowed: false,
+        delete_allowed: false,
+        protected_reason: Some("Built-in reviewer".to_string()),
+        reasoning_effort: Some("medium".to_string()),
+        raw_json: Some(serde_json::json!({
+            "id": "weles_builtin",
+            "name": "WELES",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-5",
+            "reasoning_effort": "medium"
+        })),
+    });
+
+    model.start_new_thread_view_for_agent(Some("weles"));
+
+    let profile = model.current_conversation_agent_profile();
+    assert_eq!(profile.agent_label, "Weles");
+    assert_eq!(profile.provider, "anthropic");
+    assert_eq!(profile.model, "claude-sonnet-4-5");
+    assert_eq!(profile.reasoning_effort.as_deref(), Some("medium"));
+}
+
+#[test]
+fn new_weles_conversation_keeps_weles_profile_after_first_prompt_locally() {
+    let (mut model, _daemon_rx) = make_model();
+    model.connected = true;
+    model.config.provider = "openai".to_string();
+    model.config.model = "gpt-5.4".to_string();
+    model.config.custom_model_name.clear();
+    model.subagents.entries.push(crate::state::SubAgentEntry {
+        id: "weles_builtin".to_string(),
+        name: "WELES".to_string(),
+        provider: "anthropic".to_string(),
+        model: "claude-sonnet-4-5".to_string(),
+        role: Some("testing".to_string()),
+        enabled: true,
+        builtin: true,
+        immutable_identity: true,
+        disable_allowed: false,
+        delete_allowed: false,
+        protected_reason: Some("Built-in reviewer".to_string()),
+        reasoning_effort: Some("medium".to_string()),
+        raw_json: None,
+    });
+
+    model.start_new_thread_view_for_agent(Some("weles"));
+    model.submit_prompt("review this diff".to_string());
+
+    let profile = model.current_conversation_agent_profile();
+    assert_eq!(profile.agent_label, "Weles");
+    assert_eq!(profile.provider, "anthropic");
+    assert_eq!(profile.model, "claude-sonnet-4-5");
+}
+
+#[test]
 fn thread_picker_mouse_click_switches_to_rarog_tab() {
     let (mut model, _daemon_rx) = make_model();
     model

@@ -386,12 +386,20 @@ impl AgentEngine {
         history_window: Option<&str>,
         reply_tool_name: &str,
     ) {
+        let active_responder_name = match existing_thread {
+            Some(thread_id) => self
+                .active_agent_id_for_thread(thread_id)
+                .await
+                .map(|agent_id| canonical_agent_name(&agent_id).to_string()),
+            None => None,
+        };
         let enriched_prompt = build_gateway_agent_prompt(
             &msg.platform,
             &msg.sender,
             &msg.content,
             history_window,
             reply_tool_name,
+            active_responder_name.as_deref(),
         );
         let gateway_timeout_budget = self.gateway_timeout_budget().await;
         let send_result = Box::pin(tokio::time::timeout(

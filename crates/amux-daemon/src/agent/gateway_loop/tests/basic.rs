@@ -89,6 +89,7 @@ fn gateway_prompt_prefers_auto_delivery_over_forced_send_tool() {
         "What model are you?",
         Some("- user: hi"),
         "send_discord_message",
+        None,
     );
 
     assert!(
@@ -99,6 +100,22 @@ fn gateway_prompt_prefers_auto_delivery_over_forced_send_tool() {
         !prompt.contains("YOU MUST CALL"),
         "gateway prompt should not force a gateway send tool call"
     );
+}
+
+#[test]
+fn gateway_prompt_tells_active_responder_not_to_handoff_to_itself() {
+    let prompt = build_gateway_agent_prompt(
+        "discord",
+        "alice",
+        "Give me svarog",
+        None,
+        "send_discord_message",
+        Some("Svarog"),
+    );
+
+    assert!(prompt.contains("Current active responder for this thread: Svarog."));
+    assert!(prompt.contains("Do not use `handoff_thread_agent` or `message_agent` to reach Svarog itself."));
+    assert!(prompt.contains("If the operator asks to talk to Svarog, answer directly as Svarog."));
 }
 
 #[test]
@@ -371,6 +388,7 @@ fn daemon_gateway_loop_boxes_large_delivery_futures() {
     let production_source = gateway_loop_production_source();
 
     for required in [
+        "Box::pin(self.process_gateway_messages()).await",
         "if let Err(e) = Box::pin(self.send_message(None, &prompt)).await",
         "let tool_result = Box::pin(tool_executor::execute_tool(",
         "let triage = match Box::pin(tokio::time::timeout(",
