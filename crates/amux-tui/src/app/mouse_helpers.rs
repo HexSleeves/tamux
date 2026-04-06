@@ -209,6 +209,7 @@ impl TuiModel {
                 if matches!(
                     kind,
                     modal::ModalKind::Help
+                        | modal::ModalKind::Status
                         | modal::ModalKind::CommandPalette
                         | modal::ModalKind::ThreadPicker
                         | modal::ModalKind::GoalPicker

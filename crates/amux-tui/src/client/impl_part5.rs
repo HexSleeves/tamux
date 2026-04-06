@@ -1,4 +1,8 @@
 impl DaemonClient {
+    pub fn request_agent_status(&self) -> Result<()> {
+        self.send(ClientMessage::AgentStatusQuery)
+    }
+
     pub fn request_file_preview(
         &self,
         path: impl Into<String>,

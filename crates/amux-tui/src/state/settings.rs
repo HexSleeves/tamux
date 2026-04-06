@@ -21,6 +21,7 @@ pub enum SettingsTab {
     Features,
     Advanced,
     Plugins,
+    About,
 }
 
 impl SettingsTab {
@@ -36,6 +37,7 @@ impl SettingsTab {
         SettingsTab::Features,
         SettingsTab::Advanced,
         SettingsTab::Plugins,
+        SettingsTab::About,
     ];
 
     pub fn all() -> &'static [SettingsTab] {
@@ -413,6 +415,7 @@ impl SettingsState {
                 // In detail mode, field_cursor indexes into schema fields + actions.
                 "plugin_field"
             }
+            SettingsTab::About => "",
         }
     }
 
@@ -441,6 +444,7 @@ impl SettingsState {
             SettingsTab::Features => 14,
             SettingsTab::Advanced => 22,
             SettingsTab::Plugins => 1,
+            SettingsTab::About => 0,
         }
     }
 
@@ -515,8 +519,10 @@ impl SettingsState {
 
             SettingsAction::EditField => {
                 let field_name = self.current_field_name().to_string();
-                self.editing_field = Some(field_name);
-                self.dirty = true;
+                if !field_name.is_empty() {
+                    self.editing_field = Some(field_name);
+                    self.dirty = true;
+                }
             }
 
             SettingsAction::InsertChar(c) => {

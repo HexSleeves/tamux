@@ -270,6 +270,84 @@ fn status_diagnostics_warning_mentions_sync_state() {
 }
 
 #[test]
+fn full_status_event_caches_snapshot_for_status_modal() {
+    let mut model = make_model();
+
+    model.handle_client_event(ClientEvent::StatusSnapshot(
+        crate::client::AgentStatusSnapshotVm {
+        tier: "mission_control".to_string(),
+        activity: "waiting_for_operator".to_string(),
+        active_thread_id: Some("thread-1".to_string()),
+        active_goal_run_id: Some("goal-1".to_string()),
+        active_goal_run_title: Some("Close release gap".to_string()),
+        provider_health_json: r#"{"openai":{"can_execute":true,"trip_count":0}}"#.to_string(),
+        gateway_statuses_json: r#"{"slack":{"status":"connected"}}"#.to_string(),
+        recent_actions_json: r#"[]"#.to_string(),
+        },
+    ));
+
+    let snapshot = model
+        .status_modal_snapshot
+        .as_ref()
+        .expect("status snapshot should be cached");
+    assert_eq!(snapshot.tier, "mission_control");
+    assert_eq!(snapshot.activity, "waiting_for_operator");
+    assert_eq!(snapshot.active_thread_id.as_deref(), Some("thread-1"));
+}
+
+#[test]
+fn status_query_failure_resolves_loading_modal() {
+    let mut model = make_model();
+    model.status_modal_loading = true;
+
+    model.handle_client_event(ClientEvent::Error("boom".to_string()));
+
+    assert!(!model.status_modal_loading);
+}
+
+#[test]
+fn status_modal_failure_replaces_loading_body_with_error_text() {
+    let mut model = make_model();
+    model.open_status_modal_loading();
+
+    model.handle_client_event(ClientEvent::Error("daemon unavailable".to_string()));
+
+    assert!(model.status_modal_body().contains("daemon unavailable"));
+}
+
+#[test]
+fn status_modal_latest_response_replaces_stale_content() {
+    let mut model = make_model();
+    model.open_status_modal_loading();
+    model.handle_client_event(ClientEvent::StatusSnapshot(
+        crate::client::AgentStatusSnapshotVm {
+            tier: "mission_control".to_string(),
+            activity: "older".to_string(),
+            active_thread_id: None,
+            active_goal_run_id: None,
+            active_goal_run_title: None,
+            provider_health_json: "{}".to_string(),
+            gateway_statuses_json: "{}".to_string(),
+            recent_actions_json: "[]".to_string(),
+        },
+    ));
+    model.handle_client_event(ClientEvent::StatusSnapshot(
+        crate::client::AgentStatusSnapshotVm {
+            tier: "mission_control".to_string(),
+            activity: "newer".to_string(),
+            active_thread_id: None,
+            active_goal_run_id: None,
+            active_goal_run_title: None,
+            provider_health_json: "{}".to_string(),
+            gateway_statuses_json: "{}".to_string(),
+            recent_actions_json: "[]".to_string(),
+        },
+    ));
+
+    assert!(model.status_modal_body().contains("newer"));
+}
+
+#[test]
 fn repeated_gateway_status_does_not_keep_overwriting_status_line() {
     let mut model = make_model();
     model.status_line = "Prompt sent".to_string();

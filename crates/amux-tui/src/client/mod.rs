@@ -296,6 +296,7 @@ pub enum ClientEvent {
         operator_profile_sync_dirty: bool,
         operator_profile_scheduler_fallback: bool,
     },
+    StatusSnapshot(AgentStatusSnapshotVm),
 
     TierChanged {
         new_tier: String,
@@ -334,6 +335,18 @@ pub enum ClientEvent {
     NotificationUpsert(amux_protocol::InboxNotification),
 
     Error(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentStatusSnapshotVm {
+    pub tier: String,
+    pub activity: String,
+    pub active_thread_id: Option<String>,
+    pub active_goal_run_id: Option<String>,
+    pub active_goal_run_title: Option<String>,
+    pub provider_health_json: String,
+    pub gateway_statuses_json: String,
+    pub recent_actions_json: String,
 }
 
 pub struct DaemonClient {

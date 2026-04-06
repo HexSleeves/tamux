@@ -149,6 +149,18 @@ fn activating_message_loop_delay_starts_inline_edit() {
 }
 
 #[test]
+fn activating_about_tab_does_not_enter_edit_mode() {
+    let (mut model, _daemon_rx) = make_model();
+    model
+        .settings
+        .reduce(SettingsAction::SwitchTab(SettingsTab::About));
+
+    model.activate_settings_field();
+
+    assert!(!model.settings.is_editing());
+}
+
+#[test]
 fn whatsapp_link_device_requires_allowed_contacts() {
     let (mut model, mut daemon_rx) = make_model();
     model

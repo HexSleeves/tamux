@@ -36,6 +36,7 @@ export type AgentProviderId =
   | "kimi-coding-plan"
   | "z.ai"
   | "z.ai-coding-plan"
+  | "arcee"
   | "openrouter"
   | "cerebras"
   | "together"
@@ -59,6 +60,7 @@ export const AGENT_PROVIDER_IDS: AgentProviderId[] = [
   "kimi-coding-plan",
   "z.ai",
   "z.ai-coding-plan",
+  "arcee",
   "openrouter",
   "cerebras",
   "together",

@@ -33,8 +33,8 @@ pub enum SubAgentTabAction {
     Toggle,
 }
 
-const TAB_LABELS: [&str; 11] = [
-    "Auth", "Svar", "Rar", "Tools", "Search", "Chat", "GW", "Sub", "Feat", "Adv", "Plug",
+const TAB_LABELS: [&str; 12] = [
+    "Auth", "Svar", "Rar", "Tools", "Search", "Chat", "GW", "Sub", "Feat", "Adv", "Plug", "About",
 ];
 const TAB_DIVIDER: &str = " | ";
 
@@ -268,6 +268,7 @@ fn active_tab_index(tab: SettingsTab) -> usize {
         SettingsTab::Features => 8,
         SettingsTab::Advanced => 9,
         SettingsTab::Plugins => 10,
+        SettingsTab::About => 11,
     }
 }
 

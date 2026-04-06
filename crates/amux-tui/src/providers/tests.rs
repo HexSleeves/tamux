@@ -1,12 +1,12 @@
 use super::*;
 use amux_shared::providers::{
-    MINIMAX_PROVIDER, PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_GITHUB_COPILOT,
-    PROVIDER_ID_OPENAI, QWEN_PROVIDER,
+    MINIMAX_PROVIDER, PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_ARCEE,
+    PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI, QWEN_PROVIDER,
 };
 
 #[test]
-fn provider_count_is_21() {
-    assert_eq!(PROVIDERS.len(), 21);
+fn provider_count_is_22() {
+    assert_eq!(PROVIDERS.len(), 22);
 }
 
 #[test]
@@ -121,4 +121,18 @@ fn custom_model_name_can_resolve_known_provider_context_window() {
 #[test]
 fn unknown_custom_model_uses_264k_default_context_window() {
     assert_eq!(default_custom_model_context_window(), 264_000);
+}
+
+#[test]
+fn arcee_provider_uses_expected_defaults() {
+    let provider = find_by_id(PROVIDER_ID_ARCEE).unwrap();
+    assert_eq!(provider.name, "Arcee");
+    assert_eq!(provider.default_base_url, "https://api.arcee.ai/api/v1");
+    assert_eq!(provider.default_model, "trinity-large-thinking");
+    assert_eq!(provider.default_auth_source, "api_key");
+    assert_eq!(provider.supported_auth_sources, API_KEY_ONLY_AUTH_SOURCES);
+    assert_eq!(provider.default_transport, "chat_completions");
+    assert_eq!(provider.supported_transports, CHAT_ONLY_TRANSPORTS);
+    assert_eq!(known_context_window_for(PROVIDER_ID_ARCEE, "trinity-large-thinking"), Some(256_000));
+    assert!(supports_model_fetch_for(PROVIDER_ID_ARCEE));
 }

@@ -1,6 +1,15 @@
 use super::*;
 
 impl TuiModel {
+    pub(in crate::app) fn handle_status_snapshot_event(
+        &mut self,
+        snapshot: crate::client::AgentStatusSnapshotVm,
+    ) {
+        self.status_modal_snapshot = Some(snapshot);
+        self.status_modal_loading = false;
+        self.status_modal_error = None;
+    }
+
     pub(in crate::app) fn handle_agent_config_event(
         &mut self,
         cfg: crate::wire::AgentConfigSnapshot,

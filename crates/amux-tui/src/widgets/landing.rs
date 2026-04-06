@@ -352,11 +352,11 @@ mod tests {
         let weles = render_plain("Weles", 80, 24);
 
         assert!(
-            rarog.contains("...#####...###...#####..."),
+            rarog.contains(".....#################.###########......."),
             "expected dedicated Rarog fresco signature, got: {rarog}"
         );
         assert!(
-            weles.contains("..#######..#.#..#######.."),
+            weles.contains("#########.......######............## ## ##..."),
             "expected dedicated Weles fresco signature, got: {weles}"
         );
     }

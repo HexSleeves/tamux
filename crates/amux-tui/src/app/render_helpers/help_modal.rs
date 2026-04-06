@@ -1,20 +1,7 @@
 use super::*;
 
-pub(super) fn render_help_modal(frame: &mut Frame, area: Rect, theme: &ThemeTokens) {
-    use ratatui::text::{Line, Span};
-    use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
-
-    let block = Block::default()
-        .title(" KEYBOARD SHORTCUTS ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Double)
-        .border_style(theme.accent_secondary);
-
-    let inner = block.inner(area);
-    frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
-
-    let lines = vec![
+fn help_modal_lines(theme: &ThemeTokens) -> Vec<Line<'static>> {
+    vec![
         Line::raw(""),
         Line::from(Span::styled("  Navigation", theme.accent_primary)),
         Line::from(vec![
@@ -186,6 +173,10 @@ pub(super) fn render_help_modal(frame: &mut Frame, area: Rect, theme: &ThemeToke
             Span::styled("Cycle transcript mode", theme.fg_dim),
         ]),
         Line::from(vec![
+            Span::styled("  /status          ", theme.fg_active),
+            Span::styled("Show tamux status", theme.fg_dim),
+        ]),
+        Line::from(vec![
             Span::styled("  /help            ", theme.fg_active),
             Span::styled("This help screen", theme.fg_dim),
         ]),
@@ -211,10 +202,44 @@ pub(super) fn render_help_modal(frame: &mut Frame, area: Rect, theme: &ThemeToke
         ]),
         Line::raw(""),
         Line::from(Span::styled("  Press Esc to close", theme.fg_dim)),
-    ];
+    ]
+}
+
+pub(super) fn render_help_modal(frame: &mut Frame, area: Rect, theme: &ThemeTokens) {
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
+
+    let block = Block::default()
+        .title(" KEYBOARD SHORTCUTS ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(theme.accent_secondary);
+
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    let lines = help_modal_lines(theme);
 
     let paragraph = Paragraph::new(lines)
         .scroll((0, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn help_modal_lists_status_command() {
+        let text = help_modal_lines(&ThemeTokens::default())
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("/status"));
+        assert!(text.contains("Show tamux status"));
+    }
 }

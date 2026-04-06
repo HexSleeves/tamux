@@ -131,11 +131,21 @@ fn close_clears_editing_and_dropdown() {
 
 #[test]
 fn all_tabs_hide_provider_variant() {
-    assert_eq!(SettingsTab::all().len(), 11);
+    assert_eq!(SettingsTab::all().len(), 12);
     assert!(!SettingsTab::all().contains(&SettingsTab::Provider));
     assert_eq!(SettingsTab::all()[0], SettingsTab::Auth);
     assert_eq!(SettingsTab::all()[1], SettingsTab::Agent);
     assert_eq!(SettingsTab::all()[2], SettingsTab::Concierge);
+    assert_eq!(SettingsTab::all().last(), Some(&SettingsTab::About));
+}
+
+#[test]
+fn about_tab_has_zero_edit_fields() {
+    let mut state = SettingsState::new();
+    state.reduce(SettingsAction::SwitchTab(SettingsTab::About));
+
+    assert_eq!(state.field_count(), 0);
+    assert_eq!(state.current_field_name(), "");
 }
 
 #[test]
@@ -421,6 +431,8 @@ fn field_count_per_tab() {
     assert_eq!(state.field_count(), 22);
     state.reduce(SettingsAction::SwitchTab(SettingsTab::Plugins));
     assert_eq!(state.field_count(), 1);
+    state.reduce(SettingsAction::SwitchTab(SettingsTab::About));
+    assert_eq!(state.field_count(), 0);
 }
 
 #[test]

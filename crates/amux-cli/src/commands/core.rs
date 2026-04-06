@@ -82,6 +82,91 @@ fn format_direct_message_output(
     Ok(rendered)
 }
 
+fn format_status_output(status: &client::AgentStatusSnapshot, current_version: &str) -> Result<String> {
+    let mut rendered = String::from("Agent Status\n============\n");
+    rendered.push_str(&format!("Version:  {current_version}\n"));
+    rendered.push_str(&format!("Tier:     {}\n", status.tier.replace('_', " ")));
+    rendered.push_str(&format!("Activity: {}\n", status.activity.replace('_', " ")));
+
+    if let Some(title) = &status.active_goal_run_title {
+        rendered.push_str(&format!("Goal:     {title}\n"));
+    }
+    if let Some(thread) = &status.active_thread_id {
+        rendered.push_str(&format!("Thread:   {thread}\n"));
+    }
+
+    if let Ok(providers) = serde_json::from_str::<serde_json::Value>(&status.provider_health_json) {
+        if let Some(obj) = providers.as_object() {
+            if !obj.is_empty() {
+                rendered.push_str("\nProviders:\n");
+                for (name, info) in obj {
+                    let can_exec = info
+                        .get("can_execute")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(true);
+                    let trips = info
+                        .get("trip_count")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0);
+                    let health = if can_exec { "healthy" } else { "tripped" };
+                    if trips > 0 {
+                        rendered.push_str(&format!("  {name} - {health} (trips: {trips})\n"));
+                    } else {
+                        rendered.push_str(&format!("  {name} - {health}\n"));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(gateways) = serde_json::from_str::<serde_json::Value>(&status.gateway_statuses_json) {
+        if let Some(obj) = gateways.as_object() {
+            if !obj.is_empty() {
+                rendered.push_str("\nGateways:\n");
+                for (platform, info) in obj {
+                    let gateway_status = info
+                        .get("status")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("unknown");
+                    rendered.push_str(&format!("  {platform} - {gateway_status}\n"));
+                }
+            }
+        }
+    }
+
+    if let Ok(actions) = serde_json::from_str::<Vec<serde_json::Value>>(&status.recent_actions_json) {
+        if !actions.is_empty() {
+            rendered.push_str("\nRecent Actions:\n");
+            for action in actions.iter().take(5) {
+                let action_type = action
+                    .get("action_type")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let summary = action
+                    .get("summary")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let timestamp = action
+                    .get("timestamp")
+                    .and_then(|value| value.as_i64())
+                    .unwrap_or(0);
+                rendered.push_str(&format!(
+                    "  {} [{}] {}\n",
+                    format_timestamp(timestamp),
+                    action_type,
+                    summary
+                ));
+            }
+        }
+    }
+
+    while rendered.ends_with('\n') {
+        rendered.pop();
+    }
+
+    Ok(rendered)
+}
+
 pub(crate) async fn run_default() -> Result<()> {
     update::print_upgrade_notice_if_available(env!("CARGO_PKG_VERSION")).await;
 
@@ -125,9 +210,28 @@ pub(crate) async fn run_default() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_startup_action, format_direct_message_output, DefaultStartupAction};
-    use crate::client::DirectMessageResponse;
+    use super::{
+        default_startup_action, format_direct_message_output, format_status_output,
+        DefaultStartupAction,
+    };
+    use crate::client::{AgentStatusSnapshot, DirectMessageResponse};
     use crate::setup_wizard::SetupProbe;
+
+    fn sample_status() -> AgentStatusSnapshot {
+        AgentStatusSnapshot {
+            tier: "mission_control".to_string(),
+            activity: "waiting_for_operator".to_string(),
+            active_thread_id: Some("thread-1".to_string()),
+            active_goal_run_id: None,
+            active_goal_run_title: Some("Close release gap".to_string()),
+            provider_health_json: r#"{"openai":{"can_execute":true,"trip_count":0}}"#
+                .to_string(),
+            gateway_statuses_json: r#"{"slack":{"status":"connected"}}"#.to_string(),
+            recent_actions_json:
+                r#"[{"action_type":"tool_call","summary":"Ran status","timestamp":1712345678}]"#
+                    .to_string(),
+        }
+    }
 
     #[test]
     fn default_startup_restarts_daemon_before_considering_setup() {
@@ -215,6 +319,13 @@ mod tests {
         assert!(rendered.contains("provider_final_result:"));
         assert!(rendered.contains("\"provider\": \"anthropic_message\""));
         assert!(rendered.contains("\"id\": \"msg_1\""));
+    }
+
+    #[test]
+    fn status_output_prints_current_tamux_version() {
+        let rendered = format_status_output(&sample_status(), "1.2.3").expect("render status");
+
+        assert!(rendered.contains("Version:  1.2.3"));
     }
 }
 
@@ -326,88 +437,7 @@ pub(crate) async fn run(command: Commands) -> Result<()> {
         }
         Commands::Status | Commands::Stats => {
             let status = client::send_status_query().await?;
-            println!("Agent Status");
-            println!("============");
-            println!("Tier:     {}", status.tier.replace('_', " "));
-            println!("Activity: {}", status.activity.replace('_', " "));
-
-            if let Some(title) = &status.active_goal_run_title {
-                println!("Goal:     {}", title);
-            }
-            if let Some(thread) = &status.active_thread_id {
-                println!("Thread:   {}", thread);
-            }
-
-            if let Ok(providers) =
-                serde_json::from_str::<serde_json::Value>(&status.provider_health_json)
-            {
-                if let Some(obj) = providers.as_object() {
-                    if !obj.is_empty() {
-                        println!("\nProviders:");
-                        for (name, info) in obj {
-                            let can_exec = info
-                                .get("can_execute")
-                                .and_then(|value| value.as_bool())
-                                .unwrap_or(true);
-                            let trips = info
-                                .get("trip_count")
-                                .and_then(|value| value.as_u64())
-                                .unwrap_or(0);
-                            let health = if can_exec { "healthy" } else { "tripped" };
-                            if trips > 0 {
-                                println!("  {} - {} (trips: {})", name, health, trips);
-                            } else {
-                                println!("  {} - {}", name, health);
-                            }
-                        }
-                    }
-                }
-            }
-
-            if let Ok(gateways) =
-                serde_json::from_str::<serde_json::Value>(&status.gateway_statuses_json)
-            {
-                if let Some(obj) = gateways.as_object() {
-                    if !obj.is_empty() {
-                        println!("\nGateways:");
-                        for (platform, info) in obj {
-                            let gateway_status = info
-                                .get("status")
-                                .and_then(|value| value.as_str())
-                                .unwrap_or("unknown");
-                            println!("  {} - {}", platform, gateway_status);
-                        }
-                    }
-                }
-            }
-
-            if let Ok(actions) =
-                serde_json::from_str::<Vec<serde_json::Value>>(&status.recent_actions_json)
-            {
-                if !actions.is_empty() {
-                    println!("\nRecent Actions:");
-                    for action in actions.iter().take(5) {
-                        let action_type = action
-                            .get("action_type")
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("");
-                        let summary = action
-                            .get("summary")
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("");
-                        let timestamp = action
-                            .get("timestamp")
-                            .and_then(|value| value.as_i64())
-                            .unwrap_or(0);
-                        println!(
-                            "  {} [{}] {}",
-                            format_timestamp(timestamp),
-                            action_type,
-                            summary
-                        );
-                    }
-                }
-            }
+            println!("{}", format_status_output(&status, env!("CARGO_PKG_VERSION"))?);
         }
         Commands::Settings { action } => match action {
             SettingsAction::List => {

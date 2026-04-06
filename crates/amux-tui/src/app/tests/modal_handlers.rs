@@ -123,6 +123,24 @@ fn command_palette_tools_opens_settings_tools_tab() {
 }
 
 #[test]
+fn slash_status_opens_loading_modal_and_requests_status_without_sending_chat() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.connected = true;
+    model.input.set_text("/status");
+
+    let quit = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert!(!quit);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::Status));
+    assert!(model.status_modal_loading);
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::RequestAgentStatus) => {}
+        other => panic!("expected status request, got {:?}", other),
+    }
+    assert!(daemon_rx.try_recv().is_err());
+}
+
+#[test]
 fn ctrl_e_in_error_modal_clears_error() {
     let (mut model, _daemon_rx) = make_model();
     model.last_error = Some("boom".to_string());

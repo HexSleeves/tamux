@@ -71,8 +71,29 @@ impl DaemonClient {
                 let _ = event_tx.send(ClientEvent::DivergentSession(payload)).await;
             }
             DaemonMessage::AgentStatusResponse {
-                diagnostics_json, ..
+                tier,
+                activity,
+                active_thread_id,
+                active_goal_run_id,
+                active_goal_run_title,
+                provider_health_json,
+                gateway_statuses_json,
+                recent_actions_json,
+                diagnostics_json,
+                ..
             } => {
+                let _ = event_tx
+                    .send(ClientEvent::StatusSnapshot(AgentStatusSnapshotVm {
+                        tier,
+                        activity,
+                        active_thread_id,
+                        active_goal_run_id,
+                        active_goal_run_title,
+                        provider_health_json,
+                        gateway_statuses_json,
+                        recent_actions_json,
+                    }))
+                    .await;
                 if let Ok(diagnostics) =
                     serde_json::from_str::<serde_json::Value>(&diagnostics_json)
                 {

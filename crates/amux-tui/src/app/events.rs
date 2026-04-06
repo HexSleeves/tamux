@@ -520,6 +520,9 @@ impl TuiModel {
                     operator_profile_scheduler_fallback,
                 );
             }
+            ClientEvent::StatusSnapshot(snapshot) => {
+                self.handle_status_snapshot_event(snapshot);
+            }
             ClientEvent::AgentExplanation(payload) => {
                 self.handle_agent_explanation_event(payload);
             }

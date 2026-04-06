@@ -246,6 +246,9 @@ fn start_daemon_bridge(
                             DaemonCommand::RequestFilePreview { path, max_bytes } => {
                                 let _ = client.request_file_preview(path, max_bytes);
                             }
+                            DaemonCommand::RequestAgentStatus => {
+                                let _ = client.request_agent_status();
+                            }
                             DaemonCommand::SendMessage {
                                 thread_id,
                                 content,

@@ -305,6 +305,9 @@ pub struct TuiModel {
 
     // Recent autonomous actions from heartbeat digests (shown in sidebar)
     pub recent_actions: Vec<RecentActionVm>,
+    status_modal_snapshot: Option<crate::client::AgentStatusSnapshotVm>,
+    status_modal_loading: bool,
+    status_modal_error: Option<String>,
 
     // Active mouse drag selection in the chat pane
     chat_drag_anchor: Option<Position>,
@@ -338,6 +341,7 @@ fn settings_tab_label(tab: SettingsTab) -> &'static str {
         SettingsTab::Features => "features",
         SettingsTab::Advanced => "advanced",
         SettingsTab::Plugins => "plugins",
+        SettingsTab::About => "about",
     }
 }
 

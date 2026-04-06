@@ -297,6 +297,7 @@ impl TuiModel {
                 | "chat"
                 | "settings"
                 | "view"
+                | "status"
                 | "quit"
                 | "prompt"
                 | "goal"
@@ -383,6 +384,11 @@ impl TuiModel {
                 };
                 self.chat.reduce(chat::ChatAction::SetTranscriptMode(next));
                 self.status_line = format!("View: {:?}", next);
+            }
+            "status" => {
+                self.open_status_modal_loading();
+                self.send_daemon_command(DaemonCommand::RequestAgentStatus);
+                self.status_line = "Requesting tamux status...".to_string();
             }
             "quit" => self.pending_quit = true,
             "prompt" => {

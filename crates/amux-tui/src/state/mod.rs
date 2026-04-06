@@ -63,6 +63,7 @@ pub enum DaemonCommand {
         path: String,
         max_bytes: Option<usize>,
     },
+    RequestAgentStatus,
     SendMessage {
         thread_id: Option<String>,
         content: String,

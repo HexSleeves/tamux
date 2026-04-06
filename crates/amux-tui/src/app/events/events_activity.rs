@@ -339,6 +339,10 @@ impl TuiModel {
     }
 
     pub(in crate::app) fn handle_error_event(&mut self, message: String) {
+        if self.status_modal_loading {
+            self.status_modal_loading = false;
+            self.status_modal_error = Some(message.clone());
+        }
         let should_refresh_subagents = {
             let lowercase = message.to_ascii_lowercase();
             lowercase.contains("sub-agent")
