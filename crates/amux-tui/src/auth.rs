@@ -75,7 +75,10 @@ pub fn clear_github_copilot_auth() -> Result<()> {
     let conn = open_provider_auth_db()?;
     conn.execute(
         "DELETE FROM provider_auth_state WHERE provider_id = ?1 AND auth_mode = ?2",
-        params![amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT, "github_copilot"],
+        params![
+            amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT,
+            "github_copilot"
+        ],
     )?;
     Ok(())
 }
@@ -85,7 +88,10 @@ fn read_stored_github_copilot_auth() -> Option<StoredGithubCopilotAuth> {
     let raw = conn
         .query_row(
             "SELECT state_json FROM provider_auth_state WHERE provider_id = ?1 AND auth_mode = ?2",
-            params![amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT, "github_copilot"],
+            params![
+                amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT,
+                "github_copilot"
+            ],
             |row| row.get::<_, String>(0),
         )
         .optional()

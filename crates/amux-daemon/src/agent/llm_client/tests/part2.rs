@@ -751,3 +751,84 @@ use amux_shared::providers::{
         assert_eq!(diagnostics.class, "rate_limit");
         assert_eq!(diagnostics.diagnostics["retry_after_ms"], 641);
     }
+
+    #[tokio::test]
+    async fn rate_limit_responses_429_uses_openrouter_raw_message_without_truncation() {
+        let request_paths = Arc::new(Mutex::new(VecDeque::new()));
+        let chat_requests = Arc::new(AtomicUsize::new(0));
+        let raw_detail = format!(
+            "{}qwen/qwen3.6-plus:free is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits.",
+            "prefix ".repeat(40)
+        );
+        let body = serde_json::json!({
+            "error": {
+                "message": "Provider returned error",
+                "code": 429,
+                "metadata": {
+                    "raw": raw_detail
+                }
+            }
+        })
+        .to_string();
+        let base_url = spawn_responses_error_server(
+            "429 Too Many Requests",
+            body,
+            None,
+            request_paths,
+            chat_requests,
+        )
+        .await;
+
+        let stream = send_completion_request(
+            &reqwest::Client::new(),
+            PROVIDER_ID_OPENROUTER,
+            &responses_test_config(base_url, AuthSource::ApiKey),
+            "system",
+            &[ApiMessage {
+                role: "user".to_string(),
+                content: ApiContent::Text("hello".to_string()),
+                tool_call_id: None,
+                name: None,
+                tool_calls: None,
+            }],
+            &[],
+            ApiTransport::Responses,
+            None,
+            None,
+            RetryStrategy::Bounded {
+                max_retries: 1,
+                retry_delay_ms: 5_000,
+            },
+        );
+
+        let chunks = collect_chunks(stream).await;
+        let retry_message = chunks
+            .iter()
+            .find_map(|chunk| match chunk {
+                CompletionChunk::Retry { message, .. } => Some(message.as_str()),
+                _ => None,
+            })
+            .expect("stream should emit retry chunk");
+        assert!(
+            retry_message.contains("add your own key to accumulate your rate limits"),
+            "retry chunk should preserve the detailed upstream raw message: {retry_message}"
+        );
+
+        let terminal_message = match chunks.last().expect("terminal chunk") {
+            CompletionChunk::Error { message } => message,
+            other => panic!("expected error chunk, got {other:?}"),
+        };
+        let diagnostics = parse_structured_error(terminal_message);
+        assert_eq!(diagnostics.class, "rate_limit");
+        assert!(
+            diagnostics.summary.contains("add your own key to accumulate your rate limits"),
+            "terminal summary should preserve the detailed upstream raw message: {}",
+            diagnostics.summary
+        );
+        assert!(
+            diagnostics.diagnostics["raw_message"]
+                .as_str()
+                .is_some_and(|value| value.contains("add your own key to accumulate your rate limits")),
+            "structured diagnostics should preserve the detailed upstream raw message"
+        );
+    }

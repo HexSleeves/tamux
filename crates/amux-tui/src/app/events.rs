@@ -416,6 +416,9 @@ impl TuiModel {
             ClientEvent::CollaborationSessions { sessions_json } => {
                 self.handle_collaboration_sessions_event(sessions_json);
             }
+            ClientEvent::CollaborationVoteResult { report_json } => {
+                self.handle_collaboration_vote_result_event(report_json);
+            }
             ClientEvent::GeneratedTools { tools_json } => {
                 self.handle_generated_tools_event(tools_json);
             }
@@ -516,6 +519,9 @@ impl TuiModel {
                     operator_profile_sync_dirty,
                     operator_profile_scheduler_fallback,
                 );
+            }
+            ClientEvent::StatusSnapshot(snapshot) => {
+                self.handle_status_snapshot_event(snapshot);
             }
             ClientEvent::AgentExplanation(payload) => {
                 self.handle_agent_explanation_event(payload);

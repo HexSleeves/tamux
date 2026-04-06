@@ -123,7 +123,11 @@ impl TuiModel {
             .filter(|thread| {
                 !crate::wire::is_weles_thread(thread)
                     && !thread.id.starts_with("handoff:")
-                    && !thread.title.trim().to_ascii_lowercase().starts_with("handoff ")
+                    && !thread
+                        .title
+                        .trim()
+                        .to_ascii_lowercase()
+                        .starts_with("handoff ")
             })
             .map(conversion::convert_thread)
             .collect();
@@ -135,7 +139,11 @@ impl TuiModel {
     pub(in crate::app) fn handle_thread_detail_event(&mut self, thread: crate::wire::AgentThread) {
         if crate::wire::is_weles_thread(&thread)
             || thread.id.starts_with("handoff:")
-            || thread.title.trim().to_ascii_lowercase().starts_with("handoff ")
+            || thread
+                .title
+                .trim()
+                .to_ascii_lowercase()
+                .starts_with("handoff ")
         {
             return;
         }

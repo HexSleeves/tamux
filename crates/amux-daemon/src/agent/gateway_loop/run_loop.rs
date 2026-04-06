@@ -54,7 +54,7 @@ impl AgentEngine {
                     }
                 }
                 _ = gateway_event_tick.tick() => {
-                    self.process_gateway_messages().await;
+                    Box::pin(self.process_gateway_messages()).await;
                 }
                 _ = tokio::time::sleep_until(next_heartbeat) => {
                     heartbeat_cycle_count += 1;

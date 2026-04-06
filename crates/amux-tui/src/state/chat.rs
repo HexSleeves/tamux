@@ -2,6 +2,8 @@
 // These mirror the types in state.rs
 #![allow(dead_code)]
 
+use serde_json::Value;
+
 #[path = "chat_types.rs"]
 mod chat_types;
 #[path = "chat_interactions.rs"]
@@ -63,6 +65,22 @@ impl ChatState {
     pub fn active_thread(&self) -> Option<&AgentThread> {
         let id = self.active_thread_id.as_deref()?;
         self.threads.iter().find(|t| t.id == id)
+    }
+
+    pub fn active_thread_runtime_metadata(&self) -> Option<ThreadRuntimeMetadata> {
+        let thread = self.active_thread()?;
+        if thread.runtime_provider.is_none()
+            && thread.runtime_model.is_none()
+            && thread.runtime_reasoning_effort.is_none()
+        {
+            return None;
+        }
+
+        Some(ThreadRuntimeMetadata {
+            provider: thread.runtime_provider.clone(),
+            model: thread.runtime_model.clone(),
+            reasoning_effort: thread.runtime_reasoning_effort.clone(),
+        })
     }
 
     pub fn active_thread_mut(&mut self) -> Option<&mut AgentThread> {
@@ -129,7 +147,11 @@ impl ChatState {
     }
 
     fn move_thread_to_front(&mut self, thread_id: &str) {
-        let Some(index) = self.threads.iter().position(|thread| thread.id == thread_id) else {
+        let Some(index) = self
+            .threads
+            .iter()
+            .position(|thread| thread.id == thread_id)
+        else {
             return;
         };
         if index == 0 {
@@ -268,8 +290,8 @@ impl ChatState {
                 input_tokens,
                 output_tokens,
                 cost,
-                provider: _,
-                model: _,
+                provider,
+                model,
                 tps,
                 generation_ms,
                 reasoning,
@@ -287,6 +309,20 @@ impl ChatState {
                     let mut final_reasoning = std::mem::take(&mut self.streaming_reasoning);
                     if final_reasoning.trim().is_empty() {
                         final_reasoning = reasoning.unwrap_or_default();
+                    }
+
+                    if let Some(thread) = self.threads.iter_mut().find(|t| t.id == thread_id) {
+                        if provider.is_some() {
+                            thread.runtime_provider = provider.clone();
+                        }
+                        if model.is_some() {
+                            thread.runtime_model = model.clone();
+                        }
+                        if let Some(reasoning_effort) =
+                            extract_reasoning_effort(provider_final_result_json.as_deref())
+                        {
+                            thread.runtime_reasoning_effort = Some(reasoning_effort);
+                        }
                     }
 
                     if !content.is_empty() || !final_reasoning.is_empty() {
@@ -579,6 +615,34 @@ impl ChatState {
             }
         }
     }
+}
+
+fn extract_reasoning_effort(provider_final_result_json: Option<&str>) -> Option<String> {
+    let json = provider_final_result_json?.trim();
+    if json.is_empty() {
+        return None;
+    }
+
+    let value: Value = serde_json::from_str(json).ok()?;
+    value
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("reasoning")
+                .and_then(|reasoning| reasoning.get("effort"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(|response| response.get("reasoning"))
+                .and_then(|reasoning| reasoning.get("effort"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 impl Default for ChatState {

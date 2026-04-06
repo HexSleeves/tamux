@@ -9,9 +9,8 @@ mod helpers;
 pub(in crate::agent) use helpers::aline_available;
 use helpers::build_agent_http_client;
 pub(in crate::agent) use helpers::{
-    build_fresh_agent_http_client,
-    collect_provider_health_snapshot, collect_provider_outage_metadata,
-    default_agent_http_read_timeout,
+    build_fresh_agent_http_client, collect_provider_health_snapshot,
+    collect_provider_outage_metadata, default_agent_http_read_timeout,
     file_watch_event_is_relevant, format_provider_outage_message,
     provider_is_eligible_for_alternative,
 };

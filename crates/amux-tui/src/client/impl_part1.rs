@@ -1,4 +1,89 @@
 impl DaemonClient {
+    fn next_bootstrap_attempted(bootstrap_attempted: bool, connected: bool) -> bool {
+        if connected {
+            false
+        } else {
+            bootstrap_attempted
+        }
+    }
+
+    async fn probe_daemon_once() -> bool {
+        #[cfg(unix)]
+        {
+            for socket_path in Self::unix_socket_candidates() {
+                if let Ok(stream) = UnixStream::connect(&socket_path).await {
+                    drop(stream);
+                    return true;
+                }
+            }
+            false
+        }
+
+        #[cfg(not(unix))]
+        {
+            let addr = Self::resolve_daemon_addr(&default_tcp_addr());
+            tokio::net::TcpStream::connect(&addr).await.is_ok()
+        }
+    }
+
+    fn daemon_spawn_candidates() -> Vec<std::ffi::OsString> {
+        let mut candidates = Vec::new();
+
+        if let Some(path) = std::env::var_os("TAMUX_DAEMON_BIN") {
+            if !path.is_empty() {
+                candidates.push(path);
+            }
+        }
+
+        if let Ok(current_exe) = std::env::current_exe() {
+            let exe_name = if cfg!(windows) {
+                "tamux-daemon.exe"
+            } else {
+                "tamux-daemon"
+            };
+            candidates.push(current_exe.with_file_name(exe_name).into_os_string());
+        }
+
+        candidates.push(std::ffi::OsString::from(if cfg!(windows) {
+            "tamux-daemon.exe"
+        } else {
+            "tamux-daemon"
+        }));
+        candidates
+    }
+
+    async fn attempt_spawn_daemon() -> bool {
+        for candidate in Self::daemon_spawn_candidates() {
+            let candidate_display = candidate.to_string_lossy().to_string();
+            info!(candidate = %candidate_display, "Attempting daemon bootstrap");
+
+            let spawn_result = tokio::process::Command::new(&candidate)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+
+            match spawn_result {
+                Ok(child) => {
+                    drop(child);
+                    for _ in 0..20 {
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        if Self::probe_daemon_once().await {
+                            info!(candidate = %candidate_display, "Daemon bootstrap succeeded");
+                            return true;
+                        }
+                    }
+                    warn!(candidate = %candidate_display, "Daemon bootstrap command ran but daemon never became ready");
+                }
+                Err(err) => {
+                    debug!(candidate = %candidate_display, error = %err, "Daemon bootstrap spawn failed");
+                }
+            }
+        }
+
+        false
+    }
+
     pub fn new(event_tx: mpsc::Sender<ClientEvent>) -> Self {
         let (request_tx, request_rx) = mpsc::unbounded_channel();
         Self {
@@ -21,6 +106,7 @@ impl DaemonClient {
 
         tokio::spawn(async move {
             let retry_delay = Duration::from_secs(5);
+            let mut bootstrap_attempted = false;
 
             loop {
                 let mut connected = false;
@@ -62,6 +148,15 @@ impl DaemonClient {
                             warn!("Cannot connect to daemon at {} ({})", addr, err);
                             let _ = event_tx.send(ClientEvent::Disconnected).await;
                         }
+                    }
+                }
+
+                bootstrap_attempted = Self::next_bootstrap_attempted(bootstrap_attempted, connected);
+
+                if !connected && !bootstrap_attempted {
+                    bootstrap_attempted = true;
+                    if Self::attempt_spawn_daemon().await {
+                        continue;
                     }
                 }
 
@@ -276,6 +371,7 @@ impl DaemonClient {
             | DaemonMessage::AgentOperatorModel { .. }
             | DaemonMessage::AgentOperatorModelReset { .. }
             | DaemonMessage::AgentCollaborationSessions { .. }
+            | DaemonMessage::AgentCollaborationVoteResult { .. }
             | DaemonMessage::AgentGeneratedTools { .. }
             | DaemonMessage::AgentOperatorProfileSessionCompleted { .. }
             | DaemonMessage::AgentError { .. }

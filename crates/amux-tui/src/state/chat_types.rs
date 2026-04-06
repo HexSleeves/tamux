@@ -8,6 +8,16 @@ pub struct AgentThread {
     pub messages: Vec<AgentMessage>,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
+    pub runtime_provider: Option<String>,
+    pub runtime_model: Option<String>,
+    pub runtime_reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadRuntimeMetadata {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

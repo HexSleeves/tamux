@@ -362,7 +362,10 @@ fn agent_config_roundtrip_preserves_nested_compaction_provider_settings() {
     assert_eq!(config.compaction.weles.provider, PROVIDER_ID_OPENAI);
     assert_eq!(config.compaction.weles.model, "gpt-5.4-mini");
     assert_eq!(config.compaction.weles.reasoning_effort, "low");
-    assert_eq!(config.compaction.custom_model.provider, PROVIDER_ID_OPENROUTER);
+    assert_eq!(
+        config.compaction.custom_model.provider,
+        PROVIDER_ID_OPENROUTER
+    );
     assert_eq!(
         config.compaction.custom_model.base_url,
         "https://openrouter.ai/api/v1"

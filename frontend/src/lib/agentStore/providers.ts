@@ -85,6 +85,10 @@ const ZAI_MODELS: ModelDefinition[] = [
   { id: "glm-4", name: "GLM-4", contextWindow: 128000 },
 ];
 
+const ARCEE_MODELS: ModelDefinition[] = [
+  { id: "trinity-large-thinking", name: "Trinity Large Thinking", contextWindow: 256_000 },
+];
+
 const KIMI_MODELS: ModelDefinition[] = [
   { id: "moonshot-v1-8k", name: "Moonshot V1 8K", contextWindow: 8192 },
   { id: "moonshot-v1-32k", name: "Moonshot V1 32K", contextWindow: 32768 },
@@ -137,6 +141,11 @@ const EMPTY_MODELS: ModelDefinition[] = [];
 const CHAT_ONLY_TRANSPORTS: ApiTransportMode[] = ["chat_completions"];
 const RESPONSES_AND_CHAT_TRANSPORTS: ApiTransportMode[] = ["responses", "chat_completions"];
 const NATIVE_AND_CHAT_TRANSPORTS: ApiTransportMode[] = ["native_assistant", "chat_completions"];
+export const DEFAULT_CUSTOM_MODEL_CONTEXT_WINDOW = 264_000;
+
+function normalizeModelLookupValue(value: string | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
 
 export function normalizeAgentProviderId(value: unknown): AgentProviderId {
   if (typeof value !== "string") {
@@ -228,6 +237,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
   { id: "kimi-coding-plan", name: "Kimi Coding Plan", defaultBaseUrl: "https://api.kimi.com/coding/v1", defaultModel: "kimi-for-coding", apiType: "openai", authMethod: "bearer", models: KIMI_CODING_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "z.ai", name: "Z.AI (GLM)", defaultBaseUrl: "https://api.z.ai/api/paas/v4", defaultModel: "glm-4-plus", apiType: "openai", authMethod: "bearer", models: ZAI_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "z.ai-coding-plan", name: "Z.AI Coding Plan", defaultBaseUrl: "https://api.z.ai/api/coding/paas/v4", defaultModel: "glm-5", apiType: "openai", authMethod: "bearer", models: ZAI_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
+  { id: "arcee", name: "Arcee", defaultBaseUrl: "https://api.arcee.ai/api/v1", defaultModel: "trinity-large-thinking", apiType: "openai", authMethod: "bearer", models: ARCEE_MODELS, supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "openrouter", name: "OpenRouter", defaultBaseUrl: "https://openrouter.ai/api/v1", defaultModel: "arcee-ai/trinity-large-thinking", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "cerebras", name: "Cerebras", defaultBaseUrl: "https://api.cerebras.ai/v1", defaultModel: "llama-3.3-70b", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "together", name: "Together", defaultBaseUrl: "https://api.together.xyz/v1", defaultModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
@@ -308,18 +318,62 @@ export function getModelDefinition(
   return getProviderModels(providerId, auth_source).find((model) => model.id === trimmed);
 }
 
-export function getEffectiveContextWindow(
+export function resolveProviderModelDefinition(
   providerId: AgentProviderId,
-  config: Pick<AgentProviderConfig, "model" | "context_window_tokens" | "auth_source">,
-): number {
-  if (providerId === "custom") {
-    if (typeof config.context_window_tokens === "number" && config.context_window_tokens > 0) {
-      return Math.max(1000, Math.trunc(config.context_window_tokens));
-    }
-    return 128_000;
+  auth_source: AuthSource | undefined,
+  ...candidates: Array<string | undefined>
+): ModelDefinition | undefined {
+  const normalizedCandidates = candidates
+    .map((candidate) => normalizeModelLookupValue(candidate))
+    .filter((candidate, index, all) => candidate.length > 0 && all.indexOf(candidate) === index);
+
+  if (normalizedCandidates.length === 0) {
+    return undefined;
   }
 
-  return getModelDefinition(providerId, config.model, config.auth_source)?.contextWindow ?? 128_000;
+  return getProviderModels(providerId, auth_source).find((model) => {
+    const normalizedId = normalizeModelLookupValue(model.id);
+    const normalizedName = normalizeModelLookupValue(model.name);
+    return normalizedCandidates.includes(normalizedId)
+      || normalizedCandidates.includes(normalizedName);
+  });
+}
+
+export function modelUsesContextWindowOverride(
+  providerId: AgentProviderId,
+  modelId: string,
+  custom_model_name?: string,
+  auth_source?: AuthSource,
+): boolean {
+  if (providerId === "custom") {
+    return true;
+  }
+
+  return Boolean(
+    (modelId.trim().length > 0 || (custom_model_name ?? "").trim().length > 0)
+    && !resolveProviderModelDefinition(providerId, auth_source, modelId, custom_model_name),
+  );
+}
+
+export function getEffectiveContextWindow(
+  providerId: AgentProviderId,
+  config: Pick<AgentProviderConfig, "model" | "custom_model_name" | "context_window_tokens" | "auth_source">,
+): number {
+  const resolvedModel = resolveProviderModelDefinition(
+    providerId,
+    config.auth_source,
+    config.model,
+    config.custom_model_name,
+  );
+  if (resolvedModel) {
+    return resolvedModel.contextWindow;
+  }
+
+  if (typeof config.context_window_tokens === "number" && config.context_window_tokens > 0) {
+    return Math.max(1000, Math.trunc(config.context_window_tokens));
+  }
+
+  return DEFAULT_CUSTOM_MODEL_CONTEXT_WINDOW;
 }
 
 export function providerSupportsResponseContinuity(providerId: AgentProviderId): boolean {

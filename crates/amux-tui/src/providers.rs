@@ -3,8 +3,8 @@
 //! This mirrors the `PROVIDER_DEFINITIONS` from the frontend's `agentStore.ts`
 //! so that the TUI has the same provider list with default base URLs and models.
 
-use amux_shared::providers::*;
 use crate::state::config::FetchedModel;
+use amux_shared::providers::*;
 
 #[path = "providers/model_catalog.rs"]
 mod model_catalog;
@@ -32,6 +32,67 @@ pub const NATIVE_AND_CHAT_TRANSPORTS: &[&str] = &["native_assistant", "chat_comp
 pub const API_KEY_ONLY_AUTH_SOURCES: &[&str] = &["api_key"];
 pub const OPENAI_AUTH_SOURCES: &[&str] = &["chatgpt_subscription", "api_key"];
 pub const GITHUB_COPILOT_AUTH_SOURCES: &[&str] = &["github_copilot", "api_key"];
+pub const DEFAULT_CUSTOM_MODEL_CONTEXT_WINDOW: u32 = 264_000;
+
+fn normalize_model_lookup_value(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+pub fn default_custom_model_context_window() -> u32 {
+    DEFAULT_CUSTOM_MODEL_CONTEXT_WINDOW
+}
+
+pub fn resolve_context_window_for_provider_auth(
+    provider_id: &str,
+    auth_source: &str,
+    model_id: &str,
+    custom_model_name: &str,
+) -> Option<u32> {
+    let lookup_values = [model_id, custom_model_name]
+        .into_iter()
+        .map(normalize_model_lookup_value)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+
+    if lookup_values.is_empty() {
+        return None;
+    }
+
+    known_models_for_provider_auth(provider_id, auth_source)
+        .into_iter()
+        .find(|model| {
+            let id = normalize_model_lookup_value(&model.id);
+            let name = model
+                .name
+                .as_deref()
+                .map(normalize_model_lookup_value)
+                .unwrap_or_default();
+            lookup_values
+                .iter()
+                .any(|value| value == &id || (!name.is_empty() && value == &name))
+        })
+        .and_then(|model| model.context_window)
+}
+
+pub fn model_uses_context_window_override(
+    provider_id: &str,
+    auth_source: &str,
+    model_id: &str,
+    custom_model_name: &str,
+) -> bool {
+    if provider_id == PROVIDER_ID_CUSTOM {
+        return true;
+    }
+
+    (model_id.trim().len() > 0 || custom_model_name.trim().len() > 0)
+        && resolve_context_window_for_provider_auth(
+            provider_id,
+            auth_source,
+            model_id,
+            custom_model_name,
+        )
+        .is_none()
+}
 
 pub const PROVIDERS: &[ProviderDef] = &[
     ProviderDef {
@@ -83,6 +144,17 @@ pub const PROVIDERS: &[ProviderDef] = &[
         name: "Together",
         default_base_url: "https://api.together.xyz/v1",
         default_model: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: "chat_completions",
+        supported_auth_sources: API_KEY_ONLY_AUTH_SOURCES,
+        default_auth_source: "api_key",
+        native_base_url: None,
+    },
+    ProviderDef {
+        id: PROVIDER_ID_ARCEE,
+        name: "Arcee",
+        default_base_url: "https://api.arcee.ai/api/v1",
+        default_model: "trinity-large-thinking",
         supported_transports: CHAT_ONLY_TRANSPORTS,
         default_transport: "chat_completions",
         supported_auth_sources: API_KEY_ONLY_AUTH_SOURCES,
@@ -291,8 +363,10 @@ pub fn default_transport_for(provider: &str) -> &'static str {
 }
 
 pub fn uses_fixed_anthropic_messages(provider: &str, model: &str) -> bool {
-    matches!(provider, PROVIDER_ID_MINIMAX | PROVIDER_ID_MINIMAX_CODING_PLAN)
-        || (provider == PROVIDER_ID_OPENCODE_ZEN && model.starts_with("claude"))
+    matches!(
+        provider,
+        PROVIDER_ID_MINIMAX | PROVIDER_ID_MINIMAX_CODING_PLAN
+    ) || (provider == PROVIDER_ID_OPENCODE_ZEN && model.starts_with("claude"))
 }
 
 pub fn supported_auth_sources_for(provider: &str) -> &'static [&'static str] {

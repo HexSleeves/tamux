@@ -1,5 +1,5 @@
 use super::*;
-use amux_shared::providers::{PROVIDER_ID_OPENAI, PROVIDER_ID_GROQ};
+use amux_shared::providers::{PROVIDER_ID_GROQ, PROVIDER_ID_OPENAI};
 
 #[tokio::test]
 async fn set_provider_model_json_updates_provider_and_model_atomically() {

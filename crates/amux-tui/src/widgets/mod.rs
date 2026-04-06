@@ -4,6 +4,7 @@ pub mod approval;
 pub mod approval_center;
 pub mod audit_feed;
 pub mod chat;
+pub mod collaboration_view;
 pub mod command_palette;
 pub mod concierge;
 pub mod concierge_loading;

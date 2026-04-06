@@ -65,6 +65,17 @@ pub const PROVIDERS: &[ProviderDef] = &[
         native_base_url: None,
     },
     ProviderDef {
+        id: PROVIDER_ID_ARCEE,
+        name: "Arcee",
+        default_base_url: "https://api.arcee.ai/api/v1",
+        default_model: "trinity-large-thinking",
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: "chat_completions",
+        supported_auth_sources: API_KEY_ONLY_AUTH_SOURCES,
+        default_auth_source: "api_key",
+        native_base_url: None,
+    },
+    ProviderDef {
         id: PROVIDER_ID_OPENROUTER,
         name: "OpenRouter",
         default_base_url: "https://openrouter.ai/api/v1",

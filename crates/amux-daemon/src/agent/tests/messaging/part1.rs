@@ -63,14 +63,52 @@ fn tool_execution_hot_path_boxes_large_futures() {
         .split("\n#[cfg(test)]")
         .next()
         .unwrap_or(execute_tool_source.as_str());
+    let subagents_source = fs::read_to_string(
+        repo_root().join("crates/amux-daemon/src/agent/tool_executor/subagents.rs"),
+    )
+    .expect("read subagents.rs");
+    let subagents_production = subagents_source
+        .split("\n#[cfg(test)]")
+        .next()
+        .unwrap_or(subagents_source.as_str());
 
     assert!(
         finalize_production.contains("Box::pin(self.handle_tool_calls_chunk("),
         "tool-call iteration handling should box the large handle_tool_calls_chunk future"
     );
     assert!(
+        finalize_production.contains(
+            "Box::pin(self.engine\n            .maybe_auto_send_gateway_thread_response(&self.tid))"
+        ) || finalize_production.contains(
+            "Box::pin(self.engine.maybe_auto_send_gateway_thread_response(&self.tid))"
+        ) || finalize_production.contains(
+            "Box::pin(\n            self.engine\n                .maybe_auto_send_gateway_thread_response(&self.tid),\n        )"
+        ),
+        "done-chunk finalization should box gateway auto-send futures"
+    );
+    assert!(
         tool_calls_production.contains("Box::pin(execute_tool("),
         "tool execution callsites should box execute_tool futures"
+    );
+    assert!(
+        tool_calls_production.contains(
+            "Box::pin(self.engine\n            .maybe_auto_send_gateway_thread_response(&self.tid))"
+        ) || tool_calls_production.contains(
+            "Box::pin(self.engine.maybe_auto_send_gateway_thread_response(&self.tid))"
+        ) || tool_calls_production.contains(
+            "Box::pin(\n            self.engine\n                .maybe_auto_send_gateway_thread_response(&self.tid),\n        )"
+        ),
+        "tool-call chunk handling should box gateway auto-send futures"
+    );
+    assert!(
+        subagents_production.contains(
+            "Box::pin(agent.send_internal_agent_message(&sender, target, message, preferred_session_hint.as_deref()))"
+        ) || subagents_production.contains(
+            "Box::pin(agent\n        .send_internal_agent_message(&sender, target, message, preferred_session_hint.as_deref()))"
+        ) || subagents_production.contains(
+            "let result = Box::pin(agent.send_internal_agent_message(\n        &sender,\n        target,\n        message,\n        preferred_session_hint.as_deref(),\n    ))"
+        ),
+        "message_agent should box the oversized internal-agent send future"
     );
     assert!(
         execute_tool_production.contains("pub fn execute_tool<'a>("),
@@ -91,7 +129,7 @@ fn tool_execution_hot_path_boxes_large_futures() {
 #[tokio::test]
 async fn delete_thread_messages_updates_live_thread_and_persisted_history() {
     let root = tempdir().unwrap();
-use amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT;
+    use amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT;
 
     let manager = SessionManager::new_test(root.path()).await;
     let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
@@ -334,7 +372,10 @@ async fn thread_handoff_state_persists_and_restores_active_agent_identity() {
         .await
         .expect("handoff state should restore");
     assert_eq!(restored.origin_agent_id, MAIN_AGENT_ID);
-    assert_eq!(restored.active_agent_id, crate::agent::agent_identity::WELES_AGENT_ID);
+    assert_eq!(
+        restored.active_agent_id,
+        crate::agent::agent_identity::WELES_AGENT_ID
+    );
     assert_eq!(restored.responder_stack.len(), 2);
 
     let restored_thread = rehydrated
@@ -438,7 +479,9 @@ async fn handoff_activation_clears_thread_continuation_state_for_new_responder_s
                 pinned: false,
                 upstream_thread_id: Some("legacy-upstream-thread".to_string()),
                 upstream_transport: Some(ApiTransport::Responses),
-                upstream_provider: Some(amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string()),
+                upstream_provider: Some(
+                    amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string(),
+                ),
                 upstream_model: Some("gpt-5.4".to_string()),
                 upstream_assistant_id: None,
                 total_input_tokens: 0,
@@ -457,7 +500,9 @@ async fn handoff_activation_clears_thread_continuation_state_for_new_responder_s
                         weles_review: None,
                         input_tokens: 0,
                         output_tokens: 0,
-                        provider: Some(amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string()),
+                        provider: Some(
+                            amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string(),
+                        ),
                         model: Some("gpt-5.4".to_string()),
                         api_transport: Some(ApiTransport::Responses),
                         response_id: Some("resp_123".to_string()),
@@ -495,7 +540,10 @@ async fn handoff_activation_clears_thread_continuation_state_for_new_responder_s
     assert!(thread.upstream_transport.is_none());
     assert!(thread.upstream_provider.is_none());
     assert!(thread.upstream_model.is_none());
-    assert!(thread.messages.iter().all(|message| message.response_id.is_none()));
+    assert!(thread
+        .messages
+        .iter()
+        .all(|message| message.response_id.is_none()));
 }
 
 #[tokio::test]
@@ -547,14 +595,20 @@ async fn handoff_activation_emits_thread_reload_event_for_visible_thread() {
 
     let mut saw_reload = false;
     while let Ok(event) = events.try_recv() {
-        if let AgentEvent::ThreadReloadRequired { thread_id: event_thread_id } = event {
+        if let AgentEvent::ThreadReloadRequired {
+            thread_id: event_thread_id,
+        } = event
+        {
             assert_eq!(event_thread_id, thread_id);
             saw_reload = true;
             break;
         }
     }
 
-    assert!(saw_reload, "handoff activation should emit a thread reload event");
+    assert!(
+        saw_reload,
+        "handoff activation should emit a thread reload event"
+    );
 }
 
 #[tokio::test]
@@ -578,7 +632,9 @@ async fn delete_thread_messages_rehydrates_and_clears_invalid_continuation() {
                 pinned: false,
                 upstream_thread_id: Some("upstream-thread-1".to_string()),
                 upstream_transport: Some(ApiTransport::Responses),
-                upstream_provider: Some(amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string()),
+                upstream_provider: Some(
+                    amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string(),
+                ),
                 upstream_model: Some("gpt-5.4".to_string()),
                 upstream_assistant_id: None,
                 total_input_tokens: 0,
@@ -597,7 +653,9 @@ async fn delete_thread_messages_rehydrates_and_clears_invalid_continuation() {
                         weles_review: None,
                         input_tokens: 0,
                         output_tokens: 0,
-                        provider: Some(amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string()),
+                        provider: Some(
+                            amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string(),
+                        ),
                         model: Some("gpt-5.4".to_string()),
                         api_transport: Some(ApiTransport::Responses),
                         response_id: Some("resp_123".to_string()),
@@ -672,7 +730,9 @@ async fn delete_thread_messages_removes_orphaned_tool_results_during_rebuild() {
                 pinned: false,
                 upstream_thread_id: Some("upstream-thread-2".to_string()),
                 upstream_transport: Some(ApiTransport::Responses),
-                upstream_provider: Some(amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string()),
+                upstream_provider: Some(
+                    amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string(),
+                ),
                 upstream_model: Some("gpt-5.4".to_string()),
                 upstream_assistant_id: None,
                 total_input_tokens: 0,
@@ -708,7 +768,9 @@ async fn delete_thread_messages_removes_orphaned_tool_results_during_rebuild() {
                         weles_review: None,
                         input_tokens: 0,
                         output_tokens: 0,
-                        provider: Some(amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string()),
+                        provider: Some(
+                            amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string(),
+                        ),
                         model: Some("gpt-5.4".to_string()),
                         api_transport: Some(ApiTransport::Responses),
                         response_id: Some("resp_456".to_string()),
@@ -780,7 +842,9 @@ async fn delete_thread_messages_removes_orphaned_tool_results_during_rebuild() {
                         weles_review: None,
                         input_tokens: 0,
                         output_tokens: 0,
-                        provider: Some(amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string()),
+                        provider: Some(
+                            amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string(),
+                        ),
                         model: Some("gpt-5.4".to_string()),
                         api_transport: Some(ApiTransport::Responses),
                         response_id: None,

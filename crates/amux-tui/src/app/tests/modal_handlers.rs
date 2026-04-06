@@ -123,6 +123,24 @@ fn command_palette_tools_opens_settings_tools_tab() {
 }
 
 #[test]
+fn slash_status_opens_loading_modal_and_requests_status_without_sending_chat() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.connected = true;
+    model.input.set_text("/status");
+
+    let quit = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert!(!quit);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::Status));
+    assert!(model.status_modal_loading);
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::RequestAgentStatus) => {}
+        other => panic!("expected status request, got {:?}", other),
+    }
+    assert!(daemon_rx.try_recv().is_err());
+}
+
+#[test]
 fn ctrl_e_in_error_modal_clears_error() {
     let (mut model, _daemon_rx) = make_model();
     model.last_error = Some("boom".to_string());
@@ -529,8 +547,12 @@ fn provider_picker_filters_to_authenticated_entries_plus_custom() {
     ];
 
     let defs = widgets::provider_picker::available_provider_defs(&model.auth);
-    assert!(defs.iter().any(|provider| provider.id == PROVIDER_ID_OPENAI));
-    assert!(defs.iter().any(|provider| provider.id == PROVIDER_ID_CUSTOM));
+    assert!(defs
+        .iter()
+        .any(|provider| provider.id == PROVIDER_ID_OPENAI));
+    assert!(defs
+        .iter()
+        .any(|provider| provider.id == PROVIDER_ID_CUSTOM));
     assert!(!defs.iter().any(|provider| provider.id == "groq"));
 }
 
@@ -812,6 +834,75 @@ fn thread_picker_new_conversation_uses_selected_agent_for_first_prompt() {
             other => panic!("expected send-message command, got {:?}", other),
         }
     }
+}
+
+#[test]
+fn new_weles_conversation_uses_weles_profile_before_first_prompt() {
+    let (mut model, _daemon_rx) = make_model();
+    model.config.provider = "openai".to_string();
+    model.config.model = "gpt-5.4".to_string();
+    model.config.custom_model_name.clear();
+    model.subagents.entries.push(crate::state::SubAgentEntry {
+        id: "weles_builtin".to_string(),
+        name: "WELES".to_string(),
+        provider: "anthropic".to_string(),
+        model: "claude-sonnet-4-5".to_string(),
+        role: Some("testing".to_string()),
+        enabled: true,
+        builtin: true,
+        immutable_identity: true,
+        disable_allowed: false,
+        delete_allowed: false,
+        protected_reason: Some("Built-in reviewer".to_string()),
+        reasoning_effort: Some("medium".to_string()),
+        raw_json: Some(serde_json::json!({
+            "id": "weles_builtin",
+            "name": "WELES",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-5",
+            "reasoning_effort": "medium"
+        })),
+    });
+
+    model.start_new_thread_view_for_agent(Some("weles"));
+
+    let profile = model.current_conversation_agent_profile();
+    assert_eq!(profile.agent_label, "Weles");
+    assert_eq!(profile.provider, "anthropic");
+    assert_eq!(profile.model, "claude-sonnet-4-5");
+    assert_eq!(profile.reasoning_effort.as_deref(), Some("medium"));
+}
+
+#[test]
+fn new_weles_conversation_keeps_weles_profile_after_first_prompt_locally() {
+    let (mut model, _daemon_rx) = make_model();
+    model.connected = true;
+    model.config.provider = "openai".to_string();
+    model.config.model = "gpt-5.4".to_string();
+    model.config.custom_model_name.clear();
+    model.subagents.entries.push(crate::state::SubAgentEntry {
+        id: "weles_builtin".to_string(),
+        name: "WELES".to_string(),
+        provider: "anthropic".to_string(),
+        model: "claude-sonnet-4-5".to_string(),
+        role: Some("testing".to_string()),
+        enabled: true,
+        builtin: true,
+        immutable_identity: true,
+        disable_allowed: false,
+        delete_allowed: false,
+        protected_reason: Some("Built-in reviewer".to_string()),
+        reasoning_effort: Some("medium".to_string()),
+        raw_json: None,
+    });
+
+    model.start_new_thread_view_for_agent(Some("weles"));
+    model.submit_prompt("review this diff".to_string());
+
+    let profile = model.current_conversation_agent_profile();
+    assert_eq!(profile.agent_label, "Weles");
+    assert_eq!(profile.provider, "anthropic");
+    assert_eq!(profile.model, "claude-sonnet-4-5");
 }
 
 #[test]

@@ -174,24 +174,32 @@ fn resolve_thread_handoff_agent(alias: &str) -> Option<(String, String)> {
     }
     let normalized = trimmed.to_ascii_lowercase();
     let builtin = match normalized.as_str() {
-        MAIN_AGENT_ID | "svarog" | MAIN_AGENT_ALIAS | MAIN_AGENT_LEGACY_ALIAS | MAIN_AGENT_FALLBACK_ALIAS => {
+        MAIN_AGENT_ID
+        | "svarog"
+        | MAIN_AGENT_ALIAS
+        | MAIN_AGENT_LEGACY_ALIAS
+        | MAIN_AGENT_FALLBACK_ALIAS => {
             Some((MAIN_AGENT_ID.to_string(), MAIN_AGENT_NAME.to_string()))
         }
-        CONCIERGE_AGENT_ID | CONCIERGE_AGENT_ALIAS | CONCIERGE_AGENT_LEGACY_ALIAS => {
-            Some((CONCIERGE_AGENT_ID.to_string(), CONCIERGE_AGENT_NAME.to_string()))
-        }
-        SWAROZYC_AGENT_ID | "swarozyc" => {
-            Some((SWAROZYC_AGENT_ID.to_string(), SWAROZYC_AGENT_NAME.to_string()))
-        }
-        RADOGOST_AGENT_ID | "radogost" => {
-            Some((RADOGOST_AGENT_ID.to_string(), RADOGOST_AGENT_NAME.to_string()))
-        }
+        CONCIERGE_AGENT_ID | CONCIERGE_AGENT_ALIAS | CONCIERGE_AGENT_LEGACY_ALIAS => Some((
+            CONCIERGE_AGENT_ID.to_string(),
+            CONCIERGE_AGENT_NAME.to_string(),
+        )),
+        SWAROZYC_AGENT_ID | "swarozyc" => Some((
+            SWAROZYC_AGENT_ID.to_string(),
+            SWAROZYC_AGENT_NAME.to_string(),
+        )),
+        RADOGOST_AGENT_ID | "radogost" => Some((
+            RADOGOST_AGENT_ID.to_string(),
+            RADOGOST_AGENT_NAME.to_string(),
+        )),
         DOMOWOJ_AGENT_ID | "domowoj" => {
             Some((DOMOWOJ_AGENT_ID.to_string(), DOMOWOJ_AGENT_NAME.to_string()))
         }
-        SWIETOWIT_AGENT_ID | "swietowit" => {
-            Some((SWIETOWIT_AGENT_ID.to_string(), SWIETOWIT_AGENT_NAME.to_string()))
-        }
+        SWIETOWIT_AGENT_ID | "swietowit" => Some((
+            SWIETOWIT_AGENT_ID.to_string(),
+            SWIETOWIT_AGENT_NAME.to_string(),
+        )),
         ROD_AGENT_ID | "rod" => Some((ROD_AGENT_ID.to_string(), ROD_AGENT_NAME.to_string())),
         WELES_AGENT_ID | "weles" => {
             Some((WELES_AGENT_ID.to_string(), WELES_AGENT_NAME.to_string()))
@@ -228,10 +236,7 @@ fn thread_handoff_system_message(event: &ThreadHandoffEvent) -> String {
     });
     format!(
         "{THREAD_HANDOFF_SYSTEM_MARKER}{}\n{} handed this thread to {}. Summary: {}",
-        payload,
-        from_agent_name,
-        to_agent_name,
-        event.summary
+        payload, from_agent_name, to_agent_name, event.summary
     )
 }
 
@@ -309,31 +314,34 @@ impl AgentEngine {
         summary: &str,
         event_id: &str,
     ) -> String {
-        let linked_thread_id = format!("{INTERNAL_HANDOFF_THREAD_PREFIX}{primary_thread_id}:{event_id}");
+        let linked_thread_id =
+            format!("{INTERNAL_HANDOFF_THREAD_PREFIX}{primary_thread_id}:{event_id}");
         let now = now_millis();
         let mut should_persist = false;
         {
             let mut threads = self.threads.write().await;
-            let thread = threads.entry(linked_thread_id.clone()).or_insert_with(|| AgentThread {
-                id: linked_thread_id.clone(),
-                agent_name: Some(canonical_agent_name(to_agent_id).to_string()),
-                title: format!(
-                    "Handoff · {} -> {}",
-                    canonical_agent_name(from_agent_id),
-                    canonical_agent_name(to_agent_id)
-                ),
-                messages: Vec::new(),
-                pinned: false,
-                upstream_thread_id: Some(primary_thread_id.to_string()),
-                upstream_transport: None,
-                upstream_provider: None,
-                upstream_model: None,
-                upstream_assistant_id: None,
-                created_at: now,
-                updated_at: now,
-                total_input_tokens: 0,
-                total_output_tokens: 0,
-            });
+            let thread = threads
+                .entry(linked_thread_id.clone())
+                .or_insert_with(|| AgentThread {
+                    id: linked_thread_id.clone(),
+                    agent_name: Some(canonical_agent_name(to_agent_id).to_string()),
+                    title: format!(
+                        "Handoff · {} -> {}",
+                        canonical_agent_name(from_agent_id),
+                        canonical_agent_name(to_agent_id)
+                    ),
+                    messages: Vec::new(),
+                    pinned: false,
+                    upstream_thread_id: Some(primary_thread_id.to_string()),
+                    upstream_transport: None,
+                    upstream_provider: None,
+                    upstream_model: None,
+                    upstream_assistant_id: None,
+                    created_at: now,
+                    updated_at: now,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                });
             thread.agent_name = Some(canonical_agent_name(to_agent_id).to_string());
             thread.messages.push(AgentMessage {
                 id: generate_message_id(),
@@ -422,8 +430,9 @@ impl AgentEngine {
                     .target_agent_id
                     .as_deref()
                     .ok_or_else(|| anyhow::anyhow!("push_handoff requires target_agent_id"))?;
-                let (target_agent_id, target_agent_name) = resolve_thread_handoff_agent(target_alias)
-                    .ok_or_else(|| anyhow::anyhow!("unknown handoff target: {target_alias}"))?;
+                let (target_agent_id, target_agent_name) =
+                    resolve_thread_handoff_agent(target_alias)
+                        .ok_or_else(|| anyhow::anyhow!("unknown handoff target: {target_alias}"))?;
                 if target_agent_id == from_agent_id {
                     anyhow::bail!("cannot hand off a thread to the current active responder");
                 }
@@ -578,7 +587,8 @@ impl AgentEngine {
             .await;
         self.mark_task_awaiting_approval(&task.id, &request.thread_id, pending_approval)
             .await;
-        self.record_operator_approval_requested(pending_approval).await?;
+        self.record_operator_approval_requested(pending_approval)
+            .await?;
         let thread_created_at = self
             .threads
             .read()
@@ -586,9 +596,12 @@ impl AgentEngine {
             .get(&request.thread_id)
             .map(|thread| thread.created_at)
             .unwrap_or_else(now_millis);
-        let mut state = self.thread_handoff_state(&request.thread_id).await.unwrap_or_else(|| {
-            initial_thread_handoff_state(&request.thread_id, None, thread_created_at)
-        });
+        let mut state = self
+            .thread_handoff_state(&request.thread_id)
+            .await
+            .unwrap_or_else(|| {
+                initial_thread_handoff_state(&request.thread_id, None, thread_created_at)
+            });
         state.pending_approval_id = Some(pending_approval.approval_id.clone());
         self.thread_handoff_states
             .write()
@@ -610,9 +623,10 @@ impl AgentEngine {
             .get(thread_id)
             .map(|thread| thread.created_at)
             .unwrap_or_else(now_millis);
-        let mut state = self.thread_handoff_state(thread_id).await.unwrap_or_else(|| {
-            initial_thread_handoff_state(thread_id, None, thread_created_at)
-        });
+        let mut state = self
+            .thread_handoff_state(thread_id)
+            .await
+            .unwrap_or_else(|| initial_thread_handoff_state(thread_id, None, thread_created_at));
         if state.pending_approval_id.as_deref() == Some(approval_id) {
             state.pending_approval_id = None;
             self.thread_handoff_states

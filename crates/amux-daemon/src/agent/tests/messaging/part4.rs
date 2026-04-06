@@ -8,7 +8,9 @@ async fn send_direct_message_returns_upstream_message() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind anthropic direct-message server");
-    let addr = listener.local_addr().expect("anthropic direct-message addr");
+    let addr = listener
+        .local_addr()
+        .expect("anthropic direct-message addr");
 
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accept");
@@ -60,7 +62,10 @@ async fn send_direct_message_returns_upstream_message() {
         .expect("direct message result should expose upstream message");
     assert_eq!(upstream.id.as_deref(), Some("msg_direct_upstream"));
     assert_eq!(upstream.content_blocks.len(), 1);
-    assert_eq!(upstream.content_blocks[0].text.as_deref(), Some("Direct reply"));
+    assert_eq!(
+        upstream.content_blocks[0].text.as_deref(),
+        Some("Direct reply")
+    );
 
     match result
         .provider_final_result
@@ -70,7 +75,10 @@ async fn send_direct_message_returns_upstream_message() {
         CompletionProviderFinalResult::AnthropicMessage(message) => {
             assert_eq!(message.id.as_deref(), Some("msg_direct_upstream"));
             assert_eq!(message.content_blocks.len(), 1);
-            assert_eq!(message.content_blocks[0].text.as_deref(), Some("Direct reply"));
+            assert_eq!(
+                message.content_blocks[0].text.as_deref(),
+                Some("Direct reply")
+            );
         }
         other => panic!("expected Anthropic final result, got {other:?}"),
     }
@@ -83,7 +91,9 @@ async fn send_direct_message_returns_openai_responses_final_result() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind responses direct-message server");
-    let addr = listener.local_addr().expect("responses direct-message addr");
+    let addr = listener
+        .local_addr()
+        .expect("responses direct-message addr");
 
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accept");
@@ -166,7 +176,9 @@ async fn send_direct_message_returns_openai_chat_completions_final_result() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind chat completions direct-message server");
-    let addr = listener.local_addr().expect("chat completions direct-message addr");
+    let addr = listener
+        .local_addr()
+        .expect("chat completions direct-message addr");
 
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accept");

@@ -17,7 +17,8 @@ use crate::scrub::scrub_sensitive;
 use crate::session_manager::SessionManager;
 
 use super::agent_identity::{
-    build_spawned_persona_prompt, canonical_agent_name, extract_persona_name, sender_name_for_task,
+    build_spawned_persona_prompt, canonical_agent_id, canonical_agent_name,
+    current_agent_scope_id, extract_persona_name, sender_name_for_task,
     CONCIERGE_AGENT_ALIAS, CONCIERGE_AGENT_ID, CONCIERGE_AGENT_NAME, MAIN_AGENT_ALIAS,
     MAIN_AGENT_ID, MAIN_AGENT_NAME,
 };

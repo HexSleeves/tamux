@@ -9,6 +9,8 @@ fn collaboration_sessions_inspect_field_requests_collaboration_snapshot() {
 
     model.activate_settings_field();
 
+    assert!(matches!(model.main_pane_view, MainPaneView::Collaboration));
+
     assert!(matches!(
         daemon_rx.try_recv().expect("expected collaboration inspect command"),
         DaemonCommand::GetCollaborationSessions

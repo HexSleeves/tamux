@@ -246,6 +246,9 @@ fn start_daemon_bridge(
                             DaemonCommand::RequestFilePreview { path, max_bytes } => {
                                 let _ = client.request_file_preview(path, max_bytes);
                             }
+                            DaemonCommand::RequestAgentStatus => {
+                                let _ = client.request_agent_status();
+                            }
                             DaemonCommand::SendMessage {
                                 thread_id,
                                 content,
@@ -376,6 +379,21 @@ fn start_daemon_bridge(
                             }
                             DaemonCommand::GetCollaborationSessions => {
                                 let _ = client.get_collaboration_sessions();
+                            }
+                            DaemonCommand::VoteOnCollaborationDisagreement {
+                                parent_task_id,
+                                disagreement_id,
+                                task_id,
+                                position,
+                                confidence,
+                            } => {
+                                let _ = client.vote_on_collaboration_disagreement(
+                                    parent_task_id,
+                                    disagreement_id,
+                                    task_id,
+                                    position,
+                                    confidence,
+                                );
                             }
                             DaemonCommand::GetGeneratedTools => {
                                 let _ = client.get_generated_tools();

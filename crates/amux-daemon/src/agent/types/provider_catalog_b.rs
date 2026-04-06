@@ -94,6 +94,15 @@ pub const OPENCODE_ZEN_MODELS: &[ModelDefinition] = &[
     },
 ];
 
+pub const ARCEE_MODELS: &[ModelDefinition] = &[
+    ModelDefinition {
+        id: "trinity-large-thinking",
+        name: "Trinity Large Thinking",
+        context_window: 256000,
+        modalities: TEXT_ONLY,
+    },
+];
+
 pub const OPENROUTER_MODELS: &[ModelDefinition] = &[
     ModelDefinition {
         id: "arcee-ai/trinity-large-thinking",

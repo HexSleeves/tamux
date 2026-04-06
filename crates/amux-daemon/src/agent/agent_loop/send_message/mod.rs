@@ -42,7 +42,8 @@ impl AgentEngine {
         }
 
         if let Some(existing_thread_id) = thread_id {
-            if let Some(active_agent_id) = self.active_agent_id_for_thread(existing_thread_id).await {
+            if let Some(active_agent_id) = self.active_agent_id_for_thread(existing_thread_id).await
+            {
                 return active_agent_id;
             }
         }

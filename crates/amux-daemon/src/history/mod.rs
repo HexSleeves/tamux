@@ -8,7 +8,7 @@ use amux_protocol::{
     HistorySearchHit, SnapshotIndexEntry, TranscriptIndexEntry, WormChainTip,
 };
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_rusqlite;

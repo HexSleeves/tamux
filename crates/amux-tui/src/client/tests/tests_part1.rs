@@ -259,6 +259,61 @@ use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
     }
 
     #[tokio::test]
+    async fn agent_status_response_emits_full_status_event_and_diagnostics() {
+        let (event_tx, mut event_rx) = mpsc::channel(8);
+
+        let should_continue = DaemonClient::handle_daemon_message(
+            DaemonMessage::AgentStatusResponse {
+                tier: "mission_control".to_string(),
+                feature_flags_json: "{}".to_string(),
+                activity: "waiting_for_operator".to_string(),
+                active_thread_id: Some("thread-1".to_string()),
+                active_goal_run_id: Some("goal-1".to_string()),
+                active_goal_run_title: Some("Close release gap".to_string()),
+                provider_health_json: r#"{"openai":{"can_execute":true,"trip_count":0}}"#.to_string(),
+                gateway_statuses_json: r#"{"slack":{"status":"connected"}}"#.to_string(),
+                recent_actions_json: r#"[{"action_type":"tool_call","summary":"Ran status","timestamp":1712345678}]"#.to_string(),
+                diagnostics_json: r#"{"operator_profile_sync_state":"dirty","operator_profile_sync_dirty":true,"operator_profile_scheduler_fallback":false}"#.to_string(),
+            },
+            &event_tx,
+        )
+        .await;
+
+        assert!(should_continue);
+
+        match event_rx.recv().await.expect("expected first event") {
+            ClientEvent::StatusSnapshot(AgentStatusSnapshotVm {
+                tier,
+                activity,
+                active_thread_id,
+                active_goal_run_title,
+                provider_health_json,
+                ..
+            }) => {
+                assert_eq!(tier, "mission_control");
+                assert_eq!(activity, "waiting_for_operator");
+                assert_eq!(active_thread_id.as_deref(), Some("thread-1"));
+                assert_eq!(active_goal_run_title.as_deref(), Some("Close release gap"));
+                assert!(provider_health_json.contains("openai"));
+            }
+            other => panic!("expected status snapshot event, got {:?}", other),
+        }
+
+        match event_rx.recv().await.expect("expected second event") {
+            ClientEvent::StatusDiagnostics {
+                operator_profile_sync_state,
+                operator_profile_sync_dirty,
+                operator_profile_scheduler_fallback,
+            } => {
+                assert_eq!(operator_profile_sync_state, "dirty");
+                assert!(operator_profile_sync_dirty);
+                assert!(!operator_profile_scheduler_fallback);
+            }
+            other => panic!("expected status diagnostics event, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
     async fn daemon_openai_codex_auth_replies_emit_client_events() {
         let (event_tx, mut event_rx) = mpsc::channel(8);
 

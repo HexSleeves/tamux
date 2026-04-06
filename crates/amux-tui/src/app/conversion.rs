@@ -16,6 +16,9 @@ pub(super) fn convert_thread(t: crate::wire::AgentThread) -> chat::AgentThread {
         messages: t.messages.into_iter().map(convert_message).collect(),
         total_input_tokens: t.total_input_tokens,
         total_output_tokens: t.total_output_tokens,
+        runtime_provider: None,
+        runtime_model: None,
+        runtime_reasoning_effort: None,
     }
 }
 

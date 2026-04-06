@@ -1,4 +1,4 @@
-use amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT;
+use amux_shared::providers::{PROVIDER_ID_ARCEE, PROVIDER_ID_GITHUB_COPILOT};
 
     #[test]
     fn circuit_breaker_event_deserializes_richer_outage_metadata() {
@@ -275,4 +275,26 @@ use amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT;
             .iter()
             .any(|model| model.id == "claude-opus-4.6"));
         assert!(provider.models.iter().any(|model| model.id == "goldeneye"));
+    }
+
+    #[test]
+    fn arcee_provider_exposes_openai_compatible_defaults() {
+        let provider = get_provider_definition(PROVIDER_ID_ARCEE).expect("arcee provider");
+        assert_eq!(provider.default_base_url, "https://api.arcee.ai/api/v1");
+        assert_eq!(provider.default_model, "trinity-large-thinking");
+        assert_eq!(provider.api_type, ApiType::OpenAI);
+        assert_eq!(provider.auth_method, AuthMethod::Bearer);
+        assert!(provider.supports_model_fetch);
+        assert_eq!(provider.default_transport, ApiTransport::ChatCompletions);
+        assert_eq!(provider.models.len(), 1);
+        assert_eq!(provider.models[0].id, "trinity-large-thinking");
+        assert_eq!(provider.models[0].context_window, 256000);
+        assert_eq!(
+            get_provider_api_type(
+                PROVIDER_ID_ARCEE,
+                "trinity-large-thinking",
+                "https://api.arcee.ai/api/v1"
+            ),
+            ApiType::OpenAI
+        );
     }

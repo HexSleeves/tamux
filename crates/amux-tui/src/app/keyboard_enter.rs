@@ -13,6 +13,13 @@ impl TuiModel {
             self.input.reduce(input::InputAction::InsertNewline);
             return false;
         }
+        if self.focus == FocusArea::Chat
+            && matches!(self.main_pane_view, MainPaneView::Collaboration)
+            && self.collaboration.focus() == CollaborationPaneFocus::Detail
+        {
+            self.submit_selected_collaboration_vote();
+            return false;
+        }
         if self.focus == FocusArea::Chat {
             if let Some(sel) = self.chat.selected_message() {
                 let is_tool = self

@@ -145,12 +145,18 @@ async fn persisted_assistant_messages_reload_upstream_message_metadata() {
         .as_ref()
         .expect("upstream message should reload");
 
-    assert_eq!(assistant.response_id.as_deref(), Some("msg_upstream_reloaded"));
+    assert_eq!(
+        assistant.response_id.as_deref(),
+        Some("msg_upstream_reloaded")
+    );
     assert_eq!(upstream.id.as_deref(), Some("msg_upstream_reloaded"));
     assert_eq!(upstream.message_type.as_deref(), Some("message"));
     assert_eq!(upstream.role.as_deref(), Some("assistant"));
     assert_eq!(upstream.model.as_deref(), Some("claude-sonnet-4-20250514"));
     assert_eq!(upstream.stop_reason.as_deref(), Some("end_turn"));
     assert_eq!(upstream.content_blocks.len(), 1);
-    assert_eq!(upstream.content_blocks[0].text.as_deref(), Some("Hello from Claude."));
+    assert_eq!(
+        upstream.content_blocks[0].text.as_deref(),
+        Some("Hello from Claude.")
+    );
 }

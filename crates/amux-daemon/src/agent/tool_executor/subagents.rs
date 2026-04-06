@@ -628,13 +628,21 @@ async fn execute_message_agent(
         let tasks = agent.tasks.lock().await;
         sender_name_for_task(tasks.iter().find(|task| task.id == current_task_id))
     } else {
-        MAIN_AGENT_NAME.to_string()
+        canonical_agent_name(&current_agent_scope_id()).to_string()
     };
 
+    if canonical_agent_id(&sender) == canonical_agent_id(target) {
+        anyhow::bail!("message_agent cannot target the current active responder");
+    }
+
     let preferred_session_hint = preferred_session_id.as_ref().map(|value| value.to_string());
-    let result = agent
-        .send_internal_agent_message(&sender, target, message, preferred_session_hint.as_deref())
-        .await?;
+    let result = Box::pin(agent.send_internal_agent_message(
+        &sender,
+        target,
+        message,
+        preferred_session_hint.as_deref(),
+    ))
+    .await?;
     Ok(serde_json::to_string_pretty(&serde_json::json!({
         "target": canonical_agent_name(target),
         "thread_id": result.thread_id,

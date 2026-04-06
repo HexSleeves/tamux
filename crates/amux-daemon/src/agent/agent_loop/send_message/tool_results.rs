@@ -7,7 +7,10 @@ fn build_handoff_restart_user_message(
     tool_arguments: &str,
 ) -> Option<String> {
     let args: serde_json::Value = serde_json::from_str(tool_arguments).ok()?;
-    let reason = args.get("reason").and_then(|value| value.as_str()).unwrap_or("");
+    let reason = args
+        .get("reason")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
     let summary = args
         .get("summary")
         .and_then(|value| value.as_str())

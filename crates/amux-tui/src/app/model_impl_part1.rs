@@ -18,6 +18,7 @@ impl TuiModel {
             plugin_settings: settings::PluginSettingsState::new(),
             auth: AuthState::new(),
             subagents: SubAgentsState::new(),
+            collaboration: CollaborationState::new(),
             concierge: ConciergeState::new(),
             tier: TierState::default(),
             focus: FocusArea::Input,
@@ -64,6 +65,9 @@ impl TuiModel {
             gateway_statuses: Vec::new(),
             weles_health: None,
             recent_actions: Vec::new(),
+            status_modal_snapshot: None,
+            status_modal_loading: false,
+            status_modal_error: None,
             chat_drag_anchor: None,
             chat_drag_current: None,
             chat_drag_anchor_point: None,
@@ -78,6 +82,29 @@ impl TuiModel {
 
     fn send_daemon_command(&self, command: DaemonCommand) {
         let _ = self.daemon_cmd_tx.send(command);
+    }
+
+    pub(crate) fn open_status_modal_loading(&mut self) {
+        self.status_modal_loading = true;
+        self.status_modal_snapshot = None;
+        self.status_modal_error = None;
+        if self.modal.top() != Some(modal::ModalKind::Status) {
+            self.modal
+                .reduce(modal::ModalAction::Push(modal::ModalKind::Status));
+        }
+    }
+
+    pub(crate) fn status_modal_body(&self) -> String {
+        if self.status_modal_loading {
+            return "Loading tamux status...".to_string();
+        }
+        if let Some(error) = &self.status_modal_error {
+            return format!("Status request failed\n====================\n{error}");
+        }
+        if let Some(snapshot) = &self.status_modal_snapshot {
+            return render_helpers::format_status_modal_text(snapshot);
+        }
+        "No status available.".to_string()
     }
 
     fn show_input_notice(

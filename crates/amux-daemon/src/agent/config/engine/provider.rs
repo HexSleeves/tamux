@@ -1,6 +1,6 @@
 use super::super::*;
-use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
 use crate::agent::{copilot_auth, openai_codex_auth, provider_resolution};
+use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
 
 impl AgentEngine {
     pub async fn set_provider_model_json(

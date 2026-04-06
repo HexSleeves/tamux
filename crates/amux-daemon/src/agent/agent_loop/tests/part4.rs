@@ -358,11 +358,17 @@ async fn anthropic_send_message_persists_upstream_message_on_assistant_turn() {
         .as_ref()
         .expect("upstream message should be preserved");
 
-    assert_eq!(assistant.response_id.as_deref(), Some("msg_upstream_persisted"));
+    assert_eq!(
+        assistant.response_id.as_deref(),
+        Some("msg_upstream_persisted")
+    );
     assert_eq!(upstream.id.as_deref(), Some("msg_upstream_persisted"));
     assert_eq!(upstream.model.as_deref(), Some("claude-sonnet-4-20250514"));
     assert_eq!(upstream.content_blocks.len(), 1);
-    assert_eq!(upstream.content_blocks[0].text.as_deref(), Some("Hello from Claude."));
+    assert_eq!(
+        upstream.content_blocks[0].text.as_deref(),
+        Some("Hello from Claude.")
+    );
 }
 
 #[tokio::test]
@@ -455,7 +461,10 @@ async fn anthropic_send_message_outcome_exposes_upstream_message() {
         .expect("outcome should expose upstream message");
     assert_eq!(upstream.id.as_deref(), Some("msg_upstream_outcome"));
     assert_eq!(upstream.content_blocks.len(), 1);
-    assert_eq!(upstream.content_blocks[0].text.as_deref(), Some("Outcome surface"));
+    assert_eq!(
+        upstream.content_blocks[0].text.as_deref(),
+        Some("Outcome surface")
+    );
 }
 
 #[tokio::test]
@@ -546,8 +555,7 @@ async fn anthropic_done_event_exposes_upstream_message() {
     let mut done_upstream = None;
     while let Ok(event) = events.try_recv() {
         if let AgentEvent::Done {
-            upstream_message,
-            ..
+            upstream_message, ..
         } = event
         {
             done_upstream = upstream_message;
@@ -557,5 +565,8 @@ async fn anthropic_done_event_exposes_upstream_message() {
     let upstream = done_upstream.expect("done event should expose upstream message");
     assert_eq!(upstream.id.as_deref(), Some("msg_upstream_event"));
     assert_eq!(upstream.content_blocks.len(), 1);
-    assert_eq!(upstream.content_blocks[0].text.as_deref(), Some("Event surface"));
+    assert_eq!(
+        upstream.content_blocks[0].text.as_deref(),
+        Some("Event surface")
+    );
 }

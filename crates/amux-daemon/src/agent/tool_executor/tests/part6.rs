@@ -170,6 +170,90 @@
     }
 
     #[tokio::test]
+    async fn message_agent_rejects_self_target_for_active_responder() {
+        let root = tempdir().expect("tempdir should succeed");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+        let (event_tx, _) = broadcast::channel(8);
+        let thread_id = "thread-self-message";
+
+        {
+            let mut threads = engine.threads.write().await;
+            threads.insert(
+                thread_id.to_string(),
+                crate::agent::types::AgentThread {
+                    id: thread_id.to_string(),
+                    agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+                    title: "Sticky Svarog".to_string(),
+                    messages: vec![crate::agent::types::AgentMessage::user("Operator wants Svarog", 1)],
+                    pinned: false,
+                    upstream_thread_id: None,
+                    upstream_transport: None,
+                    upstream_provider: None,
+                    upstream_model: None,
+                    upstream_assistant_id: None,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    created_at: 1,
+                    updated_at: 1,
+                },
+            );
+        }
+        engine
+            .set_thread_handoff_state(
+                thread_id,
+                crate::agent::ThreadHandoffState {
+                    origin_agent_id: crate::agent::agent_identity::MAIN_AGENT_ID.to_string(),
+                    active_agent_id: crate::agent::agent_identity::MAIN_AGENT_ID.to_string(),
+                    responder_stack: vec![crate::agent::ThreadResponderFrame {
+                        agent_id: crate::agent::agent_identity::MAIN_AGENT_ID.to_string(),
+                        agent_name: crate::agent::agent_identity::MAIN_AGENT_NAME.to_string(),
+                        entered_at: 1,
+                        entered_via_handoff_event_id: None,
+                        linked_thread_id: None,
+                    }],
+                    events: Vec::new(),
+                    pending_approval_id: None,
+                },
+            )
+            .await;
+
+        let tool_call = ToolCall::with_default_weles_review(
+            "tool-message-self".to_string(),
+            ToolFunction {
+                name: "message_agent".to_string(),
+                arguments: serde_json::json!({
+                    "target": "svarog",
+                    "message": "Talk to yourself"
+                })
+                .to_string(),
+            },
+        );
+
+        let result = execute_tool(
+            &tool_call,
+            &engine,
+            thread_id,
+            None,
+            &manager,
+            None,
+            &event_tx,
+            root.path(),
+            &engine.http_client,
+            None,
+        )
+        .await;
+
+        assert!(result.is_error, "self-targeted message_agent should be rejected");
+        assert!(
+            result.content.contains("cannot target the current active responder")
+                || result.content.contains("cannot target the same agent"),
+            "unexpected self-target error: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
     async fn execute_managed_command_auto_denies_learned_destructive_category() {
         let recorded_bodies = Arc::new(Mutex::new(std::collections::VecDeque::new()));
         let root = tempdir().expect("tempdir should succeed");

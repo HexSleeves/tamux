@@ -1,5 +1,5 @@
 use super::*;
-use amux_shared::providers::{PROVIDER_ID_OPENAI, PROVIDER_ID_CHATGPT_SUBSCRIPTION};
+use amux_shared::providers::{PROVIDER_ID_CHATGPT_SUBSCRIPTION, PROVIDER_ID_OPENAI};
 use std::path::{Path, PathBuf};
 
 #[path = "commands_goal_targets.rs"]
@@ -297,6 +297,7 @@ impl TuiModel {
                 | "chat"
                 | "settings"
                 | "view"
+                | "status"
                 | "quit"
                 | "prompt"
                 | "goal"
@@ -383,6 +384,11 @@ impl TuiModel {
                 };
                 self.chat.reduce(chat::ChatAction::SetTranscriptMode(next));
                 self.status_line = format!("View: {:?}", next);
+            }
+            "status" => {
+                self.open_status_modal_loading();
+                self.send_daemon_command(DaemonCommand::RequestAgentStatus);
+                self.status_line = "Requesting tamux status...".to_string();
             }
             "quit" => self.pending_quit = true,
             "prompt" => {
@@ -485,18 +491,39 @@ impl TuiModel {
         } else {
             None
         };
+        let local_target_agent_name =
+            target_agent_id
+                .as_deref()
+                .and_then(|agent_id| match agent_id {
+                    amux_protocol::AGENT_ID_RAROG => {
+                        Some(amux_protocol::AGENT_NAME_RAROG.to_string())
+                    }
+                    "weles" => Some("Weles".to_string()),
+                    _ => None,
+                });
         if thread_id.as_deref() == self.cancelled_thread_id.as_deref() {
             self.cancelled_thread_id = None;
         }
         if thread_id.is_none() {
+            let local_thread_id = format!("local-{}", self.tick_counter);
+            let local_title = if prompt.len() > 40 {
+                format!("{}...", &prompt[..40])
+            } else {
+                prompt.clone()
+            };
             self.chat.reduce(chat::ChatAction::ThreadCreated {
-                thread_id: format!("local-{}", self.tick_counter),
-                title: if prompt.len() > 40 {
-                    format!("{}...", &prompt[..40])
-                } else {
-                    prompt.clone()
-                },
+                thread_id: local_thread_id.clone(),
+                title: local_title.clone(),
             });
+            if let Some(agent_name) = local_target_agent_name {
+                self.chat
+                    .reduce(chat::ChatAction::ThreadDetailReceived(chat::AgentThread {
+                        id: local_thread_id,
+                        agent_name: Some(agent_name),
+                        title: local_title,
+                        ..Default::default()
+                    }));
+            }
         }
 
         if let Some(thread) = self.chat.active_thread_mut() {
@@ -527,6 +554,26 @@ impl TuiModel {
     }
 
     pub(super) fn focus_next(&mut self) {
+        if matches!(self.main_pane_view, MainPaneView::Collaboration) {
+            match self.focus {
+                FocusArea::Chat => match self.collaboration.focus() {
+                    CollaborationPaneFocus::Navigator => self.collaboration.reduce(
+                        CollaborationAction::SetFocus(CollaborationPaneFocus::Detail),
+                    ),
+                    CollaborationPaneFocus::Detail => self.focus = FocusArea::Input,
+                },
+                FocusArea::Input => {
+                    self.focus = FocusArea::Chat;
+                    self.collaboration.reduce(CollaborationAction::SetFocus(
+                        CollaborationPaneFocus::Navigator,
+                    ));
+                }
+                FocusArea::Sidebar => self.focus = FocusArea::Input,
+            }
+            self.input.set_mode(input::InputMode::Insert);
+            return;
+        }
+
         self.focus = if self.sidebar_visible() {
             match self.focus {
                 FocusArea::Chat => FocusArea::Sidebar,
@@ -543,6 +590,31 @@ impl TuiModel {
     }
 
     pub(super) fn focus_prev(&mut self) {
+        if matches!(self.main_pane_view, MainPaneView::Collaboration) {
+            match self.focus {
+                FocusArea::Input => {
+                    self.focus = FocusArea::Chat;
+                    self.collaboration.reduce(CollaborationAction::SetFocus(
+                        CollaborationPaneFocus::Detail,
+                    ));
+                }
+                FocusArea::Chat => match self.collaboration.focus() {
+                    CollaborationPaneFocus::Detail => self.collaboration.reduce(
+                        CollaborationAction::SetFocus(CollaborationPaneFocus::Navigator),
+                    ),
+                    CollaborationPaneFocus::Navigator => self.focus = FocusArea::Input,
+                },
+                FocusArea::Sidebar => {
+                    self.focus = FocusArea::Chat;
+                    self.collaboration.reduce(CollaborationAction::SetFocus(
+                        CollaborationPaneFocus::Navigator,
+                    ));
+                }
+            }
+            self.input.set_mode(input::InputMode::Insert);
+            return;
+        }
+
         self.focus = if self.sidebar_visible() {
             match self.focus {
                 FocusArea::Chat => FocusArea::Input,
@@ -594,6 +666,25 @@ impl TuiModel {
                 self.task_view_scroll = 0;
                 self.focus = FocusArea::Chat;
                 self.status_line = "Todo details".to_string();
+            }
+        }
+    }
+
+    pub(super) fn submit_selected_collaboration_vote(&mut self) {
+        if let (Some(session), Some(disagreement), Some(position)) = (
+            self.collaboration.selected_session(),
+            self.collaboration.selected_disagreement(),
+            self.collaboration.selected_position(),
+        ) {
+            if let Some(parent_task_id) = session.parent_task_id.clone() {
+                self.send_daemon_command(DaemonCommand::VoteOnCollaborationDisagreement {
+                    parent_task_id,
+                    disagreement_id: disagreement.id.clone(),
+                    task_id: "operator".to_string(),
+                    position: position.to_string(),
+                    confidence: Some(1.0),
+                });
+                self.status_line = format!("Casting vote: {position}");
             }
         }
     }

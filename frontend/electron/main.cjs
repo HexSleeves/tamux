@@ -569,7 +569,8 @@ app.whenReady().then(async () => {
     await spawnDaemon();
     windowRuntime.createWindow();
 
-    app.on('activate', () => {
+    app.on('activate', async () => {
+        await spawnDaemon();
         if (BrowserWindow.getAllWindows().length === 0) windowRuntime.createWindow();
     });
 });

@@ -380,7 +380,9 @@ async fn remove_memory_provenance_records_retract_relationship() -> Result<()> {
         })
         .await?;
 
-    let report = store.memory_provenance_report(Some("MEMORY.md"), 10).await?;
+    let report = store
+        .memory_provenance_report(Some("MEMORY.md"), 10)
+        .await?;
     let remove_entry = report
         .entries
         .iter()
@@ -389,8 +391,14 @@ async fn remove_memory_provenance_records_retract_relationship() -> Result<()> {
 
     assert_eq!(remove_entry.relationships.len(), 1);
     assert_eq!(remove_entry.relationships[0].relation_type, "retracts");
-    assert_eq!(remove_entry.relationships[0].related_entry_id, "memory-editor-active");
-    assert_eq!(remove_entry.relationships[0].fact_key.as_deref(), Some("editor"));
+    assert_eq!(
+        remove_entry.relationships[0].related_entry_id,
+        "memory-editor-active"
+    );
+    assert_eq!(
+        remove_entry.relationships[0].fact_key.as_deref(),
+        Some("editor")
+    );
 
     fs::remove_dir_all(root)?;
     Ok(())

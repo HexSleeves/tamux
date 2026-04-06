@@ -1,19 +1,22 @@
 use super::*;
 use amux_shared::providers::{
-    PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI,
-    MINIMAX_PROVIDER, QWEN_PROVIDER,
+    MINIMAX_PROVIDER, PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_ARCEE,
+    PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI, QWEN_PROVIDER,
 };
 
 #[test]
-fn provider_count_is_21() {
-    assert_eq!(PROVIDERS.len(), 21);
+fn provider_count_is_22() {
+    assert_eq!(PROVIDERS.len(), 22);
 }
 
 #[test]
 fn shared_provider_refs_match_tui_catalog() {
     let provider = find_by_id(QWEN_PROVIDER.id).unwrap();
     assert_eq!(provider.id, QWEN_PROVIDER.id);
-    assert!(uses_fixed_anthropic_messages(MINIMAX_PROVIDER.id, "MiniMax-M2.7"));
+    assert!(uses_fixed_anthropic_messages(
+        MINIMAX_PROVIDER.id,
+        "MiniMax-M2.7"
+    ));
 }
 
 #[test]
@@ -38,7 +41,10 @@ fn alibaba_coding_plan_uses_openai_compatible_base_url() {
 
 #[test]
 fn anthropic_message_providers_are_detected() {
-    assert!(uses_fixed_anthropic_messages(MINIMAX_PROVIDER.id, "MiniMax-M2.7"));
+    assert!(uses_fixed_anthropic_messages(
+        MINIMAX_PROVIDER.id,
+        "MiniMax-M2.7"
+    ));
     assert!(!uses_fixed_anthropic_messages(QWEN_PROVIDER.id, "qwen-max"));
     assert!(!uses_fixed_anthropic_messages(
         PROVIDER_ID_ALIBABA_CODING_PLAN,
@@ -97,4 +103,36 @@ fn known_models_github_copilot_matches_static_catalog() {
     assert!(models.iter().any(|model| model.id == "claude-sonnet-4.6"));
     assert!(models.iter().any(|model| model.id == "raptor-mini"));
     assert!(models.iter().any(|model| model.id == "goldeneye"));
+}
+
+#[test]
+fn custom_model_name_can_resolve_known_provider_context_window() {
+    assert_eq!(
+        resolve_context_window_for_provider_auth(
+            PROVIDER_ID_GITHUB_COPILOT,
+            "github_copilot",
+            "totally-custom-runtime-id",
+            "Raptor mini (Preview)",
+        ),
+        Some(264_000)
+    );
+}
+
+#[test]
+fn unknown_custom_model_uses_264k_default_context_window() {
+    assert_eq!(default_custom_model_context_window(), 264_000);
+}
+
+#[test]
+fn arcee_provider_uses_expected_defaults() {
+    let provider = find_by_id(PROVIDER_ID_ARCEE).unwrap();
+    assert_eq!(provider.name, "Arcee");
+    assert_eq!(provider.default_base_url, "https://api.arcee.ai/api/v1");
+    assert_eq!(provider.default_model, "trinity-large-thinking");
+    assert_eq!(provider.default_auth_source, "api_key");
+    assert_eq!(provider.supported_auth_sources, API_KEY_ONLY_AUTH_SOURCES);
+    assert_eq!(provider.default_transport, "chat_completions");
+    assert_eq!(provider.supported_transports, CHAT_ONLY_TRANSPORTS);
+    assert_eq!(known_context_window_for(PROVIDER_ID_ARCEE, "trinity-large-thinking"), Some(256_000));
+    assert!(supports_model_fetch_for(PROVIDER_ID_ARCEE));
 }

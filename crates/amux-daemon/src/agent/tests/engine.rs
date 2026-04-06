@@ -1,8 +1,7 @@
 #[cfg(test)]
 use super::*;
 use amux_shared::providers::{
-    PROVIDER_ID_CHATGPT_SUBSCRIPTION, PROVIDER_ID_CUSTOM, PROVIDER_ID_GROQ,
-    PROVIDER_ID_OPENAI,
+    PROVIDER_ID_CHATGPT_SUBSCRIPTION, PROVIDER_ID_CUSTOM, PROVIDER_ID_GROQ, PROVIDER_ID_OPENAI,
 };
 use tempfile::TempDir;
 use tokio::io::AsyncReadExt;
@@ -87,7 +86,9 @@ async fn provider_alternative_excludes_placeholder_provider_row() {
     );
     let (engine, _temp_dir) = make_test_engine(config).await;
 
-    let suggestion = engine.suggest_alternative_provider(PROVIDER_ID_OPENAI).await;
+    let suggestion = engine
+        .suggest_alternative_provider(PROVIDER_ID_OPENAI)
+        .await;
 
     assert!(
         suggestion.is_none(),
@@ -110,7 +111,9 @@ async fn provider_alternative_excludes_failed_provider_itself() {
     );
     let (engine, _temp_dir) = make_test_engine(config).await;
 
-    let suggestion = engine.suggest_alternative_provider(PROVIDER_ID_OPENAI).await;
+    let suggestion = engine
+        .suggest_alternative_provider(PROVIDER_ID_OPENAI)
+        .await;
 
     assert!(
         suggestion.is_none(),
@@ -141,7 +144,9 @@ async fn provider_alternative_excludes_open_breaker_provider() {
         }
     }
 
-    let suggestion = engine.suggest_alternative_provider(PROVIDER_ID_OPENAI).await;
+    let suggestion = engine
+        .suggest_alternative_provider(PROVIDER_ID_OPENAI)
+        .await;
 
     assert!(
         suggestion.is_none(),
@@ -164,7 +169,9 @@ async fn provider_alternative_includes_configured_healthy_provider() {
     );
     let (engine, _temp_dir) = make_test_engine(config).await;
 
-    let suggestion = engine.suggest_alternative_provider(PROVIDER_ID_OPENAI).await;
+    let suggestion = engine
+        .suggest_alternative_provider(PROVIDER_ID_OPENAI)
+        .await;
 
     let suggestion = suggestion.expect("healthy provider should be suggested");
     assert!(
@@ -233,7 +240,9 @@ async fn provider_alternative_uses_candidate_default_model_for_empty_named_model
         resolve_candidate_provider_config(&config, PROVIDER_ID_GROQ)
             .expect("candidate provider should resolve with its default model")
     };
-    let suggestion = engine.suggest_alternative_provider(PROVIDER_ID_OPENAI).await;
+    let suggestion = engine
+        .suggest_alternative_provider(PROVIDER_ID_OPENAI)
+        .await;
 
     std::env::remove_var("TAMUX_PROVIDER_AUTH_DB_PATH");
     std::env::remove_var("TAMUX_CODEX_CLI_AUTH_PATH");

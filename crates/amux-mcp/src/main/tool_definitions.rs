@@ -499,7 +499,9 @@ mod tests {
     #[test]
     fn tool_definitions_include_query_audits() {
         let defs = tool_definitions();
-        let tools = defs.as_array().expect("tool definitions should be an array");
+        let tools = defs
+            .as_array()
+            .expect("tool definitions should be an array");
         assert!(
             tools.iter().any(|tool| tool["name"] == "query_audits"),
             "query_audits tool definition should be present"
@@ -509,11 +511,12 @@ mod tests {
     #[test]
     fn tool_definitions_include_semantic_query() {
         let defs = tool_definitions();
-        let tools = defs.as_array().expect("tool definitions should be an array");
+        let tools = defs
+            .as_array()
+            .expect("tool definitions should be an array");
         assert!(
             tools.iter().any(|tool| tool["name"] == "semantic_query"),
             "semantic_query tool definition should be present"
         );
     }
-
 }

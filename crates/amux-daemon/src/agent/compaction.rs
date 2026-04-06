@@ -1,8 +1,8 @@
 //! Context compaction — token-aware message compression for LLM requests.
 
-use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
 use super::llm_client::messages_to_api_format;
 use super::*;
+use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
 
 const HEURISTIC_COMPACTION_VISIBLE_TEXT: &str = "rule based";
 const COMPACTION_NOTICE_KIND: &str = "auto-compaction";
@@ -39,7 +39,8 @@ const COMPACTION_CHECKPOINT_SCHEMA: &str = r#"# 🤖 Agent Context: State Checkp
 [Strict single-action instruction]
 "#;
 const COMPACTION_UNKNOWN_DIRECTORY: &str = "unknown (not captured in older context)";
-const COMPACTION_NO_FILES_CAPTURED: &str = "* `none` - (No explicit file edits were captured in the compacted slice.)\n";
+const COMPACTION_NO_FILES_CAPTURED: &str =
+    "* `none` - (No explicit file edits were captured in the compacted slice.)\n";
 const COMPACTION_NO_READONLY_CAPTURED: &str =
     "* `none` - (No explicit reference files were captured in the compacted slice.)\n";
 const COMPACTION_NO_DEAD_ENDS_CAPTURED: &str = "* **Failed:** No earlier failed path was preserved in this compacted slice.\n    * *Resolution:* Continue from the retained recent context instead of re-expanding discarded history.\n";
@@ -513,12 +514,16 @@ fn checkpoint_primary_objective(messages: &[AgentMessage]) -> String {
     let first_user = messages
         .iter()
         .find(|message| message.role == MessageRole::User)
-        .map(|message| super::goal_parsing::summarize_text(compaction_runtime_content(message), 180));
+        .map(|message| {
+            super::goal_parsing::summarize_text(compaction_runtime_content(message), 180)
+        });
     let latest_user = messages
         .iter()
         .rev()
         .find(|message| message.role == MessageRole::User)
-        .map(|message| super::goal_parsing::summarize_text(compaction_runtime_content(message), 180));
+        .map(|message| {
+            super::goal_parsing::summarize_text(compaction_runtime_content(message), 180)
+        });
 
     match (first_user, latest_user) {
         (Some(first), Some(latest)) if first != latest => {
@@ -570,7 +575,9 @@ fn checkpoint_pending_phases(messages: &[AgentMessage]) -> String {
         .iter()
         .rev()
         .find(|message| message.role == MessageRole::User)
-        .map(|message| super::goal_parsing::summarize_text(compaction_runtime_content(message), 140));
+        .map(|message| {
+            super::goal_parsing::summarize_text(compaction_runtime_content(message), 140)
+        });
     match latest_user {
         Some(latest_user) => format!(
             "Continue the active request, validate the affected slice, and close any unresolved risks around: {}",
@@ -655,11 +662,7 @@ fn checkpoint_dead_ends(messages: &[AgentMessage]) -> String {
 }
 
 fn checkpoint_recent_actions(messages: &[AgentMessage]) -> String {
-    let actions = messages
-        .iter()
-        .rev()
-        .take(5)
-        .collect::<Vec<_>>();
+    let actions = messages.iter().rev().take(5).collect::<Vec<_>>();
     let mut ordered = actions;
     ordered.reverse();
 
@@ -746,7 +749,8 @@ fn collect_context_paths(messages: &[AgentMessage], prefer_modified: bool) -> Ve
         if modified_tool != prefer_modified {
             continue;
         }
-        if let Some(path) = extract_path_token(message.tool_arguments.as_deref().unwrap_or_default())
+        if let Some(path) =
+            extract_path_token(message.tool_arguments.as_deref().unwrap_or_default())
         {
             if !paths.iter().any(|existing| existing == &path) {
                 paths.push(path);

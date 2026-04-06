@@ -3,6 +3,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalKind {
     CommandPalette,
+    Status,
     ThreadPicker,
     GoalPicker,
     ProviderPicker,
@@ -408,6 +409,10 @@ fn default_command_items() -> Vec<CommandItem> {
         CommandItem {
             command: "view".into(),
             description: "Switch transcript mode".into(),
+        },
+        CommandItem {
+            command: "status".into(),
+            description: "Show tamux status".into(),
         },
         CommandItem {
             command: "settings".into(),

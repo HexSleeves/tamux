@@ -1,4 +1,8 @@
 impl DaemonClient {
+    pub fn request_agent_status(&self) -> Result<()> {
+        self.send(ClientMessage::AgentStatusQuery)
+    }
+
     pub fn request_file_preview(
         &self,
         path: impl Into<String>,
@@ -229,6 +233,23 @@ impl DaemonClient {
     pub fn get_collaboration_sessions(&self) -> Result<()> {
         self.send(ClientMessage::AgentGetCollaborationSessions {
             parent_task_id: None,
+        })
+    }
+
+    pub fn vote_on_collaboration_disagreement(
+        &self,
+        parent_task_id: String,
+        disagreement_id: String,
+        task_id: String,
+        position: String,
+        confidence: Option<f64>,
+    ) -> Result<()> {
+        self.send(ClientMessage::AgentVoteOnCollaborationDisagreement {
+            parent_task_id,
+            disagreement_id,
+            task_id,
+            position,
+            confidence,
         })
     }
 

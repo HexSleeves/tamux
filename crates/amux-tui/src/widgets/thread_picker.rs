@@ -55,6 +55,10 @@ fn thread_matches_query(thread: &AgentThread, query: &str) -> bool {
 
 pub(crate) fn is_rarog_thread(thread: &AgentThread) -> bool {
     thread.id == "concierge"
+        || thread
+            .agent_name
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case(AGENT_NAME_RAROG))
         || thread.title.eq_ignore_ascii_case("concierge")
         || thread.title.starts_with("HEARTBEAT SYNTHESIS")
         || thread.title.starts_with("Heartbeat check:")
@@ -67,12 +71,20 @@ pub(crate) fn is_internal_thread(thread: &AgentThread) -> bool {
 
 fn is_hidden_handoff_thread(thread: &AgentThread) -> bool {
     thread.id.starts_with(HIDDEN_HANDOFF_THREAD_PREFIX)
-        || thread.title.trim().to_ascii_lowercase().starts_with("handoff ")
+        || thread
+            .title
+            .trim()
+            .to_ascii_lowercase()
+            .starts_with("handoff ")
 }
 
 pub(crate) fn is_weles_thread(thread: &AgentThread) -> bool {
     !is_internal_thread(thread)
-        && (thread.title.contains(WELES_THREAD_TITLE)
+        && (thread
+            .agent_name
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case("weles"))
+            || thread.title.contains(WELES_THREAD_TITLE)
             || thread.messages.iter().any(|message| {
                 message.content.lines().any(|line| {
                     let Some((marker, value)) = line.split_once(':') else {
@@ -533,6 +545,56 @@ mod tests {
 
         assert_eq!(threads.len(), 1);
         assert_eq!(threads[0].id, "weles-thread");
+    }
+
+    #[test]
+    fn weles_tab_uses_agent_name_for_new_targeted_threads() {
+        let chat = make_chat(vec![
+            AgentThread {
+                id: "thread-weles".into(),
+                agent_name: Some("Weles".into()),
+                title: "Review pending changes".into(),
+                ..Default::default()
+            },
+            AgentThread {
+                id: "thread-svarog".into(),
+                agent_name: Some("Svarog".into()),
+                title: "Review pending changes".into(),
+                ..Default::default()
+            },
+        ]);
+        let mut modal = ModalState::new();
+        modal.set_thread_picker_tab(ThreadPickerTab::Weles);
+
+        let threads = filtered_threads(&chat, &modal);
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, "thread-weles");
+    }
+
+    #[test]
+    fn rarog_tab_uses_agent_name_for_new_targeted_threads() {
+        let chat = make_chat(vec![
+            AgentThread {
+                id: "thread-rarog".into(),
+                agent_name: Some("Rarog".into()),
+                title: "Operator triage".into(),
+                ..Default::default()
+            },
+            AgentThread {
+                id: "thread-svarog".into(),
+                agent_name: Some("Svarog".into()),
+                title: "Operator triage".into(),
+                ..Default::default()
+            },
+        ]);
+        let mut modal = ModalState::new();
+        modal.set_thread_picker_tab(ThreadPickerTab::Rarog);
+
+        let threads = filtered_threads(&chat, &modal);
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, "thread-rarog");
     }
 
     #[test]

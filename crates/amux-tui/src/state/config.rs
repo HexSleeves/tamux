@@ -1,8 +1,8 @@
 // Local wire type copies (will be replaced by crate::wire imports in Task 9)
 #![allow(dead_code)]
 
-use amux_shared::providers::{PROVIDER_ID_MINIMAX_CODING_PLAN, PROVIDER_ID_OPENAI};
 use crate::providers;
+use amux_shared::providers::{PROVIDER_ID_MINIMAX_CODING_PLAN, PROVIDER_ID_OPENAI};
 
 #[derive(Debug, Clone, Default)]
 pub struct FetchedModel {
@@ -381,7 +381,8 @@ mod tests {
     fn config_received_populates_all_fields() {
         let mut state = ConfigState::new();
         state.reduce(ConfigAction::ConfigReceived(make_snapshot(
-            PROVIDER_ID_OPENAI, "gpt-4o",
+            PROVIDER_ID_OPENAI,
+            "gpt-4o",
         )));
         assert_eq!(state.provider(), PROVIDER_ID_OPENAI);
         assert_eq!(state.model(), "gpt-4o");
@@ -416,9 +417,12 @@ mod tests {
     fn set_provider_resets_base_url_and_model_to_definition_defaults() {
         let mut state = ConfigState::new();
         state.reduce(ConfigAction::ConfigReceived(make_snapshot(
-            PROVIDER_ID_OPENAI, "gpt-4o",
+            PROVIDER_ID_OPENAI,
+            "gpt-4o",
         )));
-        state.reduce(ConfigAction::SetProvider(PROVIDER_ID_MINIMAX_CODING_PLAN.into()));
+        state.reduce(ConfigAction::SetProvider(
+            PROVIDER_ID_MINIMAX_CODING_PLAN.into(),
+        ));
         assert_eq!(state.provider(), PROVIDER_ID_MINIMAX_CODING_PLAN);
         // base_url and model reset to the new provider's defaults
         let def = providers::find_by_id(PROVIDER_ID_MINIMAX_CODING_PLAN).unwrap();
@@ -432,7 +436,8 @@ mod tests {
     fn set_model_updates_only_model() {
         let mut state = ConfigState::new();
         state.reduce(ConfigAction::ConfigReceived(make_snapshot(
-            PROVIDER_ID_OPENAI, "gpt-4o",
+            PROVIDER_ID_OPENAI,
+            "gpt-4o",
         )));
         state.reduce(ConfigAction::SetModel("gpt-4o-mini".into()));
         assert_eq!(state.model(), "gpt-4o-mini");
@@ -454,13 +459,17 @@ mod tests {
     fn config_received_twice_overwrites() {
         let mut state = ConfigState::new();
         state.reduce(ConfigAction::ConfigReceived(make_snapshot(
-            PROVIDER_ID_OPENAI, "gpt-4o",
+            PROVIDER_ID_OPENAI,
+            "gpt-4o",
         )));
         state.reduce(ConfigAction::ConfigReceived(make_snapshot(
             amux_shared::providers::PROVIDER_ID_ANTHROPIC,
             "claude-3-5-sonnet",
         )));
-        assert_eq!(state.provider(), amux_shared::providers::PROVIDER_ID_ANTHROPIC);
+        assert_eq!(
+            state.provider(),
+            amux_shared::providers::PROVIDER_ID_ANTHROPIC
+        );
         assert_eq!(state.model(), "claude-3-5-sonnet");
     }
 }

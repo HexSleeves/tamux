@@ -105,6 +105,59 @@ fn settings_tab_bar_uses_swarog_and_rarog_labels() {
 }
 
 #[test]
+fn settings_tab_bar_includes_about_label() {
+    let area = Rect::new(0, 0, 140, 1);
+    let mut settings = SettingsState::new();
+    settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+        SettingsTab::About,
+    ));
+
+    let tabs = visible_tabs(area, active_tab_index(SettingsTab::About));
+    let line = render_tabs_line(&tabs, &settings, &ThemeTokens::default());
+    let text = line.to_string();
+
+    assert!(text.contains("About"));
+}
+
+#[test]
+fn about_tab_renders_product_metadata() {
+    let mut settings = SettingsState::new();
+    settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+        SettingsTab::About,
+    ));
+    let config = ConfigState::new();
+    let modal = ModalState::new();
+    let auth = crate::state::auth::AuthState::new();
+    let subagents = SubAgentsState::new();
+    let concierge = crate::state::concierge::ConciergeState::new();
+    let tier = crate::state::tier::TierState::from_tier("power_user");
+    let plugin_settings = crate::state::settings::PluginSettingsState::new();
+
+    let lines = render_tab_content(
+        100,
+        &settings,
+        &config,
+        &modal,
+        &auth,
+        &subagents,
+        &concierge,
+        &tier,
+        &plugin_settings,
+        &ThemeTokens::default(),
+    );
+    let text = lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(text.contains("Version:"));
+    assert!(text.contains("Mariusz Kurman"));
+    assert!(text.contains("mkurman/tamux"));
+    assert!(text.contains("tamux.app"));
+}
+
+#[test]
 fn gateway_tab_contains_selectable_link_device_row() {
     let mut settings = SettingsState::new();
     settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
@@ -294,6 +347,32 @@ fn custom_provider_model_row_shows_active_edit_buffer() {
 
     assert!(text.contains("> Model           my-model█"));
     assert!(!text.contains("> Provider        custom█"));
+}
+
+#[test]
+fn custom_model_context_row_invites_edit_for_non_custom_provider() {
+    let mut settings = SettingsState::new();
+    settings.reduce(crate::state::settings::SettingsAction::SwitchTab(
+        SettingsTab::Provider,
+    ));
+    settings.reduce(crate::state::settings::SettingsAction::NavigateField(7));
+    let mut config = ConfigState::new();
+    config.provider = "openrouter".to_string();
+    config.auth_source = "api_key".to_string();
+    config.model = "openrouter/custom-preview".to_string();
+    config.custom_model_name = "Custom Preview".to_string();
+    config.context_window_tokens = 333_000;
+    config.custom_context_window_tokens = Some(333_000);
+
+    let lines = render_provider_tab(&settings, &config, &ThemeTokens::default());
+    let text = lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(text.contains("> Ctx Length      333000 tok [Enter: edit]"));
+    assert!(!text.contains("[derived]"));
 }
 
 #[test]

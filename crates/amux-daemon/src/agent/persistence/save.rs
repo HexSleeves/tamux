@@ -72,7 +72,10 @@ impl AgentEngine {
             workspace_id: None,
             surface_id: None,
             pane_id: None,
-            agent_name: Some(persisted_agent_name_for_thread(thread, handoff_state.as_ref())),
+            agent_name: Some(persisted_agent_name_for_thread(
+                thread,
+                handoff_state.as_ref(),
+            )),
             title: thread.title.clone(),
             created_at: thread.created_at as i64,
             updated_at: thread.updated_at as i64,
@@ -83,7 +86,11 @@ impl AgentEngine {
                 .last()
                 .map(|message| message.content.chars().take(100).collect())
                 .unwrap_or_default(),
-            metadata_json: build_thread_metadata_json(thread, client_surface, handoff_state.as_ref()),
+            metadata_json: build_thread_metadata_json(
+                thread,
+                client_surface,
+                handoff_state.as_ref(),
+            ),
         };
 
         if let Err(e) = self.history.delete_thread(&thread.id).await {

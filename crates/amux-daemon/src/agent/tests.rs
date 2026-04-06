@@ -210,8 +210,8 @@ async fn spawn_goal_recording_server(
         .await
         .expect("bind goal recording server");
     let addr = listener.local_addr().expect("goal recording server addr");
-    let response_json = serde_json::to_string(&assistant_content)
-        .expect("assistant content should serialize");
+    let response_json =
+        serde_json::to_string(&assistant_content).expect("assistant content should serialize");
 
     tokio::spawn(async move {
         loop {
@@ -597,10 +597,12 @@ async fn request_goal_replan_includes_recovery_guidance_when_present() {
             "[]",
             "ctx_hash",
             "[]",
-            &serde_json::to_string(&crate::agent::learning::traces::CausalTraceOutcome::NearMiss {
-                what_went_wrong: "step failed due to over-broad command".to_string(),
-                how_recovered: "replanned into smaller scoped steps".to_string(),
-            })
+            &serde_json::to_string(
+                &crate::agent::learning::traces::CausalTraceOutcome::NearMiss {
+                    what_went_wrong: "step failed due to over-broad command".to_string(),
+                    how_recovered: "replanned into smaller scoped steps".to_string(),
+                },
+            )
             .expect("serialize outcome"),
             Some("gpt-4o-mini"),
             now_millis(),

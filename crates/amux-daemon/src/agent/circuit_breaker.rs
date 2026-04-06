@@ -368,7 +368,9 @@ mod tests {
         );
 
         // Trip OpenAI's breaker
-        let openai_breaker = registry.get(amux_shared::providers::PROVIDER_ID_OPENAI).await;
+        let openai_breaker = registry
+            .get(amux_shared::providers::PROVIDER_ID_OPENAI)
+            .await;
         {
             let mut b = openai_breaker.lock().await;
             let now = 1000;
@@ -379,8 +381,9 @@ mod tests {
         }
 
         // Anthropic's breaker should still be Closed
-        let anthropic_breaker =
-            registry.get(amux_shared::providers::PROVIDER_ID_ANTHROPIC).await;
+        let anthropic_breaker = registry
+            .get(amux_shared::providers::PROVIDER_ID_ANTHROPIC)
+            .await;
         {
             let mut b = anthropic_breaker.lock().await;
             assert_eq!(b.state(), CircuitState::Closed);

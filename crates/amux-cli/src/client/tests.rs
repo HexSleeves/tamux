@@ -2,12 +2,31 @@ use super::agent_api::parse_config_set_response;
 use super::agent_bridge::handle_message_for_test as handle_bridge_message;
 use super::agent_bridge::initial_bridge_messages;
 use super::agent_protocol::AgentBridgeCommand;
+use super::connection::closed_connection_error;
 use super::skill_api::{
     parse_skill_import_terminal_response, parse_skill_publish_terminal_response,
 };
 use amux_protocol::{ClientMessage, DaemonCodec, DaemonMessage};
 use futures::SinkExt;
 use tokio_util::codec::Framed;
+
+#[test]
+fn closed_connection_error_mentions_version_mismatch_and_restart() {
+    let message = closed_connection_error().to_string();
+
+    assert!(
+        message.contains("daemon closed connection"),
+        "base failure should remain visible: {message}"
+    );
+    assert!(
+        message.contains("version mismatch"),
+        "message should point to likely protocol skew: {message}"
+    );
+    assert!(
+        message.contains("restart"),
+        "message should tell the operator what to do next: {message}"
+    );
+}
 
 #[test]
 fn operator_profile_bridge_commands_deserialize() {
@@ -111,7 +130,10 @@ fn operator_profile_bridge_commands_deserialize() {
             since,
             limit,
         } => {
-            assert_eq!(action_types, Some(vec!["tool".to_string(), "heartbeat".to_string()]));
+            assert_eq!(
+                action_types,
+                Some(vec!["tool".to_string(), "heartbeat".to_string()])
+            );
             assert_eq!(since, None);
             assert_eq!(limit, Some(25));
         }
@@ -137,7 +159,10 @@ fn operator_profile_bridge_commands_deserialize() {
             since,
             limit,
         } => {
-            assert_eq!(action_types, Some(vec!["tool".to_string(), "heartbeat".to_string()]));
+            assert_eq!(
+                action_types,
+                Some(vec!["tool".to_string(), "heartbeat".to_string()])
+            );
             assert_eq!(since, None);
             assert_eq!(limit, Some(25));
         }
@@ -175,7 +200,8 @@ fn operator_profile_bridge_commands_deserialize() {
         _ => panic!("unexpected variant for confirm-memory-provenance-entry"),
     }
 
-    let json = r#"{"type":"retract-memory-provenance-entry","entry_id":"retractable-memory-entry"}"#;
+    let json =
+        r#"{"type":"retract-memory-provenance-entry","entry_id":"retractable-memory-entry"}"#;
     let cmd: AgentBridgeCommand =
         serde_json::from_str(json).expect("retract-memory-provenance-entry must deserialize");
     match cmd {

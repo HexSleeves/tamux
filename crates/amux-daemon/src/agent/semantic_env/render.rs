@@ -190,7 +190,10 @@ pub(super) fn render_services(root: &Path, graph: &SemanticGraph, limit: usize) 
 
 pub(super) fn render_infra(root: &Path, graph: &SemanticGraph, limit: usize) -> String {
     if graph.infra_resources.is_empty() {
-        return format!("No Terraform or Kubernetes resources found under {}.", root.display());
+        return format!(
+            "No Terraform or Kubernetes resources found under {}.",
+            root.display()
+        );
     }
 
     let mut lines = vec![format!("Infra resources under {}:", root.display())];
@@ -203,16 +206,15 @@ pub(super) fn render_infra(root: &Path, graph: &SemanticGraph, limit: usize) -> 
         let deps = if resource.dependencies.is_empty() {
             "0 deps".to_string()
         } else {
-            format!("{} deps [{}]", resource.dependencies.len(), resource.dependencies.join(", "))
+            format!(
+                "{} deps [{}]",
+                resource.dependencies.len(),
+                resource.dependencies.join(", ")
+            )
         };
         lines.push(format!(
             "- [{}] {} {}{} {} ({})",
-            resource.system,
-            resource.kind,
-            resource.name,
-            namespace,
-            resource.source_path,
-            deps,
+            resource.system, resource.kind, resource.name, namespace, resource.source_path, deps,
         ));
     }
     if graph.infra_resources.len() > limit {

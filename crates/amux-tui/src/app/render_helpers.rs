@@ -3,9 +3,24 @@ use ratatui::style::Modifier;
 
 #[path = "render_helpers/help_modal.rs"]
 mod help_modal;
+#[path = "render_helpers/status_modal.rs"]
+mod status_modal;
 
 pub(super) fn render_help_modal(frame: &mut Frame, area: Rect, theme: &ThemeTokens) {
     help_modal::render_help_modal(frame, area, theme);
+}
+
+pub(super) fn render_status_modal(
+    frame: &mut Frame,
+    area: Rect,
+    body: &str,
+    theme: &ThemeTokens,
+) {
+    status_modal::render_status_modal(frame, area, body, theme);
+}
+
+pub(super) fn format_status_modal_text(snapshot: &crate::client::AgentStatusSnapshotVm) -> String {
+    status_modal::format_status_modal_text(snapshot)
 }
 
 pub(super) fn render_effort_picker(

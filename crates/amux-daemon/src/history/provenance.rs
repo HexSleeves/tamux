@@ -4,7 +4,9 @@ use uuid::Uuid;
 fn overlapping_fact_keys(left: &[String], right: &[String]) -> Vec<String> {
     let left: std::collections::BTreeSet<&str> = left.iter().map(String::as_str).collect();
     let right: std::collections::BTreeSet<&str> = right.iter().map(String::as_str).collect();
-    left.intersection(&right).map(|value| (*value).to_string()).collect()
+    left.intersection(&right)
+        .map(|value| (*value).to_string())
+        .collect()
 }
 
 fn relationship_rows_for_entry(
@@ -155,7 +157,12 @@ impl HistoryStore {
         let created_at = record.created_at;
         let fact_keys_owned: Vec<String> = record.fact_keys.to_vec();
         let relationship_target = if record.mode == "remove" {
-            Some((target.clone(), id.clone(), fact_keys_owned.clone(), created_at))
+            Some((
+                target.clone(),
+                id.clone(),
+                fact_keys_owned.clone(),
+                created_at,
+            ))
         } else {
             None
         };

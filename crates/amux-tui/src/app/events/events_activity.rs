@@ -251,15 +251,53 @@ impl TuiModel {
     }
 
     pub(in crate::app) fn handle_collaboration_sessions_event(&mut self, sessions_json: String) {
-        let pretty = serde_json::from_str::<serde_json::Value>(&sessions_json)
+        let sessions = serde_json::from_str::<serde_json::Value>(&sessions_json)
             .ok()
-            .and_then(|value| serde_json::to_string_pretty(&value).ok())
-            .unwrap_or(sessions_json);
-        self.last_error = Some(pretty);
-        self.error_active = true;
-        self.modal
-            .reduce(modal::ModalAction::Push(modal::ModalKind::ErrorViewer));
+            .and_then(parse_collaboration_sessions)
+            .unwrap_or_default();
+        let escalation_notice = sessions.iter().find_map(|session| {
+            session
+                .escalation
+                .as_ref()
+                .map(|escalation| escalation.reason.clone())
+        });
+        self.main_pane_view = MainPaneView::Collaboration;
+        self.collaboration
+            .reduce(CollaborationAction::SessionsLoaded(sessions));
+        if self
+            .collaboration
+            .rows()
+            .get(1)
+            .and_then(CollaborationRowVm::disagreement_id)
+            .is_some()
+        {
+            self.collaboration.reduce(CollaborationAction::SelectRow(1));
+        }
+        self.last_error = None;
+        self.error_active = false;
         self.status_line = "Collaboration sessions loaded".to_string();
+        if let Some(reason) = escalation_notice {
+            self.show_input_notice(
+                format!("Collaboration escalation: {reason}"),
+                InputNoticeKind::Warning,
+                120,
+                true,
+            );
+        }
+    }
+
+    pub(in crate::app) fn handle_collaboration_vote_result_event(&mut self, report_json: String) {
+        let resolution = serde_json::from_str::<serde_json::Value>(&report_json)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("resolution")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_else(|| "updated".to_string());
+        self.status_line = format!("Vote recorded: {resolution}.");
+        self.send_daemon_command(DaemonCommand::GetCollaborationSessions);
     }
 
     pub(in crate::app) fn handle_generated_tools_event(&mut self, tools_json: String) {
@@ -301,6 +339,10 @@ impl TuiModel {
     }
 
     pub(in crate::app) fn handle_error_event(&mut self, message: String) {
+        if self.status_modal_loading {
+            self.status_modal_loading = false;
+            self.status_modal_error = Some(message.clone());
+        }
         let should_refresh_subagents = {
             let lowercase = message.to_ascii_lowercase();
             lowercase.contains("sub-agent")
@@ -556,4 +598,115 @@ impl TuiModel {
         });
         self.status_line = "Divergent session payload received".to_string();
     }
+}
+
+fn parse_collaboration_sessions(value: serde_json::Value) -> Option<Vec<CollaborationSessionVm>> {
+    let items = value.as_array()?;
+    Some(
+        items
+            .iter()
+            .filter_map(|session| {
+                let id = session.get("id")?.as_str()?.to_string();
+                let disagreement_values = session
+                    .get("disagreements")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let disagreements = session
+                    .get("disagreements")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|disagreement| {
+                                Some(CollaborationDisagreementVm {
+                                    id: disagreement.get("id")?.as_str()?.to_string(),
+                                    topic: disagreement
+                                        .get("topic")
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or("disagreement")
+                                        .to_string(),
+                                    positions: disagreement
+                                        .get("positions")
+                                        .and_then(serde_json::Value::as_array)
+                                        .map(|positions| {
+                                            positions
+                                                .iter()
+                                                .filter_map(|position| {
+                                                    position.as_str().map(ToOwned::to_owned)
+                                                })
+                                                .collect::<Vec<_>>()
+                                        })
+                                        .unwrap_or_default(),
+                                    vote_count: disagreement
+                                        .get("votes")
+                                        .and_then(serde_json::Value::as_array)
+                                        .map(|votes| votes.len())
+                                        .unwrap_or(0),
+                                    resolution: disagreement
+                                        .get("resolution")
+                                        .and_then(serde_json::Value::as_str)
+                                        .map(ToOwned::to_owned),
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let escalation = disagreement_values.iter().find_map(|disagreement| {
+                    let resolution = disagreement
+                        .get("resolution")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("pending");
+                    let confidence_gap = disagreement
+                        .get("confidence_gap")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(1.0);
+                    if resolution == "escalated"
+                        || (resolution == "pending" && confidence_gap < 0.15)
+                    {
+                        Some(CollaborationEscalationVm {
+                            from_level: "L1".to_string(),
+                            to_level: if resolution == "escalated" {
+                                "L2".to_string()
+                            } else {
+                                "L1".to_string()
+                            },
+                            reason: disagreement
+                                .get("topic")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("subagent disagreement requires attention")
+                                .to_string(),
+                            attempts: 1,
+                        })
+                    } else {
+                        None
+                    }
+                });
+                Some(CollaborationSessionVm {
+                    id,
+                    parent_task_id: session
+                        .get("parent_task_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned),
+                    parent_thread_id: session
+                        .get("parent_thread_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned),
+                    agent_count: session
+                        .get("agents")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|agents| agents.len())
+                        .unwrap_or(0),
+                    disagreement_count: disagreements.len(),
+                    consensus_summary: session
+                        .get("consensus")
+                        .and_then(|consensus| consensus.get("summary"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned),
+                    escalation,
+                    disagreements,
+                })
+            })
+            .collect(),
+    )
 }

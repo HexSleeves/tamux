@@ -92,7 +92,8 @@ fn resolve_concierge_provider_uses_shared_resolution_path() {
     config.reasoning_effort = "high".to_string();
     config.context_window_tokens = 123_000;
     config.assistant_id = "assistant-root".to_string();
-    config.concierge.provider = Some(amux_shared::providers::PROVIDER_ID_ALIBABA_CODING_PLAN.to_string());
+    config.concierge.provider =
+        Some(amux_shared::providers::PROVIDER_ID_ALIBABA_CODING_PLAN.to_string());
     config.concierge.model = Some("qwen3.5-plus".to_string());
     config.concierge.reasoning_effort = Some("high".to_string());
     config.providers.insert(

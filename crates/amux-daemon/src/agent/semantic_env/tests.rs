@@ -95,40 +95,40 @@ services:
 
 #[test]
 fn parse_terraform_resources_extracts_resources_and_dependencies() -> Result<()> {
-        let root = make_temp_dir()?;
-        let manifest = root.join("main.tf");
-        fs::write(
-                &manifest,
-                r#"
+    let root = make_temp_dir()?;
+    let manifest = root.join("main.tf");
+    fs::write(
+        &manifest,
+        r#"
 resource "aws_vpc" "core" {}
 
 resource "aws_subnet" "app" {
     depends_on = [aws_vpc.core]
 }
 "#,
-        )?;
+    )?;
 
-        let resources = parse_terraform_resources(&manifest)?;
-        assert_eq!(resources.len(), 2);
-        let subnet = resources
-                .iter()
-                .find(|resource| resource.name == "app")
-                .expect("subnet resource should parse");
-        assert_eq!(subnet.system, "terraform");
-        assert_eq!(subnet.kind, "aws_subnet");
-        assert_eq!(subnet.dependencies, vec!["aws_vpc.core".to_string()]);
+    let resources = parse_terraform_resources(&manifest)?;
+    assert_eq!(resources.len(), 2);
+    let subnet = resources
+        .iter()
+        .find(|resource| resource.name == "app")
+        .expect("subnet resource should parse");
+    assert_eq!(subnet.system, "terraform");
+    assert_eq!(subnet.kind, "aws_subnet");
+    assert_eq!(subnet.dependencies, vec!["aws_vpc.core".to_string()]);
 
-        fs::remove_dir_all(root)?;
-        Ok(())
+    fs::remove_dir_all(root)?;
+    Ok(())
 }
 
 #[test]
 fn parse_kubernetes_resources_extracts_kinds_and_service_dependencies() -> Result<()> {
-        let root = make_temp_dir()?;
-        let manifest = root.join("k8s.yaml");
-        fs::write(
-                &manifest,
-                r#"
+    let root = make_temp_dir()?;
+    let manifest = root.join("k8s.yaml");
+    fs::write(
+        &manifest,
+        r#"
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -150,19 +150,19 @@ spec:
             port:
                 number: 80
 "#,
-        )?;
+    )?;
 
-        let resources = parse_kubernetes_resources(&manifest)?;
-        assert_eq!(resources.len(), 2);
-        let ingress = resources
-                .iter()
-                .find(|resource| resource.kind == "Ingress")
-                .expect("ingress should parse");
-        assert_eq!(ingress.system, "kubernetes");
-        assert_eq!(ingress.dependencies, vec!["service:api".to_string()]);
+    let resources = parse_kubernetes_resources(&manifest)?;
+    assert_eq!(resources.len(), 2);
+    let ingress = resources
+        .iter()
+        .find(|resource| resource.kind == "Ingress")
+        .expect("ingress should parse");
+    assert_eq!(ingress.system, "kubernetes");
+    assert_eq!(ingress.dependencies, vec!["service:api".to_string()]);
 
-        fs::remove_dir_all(root)?;
-        Ok(())
+    fs::remove_dir_all(root)?;
+    Ok(())
 }
 
 #[test]

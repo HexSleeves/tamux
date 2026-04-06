@@ -4,7 +4,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::state::chat::ChatState;
-use crate::state::config::ConfigState;
 use crate::theme::ThemeTokens;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,8 +15,10 @@ pub enum HeaderHitTarget {
 pub fn render(
     frame: &mut Frame,
     area: Rect,
-    config: &ConfigState,
     chat: &ChatState,
+    provider: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
     theme: &ThemeTokens,
     pending_approvals: usize,
     approvals_open: bool,
@@ -58,12 +59,6 @@ pub fn render(
     let approval_area = badge_sections[0];
     let bell_area = badge_sections[2];
 
-    let model = if config.model.is_empty() {
-        "no model"
-    } else {
-        &config.model
-    };
-
     let (in_tok, out_tok) = if let Some(thread) = chat.active_thread() {
         (thread.total_input_tokens, thread.total_output_tokens)
     } else {
@@ -88,19 +83,16 @@ pub fn render(
         ),
     ];
 
-    if !config.provider.is_empty() {
-        spans.push(Span::raw(&config.provider));
+    if !provider.is_empty() {
+        spans.push(Span::raw(provider));
         spans.push(Span::raw(" "));
     }
 
     spans.push(Span::styled(model, theme.fg_active));
 
-    if !config.reasoning_effort.is_empty() {
+    if let Some(reasoning_effort) = reasoning_effort.filter(|value| !value.is_empty()) {
         spans.push(Span::raw(" ["));
-        spans.push(Span::styled(
-            &config.reasoning_effort,
-            theme.accent_secondary,
-        ));
+        spans.push(Span::styled(reasoning_effort, theme.accent_secondary));
         spans.push(Span::raw("]"));
     }
 

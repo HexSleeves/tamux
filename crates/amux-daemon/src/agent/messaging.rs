@@ -211,7 +211,11 @@ impl AgentEngine {
         drop(threads);
         self.thread_handoff_states.write().await.insert(
             tid.clone(),
-            initial_thread_handoff_state(&tid, Some(canonical_agent_name(&active_agent_id)), created_at),
+            initial_thread_handoff_state(
+                &tid,
+                Some(canonical_agent_name(&active_agent_id)),
+                created_at,
+            ),
         );
     }
 

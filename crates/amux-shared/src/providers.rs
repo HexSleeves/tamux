@@ -5,6 +5,7 @@ pub struct ProviderRef {
 
 pub const PROVIDER_ID_ALIBABA_CODING_PLAN: &str = "alibaba-coding-plan";
 pub const PROVIDER_ID_ANTHROPIC: &str = "anthropic";
+pub const PROVIDER_ID_ARCEE: &str = "arcee";
 pub const PROVIDER_ID_CEREBRAS: &str = "cerebras";
 pub const PROVIDER_ID_CHUTES: &str = "chutes";
 pub const PROVIDER_ID_CUSTOM: &str = "custom";

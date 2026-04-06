@@ -145,8 +145,7 @@ async fn spawn_stub_assistant_server(response_text: &str) -> String {
                     .await
                     .expect("write stub assistant response");
             });
-use amux_shared::providers::PROVIDER_ID_OPENAI;
-
+            use amux_shared::providers::PROVIDER_ID_OPENAI;
         }
     });
 
@@ -391,9 +390,12 @@ async fn supervise_stalled_turns_retries_with_internal_ping_and_continue() {
     }));
     drop(threads);
 
-    let dm_thread_id = crate::agent::agent_identity::internal_dm_thread_id(WELES_AGENT_ID, MAIN_AGENT_ID);
+    let dm_thread_id =
+        crate::agent::agent_identity::internal_dm_thread_id(WELES_AGENT_ID, MAIN_AGENT_ID);
     let threads = engine.threads.read().await;
-    let dm_thread = threads.get(&dm_thread_id).expect("internal recovery DM should exist");
+    let dm_thread = threads
+        .get(&dm_thread_id)
+        .expect("internal recovery DM should exist");
     assert_eq!(dm_thread.agent_name.as_deref(), Some(MAIN_AGENT_NAME));
     assert!(dm_thread.messages.iter().any(|message| {
         message.role == MessageRole::Assistant && message.content.contains("Recovered.")
@@ -467,7 +469,9 @@ async fn collect_stalled_turn_observations_detects_idle_active_reasoning_stream(
         .await;
     {
         let mut streams = engine.stream_cancellations.lock().await;
-        let entry = streams.get_mut(thread_id).expect("active stream entry should exist");
+        let entry = streams
+            .get_mut(thread_id)
+            .expect("active stream entry should exist");
         entry.last_progress_at = now.saturating_sub(31_000);
     }
 
@@ -494,7 +498,10 @@ async fn supervise_stalled_turns_recovers_idle_reasoning_stream_via_internal_dm(
                 id: thread_id.to_string(),
                 agent_name: Some(CONCIERGE_AGENT_NAME.to_string()),
                 title: "Idle stream recovery".to_string(),
-                messages: vec![AgentMessage::user("Continue the unfinished job", now.saturating_sub(61_000))],
+                messages: vec![AgentMessage::user(
+                    "Continue the unfinished job",
+                    now.saturating_sub(61_000),
+                )],
                 pinned: false,
                 upstream_thread_id: None,
                 upstream_transport: None,
@@ -547,7 +554,9 @@ async fn supervise_stalled_turns_recovers_idle_reasoning_stream_via_internal_dm(
         .await;
     {
         let mut streams = engine.stream_cancellations.lock().await;
-        let entry = streams.get_mut(thread_id).expect("active stream entry should exist");
+        let entry = streams
+            .get_mut(thread_id)
+            .expect("active stream entry should exist");
         entry.last_progress_at = now.saturating_sub(31_000);
     }
 
@@ -560,7 +569,9 @@ async fn supervise_stalled_turns_recovers_idle_reasoning_stream_via_internal_dm(
     let thread = threads.get(thread_id).expect("thread should exist");
     assert!(thread.messages.iter().any(|message| {
         message.role == MessageRole::System
-            && message.content.contains("stream went idle before completion")
+            && message
+                .content
+                .contains("stream went idle before completion")
     }));
     assert!(thread.messages.iter().any(|message| {
         message.role == MessageRole::Assistant && message.content.contains("Recovered.")
@@ -568,7 +579,9 @@ async fn supervise_stalled_turns_recovers_idle_reasoning_stream_via_internal_dm(
 
     let dm_thread_id =
         crate::agent::agent_identity::internal_dm_thread_id(WELES_AGENT_ID, CONCIERGE_AGENT_ID);
-    let dm_thread = threads.get(&dm_thread_id).expect("recovery DM should exist");
+    let dm_thread = threads
+        .get(&dm_thread_id)
+        .expect("recovery DM should exist");
     assert_eq!(dm_thread.agent_name.as_deref(), Some(CONCIERGE_AGENT_NAME));
     assert!(dm_thread.messages.iter().any(|message| {
         message.role == MessageRole::Assistant && message.content.contains("Recovered.")

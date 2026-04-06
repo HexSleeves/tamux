@@ -1,6 +1,193 @@
 use super::*;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConversationAgentProfile {
+    pub(crate) agent_label: String,
+    pub(crate) provider: String,
+    pub(crate) model: String,
+    pub(crate) reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConversationAgentKind {
+    Swarog,
+    Rarog,
+    Weles,
+}
+
 impl TuiModel {
+    fn configured_model_label(model: &str, custom_model_name: &str) -> String {
+        let custom = custom_model_name.trim();
+        if !custom.is_empty() && custom != model {
+            custom.to_string()
+        } else if model.trim().is_empty() {
+            "no model".to_string()
+        } else {
+            model.to_string()
+        }
+    }
+
+    fn current_conversation_agent_kind(&self) -> ConversationAgentKind {
+        if let Some(thread) = self.chat.active_thread() {
+            if thread.id == "concierge"
+                || thread
+                    .agent_name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(amux_protocol::AGENT_NAME_RAROG))
+                || widgets::thread_picker::is_rarog_thread(thread)
+            {
+                return ConversationAgentKind::Rarog;
+            }
+
+            if thread
+                .agent_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("weles"))
+                || widgets::thread_picker::is_weles_thread(thread)
+            {
+                return ConversationAgentKind::Weles;
+            }
+
+            return ConversationAgentKind::Swarog;
+        }
+
+        match self.pending_new_thread_target_agent.as_deref() {
+            Some(agent_id) if agent_id == amux_protocol::AGENT_ID_RAROG => {
+                ConversationAgentKind::Rarog
+            }
+            Some("weles") => ConversationAgentKind::Weles,
+            _ => ConversationAgentKind::Swarog,
+        }
+    }
+
+    fn weles_profile(&self) -> ConversationAgentProfile {
+        if let Some(entry) = self.subagents.entries.iter().find(|entry| {
+            entry.id.eq_ignore_ascii_case("weles_builtin")
+                || entry.name.eq_ignore_ascii_case("weles")
+        }) {
+            return ConversationAgentProfile {
+                agent_label: "Weles".to_string(),
+                provider: entry.provider.clone(),
+                model: entry.model.clone(),
+                reasoning_effort: entry
+                    .reasoning_effort
+                    .clone()
+                    .filter(|value| !value.is_empty()),
+            };
+        }
+
+        let raw_weles = self
+            .config
+            .agent_config_raw
+            .as_ref()
+            .and_then(|raw| raw.get("builtin_sub_agents"))
+            .and_then(|value| value.get("weles"));
+
+        let provider = raw_weles
+            .and_then(|value| value.get("provider"))
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(self.config.compaction_weles_provider.as_str())
+            .to_string();
+        let model = raw_weles
+            .and_then(|value| value.get("model"))
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(self.config.compaction_weles_model.as_str())
+            .to_string();
+        let reasoning_effort = raw_weles
+            .and_then(|value| value.get("reasoning_effort"))
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                (!self
+                    .config
+                    .compaction_weles_reasoning_effort
+                    .trim()
+                    .is_empty())
+                .then(|| self.config.compaction_weles_reasoning_effort.clone())
+            });
+
+        ConversationAgentProfile {
+            agent_label: "Weles".to_string(),
+            provider,
+            model: if model.trim().is_empty() {
+                "no model".to_string()
+            } else {
+                model
+            },
+            reasoning_effort,
+        }
+    }
+
+    pub(crate) fn current_conversation_agent_profile(&self) -> ConversationAgentProfile {
+        match self.current_conversation_agent_kind() {
+            ConversationAgentKind::Swarog => ConversationAgentProfile {
+                agent_label: amux_protocol::AGENT_NAME_SWAROG.to_string(),
+                provider: self.config.provider.clone(),
+                model: Self::configured_model_label(
+                    &self.config.model,
+                    &self.config.custom_model_name,
+                ),
+                reasoning_effort: (!self.config.reasoning_effort.trim().is_empty())
+                    .then(|| self.config.reasoning_effort.clone()),
+            },
+            ConversationAgentKind::Rarog => {
+                let provider = self
+                    .concierge
+                    .provider
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .zip(
+                        self.concierge
+                            .model
+                            .as_deref()
+                            .filter(|value| !value.is_empty()),
+                    );
+
+                if let Some((provider, model)) = provider {
+                    ConversationAgentProfile {
+                        agent_label: amux_protocol::AGENT_NAME_RAROG.to_string(),
+                        provider: provider.to_string(),
+                        model: model.to_string(),
+                        reasoning_effort: self
+                            .concierge
+                            .reasoning_effort
+                            .clone()
+                            .filter(|value| !value.is_empty()),
+                    }
+                } else {
+                    ConversationAgentProfile {
+                        agent_label: amux_protocol::AGENT_NAME_RAROG.to_string(),
+                        provider: self.config.provider.clone(),
+                        model: Self::configured_model_label(
+                            &self.config.model,
+                            &self.config.custom_model_name,
+                        ),
+                        reasoning_effort: (!self.config.reasoning_effort.trim().is_empty())
+                            .then(|| self.config.reasoning_effort.clone()),
+                    }
+                }
+            }
+            ConversationAgentKind::Weles => self.weles_profile(),
+        }
+    }
+
+    pub(crate) fn current_header_agent_profile(&self) -> ConversationAgentProfile {
+        let fallback = self.current_conversation_agent_profile();
+        let Some(runtime) = self.chat.active_thread_runtime_metadata() else {
+            return fallback;
+        };
+
+        ConversationAgentProfile {
+            agent_label: fallback.agent_label,
+            provider: runtime.provider.unwrap_or(fallback.provider),
+            model: runtime.model.unwrap_or(fallback.model),
+            reasoning_effort: runtime.reasoning_effort.or(fallback.reasoning_effort),
+        }
+    }
+
     fn render_conversation_panel(&self, frame: &mut Frame, area: Rect) {
         if self.should_show_operator_profile_onboarding() {
             let question = self.operator_profile.question.as_ref().map(|question| {
@@ -37,7 +224,8 @@ impl TuiModel {
         }
 
         if self.should_show_local_landing() {
-            widgets::landing::render(frame, area, &self.theme);
+            let profile = self.current_conversation_agent_profile();
+            widgets::landing::render(frame, area, &self.theme, &profile.agent_label);
             return;
         }
 
@@ -121,11 +309,15 @@ impl TuiModel {
             ])
             .split(area);
 
+        let profile = self.current_header_agent_profile();
+
         widgets::header::render(
             frame,
             chunks[0],
-            &self.config,
             &self.chat,
+            &profile.provider,
+            &profile.model,
+            profile.reasoning_effort.as_deref(),
             &self.theme,
             self.approval.pending_approvals().len(),
             self.modal.top() == Some(modal::ModalKind::ApprovalCenter),
@@ -138,6 +330,13 @@ impl TuiModel {
                 MainPaneView::Conversation => {
                     self.render_conversation_panel(frame, layout.chat);
                 }
+                MainPaneView::Collaboration => widgets::collaboration_view::render(
+                    frame,
+                    layout.chat,
+                    &self.collaboration,
+                    &self.theme,
+                    self.focus == FocusArea::Chat,
+                ),
                 MainPaneView::Task(target) => widgets::task_view::render(
                     frame,
                     layout.chat,
@@ -208,6 +407,13 @@ impl TuiModel {
         } else {
             match &self.main_pane_view {
                 MainPaneView::Conversation => self.render_conversation_panel(frame, layout.chat),
+                MainPaneView::Collaboration => widgets::collaboration_view::render(
+                    frame,
+                    layout.chat,
+                    &self.collaboration,
+                    &self.theme,
+                    self.focus == FocusArea::Chat,
+                ),
                 MainPaneView::Task(target) => widgets::task_view::render(
                     frame,
                     layout.chat,
@@ -310,6 +516,7 @@ impl TuiModel {
                 modal::ModalKind::ApprovalCenter => render_helpers::centered_rect(86, 82, area),
                 modal::ModalKind::ChatActionConfirm => render_helpers::centered_rect(48, 28, area),
                 modal::ModalKind::CommandPalette => render_helpers::centered_rect(50, 40, area),
+                modal::ModalKind::Status => render_helpers::centered_rect(72, 70, area),
                 modal::ModalKind::ThreadPicker => render_helpers::centered_rect(60, 50, area),
                 modal::ModalKind::GoalPicker => render_helpers::centered_rect(60, 50, area),
                 modal::ModalKind::QueuedPrompts => render_helpers::centered_rect(72, 42, area),
@@ -458,6 +665,14 @@ impl TuiModel {
                     );
                 }
                 modal::ModalKind::ToolsPicker | modal::ModalKind::ViewPicker => {}
+                modal::ModalKind::Status => {
+                    render_helpers::render_status_modal(
+                        frame,
+                        overlay_area,
+                        &self.status_modal_body(),
+                        &self.theme,
+                    );
+                }
                 modal::ModalKind::Help => {
                     render_helpers::render_help_modal(frame, overlay_area, &self.theme);
                 }
@@ -477,6 +692,7 @@ impl TuiModel {
             modal::ModalKind::ApprovalCenter => render_helpers::centered_rect(86, 82, area),
             modal::ModalKind::ChatActionConfirm => render_helpers::centered_rect(48, 28, area),
             modal::ModalKind::CommandPalette => render_helpers::centered_rect(50, 40, area),
+            modal::ModalKind::Status => render_helpers::centered_rect(72, 70, area),
             modal::ModalKind::ThreadPicker => render_helpers::centered_rect(60, 50, area),
             modal::ModalKind::GoalPicker => render_helpers::centered_rect(60, 50, area),
             modal::ModalKind::QueuedPrompts => render_helpers::centered_rect(72, 42, area),

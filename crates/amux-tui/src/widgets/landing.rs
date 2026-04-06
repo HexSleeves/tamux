@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -39,6 +39,70 @@ const SVAROG_FRESCO_STATIC: &[&str] = &[
     " ..............###....##################........##############...##.....",
     "................###.....###..##############.###############..##......   ",
 ];
+
+const RAROG_FRESCO_STATIC: &[&str] = &[
+             "                                   ...................                  ",
+            "                             ............###...#.........               ",
+            "                           ...........################....              ",
+            "                          .....########################......           ",
+            "                          ...###########################.......         ",
+            "                       .....#################.###########.......        ",
+            "                     ..##########..########################......       ",
+            "                  ##############.#...#####..################.....       ",
+            "              #############.##......######.#################......      ",
+            "             #######################.###..##################.......     ",
+            "            ######......\\\\##.############################.......      ",
+            "           ###.............########.###..#################........      ",
+            "            ...............######..#####..###############.........      ",
+            "          .................###############################.......       ",
+            "        .............#.....#################################........    ",
+            "       .............##.....##################################........   ",
+            "      ..............##.....####################################.......  ",
+            "       ............###....#####################################.......  ",
+            "       ...........####...######################################.......  ",
+            "      ...........#####...########################..############........ ",
+            "   .............######....###############..#######....##########....    ",
+        ];
+
+const WELES_FRESCO_STATIC: &[&str] = &[
+    "                                                                        ",
+    "                    ..          ...                          ..         ",
+    "                    ..      .......#         .             ......       ",
+    "                    #.... .........##     .....##..#.    ..####...      ",
+    "                    .......###.....#....##...##...##.. ..## # #...      ",
+    "                      #########.......######............## ## ##...     ",
+    "                         ########..#########.............# ### #....    ",
+    "                       .#.##..##...##...######...........#####.....     ",
+    "                      ..#####....#.....#####.###.........####.....      ",
+    "                      ..###....#####...#########..........###.....      ",
+    "                    .##..##...#.###.##..###########.......###.....      ",
+    "                 ..#.####.##.....#......################..###.....      ",
+    "              #####.#########...###....#################..###.....      ",
+    "              ....##..############.##########################.....      ",
+    "              .....#.#..####..##########.###.###########.###....        ",
+    "                 ..  #########.........####..#..#######...##.....       ",
+    "                             #.##...##.#         .####....##.....       ",
+    "                                ..###.             ###....##.....       ",
+    "                                ...  ..            .##....#......       ",
+    "                                                   ..............       ",
+    "                                                                        ",
+];
+
+fn fresco_for_agent(agent_label: &str) -> &'static [&'static str] {
+    match agent_label {
+        "Rarog" => RAROG_FRESCO_STATIC,
+        "Weles" => WELES_FRESCO_STATIC,
+        _ => SVAROG_FRESCO_STATIC,
+    }
+}
+
+fn copy_for_agent(agent_label: &str) -> (&'static str, &'static str) {
+    match agent_label {
+        "Rarog" => ("Cinders turn.", "Rarog watches the seam."),
+        "Weles" => ("The ward is drawn.", "Weles weighs the path."),
+        _ => ("Fire is lit.", "Svarog tends the forge."),
+    }
+}
 
 fn content_width(line: &Line<'_>) -> u16 {
     let width = line
@@ -115,14 +179,16 @@ fn centered_line_rect(content_area: Rect, row: u16, line: &Line<'_>) -> Rect {
     Rect::new(x, content_area.y.saturating_add(row), width, 1)
 }
 
-pub fn render(frame: &mut Frame, area: Rect, theme: &ThemeTokens) {
+pub fn render(frame: &mut Frame, area: Rect, theme: &ThemeTokens, agent_label: &str) {
     if area.width == 0 || area.height == 0 {
         return;
     }
 
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    for row in SVAROG_FRESCO_STATIC {
+    let (lead_copy, agent_copy) = copy_for_agent(agent_label);
+
+    for row in fresco_for_agent(agent_label) {
         lines.push(Line::from(Span::styled(
             *row,
             theme.fg_dim.add_modifier(Modifier::BOLD),
@@ -151,9 +217,9 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &ThemeTokens) {
     // )));
     lines.push(Line::raw(""));
     lines.push(Line::from(vec![
-        Span::styled("Fire is lit.", theme.fg_dim),
+        Span::styled(lead_copy, theme.fg_dim),
         Span::raw("  "),
-        Span::styled("Svarog awaits.", theme.accent_secondary),
+        Span::styled(agent_copy, theme.accent_secondary),
         Span::raw("  "),
         Span::styled("Type to begin.", theme.fg_dim),
     ]));
@@ -181,12 +247,12 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
-    fn render_rows(width: u16, height: u16) -> Vec<String> {
+    fn render_rows_for(agent_label: &str, width: u16, height: u16) -> Vec<String> {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
 
         terminal
-            .draw(|frame| render(frame, frame.area(), &ThemeTokens::default()))
+            .draw(|frame| render(frame, frame.area(), &ThemeTokens::default(), agent_label))
             .expect("landing render should succeed");
 
         let buffer = terminal.backend().buffer();
@@ -197,6 +263,10 @@ mod tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    fn render_plain(agent_label: &str, width: u16, height: u16) -> String {
+        render_rows_for(agent_label, width, height).join("\n")
     }
 
     #[test]
@@ -239,7 +309,7 @@ mod tests {
 
     #[test]
     fn landing_render_balances_vertical_space() {
-        let rows = render_rows(80, 24);
+        let rows = render_rows_for("Svarog", 80, 24);
         let visible_rows: Vec<usize> = rows
             .iter()
             .enumerate()
@@ -262,8 +332,38 @@ mod tests {
     }
 
     #[test]
+    fn landing_copy_is_unique_per_agent() {
+        let svarog = render_plain("Svarog", 80, 24);
+        let rarog = render_plain("Rarog", 80, 24);
+        let weles = render_plain("Weles", 80, 24);
+
+        assert!(svarog.contains("Fire is lit."), "expected Svarog copy, got: {svarog}");
+        assert!(rarog.contains("Cinders turn."), "expected Rarog copy, got: {rarog}");
+        assert!(weles.contains("The ward is drawn."), "expected Weles copy, got: {weles}");
+
+        assert!(!rarog.contains("Fire is lit."), "Rarog should not reuse Svarog copy: {rarog}");
+        assert!(!weles.contains("Fire is lit."), "Weles should not reuse Svarog copy: {weles}");
+        assert!(!weles.contains("Cinders turn."), "Weles should not reuse Rarog copy: {weles}");
+    }
+
+    #[test]
+    fn landing_ascii_is_unique_per_agent() {
+        let rarog = render_plain("Rarog", 80, 24);
+        let weles = render_plain("Weles", 80, 24);
+
+        assert!(
+            rarog.contains(".....#################.###########......."),
+            "expected dedicated Rarog fresco signature, got: {rarog}"
+        );
+        assert!(
+            weles.contains("#########.......######............## ## ##..."),
+            "expected dedicated Weles fresco signature, got: {weles}"
+        );
+    }
+
+    #[test]
     fn landing_render_centers_each_line_individually() {
-        let rows = render_rows(80, 24);
+        let rows = render_rows_for("Svarog", 80, 24);
         let art_row = rows
             .iter()
             .find(|row| row.contains("......."))
@@ -273,10 +373,10 @@ mod tests {
             .find(|row| row.contains("Fire is lit."))
             .expect("body row should be rendered");
 
-        let art_start = art_row
-            .chars()
-            .position(|ch| ch != ' ')
-            .expect("art row should have visible content");
+        assert!(
+            art_row.chars().any(|ch| ch != ' '),
+            "art row should have visible content"
+        );
         let body_start = body_row
             .chars()
             .position(|ch| ch != ' ')

@@ -204,10 +204,7 @@ impl AgentEngine {
             let _ = self.event_tx.send(AgentEvent::WorkflowNotice {
                 thread_id,
                 kind: "collaboration".to_string(),
-                message: format!(
-                    "Unresolved subagent disagreement on {}",
-                    disagreement.topic
-                ),
+                message: format!("Unresolved subagent disagreement on {}", disagreement.topic),
                 details: Some(disagreement.positions.join(" vs ")),
             });
         }
