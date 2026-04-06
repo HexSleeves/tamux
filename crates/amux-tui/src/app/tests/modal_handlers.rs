@@ -529,8 +529,12 @@ fn provider_picker_filters_to_authenticated_entries_plus_custom() {
     ];
 
     let defs = widgets::provider_picker::available_provider_defs(&model.auth);
-    assert!(defs.iter().any(|provider| provider.id == PROVIDER_ID_OPENAI));
-    assert!(defs.iter().any(|provider| provider.id == PROVIDER_ID_CUSTOM));
+    assert!(defs
+        .iter()
+        .any(|provider| provider.id == PROVIDER_ID_OPENAI));
+    assert!(defs
+        .iter()
+        .any(|provider| provider.id == PROVIDER_ID_CUSTOM));
     assert!(!defs.iter().any(|provider| provider.id == "groq"));
 }
 

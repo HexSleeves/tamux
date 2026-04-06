@@ -196,14 +196,14 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                             &model.config.model,
                             &model.config.custom_model_name,
                         ) {
-                            model.config.custom_model_name = model_entry
-                                .name
-                                .clone()
-                                .unwrap_or_else(|| model_id.clone());
-                            let next_context = model_context_window
-                                .unwrap_or(model.config.custom_context_window_tokens.unwrap_or(
-                                    providers::default_custom_model_context_window(),
-                                ));
+                            model.config.custom_model_name =
+                                model_entry.name.clone().unwrap_or_else(|| model_id.clone());
+                            let next_context = model_context_window.unwrap_or(
+                                model
+                                    .config
+                                    .custom_context_window_tokens
+                                    .unwrap_or(providers::default_custom_model_context_window()),
+                            );
                             model.config.custom_context_window_tokens = Some(next_context);
                             model.config.context_window_tokens = next_context;
                         } else {

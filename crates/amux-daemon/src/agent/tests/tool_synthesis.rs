@@ -103,9 +103,7 @@ async fn cli_generated_tool_execution_is_blocked_when_filesystem_disabled() {
         .expect_err("CLI generated tools should be blocked when filesystem access is disabled");
 
     assert!(
-        error
-            .to_string()
-            .contains("filesystem access"),
+        error.to_string().contains("filesystem access"),
         "expected filesystem guard error, got: {error}"
     );
 }
@@ -186,7 +184,11 @@ fn retire_generated_tool_marks_tool_archived_and_removes_promoted_skill_artifact
     let promoted_skill_path = super::skills_dir(&agent_data_dir)
         .join("generated")
         .join("use-tool-retire.md");
-    std::fs::create_dir_all(promoted_skill_path.parent().expect("generated skill parent"))?;
+    std::fs::create_dir_all(
+        promoted_skill_path
+            .parent()
+            .expect("generated skill parent"),
+    )?;
     std::fs::write(&promoted_skill_path, "# generated tool skill\n")?;
 
     save_generated_tool(

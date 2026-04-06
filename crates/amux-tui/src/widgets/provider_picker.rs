@@ -3,12 +3,12 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
 
-use amux_shared::providers::PROVIDER_ID_CUSTOM;
 use crate::providers::{ProviderDef, PROVIDERS};
 use crate::state::auth::AuthState;
 use crate::state::config::ConfigState;
 use crate::state::modal::ModalState;
 use crate::theme::ThemeTokens;
+use amux_shared::providers::PROVIDER_ID_CUSTOM;
 
 pub fn available_provider_defs(auth: &AuthState) -> Vec<&'static ProviderDef> {
     PROVIDERS
@@ -120,8 +120,8 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use amux_shared::providers::{PROVIDER_ID_GROQ, PROVIDER_ID_OPENAI};
     use crate::state::auth::{AuthState, ProviderAuthEntry};
+    use amux_shared::providers::{PROVIDER_ID_GROQ, PROVIDER_ID_OPENAI};
 
     #[test]
     fn available_provider_defs_filters_to_authenticated_entries_plus_custom() {
@@ -144,8 +144,12 @@ mod tests {
         ];
 
         let defs = available_provider_defs(&auth);
-        assert!(defs.iter().any(|provider| provider.id == PROVIDER_ID_OPENAI));
-        assert!(defs.iter().any(|provider| provider.id == PROVIDER_ID_CUSTOM));
+        assert!(defs
+            .iter()
+            .any(|provider| provider.id == PROVIDER_ID_OPENAI));
+        assert!(defs
+            .iter()
+            .any(|provider| provider.id == PROVIDER_ID_CUSTOM));
         assert!(!defs.iter().any(|provider| provider.id == PROVIDER_ID_GROQ));
     }
 

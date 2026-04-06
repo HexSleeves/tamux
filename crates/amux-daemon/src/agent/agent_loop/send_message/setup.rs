@@ -183,7 +183,8 @@ impl<'a> SendMessageRunner<'a> {
                 }
                 Ok(pc)
             } else if let Some(responder) = direct_thread_responder.as_ref() {
-                let mut pc = engine.resolve_sub_agent_provider_config(&config, &responder.provider_id)?;
+                let mut pc =
+                    engine.resolve_sub_agent_provider_config(&config, &responder.provider_id)?;
                 if let Some(model) = responder.model.as_ref() {
                     pc.model = model.clone();
                 }
@@ -248,7 +249,10 @@ impl<'a> SendMessageRunner<'a> {
         {
             format!("{}\n\n{}", override_prompt, config.system_prompt)
         } else if let Some(responder) = direct_thread_responder.as_ref() {
-            format!("{}\n\n{}", responder.persona_prompt, responder.system_prompt)
+            format!(
+                "{}\n\n{}",
+                responder.persona_prompt, responder.system_prompt
+            )
         } else {
             config.system_prompt.clone()
         };

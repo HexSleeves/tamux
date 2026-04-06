@@ -1,5 +1,7 @@
 use super::*;
-use amux_shared::providers::{PROVIDER_ID_CUSTOM, PROVIDER_ID_MINIMAX_CODING_PLAN, PROVIDER_ID_OPENAI};
+use amux_shared::providers::{
+    PROVIDER_ID_CUSTOM, PROVIDER_ID_MINIMAX_CODING_PLAN, PROVIDER_ID_OPENAI,
+};
 
 #[tokio::test]
 async fn send_message_request_includes_runtime_continuity_and_negative_knowledge() {
@@ -620,7 +622,10 @@ async fn successful_handoff_tool_call_restarts_same_turn_under_requested_agent()
 
     let threads = engine.threads.read().await;
     let thread = threads.get(thread_id).expect("thread should exist");
-    assert!(thread.messages.iter().any(|message| message.content == "I'm Rarog."));
+    assert!(thread
+        .messages
+        .iter()
+        .any(|message| message.content == "I'm Rarog."));
 }
 
 #[tokio::test]
@@ -807,12 +812,10 @@ async fn successful_handoff_restarts_same_turn_under_requested_agent_with_summar
 
     let threads = engine.threads.read().await;
     let thread = threads.get(thread_id).expect("thread should exist");
-    assert!(
-        thread
-            .messages
-            .iter()
-            .any(|message| message.content == "I'm Weles.")
-    );
+    assert!(thread
+        .messages
+        .iter()
+        .any(|message| message.content == "I'm Weles."));
 }
 
 #[tokio::test]

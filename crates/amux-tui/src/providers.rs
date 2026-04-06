@@ -3,8 +3,8 @@
 //! This mirrors the `PROVIDER_DEFINITIONS` from the frontend's `agentStore.ts`
 //! so that the TUI has the same provider list with default base URLs and models.
 
-use amux_shared::providers::*;
 use crate::state::config::FetchedModel;
+use amux_shared::providers::*;
 
 #[path = "providers/model_catalog.rs"]
 mod model_catalog;
@@ -67,7 +67,9 @@ pub fn resolve_context_window_for_provider_auth(
                 .as_deref()
                 .map(normalize_model_lookup_value)
                 .unwrap_or_default();
-            lookup_values.iter().any(|value| value == &id || (!name.is_empty() && value == &name))
+            lookup_values
+                .iter()
+                .any(|value| value == &id || (!name.is_empty() && value == &name))
         })
         .and_then(|model| model.context_window)
 }
@@ -350,8 +352,10 @@ pub fn default_transport_for(provider: &str) -> &'static str {
 }
 
 pub fn uses_fixed_anthropic_messages(provider: &str, model: &str) -> bool {
-    matches!(provider, PROVIDER_ID_MINIMAX | PROVIDER_ID_MINIMAX_CODING_PLAN)
-        || (provider == PROVIDER_ID_OPENCODE_ZEN && model.starts_with("claude"))
+    matches!(
+        provider,
+        PROVIDER_ID_MINIMAX | PROVIDER_ID_MINIMAX_CODING_PLAN
+    ) || (provider == PROVIDER_ID_OPENCODE_ZEN && model.starts_with("claude"))
 }
 
 pub fn supported_auth_sources_for(provider: &str) -> &'static [&'static str] {

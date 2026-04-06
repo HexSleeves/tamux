@@ -533,11 +533,9 @@ mod tests {
 
         assert_eq!(value["identifier"], "var-1");
         assert_eq!(value["variant"]["variant_id"], "var-1");
-        assert!(
-            value["content"]
-                .as_str()
-                .is_some_and(|content| content.contains("Lifecycle Inspection"))
-        );
+        assert!(value["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("Lifecycle Inspection")));
     }
 
     #[test]

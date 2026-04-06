@@ -256,7 +256,10 @@ fn gateway_auto_send_keeps_latest_assistant_message_pending_after_earlier_send_t
             tool_calls: None,
             tool_call_id: Some("call-1".to_string()),
             tool_name: Some("send_discord_message".to_string()),
-            tool_arguments: Some("{\"channel_id\":\"chan-1\",\"message\":\"On it, give me a moment...\"}".to_string()),
+            tool_arguments: Some(
+                "{\"channel_id\":\"chan-1\",\"message\":\"On it, give me a moment...\"}"
+                    .to_string(),
+            ),
             tool_status: Some("done".to_string()),
             weles_review: None,
             input_tokens: 0,

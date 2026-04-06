@@ -218,6 +218,191 @@ fn tab_inside_unmatched_file_reference_keeps_input_focus() {
     );
 }
 
+fn sample_collaboration_sessions() -> Vec<crate::state::CollaborationSessionVm> {
+    vec![crate::state::CollaborationSessionVm {
+        id: "session-1".to_string(),
+        parent_task_id: Some("task-1".to_string()),
+        parent_thread_id: None,
+        agent_count: 2,
+        disagreement_count: 1,
+        consensus_summary: None,
+        escalation: None,
+        disagreements: vec![crate::state::CollaborationDisagreementVm {
+            id: "disagreement-1".to_string(),
+            topic: "deployment strategy".to_string(),
+            positions: vec!["roll forward".to_string(), "roll back".to_string()],
+            vote_count: 0,
+            resolution: None,
+        }],
+    }]
+}
+
+#[test]
+fn collaboration_tab_cycles_between_navigator_detail_and_input() {
+    let mut model = build_model();
+    model.main_pane_view = MainPaneView::Collaboration;
+    model.focus = FocusArea::Chat;
+    model
+        .collaboration
+        .reduce(crate::state::CollaborationAction::SessionsLoaded(
+            sample_collaboration_sessions(),
+        ));
+
+    let handled = model.handle_key(KeyCode::Tab, KeyModifiers::NONE);
+    assert!(!handled);
+    assert_eq!(model.focus, FocusArea::Chat);
+    assert_eq!(
+        model.collaboration.focus(),
+        crate::state::CollaborationPaneFocus::Detail
+    );
+
+    let handled = model.handle_key(KeyCode::Tab, KeyModifiers::NONE);
+    assert!(!handled);
+    assert_eq!(model.focus, FocusArea::Input);
+
+    let handled = model.handle_key(KeyCode::BackTab, KeyModifiers::SHIFT);
+    assert!(!handled);
+    assert_eq!(model.focus, FocusArea::Chat);
+    assert_eq!(
+        model.collaboration.focus(),
+        crate::state::CollaborationPaneFocus::Detail
+    );
+}
+
+#[test]
+fn collaboration_arrow_keys_navigate_rows_and_detail_actions() {
+    let mut model = build_model();
+    model.main_pane_view = MainPaneView::Collaboration;
+    model.focus = FocusArea::Chat;
+    model
+        .collaboration
+        .reduce(crate::state::CollaborationAction::SessionsLoaded(
+            sample_collaboration_sessions(),
+        ));
+
+    let handled = model.handle_key(KeyCode::Down, KeyModifiers::NONE);
+    assert!(!handled);
+    assert_eq!(model.collaboration.selected_row_index(), 1);
+
+    let handled = model.handle_key(KeyCode::Right, KeyModifiers::NONE);
+    assert!(!handled);
+    assert_eq!(
+        model.collaboration.focus(),
+        crate::state::CollaborationPaneFocus::Detail
+    );
+
+    let handled = model.handle_key(KeyCode::Right, KeyModifiers::NONE);
+    assert!(!handled);
+    assert_eq!(model.collaboration.selected_detail_action_index(), 1);
+
+    let handled = model.handle_key(KeyCode::Left, KeyModifiers::NONE);
+    assert!(!handled);
+    assert_eq!(model.collaboration.selected_detail_action_index(), 0);
+
+    let handled = model.handle_key(KeyCode::Left, KeyModifiers::NONE);
+    assert!(!handled);
+    assert_eq!(
+        model.collaboration.focus(),
+        crate::state::CollaborationPaneFocus::Navigator
+    );
+}
+
+#[test]
+fn collaboration_enter_in_detail_sends_vote_command() {
+    let (_daemon_tx, daemon_rx) = mpsc::channel();
+    let (cmd_tx, mut cmd_rx) = unbounded_channel();
+    let mut model = TuiModel::new(daemon_rx, cmd_tx);
+    model.main_pane_view = MainPaneView::Collaboration;
+    model.focus = FocusArea::Chat;
+    model
+        .collaboration
+        .reduce(crate::state::CollaborationAction::SessionsLoaded(
+            sample_collaboration_sessions(),
+        ));
+    model
+        .collaboration
+        .reduce(crate::state::CollaborationAction::SelectRow(1));
+    model.collaboration.reduce(crate::state::CollaborationAction::SetFocus(
+        crate::state::CollaborationPaneFocus::Detail,
+    ));
+
+    let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+    assert!(!handled);
+
+    match cmd_rx
+        .try_recv()
+        .expect("expected collaboration vote command from detail enter")
+    {
+        DaemonCommand::VoteOnCollaborationDisagreement {
+            parent_task_id,
+            disagreement_id,
+            task_id,
+            position,
+            confidence,
+        } => {
+            assert_eq!(parent_task_id, "task-1");
+            assert_eq!(disagreement_id, "disagreement-1");
+            assert_eq!(task_id, "operator");
+            assert_eq!(position, "roll forward");
+            assert_eq!(confidence, Some(1.0));
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[test]
+fn collaboration_mouse_clicks_select_rows_and_vote_actions() {
+    let (_daemon_tx, daemon_rx) = mpsc::channel();
+    let (cmd_tx, mut cmd_rx) = unbounded_channel();
+    let mut model = TuiModel::new(daemon_rx, cmd_tx);
+    model.main_pane_view = MainPaneView::Collaboration;
+    model.focus = FocusArea::Chat;
+    model
+        .collaboration
+        .reduce(crate::state::CollaborationAction::SessionsLoaded(
+            sample_collaboration_sessions(),
+        ));
+
+    let chat_area = rendered_chat_area(&model);
+    let left_x = chat_area.x + 3;
+    let top_y = chat_area.y + 2;
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: left_x,
+        row: top_y,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(model.collaboration.selected_row_index(), 0);
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: left_x,
+        row: top_y + 1,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(model.collaboration.selected_row_index(), 1);
+
+    let right_x = chat_area.x + (chat_area.width / 2);
+    let action_y = chat_area.y + 6;
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: right_x,
+        row: action_y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    match cmd_rx
+        .try_recv()
+        .expect("expected collaboration vote command from mouse action")
+    {
+        DaemonCommand::VoteOnCollaborationDisagreement { position, .. } => {
+            assert_eq!(position, "roll forward");
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
 #[test]
 fn done_event_stores_provider_final_result_on_final_message() {
     let (_daemon_tx, daemon_rx) = mpsc::channel();

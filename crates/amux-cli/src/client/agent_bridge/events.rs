@@ -759,14 +759,15 @@ mod tests {
 
     #[test]
     fn translates_collaboration_vote_result_event() {
-        let event = bridge_event_from_daemon_message(&DaemonMessage::AgentCollaborationVoteResult {
-            report_json: serde_json::json!({
-                "session_id": "session-1",
-                "resolution": "resolved"
+        let event =
+            bridge_event_from_daemon_message(&DaemonMessage::AgentCollaborationVoteResult {
+                report_json: serde_json::json!({
+                    "session_id": "session-1",
+                    "resolution": "resolved"
+                })
+                .to_string(),
             })
-            .to_string(),
-        })
-        .expect("collaboration vote result should translate");
+            .expect("collaboration vote result should translate");
 
         assert_eq!(
             event,
@@ -835,5 +836,4 @@ mod tests {
             })
         );
     }
-
 }

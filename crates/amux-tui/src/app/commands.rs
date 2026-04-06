@@ -1,5 +1,5 @@
 use super::*;
-use amux_shared::providers::{PROVIDER_ID_OPENAI, PROVIDER_ID_CHATGPT_SUBSCRIPTION};
+use amux_shared::providers::{PROVIDER_ID_CHATGPT_SUBSCRIPTION, PROVIDER_ID_OPENAI};
 use std::path::{Path, PathBuf};
 
 #[path = "commands_goal_targets.rs"]
@@ -527,6 +527,26 @@ impl TuiModel {
     }
 
     pub(super) fn focus_next(&mut self) {
+        if matches!(self.main_pane_view, MainPaneView::Collaboration) {
+            match self.focus {
+                FocusArea::Chat => match self.collaboration.focus() {
+                    CollaborationPaneFocus::Navigator => self.collaboration.reduce(
+                        CollaborationAction::SetFocus(CollaborationPaneFocus::Detail),
+                    ),
+                    CollaborationPaneFocus::Detail => self.focus = FocusArea::Input,
+                },
+                FocusArea::Input => {
+                    self.focus = FocusArea::Chat;
+                    self.collaboration.reduce(CollaborationAction::SetFocus(
+                        CollaborationPaneFocus::Navigator,
+                    ));
+                }
+                FocusArea::Sidebar => self.focus = FocusArea::Input,
+            }
+            self.input.set_mode(input::InputMode::Insert);
+            return;
+        }
+
         self.focus = if self.sidebar_visible() {
             match self.focus {
                 FocusArea::Chat => FocusArea::Sidebar,
@@ -543,6 +563,31 @@ impl TuiModel {
     }
 
     pub(super) fn focus_prev(&mut self) {
+        if matches!(self.main_pane_view, MainPaneView::Collaboration) {
+            match self.focus {
+                FocusArea::Input => {
+                    self.focus = FocusArea::Chat;
+                    self.collaboration.reduce(CollaborationAction::SetFocus(
+                        CollaborationPaneFocus::Detail,
+                    ));
+                }
+                FocusArea::Chat => match self.collaboration.focus() {
+                    CollaborationPaneFocus::Detail => self.collaboration.reduce(
+                        CollaborationAction::SetFocus(CollaborationPaneFocus::Navigator),
+                    ),
+                    CollaborationPaneFocus::Navigator => self.focus = FocusArea::Input,
+                },
+                FocusArea::Sidebar => {
+                    self.focus = FocusArea::Chat;
+                    self.collaboration.reduce(CollaborationAction::SetFocus(
+                        CollaborationPaneFocus::Navigator,
+                    ));
+                }
+            }
+            self.input.set_mode(input::InputMode::Insert);
+            return;
+        }
+
         self.focus = if self.sidebar_visible() {
             match self.focus {
                 FocusArea::Chat => FocusArea::Input,
@@ -594,6 +639,25 @@ impl TuiModel {
                 self.task_view_scroll = 0;
                 self.focus = FocusArea::Chat;
                 self.status_line = "Todo details".to_string();
+            }
+        }
+    }
+
+    pub(super) fn submit_selected_collaboration_vote(&mut self) {
+        if let (Some(session), Some(disagreement), Some(position)) = (
+            self.collaboration.selected_session(),
+            self.collaboration.selected_disagreement(),
+            self.collaboration.selected_position(),
+        ) {
+            if let Some(parent_task_id) = session.parent_task_id.clone() {
+                self.send_daemon_command(DaemonCommand::VoteOnCollaborationDisagreement {
+                    parent_task_id,
+                    disagreement_id: disagreement.id.clone(),
+                    task_id: "operator".to_string(),
+                    position: position.to_string(),
+                    confidence: Some(1.0),
+                });
+                self.status_line = format!("Casting vote: {position}");
             }
         }
     }

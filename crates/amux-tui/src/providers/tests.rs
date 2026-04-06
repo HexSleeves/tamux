@@ -1,7 +1,7 @@
 use super::*;
 use amux_shared::providers::{
-    PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI,
-    MINIMAX_PROVIDER, QWEN_PROVIDER,
+    MINIMAX_PROVIDER, PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_GITHUB_COPILOT,
+    PROVIDER_ID_OPENAI, QWEN_PROVIDER,
 };
 
 #[test]
@@ -13,7 +13,10 @@ fn provider_count_is_21() {
 fn shared_provider_refs_match_tui_catalog() {
     let provider = find_by_id(QWEN_PROVIDER.id).unwrap();
     assert_eq!(provider.id, QWEN_PROVIDER.id);
-    assert!(uses_fixed_anthropic_messages(MINIMAX_PROVIDER.id, "MiniMax-M2.7"));
+    assert!(uses_fixed_anthropic_messages(
+        MINIMAX_PROVIDER.id,
+        "MiniMax-M2.7"
+    ));
 }
 
 #[test]
@@ -38,7 +41,10 @@ fn alibaba_coding_plan_uses_openai_compatible_base_url() {
 
 #[test]
 fn anthropic_message_providers_are_detected() {
-    assert!(uses_fixed_anthropic_messages(MINIMAX_PROVIDER.id, "MiniMax-M2.7"));
+    assert!(uses_fixed_anthropic_messages(
+        MINIMAX_PROVIDER.id,
+        "MiniMax-M2.7"
+    ));
     assert!(!uses_fixed_anthropic_messages(QWEN_PROVIDER.id, "qwen-max"));
     assert!(!uses_fixed_anthropic_messages(
         PROVIDER_ID_ALIBABA_CODING_PLAN,

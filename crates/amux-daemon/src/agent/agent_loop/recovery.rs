@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::llm_client::{StructuredUpstreamFailure, parse_structured_upstream_failure};
+use crate::agent::llm_client::{parse_structured_upstream_failure, StructuredUpstreamFailure};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FixableUpstreamRecoveryAction {

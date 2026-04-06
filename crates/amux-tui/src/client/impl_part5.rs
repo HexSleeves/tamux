@@ -232,6 +232,23 @@ impl DaemonClient {
         })
     }
 
+    pub fn vote_on_collaboration_disagreement(
+        &self,
+        parent_task_id: String,
+        disagreement_id: String,
+        task_id: String,
+        position: String,
+        confidence: Option<f64>,
+    ) -> Result<()> {
+        self.send(ClientMessage::AgentVoteOnCollaborationDisagreement {
+            parent_task_id,
+            disagreement_id,
+            task_id,
+            position,
+            confidence,
+        })
+    }
+
     pub fn get_generated_tools(&self) -> Result<()> {
         self.send(ClientMessage::AgentListGeneratedTools)
     }

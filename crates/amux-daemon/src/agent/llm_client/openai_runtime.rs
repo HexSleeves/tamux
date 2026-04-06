@@ -16,13 +16,7 @@ async fn fetch_native_assistant_message(
     if !response.status().is_success() {
         let status = response.status();
         let retry_after_ms = extract_retry_after_ms(Some(response.headers()), "");
-        let text = response
-            .text()
-            .await
-            .unwrap_or_default()
-            .chars()
-            .take(240)
-            .collect::<String>();
+        let text = response.text().await.unwrap_or_default();
         return Err(classify_http_failure_with_retry_after(
             status,
             provider,
@@ -136,13 +130,7 @@ async fn run_openai_chat_completions(
     if !response.status().is_success() {
         let status = response.status();
         let retry_after_ms = extract_retry_after_ms(Some(response.headers()), "");
-        let text = response
-            .text()
-            .await
-            .unwrap_or_default()
-            .chars()
-            .take(200)
-            .collect::<String>();
+        let text = response.text().await.unwrap_or_default();
         return Err(classify_http_failure_with_retry_after(
             status,
             provider,
@@ -450,13 +438,7 @@ async fn run_openai_responses(
     if !response.status().is_success() {
         let status = response.status();
         let retry_after_ms = extract_retry_after_ms(Some(response.headers()), "");
-        let text = response
-            .text()
-            .await
-            .unwrap_or_default()
-            .chars()
-            .take(240)
-            .collect::<String>();
+        let text = response.text().await.unwrap_or_default();
         let is_compatibility_error = matches!(
             status,
             reqwest::StatusCode::BAD_REQUEST

@@ -73,6 +73,7 @@ pub(crate) struct ChatFilePreviewTarget {
 #[derive(Clone, Debug)]
 enum MainPaneView {
     Conversation,
+    Collaboration,
     Task(sidebar::SidebarItemTarget),
     WorkContext,
     FilePreview(ChatFilePreviewTarget),
@@ -221,6 +222,7 @@ pub struct TuiModel {
     pub plugin_settings: settings::PluginSettingsState,
     pub auth: AuthState,
     pub subagents: SubAgentsState,
+    pub collaboration: CollaborationState,
     pub concierge: ConciergeState,
     pub tier: TierState,
 

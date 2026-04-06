@@ -352,7 +352,11 @@ pub(super) fn skill_content_similarity(left: &str, right: &str) -> f64 {
     }
     let overlap = left_tokens.intersection(&right_tokens).count() as f64;
     let union = left_tokens.union(&right_tokens).count() as f64;
-    if union == 0.0 { 0.0 } else { overlap / union }
+    if union == 0.0 {
+        0.0
+    } else {
+        overlap / union
+    }
 }
 
 pub(super) fn tokenize_skill_similarity(content: &str) -> BTreeSet<String> {

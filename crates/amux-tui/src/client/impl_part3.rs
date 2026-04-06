@@ -152,6 +152,11 @@ impl DaemonClient {
                     .send(ClientEvent::CollaborationSessions { sessions_json })
                     .await;
             }
+            DaemonMessage::AgentCollaborationVoteResult { report_json } => {
+                let _ = event_tx
+                    .send(ClientEvent::CollaborationVoteResult { report_json })
+                    .await;
+            }
             DaemonMessage::AgentGeneratedTools { tools_json } => {
                 let _ = event_tx
                     .send(ClientEvent::GeneratedTools { tools_json })

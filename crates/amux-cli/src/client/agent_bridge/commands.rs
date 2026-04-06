@@ -553,8 +553,8 @@ mod tests {
     use amux_protocol::{AmuxCodec, ClientMessage, DaemonCodec};
     use bytes::BytesMut;
     use futures::{SinkExt, StreamExt};
-    use tokio_util::codec::{Decoder, Encoder};
     use tokio_util::codec::Framed;
+    use tokio_util::codec::{Decoder, Encoder};
 
     async fn emitted_client_message(line: &str) -> ClientMessage {
         let (client_side, server_side) = tokio::io::duplex(1024);

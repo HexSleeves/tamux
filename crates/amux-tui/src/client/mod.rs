@@ -281,6 +281,9 @@ pub enum ClientEvent {
     CollaborationSessions {
         sessions_json: String,
     },
+    CollaborationVoteResult {
+        report_json: String,
+    },
     GeneratedTools {
         tools_json: String,
     },

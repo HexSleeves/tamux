@@ -316,9 +316,7 @@ pub(super) fn retire_generated_tool(agent_data_dir: &Path, tool_name: &str) -> R
         let skill_path = Path::new(path);
         if skill_path.exists() {
             std::fs::remove_file(skill_path).with_context(|| {
-                format!(
-                    "failed to remove promoted skill artifact for generated tool `{tool_name}`"
-                )
+                format!("failed to remove promoted skill artifact for generated tool `{tool_name}`")
             })?;
         }
     }

@@ -67,7 +67,11 @@ pub(crate) fn is_internal_thread(thread: &AgentThread) -> bool {
 
 fn is_hidden_handoff_thread(thread: &AgentThread) -> bool {
     thread.id.starts_with(HIDDEN_HANDOFF_THREAD_PREFIX)
-        || thread.title.trim().to_ascii_lowercase().starts_with("handoff ")
+        || thread
+            .title
+            .trim()
+            .to_ascii_lowercase()
+            .starts_with("handoff ")
 }
 
 pub(crate) fn is_weles_thread(thread: &AgentThread) -> bool {

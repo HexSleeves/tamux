@@ -51,9 +51,11 @@ impl AgentEngine {
     ) -> Option<gateway::IncomingMessage> {
         let channel_key = {
             let gateway_threads = self.gateway_threads.read().await;
-            gateway_threads.iter().find_map(|(channel_key, mapped_thread_id)| {
-                (mapped_thread_id == thread_id).then(|| channel_key.clone())
-            })
+            gateway_threads
+                .iter()
+                .find_map(|(channel_key, mapped_thread_id)| {
+                    (mapped_thread_id == thread_id).then(|| channel_key.clone())
+                })
         }?;
 
         let (platform, channel) = channel_key.split_once(':')?;
@@ -371,13 +373,7 @@ impl AgentEngine {
             );
 
             let _ = self
-                .send_gateway_platform_tool(
-                    thread_id,
-                    "auto",
-                    reply_tool_name,
-                    msg,
-                    &response_text,
-                )
+                .send_gateway_platform_tool(thread_id, "auto", reply_tool_name, msg, &response_text)
                 .await;
         }
     }

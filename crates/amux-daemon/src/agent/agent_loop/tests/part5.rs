@@ -107,14 +107,14 @@ async fn openai_done_event_exposes_provider_final_result() {
             assert_eq!(terminal_response.output, Vec::<serde_json::Value>::new());
             assert_eq!(terminal_response.usage.input_tokens, 5);
             assert_eq!(terminal_response.usage.output_tokens, 2);
-                let response_json: serde_json::Value = serde_json::from_str(
-                    response
-                        .response_json
-                        .as_deref()
-                        .expect("raw terminal response JSON should be present on the done event"),
-                )
-                .expect("response_json should decode");
-                assert_eq!(response_json["metadata"]["source"], "event-test");
+            let response_json: serde_json::Value = serde_json::from_str(
+                response
+                    .response_json
+                    .as_deref()
+                    .expect("raw terminal response JSON should be present on the done event"),
+            )
+            .expect("response_json should decode");
+            assert_eq!(response_json["metadata"]["source"], "event-test");
         }
         other => panic!("expected OpenAI Responses final result, got {other:?}"),
     }
@@ -218,7 +218,10 @@ async fn anthropic_done_event_exposes_provider_final_result() {
         CompletionProviderFinalResult::AnthropicMessage(message) => {
             assert_eq!(message.id.as_deref(), Some("msg_event_final"));
             assert_eq!(message.content_blocks.len(), 1);
-            assert_eq!(message.content_blocks[0].text.as_deref(), Some("Anthropic event"));
+            assert_eq!(
+                message.content_blocks[0].text.as_deref(),
+                Some("Anthropic event")
+            );
         }
         other => panic!("expected Anthropic final result, got {other:?}"),
     }

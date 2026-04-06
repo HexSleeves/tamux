@@ -234,6 +234,8 @@ impl TuiModel {
                 self.status_line = "Resetting operator model".to_string();
             }
             "collaboration_sessions_inspect" => {
+                self.main_pane_view = MainPaneView::Collaboration;
+                self.focus = FocusArea::Chat;
                 self.send_daemon_command(DaemonCommand::GetCollaborationSessions);
                 self.status_line = "Loading collaboration sessions".to_string();
             }

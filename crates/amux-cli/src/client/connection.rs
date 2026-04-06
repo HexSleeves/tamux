@@ -36,10 +36,7 @@ pub(super) async fn connect(
 pub(super) async fn roundtrip(msg: ClientMessage) -> Result<DaemonMessage> {
     let mut framed = connect().await?;
     framed.send(msg).await?;
-    let resp = framed
-        .next()
-        .await
-        .ok_or_else(closed_connection_error)??;
+    let resp = framed.next().await.ok_or_else(closed_connection_error)??;
     Ok(resp)
 }
 
@@ -59,10 +56,7 @@ where
     framed.send(msg).await?;
 
     loop {
-        let resp = framed
-            .next()
-            .await
-            .ok_or_else(closed_connection_error)??;
+        let resp = framed.next().await.ok_or_else(closed_connection_error)??;
         if let Some(result) = f(resp) {
             return result;
         }

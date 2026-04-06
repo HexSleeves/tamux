@@ -416,6 +416,9 @@ impl TuiModel {
             ClientEvent::CollaborationSessions { sessions_json } => {
                 self.handle_collaboration_sessions_event(sessions_json);
             }
+            ClientEvent::CollaborationVoteResult { report_json } => {
+                self.handle_collaboration_vote_result_event(report_json);
+            }
             ClientEvent::GeneratedTools { tools_json } => {
                 self.handle_generated_tools_event(tools_json);
             }

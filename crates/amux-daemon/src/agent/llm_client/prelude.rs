@@ -196,8 +196,10 @@ fn raw_upstream_message(body_text: &str) -> String {
         .ok()
         .and_then(|value| {
             value
-                .pointer("/error/message")
+                .pointer("/error/metadata/raw")
                 .and_then(|value| value.as_str())
+                .or_else(|| value.pointer("/metadata/raw").and_then(|value| value.as_str()))
+                .or_else(|| value.pointer("/error/message").and_then(|value| value.as_str()))
                 .or_else(|| value.get("message").and_then(|value| value.as_str()))
                 .map(ToOwned::to_owned)
         })

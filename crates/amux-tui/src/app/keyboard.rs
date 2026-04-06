@@ -337,7 +337,8 @@ impl TuiModel {
                     self.clear_pending_stop();
                     if self.focus == FocusArea::Chat {
                         match &self.main_pane_view {
-                            MainPaneView::Task(_)
+                            MainPaneView::Collaboration
+                            | MainPaneView::Task(_)
                             | MainPaneView::WorkContext
                             | MainPaneView::FilePreview(_)
                             | MainPaneView::GoalComposer => {}
@@ -424,7 +425,13 @@ impl TuiModel {
             }
             KeyCode::Down if self.focus != FocusArea::Input => match self.focus {
                 FocusArea::Chat => {
-                    if matches!(
+                    if matches!(self.main_pane_view, MainPaneView::Collaboration)
+                        && self.collaboration.focus() == CollaborationPaneFocus::Navigator
+                    {
+                        self.collaboration.reduce(CollaborationAction::SelectRow(
+                            self.collaboration.selected_row_index().saturating_add(1),
+                        ));
+                    } else if matches!(
                         self.main_pane_view,
                         MainPaneView::Task(_) | MainPaneView::WorkContext
                     ) {
@@ -438,7 +445,13 @@ impl TuiModel {
             },
             KeyCode::Up if self.focus != FocusArea::Input => match self.focus {
                 FocusArea::Chat => {
-                    if matches!(
+                    if matches!(self.main_pane_view, MainPaneView::Collaboration)
+                        && self.collaboration.focus() == CollaborationPaneFocus::Navigator
+                    {
+                        self.collaboration.reduce(CollaborationAction::SelectRow(
+                            self.collaboration.selected_row_index().saturating_sub(1),
+                        ));
+                    } else if matches!(
                         self.main_pane_view,
                         MainPaneView::Task(_) | MainPaneView::WorkContext
                     ) {
@@ -450,6 +463,34 @@ impl TuiModel {
                 FocusArea::Sidebar => self.sidebar.navigate(-1, self.sidebar_item_count()),
                 _ => {}
             },
+            KeyCode::Left
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::Collaboration) =>
+            {
+                if self.collaboration.focus() == CollaborationPaneFocus::Detail {
+                    if self.collaboration.selected_detail_action_index() > 0 {
+                        self.collaboration
+                            .reduce(CollaborationAction::StepDetailAction(-1));
+                    } else {
+                        self.collaboration.reduce(CollaborationAction::SetFocus(
+                            CollaborationPaneFocus::Navigator,
+                        ));
+                    }
+                }
+            }
+            KeyCode::Right
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::Collaboration) =>
+            {
+                if self.collaboration.focus() == CollaborationPaneFocus::Navigator {
+                    self.collaboration.reduce(CollaborationAction::SetFocus(
+                        CollaborationPaneFocus::Detail,
+                    ));
+                } else {
+                    self.collaboration
+                        .reduce(CollaborationAction::StepDetailAction(1));
+                }
+            }
             KeyCode::Left if self.focus == FocusArea::Sidebar => {
                 self.sidebar.reduce(sidebar::SidebarAction::SwitchTab(
                     sidebar::SidebarTab::Files,

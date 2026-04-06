@@ -125,9 +125,7 @@ pub(crate) async fn run_default() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        default_startup_action, format_direct_message_output, DefaultStartupAction,
-    };
+    use super::{default_startup_action, format_direct_message_output, DefaultStartupAction};
     use crate::client::DirectMessageResponse;
     use crate::setup_wizard::SetupProbe;
 
@@ -167,17 +165,31 @@ mod tests {
         )
         .expect("render json output");
 
-        let value: serde_json::Value = serde_json::from_str(&rendered).expect("parse rendered json");
+        let value: serde_json::Value =
+            serde_json::from_str(&rendered).expect("parse rendered json");
         assert_eq!(value.get("target").and_then(|v| v.as_str()), Some("main"));
-        assert_eq!(value.get("thread_id").and_then(|v| v.as_str()), Some("thread-1"));
-        assert_eq!(value.get("session_id").and_then(|v| v.as_str()), Some("session-1"));
-        assert_eq!(value.get("response").and_then(|v| v.as_str()), Some("protocol reply"));
         assert_eq!(
-            value.pointer("/provider_final_result/provider").and_then(|v| v.as_str()),
+            value.get("thread_id").and_then(|v| v.as_str()),
+            Some("thread-1")
+        );
+        assert_eq!(
+            value.get("session_id").and_then(|v| v.as_str()),
+            Some("session-1")
+        );
+        assert_eq!(
+            value.get("response").and_then(|v| v.as_str()),
+            Some("protocol reply")
+        );
+        assert_eq!(
+            value
+                .pointer("/provider_final_result/provider")
+                .and_then(|v| v.as_str()),
             Some("open_ai_responses")
         );
         assert_eq!(
-            value.pointer("/provider_final_result/id").and_then(|v| v.as_str()),
+            value
+                .pointer("/provider_final_result/id")
+                .and_then(|v| v.as_str()),
             Some("resp_1")
         );
     }

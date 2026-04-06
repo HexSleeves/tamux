@@ -1,7 +1,7 @@
 use super::*;
 use amux_shared::providers::{
-    PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_GITHUB_COPILOT,
-    PROVIDER_ID_MINIMAX_CODING_PLAN, PROVIDER_ID_OPENAI, PROVIDER_ID_OPENROUTER,
+    PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_MINIMAX_CODING_PLAN,
+    PROVIDER_ID_OPENAI, PROVIDER_ID_OPENROUTER,
 };
 use std::sync::mpsc;
 use tokio::sync::mpsc::unbounded_channel;
@@ -121,9 +121,14 @@ fn build_config_patch_value_covers_all_daemon_backed_tabs() {
     assert_eq!(json["agent_name"], "Tamux");
     assert_eq!(json["system_prompt"], "be sharp");
     assert_eq!(json["provider"], PROVIDER_ID_OPENAI);
-    assert_eq!(json["providers"][PROVIDER_ID_OPENAI]["assistant_id"], "asst_123");
+    assert_eq!(
+        json["providers"][PROVIDER_ID_OPENAI]["assistant_id"],
+        "asst_123"
+    );
     assert!(json[PROVIDER_ID_OPENAI].get("api_key").is_none());
-    assert!(json["providers"][PROVIDER_ID_OPENAI].get("api_key").is_none());
+    assert!(json["providers"][PROVIDER_ID_OPENAI]
+        .get("api_key")
+        .is_none());
     assert_eq!(json["tools"]["bash"], false);
     assert_eq!(json["search_provider"], "exa");
     assert_eq!(json["enable_conversation_memory"], false);
@@ -162,7 +167,10 @@ fn build_config_patch_value_covers_all_daemon_backed_tabs() {
     );
     assert_eq!(json["compaction"]["strategy"], "custom_model");
     assert_eq!(json["compaction"]["weles"]["model"], "gpt-5.4-mini");
-    assert_eq!(json["compaction"]["custom_model"]["provider"], PROVIDER_ID_OPENROUTER);
+    assert_eq!(
+        json["compaction"]["custom_model"]["provider"],
+        PROVIDER_ID_OPENROUTER
+    );
     assert_eq!(
         json["compaction"]["custom_model"]["context_window_tokens"],
         333000
@@ -378,10 +386,16 @@ fn build_config_patch_value_round_trips_daemon_backed_settings() {
     assert_eq!(reloaded.config.bash_timeout_secs, 77);
     assert_eq!(reloaded.config.weles_max_concurrent_reviews, 4);
     assert_eq!(reloaded.config.compaction_strategy, "custom_model");
-    assert_eq!(reloaded.config.compaction_weles_provider, PROVIDER_ID_OPENAI);
+    assert_eq!(
+        reloaded.config.compaction_weles_provider,
+        PROVIDER_ID_OPENAI
+    );
     assert_eq!(reloaded.config.compaction_weles_model, "gpt-5.4-mini");
     assert_eq!(reloaded.config.compaction_weles_reasoning_effort, "medium");
-    assert_eq!(reloaded.config.compaction_custom_provider, PROVIDER_ID_OPENROUTER);
+    assert_eq!(
+        reloaded.config.compaction_custom_provider,
+        PROVIDER_ID_OPENROUTER
+    );
     assert_eq!(
         reloaded.config.compaction_custom_base_url,
         "https://openrouter.ai/api/v1"
@@ -529,7 +543,10 @@ fn apply_config_json_loads_nested_compaction_settings() {
     assert_eq!(model.config.weles_max_concurrent_reviews, 5);
     assert_eq!(model.config.compaction_weles_provider, PROVIDER_ID_OPENAI);
     assert_eq!(model.config.compaction_weles_model, "gpt-5.4-mini");
-    assert_eq!(model.config.compaction_custom_provider, PROVIDER_ID_OPENROUTER);
+    assert_eq!(
+        model.config.compaction_custom_provider,
+        PROVIDER_ID_OPENROUTER
+    );
     assert_eq!(
         model.config.compaction_custom_base_url,
         "https://openrouter.ai/api/v1"

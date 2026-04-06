@@ -337,10 +337,7 @@ fn current_field_name_chat_tab() {
     state.reduce(SettingsAction::NavigateField(1));
     assert_eq!(state.current_field_name(), "generated_tools_inspect");
     state.reduce(SettingsAction::NavigateField(4));
-    assert_eq!(
-        state.current_field_name(),
-        "generated_tools_inspect"
-    );
+    assert_eq!(state.current_field_name(), "generated_tools_inspect");
     assert_eq!(state.field_cursor(), 25);
 }
 

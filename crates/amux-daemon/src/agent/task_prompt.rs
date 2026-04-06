@@ -398,7 +398,10 @@ mod tests {
             "expected built-in skills seed to copy the repo skills README"
         );
         assert!(
-            builtin_root.join("operating").join("thread-compaction.md").exists(),
+            builtin_root
+                .join("operating")
+                .join("thread-compaction.md")
+                .exists(),
             "expected built-in skills seed to copy nested skill docs"
         );
     }

@@ -1,5 +1,5 @@
-use amux_shared::providers::*;
 use crate::state::config::FetchedModel;
+use amux_shared::providers::*;
 
 pub(super) fn known_models_for_provider_auth(
     provider: &str,
@@ -134,7 +134,11 @@ pub(super) fn known_models_for_provider_auth(
             ("qwen-turbo", "Qwen Turbo", 131_072),
         ],
         PROVIDER_ID_OPENROUTER => &[
-            ("arcee/trinity-large-thinking", "Trinity Large Thinking", 262_144),
+            (
+                "arcee/trinity-large-thinking",
+                "Trinity Large Thinking",
+                262_144,
+            ),
             ("anthropic/claude-opus-4-6", "Claude Opus 4.6", 1_000_000),
             ("openai/gpt-4.1", "GPT-4.1", 1_000_000),
             ("google/gemini-2.5-pro", "Gemini 2.5 Pro", 1_000_000),

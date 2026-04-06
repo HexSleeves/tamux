@@ -143,6 +143,102 @@ fn whatsapp_status_events_update_modal_state() {
 }
 
 #[test]
+fn collaboration_sessions_event_populates_workspace_state_without_error_modal() {
+    let mut model = make_model();
+
+    model.handle_collaboration_sessions_event(
+        serde_json::json!([
+            {
+                "id": "session-1",
+                "parent_task_id": "task-1",
+                "agents": [{"role": "research"}, {"role": "testing"}],
+                "disagreements": [
+                    {
+                        "id": "disagreement-1",
+                        "topic": "deployment strategy",
+                        "positions": ["roll forward", "roll back"],
+                        "votes": [{"task_id": "subagent-1"}]
+                    }
+                ]
+            }
+        ])
+        .to_string(),
+    );
+
+    assert!(matches!(model.main_pane_view, MainPaneView::Collaboration));
+    assert_eq!(model.modal.top(), None);
+    assert!(!model.error_active);
+    assert_eq!(model.status_line, "Collaboration sessions loaded");
+    assert_eq!(model.collaboration.rows().len(), 2);
+    assert_eq!(
+        model
+            .collaboration
+            .selected_row()
+            .and_then(crate::state::collaboration::CollaborationRowVm::disagreement_id),
+        Some("disagreement-1")
+    );
+}
+
+#[test]
+fn collaboration_vote_result_requests_refresh_and_updates_status() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+
+    model.handle_client_event(ClientEvent::CollaborationVoteResult {
+        report_json: serde_json::json!({
+            "session_id": "session-1",
+            "resolution": "resolved"
+        })
+        .to_string(),
+    });
+
+    assert_eq!(model.status_line, "Vote recorded: resolved.");
+    assert!(matches!(
+        daemon_rx
+            .try_recv()
+            .expect("expected collaboration refresh after vote result"),
+        DaemonCommand::GetCollaborationSessions
+    ));
+}
+
+#[test]
+fn collaboration_sessions_event_surfaces_escalation_notice() {
+    let mut model = make_model();
+
+    model.handle_collaboration_sessions_event(
+        serde_json::json!([
+            {
+                "id": "session-1",
+                "parent_task_id": "task-1",
+                "disagreements": [
+                    {
+                        "id": "disagreement-1",
+                        "topic": "deployment strategy",
+                        "positions": ["roll forward", "roll back"],
+                        "resolution": "pending",
+                        "confidence_gap": 0.1,
+                        "votes": []
+                    }
+                ]
+            }
+        ])
+        .to_string(),
+    );
+
+    let notice = model
+        .input_notice_style()
+        .expect("escalation should surface a notice");
+    assert!(notice.0.contains("Collaboration escalation"));
+    assert!(
+        model
+            .collaboration
+            .selected_session()
+            .and_then(|session| session.escalation.as_ref())
+            .is_some(),
+        "session should carry escalation summary for workspace rendering"
+    );
+}
+
+#[test]
 fn operator_profile_workflow_warning_surfaces_retry_notice() {
     let mut model = make_model();
     model.handle_client_event(ClientEvent::WorkflowNotice {
@@ -674,9 +770,9 @@ fn selected_internal_dm_thread_detail_is_loaded() {
         thread_id: "dm:svarog:weles".to_string(),
         title: "Internal DM · Svarog ↔ WELES".to_string(),
     });
-    model
-        .chat
-        .reduce(chat::ChatAction::SelectThread("dm:svarog:weles".to_string()));
+    model.chat.reduce(chat::ChatAction::SelectThread(
+        "dm:svarog:weles".to_string(),
+    ));
 
     model.handle_client_event(ClientEvent::ThreadDetail(Some(crate::wire::AgentThread {
         id: "dm:svarog:weles".to_string(),
@@ -701,7 +797,10 @@ fn selected_internal_dm_thread_detail_is_loaded() {
         .expect("selected internal dm thread should remain in chat state");
     assert_eq!(model.chat.active_thread_id(), Some("dm:svarog:weles"));
     assert_eq!(thread.messages.len(), 1);
-    assert_eq!(thread.messages[0].content, "Keep reviewing the migration plan.");
+    assert_eq!(
+        thread.messages[0].content,
+        "Keep reviewing the migration plan."
+    );
 }
 
 #[test]

@@ -31,8 +31,7 @@ fn finalize_resolved_provider(
     if !provider_supports_transport(provider_id, resolved.api_transport) {
         resolved.api_transport = default_api_transport_for_provider(provider_id);
     }
-    if provider_id == PROVIDER_ID_OPENAI
-        && resolved.auth_source == AuthSource::ChatgptSubscription
+    if provider_id == PROVIDER_ID_OPENAI && resolved.auth_source == AuthSource::ChatgptSubscription
     {
         resolved.api_transport = ApiTransport::Responses;
     }
@@ -275,13 +274,12 @@ mod tests {
             },
         );
 
-        let resolved =
-            resolve_provider_config_for(
-                &config,
-                PROVIDER_ID_ALIBABA_CODING_PLAN,
-                Some("qwen3.5-plus"),
-            )
-                .expect("provider should resolve");
+        let resolved = resolve_provider_config_for(
+            &config,
+            PROVIDER_ID_ALIBABA_CODING_PLAN,
+            Some("qwen3.5-plus"),
+        )
+        .expect("provider should resolve");
 
         assert_eq!(
             resolved.base_url,
@@ -337,9 +335,8 @@ mod tests {
             },
         );
 
-        let resolved =
-            resolve_candidate_provider_config(&config, PROVIDER_ID_GROQ)
-                .expect("candidate should resolve");
+        let resolved = resolve_candidate_provider_config(&config, PROVIDER_ID_GROQ)
+            .expect("candidate should resolve");
 
         assert_eq!(resolved.model, "llama-3.3-70b-versatile");
         assert_eq!(resolved.base_url, "https://api.groq.com/openai/v1");

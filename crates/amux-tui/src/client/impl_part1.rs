@@ -276,6 +276,7 @@ impl DaemonClient {
             | DaemonMessage::AgentOperatorModel { .. }
             | DaemonMessage::AgentOperatorModelReset { .. }
             | DaemonMessage::AgentCollaborationSessions { .. }
+            | DaemonMessage::AgentCollaborationVoteResult { .. }
             | DaemonMessage::AgentGeneratedTools { .. }
             | DaemonMessage::AgentOperatorProfileSessionCompleted { .. }
             | DaemonMessage::AgentError { .. }

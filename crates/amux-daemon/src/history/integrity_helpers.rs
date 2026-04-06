@@ -1,8 +1,8 @@
 use super::*;
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use ring::rand::SystemRandom;
-use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
+use ring::signature::{Ed25519KeyPair, KeyPair, UnparsedPublicKey, ED25519};
 
 const PROVENANCE_SIGNATURE_SCHEME_ED25519: &str = "ed25519";
 

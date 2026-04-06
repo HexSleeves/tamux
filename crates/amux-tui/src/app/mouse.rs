@@ -208,7 +208,35 @@ impl TuiModel {
                     }
                 } else if cursor_in_chat {
                     self.focus = FocusArea::Chat;
-                    if matches!(self.main_pane_view, MainPaneView::Conversation) {
+                    if matches!(self.main_pane_view, MainPaneView::Collaboration) {
+                        if let Some(hit) = widgets::collaboration_view::hit_test(
+                            chat_area,
+                            &self.collaboration,
+                            Position::new(mouse.column, mouse.row),
+                        ) {
+                            match hit {
+                                widgets::collaboration_view::CollaborationHitTarget::Row(index) => {
+                                    self.collaboration
+                                        .reduce(CollaborationAction::SelectRow(index));
+                                    self.collaboration.reduce(CollaborationAction::SetFocus(
+                                        CollaborationPaneFocus::Navigator,
+                                    ));
+                                }
+                                widgets::collaboration_view::CollaborationHitTarget::DetailAction(index) => {
+                                    self.collaboration.reduce(CollaborationAction::SetFocus(
+                                        CollaborationPaneFocus::Detail,
+                                    ));
+                                    let current = self.collaboration.selected_detail_action_index() as i32;
+                                    self.collaboration.reduce(CollaborationAction::StepDetailAction(
+                                        index as i32 - current,
+                                    ));
+                                    self.submit_selected_collaboration_vote();
+                                }
+                            }
+                            self.input.set_mode(input::InputMode::Insert);
+                            return;
+                        }
+                    } else if matches!(self.main_pane_view, MainPaneView::Conversation) {
                         let pos = Position::new(mouse.column, mouse.row);
                         if matches!(
                             widgets::chat::hit_test(

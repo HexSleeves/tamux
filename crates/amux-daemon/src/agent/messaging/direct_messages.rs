@@ -126,7 +126,9 @@ impl AgentEngine {
                 provider_final_result: None,
             });
         if result.upstream_message.is_none() {
-            result.upstream_message = outcome.as_ref().and_then(|value| value.upstream_message.clone());
+            result.upstream_message = outcome
+                .as_ref()
+                .and_then(|value| value.upstream_message.clone());
         }
         if result.provider_final_result.is_none() {
             result.provider_final_result = outcome

@@ -570,12 +570,8 @@ mod tests {
     async fn system_prompt_distinguishes_internal_dm_from_thread_handoff() {
         let root = tempfile::tempdir().expect("tempdir should succeed");
         let manager = crate::session_manager::SessionManager::new_test(root.path()).await;
-        let engine = crate::agent::AgentEngine::new_test(
-            manager,
-            AgentConfig::default(),
-            root.path(),
-        )
-        .await;
+        let engine =
+            crate::agent::AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
 
         let prompt = build_system_prompt(
             &AgentConfig::default(),

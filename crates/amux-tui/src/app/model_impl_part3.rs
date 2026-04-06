@@ -77,6 +77,11 @@ impl TuiModel {
                     None,
                 ),
             },
+            MainPaneView::Collaboration => (
+                "collaboration:workspace".to_string(),
+                self.chat.active_thread_id().map(str::to_string),
+                None,
+            ),
             MainPaneView::Task(target) => (
                 "task:detail".to_string(),
                 self.target_thread_id(target),

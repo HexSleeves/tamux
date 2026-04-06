@@ -91,7 +91,10 @@ impl TuiModel {
                 self.set_main_pane_conversation(focus);
                 true
             }
-            MainPaneView::WorkContext | MainPaneView::FilePreview(_) | MainPaneView::GoalComposer => {
+            MainPaneView::Collaboration
+            | MainPaneView::WorkContext
+            | MainPaneView::FilePreview(_)
+            | MainPaneView::GoalComposer => {
                 self.set_main_pane_conversation(focus);
                 true
             }

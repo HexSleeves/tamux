@@ -4,6 +4,7 @@ pub mod approval;
 pub mod audit;
 pub mod auth;
 pub mod chat;
+pub mod collaboration;
 pub mod concierge;
 pub mod config;
 pub mod input;
@@ -143,6 +144,13 @@ pub enum DaemonCommand {
     GetOperatorModel,
     ResetOperatorModel,
     GetCollaborationSessions,
+    VoteOnCollaborationDisagreement {
+        parent_task_id: String,
+        disagreement_id: String,
+        task_id: String,
+        position: String,
+        confidence: Option<f64>,
+    },
     GetGeneratedTools,
     SetOperatorProfileConsent {
         consent_key: String,
@@ -200,6 +208,11 @@ pub use audit::{AuditAction, AuditEntryVm, AuditState, EscalationVm, TimeRange};
 pub use auth::{AuthAction, AuthState, ProviderAuthEntry};
 #[allow(unused_imports)]
 pub use chat::{ChatAction, ChatState, ToolCallStatus, ToolCallVm, TranscriptMode};
+#[allow(unused_imports)]
+pub use collaboration::{
+    CollaborationAction, CollaborationDisagreementVm, CollaborationEscalationVm,
+    CollaborationPaneFocus, CollaborationRowVm, CollaborationSessionVm, CollaborationState,
+};
 #[allow(unused_imports)]
 pub use concierge::{ConciergeAction, ConciergeActionVm, ConciergeState};
 #[allow(unused_imports)]

@@ -270,7 +270,8 @@ impl TuiModel {
                                         let next_context = resolved_context_window.unwrap_or(
                                             providers::default_custom_model_context_window(),
                                         );
-                                        self.config.custom_context_window_tokens = Some(next_context);
+                                        self.config.custom_context_window_tokens =
+                                            Some(next_context);
                                         self.config.context_window_tokens = next_context;
                                     } else {
                                         self.config.custom_model_name = if name.is_empty() {
@@ -279,8 +280,8 @@ impl TuiModel {
                                             name.to_string()
                                         };
                                         self.config.custom_context_window_tokens = None;
-                                        self.config.context_window_tokens = resolved_context_window
-                                            .unwrap_or(128_000);
+                                        self.config.context_window_tokens =
+                                            resolved_context_window.unwrap_or(128_000);
                                     }
                                 }
                             }

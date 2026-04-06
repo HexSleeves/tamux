@@ -83,7 +83,9 @@ pub fn hit_test(
     }
 
     let header_area = Rect::new(inner.x, inner.y, inner.width, 2);
-    if let Some(filter_hit) = header_hit_test(header_area, approval.pending_approvals().len(), position) {
+    if let Some(filter_hit) =
+        header_hit_test(header_area, approval.pending_approvals().len(), position)
+    {
         return Some(filter_hit);
     }
 

@@ -18,6 +18,7 @@ impl TuiModel {
             plugin_settings: settings::PluginSettingsState::new(),
             auth: AuthState::new(),
             subagents: SubAgentsState::new(),
+            collaboration: CollaborationState::new(),
             concierge: ConciergeState::new(),
             tier: TierState::default(),
             focus: FocusArea::Input,

@@ -199,11 +199,7 @@ async fn gateway_auto_send_thread_response_emits_gateway_request_for_latest_assi
     };
 
     let thread_id = engine
-        .persist_gateway_fast_path_exchange(
-            "Discord:user:123456789",
-            &incoming,
-            "Initial reply",
-        )
+        .persist_gateway_fast_path_exchange("Discord:user:123456789", &incoming, "Initial reply")
         .await
         .expect("persist fast-path exchange");
 

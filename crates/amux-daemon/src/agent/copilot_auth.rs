@@ -1,6 +1,6 @@
 use super::types::AuthSource;
-use anyhow::{Context, Result};
 use amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 
@@ -59,12 +59,11 @@ fn env_flag_is_enabled(name: &str) -> bool {
 }
 
 pub fn read_stored_github_copilot_auth() -> Option<StoredGithubCopilotAuth> {
-    let value =
-        super::provider_auth_store::load_provider_auth_state(
-            PROVIDER_ID_GITHUB_COPILOT,
-            "github_copilot",
-        )
-            .ok()??;
+    let value = super::provider_auth_store::load_provider_auth_state(
+        PROVIDER_ID_GITHUB_COPILOT,
+        "github_copilot",
+    )
+    .ok()??;
     serde_json::from_value(value).ok()
 }
 

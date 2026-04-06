@@ -3,10 +3,9 @@ use super::*;
 fn settlement_factor_for_outcome(
     outcome_json: &str,
 ) -> Option<crate::agent::learning::traces::CausalFactor> {
-    let outcome = serde_json::from_str::<crate::agent::learning::traces::CausalTraceOutcome>(
-        outcome_json,
-    )
-    .ok()?;
+    let outcome =
+        serde_json::from_str::<crate::agent::learning::traces::CausalTraceOutcome>(outcome_json)
+            .ok()?;
     match outcome {
         crate::agent::learning::traces::CausalTraceOutcome::Success => {
             Some(crate::agent::learning::traces::CausalFactor {

@@ -1,5 +1,5 @@
 use super::helpers::{
-    FamilyOutcomeSummary, command_family, pattern_family_from_factor, summarize_outcome,
+    command_family, pattern_family_from_factor, summarize_outcome, FamilyOutcomeSummary,
 };
 use super::*;
 

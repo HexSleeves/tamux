@@ -130,7 +130,10 @@ fn operator_profile_bridge_commands_deserialize() {
             since,
             limit,
         } => {
-            assert_eq!(action_types, Some(vec!["tool".to_string(), "heartbeat".to_string()]));
+            assert_eq!(
+                action_types,
+                Some(vec!["tool".to_string(), "heartbeat".to_string()])
+            );
             assert_eq!(since, None);
             assert_eq!(limit, Some(25));
         }
@@ -156,7 +159,10 @@ fn operator_profile_bridge_commands_deserialize() {
             since,
             limit,
         } => {
-            assert_eq!(action_types, Some(vec!["tool".to_string(), "heartbeat".to_string()]));
+            assert_eq!(
+                action_types,
+                Some(vec!["tool".to_string(), "heartbeat".to_string()])
+            );
             assert_eq!(since, None);
             assert_eq!(limit, Some(25));
         }
@@ -194,7 +200,8 @@ fn operator_profile_bridge_commands_deserialize() {
         _ => panic!("unexpected variant for confirm-memory-provenance-entry"),
     }
 
-    let json = r#"{"type":"retract-memory-provenance-entry","entry_id":"retractable-memory-entry"}"#;
+    let json =
+        r#"{"type":"retract-memory-provenance-entry","entry_id":"retractable-memory-entry"}"#;
     let cmd: AgentBridgeCommand =
         serde_json::from_str(json).expect("retract-memory-provenance-entry must deserialize");
     match cmd {

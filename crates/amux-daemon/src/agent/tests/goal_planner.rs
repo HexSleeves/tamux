@@ -240,7 +240,9 @@ async fn fail_goal_run_appends_failure_factor_to_goal_replan_trace() {
         factors.iter().any(|factor| matches!(
             factor.factor_type,
             crate::agent::learning::traces::FactorType::PastFailure
-        ) && factor.description.contains("managed command failed permanently")),
+        ) && factor
+            .description
+            .contains("managed command failed permanently")),
         "expected settled goal replan trace to append a final failure factor"
     );
 }

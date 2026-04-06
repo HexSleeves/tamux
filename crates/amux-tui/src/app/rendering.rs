@@ -138,6 +138,13 @@ impl TuiModel {
                 MainPaneView::Conversation => {
                     self.render_conversation_panel(frame, layout.chat);
                 }
+                MainPaneView::Collaboration => widgets::collaboration_view::render(
+                    frame,
+                    layout.chat,
+                    &self.collaboration,
+                    &self.theme,
+                    self.focus == FocusArea::Chat,
+                ),
                 MainPaneView::Task(target) => widgets::task_view::render(
                     frame,
                     layout.chat,
@@ -208,6 +215,13 @@ impl TuiModel {
         } else {
             match &self.main_pane_view {
                 MainPaneView::Conversation => self.render_conversation_panel(frame, layout.chat),
+                MainPaneView::Collaboration => widgets::collaboration_view::render(
+                    frame,
+                    layout.chat,
+                    &self.collaboration,
+                    &self.theme,
+                    self.focus == FocusArea::Chat,
+                ),
                 MainPaneView::Task(target) => widgets::task_view::render(
                     frame,
                     layout.chat,
