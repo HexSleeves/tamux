@@ -106,6 +106,7 @@ async fn make_test_engine(
         threads: RwLock::new(HashMap::new()),
         thread_handoff_states: RwLock::new(HashMap::new()),
         thread_client_surfaces: RwLock::new(HashMap::new()),
+        thread_skill_discovery_states: RwLock::new(HashMap::new()),
         thread_todos: RwLock::new(todos),
         thread_work_contexts: RwLock::new(HashMap::new()),
         tasks: Mutex::new(VecDeque::new()),

@@ -1,8 +1,15 @@
 use super::*;
-use amux_protocol::SessionId;
 use crate::agent::types::SkillRecommendationConfig;
+use amux_protocol::SessionId;
 
 const MAX_SKILL_PREFLIGHT_MATCHES: usize = 3;
+
+pub(crate) struct SkillPreflightContext {
+    pub prompt_context: String,
+    pub state: LatestSkillDiscoveryState,
+    pub workflow_message: String,
+    pub workflow_details: Option<String>,
+}
 
 impl AgentEngine {
     pub(crate) async fn discover_skill_recommendations_public(
@@ -11,6 +18,107 @@ impl AgentEngine {
         session_id: Option<SessionId>,
         limit: usize,
     ) -> Result<amux_protocol::SkillDiscoveryResultPublic> {
+        let context = self.run_skill_discovery(query, session_id, limit).await?;
+
+        Ok(translate_skill_discovery_result(
+            query,
+            &context.context_tags,
+            &context.result,
+            &context.cfg,
+        ))
+    }
+
+    pub(super) async fn build_skill_preflight_context(
+        &self,
+        content: &str,
+        session_id: Option<SessionId>,
+    ) -> Result<Option<SkillPreflightContext>> {
+        if !should_run_skill_preflight(content) {
+            return Ok(None);
+        }
+
+        let context = self
+            .run_skill_discovery(content, session_id, MAX_SKILL_PREFLIGHT_MATCHES)
+            .await?;
+        let state = build_latest_skill_discovery_state(content, &context.result);
+
+        Ok(Some(SkillPreflightContext {
+            prompt_context: build_skill_preflight_prompt(content, &context.result, &state),
+            workflow_message: format!(
+                "Skill discovery confidence: {}. Next action: {}.",
+                state.confidence_tier, state.recommended_action
+            ),
+            workflow_details: serde_json::to_string(&state).ok(),
+            state,
+        }))
+    }
+
+    pub(crate) async fn refresh_thread_skill_discovery_state(
+        &self,
+        thread_id: &str,
+        query: &str,
+        session_id: Option<SessionId>,
+        limit: usize,
+    ) -> Result<LatestSkillDiscoveryState> {
+        let context = self.run_skill_discovery(query, session_id, limit).await?;
+        let state = build_latest_skill_discovery_state(query, &context.result);
+        self.set_thread_skill_discovery_state(thread_id, state.clone())
+            .await;
+        Ok(state)
+    }
+
+    pub(crate) async fn record_thread_skill_skip_rationale(
+        &self,
+        thread_id: &str,
+        rationale: &str,
+    ) -> Result<LatestSkillDiscoveryState> {
+        let trimmed = rationale.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("skip rationale must not be empty");
+        }
+
+        let mut state = self
+            .get_thread_skill_discovery_state(thread_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("no active skill discovery state for this thread"))?;
+        state.skip_rationale = Some(trimmed.to_string());
+        state.compliant = !state.confidence_tier.eq_ignore_ascii_case("strong");
+        state.updated_at = now_millis();
+        self.set_thread_skill_discovery_state(thread_id, state.clone())
+            .await;
+        Ok(state)
+    }
+
+    pub(crate) async fn record_thread_skill_read_compliance(
+        &self,
+        thread_id: &str,
+        skill_identifier: &str,
+    ) -> Option<LatestSkillDiscoveryState> {
+        let mut state = self.get_thread_skill_discovery_state(thread_id).await?;
+        if !state.confidence_tier.eq_ignore_ascii_case("strong") {
+            return Some(state);
+        }
+        let expected = state
+            .read_skill_identifier
+            .as_deref()
+            .or(state.recommended_skill.as_deref())?;
+        if !skill_identifier_matches(expected, skill_identifier) {
+            return Some(state);
+        }
+
+        state.compliant = true;
+        state.updated_at = now_millis();
+        self.set_thread_skill_discovery_state(thread_id, state.clone())
+            .await;
+        Some(state)
+    }
+
+    async fn run_skill_discovery(
+        &self,
+        query: &str,
+        session_id: Option<SessionId>,
+        limit: usize,
+    ) -> Result<SkillDiscoveryComputation> {
         let skills_root = self.history.data_dir().to_path_buf();
         let context_tags = resolve_skill_context_tags(&self.session_manager, session_id).await;
         let cfg = self.config.read().await.skill_recommendation.clone();
@@ -23,74 +131,18 @@ impl AgentEngine {
             &cfg,
         )
         .await?;
-
-        Ok(translate_skill_discovery_result(
-            query,
-            &context_tags,
-            &result,
-            &cfg,
-        ))
+        Ok(SkillDiscoveryComputation {
+            context_tags,
+            cfg,
+            result,
+        })
     }
+}
 
-    pub(super) async fn build_skill_preflight_context(
-        &self,
-        content: &str,
-        session_id: Option<SessionId>,
-    ) -> Result<Option<String>> {
-        if !should_run_skill_preflight(content) {
-            return Ok(None);
-        }
-
-        let skills_root = self.history.data_dir().to_path_buf();
-        let context_tags = resolve_skill_context_tags(&self.session_manager, session_id).await;
-        let cfg = self.config.read().await.skill_recommendation.clone();
-        let result = super::skill_recommendation::discover_local_skills(
-            &self.history,
-            &skills_root,
-            content,
-            &context_tags,
-            MAX_SKILL_PREFLIGHT_MATCHES,
-            &cfg,
-        )
-        .await?;
-        if result.recommendations.is_empty() {
-            return Ok(None);
-        }
-
-        let mut body = format!(
-            "Daemon skill preflight ranked local skills before tool execution. Confidence={} action={}.\n",
-            confidence_label(result.confidence),
-            action_label(result.recommended_action)
-        );
-        for recommendation in result.recommendations {
-            let tags = if recommendation.record.context_tags.is_empty() {
-                "none".to_string()
-            } else {
-                recommendation.record.context_tags.join(", ")
-            };
-            let summary = recommendation
-                .metadata
-                .summary
-                .as_deref()
-                .unwrap_or("No summary extracted.");
-            body.push_str(&format!(
-                "\n- {} [{} | status={} | uses={} | success={:.0}% | score={:.2} | tags={}]\n  Reason: {}\n  Summary: {}\n  Path: {}\n{}\n",
-                recommendation.record.skill_name,
-                recommendation.record.variant_name,
-                recommendation.record.status,
-                recommendation.record.use_count,
-                recommendation.record.success_rate() * 100.0,
-                recommendation.score,
-                tags,
-                recommendation.reason,
-                summary,
-                recommendation.record.relative_path,
-                recommendation.excerpt
-            ));
-        }
-
-        Ok(Some(body))
-    }
+struct SkillDiscoveryComputation {
+    context_tags: Vec<String>,
+    cfg: SkillRecommendationConfig,
+    result: super::skill_recommendation::SkillDiscoveryResult,
 }
 
 fn translate_skill_discovery_result(
@@ -120,20 +172,23 @@ fn translate_skill_discovery_result(
         candidates: result
             .recommendations
             .iter()
-            .map(|recommendation| amux_protocol::SkillDiscoveryCandidatePublic {
-                variant_id: recommendation.record.variant_id.clone(),
-                skill_name: recommendation.record.skill_name.clone(),
-                variant_name: recommendation.record.variant_name.clone(),
-                relative_path: recommendation.record.relative_path.clone(),
-                status: recommendation.record.status.clone(),
-                score: recommendation.score,
-                confidence_tier: candidate_confidence_label(recommendation.score, cfg).to_string(),
-                reasons: split_reasons(&recommendation.reason),
-                context_tags: recommendation.record.context_tags.clone(),
-                use_count: recommendation.record.use_count,
-                success_count: recommendation.record.success_count,
-                failure_count: recommendation.record.failure_count,
-            })
+            .map(
+                |recommendation| amux_protocol::SkillDiscoveryCandidatePublic {
+                    variant_id: recommendation.record.variant_id.clone(),
+                    skill_name: recommendation.record.skill_name.clone(),
+                    variant_name: recommendation.record.variant_name.clone(),
+                    relative_path: recommendation.record.relative_path.clone(),
+                    status: recommendation.record.status.clone(),
+                    score: recommendation.score,
+                    confidence_tier: candidate_confidence_label(recommendation.score, cfg)
+                        .to_string(),
+                    reasons: split_reasons(&recommendation.reason),
+                    context_tags: recommendation.record.context_tags.clone(),
+                    use_count: recommendation.record.use_count,
+                    success_count: recommendation.record.success_count,
+                    failure_count: recommendation.record.failure_count,
+                },
+            )
             .collect(),
     }
 }
@@ -188,6 +243,117 @@ fn should_run_skill_preflight(content: &str) -> bool {
     .any(|keyword| normalized.contains(keyword))
 }
 
+fn build_latest_skill_discovery_state(
+    query: &str,
+    result: &super::skill_recommendation::SkillDiscoveryResult,
+) -> LatestSkillDiscoveryState {
+    let recommended_skill = result
+        .recommendations
+        .first()
+        .map(|recommendation| recommendation.record.skill_name.clone());
+    let confidence_tier = confidence_label(result.confidence).to_string();
+    let recommended_action = if confidence_tier == "strong" {
+        recommended_skill
+            .as_ref()
+            .map(|skill_name| format!("read_skill {skill_name}"))
+            .unwrap_or_else(|| "read_skill".to_string())
+    } else {
+        "justify_skill_skip".to_string()
+    };
+
+    LatestSkillDiscoveryState {
+        query: query.to_string(),
+        confidence_tier,
+        recommended_skill: recommended_skill.clone(),
+        recommended_action,
+        read_skill_identifier: recommended_skill.filter(|_| {
+            matches!(
+                result.confidence,
+                super::skill_recommendation::SkillRecommendationConfidence::Strong
+            )
+        }),
+        skip_rationale: None,
+        compliant: false,
+        updated_at: now_millis(),
+    }
+}
+
+fn build_skill_preflight_prompt(
+    query: &str,
+    result: &super::skill_recommendation::SkillDiscoveryResult,
+    state: &LatestSkillDiscoveryState,
+) -> String {
+    let mut body = format!(
+        "Daemon skill discovery already evaluated this request.\n- Query: {query}\n- Confidence: {}\n- Next action: {}\n",
+        state.confidence_tier, state.recommended_action
+    );
+
+    match state.confidence_tier.as_str() {
+        "strong" => {
+            body.push_str(
+                "- Hard gate: do not call non-discovery tools until you read the recommended skill.\n",
+            );
+        }
+        _ => {
+            body.push_str(
+                "- Hard gate: do not call non-discovery tools until you record an explicit skip rationale with `justify_skill_skip`.\n",
+            );
+        }
+    }
+
+    if result.recommendations.is_empty() {
+        body.push_str(
+            "- No installed skill cleared the weak threshold. If you continue, explain why no local skill fits before proceeding.\n",
+        );
+        return body;
+    }
+
+    for recommendation in &result.recommendations {
+        let tags = if recommendation.record.context_tags.is_empty() {
+            "none".to_string()
+        } else {
+            recommendation.record.context_tags.join(", ")
+        };
+        let summary = recommendation
+            .metadata
+            .summary
+            .as_deref()
+            .unwrap_or("No summary extracted.");
+        let reasons = split_reasons(&recommendation.reason).join(", ");
+        body.push_str(&format!(
+            "\n- {} [{} | status={} | score={:.2} | tags={}]\n  Reasons: {}\n  Summary: {}\n  Path: {}\n",
+            recommendation.record.skill_name,
+            recommendation.record.variant_name,
+            recommendation.record.status,
+            recommendation.score,
+            tags,
+            reasons,
+            summary,
+            recommendation.record.relative_path,
+        ));
+    }
+
+    body
+}
+
+fn skill_identifier_matches(expected: &str, actual: &str) -> bool {
+    let expected = expected.trim();
+    let actual = actual.trim();
+    if expected.is_empty() || actual.is_empty() {
+        return false;
+    }
+
+    expected.eq_ignore_ascii_case(actual)
+        || actual
+            .rsplit('/')
+            .next()
+            .is_some_and(|segment| expected.eq_ignore_ascii_case(segment))
+        || actual
+            .trim_end_matches(".md")
+            .trim_end_matches("/SKILL")
+            .ends_with(expected)
+}
+
 fn confidence_label(
     value: super::skill_recommendation::SkillRecommendationConfidence,
 ) -> &'static str {
@@ -214,10 +380,9 @@ fn recommended_action_label(
         (super::skill_recommendation::SkillRecommendationAction::ReadSkill, Some(skill_name)) => {
             format!("read_skill {skill_name}")
         }
-        (
-            super::skill_recommendation::SkillRecommendationAction::JustifySkip,
-            Some(skill_name),
-        ) => format!("justify_skip {skill_name}"),
+        (super::skill_recommendation::SkillRecommendationAction::JustifySkip, Some(skill_name)) => {
+            format!("justify_skip {skill_name}")
+        }
         _ => action_label(action).to_string(),
     }
 }

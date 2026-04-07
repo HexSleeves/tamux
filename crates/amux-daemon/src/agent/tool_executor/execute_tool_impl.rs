@@ -481,6 +481,7 @@ pub fn execute_tool<'a>(
             )
             .await
         }
+        "justify_skill_skip" => execute_justify_skill_skip(&args, agent, thread_id).await,
         "synthesize_tool" => synthesize_tool(&args, agent, agent_data_dir, http_client).await,
         "list_generated_tools" => list_generated_tools(agent_data_dir),
         "promote_generated_tool" => {

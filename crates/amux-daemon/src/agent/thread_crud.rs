@@ -33,6 +33,43 @@ impl AgentEngine {
         self.thread_client_surfaces.write().await.remove(thread_id);
     }
 
+    pub async fn set_thread_skill_discovery_state(
+        &self,
+        thread_id: &str,
+        state: LatestSkillDiscoveryState,
+    ) {
+        self.thread_skill_discovery_states
+            .write()
+            .await
+            .insert(thread_id.to_string(), state);
+        let thread_exists = self.threads.read().await.contains_key(thread_id);
+        if thread_exists {
+            self.persist_thread_by_id(thread_id).await;
+        }
+    }
+
+    pub async fn get_thread_skill_discovery_state(
+        &self,
+        thread_id: &str,
+    ) -> Option<LatestSkillDiscoveryState> {
+        self.thread_skill_discovery_states
+            .read()
+            .await
+            .get(thread_id)
+            .cloned()
+    }
+
+    pub async fn clear_thread_skill_discovery_state(&self, thread_id: &str) {
+        self.thread_skill_discovery_states
+            .write()
+            .await
+            .remove(thread_id);
+        let thread_exists = self.threads.read().await.contains_key(thread_id);
+        if thread_exists {
+            self.persist_thread_by_id(thread_id).await;
+        }
+    }
+
     pub async fn set_goal_run_client_surface(
         &self,
         goal_run_id: &str,
@@ -97,6 +134,7 @@ impl AgentEngine {
         let removed = self.threads.write().await.remove(thread_id).is_some();
         if removed {
             self.clear_thread_client_surface(thread_id).await;
+            self.clear_thread_skill_discovery_state(thread_id).await;
             self.thread_handoff_states.write().await.remove(thread_id);
             self.remove_repo_watcher(thread_id).await;
             self.thread_todos.write().await.remove(thread_id);

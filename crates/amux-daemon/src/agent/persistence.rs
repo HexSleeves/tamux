@@ -105,6 +105,7 @@ impl AgentEngine {
                 let mut threads = HashMap::new();
                 let mut handoff_states = HashMap::new();
                 let mut thread_client_surfaces = HashMap::new();
+                let mut thread_skill_discovery_states = HashMap::new();
                 for thread_row in thread_rows {
                     let thread_id = thread_row.id.clone();
                     let thread_title = thread_row.title.clone();
@@ -112,6 +113,12 @@ impl AgentEngine {
                         parse_thread_metadata(thread_row.metadata_json.as_deref());
                     if let Some(client_surface) = thread_metadata.client_surface {
                         thread_client_surfaces.insert(thread_id.clone(), client_surface);
+                    }
+                    if let Some(latest_skill_discovery_state) =
+                        thread_metadata.latest_skill_discovery_state.clone()
+                    {
+                        thread_skill_discovery_states
+                            .insert(thread_id.clone(), latest_skill_discovery_state);
                     }
                     let handoff_state = normalized_thread_handoff_state(
                         &thread_id,
@@ -188,6 +195,7 @@ impl AgentEngine {
                 *self.threads.write().await = threads;
                 *self.thread_handoff_states.write().await = handoff_states;
                 *self.thread_client_surfaces.write().await = thread_client_surfaces;
+                *self.thread_skill_discovery_states.write().await = thread_skill_discovery_states;
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("failed to load agent threads from sqlite: {e}"),

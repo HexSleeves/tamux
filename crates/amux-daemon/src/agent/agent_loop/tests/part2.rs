@@ -1555,9 +1555,12 @@ async fn auto_retry_wait_escalates_to_fresh_runner_after_repeated_waits() {
     .await
     .expect("initial stream generation should be registered");
 
-    tokio::time::timeout(std::time::Duration::from_secs(1), success_request_started.notified())
-        .await
-        .expect("fresh recovery request should start after repeated waits");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        success_request_started.notified(),
+    )
+    .await
+    .expect("fresh recovery request should start after repeated waits");
 
     let refreshed_generation = {
         let streams = engine.stream_cancellations.lock().await;
@@ -2108,4 +2111,253 @@ async fn concierge_recovery_transport_signature_is_blocked_after_committed_outpu
 
     let tasks = engine.tasks.lock().await;
     assert_eq!(tasks.len(), 1);
+}
+
+#[tokio::test]
+async fn strong_match_requires_read_skill_before_non_discovery_tool() {
+    let root = tempdir().unwrap();
+    let skill_dir = root
+        .path()
+        .join("skills")
+        .join("systematic-debugging");
+    fs::create_dir_all(&skill_dir).expect("create skills directory");
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "# Systematic debugging\nUse this workflow to debug panic failures in rust services.\n",
+    )
+    .expect("write skill");
+
+    let readable_path = root.path().join("allowed.txt");
+    fs::write(&readable_path, "allowed through\n").expect("write readable file");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = spawn_scripted_tool_call_server(vec![(
+        "read_file".to_string(),
+        serde_json::json!({ "path": readable_path }).to_string(),
+    )])
+    .await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    config.skill_recommendation.strong_match_threshold = 0.60;
+    config.skill_recommendation.weak_match_threshold = 0.30;
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread-strong-skill-gate";
+    let mut events = engine.subscribe();
+
+    let outcome = engine
+        .send_message_inner(
+            Some(thread_id),
+            "debug panic in rust service",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect("send message should complete");
+    assert!(!outcome.interrupted_for_approval);
+
+    let mut saw_gate_notice = false;
+    let mut saw_gate_result = false;
+    while let Ok(event) = events.try_recv() {
+        match event {
+            AgentEvent::WorkflowNotice {
+                thread_id: event_thread_id,
+                kind,
+                message,
+                ..
+            } if event_thread_id == thread_id && kind == "skill-gate" => {
+                saw_gate_notice = true;
+                assert!(
+                    message.contains("read_skill systematic-debugging"),
+                    "expected gate notice to require reading the recommended skill first: {message}"
+                );
+            }
+            AgentEvent::ToolResult {
+                thread_id: event_thread_id,
+                name,
+                content,
+                is_error,
+                ..
+            } if event_thread_id == thread_id && name == "read_file" => {
+                saw_gate_result = true;
+                assert!(is_error, "blocked tool should surface as an error result");
+                assert!(
+                    content.contains("read_skill systematic-debugging"),
+                    "expected blocked tool result to point at the required skill read: {content}"
+                );
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_gate_notice, "expected a skill gate workflow notice");
+    assert!(saw_gate_result, "expected a blocked read_file tool result");
+
+    let persisted = engine
+        .history
+        .get_thread(thread_id)
+        .await
+        .expect("read persisted thread")
+        .expect("thread should persist");
+    let metadata = persisted.metadata_json.expect("thread metadata");
+    assert!(metadata.contains("\"recommended_skill\":\"systematic-debugging\""));
+    assert!(metadata.contains("\"compliant\":false"));
+}
+
+#[tokio::test]
+async fn weak_match_allows_progress_only_after_skip_rationale() {
+    let root = tempdir().unwrap();
+    let skill_dir = root.path().join("skills").join("debugging-playbook");
+    fs::create_dir_all(&skill_dir).expect("create skills directory");
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "# Debugging playbook\nUse this skill for generic debug investigations.\n",
+    )
+    .expect("write skill");
+
+    let readable_path = root.path().join("allowed.txt");
+    fs::write(&readable_path, "allowed through\n").expect("write readable file");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = spawn_scripted_tool_call_server(vec![
+        (
+            "read_file".to_string(),
+            serde_json::json!({ "path": readable_path }).to_string(),
+        ),
+        (
+            "justify_skill_skip".to_string(),
+            serde_json::json!({
+                "rationale": "No installed skill matches this exact panic workflow."
+            })
+            .to_string(),
+        ),
+        (
+            "read_file".to_string(),
+            serde_json::json!({ "path": readable_path }).to_string(),
+        ),
+    ])
+    .await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    config.skill_recommendation.strong_match_threshold = 0.80;
+    config.skill_recommendation.weak_match_threshold = 0.30;
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread-weak-skill-gate";
+
+    engine
+        .send_message_inner(
+            Some(thread_id),
+            "debug panic",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect("initial send should complete");
+
+    let first_read_attempt = {
+        let threads = engine.threads.read().await;
+        threads
+            .get(thread_id)
+            .expect("thread should exist")
+            .messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message.role == MessageRole::Tool
+                    && message.tool_name.as_deref() == Some("read_file")
+            })
+            .cloned()
+            .expect("initial read_file result should be recorded")
+    };
+    assert_eq!(first_read_attempt.tool_status.as_deref(), Some("error"));
+    assert!(
+        first_read_attempt.content.contains("justify_skill_skip"),
+        "expected weak gate to require explicit skip rationale before continuing: {}",
+        first_read_attempt.content
+    );
+
+    engine
+        .send_message_inner(
+            Some(thread_id),
+            "continue",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect("skip-rationale turn should complete");
+    engine
+        .send_message_inner(
+            Some(thread_id),
+            "continue",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect("post-rationale turn should complete");
+
+    let threads = engine.threads.read().await;
+    let thread = threads.get(thread_id).expect("thread should exist");
+    let skip_message = thread
+        .messages
+        .iter()
+        .find(|message| {
+            message.role == MessageRole::Tool
+                && message.tool_name.as_deref() == Some("justify_skill_skip")
+        })
+        .expect("skip rationale tool result should be recorded");
+    assert_eq!(skip_message.tool_status.as_deref(), Some("done"));
+
+    let final_read_attempt = thread
+        .messages
+        .iter()
+        .rev()
+        .find(|message| {
+            message.role == MessageRole::Tool
+                && message.tool_name.as_deref() == Some("read_file")
+        })
+        .expect("final read_file result should be recorded");
+    assert_eq!(final_read_attempt.tool_status.as_deref(), Some("done"));
+    assert!(final_read_attempt.content.contains("allowed through"));
+
+    let persisted = engine
+        .history
+        .get_thread(thread_id)
+        .await
+        .expect("read persisted thread")
+        .expect("thread should persist");
+    let metadata = persisted.metadata_json.expect("thread metadata");
+    assert!(metadata.contains("\"skip_rationale\""));
+    assert!(metadata.contains("\"compliant\":true"));
 }

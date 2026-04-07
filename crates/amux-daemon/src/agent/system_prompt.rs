@@ -6,8 +6,10 @@ use super::types::*;
 
 const LOCAL_SKILL_WORKFLOW_PROMPT: &str =
     "## Local Skills Workflow\n\
-     - Before non-trivial work, call `list_skills` to inspect reusable local skills.\n\
-     - If a relevant skill exists, call `read_skill` before executing commands or spawning tasks.\n\
+     - Tamux runs local skill discovery before non-trivial work and surfaces the ranked result in the runtime prompt and workflow notices.\n\
+     - Treat that discovery result as the source of truth instead of relying on raw `list_skills` output.\n\
+     - If the top match is strong, call `read_skill` for the recommended skill before other substantial tools.\n\
+     - If discovery confidence is weak or none, call `justify_skill_skip` with an explicit rationale before other substantial tools.\n\
      - Use `onecontext_search` or `session_search` when historical decisions, prior fixes, or existing implementations matter.\n\
      - Use `semantic_query` when you need codebase-wide structure or dependency context before editing.\n";
 
@@ -99,8 +101,10 @@ pub(super) fn build_system_prompt(
              - Skills root: {}\n\
              - Generated skills: {}\n\
              - Built-in skills: {}/builtin/ (tamux reference docs for terminals, browser, tasks, goals, memory, safety, etc.)\n\
-             - Before non-trivial work, consult MEMORY.md and USER.md, then call `list_skills` to inspect reusable local skills.\n\
-             - If a relevant skill exists, call `read_skill` before executing commands or spawning tasks.\n\
+             - Before non-trivial work, consult MEMORY.md and USER.md, then follow the daemon-provided skill discovery result for this turn.\n\
+             - Strong matches require `read_skill` before other substantial tools.\n\
+             - Weak or no matches require `justify_skill_skip` with an explicit rationale before continuing.\n\
+             - `list_skills` remains the raw catalog view, not the decision authority for the task.\n\
              - The `builtin/cheatsheet` skill provides a quick reference for all available MCP tools.\n\
              - Prefer reusing an existing skill over inventing a brand-new workflow.\n",
             skills_root.display(),
@@ -543,8 +547,9 @@ mod tests {
 
         assert!(prompt.contains("## Time Context"));
         assert!(prompt.contains("Current local day:"));
-        assert!(prompt.contains("list_skills"));
         assert!(prompt.contains("read_skill"));
+        assert!(prompt.contains("justify_skill_skip"));
+        assert!(prompt.contains("source of truth"));
         assert!(prompt.contains("onecontext_search"));
     }
 
@@ -562,8 +567,9 @@ mod tests {
 
         assert!(prompt.contains("## Time Context"));
         assert!(prompt.contains("Current local day:"));
-        assert!(prompt.contains("list_skills"));
         assert!(prompt.contains("read_skill"));
+        assert!(prompt.contains("justify_skill_skip"));
+        assert!(prompt.contains("source of truth"));
         assert!(prompt.contains("onecontext_search"));
     }
 

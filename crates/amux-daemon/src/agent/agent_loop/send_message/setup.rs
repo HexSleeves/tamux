@@ -243,6 +243,11 @@ impl<'a> SendMessageRunner<'a> {
         let skill_preflight = engine
             .build_skill_preflight_context(stored_user_content, preferred_session_id.clone())
             .await?;
+        if let Some(skill_preflight) = skill_preflight.as_ref() {
+            engine
+                .set_thread_skill_discovery_state(&tid, skill_preflight.state.clone())
+                .await;
+        }
         let memory = engine.current_memory_snapshot().await;
         let memory_paths = memory_paths_for_scope(&engine.data_dir, &agent_scope_id);
         let base_prompt = if let Some((_, _, Some(ref override_prompt), _)) = task_provider_override
@@ -458,9 +463,9 @@ impl<'a> SendMessageRunner<'a> {
                 .push_str("Use this as historical context from prior sessions when relevant:\n");
             system_prompt.push_str(recall);
         }
-        if let Some(skill_preflight) = skill_preflight.as_deref() {
+        if let Some(skill_preflight) = skill_preflight.as_ref() {
             system_prompt.push_str("\n\n## Preloaded Skills\n");
-            system_prompt.push_str(skill_preflight);
+            system_prompt.push_str(&skill_preflight.prompt_context);
         }
         match engine
             .maybe_build_honcho_context(&tid, stored_user_content)
@@ -486,11 +491,12 @@ impl<'a> SendMessageRunner<'a> {
             )),
         );
         if skill_preflight.is_some() {
+            let skill_preflight = skill_preflight.as_ref().expect("checked Some");
             engine.emit_workflow_notice(
                 &tid,
                 "skill-preflight",
-                "Preloaded relevant local skills for this turn before tool execution.",
-                None,
+                skill_preflight.workflow_message.clone(),
+                skill_preflight.workflow_details.clone(),
             );
         }
         let has_workspace_topology = engine.session_manager.read_workspace_topology().is_some();

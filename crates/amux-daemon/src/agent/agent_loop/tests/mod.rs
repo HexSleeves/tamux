@@ -3,6 +3,7 @@ use crate::agent::llm_client::{StructuredUpstreamFailure, UPSTREAM_DIAGNOSTICS_M
 use crate::agent::types::{AgentEvent, TaskStatus};
 use crate::session_manager::SessionManager;
 use rusqlite::OptionalExtension;
+use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tempfile::tempdir;
@@ -189,6 +190,73 @@ async fn spawn_recording_request_server(
                     .write_all(response.as_bytes())
                     .await
                     .expect("write recording request response");
+            });
+        }
+    });
+
+    format!("http://{addr}/v1")
+}
+
+async fn spawn_scripted_tool_call_server(script: Vec<(String, String)>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind scripted tool call server");
+    let addr = listener
+        .local_addr()
+        .expect("scripted tool call server local addr");
+    let script = Arc::new(script);
+    let next_response = Arc::new(AtomicUsize::new(0));
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let script = script.clone();
+            let next_response = next_response.clone();
+            tokio::spawn(async move {
+                let _request = read_http_request(&mut socket, "scripted tool call request").await;
+                let index = next_response.fetch_add(1, Ordering::SeqCst);
+                let response = if let Some((tool_name, arguments)) = script.get(index) {
+                    let chunk = serde_json::json!({
+                        "choices": [{
+                            "delta": {
+                                "tool_calls": [{
+                                    "index": 0,
+                                    "id": format!("call_scripted_{index}"),
+                                    "function": {
+                                        "name": tool_name,
+                                        "arguments": arguments,
+                                    }
+                                }]
+                            }
+                        }],
+                        "usage": {
+                            "prompt_tokens": 7,
+                            "completion_tokens": 3
+                        }
+                    })
+                    .to_string();
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\ndata: {chunk}\n\ndata: [DONE]\n\n"
+                    )
+                } else {
+                    concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "content-type: text/event-stream\r\n",
+                        "cache-control: no-cache\r\n",
+                        "connection: close\r\n",
+                        "\r\n",
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"Acknowledged.\"}}]}\n\n",
+                        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+                        "data: [DONE]\n\n"
+                    )
+                    .to_string()
+                };
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write scripted tool call response");
             });
         }
     });

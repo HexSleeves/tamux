@@ -61,9 +61,12 @@ fn render_shared_user_profile_policy() -> String {
     )
 }
 
-fn render_local_skills_section(skills_root: &std::path::Path, generated_skills_root: &std::path::Path) -> String {
+fn render_local_skills_section(
+    skills_root: &std::path::Path,
+    generated_skills_root: &std::path::Path,
+) -> String {
     format!(
-        "- Skills root: {}\n- Generated skills: {}\n- Built-in skills: {}/builtin/ (tamux reference docs for terminals, browser, tasks, goals, memory, safety, etc.)\n- Before non-trivial work, consult MEMORY.md and USER.md, then call `list_skills` to inspect reusable local skills.\n- If a relevant skill exists, call `read_skill` before executing commands or spawning tasks.\n- The `builtin/cheatsheet` skill provides a quick reference for all available MCP tools.\n- Prefer reusing an existing skill over inventing a brand-new workflow.",
+        "- Skills root: {}\n- Generated skills: {}\n- Built-in skills: {}/builtin/ (tamux reference docs for terminals, browser, tasks, goals, memory, safety, etc.)\n- Before non-trivial work, consult MEMORY.md and USER.md, then follow the daemon-provided skill discovery result for this turn.\n- Strong matches require `read_skill` before other substantial tools.\n- Weak or no matches require `justify_skill_skip` with an explicit rationale before continuing.\n- `list_skills` remains the raw catalog view, not the decision authority for the task.\n- The `builtin/cheatsheet` skill provides a quick reference for all available MCP tools.\n- Prefer reusing an existing skill over inventing a brand-new workflow.",
         skills_root.display(),
         generated_skills_root.display(),
         skills_root.display(),
@@ -154,7 +157,10 @@ fn render_sub_agent_registry_section(sub_agents: &[SubAgentDefinition]) -> Optio
     }
 }
 
-fn exact_sub_agent_match<'a>(sub_agents: &'a [SubAgentDefinition], requested: &str) -> Option<&'a SubAgentDefinition> {
+fn exact_sub_agent_match<'a>(
+    sub_agents: &'a [SubAgentDefinition],
+    requested: &str,
+) -> Option<&'a SubAgentDefinition> {
     sub_agents.iter().find(|entry| {
         entry.id.eq_ignore_ascii_case(requested) || entry.name.eq_ignore_ascii_case(requested)
     })
@@ -165,7 +171,8 @@ fn build_exact_subagent_target(
     config: &AgentConfig,
     definition: &SubAgentDefinition,
 ) -> Result<PromptInspectionTarget> {
-    let mut provider_config = engine.resolve_sub_agent_provider_config(config, &definition.provider)?;
+    let mut provider_config =
+        engine.resolve_sub_agent_provider_config(config, &definition.provider)?;
     provider_config.model = definition.model.clone();
     let base_prompt = definition
         .system_prompt
@@ -224,7 +231,8 @@ fn build_direct_target(
             .iter()
             .find(|entry| entry.id == crate::agent::agent_identity::WELES_BUILTIN_SUBAGENT_ID)
             .context("missing builtin Weles definition")?;
-        let mut provider_config = engine.resolve_sub_agent_provider_config(config, &weles.provider)?;
+        let mut provider_config =
+            engine.resolve_sub_agent_provider_config(config, &weles.provider)?;
         provider_config.model = weles.model.clone();
         let system_prompt = weles
             .system_prompt
@@ -281,8 +289,18 @@ fn build_sections(
     let generated_skills_root = skills_root.join("generated");
     let mut sections = Vec::new();
 
-    push_section(&mut sections, "base_prompt", "Base Prompt", target.base_prompt.clone());
-    push_section(&mut sections, "identity_notes", "Identity Notes", memory.soul.clone());
+    push_section(
+        &mut sections,
+        "base_prompt",
+        "Base Prompt",
+        target.base_prompt.clone(),
+    );
+    push_section(
+        &mut sections,
+        "identity_notes",
+        "Identity Notes",
+        memory.soul.clone(),
+    );
     push_section(
         &mut sections,
         "persistent_memory",
@@ -316,7 +334,12 @@ fn build_sections(
         render_local_skills_section(&skills_root, &generated_skills_root),
     );
     if let Some(plugin_skills) = render_plugin_skills_section(&skills_root) {
-        push_section(&mut sections, "plugin_skills", "Plugin Skills", plugin_skills);
+        push_section(
+            &mut sections,
+            "plugin_skills",
+            "Plugin Skills",
+            plugin_skills,
+        );
     }
     if let Some(skill_index) = render_skill_index(&skills_root) {
         push_section(&mut sections, "skill_index", "Skill Index", skill_index);
@@ -399,18 +422,20 @@ impl AgentEngine {
             .filter(|value| !value.is_empty())
             .unwrap_or(MAIN_AGENT_ID);
 
-        let target = if let Some(definition) = exact_sub_agent_match(&sub_agents, requested_agent_id)
-        {
-            if definition.id == crate::agent::agent_identity::WELES_BUILTIN_SUBAGENT_ID {
-                build_direct_target(self, &config, WELES_AGENT_ID, &sub_agents)?
+        let target =
+            if let Some(definition) = exact_sub_agent_match(&sub_agents, requested_agent_id) {
+                if definition.id == crate::agent::agent_identity::WELES_BUILTIN_SUBAGENT_ID {
+                    build_direct_target(self, &config, WELES_AGENT_ID, &sub_agents)?
+                } else {
+                    build_exact_subagent_target(self, &config, definition)?
+                }
             } else {
-                build_exact_subagent_target(self, &config, definition)?
-            }
-        } else {
-            build_direct_target(self, &config, requested_agent_id, &sub_agents)?
-        };
+                build_direct_target(self, &config, requested_agent_id, &sub_agents)?
+            };
 
-        let memory = self.memory_snapshot_for_scope(&target.memory_scope_id).await;
+        let memory = self
+            .memory_snapshot_for_scope(&target.memory_scope_id)
+            .await;
         let memory_paths = memory_paths_for_scope(&self.data_dir, &target.memory_scope_id);
         let operator_model_summary = self.build_operator_model_prompt_summary().await;
         let operational_context = self.build_operational_context_summary().await;
