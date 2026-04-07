@@ -213,14 +213,17 @@ fn infer_skill_discovery_session_for_cwd(
 ) -> Option<SessionId> {
     sessions
         .iter()
-        .find(|session| {
-            session.is_alive
-                && session
-                    .cwd
-                    .as_deref()
-                    .is_some_and(|session_cwd| Path::new(session_cwd) == cwd)
+        .filter(|session| session.is_alive)
+        .filter_map(|session| {
+            let session_cwd = session.cwd.as_deref()?;
+            let session_path = Path::new(session_cwd);
+            cwd.starts_with(session_path).then_some((
+                session_path.components().count(),
+                session.id,
+            ))
         })
-        .map(|session| session.id)
+        .max_by_key(|(depth, _)| *depth)
+        .map(|(_, session_id)| session_id)
 }
 
 async fn resolve_skill_discovery_session(value: Option<&str>) -> Result<Option<SessionId>> {
@@ -316,6 +319,47 @@ mod tests {
             infer_skill_discovery_session_for_cwd(&sessions, Path::new("/workspace/repo"));
 
         assert_eq!(selected, Some(expected));
+    }
+
+    #[test]
+    fn infer_skill_discovery_session_prefers_nearest_ancestor_cwd() {
+        let repo_root =
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440010").expect("valid test uuid");
+        let subdir =
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440011").expect("valid test uuid");
+        let sessions = vec![
+            SessionInfo {
+                id: repo_root,
+                title: Some("repo".to_string()),
+                cwd: Some("/workspace/repo".to_string()),
+                cols: 80,
+                rows: 24,
+                created_at: 1,
+                workspace_id: None,
+                exit_code: None,
+                is_alive: true,
+                active_command: None,
+            },
+            SessionInfo {
+                id: subdir,
+                title: Some("subdir".to_string()),
+                cwd: Some("/workspace/repo/services/api".to_string()),
+                cols: 80,
+                rows: 24,
+                created_at: 2,
+                workspace_id: None,
+                exit_code: None,
+                is_alive: true,
+                active_command: None,
+            },
+        ];
+
+        let selected = infer_skill_discovery_session_for_cwd(
+            &sessions,
+            Path::new("/workspace/repo/services/api/src"),
+        );
+
+        assert_eq!(selected, Some(subdir));
     }
 
     #[test]
