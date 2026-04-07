@@ -50,12 +50,12 @@ mod utils;
 
 use agent_tools::{
     tool_activate_generated_tool, tool_control_goal_run, tool_discover_skills,
-    tool_generate_soc2_artifact,
-    tool_get_causal_trace_report, tool_get_collaboration_sessions, tool_get_counterfactual_report,
-    tool_get_goal_run, tool_get_memory_provenance_report, tool_get_operator_model,
-    tool_get_provenance_report, tool_inspect_skill_variant, tool_list_generated_tools,
-    tool_list_goal_runs, tool_list_skill_variants, tool_promote_generated_tool, tool_query_audits,
-    tool_reset_operator_model, tool_run_generated_tool, tool_synthesize_tool,
+    tool_generate_soc2_artifact, tool_get_causal_trace_report, tool_get_collaboration_sessions,
+    tool_get_counterfactual_report, tool_get_goal_run, tool_get_memory_provenance_report,
+    tool_get_operator_model, tool_get_provenance_report, tool_inspect_skill_variant,
+    tool_list_generated_tools, tool_list_goal_runs, tool_list_skill_variants,
+    tool_promote_generated_tool, tool_query_audits, tool_reset_operator_model,
+    tool_run_generated_tool, tool_synthesize_tool,
 };
 use daemon::{connect_daemon, daemon_roundtrip};
 use daemon_tools::{

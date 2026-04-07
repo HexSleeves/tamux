@@ -280,11 +280,7 @@ impl<'a> SendMessageRunner<'a> {
         }
     }
 
-    async fn persist_denied_tool_result(
-        &mut self,
-        tc: &ToolCall,
-        content: String,
-    ) {
+    async fn persist_denied_tool_result(&mut self, tc: &ToolCall, content: String) {
         let _ = self.engine.event_tx.send(AgentEvent::ToolResult {
             thread_id: self.tid.clone(),
             call_id: tc.id.clone(),
@@ -340,7 +336,11 @@ impl<'a> SendMessageRunner<'a> {
         if skill_gate_exempt_tool(&tc.function.name) {
             return false;
         }
-        let Some(state) = self.engine.get_thread_skill_discovery_state(&self.tid).await else {
+        let Some(state) = self
+            .engine
+            .get_thread_skill_discovery_state(&self.tid)
+            .await
+        else {
             return false;
         };
         if state.compliant {

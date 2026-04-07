@@ -9,7 +9,10 @@ pub(super) fn format_status_modal_text(snapshot: &AgentStatusSnapshotVm) -> Stri
     let mut rendered = String::from("Agent Status\n============\n");
     rendered.push_str(&format!("Version:  {}\n", env!("CARGO_PKG_VERSION")));
     rendered.push_str(&format!("Tier:     {}\n", snapshot.tier.replace('_', " ")));
-    rendered.push_str(&format!("Activity: {}\n", snapshot.activity.replace('_', " ")));
+    rendered.push_str(&format!(
+        "Activity: {}\n",
+        snapshot.activity.replace('_', " ")
+    ));
 
     if let Some(title) = &snapshot.active_goal_run_title {
         rendered.push_str(&format!("Goal:     {title}\n"));
@@ -59,7 +62,8 @@ pub(super) fn format_status_modal_text(snapshot: &AgentStatusSnapshotVm) -> Stri
         }
     }
 
-    if let Ok(actions) = serde_json::from_str::<Vec<serde_json::Value>>(&snapshot.recent_actions_json)
+    if let Ok(actions) =
+        serde_json::from_str::<Vec<serde_json::Value>>(&snapshot.recent_actions_json)
     {
         if !actions.is_empty() {
             rendered.push_str("\nRecent Actions:\n");
@@ -82,7 +86,10 @@ pub(super) fn format_status_modal_text(snapshot: &AgentStatusSnapshotVm) -> Stri
 
 pub(super) fn format_prompt_modal_text(prompt: &crate::client::AgentPromptInspectionVm) -> String {
     let mut rendered = String::from("Agent Prompt\n============\n");
-    rendered.push_str(&format!("Agent:    {} ({})\n", prompt.agent_name, prompt.agent_id));
+    rendered.push_str(&format!(
+        "Agent:    {} ({})\n",
+        prompt.agent_name, prompt.agent_id
+    ));
     rendered.push_str(&format!("Provider: {}\n", prompt.provider_id));
     rendered.push_str(&format!("Model:    {}\n", prompt.model));
 
@@ -152,7 +159,8 @@ mod tests {
             active_goal_run_title: Some("Close release gap".to_string()),
             provider_health_json: r#"{"openai":{"can_execute":true,"trip_count":0}}"#.to_string(),
             gateway_statuses_json: r#"{"slack":{"status":"connected"}}"#.to_string(),
-            recent_actions_json: r#"[{"action_type":"tool_call","summary":"Ran status"}]"#.to_string(),
+            recent_actions_json: r#"[{"action_type":"tool_call","summary":"Ran status"}]"#
+                .to_string(),
         });
 
         assert!(rendered.contains("Version:"));

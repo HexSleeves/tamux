@@ -196,9 +196,10 @@ async fn successful_retry_resets_scheduled_retry_cycle_before_later_failures() {
                 }) if event_thread_id == thread_id && attempt > 0 => {
                     retry_attempts.push(attempt);
                 }
-                Ok(AgentEvent::Done { thread_id: event_thread_id, .. })
-                    if event_thread_id == done_thread_id =>
-                {
+                Ok(AgentEvent::Done {
+                    thread_id: event_thread_id,
+                    ..
+                }) if event_thread_id == done_thread_id => {
                     break;
                 }
                 Ok(_) => {}
@@ -299,9 +300,10 @@ async fn successful_timeout_recovery_resets_stream_timeout_counter_before_later_
                 }) if event_thread_id == thread_id && failure_class == "timeout" => {
                     timeout_attempts.push(attempt);
                 }
-                Ok(AgentEvent::Done { thread_id: event_thread_id, .. })
-                    if event_thread_id == done_thread_id =>
-                {
+                Ok(AgentEvent::Done {
+                    thread_id: event_thread_id,
+                    ..
+                }) if event_thread_id == done_thread_id => {
                     break;
                 }
                 Ok(_) => {}
@@ -409,9 +411,12 @@ async fn repeated_waiting_timeouts_escalate_to_fresh_runner() {
     .await
     .expect("initial timeout stream generation should be registered");
 
-    tokio::time::timeout(std::time::Duration::from_secs(3), success_request_started.notified())
-        .await
-        .expect("fresh timeout recovery request should start after repeated waiting timeouts");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        success_request_started.notified(),
+    )
+    .await
+    .expect("fresh timeout recovery request should start after repeated waiting timeouts");
 
     let refreshed_generation = {
         let streams = engine.stream_cancellations.lock().await;

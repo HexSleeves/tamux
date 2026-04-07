@@ -725,6 +725,57 @@ export function AgentTab({
                 ) : null}
             </Section>
 
+            <Section title="Skill Discovery">
+                <SettingRow label="Local Skill Gate">
+                    <Toggle
+                        value={settings.skill_recommendation.enabled}
+                        onChange={(value) =>
+                            updateSetting("skill_recommendation", {
+                                ...settings.skill_recommendation,
+                                enabled: value,
+                            })}
+                    />
+                </SettingRow>
+                <SettingRow label="Background Community Scout">
+                    <Toggle
+                        value={settings.skill_recommendation.background_community_search}
+                        onChange={(value) =>
+                            updateSetting("skill_recommendation", {
+                                ...settings.skill_recommendation,
+                                background_community_search: value,
+                            })}
+                    />
+                </SettingRow>
+                <SettingRow label="Scout Prompt Timeout (s)">
+                    <NumberInput
+                        value={settings.skill_recommendation.community_preapprove_timeout_secs}
+                        min={5}
+                        max={300}
+                        step={5}
+                        onChange={(value) =>
+                            updateSetting("skill_recommendation", {
+                                ...settings.skill_recommendation,
+                                community_preapprove_timeout_secs: value,
+                            })}
+                    />
+                </SettingRow>
+                <SettingRow label="Suggest Global Enable After">
+                    <NumberInput
+                        value={settings.skill_recommendation.suggest_global_enable_after_approvals}
+                        min={1}
+                        max={12}
+                        onChange={(value) =>
+                            updateSetting("skill_recommendation", {
+                                ...settings.skill_recommendation,
+                                suggest_global_enable_after_approvals: value,
+                            })}
+                    />
+                </SettingRow>
+                <div style={{ marginTop: 4, marginBottom: 8, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                    Local installed skills remain authoritative. Community discovery is advisory, non-blocking, and only used to surface install candidates with a short operator approval window.
+                </div>
+            </Section>
+
             <Section title="Context Compaction">
                 <SettingRow label="Auto Compact">
                     <Toggle value={settings.auto_compact_context} onChange={(value) => updateSetting("auto_compact_context", value)} />

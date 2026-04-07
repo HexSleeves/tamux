@@ -1,6 +1,6 @@
 use super::{
-    discover_local_skills, extract_skill_metadata, SkillRecommendationAction,
-    SkillRecommendationConfidence,
+    discover_community_skills, discover_local_skills, extract_skill_metadata,
+    SkillRecommendationAction, SkillRecommendationConfidence,
 };
 use crate::agent::types::SkillRecommendationConfig;
 use crate::history::HistoryStore;
@@ -285,7 +285,10 @@ keywords: [rust, cargo, build]
 
     assert_eq!(indexed.len(), 1);
     assert_eq!(result.recommendations.len(), 1);
-    assert_eq!(result.recommendations[0].record.skill_name, "debug-rust-build");
+    assert_eq!(
+        result.recommendations[0].record.skill_name,
+        "debug-rust-build"
+    );
 
     Ok(())
 }
@@ -322,7 +325,50 @@ keywords: [rust, cargo, build]
     .await
     .expect_err("missing skill file should be surfaced");
 
-    assert!(error.to_string().contains("failed to read skill recommendation file"));
+    assert!(error
+        .to_string()
+        .contains("failed to read skill recommendation file"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn discover_community_skills_matches_query_tokens_against_cached_registry() -> Result<()> {
+    let root = tempdir()?;
+    let registry_dir = root.path().join("registry");
+    fs::create_dir_all(&registry_dir)?;
+    fs::write(
+        registry_dir.join("index.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "version": 1,
+            "updated_at": 42,
+            "skills": [{
+                "name": "community-debugging-expert",
+                "description": "Advanced panic debugging workflow from the registry.",
+                "version": "1.0.0",
+                "publisher_id": "publisher-1",
+                "publisher_verified": true,
+                "success_rate": 0.91,
+                "use_count": 18,
+                "content_hash": "abc123",
+                "tamux_version": "0.3.1",
+                "maturity_at_publish": "proven",
+                "tags": ["debug", "rust", "panic"],
+                "published_at": 42
+            }]
+        }))?,
+    )?;
+
+    let matches = discover_community_skills(
+        root.path(),
+        "http://127.0.0.1:9",
+        "debug panic in rust service",
+        5,
+    )
+    .await?;
+
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].name, "community-debugging-expert");
 
     Ok(())
 }

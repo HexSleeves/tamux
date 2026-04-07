@@ -534,19 +534,40 @@ impl TuiModel {
                                     }
                                 }
                             }
-                            "feat_skill_promotion_threshold" => {
+                            "feat_skill_community_preapprove_timeout_secs" => {
                                 if let Ok(n) = value.parse::<u64>() {
-                                    let clamped = n.clamp(1, 100);
+                                    let clamped = n.clamp(5, 300);
                                     self.send_daemon_command(DaemonCommand::SetConfigItem {
-                                        key_path: "/skill_discovery/promotion_threshold"
-                                            .to_string(),
+                                        key_path:
+                                            "/skill_recommendation/community_preapprove_timeout_secs"
+                                                .to_string(),
                                         value_json: format!("{}", clamped),
                                     });
                                     if let Some(ref mut raw) = self.config.agent_config_raw {
-                                        if raw.get("skill_discovery").is_none() {
-                                            raw["skill_discovery"] = serde_json::json!({});
+                                        if raw.get("skill_recommendation").is_none() {
+                                            raw["skill_recommendation"] = serde_json::json!({});
                                         }
-                                        raw["skill_discovery"]["promotion_threshold"] =
+                                        raw["skill_recommendation"]
+                                            ["community_preapprove_timeout_secs"] =
+                                            serde_json::json!(clamped);
+                                    }
+                                }
+                            }
+                            "feat_skill_suggest_global_enable_after_approvals" => {
+                                if let Ok(n) = value.parse::<u64>() {
+                                    let clamped = n.clamp(1, 12);
+                                    self.send_daemon_command(DaemonCommand::SetConfigItem {
+                                        key_path:
+                                            "/skill_recommendation/suggest_global_enable_after_approvals"
+                                                .to_string(),
+                                        value_json: format!("{}", clamped),
+                                    });
+                                    if let Some(ref mut raw) = self.config.agent_config_raw {
+                                        if raw.get("skill_recommendation").is_none() {
+                                            raw["skill_recommendation"] = serde_json::json!({});
+                                        }
+                                        raw["skill_recommendation"]
+                                            ["suggest_global_enable_after_approvals"] =
                                             serde_json::json!(clamped);
                                     }
                                 }

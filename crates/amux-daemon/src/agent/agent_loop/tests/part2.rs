@@ -2116,10 +2116,7 @@ async fn concierge_recovery_transport_signature_is_blocked_after_committed_outpu
 #[tokio::test]
 async fn strong_match_requires_read_skill_before_non_discovery_tool() {
     let root = tempdir().unwrap();
-    let skill_dir = root
-        .path()
-        .join("skills")
-        .join("systematic-debugging");
+    let skill_dir = root.path().join("skills").join("systematic-debugging");
     fs::create_dir_all(&skill_dir).expect("create skills directory");
     fs::write(
         skill_dir.join("SKILL.md"),
@@ -2344,8 +2341,7 @@ async fn weak_match_allows_progress_only_after_skip_rationale() {
         .iter()
         .rev()
         .find(|message| {
-            message.role == MessageRole::Tool
-                && message.tool_name.as_deref() == Some("read_file")
+            message.role == MessageRole::Tool && message.tool_name.as_deref() == Some("read_file")
         })
         .expect("final read_file result should be recorded");
     assert_eq!(final_read_attempt.tool_status.as_deref(), Some("done"));
@@ -2360,4 +2356,225 @@ async fn weak_match_allows_progress_only_after_skip_rationale() {
     let metadata = persisted.metadata_json.expect("thread metadata");
     assert!(metadata.contains("\"skip_rationale\""));
     assert!(metadata.contains("\"compliant\":true"));
+}
+
+#[tokio::test]
+async fn local_strong_match_still_runs_when_background_community_scout_enabled() {
+    let root = tempdir().unwrap();
+    let skill_dir = root.path().join("skills").join("systematic-debugging");
+    fs::create_dir_all(&skill_dir).expect("create skills directory");
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "# Systematic debugging\nUse this workflow to debug panic failures in rust services.\n",
+    )
+    .expect("write skill");
+
+    let registry_dir = root.path().join("registry");
+    fs::create_dir_all(&registry_dir).expect("create registry directory");
+    fs::write(
+        registry_dir.join("index.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "version": 1,
+            "updated_at": 42,
+            "skills": [{
+                "name": "community-debugging-expert",
+                "description": "Advanced panic debugging workflow from the registry.",
+                "version": "1.0.0",
+                "publisher_id": "publisher-1",
+                "publisher_verified": true,
+                "success_rate": 0.91,
+                "use_count": 18,
+                "content_hash": "abc123",
+                "tamux_version": "0.3.1",
+                "maturity_at_publish": "proven",
+                "tags": ["debug", "rust", "panic"],
+                "published_at": 42
+            }]
+        }))
+        .expect("serialize registry index"),
+    )
+    .expect("write registry index");
+
+    let readable_path = root.path().join("allowed.txt");
+    fs::write(&readable_path, "allowed through\n").expect("write readable file");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = spawn_scripted_tool_call_server(vec![(
+        "read_file".to_string(),
+        serde_json::json!({ "path": readable_path }).to_string(),
+    )])
+    .await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    config.skill_recommendation.strong_match_threshold = 0.60;
+    config.skill_recommendation.weak_match_threshold = 0.30;
+    config.skill_recommendation.background_community_search = true;
+    config.extra.insert(
+        "registry_url".to_string(),
+        serde_json::Value::String("http://127.0.0.1:9".to_string()),
+    );
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread-community-scout-enabled";
+    let mut events = engine.subscribe();
+
+    engine
+        .send_message_inner(
+            Some(thread_id),
+            "debug panic in rust service",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect("send message should complete");
+
+    let persisted = engine
+        .history
+        .get_thread(thread_id)
+        .await
+        .expect("read persisted thread")
+        .expect("thread should persist");
+    let metadata = persisted.metadata_json.expect("thread metadata");
+    assert!(metadata.contains("\"recommended_skill\":\"systematic-debugging\""));
+
+    let scout_notice = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+        loop {
+            match events.recv().await {
+                Ok(AgentEvent::WorkflowNotice {
+                    thread_id: event_thread_id,
+                    kind,
+                    details,
+                    ..
+                }) if event_thread_id == thread_id && kind == "skill-community-scout" => {
+                    return details.expect("scout notice details");
+                }
+                Ok(_) => continue,
+                Err(error) => panic!("workflow event stream closed unexpectedly: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("expected community scout notice");
+
+    assert!(
+        scout_notice.contains("community-debugging-expert"),
+        "expected scout notice to include candidate payload, got: {scout_notice}"
+    );
+    assert!(scout_notice.contains("\"community_preapprove_timeout_secs\":30"));
+}
+
+#[tokio::test]
+async fn disabled_background_community_scout_does_not_search_registry() {
+    let root = tempdir().unwrap();
+    let skill_dir = root.path().join("skills").join("systematic-debugging");
+    fs::create_dir_all(&skill_dir).expect("create skills directory");
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "# Systematic debugging\nUse this workflow to debug panic failures in rust services.\n",
+    )
+    .expect("write skill");
+
+    let registry_dir = root.path().join("registry");
+    fs::create_dir_all(&registry_dir).expect("create registry directory");
+    fs::write(
+        registry_dir.join("index.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "version": 1,
+            "updated_at": 42,
+            "skills": [{
+                "name": "community-debugging-expert",
+                "description": "Advanced panic debugging workflow from the registry.",
+                "version": "1.0.0",
+                "publisher_id": "publisher-1",
+                "publisher_verified": true,
+                "success_rate": 0.91,
+                "use_count": 18,
+                "content_hash": "abc123",
+                "tamux_version": "0.3.1",
+                "maturity_at_publish": "proven",
+                "tags": ["debug", "rust", "panic"],
+                "published_at": 42
+            }]
+        }))
+        .expect("serialize registry index"),
+    )
+    .expect("write registry index");
+
+    let readable_path = root.path().join("allowed.txt");
+    fs::write(&readable_path, "allowed through\n").expect("write readable file");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = spawn_scripted_tool_call_server(vec![(
+        "read_file".to_string(),
+        serde_json::json!({ "path": readable_path }).to_string(),
+    )])
+    .await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    config.skill_recommendation.strong_match_threshold = 0.60;
+    config.skill_recommendation.weak_match_threshold = 0.30;
+    config.skill_recommendation.background_community_search = false;
+    config.extra.insert(
+        "registry_url".to_string(),
+        serde_json::Value::String("http://127.0.0.1:9".to_string()),
+    );
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread-community-scout-disabled";
+    let mut events = engine.subscribe();
+
+    engine
+        .send_message_inner(
+            Some(thread_id),
+            "debug panic in rust service",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect("send message should complete");
+
+    let saw_scout_notice = tokio::time::timeout(std::time::Duration::from_millis(250), async {
+        loop {
+            match events.recv().await {
+                Ok(AgentEvent::WorkflowNotice {
+                    thread_id: event_thread_id,
+                    kind,
+                    ..
+                }) if event_thread_id == thread_id && kind == "skill-community-scout" => {
+                    return true;
+                }
+                Ok(_) => continue,
+                Err(_) => return false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    assert!(
+        !saw_scout_notice,
+        "community scout should stay disabled for this turn"
+    );
 }

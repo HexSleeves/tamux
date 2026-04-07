@@ -2,10 +2,12 @@ mod metadata;
 mod ranking;
 mod types;
 
+use crate::agent::skill_registry::{to_community_entry, RegistryClient};
 use crate::agent::types::SkillRecommendationConfig;
 use crate::history::HistoryStore;
 use anyhow::{Context, Result};
 use ranking::rank_skill_candidates;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use types::SkillCandidateInput;
 
@@ -63,6 +65,49 @@ pub(crate) async fn sync_skill_catalog(history: &HistoryStore, skills_root: &Pat
         history.register_skill_document(&path).await?;
     }
     Ok(())
+}
+
+pub(crate) async fn discover_community_skills(
+    data_dir: &Path,
+    registry_url: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<amux_protocol::CommunitySkillEntry>> {
+    let client = RegistryClient::new(registry_url.to_string(), data_dir);
+    let _ = client.refresh_index().await;
+    let mut seen = HashSet::new();
+    let mut merged = Vec::new();
+
+    let mut queries = vec![query.trim().to_string()];
+    queries.extend(
+        query
+            .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_')
+            .map(str::trim)
+            .filter(|token| token.len() >= 3)
+            .map(ToOwned::to_owned),
+    );
+
+    for search_query in queries {
+        if search_query.is_empty() {
+            continue;
+        }
+        for entry in client.search(&search_query).await? {
+            if seen.insert(entry.name.clone()) {
+                merged.push(entry);
+            }
+            if merged.len() >= limit.max(1) {
+                return Ok(merged
+                    .into_iter()
+                    .map(|entry| to_community_entry(&entry))
+                    .collect());
+            }
+        }
+    }
+
+    Ok(merged
+        .into_iter()
+        .map(|entry| to_community_entry(&entry))
+        .collect())
 }
 
 fn collect_skill_documents(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {

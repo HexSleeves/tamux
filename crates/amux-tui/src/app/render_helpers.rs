@@ -25,9 +25,7 @@ pub(super) fn format_status_modal_text(snapshot: &crate::client::AgentStatusSnap
     status_modal::format_status_modal_text(snapshot)
 }
 
-pub(super) fn format_prompt_modal_text(
-    prompt: &crate::client::AgentPromptInspectionVm,
-) -> String {
+pub(super) fn format_prompt_modal_text(prompt: &crate::client::AgentPromptInspectionVm) -> String {
     status_modal::format_prompt_modal_text(prompt)
 }
 

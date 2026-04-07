@@ -217,10 +217,8 @@ fn infer_skill_discovery_session_for_cwd(
         .filter_map(|session| {
             let session_cwd = session.cwd.as_deref()?;
             let session_path = Path::new(session_cwd);
-            cwd.starts_with(session_path).then_some((
-                session_path.components().count(),
-                session.id,
-            ))
+            cwd.starts_with(session_path)
+                .then_some((session_path.components().count(), session.id))
         })
         .max_by_key(|(depth, _)| *depth)
         .map(|(_, session_id)| session_id)

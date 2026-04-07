@@ -1,5 +1,122 @@
 use super::*;
 
+fn parse_workflow_notice_details(details: Option<&str>) -> Option<serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(details?).ok()
+}
+
+fn normalized_skill_workflow_notice(
+    kind: &str,
+    message: &str,
+    details: Option<&str>,
+) -> Option<(String, String, Option<String>)> {
+    let parsed = parse_workflow_notice_details(details);
+    let recommended_skill = parsed
+        .as_ref()
+        .and_then(|value| value.get("recommended_skill"))
+        .and_then(|value| value.as_str());
+    let confidence_tier = parsed
+        .as_ref()
+        .and_then(|value| value.get("confidence_tier"))
+        .and_then(|value| value.as_str());
+    let recommended_action = parsed
+        .as_ref()
+        .and_then(|value| value.get("recommended_action"))
+        .and_then(|value| value.as_str());
+    let skip_rationale = parsed
+        .as_ref()
+        .and_then(|value| value.get("skip_rationale"))
+        .and_then(|value| value.as_str());
+
+    match kind {
+        "skill-preflight" => {
+            let normalized_kind = if confidence_tier == Some("strong") {
+                "skill-discovery-required"
+            } else {
+                "skill-discovery-recommended"
+            };
+            let status = [
+                if normalized_kind == "skill-discovery-required" {
+                    Some("Skill gate required".to_string())
+                } else {
+                    Some("Skill guidance ready".to_string())
+                },
+                recommended_skill.map(|value| format!("skill={value}")),
+                confidence_tier.map(|value| format!("confidence={value}")),
+                recommended_action.map(|value| format!("next={value}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" | ");
+            let activity = if normalized_kind == "skill-discovery-required" {
+                Some("skill gate".to_string())
+            } else {
+                Some("skill review".to_string())
+            };
+            Some((normalized_kind.to_string(), status, activity))
+        }
+        "skill-gate" => {
+            let status = [
+                Some("Skill gate blocked progress".to_string()),
+                recommended_skill.map(|value| format!("skill={value}")),
+                recommended_action.map(|value| format!("next={value}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" | ");
+            Some((
+                "skill-discovery-required".to_string(),
+                status,
+                Some("skill gate".to_string()),
+            ))
+        }
+        "skill-discovery-skipped" => {
+            let status = [
+                Some("Skill recommendation skipped".to_string()),
+                recommended_skill.map(|value| format!("skill={value}")),
+                skip_rationale.map(|value| format!("why={value}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" | ");
+            Some((kind.to_string(), status, None))
+        }
+        "skill-community-scout" => {
+            let candidates = parsed
+                .as_ref()
+                .and_then(|value| value.get("candidates"))
+                .and_then(|value| value.as_array())
+                .map(|value| value.len());
+            let timeout = parsed
+                .as_ref()
+                .and_then(|value| value.get("community_preapprove_timeout_secs"))
+                .and_then(|value| value.as_u64());
+            let status = [
+                Some("Community scout update".to_string()),
+                candidates.map(|value| format!("candidates={value}")),
+                timeout.map(|value| format!("timeout={}s", value)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" | ");
+            Some((kind.to_string(), status, Some("skill scout".to_string())))
+        }
+        "skill-discovery-required" | "skill-discovery-recommended" => Some((
+            kind.to_string(),
+            message.to_string(),
+            Some(if kind == "skill-discovery-required" {
+                "skill gate".to_string()
+            } else {
+                "skill review".to_string()
+            }),
+        )),
+        _ => None,
+    }
+}
+
 impl TuiModel {
     fn should_surface_thread_activity(&self, thread_id: &str) -> bool {
         match self.chat.active_thread_id() {
@@ -9,7 +126,10 @@ impl TuiModel {
     }
 
     fn should_accept_retry_status_event(&self, thread_id: &str) -> bool {
-        if self.chat.is_streaming() || self.chat.retry_status().is_some() || self.agent_activity.is_some() {
+        if self.chat.is_streaming()
+            || self.chat.retry_status().is_some()
+            || self.agent_activity.is_some()
+        {
             return true;
         }
 
@@ -486,11 +606,20 @@ impl TuiModel {
                 }
             }
         }
-        self.status_line = if let Some(details) = details_ref {
-            format!("{message} ({details})")
+        if let Some((_normalized_kind, status_line, agent_activity)) =
+            normalized_skill_workflow_notice(&kind, &message, details_ref)
+        {
+            self.status_line = status_line;
+            if let Some(agent_activity) = agent_activity {
+                self.agent_activity = Some(agent_activity);
+            }
         } else {
-            message.clone()
-        };
+            self.status_line = if let Some(details) = details_ref {
+                format!("{message} ({details})")
+            } else {
+                message.clone()
+            };
+        }
         if kind == "operator-profile-warning" {
             let warning = if let Some(details) = details_ref {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(details) {

@@ -942,10 +942,16 @@ fn skill_discover_result_round_trip() {
             assert!(result.explicit_rationale_required);
             assert_eq!(result.workspace_tags, vec!["git", "rebase"]);
             assert_eq!(result.candidates.len(), 1);
-            assert_eq!(result.candidates[0].variant_id, "local:git_rebase_workflow:v1");
+            assert_eq!(
+                result.candidates[0].variant_id,
+                "local:git_rebase_workflow:v1"
+            );
             assert_eq!(result.candidates[0].skill_name, "git_rebase_workflow");
             assert_eq!(result.candidates[0].variant_name, "v1");
-            assert_eq!(result.candidates[0].relative_path, "drafts/git_rebase_workflow/SKILL.md");
+            assert_eq!(
+                result.candidates[0].relative_path,
+                "drafts/git_rebase_workflow/SKILL.md"
+            );
             assert_eq!(result.candidates[0].status, "active");
             assert!((result.candidates[0].score - 0.94).abs() < f64::EPSILON);
             assert_eq!(result.candidates[0].confidence_tier, "strong");

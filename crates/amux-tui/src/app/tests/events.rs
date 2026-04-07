@@ -275,14 +275,14 @@ fn full_status_event_caches_snapshot_for_status_modal() {
 
     model.handle_client_event(ClientEvent::StatusSnapshot(
         crate::client::AgentStatusSnapshotVm {
-        tier: "mission_control".to_string(),
-        activity: "waiting_for_operator".to_string(),
-        active_thread_id: Some("thread-1".to_string()),
-        active_goal_run_id: Some("goal-1".to_string()),
-        active_goal_run_title: Some("Close release gap".to_string()),
-        provider_health_json: r#"{"openai":{"can_execute":true,"trip_count":0}}"#.to_string(),
-        gateway_statuses_json: r#"{"slack":{"status":"connected"}}"#.to_string(),
-        recent_actions_json: r#"[]"#.to_string(),
+            tier: "mission_control".to_string(),
+            activity: "waiting_for_operator".to_string(),
+            active_thread_id: Some("thread-1".to_string()),
+            active_goal_run_id: Some("goal-1".to_string()),
+            active_goal_run_title: Some("Close release gap".to_string()),
+            provider_health_json: r#"{"openai":{"can_execute":true,"trip_count":0}}"#.to_string(),
+            gateway_statuses_json: r#"{"slack":{"status":"connected"}}"#.to_string(),
+            recent_actions_json: r#"[]"#.to_string(),
         },
     ));
 
