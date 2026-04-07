@@ -272,6 +272,9 @@ pub(crate) enum SkillAction {
     Discover {
         /// Task or problem description to match against installed skills.
         query: String,
+        /// Optional terminal session UUID for workspace-aware ranking.
+        #[arg(long)]
+        session: Option<String>,
         /// Maximum number of ranked candidates to show.
         #[arg(long, default_value = "3")]
         limit: usize,
@@ -346,16 +349,59 @@ pub(crate) enum SettingsAction {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{Cli, Commands, SkillAction};
     use clap::Parser;
 
     #[test]
     fn skill_discover_subcommand_parses_query() {
         let cli = Cli::try_parse_from(["tamux", "skill", "discover", "debug panic"])
             .expect("skill discover subcommand should parse");
-        let rendered = format!("{:?}", cli.command);
-        assert!(rendered.contains("Discover"), "parsed command was {rendered}");
-        assert!(rendered.contains("debug panic"), "parsed command was {rendered}");
-        assert!(rendered.contains("limit: 3"), "parsed command was {rendered}");
+        match cli.command {
+            Some(Commands::Skill {
+                action:
+                    SkillAction::Discover {
+                        query,
+                        session,
+                        limit,
+                    },
+            }) => {
+                assert_eq!(query, "debug panic");
+                assert_eq!(session, None);
+                assert_eq!(limit, 3);
+            }
+            other => panic!("parsed unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skill_discover_subcommand_accepts_explicit_session() {
+        let cli = Cli::try_parse_from([
+            "tamux",
+            "skill",
+            "discover",
+            "--session",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "debug panic",
+        ])
+        .expect("skill discover subcommand should parse explicit session");
+
+        match cli.command {
+            Some(Commands::Skill {
+                action:
+                    SkillAction::Discover {
+                        query,
+                        session,
+                        limit,
+                    },
+            }) => {
+                assert_eq!(query, "debug panic");
+                assert_eq!(
+                    session.as_deref(),
+                    Some("550e8400-e29b-41d4-a716-446655440000")
+                );
+                assert_eq!(limit, 3);
+            }
+            other => panic!("parsed unexpected command: {other:?}"),
+        }
     }
 }

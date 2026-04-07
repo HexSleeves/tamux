@@ -37,6 +37,16 @@ fn map_skill_discovery_response(resp: DaemonMessage) -> Result<Value> {
     }
 }
 
+fn parse_skill_discovery_event(resp: DaemonMessage) -> Option<Result<Value>> {
+    match resp {
+        DaemonMessage::CwdChanged { .. }
+        | DaemonMessage::Output { .. }
+        | DaemonMessage::CommandStarted { .. }
+        | DaemonMessage::CommandFinished { .. } => None,
+        other => Some(map_skill_discovery_response(other)),
+    }
+}
+
 fn map_audit_query_response(resp: DaemonMessage) -> Result<Value> {
     match resp {
         DaemonMessage::AuditList { entries_json } => Ok(serde_json::json!({
@@ -106,13 +116,15 @@ pub(super) async fn tool_discover_skills(args: &Value) -> Result<Value> {
         })
         .transpose()?;
 
-    let resp = daemon_roundtrip(ClientMessage::SkillDiscover {
-        query,
-        session_id,
-        limit,
-    })
-    .await?;
-    map_skill_discovery_response(resp)
+    super::daemon::daemon_roundtrip_until(
+        ClientMessage::SkillDiscover {
+            query,
+            session_id,
+            limit,
+        },
+        parse_skill_discovery_event,
+    )
+    .await
 }
 
 pub(super) async fn tool_list_goal_runs() -> Result<Value> {
@@ -599,5 +611,53 @@ mod tests {
 
         assert_eq!(value["entries"][0]["action_type"], "tool");
         assert_eq!(value["entries"][0]["summary"], "Executed managed command");
+    }
+
+    #[test]
+    fn parse_skill_discovery_event_ignores_unsolicited_frames() {
+        let session_id =
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("valid test uuid");
+
+        assert!(parse_skill_discovery_event(DaemonMessage::CwdChanged {
+            id: session_id,
+            cwd: "/workspace/repo".to_string(),
+        })
+        .is_none());
+        assert!(parse_skill_discovery_event(DaemonMessage::Output {
+            id: session_id,
+            data: b"log".to_vec(),
+        })
+        .is_none());
+        assert!(parse_skill_discovery_event(DaemonMessage::CommandStarted {
+            id: session_id,
+            command: "cargo test".to_string(),
+        })
+        .is_none());
+        assert!(parse_skill_discovery_event(DaemonMessage::CommandFinished {
+            id: session_id,
+            exit_code: Some(0),
+        })
+        .is_none());
+    }
+
+    #[test]
+    fn parse_skill_discovery_event_maps_result_payload() {
+        let value = parse_skill_discovery_event(DaemonMessage::SkillDiscoverResult {
+            result_json: serde_json::json!({
+                "query": "debug panic",
+                "required": true,
+                "confidence_tier": "strong",
+                "recommended_action": "read_skill systematic-debugging",
+                "explicit_rationale_required": false,
+                "workspace_tags": ["rust"],
+                "candidates": []
+            })
+            .to_string(),
+        })
+        .expect("result frame should terminate")
+        .expect("payload should parse");
+
+        assert_eq!(value["query"], "debug panic");
+        assert_eq!(value["confidence_tier"], "strong");
     }
 }
