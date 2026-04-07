@@ -39,6 +39,23 @@ async fn execute_spawn_subagent(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("missing 'description' argument"))?
         .to_string();
+    let provider_override = args
+        .get("provider")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let model_override = args
+        .get("model")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if model_override.is_some() && provider_override.is_none() {
+        anyhow::bail!(
+            "'model' requires an explicit 'provider'. Use `fetch_authenticated_providers` first, then `fetch_provider_models` for the chosen provider."
+        );
+    }
     let runtime = normalize_task_runtime(args.get("runtime").and_then(|value| value.as_str()))?;
     if runtime != "daemon" {
         let status = agent
@@ -137,6 +154,12 @@ async fn execute_spawn_subagent(
         )
         .await;
 
+    if let Some(provider_id) = provider_override.as_deref() {
+        validate_spawn_provider_override(agent, provider_id, model_override.as_deref()).await?;
+        subagent.override_provider = Some(provider_id.to_string());
+        subagent.override_model = model_override.clone();
+    }
+
     // Look up a matching SubAgentDefinition by title/name and apply overrides.
     {
         let effective_sub_agents = agent.list_sub_agents().await;
@@ -229,6 +252,119 @@ async fn execute_spawn_subagent(
         "Spawned subagent {} with runtime {}.{}{}{def_suffix}",
         subagent.id, runtime, lane_suffix, persona_suffix
     ))
+}
+
+async fn execute_fetch_authenticated_providers(agent: &AgentEngine) -> Result<String> {
+    let authenticated = agent
+        .get_provider_auth_states()
+        .await
+        .into_iter()
+        .filter(|state| state.authenticated)
+        .collect::<Vec<_>>();
+    serde_json::to_string_pretty(&authenticated)
+        .map_err(|error| anyhow::anyhow!("failed to serialize authenticated providers: {error}"))
+}
+
+async fn execute_fetch_provider_models(
+    args: &serde_json::Value,
+    agent: &AgentEngine,
+) -> Result<String> {
+    let provider_id = args
+        .get("provider")
+        .or_else(|| args.get("provider_id"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'provider' argument"))?;
+
+    let provider_config = resolve_authenticated_provider_config(agent, provider_id).await?;
+    let models = crate::agent::llm_client::fetch_models(
+        provider_id,
+        &provider_config.base_url,
+        &provider_config.api_key,
+    )
+    .await
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "failed to fetch models for provider '{}': {}. Check `fetch_authenticated_providers` and try `fetch_provider_models` again after fixing auth/base URL.",
+            provider_id,
+            error
+        )
+    })?;
+
+    serde_json::to_string_pretty(&models)
+        .map_err(|error| anyhow::anyhow!("failed to serialize provider models: {error}"))
+}
+
+async fn validate_spawn_provider_override(
+    agent: &AgentEngine,
+    provider_id: &str,
+    model_override: Option<&str>,
+) -> Result<()> {
+    let provider_config = resolve_authenticated_provider_config(agent, provider_id).await?;
+    let Some(model_override) = model_override.map(str::trim).filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+
+    let models = crate::agent::llm_client::fetch_models(
+        provider_id,
+        &provider_config.base_url,
+        &provider_config.api_key,
+    )
+    .await
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "failed to validate model '{}' for provider '{}': {}. Use `fetch_provider_models` to inspect the provider's available models first.",
+            model_override,
+            provider_id,
+            error
+        )
+    })?;
+
+    if !models.is_empty() && !models.iter().any(|model| model.id == model_override) {
+        anyhow::bail!(
+            "model '{}' is not available for authenticated provider '{}'. Use `fetch_provider_models` to choose one of the returned models.",
+            model_override,
+            provider_id
+        );
+    }
+
+    Ok(())
+}
+
+async fn resolve_authenticated_provider_config(
+    agent: &AgentEngine,
+    provider_id: &str,
+) -> Result<crate::agent::types::ProviderConfig> {
+    let auth_state = agent
+        .get_provider_auth_states()
+        .await
+        .into_iter()
+        .find(|state| state.provider_id == provider_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown provider '{}'. Use `fetch_authenticated_providers` to inspect available authenticated providers.",
+                provider_id
+            )
+        })?;
+    if !auth_state.authenticated {
+        anyhow::bail!(
+            "provider '{}' is not authenticated. Use `fetch_authenticated_providers` to inspect which providers are ready before spawning a subagent.",
+            provider_id
+        );
+    }
+
+    let config = agent.get_config().await;
+    agent
+        .resolve_sub_agent_provider_config(&config, provider_id)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "failed to resolve provider '{}': {}. Use `fetch_authenticated_providers` to verify the provider configuration.",
+                provider_id,
+                error
+            )
+        })
 }
 
 pub(in crate::agent) async fn spawn_weles_internal_subagent(

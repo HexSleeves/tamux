@@ -1,6 +1,13 @@
 use super::*;
 
 impl TuiModel {
+    fn should_surface_thread_activity(&self, thread_id: &str) -> bool {
+        match self.chat.active_thread_id() {
+            None => true,
+            Some(active_thread_id) => active_thread_id == thread_id,
+        }
+    }
+
     fn should_accept_retry_status_event(&self, thread_id: &str) -> bool {
         if self.chat.is_streaming() || self.chat.retry_status().is_some() || self.agent_activity.is_some() {
             return true;
@@ -33,9 +40,11 @@ impl TuiModel {
         {
             return;
         }
-        self.agent_activity = Some("writing".to_string());
-        self.anticipatory
-            .reduce(crate::state::AnticipatoryAction::Clear);
+        if self.should_surface_thread_activity(&thread_id) {
+            self.agent_activity = Some("writing".to_string());
+            self.anticipatory
+                .reduce(crate::state::AnticipatoryAction::Clear);
+        }
         self.chat
             .reduce(chat::ChatAction::Delta { thread_id, content });
     }
@@ -46,9 +55,11 @@ impl TuiModel {
         {
             return;
         }
-        self.agent_activity = Some("reasoning".to_string());
-        self.anticipatory
-            .reduce(crate::state::AnticipatoryAction::Clear);
+        if self.should_surface_thread_activity(&thread_id) {
+            self.agent_activity = Some("reasoning".to_string());
+            self.anticipatory
+                .reduce(crate::state::AnticipatoryAction::Clear);
+        }
         self.chat
             .reduce(chat::ChatAction::Reasoning { thread_id, content });
     }
@@ -66,9 +77,11 @@ impl TuiModel {
         {
             return;
         }
-        self.agent_activity = Some(format!("⚙  {}", name));
-        self.anticipatory
-            .reduce(crate::state::AnticipatoryAction::Clear);
+        if self.should_surface_thread_activity(&thread_id) {
+            self.agent_activity = Some(format!("⚙  {}", name));
+            self.anticipatory
+                .reduce(crate::state::AnticipatoryAction::Clear);
+        }
         self.chat.reduce(chat::ChatAction::ToolCall {
             thread_id,
             call_id,
@@ -92,9 +105,11 @@ impl TuiModel {
         {
             return;
         }
-        self.agent_activity = Some(format!("⚙  {} ✓", name));
-        self.anticipatory
-            .reduce(crate::state::AnticipatoryAction::Clear);
+        if self.should_surface_thread_activity(&thread_id) {
+            self.agent_activity = Some(format!("⚙  {} ✓", name));
+            self.anticipatory
+                .reduce(crate::state::AnticipatoryAction::Clear);
+        }
         self.chat.reduce(chat::ChatAction::ToolResult {
             thread_id,
             call_id,
@@ -125,16 +140,18 @@ impl TuiModel {
         {
             return;
         }
-        self.agent_activity = None;
-        self.pending_stop = false;
-        self.anticipatory
-            .reduce(crate::state::AnticipatoryAction::Clear);
-        if self
-            .input_notice
-            .as_ref()
-            .is_some_and(|notice| notice.kind == InputNoticeKind::Warning)
-        {
-            self.input_notice = None;
+        if self.should_surface_thread_activity(&thread_id) {
+            self.agent_activity = None;
+            self.pending_stop = false;
+            self.anticipatory
+                .reduce(crate::state::AnticipatoryAction::Clear);
+            if self
+                .input_notice
+                .as_ref()
+                .is_some_and(|notice| notice.kind == InputNoticeKind::Warning)
+            {
+                self.input_notice = None;
+            }
         }
         self.chat.reduce(chat::ChatAction::TurnDone {
             thread_id,

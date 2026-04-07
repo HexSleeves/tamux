@@ -440,6 +440,98 @@ fn reselecting_thread_resets_scroll_lock_and_offset() {
 }
 
 #[test]
+fn inactive_thread_streaming_does_not_pollute_selected_thread_view() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadListReceived(vec![
+        AgentThread {
+            id: "t1".into(),
+            title: "First".into(),
+            ..Default::default()
+        },
+        AgentThread {
+            id: "t2".into(),
+            title: "Second".into(),
+            ..Default::default()
+        },
+    ]));
+    state.reduce(ChatAction::SelectThread("t2".into()));
+
+    state.reduce(ChatAction::Delta {
+        thread_id: "t1".into(),
+        content: "background output".into(),
+    });
+    state.reduce(ChatAction::Reasoning {
+        thread_id: "t1".into(),
+        content: "background reasoning".into(),
+    });
+    state.reduce(ChatAction::ToolCall {
+        thread_id: "t1".into(),
+        call_id: "call-1".into(),
+        name: "bash_command".into(),
+        args: "ls".into(),
+        weles_review: None,
+    });
+
+    assert_eq!(state.active_thread_id(), Some("t2"));
+    assert_eq!(state.streaming_content(), "");
+    assert_eq!(state.streaming_reasoning(), "");
+    assert!(state.active_tool_calls().is_empty());
+}
+
+#[test]
+fn inactive_thread_done_finalizes_background_stream_on_origin_thread() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadListReceived(vec![
+        AgentThread {
+            id: "t1".into(),
+            title: "First".into(),
+            ..Default::default()
+        },
+        AgentThread {
+            id: "t2".into(),
+            title: "Second".into(),
+            ..Default::default()
+        },
+    ]));
+    state.reduce(ChatAction::SelectThread("t2".into()));
+
+    state.reduce(ChatAction::Delta {
+        thread_id: "t1".into(),
+        content: "background output".into(),
+    });
+    state.reduce(ChatAction::Reasoning {
+        thread_id: "t1".into(),
+        content: "background reasoning".into(),
+    });
+    state.reduce(ChatAction::TurnDone {
+        thread_id: "t1".into(),
+        input_tokens: 10,
+        output_tokens: 20,
+        cost: None,
+        provider: None,
+        model: None,
+        tps: None,
+        generation_ms: None,
+        reasoning: None,
+        provider_final_result_json: Some("result_json".to_string()),
+    });
+
+    assert_eq!(state.active_thread_id(), Some("t2"));
+    assert_eq!(state.streaming_content(), "");
+    assert_eq!(state.streaming_reasoning(), "");
+
+    let thread = state
+        .threads()
+        .iter()
+        .find(|thread| thread.id == "t1")
+        .expect("origin thread should exist");
+    let last = thread.messages.last().expect("background reply should be recorded");
+    assert_eq!(last.role, MessageRole::Assistant);
+    assert_eq!(last.content, "background output");
+    assert_eq!(last.reasoning.as_deref(), Some("background reasoning"));
+}
+
+#[test]
 fn thread_detail_keeps_local_messages_with_actions() {
     let mut state = ChatState::new();
     state.reduce(ChatAction::ThreadCreated {

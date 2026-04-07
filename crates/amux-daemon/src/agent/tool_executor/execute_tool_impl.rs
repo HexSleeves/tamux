@@ -343,6 +343,8 @@ pub fn execute_tool<'a>(
         "allocate_terminal" => {
             execute_allocate_terminal(&args, session_manager, session_id, event_tx).await
         }
+        "fetch_authenticated_providers" => execute_fetch_authenticated_providers(agent).await,
+        "fetch_provider_models" => execute_fetch_provider_models(&args, agent).await,
         "spawn_subagent" => {
             execute_spawn_subagent(
                 &args,

@@ -578,6 +578,233 @@
         assert_eq!(tasks[0].parent_thread_id.as_deref(), Some(thread_id));
     }
 
+    async fn spawn_model_fetch_server(models_body: serde_json::Value) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind model fetch server");
+        let address = listener
+            .local_addr()
+            .expect("read model fetch listener address");
+        let response_body = serde_json::to_string(&models_body).expect("serialize models body");
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let body = response_body.clone();
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 2048];
+                    let _ = stream.read(&mut buffer).await;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
+
+        format!("http://{}", address)
+    }
+
+    #[tokio::test]
+    async fn fetch_authenticated_providers_returns_only_authenticated_entries() {
+        let root = tempdir().expect("tempdir should succeed");
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.provider = amux_shared::providers::PROVIDER_ID_OPENAI.to_string();
+        config.api_key = "test-key".to_string();
+        config.base_url = "https://api.openai.example/v1".to_string();
+        let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+        let (event_tx, _) = broadcast::channel(8);
+
+        let tool_call = ToolCall::with_default_weles_review(
+            "tool-fetch-authenticated-providers".to_string(),
+            ToolFunction {
+                name: "fetch_authenticated_providers".to_string(),
+                arguments: serde_json::json!({}).to_string(),
+            },
+        );
+
+        let result = execute_tool(
+            &tool_call,
+            &engine,
+            "thread-provider-discovery",
+            None,
+            &manager,
+            None,
+            &event_tx,
+            root.path(),
+            &engine.http_client,
+            None,
+        )
+        .await;
+
+        assert!(!result.is_error, "provider discovery should succeed: {}", result.content);
+        let providers: Vec<crate::agent::types::ProviderAuthState> =
+            serde_json::from_str(&result.content).expect("parse authenticated provider list");
+        assert!(providers.iter().all(|provider| provider.authenticated));
+        assert!(providers.iter().any(|provider| {
+            provider.provider_id == amux_shared::providers::PROVIDER_ID_OPENAI
+        }));
+    }
+
+    #[tokio::test]
+    async fn fetch_provider_models_uses_authenticated_provider_config() {
+        let root = tempdir().expect("tempdir should succeed");
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.provider = amux_shared::providers::PROVIDER_ID_OPENAI.to_string();
+        config.api_key = "test-key".to_string();
+        config.base_url = spawn_model_fetch_server(serde_json::json!({
+            "data": [
+                {"id": "gpt-4.1", "name": "GPT-4.1", "context_length": 1048576},
+                {"id": "gpt-5.4", "name": "GPT-5.4", "context_length": 1048576}
+            ]
+        }))
+        .await;
+        let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+        let (event_tx, _) = broadcast::channel(8);
+
+        let tool_call = ToolCall::with_default_weles_review(
+            "tool-fetch-provider-models".to_string(),
+            ToolFunction {
+                name: "fetch_provider_models".to_string(),
+                arguments: serde_json::json!({
+                    "provider": amux_shared::providers::PROVIDER_ID_OPENAI,
+                })
+                .to_string(),
+            },
+        );
+
+        let result = execute_tool(
+            &tool_call,
+            &engine,
+            "thread-provider-models",
+            None,
+            &manager,
+            None,
+            &event_tx,
+            root.path(),
+            &engine.http_client,
+            None,
+        )
+        .await;
+
+        assert!(!result.is_error, "model discovery should succeed: {}", result.content);
+        let models: Vec<crate::agent::llm_client::FetchedModel> =
+            serde_json::from_str(&result.content).expect("parse fetched models");
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gpt-4.1");
+        assert_eq!(models[1].id, "gpt-5.4");
+    }
+
+    #[tokio::test]
+    async fn spawn_subagent_rejects_model_without_provider_and_points_to_fetch_tools() {
+        let root = tempdir().expect("tempdir should succeed");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+        let (event_tx, _) = broadcast::channel(8);
+
+        let error = super::execute_spawn_subagent(
+            &serde_json::json!({
+                "title": "Write foundational skill files",
+                "description": "Create the foundational skill files in parallel.",
+                "model": "gpt-5.4"
+            }),
+            &engine,
+            "thread-parent",
+            None,
+            &manager,
+            None,
+            &event_tx,
+        )
+        .await
+        .expect_err("model-only override should be rejected");
+
+        let message = error.to_string();
+        assert!(message.contains("provider"));
+        assert!(message.contains("fetch_authenticated_providers"));
+        assert!(message.contains("fetch_provider_models"));
+    }
+
+    #[tokio::test]
+    async fn spawn_subagent_rejects_unauthenticated_provider_and_points_to_fetch_tools() {
+        let root = tempdir().expect("tempdir should succeed");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+        let (event_tx, _) = broadcast::channel(8);
+
+        let error = super::execute_spawn_subagent(
+            &serde_json::json!({
+                "title": "Write foundational skill files",
+                "description": "Create the foundational skill files in parallel.",
+                "provider": amux_shared::providers::PROVIDER_ID_OPENAI
+            }),
+            &engine,
+            "thread-parent",
+            None,
+            &manager,
+            None,
+            &event_tx,
+        )
+        .await
+        .expect_err("unauthenticated provider override should be rejected");
+
+        let message = error.to_string();
+        assert!(message.contains("fetch_authenticated_providers"));
+        assert!(message.contains(amux_shared::providers::PROVIDER_ID_OPENAI));
+    }
+
+    #[tokio::test]
+    async fn spawn_subagent_persists_explicit_provider_and_model_override() {
+        let root = tempdir().expect("tempdir should succeed");
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.provider = amux_shared::providers::PROVIDER_ID_OPENAI.to_string();
+        config.api_key = "test-key".to_string();
+        config.base_url = spawn_model_fetch_server(serde_json::json!({
+            "data": [
+                {"id": "gpt-4.1", "name": "GPT-4.1", "context_length": 1048576},
+                {"id": "gpt-5.4", "name": "GPT-5.4", "context_length": 1048576}
+            ]
+        }))
+        .await;
+        let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+        let (event_tx, _) = broadcast::channel(8);
+
+        let result = super::execute_spawn_subagent(
+            &serde_json::json!({
+                "title": "Write foundational skill files",
+                "description": "Create the foundational skill files in parallel.",
+                "provider": amux_shared::providers::PROVIDER_ID_OPENAI,
+                "model": "gpt-5.4"
+            }),
+            &engine,
+            "thread-parent",
+            None,
+            &manager,
+            None,
+            &event_tx,
+        )
+        .await
+        .expect("explicit provider/model override should succeed");
+
+        let tasks = engine.list_tasks().await;
+        let task = tasks
+            .into_iter()
+            .find(|task| result.contains(&task.id))
+            .expect("spawned subagent should exist");
+        assert_eq!(task.override_provider.as_deref(), Some(amux_shared::providers::PROVIDER_ID_OPENAI));
+        assert_eq!(task.override_model.as_deref(), Some("gpt-5.4"));
+    }
+
     #[tokio::test]
     async fn spawn_subagent_bootstraps_todos_for_goal_run_tasks() {
         let root = tempdir().expect("tempdir should succeed");

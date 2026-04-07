@@ -1058,6 +1058,40 @@ fn internal_dm_tool_activity_does_not_block_normal_thread_completion() {
 }
 
 #[test]
+fn inactive_thread_events_do_not_replace_selected_thread_activity_badge() {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-user".to_string(),
+        title: "User Thread".to_string(),
+    });
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-other".to_string(),
+        title: "Other Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-user".to_string()));
+
+    model.handle_client_event(ClientEvent::Reasoning {
+        thread_id: "thread-other".to_string(),
+        content: "background reasoning".to_string(),
+    });
+    model.handle_client_event(ClientEvent::ToolCall {
+        thread_id: "thread-other".to_string(),
+        call_id: "background-call".to_string(),
+        name: "bash_command".to_string(),
+        arguments: "{\"command\":\"pwd\"}".to_string(),
+        weles_review: None,
+    });
+
+    assert_eq!(model.chat.active_thread_id(), Some("thread-user"));
+    assert!(model.agent_activity.is_none());
+    assert_eq!(model.chat.streaming_content(), "");
+    assert_eq!(model.chat.streaming_reasoning(), "");
+    assert!(model.chat.active_tool_calls().is_empty());
+}
+
+#[test]
 fn queued_prompt_flushes_after_last_tool_result_before_turn_done() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
     model.connected = true;

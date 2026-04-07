@@ -130,7 +130,7 @@ fn render_large_file_writes_section() -> &'static str {
 
 fn render_subagent_supervision_section(config: &AgentConfig) -> String {
     let mut section = String::from(
-        "- For large tasks with clearly separable work, call `spawn_subagent` to create bounded child tasks instead of trying to do everything in one loop.\n- Keep each subagent narrow in scope and avoid creating duplicate child assignments.\n- Monitor child progress with `list_subagents` and integrate their results before declaring the parent task complete.\n- Spawned agents carry their own Slavic persona. Treat those identities as real collaborators with bounded scope, not as disposable copies of yourself.\n",
+        "- For large tasks with clearly separable work, call `spawn_subagent` to create bounded child tasks instead of trying to do everything in one loop.\n- If a child should use a specific provider or model, call `fetch_authenticated_providers` first and `fetch_provider_models` for the chosen provider before setting `spawn_subagent.provider` or `spawn_subagent.model`.\n- Keep each subagent narrow in scope and avoid creating duplicate child assignments.\n- Monitor child progress with `list_subagents` and integrate their results before declaring the parent task complete.\n- Spawned agents carry their own Slavic persona. Treat those identities as real collaborators with bounded scope, not as disposable copies of yourself.\n",
     );
     if config.collaboration.enabled {
         section.push_str(
