@@ -41,6 +41,7 @@ pub enum ClientMessage {
     UpsertAgentEvent { event_json: String },
     ListAgentEvents { category: Option<String>, pane_id: Option<String>, limit: Option<usize> },
     GenerateSkill { query: Option<String>, title: Option<String> },
+    SkillDiscover { query: String, session_id: Option<String>, limit: Option<usize> },
     FindSymbol { workspace_root: String, symbol: String, limit: Option<usize> },
     ListSnapshots { workspace_id: Option<WorkspaceId> },
     RestoreSnapshot { snapshot_id: String },

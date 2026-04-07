@@ -673,6 +673,32 @@ fn sample_community_skill_entry() -> CommunitySkillEntry {
     }
 }
 
+fn sample_skill_discovery_candidate() -> SkillDiscoveryCandidatePublic {
+    SkillDiscoveryCandidatePublic {
+        skill_id: "local:git_rebase_workflow".to_string(),
+        skill_name: "git_rebase_workflow".to_string(),
+        title: "Git Rebase Workflow".to_string(),
+        summary: "Safely rebase a feature branch with conflict checks.".to_string(),
+        source: "local".to_string(),
+        match_score: 0.94,
+        strong_match: true,
+        metadata_json: serde_json::json!({
+            "status": "active",
+            "relative_path": "drafts/git_rebase_workflow/SKILL.md",
+        })
+        .to_string(),
+    }
+}
+
+fn sample_skill_discovery_result() -> SkillDiscoveryResultPublic {
+    SkillDiscoveryResultPublic {
+        query: "git rebase workflow".to_string(),
+        session_id: Some("session-123".to_string()),
+        limit: Some(5),
+        candidates: vec![sample_skill_discovery_candidate()],
+    }
+}
+
 #[test]
 fn gateway_register_round_trip() {
     let msg = ClientMessage::GatewayRegister {
@@ -793,6 +819,53 @@ fn skill_search_result_round_trip() {
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].name, "git-rebase-workflow");
             assert!(entries[0].publisher_verified);
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
+}
+
+#[test]
+fn skill_discover_round_trip() {
+    let msg = ClientMessage::SkillDiscover {
+        query: "git rebase workflow".to_string(),
+        session_id: Some("session-123".to_string()),
+        limit: Some(5),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+    match decoded {
+        ClientMessage::SkillDiscover {
+            query,
+            session_id,
+            limit,
+        } => {
+            assert_eq!(query, "git rebase workflow");
+            assert_eq!(session_id.as_deref(), Some("session-123"));
+            assert_eq!(limit, Some(5));
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
+}
+
+#[test]
+fn skill_discover_result_round_trip() {
+    let payload = sample_skill_discovery_result();
+    let msg = DaemonMessage::SkillDiscoverResult {
+        result_json: serde_json::to_string(&payload).unwrap(),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    match decoded {
+        DaemonMessage::SkillDiscoverResult { result_json } => {
+            let result: SkillDiscoveryResultPublic = serde_json::from_str(&result_json).unwrap();
+            assert_eq!(result.query, "git rebase workflow");
+            assert_eq!(result.session_id.as_deref(), Some("session-123"));
+            assert_eq!(result.limit, Some(5));
+            assert_eq!(result.candidates.len(), 1);
+            assert_eq!(result.candidates[0].skill_name, "git_rebase_workflow");
+            assert_eq!(result.candidates[0].source, "local");
+            assert!(result.candidates[0].strong_match);
+            assert!((result.candidates[0].match_score - 0.94).abs() < f64::EPSILON);
         }
         other => panic!("unexpected variant: {:?}", other),
     }

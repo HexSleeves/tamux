@@ -206,6 +206,7 @@ impl Default for AgentConfig {
             ema_activity_threshold: default_ema_activity_threshold(),
             consolidation: ConsolidationConfig::default(),
             skill_discovery: SkillDiscoveryConfig::default(),
+            skill_recommendation: SkillRecommendationConfig::default(),
             skill_promotion: SkillPromotionConfig::default(),
             tier: TierConfig::default(),
             episodic: super::episodic::EpisodicConfig::default(),

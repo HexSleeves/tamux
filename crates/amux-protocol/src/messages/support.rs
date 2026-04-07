@@ -88,6 +88,29 @@ pub struct CommunitySkillEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SkillDiscoveryCandidatePublic {
+    pub skill_id: String,
+    pub skill_name: String,
+    pub title: String,
+    pub summary: String,
+    pub source: String,
+    pub match_score: f64,
+    pub strong_match: bool,
+    pub metadata_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SkillDiscoveryResultPublic {
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub candidates: Vec<SkillDiscoveryCandidatePublic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScanReportPublic {
     pub verdict: String,
     pub findings_count: u32,
