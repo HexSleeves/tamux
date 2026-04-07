@@ -268,6 +268,14 @@ pub(crate) enum SkillAction {
         #[arg(long, default_value = "50")]
         limit: usize,
     },
+    /// Rank installed skills for a task and suggest the next action.
+    Discover {
+        /// Task or problem description to match against installed skills.
+        query: String,
+        /// Maximum number of ranked candidates to show.
+        #[arg(long, default_value = "3")]
+        limit: usize,
+    },
     /// Show details of a specific skill.
     Inspect {
         /// Skill name or variant ID.
@@ -334,4 +342,20 @@ pub(crate) enum SettingsAction {
         /// Value to set (JSON or plain string).
         value: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn skill_discover_subcommand_parses_query() {
+        let cli = Cli::try_parse_from(["tamux", "skill", "discover", "debug panic"])
+            .expect("skill discover subcommand should parse");
+        let rendered = format!("{:?}", cli.command);
+        assert!(rendered.contains("Discover"), "parsed command was {rendered}");
+        assert!(rendered.contains("debug panic"), "parsed command was {rendered}");
+        assert!(rendered.contains("limit: 3"), "parsed command was {rendered}");
+    }
 }

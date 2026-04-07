@@ -26,6 +26,10 @@ pub(crate) async fn run(action: SkillAction) -> Result<()> {
                 println!("\n{} skill(s) shown.", variants.len());
             }
         }
+        SkillAction::Discover { query, limit } => {
+            let result = client::send_skill_discover(&query, limit).await?;
+            println!("{}", render_skill_discovery(&result));
+        }
         SkillAction::Inspect { name } => {
             let (variant, content) = client::send_skill_inspect(&name).await?;
             if let Some(variant) = variant {
@@ -142,4 +146,84 @@ pub(crate) async fn run(action: SkillAction) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn render_skill_discovery(result: &amux_protocol::SkillDiscoveryResultPublic) -> String {
+    let mut lines = vec![
+        format!("Confidence: {}", display_or_none(&result.confidence_tier)),
+        format!(
+            "Next action: {}",
+            display_or_none(&result.recommended_action)
+        ),
+    ];
+
+    if result.candidates.is_empty() {
+        lines.push("No matching skills found.".to_string());
+        return lines.join("\n");
+    }
+
+    for (index, candidate) in result.candidates.iter().enumerate() {
+        lines.push(format!(
+            "{}. {} [{}] score={}",
+            index + 1,
+            candidate.skill_name,
+            candidate.status,
+            (candidate.score * 100.0).round() as u32
+        ));
+        let reasons = if candidate.reasons.is_empty() {
+            "none".to_string()
+        } else {
+            candidate.reasons.join(", ")
+        };
+        lines.push(format!("   reasons: {reasons}"));
+    }
+
+    lines.join("\n")
+}
+
+fn display_or_none(value: &str) -> &str {
+    let trimmed = value.trim();
+    if trimmed.is_empty() { "none" } else { trimmed }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_skill_discovery;
+
+    #[test]
+    fn render_skill_discovery_formats_ranked_candidates() {
+        let rendered = render_skill_discovery(&amux_protocol::SkillDiscoveryResultPublic {
+            query: "debug panic".to_string(),
+            required: true,
+            confidence_tier: "strong".to_string(),
+            recommended_action: "read_skill systematic-debugging".to_string(),
+            explicit_rationale_required: false,
+            workspace_tags: vec!["rust".to_string()],
+            candidates: vec![amux_protocol::SkillDiscoveryCandidatePublic {
+                variant_id: "local:systematic-debugging:v1".to_string(),
+                skill_name: "systematic-debugging".to_string(),
+                variant_name: "v1".to_string(),
+                relative_path: "generated/systematic-debugging/SKILL.md".to_string(),
+                status: "active".to_string(),
+                score: 0.93,
+                confidence_tier: "strong".to_string(),
+                reasons: vec![
+                    "matched debug".to_string(),
+                    "workspace rust".to_string(),
+                    "14/16 successful uses".to_string(),
+                ],
+                context_tags: vec!["rust".to_string()],
+                use_count: 16,
+                success_count: 14,
+                failure_count: 2,
+            }],
+        });
+
+        assert!(rendered.contains("Confidence: strong"));
+        assert!(rendered.contains("Next action: read_skill systematic-debugging"));
+        assert!(rendered.contains("1. systematic-debugging [active] score=93"));
+        assert!(rendered.contains(
+            "reasons: matched debug, workspace rust, 14/16 successful uses"
+        ));
+    }
 }

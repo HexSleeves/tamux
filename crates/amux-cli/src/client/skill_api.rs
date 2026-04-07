@@ -1,5 +1,5 @@
-use amux_protocol::{ClientMessage, DaemonMessage};
-use anyhow::Result;
+use amux_protocol::{ClientMessage, DaemonMessage, SkillDiscoveryResultPublic};
+use anyhow::{Context, Result};
 
 use super::connection::{roundtrip, roundtrip_async_until};
 
@@ -23,6 +23,21 @@ pub async fn send_skill_inspect(
     .await?
     {
         DaemonMessage::SkillInspectResult { variant, content } => Ok((variant, content)),
+        DaemonMessage::Error { message } => anyhow::bail!("daemon error: {message}"),
+        other => anyhow::bail!("unexpected response: {other:?}"),
+    }
+}
+
+pub async fn send_skill_discover(query: &str, limit: usize) -> Result<SkillDiscoveryResultPublic> {
+    match roundtrip(ClientMessage::SkillDiscover {
+        query: query.to_string(),
+        session_id: None,
+        limit,
+    })
+    .await?
+    {
+        DaemonMessage::SkillDiscoverResult { result_json } => serde_json::from_str(&result_json)
+            .context("invalid skill discovery payload from daemon"),
         DaemonMessage::Error { message } => anyhow::bail!("daemon error: {message}"),
         other => anyhow::bail!("unexpected response: {other:?}"),
     }

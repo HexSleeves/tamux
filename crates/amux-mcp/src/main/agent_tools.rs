@@ -26,6 +26,17 @@ fn map_skill_variant_inspect_response(identifier: &str, resp: DaemonMessage) -> 
     }
 }
 
+fn map_skill_discovery_response(resp: DaemonMessage) -> Result<Value> {
+    match resp {
+        DaemonMessage::SkillDiscoverResult { result_json } => serde_json::from_str(&result_json)
+            .map_err(|error| anyhow::anyhow!("invalid daemon skill discovery payload: {error}")),
+        DaemonMessage::AgentError { message } | DaemonMessage::Error { message } => {
+            anyhow::bail!("daemon error: {message}")
+        }
+        other => anyhow::bail!("unexpected daemon response: {other:?}"),
+    }
+}
+
 fn map_audit_query_response(resp: DaemonMessage) -> Result<Value> {
     match resp {
         DaemonMessage::AuditList { entries_json } => Ok(serde_json::json!({
@@ -69,6 +80,39 @@ pub(super) async fn tool_inspect_skill_variant(args: &Value) -> Result<Value> {
     })
     .await?;
     map_skill_variant_inspect_response(&identifier, resp)
+}
+
+pub(super) async fn tool_discover_skills(args: &Value) -> Result<Value> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing required parameter: query"))?
+        .to_string();
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|value| value.clamp(1, 20) as usize)
+        .unwrap_or(3);
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|value| {
+            amux_protocol::SessionId::parse_str(value)
+                .map_err(|error| anyhow::anyhow!("invalid session_id `{value}`: {error}"))
+        })
+        .transpose()?;
+
+    let resp = daemon_roundtrip(ClientMessage::SkillDiscover {
+        query,
+        session_id,
+        limit,
+    })
+    .await?;
+    map_skill_discovery_response(resp)
 }
 
 pub(super) async fn tool_list_goal_runs() -> Result<Value> {

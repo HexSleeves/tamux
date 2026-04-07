@@ -49,7 +49,8 @@ mod transport;
 mod utils;
 
 use agent_tools::{
-    tool_activate_generated_tool, tool_control_goal_run, tool_generate_soc2_artifact,
+    tool_activate_generated_tool, tool_control_goal_run, tool_discover_skills,
+    tool_generate_soc2_artifact,
     tool_get_causal_trace_report, tool_get_collaboration_sessions, tool_get_counterfactual_report,
     tool_get_goal_run, tool_get_memory_provenance_report, tool_get_operator_model,
     tool_get_provenance_report, tool_inspect_skill_variant, tool_list_generated_tools,
@@ -117,6 +118,7 @@ async fn dispatch_tool(name: &str, args: &Value) -> Result<Value> {
         "list_todos" => tool_list_todos().await,
         "get_todos" => tool_get_todos(args).await,
         "list_skills" => tool_list_skills(args).await,
+        "discover_skills" => tool_discover_skills(args).await,
         "read_skill" => tool_read_skill(args).await,
         "list_skill_variants" => tool_list_skill_variants(args).await,
         "inspect_skill_variant" => tool_inspect_skill_variant(args).await,
