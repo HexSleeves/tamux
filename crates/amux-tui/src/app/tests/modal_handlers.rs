@@ -188,15 +188,15 @@ fn prompt_viewer_down_scrolls_prompt_body() {
         sections: vec![crate::client::AgentPromptInspectionSectionVm {
             id: "base_prompt".to_string(),
             title: "Base Prompt".to_string(),
-            content: (0..40)
-                .map(|idx| format!("line {idx}"))
+            content: (0..220)
+                .map(|idx| format!("token-{idx}"))
                 .collect::<Vec<_>>()
-                .join("\n"),
+                .join(" "),
         }],
-        final_prompt: (0..80)
-            .map(|idx| format!("final {idx}"))
+        final_prompt: (0..320)
+            .map(|idx| format!("final-token-{idx}"))
             .collect::<Vec<_>>()
-            .join("\n"),
+            .join(" "),
     });
     model.modal.reduce(modal::ModalAction::Push(modal::ModalKind::PromptViewer));
     model.width = 120;
@@ -210,6 +210,29 @@ fn prompt_viewer_down_scrolls_prompt_body() {
 
     assert!(!quit);
     assert_eq!(model.prompt_modal_scroll, 1);
+}
+
+#[test]
+fn command_palette_prompt_query_with_args_requests_target_agent() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.connected = true;
+    model.focus = FocusArea::Chat;
+
+    let quit = model.handle_key(KeyCode::Char('/'), KeyModifiers::NONE);
+    assert!(!quit);
+    for ch in "prompt weles".chars() {
+        let quit = model.handle_key(KeyCode::Char(ch), KeyModifiers::NONE);
+        assert!(!quit);
+    }
+    let quit = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert!(!quit);
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::RequestPromptInspection { agent_id }) => {
+            assert_eq!(agent_id.as_deref(), Some("weles"));
+        }
+        other => panic!("expected prompt inspection request from command palette query, got {:?}", other),
+    }
 }
 
 #[test]

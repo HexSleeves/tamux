@@ -136,13 +136,21 @@ impl TuiModel {
     }
 
     pub(crate) fn prompt_modal_max_scroll(&self) -> usize {
-        let total_lines = self.prompt_modal_body().lines().count().max(1);
-        let viewport_lines = self
+        let body = self.prompt_modal_body();
+        let (viewport_lines, inner_width) = self
             .current_modal_area()
             .filter(|(kind, _)| *kind == modal::ModalKind::PromptViewer)
-            .map(|(_, area)| area.height.saturating_sub(3) as usize)
-            .unwrap_or(1)
+            .map(|(_, area)| {
+                (
+                    area.height.saturating_sub(3) as usize,
+                    area.width.saturating_sub(2) as usize,
+                )
+            })
+            .unwrap_or((1, 1));
+        let total_lines = crate::widgets::message::wrap_text(&body, inner_width.max(1))
+            .len()
             .max(1);
+        let viewport_lines = viewport_lines.max(1);
         total_lines.saturating_sub(viewport_lines)
     }
 

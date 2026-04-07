@@ -334,6 +334,7 @@ impl ModalState {
         } else {
             // Strip leading '/' for matching
             let q = query.strip_prefix('/').unwrap_or(&query);
+            let q = q.split_whitespace().next().unwrap_or(q);
             self.filtered_indices = self
                 .command_items
                 .iter()
