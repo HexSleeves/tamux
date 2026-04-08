@@ -148,7 +148,8 @@ dist-release/
     GETTING_STARTED.md
     tamux-<version>.AppImage
     tamux_<version>_amd64.deb
-    tamux-<version>-linux-x86_64.zip
+    tamux-linux-x86_64.zip
+    tamux-linux-aarch64.zip
     SHA256SUMS.txt
     RELEASE_NOTES.md
   windows/
@@ -159,7 +160,7 @@ dist-release/
     GETTING_STARTED.md
     tamux-portable.exe
     tamux Setup <version>.exe
-    tamux-<version>-windows-x64.zip
+    tamux-windows-x64.zip
     SHA256SUMS.txt
     RELEASE_NOTES.md
 ```

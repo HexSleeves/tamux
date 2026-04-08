@@ -304,10 +304,12 @@ use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
                 operator_profile_sync_state,
                 operator_profile_sync_dirty,
                 operator_profile_scheduler_fallback,
+                diagnostics_json,
             } => {
                 assert_eq!(operator_profile_sync_state, "dirty");
                 assert!(operator_profile_sync_dirty);
                 assert!(!operator_profile_scheduler_fallback);
+                assert!(diagnostics_json.contains("operator_profile_sync_state"));
             }
             other => panic!("expected status diagnostics event, got {:?}", other),
         }

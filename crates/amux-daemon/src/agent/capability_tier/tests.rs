@@ -230,3 +230,53 @@ async fn status_snapshot_includes_outage_metadata_for_open_provider() {
         "expected structured alternatives in provider health snapshot"
     );
 }
+
+#[tokio::test]
+async fn status_snapshot_includes_aline_diagnostics() {
+    let (engine, _temp_dir) = make_test_engine(AgentConfig::default()).await;
+    engine.set_aline_startup_test_availability(true);
+    engine
+        .record_aline_startup_summary_for_tests(crate::agent::aline_startup::AlineStartupSummary {
+            aline_available: true,
+            watcher_initial_state: Some(crate::agent::aline_startup::WatcherState::Stopped),
+            watcher_started: true,
+            discovered_count: 4,
+            selected_count: 2,
+            imported_count: 1,
+            generated_count: 1,
+            short_circuit_reason: Some(
+                crate::agent::aline_startup::AlineStartupShortCircuitReason::BudgetExhausted,
+            ),
+            skipped_recently_imported_count: 1,
+            budget_exhausted: true,
+            failure_stage: None,
+            failure_message: None,
+            recently_imported_session_ids: vec!["session-1".to_string()],
+        })
+        .await;
+
+    let snapshot = engine.get_status_snapshot().await;
+    let DaemonMessage::AgentStatusResponse {
+        diagnostics_json, ..
+    } = snapshot
+    else {
+        panic!("expected agent status response");
+    };
+
+    let diagnostics: serde_json::Value = serde_json::from_str(&diagnostics_json).unwrap();
+    let aline = diagnostics.get("aline").expect("aline diagnostics should exist");
+    assert_eq!(aline.get("available").and_then(|value| value.as_bool()), Some(true));
+    assert_eq!(
+        aline.get("watcher_state").and_then(|value| value.as_str()),
+        Some("running")
+    );
+    assert_eq!(
+        aline.get("short_circuit_reason")
+            .and_then(|value| value.as_str()),
+        Some("budget_exhausted")
+    );
+    assert_eq!(
+        aline.get("imported_count").and_then(|value| value.as_u64()),
+        Some(1)
+    );
+}

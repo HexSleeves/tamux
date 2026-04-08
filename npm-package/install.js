@@ -149,6 +149,7 @@ function verifyBufferChecksum(buffer, expectedHash) {
 function getReleaseAssetInfo(platform, arch, version) {
   var key = platform + "-" + arch;
   var target = PLATFORM_MAP[key];
+  void version;
 
   if (!target) {
     return null;

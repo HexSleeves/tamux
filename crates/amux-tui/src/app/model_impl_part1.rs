@@ -66,8 +66,10 @@ impl TuiModel {
             weles_health: None,
             recent_actions: Vec::new(),
             status_modal_snapshot: None,
+            status_modal_diagnostics_json: None,
             status_modal_loading: false,
             status_modal_error: None,
+            status_modal_scroll: 0,
             prompt_modal_snapshot: None,
             prompt_modal_loading: false,
             prompt_modal_error: None,
@@ -92,7 +94,9 @@ impl TuiModel {
     pub(crate) fn open_status_modal_loading(&mut self) {
         self.status_modal_loading = true;
         self.status_modal_snapshot = None;
+        self.status_modal_diagnostics_json = None;
         self.status_modal_error = None;
+        self.status_modal_scroll = 0;
         if self.modal.top() != Some(modal::ModalKind::Status) {
             self.modal
                 .reduce(modal::ModalAction::Push(modal::ModalKind::Status));
@@ -118,7 +122,10 @@ impl TuiModel {
             return format!("Status request failed\n====================\n{error}");
         }
         if let Some(snapshot) = &self.status_modal_snapshot {
-            return render_helpers::format_status_modal_text(snapshot);
+            return render_helpers::format_status_modal_text(
+                snapshot,
+                self.status_modal_diagnostics_json.as_deref(),
+            );
         }
         "No status available.".to_string()
     }
@@ -153,6 +160,45 @@ impl TuiModel {
             .max(1);
         let viewport_lines = viewport_lines.max(1);
         total_lines.saturating_sub(viewport_lines)
+    }
+
+    pub(crate) fn status_modal_max_scroll(&self) -> usize {
+        let body = self.status_modal_body();
+        let (viewport_lines, inner_width) = self
+            .current_modal_area()
+            .filter(|(kind, _)| *kind == modal::ModalKind::Status)
+            .map(|(_, area)| {
+                (
+                    area.height.saturating_sub(3) as usize,
+                    area.width.saturating_sub(2) as usize,
+                )
+            })
+            .unwrap_or((1, 1));
+        let total_lines = crate::widgets::message::wrap_text(&body, inner_width.max(1))
+            .len()
+            .max(1);
+        let viewport_lines = viewport_lines.max(1);
+        total_lines.saturating_sub(viewport_lines)
+    }
+
+    pub(crate) fn set_status_modal_scroll(&mut self, scroll: usize) {
+        self.status_modal_scroll = scroll.min(self.status_modal_max_scroll());
+    }
+
+    pub(crate) fn step_status_modal_scroll(&mut self, delta: i32) {
+        let current = self.status_modal_scroll as i32;
+        let next = (current + delta).max(0) as usize;
+        self.set_status_modal_scroll(next);
+    }
+
+    pub(crate) fn page_status_modal_scroll(&mut self, direction: i32) {
+        let page = self
+            .current_modal_area()
+            .filter(|(kind, _)| *kind == modal::ModalKind::Status)
+            .map(|(_, area)| area.height.saturating_sub(4) as i32)
+            .unwrap_or(10)
+            .max(1);
+        self.step_status_modal_scroll(page * direction);
     }
 
     pub(crate) fn set_prompt_modal_scroll(&mut self, scroll: usize) {

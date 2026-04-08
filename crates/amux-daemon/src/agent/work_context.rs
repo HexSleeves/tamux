@@ -350,6 +350,8 @@ impl AgentEngine {
             .collect::<Vec<_>>();
         self.merge_repo_scan_entries(thread_id, &repo_root, entries)
             .await;
+        self.maybe_run_aline_startup_reconciliation_for_repo(&repo_root)
+            .await;
     }
 
     async fn merge_repo_scan_entries(

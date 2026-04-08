@@ -179,7 +179,10 @@ async fn spawn_subagent_rejects_protected_weles_from_normal_title_or_role_lookup
     .expect_err("protected subagents should not be spawnable from normal callers");
 
     let message = error.to_string();
-    assert!(message.contains("protected sub-agent"), "unexpected error: {message}");
+    assert!(
+        message.contains("protected sub-agent"),
+        "unexpected error: {message}"
+    );
     assert!(message.contains("WELES"), "unexpected error: {message}");
 }
 
@@ -231,7 +234,10 @@ async fn spawn_subagent_rejects_other_protected_subagents_from_normal_lookup() {
     .expect_err("protected subagents should not be spawnable by role lookup either");
 
     let message = error.to_string();
-    assert!(message.contains("protected sub-agent"), "unexpected error: {message}");
+    assert!(
+        message.contains("protected sub-agent"),
+        "unexpected error: {message}"
+    );
     assert!(message.contains("Sentinel"), "unexpected error: {message}");
 }
 

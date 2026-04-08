@@ -714,12 +714,14 @@ impl TuiModel {
                 }
                 modal::ModalKind::ToolsPicker | modal::ModalKind::ViewPicker => {}
                 modal::ModalKind::Status => {
+                    let max_scroll = self.status_modal_max_scroll();
                     render_helpers::render_status_modal(
                         frame,
                         overlay_area,
                         "STATUS",
                         &self.status_modal_body(),
-                        0,
+                        self.status_modal_scroll,
+                        max_scroll > 0,
                         &self.theme,
                     );
                 }
@@ -730,6 +732,7 @@ impl TuiModel {
                         "PROMPT",
                         &self.prompt_modal_body(),
                         self.prompt_modal_scroll,
+                        true,
                         &self.theme,
                     );
                 }
@@ -752,7 +755,7 @@ impl TuiModel {
             modal::ModalKind::ApprovalCenter => render_helpers::centered_rect(86, 82, area),
             modal::ModalKind::ChatActionConfirm => render_helpers::centered_rect(48, 28, area),
             modal::ModalKind::CommandPalette => render_helpers::centered_rect(50, 40, area),
-            modal::ModalKind::Status => render_helpers::centered_rect(72, 70, area),
+            modal::ModalKind::Status => render_helpers::centered_rect(84, 84, area),
             modal::ModalKind::PromptViewer => render_helpers::centered_rect(84, 84, area),
             modal::ModalKind::ThreadPicker => render_helpers::centered_rect(60, 50, area),
             modal::ModalKind::GoalPicker => render_helpers::centered_rect(60, 50, area),

@@ -262,10 +262,19 @@ fn status_diagnostics_warning_mentions_sync_state() {
         operator_profile_sync_state: "dirty".to_string(),
         operator_profile_sync_dirty: true,
         operator_profile_scheduler_fallback: false,
+        diagnostics_json: r#"{"operator_profile_sync_state":"dirty","aline":{"available":true}}"#
+            .to_string(),
     });
     assert!(
         model.status_line.contains("sync state: dirty"),
         "status line should expose dirty sync diagnostics"
+    );
+    assert!(
+        model
+            .status_modal_diagnostics_json
+            .as_deref()
+            .is_some_and(|diagnostics| diagnostics.contains("\"aline\"")),
+        "status diagnostics should retain the raw payload for the status modal"
     );
 }
 
@@ -282,9 +291,18 @@ fn full_status_event_caches_snapshot_for_status_modal() {
             active_goal_run_title: Some("Close release gap".to_string()),
             provider_health_json: r#"{"openai":{"can_execute":true,"trip_count":0}}"#.to_string(),
             gateway_statuses_json: r#"{"slack":{"status":"connected"}}"#.to_string(),
-            recent_actions_json: r#"[]"#.to_string(),
+            recent_actions_json:
+                r#"[{"action_type":"tool_call","summary":"Ran status","timestamp":1712345678}]"#
+                    .to_string(),
         },
     ));
+    model.handle_client_event(ClientEvent::StatusDiagnostics {
+        operator_profile_sync_state: "clean".to_string(),
+        operator_profile_sync_dirty: false,
+        operator_profile_scheduler_fallback: false,
+        diagnostics_json: r#"{"aline":{"available":true,"watcher_state":"running"}}"#
+            .to_string(),
+    });
 
     let snapshot = model
         .status_modal_snapshot
@@ -293,6 +311,9 @@ fn full_status_event_caches_snapshot_for_status_modal() {
     assert_eq!(snapshot.tier, "mission_control");
     assert_eq!(snapshot.activity, "waiting_for_operator");
     assert_eq!(snapshot.active_thread_id.as_deref(), Some("thread-1"));
+    assert_eq!(model.recent_actions.len(), 1);
+    assert_eq!(model.recent_actions[0].summary, "Ran status");
+    assert!(model.status_modal_body().contains("Watcher:"));
 }
 
 #[test]
@@ -319,6 +340,13 @@ fn status_modal_failure_replaces_loading_body_with_error_text() {
 fn status_modal_latest_response_replaces_stale_content() {
     let mut model = make_model();
     model.open_status_modal_loading();
+    model.handle_client_event(ClientEvent::StatusDiagnostics {
+        operator_profile_sync_state: "older".to_string(),
+        operator_profile_sync_dirty: true,
+        operator_profile_scheduler_fallback: false,
+        diagnostics_json: r#"{"aline":{"available":false,"watcher_state":"unknown"}}"#
+            .to_string(),
+    });
     model.handle_client_event(ClientEvent::StatusSnapshot(
         crate::client::AgentStatusSnapshotVm {
             tier: "mission_control".to_string(),
@@ -331,6 +359,13 @@ fn status_modal_latest_response_replaces_stale_content() {
             recent_actions_json: "[]".to_string(),
         },
     ));
+    model.handle_client_event(ClientEvent::StatusDiagnostics {
+        operator_profile_sync_state: "clean".to_string(),
+        operator_profile_sync_dirty: false,
+        operator_profile_scheduler_fallback: false,
+        diagnostics_json: r#"{"aline":{"available":true,"watcher_state":"running"}}"#
+            .to_string(),
+    });
     model.handle_client_event(ClientEvent::StatusSnapshot(
         crate::client::AgentStatusSnapshotVm {
             tier: "mission_control".to_string(),
@@ -345,6 +380,7 @@ fn status_modal_latest_response_replaces_stale_content() {
     ));
 
     assert!(model.status_modal_body().contains("newer"));
+    assert!(model.status_modal_body().contains("running"));
 }
 
 #[test]

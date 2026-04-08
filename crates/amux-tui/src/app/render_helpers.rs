@@ -16,13 +16,17 @@ pub(super) fn render_status_modal(
     title: &str,
     body: &str,
     scroll: usize,
+    show_scroll_hint: bool,
     theme: &ThemeTokens,
 ) {
-    status_modal::render_status_modal(frame, area, title, body, scroll, theme);
+    status_modal::render_status_modal(frame, area, title, body, scroll, show_scroll_hint, theme);
 }
 
-pub(super) fn format_status_modal_text(snapshot: &crate::client::AgentStatusSnapshotVm) -> String {
-    status_modal::format_status_modal_text(snapshot)
+pub(super) fn format_status_modal_text(
+    snapshot: &crate::client::AgentStatusSnapshotVm,
+    diagnostics_json: Option<&str>,
+) -> String {
+    status_modal::format_status_modal_text(snapshot, diagnostics_json)
 }
 
 pub(super) fn format_prompt_modal_text(prompt: &crate::client::AgentPromptInspectionVm) -> String {

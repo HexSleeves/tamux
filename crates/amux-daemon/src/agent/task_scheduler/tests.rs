@@ -111,9 +111,16 @@ fn select_ready_task_indices_allows_four_parallel_child_daemon_tasks() {
 
     let selected = select_ready_task_indices(&tasks, &[], &HashMap::new(), &make_default_config());
 
-    assert_eq!(selected.len(), 4, "up to four child daemon tasks should dispatch in parallel");
+    assert_eq!(
+        selected.len(),
+        4,
+        "up to four child daemon tasks should dispatch in parallel"
+    );
 
-    let lanes = selected.into_iter().map(|(_, lane)| lane).collect::<Vec<_>>();
+    let lanes = selected
+        .into_iter()
+        .map(|(_, lane)| lane)
+        .collect::<Vec<_>>();
     assert_eq!(
         lanes,
         vec![

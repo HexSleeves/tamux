@@ -114,10 +114,14 @@ impl AgentEngine {
     }
 
     pub async fn list_threads(&self) -> Vec<AgentThread> {
-        self.list_threads_filtered(&ThreadListFilter::default()).await
+        self.list_threads_filtered(&ThreadListFilter::default())
+            .await
     }
 
-    pub(crate) async fn list_threads_filtered(&self, filter: &ThreadListFilter) -> Vec<AgentThread> {
+    pub(crate) async fn list_threads_filtered(
+        &self,
+        filter: &ThreadListFilter,
+    ) -> Vec<AgentThread> {
         let threads = self.threads.read().await;
         let mut list: Vec<AgentThread> = threads
             .values()

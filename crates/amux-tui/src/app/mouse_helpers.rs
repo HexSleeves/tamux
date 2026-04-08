@@ -194,6 +194,9 @@ impl TuiModel {
                 modal::ModalKind::ApprovalCenter => {
                     self.step_approval_selection(-1);
                 }
+                modal::ModalKind::Status => {
+                    self.step_status_modal_scroll(-3);
+                }
                 modal::ModalKind::PromptViewer => {
                     self.step_prompt_modal_scroll(-3);
                 }
@@ -220,6 +223,9 @@ impl TuiModel {
                 }
                 modal::ModalKind::ApprovalCenter => {
                     self.step_approval_selection(1);
+                }
+                modal::ModalKind::Status => {
+                    self.step_status_modal_scroll(3);
                 }
                 modal::ModalKind::PromptViewer => {
                     self.step_prompt_modal_scroll(3);

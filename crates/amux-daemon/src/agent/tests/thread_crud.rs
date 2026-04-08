@@ -197,7 +197,10 @@ async fn list_threads_include_internal_reveals_hidden_threads() {
         })
         .await;
 
-    assert_eq!(list_ids(&listed), vec!["visible-main", "weles-hidden", "handoff:hidden"]);
+    assert_eq!(
+        list_ids(&listed),
+        vec!["visible-main", "weles-hidden", "handoff:hidden"]
+    );
 }
 
 #[tokio::test]
@@ -497,12 +500,10 @@ async fn get_thread_filtered_hides_internal_threads_unless_requested() {
         ),
     );
 
-    assert!(
-        engine
-            .get_thread_filtered("weles-hidden", false, None, 0)
-            .await
-            .is_none()
-    );
+    assert!(engine
+        .get_thread_filtered("weles-hidden", false, None, 0)
+        .await
+        .is_none());
 
     let detail = engine
         .get_thread_filtered("weles-hidden", true, None, 0)

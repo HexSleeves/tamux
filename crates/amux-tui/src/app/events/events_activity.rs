@@ -683,7 +683,9 @@ impl TuiModel {
         operator_profile_sync_state: String,
         operator_profile_sync_dirty: bool,
         operator_profile_scheduler_fallback: bool,
+        diagnostics_json: String,
     ) {
+        self.status_modal_diagnostics_json = Some(diagnostics_json);
         if operator_profile_sync_dirty {
             self.status_line = format!(
                 "Operator profile sync state: {} (retry with Ctrl+R)",

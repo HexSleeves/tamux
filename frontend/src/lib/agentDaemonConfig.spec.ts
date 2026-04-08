@@ -182,8 +182,8 @@ const namedUnknownModelConfig = {
 };
 
 assert(
-  getEffectiveContextWindow("github-copilot", namedUnknownModelConfig) === 264_000,
-  "Unknown custom models should default to a 264k context window",
+  getEffectiveContextWindow("github-copilot", namedUnknownModelConfig) === 128_000,
+  "Unknown custom models should fall back to the conservative 128k context window on non-custom providers",
 );
 
 assert(

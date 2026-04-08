@@ -1,13 +1,49 @@
 use super::*;
 
 impl TuiModel {
+    fn replace_recent_actions_from_status_snapshot(&mut self, recent_actions_json: &str) {
+        let Ok(actions) = serde_json::from_str::<Vec<serde_json::Value>>(recent_actions_json) else {
+            return;
+        };
+
+        let mut parsed_actions: Vec<super::RecentActionVm> = actions
+            .into_iter()
+            .filter_map(|action| {
+                let summary = action.get("summary").and_then(|value| value.as_str())?;
+                Some(super::RecentActionVm {
+                    action_type: action
+                        .get("action_type")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("activity")
+                        .to_string(),
+                    summary: summary.to_string(),
+                    timestamp: action
+                        .get("timestamp")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or_default(),
+                })
+            })
+            .collect();
+
+        parsed_actions.sort_by(|left, right| {
+            right
+                .timestamp
+                .cmp(&left.timestamp)
+                .then_with(|| left.summary.cmp(&right.summary))
+        });
+        parsed_actions.truncate(3);
+        self.recent_actions = parsed_actions;
+    }
+
     pub(in crate::app) fn handle_status_snapshot_event(
         &mut self,
         snapshot: crate::client::AgentStatusSnapshotVm,
     ) {
+        self.replace_recent_actions_from_status_snapshot(&snapshot.recent_actions_json);
         self.status_modal_snapshot = Some(snapshot);
         self.status_modal_loading = false;
         self.status_modal_error = None;
+        self.status_modal_scroll = 0;
     }
 
     pub(in crate::app) fn handle_prompt_inspection_event(

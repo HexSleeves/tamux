@@ -86,6 +86,62 @@ jobs:
           retention-days: 5
 
   # ================================================================
+  # Linux arm64 — Rust cross-compile for npm binary distribution
+  # ================================================================
+  build-linux-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install Linux arm64 cross-build dependencies
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross \
+            libssl-dev:arm64 \
+            pkg-config
+
+      - name: Rust build
+        env:
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          PKG_CONFIG_ALLOW_CROSS: '1'
+          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
+        run: cargo build --release --target aarch64-unknown-linux-gnu
+
+      - name: Collect Linux arm64 binaries
+        run: |
+          mkdir -p dist-release/linux-arm64
+          for bin in tamux-daemon tamux tamux-tui tamux-mcp tamux-gateway; do
+            cp target/aarch64-unknown-linux-gnu/release/$bin dist-release/linux-arm64/
+          done
+
+      - name: Package Linux arm64 binaries
+        run: |
+          cd dist-release/linux-arm64
+          ZIP="tamux-linux-aarch64.zip"
+          zip "$ZIP" tamux-daemon tamux tamux-tui tamux-mcp tamux-gateway
+          sha256sum "$ZIP" > "SHA256SUMS-linux-aarch64.txt"
+
+      - name: Upload Linux arm64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: |
+            dist-release/linux-arm64/*.zip
+            dist-release/linux-arm64/SHA256SUMS*.txt
+          retention-days: 5
+
+  # ================================================================
   # Windows x64 — Rust cross-compile + Electron packaging
   # ================================================================
   build-windows-x64:
@@ -301,7 +357,7 @@ jobs:
   # Release — collect all artifacts, create GitHub Release
   # ================================================================
   release:
-    needs: [build-linux-x64, build-windows-x64, build-darwin-x64, build-darwin-arm64]
+    needs: [build-linux-x64, build-linux-arm64, build-windows-x64, build-darwin-x64, build-darwin-arm64]
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write

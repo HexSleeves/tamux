@@ -10,8 +10,25 @@ test("getReleaseAssetInfo maps linux x64 to published zip asset names", function
   const info = install.getReleaseAssetInfo("linux", "x64", "0.2.0");
 
   assert.deepEqual(info, {
-    archiveName: "tamux-0.2.0-linux-x86_64.zip",
+    archiveName: "tamux-linux-x86_64.zip",
     checksumName: "SHA256SUMS-linux-x86_64.txt",
+    bundleChecksumName: "SHA256SUMS.txt",
+    requiredBinaries: [
+      "tamux",
+      "tamux-daemon",
+      "tamux-tui",
+      "tamux-gateway",
+      "tamux-mcp",
+    ],
+  });
+});
+
+test("getReleaseAssetInfo maps linux arm64 to published zip asset names", function () {
+  const info = install.getReleaseAssetInfo("linux", "arm64", "0.2.0");
+
+  assert.deepEqual(info, {
+    archiveName: "tamux-linux-aarch64.zip",
+    checksumName: "SHA256SUMS-linux-aarch64.txt",
     bundleChecksumName: "SHA256SUMS.txt",
     requiredBinaries: [
       "tamux",
@@ -27,7 +44,7 @@ test("getReleaseAssetInfo maps windows x64 to published zip asset names", functi
   const info = install.getReleaseAssetInfo("win32", "x64", "0.2.0");
 
   assert.deepEqual(info, {
-    archiveName: "tamux-0.2.0-windows-x64.zip",
+    archiveName: "tamux-windows-x64.zip",
     checksumName: "SHA256SUMS-windows-x64.txt",
     bundleChecksumName: "SHA256SUMS.txt",
     requiredBinaries: [

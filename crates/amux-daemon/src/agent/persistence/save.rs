@@ -101,28 +101,28 @@ impl AgentEngine {
             .map(|message| {
                 let metadata_json = build_message_metadata_json(message);
                 amux_protocol::AgentDbMessage {
-                id: message.id.clone(),
-                thread_id: thread.id.clone(),
-                created_at: message.timestamp as i64,
-                role: match message.role {
-                    MessageRole::System => "system",
-                    MessageRole::User => "user",
-                    MessageRole::Assistant => "assistant",
-                    MessageRole::Tool => "tool",
-                }
-                .to_string(),
-                content: message.content.clone(),
-                provider: message.provider.clone(),
-                model: message.model.clone(),
-                input_tokens: Some(message.input_tokens as i64),
-                output_tokens: Some(message.output_tokens as i64),
-                total_tokens: Some((message.input_tokens + message.output_tokens) as i64),
-                reasoning: message.reasoning.clone(),
-                tool_calls_json: message
-                    .tool_calls
-                    .as_ref()
-                    .and_then(|calls| serde_json::to_string(calls).ok()),
-                metadata_json,
+                    id: message.id.clone(),
+                    thread_id: thread.id.clone(),
+                    created_at: message.timestamp as i64,
+                    role: match message.role {
+                        MessageRole::System => "system",
+                        MessageRole::User => "user",
+                        MessageRole::Assistant => "assistant",
+                        MessageRole::Tool => "tool",
+                    }
+                    .to_string(),
+                    content: message.content.clone(),
+                    provider: message.provider.clone(),
+                    model: message.model.clone(),
+                    input_tokens: Some(message.input_tokens as i64),
+                    output_tokens: Some(message.output_tokens as i64),
+                    total_tokens: Some((message.input_tokens + message.output_tokens) as i64),
+                    reasoning: message.reasoning.clone(),
+                    tool_calls_json: message
+                        .tool_calls
+                        .as_ref()
+                        .and_then(|calls| serde_json::to_string(calls).ok()),
+                    metadata_json,
                 }
             })
             .collect::<Vec<_>>();

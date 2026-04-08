@@ -306,8 +306,10 @@ pub struct TuiModel {
     // Recent autonomous actions from heartbeat digests (shown in sidebar)
     pub recent_actions: Vec<RecentActionVm>,
     status_modal_snapshot: Option<crate::client::AgentStatusSnapshotVm>,
+    status_modal_diagnostics_json: Option<String>,
     status_modal_loading: bool,
     status_modal_error: Option<String>,
+    status_modal_scroll: usize,
     prompt_modal_snapshot: Option<crate::client::AgentPromptInspectionVm>,
     prompt_modal_loading: bool,
     prompt_modal_error: Option<String>,

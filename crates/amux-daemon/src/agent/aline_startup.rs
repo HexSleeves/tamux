@@ -776,7 +776,7 @@ async fn wait_for_next_confirmation_poll() {
     tokio::time::sleep(TRACKED_POLL_INTERVAL).await;
 }
 
-fn ensure_success_exit(output: &StartupCommandOutput, command_name: &str) -> Result<()> {
+pub(super) fn ensure_success_exit(output: &StartupCommandOutput, command_name: &str) -> Result<()> {
     if output.exit_code == 0 {
         return Ok(());
     }

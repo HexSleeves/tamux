@@ -704,6 +704,9 @@ impl AgentEngine {
         }
 
         let startup_repo_roots = self.collect_aline_startup_repo_roots().await;
+        if startup_repo_roots.len() != 1 {
+            self.ensure_aline_watcher_running_during_hydrate().await;
+        }
         match startup_repo_roots.as_slice() {
             [repo_root] => self.schedule_aline_startup_reconciliation(repo_root.clone()),
             [] => {
@@ -711,9 +714,7 @@ impl AgentEngine {
                     super::aline_startup::AlineStartupShortCircuitReason::NoRepoRoots,
                 );
                 summary.aline_available = self.aline_startup_is_available();
-                #[cfg(test)]
-                self.record_aline_startup_summary_for_tests(summary.clone())
-                    .await;
+                self.record_aline_startup_summary(summary.clone()).await;
                 super::log_aline_startup_summary(std::path::Path::new("<none>"), &summary);
                 tracing::info!(
                     short_circuit_reason = "no_repo_roots",
@@ -726,9 +727,7 @@ impl AgentEngine {
                     super::aline_startup::AlineStartupShortCircuitReason::MultipleRepoRoots,
                 );
                 summary.aline_available = self.aline_startup_is_available();
-                #[cfg(test)]
-                self.record_aline_startup_summary_for_tests(summary.clone())
-                    .await;
+                self.record_aline_startup_summary(summary.clone()).await;
                 super::log_aline_startup_summary(std::path::Path::new("<none>"), &summary);
                 tracing::info!(
                     short_circuit_reason = "multiple_repo_roots",
@@ -744,6 +743,51 @@ impl AgentEngine {
         self.maybe_spawn_gateway().await;
 
         Ok(())
+    }
+
+    async fn ensure_aline_watcher_running_during_hydrate(&self) {
+        if !self.aline_startup_is_available() {
+            return;
+        }
+
+        let runner = self.aline_startup_command_runner();
+        let status_output = match runner
+            .run(super::aline_startup::build_watcher_status_command())
+            .await
+        {
+            Ok(output) => output,
+            Err(error) => {
+                tracing::warn!(%error, "failed to query Aline watcher status during hydrate");
+                return;
+            }
+        };
+        if let Err(error) =
+            super::aline_startup::ensure_success_exit(&status_output, "aline watcher status")
+        {
+            tracing::warn!(%error, "Aline watcher status command failed during hydrate");
+            return;
+        }
+
+        let watcher_status = super::aline_startup::parse_watcher_status(&status_output.stdout);
+        if watcher_status.state != super::aline_startup::WatcherState::Stopped {
+            return;
+        }
+
+        let start_output = match runner
+            .run(super::aline_startup::build_watcher_start_command())
+            .await
+        {
+            Ok(output) => output,
+            Err(error) => {
+                tracing::warn!(%error, "failed to start Aline watcher during hydrate");
+                return;
+            }
+        };
+        if let Err(error) =
+            super::aline_startup::ensure_success_exit(&start_output, "aline watcher start")
+        {
+            tracing::warn!(%error, "Aline watcher start command failed during hydrate");
+        }
     }
 
     async fn collect_aline_startup_repo_roots(&self) -> Vec<String> {
