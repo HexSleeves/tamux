@@ -486,16 +486,53 @@ impl AgentEngine {
         Ok(())
     }
 
-    pub(crate) fn operator_profile_diagnostics_snapshot(&self) -> serde_json::Value {
+    pub(crate) async fn status_diagnostics_snapshot(&self) -> serde_json::Value {
         let sync_state = match super::operator_profile::user_sync::current_user_sync_state() {
             super::operator_profile::user_sync::UserProfileSyncState::Clean => "clean",
             super::operator_profile::user_sync::UserProfileSyncState::Dirty => "dirty",
             super::operator_profile::user_sync::UserProfileSyncState::Reconciling => "reconciling",
         };
+
+        let aline_summary = self.aline_startup_last_summary().await;
+        let aline_available = aline_summary
+            .as_ref()
+            .map(|summary| summary.aline_available)
+            .unwrap_or_else(|| self.aline_startup_is_available());
+        let watcher_state = aline_summary
+            .as_ref()
+            .and_then(|summary| {
+                if summary.watcher_started {
+                    Some("running")
+                } else {
+                    summary.watcher_initial_state.as_ref().map(|state| match state {
+                        crate::agent::WatcherState::Running => "running",
+                        crate::agent::WatcherState::Stopped => "stopped",
+                        crate::agent::WatcherState::Unknown => "unknown",
+                    })
+                }
+            })
+            .unwrap_or("unknown");
+
         serde_json::json!({
             "operator_profile_sync_state": sync_state,
             "operator_profile_sync_dirty": sync_state != "clean",
             "operator_profile_scheduler_fallback": false,
+            "aline": {
+                "available": aline_available,
+                "watcher_state": watcher_state,
+                "watcher_started": aline_summary.as_ref().map(|summary| summary.watcher_started).unwrap_or(false),
+                "discovered_count": aline_summary.as_ref().map(|summary| summary.discovered_count).unwrap_or(0),
+                "selected_count": aline_summary.as_ref().map(|summary| summary.selected_count).unwrap_or(0),
+                "imported_count": aline_summary.as_ref().map(|summary| summary.imported_count).unwrap_or(0),
+                "generated_count": aline_summary.as_ref().map(|summary| summary.generated_count).unwrap_or(0),
+                "skipped_recently_imported_count": aline_summary.as_ref().map(|summary| summary.skipped_recently_imported_count).unwrap_or(0),
+                "budget_exhausted": aline_summary.as_ref().map(|summary| summary.budget_exhausted).unwrap_or(false),
+                "failure_stage": aline_summary.as_ref().and_then(|summary| summary.failure_stage.clone()),
+                "failure_message": aline_summary.as_ref().and_then(|summary| summary.failure_message.clone()),
+                "short_circuit_reason": aline_summary
+                    .as_ref()
+                    .and_then(|summary| summary.short_circuit_reason.map(|reason| reason.as_str())),
+            },
         })
     }
 }

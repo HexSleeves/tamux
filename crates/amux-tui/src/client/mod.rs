@@ -295,6 +295,7 @@ pub enum ClientEvent {
         operator_profile_sync_state: String,
         operator_profile_sync_dirty: bool,
         operator_profile_scheduler_fallback: bool,
+        diagnostics_json: String,
     },
     StatusSnapshot(AgentStatusSnapshotVm),
     PromptInspection(AgentPromptInspectionVm),

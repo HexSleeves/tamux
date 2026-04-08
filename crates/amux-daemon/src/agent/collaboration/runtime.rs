@@ -7,20 +7,21 @@ impl AgentEngine {
         task: &AgentTask,
     ) -> Result<CollaborationSession> {
         let mut collaboration = self.collaboration.write().await;
-        let session = collaboration
-            .entry(task.id.clone())
-            .or_insert_with(|| CollaborationSession {
-                id: format!("collab_{}", uuid::Uuid::new_v4()),
-                parent_task_id: task.id.clone(),
-                thread_id: task.thread_id.clone().or(task.parent_thread_id.clone()),
-                goal_run_id: task.goal_run_id.clone(),
-                mission: task.description.clone(),
-                agents: Vec::new(),
-                contributions: Vec::new(),
-                disagreements: Vec::new(),
-                consensus: None,
-                updated_at: now_millis(),
-            });
+        let session =
+            collaboration
+                .entry(task.id.clone())
+                .or_insert_with(|| CollaborationSession {
+                    id: format!("collab_{}", uuid::Uuid::new_v4()),
+                    parent_task_id: task.id.clone(),
+                    thread_id: task.thread_id.clone().or(task.parent_thread_id.clone()),
+                    goal_run_id: task.goal_run_id.clone(),
+                    mission: task.description.clone(),
+                    agents: Vec::new(),
+                    contributions: Vec::new(),
+                    disagreements: Vec::new(),
+                    consensus: None,
+                    updated_at: now_millis(),
+                });
 
         if !session.agents.iter().any(|agent| agent.task_id == task.id) {
             session.agents.push(CollaborativeAgent {
@@ -70,8 +71,8 @@ impl AgentEngine {
         let persisted = self.history.list_collaboration_sessions().await?;
         let mut sessions = std::collections::BTreeMap::new();
         for row in persisted {
-            let session: CollaborationSession = serde_json::from_str(&row.session_json)
-                .map_err(|error| anyhow::anyhow!(error))?;
+            let session: CollaborationSession =
+                serde_json::from_str(&row.session_json).map_err(|error| anyhow::anyhow!(error))?;
             sessions.insert(session.parent_task_id.clone(), session);
         }
 
@@ -311,8 +312,10 @@ impl AgentEngine {
             }
             return Ok(serde_json::json!([]));
         }
-        Ok(serde_json::to_value(self.merged_persisted_collaboration_sessions().await?)
-            .unwrap_or_else(|_| serde_json::json!([])))
+        Ok(
+            serde_json::to_value(self.merged_persisted_collaboration_sessions().await?)
+                .unwrap_or_else(|_| serde_json::json!([])),
+        )
     }
 
     pub(in crate::agent) async fn record_collaboration_outcome(

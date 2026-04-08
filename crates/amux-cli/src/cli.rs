@@ -116,10 +116,10 @@ pub(crate) enum Commands {
         /// Inspect the WELES prompt.
         #[arg(long, conflicts_with_all = ["agent", "concierge", "rarog"])]
         weles: bool,
-        /// Inspect the Rarog concierge prompt.
+        /// Inspect the concierge agent prompt.
         #[arg(long, conflicts_with_all = ["agent", "weles", "rarog"])]
         concierge: bool,
-        /// Inspect the Rarog concierge prompt.
+        /// Inspect the Rarog agent prompt.
         #[arg(long, conflicts_with_all = ["agent", "weles", "concierge"])]
         rarog: bool,
         /// Emit the raw daemon payload as JSON.
@@ -350,7 +350,7 @@ pub(crate) enum SettingsAction {
 #[cfg(test)]
 mod tests {
     use super::{Cli, Commands, SkillAction};
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     #[test]
     fn skill_discover_subcommand_parses_query() {
@@ -403,5 +403,28 @@ mod tests {
             }
             other => panic!("parsed unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn prompt_help_text_describes_concierge_and_rarog_distinctly() {
+        let command = Cli::command();
+        let prompt = command
+            .find_subcommand("prompt")
+            .expect("prompt subcommand should exist");
+        let concierge_help = prompt
+            .get_arguments()
+            .find(|arg| arg.get_id().as_str() == "concierge")
+            .and_then(|arg| arg.get_help())
+            .map(|help| help.to_string())
+            .expect("concierge help should exist");
+        let rarog_help = prompt
+            .get_arguments()
+            .find(|arg| arg.get_id().as_str() == "rarog")
+            .and_then(|arg| arg.get_help())
+            .map(|help| help.to_string())
+            .expect("rarog help should exist");
+
+        assert_eq!(concierge_help, "Inspect the concierge agent prompt");
+        assert_eq!(rarog_help, "Inspect the Rarog agent prompt");
     }
 }

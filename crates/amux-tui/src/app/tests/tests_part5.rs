@@ -207,6 +207,57 @@
     }
 
     #[test]
+    fn status_modal_mouse_wheel_scrolls_body() {
+        let mut model = build_model();
+        model.status_modal_snapshot = Some(crate::client::AgentStatusSnapshotVm {
+            tier: "mission_control".to_string(),
+            activity: "waiting_for_operator".to_string(),
+            active_thread_id: Some("thread-1".to_string()),
+            active_goal_run_id: None,
+            active_goal_run_title: Some("Close release gap".to_string()),
+            provider_health_json: r#"{"openai":{"can_execute":true,"trip_count":0}}"#.to_string(),
+            gateway_statuses_json: r#"{"slack":{"status":"connected"}}"#.to_string(),
+            recent_actions_json: serde_json::to_string(
+                &(0..40)
+                    .map(|idx| serde_json::json!({
+                        "action_type": format!("tool_{idx}"),
+                        "summary": format!("summary {idx}"),
+                        "timestamp": 1712345678_u64 + idx,
+                    }))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap(),
+        });
+        model.status_modal_diagnostics_json = Some(
+            serde_json::json!({
+                "aline": {
+                    "available": true,
+                    "watcher_state": "running",
+                    "imported_count": 1,
+                    "generated_count": 1,
+                }
+            })
+            .to_string(),
+        );
+        model
+            .modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::Status));
+
+        let (_, overlay_area) = model
+            .current_modal_area()
+            .expect("status modal should expose an overlay area");
+
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: overlay_area.x.saturating_add(2),
+            row: overlay_area.y.saturating_add(2),
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(model.status_modal_scroll, 3);
+    }
+
+    #[test]
     fn reselecting_same_sidebar_file_closes_work_context() {
         let mut model = build_model();
         model.chat.reduce(chat::ChatAction::ThreadCreated {
@@ -640,4 +691,3 @@
         assert!(matches!(model.main_pane_view, MainPaneView::Conversation));
         assert_eq!(model.focus, FocusArea::Chat);
     }
-

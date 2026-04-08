@@ -120,7 +120,8 @@ pub(super) fn build_task_prompt(task: &AgentTask) -> String {
 /// Append available sub-agent registry to a task prompt so the LLM
 /// knows what specialist sub-agents it can delegate work to.
 pub(super) fn append_sub_agent_registry(prompt: &mut String, sub_agents: &[SubAgentDefinition]) {
-    let enabled: Vec<&SubAgentDefinition> = sub_agents.iter().filter(|sa| sa.is_spawnable()).collect();
+    let enabled: Vec<&SubAgentDefinition> =
+        sub_agents.iter().filter(|sa| sa.is_spawnable()).collect();
     if enabled.is_empty() {
         return;
     }
@@ -464,7 +465,10 @@ mod tests {
 
         append_sub_agent_registry(&mut prompt, &[visible, protected]);
 
-        assert!(prompt.contains("Researcher"), "spawnable subagents should remain visible");
+        assert!(
+            prompt.contains("Researcher"),
+            "spawnable subagents should remain visible"
+        );
         assert!(
             !prompt.contains("WELES"),
             "protected subagents should not be advertised as spawnable: {prompt}"

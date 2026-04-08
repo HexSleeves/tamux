@@ -5,7 +5,23 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use crate::client::AgentStatusSnapshotVm;
 use crate::theme::ThemeTokens;
 
-pub(super) fn format_status_modal_text(snapshot: &AgentStatusSnapshotVm) -> String {
+fn footer_hints(show_scroll_hint: bool, theme: &ThemeTokens) -> Line<'static> {
+    let mut hints = vec![
+        Span::styled("Esc", theme.fg_active),
+        Span::styled(" close", theme.fg_dim),
+    ];
+    if show_scroll_hint {
+        hints.push(Span::raw("  "));
+        hints.push(Span::styled("j/k", theme.fg_active));
+        hints.push(Span::styled(" scroll", theme.fg_dim));
+    }
+    Line::from(hints)
+}
+
+pub(super) fn format_status_modal_text(
+    snapshot: &AgentStatusSnapshotVm,
+    diagnostics_json: Option<&str>,
+) -> String {
     let mut rendered = String::from("Agent Status\n============\n");
     rendered.push_str(&format!("Version:  {}\n", env!("CARGO_PKG_VERSION")));
     rendered.push_str(&format!("Tier:     {}\n", snapshot.tier.replace('_', " ")));
@@ -67,7 +83,7 @@ pub(super) fn format_status_modal_text(snapshot: &AgentStatusSnapshotVm) -> Stri
     {
         if !actions.is_empty() {
             rendered.push_str("\nRecent Actions:\n");
-            for action in actions.iter().take(5) {
+            for action in &actions {
                 let action_type = action
                     .get("action_type")
                     .and_then(|value| value.as_str())
@@ -77,6 +93,69 @@ pub(super) fn format_status_modal_text(snapshot: &AgentStatusSnapshotVm) -> Stri
                     .and_then(|value| value.as_str())
                     .unwrap_or("");
                 rendered.push_str(&format!("  [{action_type}] {summary}\n"));
+            }
+        }
+    }
+
+    if let Some(diagnostics_json) = diagnostics_json {
+        if let Ok(diagnostics) = serde_json::from_str::<serde_json::Value>(diagnostics_json) {
+            if let Some(aline) = diagnostics.get("aline").and_then(|value| value.as_object()) {
+                rendered.push_str("\nAline:\n");
+                let available = aline
+                    .get("available")
+                    .and_then(|value| value.as_bool())
+                    .map(|value| if value { "yes" } else { "no" })
+                    .unwrap_or("unknown");
+                let watcher_state = aline
+                    .get("watcher_state")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown");
+                let watcher_started = aline
+                    .get("watcher_started")
+                    .and_then(|value| value.as_bool())
+                    .map(|value| if value { "yes" } else { "no" })
+                    .unwrap_or("no");
+                let discovered_count = aline
+                    .get("discovered_count")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+                let selected_count = aline
+                    .get("selected_count")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+                let imported_count = aline
+                    .get("imported_count")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+                let generated_count = aline
+                    .get("generated_count")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+                let short_circuit_reason = aline
+                    .get("short_circuit_reason")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.replace('_', " "));
+                let failure_stage = aline.get("failure_stage").and_then(|value| value.as_str());
+                let failure_message = aline
+                    .get("failure_message")
+                    .and_then(|value| value.as_str());
+
+                rendered.push_str(&format!("  Available: {available}\n"));
+                rendered.push_str(&format!("  Watcher:   {watcher_state}\n"));
+                rendered.push_str(&format!("  Started:   {watcher_started}\n"));
+                rendered.push_str(&format!(
+                    "  Sessions:  discovered {discovered_count}, selected {selected_count}, imported {imported_count}, generated {generated_count}\n"
+                ));
+                if let Some(reason) = short_circuit_reason {
+                    rendered.push_str(&format!("  Result:    {reason}\n"));
+                }
+                if let Some(stage) = failure_stage {
+                    if let Some(message) = failure_message {
+                        rendered.push_str(&format!("  Failure:   {stage} - {message}\n"));
+                    } else {
+                        rendered.push_str(&format!("  Failure:   {stage}\n"));
+                    }
+                }
             }
         }
     }
@@ -111,6 +190,7 @@ pub(super) fn render_status_modal(
     title: &str,
     body: &str,
     scroll: usize,
+    show_scroll_hint: bool,
     theme: &ThemeTokens,
 ) {
     let block = Block::default()
@@ -135,13 +215,7 @@ pub(super) fn render_status_modal(
         layout[0],
     );
 
-    let hints = Line::from(vec![
-        Span::styled("Esc", theme.fg_active),
-        Span::styled(" close", theme.fg_dim),
-        Span::raw("  "),
-        Span::styled("j/k", theme.fg_active),
-        Span::styled(" scroll", theme.fg_dim),
-    ]);
+    let hints = footer_hints(show_scroll_hint, theme);
     frame.render_widget(Paragraph::new(hints), layout[1]);
 }
 
@@ -151,20 +225,42 @@ mod tests {
 
     #[test]
     fn status_modal_formatter_includes_version_and_sections() {
-        let rendered = format_status_modal_text(&AgentStatusSnapshotVm {
-            tier: "mission_control".to_string(),
-            activity: "waiting_for_operator".to_string(),
-            active_thread_id: Some("thread-1".to_string()),
-            active_goal_run_id: None,
-            active_goal_run_title: Some("Close release gap".to_string()),
-            provider_health_json: r#"{"openai":{"can_execute":true,"trip_count":0}}"#.to_string(),
-            gateway_statuses_json: r#"{"slack":{"status":"connected"}}"#.to_string(),
-            recent_actions_json: r#"[{"action_type":"tool_call","summary":"Ran status"}]"#
-                .to_string(),
-        });
+        let rendered = format_status_modal_text(
+            &AgentStatusSnapshotVm {
+                tier: "mission_control".to_string(),
+                activity: "waiting_for_operator".to_string(),
+                active_thread_id: Some("thread-1".to_string()),
+                active_goal_run_id: None,
+                active_goal_run_title: Some("Close release gap".to_string()),
+                provider_health_json: r#"{"openai":{"can_execute":true,"trip_count":0}}"#
+                    .to_string(),
+                gateway_statuses_json: r#"{"slack":{"status":"connected"}}"#.to_string(),
+                recent_actions_json: r#"[{"action_type":"tool_call","summary":"Ran status"}]"#
+                    .to_string(),
+            },
+            Some(r#"{"aline":{"available":true,"watcher_state":"running"}}"#),
+        );
 
         assert!(rendered.contains("Version:"));
         assert!(rendered.contains("Providers:"));
         assert!(rendered.contains("Recent Actions:"));
+        assert!(rendered.contains("Aline:"));
+        assert!(rendered.contains("Watcher:"));
+        assert!(rendered.contains("running"));
+    }
+
+    #[test]
+    fn footer_hints_hide_scroll_copy_when_scrolling_is_disabled() {
+        let theme = ThemeTokens::default();
+        let hints = footer_hints(false, &theme).to_string();
+        assert!(!hints.contains("scroll"));
+    }
+
+    #[test]
+    fn footer_hints_show_scroll_copy_when_scrolling_is_enabled() {
+        let theme = ThemeTokens::default();
+        let hints = footer_hints(true, &theme).to_string();
+        assert!(hints.contains("j/k"));
+        assert!(hints.contains("scroll"));
     }
 }

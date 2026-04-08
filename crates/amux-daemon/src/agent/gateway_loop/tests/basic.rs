@@ -331,6 +331,73 @@ fn gateway_auto_send_keeps_latest_assistant_message_pending_after_earlier_send_t
 }
 
 #[test]
+fn gateway_auto_send_treats_tool_call_only_assistant_messages_as_latest_activity() {
+    let messages = vec![
+        AgentMessage::user("Can you post a quick update?", 1),
+        AgentMessage {
+            id: "assistant-1".to_string(),
+            role: MessageRole::Assistant,
+            content: "On it.".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_arguments: None,
+            tool_status: None,
+            weles_review: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider: None,
+            model: None,
+            api_transport: None,
+            response_id: None,
+            upstream_message: None,
+            provider_final_result: None,
+            reasoning: None,
+            message_kind: AgentMessageKind::Normal,
+            compaction_strategy: None,
+            compaction_payload: None,
+            timestamp: 2,
+        },
+        AgentMessage {
+            id: "assistant-2".to_string(),
+            role: MessageRole::Assistant,
+            content: String::new(),
+            tool_calls: Some(vec![ToolCall::with_default_weles_review(
+                "call-1".to_string(),
+                ToolFunction {
+                    name: "send_discord_message".to_string(),
+                    arguments: "{\"channel_id\":\"chan-1\",\"message\":\"Still checking\"}"
+                        .to_string(),
+                },
+            )]),
+            tool_call_id: None,
+            tool_name: None,
+            tool_arguments: None,
+            tool_status: None,
+            weles_review: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider: None,
+            model: None,
+            api_transport: None,
+            response_id: None,
+            upstream_message: None,
+            provider_final_result: None,
+            reasoning: None,
+            message_kind: AgentMessageKind::Normal,
+            compaction_strategy: None,
+            compaction_payload: None,
+            timestamp: 3,
+        },
+    ];
+
+    assert!(
+        gateway_turn_used_send_tool(&messages),
+        "assistant tool-call chunks without visible content should still suppress auto-send"
+    );
+}
+
+#[test]
 fn daemon_gateway_loop_no_longer_polls_slack_discord_or_telegram() {
     let production_source = gateway_loop_production_source();
     for forbidden in [

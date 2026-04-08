@@ -107,9 +107,17 @@ pub fn get_git_status(path: &str) -> GitInfo {
 
 pub fn find_git_root(path: &str) -> Option<String> {
     let resolved = fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
+    let workdir = if resolved.is_file() {
+        resolved
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or(resolved)
+    } else {
+        resolved
+    };
     let output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
-        .current_dir(&resolved)
+        .current_dir(&workdir)
         .output()
         .ok()?;
     if !output.status.success() {

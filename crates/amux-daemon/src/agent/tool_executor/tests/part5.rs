@@ -187,6 +187,37 @@
     }
 
     #[test]
+    fn apply_patch_tool_uses_top_level_object_schema() {
+        let config = AgentConfig::default();
+        let temp_dir = std::env::temp_dir();
+        let tools = get_available_tools(&config, &temp_dir, false);
+        let apply_patch = tools
+            .iter()
+            .find(|tool| tool.function.name == "apply_patch")
+            .expect("apply_patch tool should be available");
+
+        assert_eq!(
+            apply_patch.function.parameters.get("type"),
+            Some(&serde_json::json!("object"))
+        );
+        assert!(
+            apply_patch.function.parameters.get("anyOf").is_none(),
+            "apply_patch schema must not use top-level anyOf"
+        );
+
+        let properties = apply_patch
+            .function
+            .parameters
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("apply_patch schema should expose top-level properties");
+
+        assert!(properties.get("input").is_some(), "schema should include harness patch input");
+        assert!(properties.get("path").is_some(), "schema should include legacy patch path");
+        assert!(properties.get("edits").is_some(), "schema should include legacy edits");
+    }
+
+    #[test]
     fn scrub_sensitive_redacts_common_api_key_lines() {
         let input = "openai api_key=sk-live-secret\nAuthorization: Bearer abc123secret";
         let scrubbed = crate::scrub::scrub_sensitive(input);

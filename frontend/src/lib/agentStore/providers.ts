@@ -141,6 +141,7 @@ const EMPTY_MODELS: ModelDefinition[] = [];
 const CHAT_ONLY_TRANSPORTS: ApiTransportMode[] = ["chat_completions"];
 const RESPONSES_AND_CHAT_TRANSPORTS: ApiTransportMode[] = ["responses", "chat_completions"];
 const NATIVE_AND_CHAT_TRANSPORTS: ApiTransportMode[] = ["native_assistant", "chat_completions"];
+export const DEFAULT_PROVIDER_CONTEXT_WINDOW = 128_000;
 export const DEFAULT_CUSTOM_MODEL_CONTEXT_WINDOW = 264_000;
 
 function normalizeModelLookupValue(value: string | undefined): string {
@@ -373,7 +374,9 @@ export function getEffectiveContextWindow(
     return Math.max(1000, Math.trunc(config.context_window_tokens));
   }
 
-  return DEFAULT_CUSTOM_MODEL_CONTEXT_WINDOW;
+  return providerId === "custom"
+    ? DEFAULT_CUSTOM_MODEL_CONTEXT_WINDOW
+    : DEFAULT_PROVIDER_CONTEXT_WINDOW;
 }
 
 export function providerSupportsResponseContinuity(providerId: AgentProviderId): boolean {

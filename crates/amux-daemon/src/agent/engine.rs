@@ -168,8 +168,7 @@ pub struct AgentEngine {
     pub(super) aline_startup_test_availability: std::sync::OnceLock<bool>,
     #[cfg(test)]
     pub(super) aline_startup_test_repo_roots: Mutex<Vec<PathBuf>>,
-    #[cfg(test)]
-    pub(super) aline_startup_test_last_summary:
+    pub(super) aline_startup_last_summary:
         Mutex<Option<super::aline_startup::AlineStartupSummary>>,
     /// Per-provider circuit breakers for LLM call path gating.
     pub circuit_breakers: Arc<CircuitBreakerRegistry>,
@@ -339,8 +338,7 @@ impl AgentEngine {
             aline_startup_test_availability: std::sync::OnceLock::new(),
             #[cfg(test)]
             aline_startup_test_repo_roots: Mutex::new(Vec::new()),
-            #[cfg(test)]
-            aline_startup_test_last_summary: Mutex::new(None),
+            aline_startup_last_summary: Mutex::new(None),
             circuit_breakers,
             config_notify: tokio::sync::Notify::new(),
             config_runtime_projection: Mutex::new(initial_config_runtime_projection),
@@ -518,9 +516,7 @@ impl AgentEngine {
 
         if !self.aline_startup_is_available() {
             let summary = super::aline_startup::AlineStartupSummary::unavailable();
-            #[cfg(test)]
-            self.record_aline_startup_summary_for_tests(summary.clone())
-                .await;
+            self.record_aline_startup_summary(summary.clone()).await;
             log_aline_startup_summary(&repo_root, &summary);
             return Ok(summary);
         }
@@ -557,9 +553,7 @@ impl AgentEngine {
             }
         }
 
-        #[cfg(test)]
-        self.record_aline_startup_summary_for_tests(summary.clone())
-            .await;
+        self.record_aline_startup_summary(summary.clone()).await;
         log_aline_startup_summary(&repo_root, &summary);
         Ok(summary)
     }
@@ -573,7 +567,9 @@ impl AgentEngine {
         aline_available()
     }
 
-    fn aline_startup_command_runner(&self) -> Arc<dyn super::aline_startup::StartupCommandRunner> {
+    pub(super) fn aline_startup_command_runner(
+        &self,
+    ) -> Arc<dyn super::aline_startup::StartupCommandRunner> {
         #[cfg(test)]
         if let Some(runner) = self.aline_startup_test_runner.get() {
             return Arc::clone(runner);
@@ -586,6 +582,31 @@ impl AgentEngine {
         if let Some(tx) = self.aline_startup_test_completion.get() {
             let _ = tx.send(true);
         }
+    }
+
+    pub(super) async fn maybe_run_aline_startup_reconciliation_for_repo(
+        &self,
+        repo_root: &str,
+    ) {
+        if !self.aline_startup_is_available() {
+            return;
+        }
+
+        if self
+            .aline_startup_reconcile_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
+        if let Err(error) = self
+            .run_aline_startup_reconciliation(PathBuf::from(repo_root))
+            .await
+        {
+            tracing::warn!(repo_root = %repo_root, %error, "Aline startup reconciliation failed");
+        }
+        self.notify_aline_startup_reconciliation_finished_for_tests();
     }
 
     #[cfg(test)]
@@ -623,19 +644,32 @@ impl AgentEngine {
         self.aline_startup_test_repo_roots.lock().await.clone()
     }
 
-    #[cfg(test)]
-    pub(crate) async fn aline_startup_last_summary_for_tests(
+    pub(super) async fn aline_startup_last_summary(
         &self,
     ) -> Option<super::aline_startup::AlineStartupSummary> {
-        self.aline_startup_test_last_summary.lock().await.clone()
+        self.aline_startup_last_summary.lock().await.clone()
     }
 
-    #[cfg(test)]
-    pub(crate) async fn record_aline_startup_summary_for_tests(
+    pub(super) async fn record_aline_startup_summary(
         &self,
         summary: super::aline_startup::AlineStartupSummary,
     ) {
-        *self.aline_startup_test_last_summary.lock().await = Some(summary);
+        *self.aline_startup_last_summary.lock().await = Some(summary);
+    }
+
+    #[cfg(test)]
+    pub(super) async fn aline_startup_last_summary_for_tests(
+        &self,
+    ) -> Option<super::aline_startup::AlineStartupSummary> {
+        self.aline_startup_last_summary().await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn record_aline_startup_summary_for_tests(
+        &self,
+        summary: super::aline_startup::AlineStartupSummary,
+    ) {
+        self.record_aline_startup_summary(summary).await;
     }
 }
 

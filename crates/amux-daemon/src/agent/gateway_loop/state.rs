@@ -287,10 +287,15 @@ fn assistant_message_has_gateway_send_tool_call(message: &AgentMessage) -> bool 
 
 pub(super) fn gateway_turn_used_send_tool(messages: &[AgentMessage]) -> bool {
     let turn = latest_gateway_turn_slice(messages);
-    let Some(latest_assistant_index) = turn
-        .iter()
-        .rposition(|message| message.role == MessageRole::Assistant && !message.content.is_empty())
-    else {
+    let Some(latest_assistant_index) = turn.iter().rposition(|message| {
+        message.role == MessageRole::Assistant
+            && (!message.content.is_empty()
+                || message
+                    .tool_calls
+                    .as_ref()
+                    .map(|tool_calls| !tool_calls.is_empty())
+                    .unwrap_or(false))
+    }) else {
         return turn.iter().any(is_gateway_send_tool_message);
     };
 

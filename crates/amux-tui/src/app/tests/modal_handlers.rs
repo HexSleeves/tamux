@@ -218,6 +218,51 @@ fn prompt_viewer_down_scrolls_prompt_body() {
 }
 
 #[test]
+fn status_viewer_down_scrolls_status_body() {
+    let (mut model, _daemon_rx) = make_model();
+    model.status_modal_snapshot = Some(crate::client::AgentStatusSnapshotVm {
+        tier: "mission_control".to_string(),
+        activity: "waiting_for_operator".to_string(),
+        active_thread_id: Some("thread-1".to_string()),
+        active_goal_run_id: None,
+        active_goal_run_title: Some("Close release gap".to_string()),
+        provider_health_json: r#"{"openai":{"can_execute":true,"trip_count":0}}"#.to_string(),
+        gateway_statuses_json: r#"{"slack":{"status":"connected"}}"#.to_string(),
+        recent_actions_json: serde_json::to_string(
+            &(0..40)
+                .map(|idx| serde_json::json!({
+                    "action_type": format!("tool_{idx}"),
+                    "summary": format!("summary {idx}"),
+                    "timestamp": 1712345678_u64 + idx,
+                }))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap(),
+    });
+    model.status_modal_diagnostics_json = Some(
+        serde_json::json!({
+            "aline": {
+                "available": true,
+                "watcher_state": "running",
+                "imported_count": 1,
+                "generated_count": 1,
+            }
+        })
+        .to_string(),
+    );
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::Status));
+    model.width = 120;
+    model.height = 40;
+
+    let quit = model.handle_key_modal(KeyCode::Down, KeyModifiers::NONE, modal::ModalKind::Status);
+
+    assert!(!quit);
+    assert_eq!(model.status_modal_scroll, 1);
+}
+
+#[test]
 fn command_palette_prompt_query_with_args_requests_target_agent() {
     let (mut model, mut daemon_rx) = make_model();
     model.connected = true;

@@ -159,7 +159,7 @@ async fn make_test_engine(
         aline_startup_test_runner: std::sync::OnceLock::new(),
         aline_startup_test_availability: std::sync::OnceLock::new(),
         aline_startup_test_repo_roots: Mutex::new(Vec::new()),
-        aline_startup_test_last_summary: Mutex::new(None),
+        aline_startup_last_summary: Mutex::new(None),
         circuit_breakers,
         config_notify: tokio::sync::Notify::new(),
         config_runtime_projection: Mutex::new(ConfigRuntimeProjection::default()),

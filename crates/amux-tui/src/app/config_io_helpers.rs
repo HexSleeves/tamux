@@ -194,39 +194,39 @@ impl TuiModel {
             Self::provider_field_str(&ui_value, "api_transport", "api_transport")
                 .unwrap_or(providers::default_transport_for(provider_id)),
         );
+        let model = Self::provider_field_str(&ui_value, "model", "model").unwrap_or("");
+        let custom_model_name =
+            Self::provider_field_str(&ui_value, "custom_model_name", "custom_model_name")
+                .unwrap_or("");
+        let resolved_context_window = providers::resolve_context_window_for_provider_auth(
+            provider_id,
+            &auth_source,
+            model,
+            custom_model_name,
+        );
         serde_json::json!({
             "base_url": Self::provider_field_str(&ui_value, "base_url", "base_url").unwrap_or(""),
-            "model": Self::provider_field_str(&ui_value, "model", "model").unwrap_or(""),
-            "custom_model_name": Self::provider_field_str(&ui_value, "custom_model_name", "custom_model_name").unwrap_or(""),
+            "model": model,
+            "custom_model_name": custom_model_name,
             "api_key": Self::provider_field_str(&ui_value, "api_key", "api_key").unwrap_or(""),
             "assistant_id": Self::provider_field_str(&ui_value, "assistant_id", "assistant_id").unwrap_or(""),
             "auth_source": auth_source,
             "api_transport": api_transport,
             "reasoning_effort": &self.config.reasoning_effort,
-            "context_window_tokens": if providers::resolve_context_window_for_provider_auth(
-                provider_id,
-                &auth_source,
-                Self::provider_field_str(&ui_value, "model", "model").unwrap_or(""),
-                Self::provider_field_str(&ui_value, "custom_model_name", "custom_model_name").unwrap_or(""),
-            ).is_some() {
-                providers::resolve_context_window_for_provider_auth(
-                    provider_id,
-                    &auth_source,
-                    Self::provider_field_str(&ui_value, "model", "model").unwrap_or(""),
-                    Self::provider_field_str(&ui_value, "custom_model_name", "custom_model_name").unwrap_or(""),
-                ).unwrap_or(128_000) as u64
+            "context_window_tokens": if let Some(context_window) = resolved_context_window {
+                context_window as u64
             } else if providers::model_uses_context_window_override(
                 provider_id,
                 &auth_source,
-                Self::provider_field_str(&ui_value, "model", "model").unwrap_or(""),
-                Self::provider_field_str(&ui_value, "custom_model_name", "custom_model_name").unwrap_or(""),
+                model,
+                custom_model_name,
             ) {
                 Self::provider_field_u64(&ui_value, "context_window_tokens", "context_window_tokens")
                     .unwrap_or(providers::default_custom_model_context_window() as u64)
             } else {
                 providers::known_context_window_for(
                     provider_id,
-                    Self::provider_field_str(&ui_value, "model", "model").unwrap_or(""),
+                    model,
                 )
                 .unwrap_or(128_000) as u64
             },

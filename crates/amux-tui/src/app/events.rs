@@ -513,11 +513,13 @@ impl TuiModel {
                 operator_profile_sync_state,
                 operator_profile_sync_dirty,
                 operator_profile_scheduler_fallback,
+                diagnostics_json,
             } => {
                 self.handle_status_diagnostics_event(
                     operator_profile_sync_state,
                     operator_profile_sync_dirty,
                     operator_profile_scheduler_fallback,
+                    diagnostics_json,
                 );
             }
             ClientEvent::StatusSnapshot(snapshot) => {

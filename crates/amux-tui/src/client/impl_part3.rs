@@ -112,6 +112,7 @@ impl DaemonClient {
                                 .get("operator_profile_scheduler_fallback")
                                 .and_then(Value::as_bool)
                                 .unwrap_or(false),
+                            diagnostics_json,
                         })
                         .await;
                 }

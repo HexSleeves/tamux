@@ -1,6 +1,6 @@
 {
   "name": "tamux",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "The Agent That Lives - daemon-first AI agent runtime",
   "license": "MIT",
   "homepage": "https://tamux.app",
@@ -25,6 +25,7 @@
   "files": [
     "install.js",
     "bin/",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ]
 }

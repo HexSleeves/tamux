@@ -343,10 +343,15 @@ done
 
 if [[ ${#bundle_artifacts[@]} -gt 0 ]]; then
     notes_file="$OUT_DIR/RELEASE_NOTES.md"
-    artifact_os_name="$OS"
-    if [[ "$PLATFORM_DIR" == "macos" ]]; then
-        artifact_os_name="$OS_SLUG"
-    fi
+    case "$PLATFORM_DIR" in
+        linux) artifact_os_name="linux" ;;
+        macos) artifact_os_name="darwin" ;;
+        windows) artifact_os_name="windows" ;;
+        *)
+            warn_msg "Unknown platform '$PLATFORM_DIR' for artifact naming; falling back to normalized OS slug"
+            artifact_os_name="$(printf '%s' "${OS_SLUG:-$OS}" | tr '[:upper:]' '[:lower:]')"
+            ;;
+    esac
     checksums_file="$OUT_DIR/SHA256SUMS-${artifact_os_name}-${ARCH}.txt"
     bundle_file="$OUT_DIR/tamux-${artifact_os_name}-${ARCH}.zip"
 

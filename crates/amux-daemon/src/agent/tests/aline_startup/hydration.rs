@@ -22,7 +22,7 @@ async fn hydrate_skips_aline_reconciliation_when_cli_is_unavailable() {
 #[tokio::test]
 async fn hydrate_skips_aline_reconciliation_when_no_repo_root_is_resolved() {
     let harness =
-        make_aline_startup_harness_with_runner(true, vec![session_list_output(SAMPLE_JSON)]).await;
+        make_aline_startup_harness_with_runner(true, vec![watcher_status_output("Running")]).await;
 
     harness
         .engine
@@ -34,7 +34,10 @@ async fn hydrate_skips_aline_reconciliation_when_no_repo_root_is_resolved() {
     assert!(!harness
         .engine
         .aline_startup_reconciliation_started_for_tests());
-    assert!(harness.recorded_commands().is_empty());
+    assert_eq!(
+        harness.recorded_commands(),
+        vec![vec!["watcher".to_string(), "status".to_string()]]
+    );
     let summary = harness
         .engine
         .aline_startup_last_summary_for_tests()
@@ -48,9 +51,48 @@ async fn hydrate_skips_aline_reconciliation_when_no_repo_root_is_resolved() {
 }
 
 #[tokio::test]
+async fn hydrate_starts_watcher_even_when_no_repo_root_is_resolved() {
+    let harness = make_aline_startup_harness_with_runner(
+        true,
+        vec![
+            watcher_status_output("Stopped"),
+            command_output("Watcher started\n"),
+        ],
+    )
+    .await;
+
+    harness
+        .engine
+        .hydrate()
+        .await
+        .expect("hydrate should succeed without repo roots");
+    tokio::task::yield_now().await;
+
+    assert!(!harness
+        .engine
+        .aline_startup_reconciliation_started_for_tests());
+    assert_eq!(
+        harness.recorded_commands(),
+        vec![
+            vec!["watcher".to_string(), "status".to_string()],
+            vec!["watcher".to_string(), "start".to_string()],
+        ]
+    );
+    let summary = harness
+        .engine
+        .aline_startup_last_summary_for_tests()
+        .await
+        .expect("summary should be captured for no-repo skip");
+    assert_eq!(
+        summary.short_circuit_reason,
+        Some(AlineStartupShortCircuitReason::NoRepoRoots)
+    );
+}
+
+#[tokio::test]
 async fn hydrate_skips_aline_reconciliation_when_multiple_repo_roots_are_resolved() {
     let harness =
-        make_aline_startup_harness_with_runner(true, vec![session_list_output(SAMPLE_JSON)]).await;
+        make_aline_startup_harness_with_runner(true, vec![watcher_status_output("Running")]).await;
     let repo_root_a = harness.create_git_repo("multi-root-a");
     let repo_root_b = harness.create_git_repo("multi-root-b");
     harness
@@ -70,7 +112,10 @@ async fn hydrate_skips_aline_reconciliation_when_multiple_repo_roots_are_resolve
     assert!(!harness
         .engine
         .aline_startup_reconciliation_started_for_tests());
-    assert!(harness.recorded_commands().is_empty());
+    assert_eq!(
+        harness.recorded_commands(),
+        vec![vec!["watcher".to_string(), "status".to_string()]]
+    );
     let summary = harness
         .engine
         .aline_startup_last_summary_for_tests()
@@ -80,6 +125,120 @@ async fn hydrate_skips_aline_reconciliation_when_multiple_repo_roots_are_resolve
     assert_eq!(
         summary.short_circuit_reason,
         Some(AlineStartupShortCircuitReason::MultipleRepoRoots)
+    );
+}
+
+#[tokio::test]
+async fn hydrate_starts_watcher_even_when_multiple_repo_roots_are_resolved() {
+    let harness = make_aline_startup_harness_with_runner(
+        true,
+        vec![
+            watcher_status_output("Stopped"),
+            command_output("Watcher started\n"),
+        ],
+    )
+    .await;
+    let repo_root_a = harness.create_git_repo("multi-root-start-a");
+    let repo_root_b = harness.create_git_repo("multi-root-start-b");
+    harness
+        .persist_repo_roots_with_updated_at(&[
+            (repo_root_a.as_str(), 10),
+            (repo_root_b.as_str(), 10),
+        ])
+        .await;
+
+    harness
+        .engine
+        .hydrate()
+        .await
+        .expect("hydrate should still start the watcher for multi-root state");
+    tokio::task::yield_now().await;
+
+    assert_eq!(
+        harness.recorded_commands(),
+        vec![
+            vec!["watcher".to_string(), "status".to_string()],
+            vec!["watcher".to_string(), "start".to_string()],
+        ]
+    );
+    let summary = harness
+        .engine
+        .aline_startup_last_summary_for_tests()
+        .await
+        .expect("summary should be captured for multi-repo skip");
+    assert_eq!(
+        summary.short_circuit_reason,
+        Some(AlineStartupShortCircuitReason::MultipleRepoRoots)
+    );
+}
+
+#[tokio::test]
+async fn repo_context_refresh_starts_aline_reconciliation_after_no_repo_boot() {
+    let mut harness = make_aline_startup_harness_with_runner(
+        true,
+        vec![
+            watcher_status_output("Running"),
+            session_list_output(SAMPLE_JSON),
+        ],
+    )
+    .await;
+
+    harness
+        .engine
+        .hydrate()
+        .await
+        .expect("hydrate should succeed without repo roots");
+    tokio::task::yield_now().await;
+
+    assert!(!harness
+        .engine
+        .aline_startup_reconciliation_started_for_tests());
+
+    let repo_root = harness.create_git_repo("late-repo-context");
+    let tracked_file = std::path::Path::new(&repo_root).join("README.md");
+    std::fs::write(&tracked_file, "late repo context\n").expect("write tracked file");
+
+    harness
+        .engine
+        .record_file_work_context(
+            "thread-late-repo-context",
+            None,
+            "write_file",
+            tracked_file.to_str().expect("utf-8 path"),
+        )
+        .await;
+    assert_eq!(
+        harness
+            .engine
+            .resolve_thread_repo_root("thread-late-repo-context")
+            .await
+            .map(|item| item.0),
+        Some(repo_root.clone())
+    );
+    assert!(harness
+        .engine
+        .aline_startup_reconciliation_started_for_tests());
+    harness.wait_for_reconciliation().await;
+
+    assert!(harness
+        .engine
+        .aline_startup_reconciliation_started_for_tests());
+    assert_eq!(
+        harness.recorded_commands(),
+        vec![
+            vec!["watcher".to_string(), "status".to_string()],
+            vec!["watcher".to_string(), "status".to_string()],
+            vec![
+                "watcher".to_string(),
+                "session".to_string(),
+                "list".to_string(),
+                "--json".to_string(),
+                "--page".to_string(),
+                "1".to_string(),
+                "--per-page".to_string(),
+                "30".to_string(),
+            ],
+        ]
     );
 }
 
