@@ -259,7 +259,7 @@ async fn get_thread_tool_returns_truncated_thread_detail() {
         .get("properties")
         .and_then(|value| value.as_object())
         .expect("get_thread schema should expose properties");
-    for field in ["thread_id", "message_limit", "include_internal"] {
+    for field in ["thread_id", "limit", "offset", "include_internal"] {
         assert!(
             properties.contains_key(field),
             "get_thread schema should include {field}"
@@ -274,12 +274,15 @@ async fn get_thread_tool_returns_truncated_thread_detail() {
             "Thread detail",
             false,
             200,
-            240,
+            270,
             vec![
                 crate::agent::types::AgentMessage::user("one", 200),
                 crate::agent::types::AgentMessage::user("two", 210),
                 crate::agent::types::AgentMessage::user("three", 220),
                 crate::agent::types::AgentMessage::user("four", 230),
+                crate::agent::types::AgentMessage::user("five", 240),
+                crate::agent::types::AgentMessage::user("six", 250),
+                crate::agent::types::AgentMessage::user("seven", 260),
             ],
         ),
     );
@@ -288,11 +291,7 @@ async fn get_thread_tool_returns_truncated_thread_detail() {
         "tool-get-thread".to_string(),
         ToolFunction {
             name: "get_thread".to_string(),
-            arguments: serde_json::json!({
-                "thread_id": "thread-detail",
-                "message_limit": 2
-            })
-            .to_string(),
+            arguments: serde_json::json!({ "thread_id": "thread-detail" }).to_string(),
         },
     );
 
@@ -337,7 +336,7 @@ async fn get_thread_tool_returns_truncated_thread_detail() {
         .and_then(|value| value.get("messages"))
         .and_then(|value| value.as_array())
         .expect("thread detail should include messages");
-    assert_eq!(messages.len(), 2);
+    assert_eq!(messages.len(), 5);
     let contents = messages
         .iter()
         .map(|message| {
@@ -347,7 +346,93 @@ async fn get_thread_tool_returns_truncated_thread_detail() {
                 .expect("message content should be present")
         })
         .collect::<Vec<_>>();
-    assert_eq!(contents, vec!["three", "four"]);
+    assert_eq!(contents, vec!["three", "four", "five", "six", "seven"]);
+}
+
+#[tokio::test]
+async fn get_thread_tool_applies_offset_from_most_recent_messages() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    engine.threads.write().await.insert(
+        "thread-detail-offset".to_string(),
+        make_thread(
+            "thread-detail-offset",
+            Some(crate::agent::agent_identity::MAIN_AGENT_NAME),
+            "Thread detail offset",
+            false,
+            200,
+            260,
+            vec![
+                crate::agent::types::AgentMessage::user("one", 200),
+                crate::agent::types::AgentMessage::user("two", 210),
+                crate::agent::types::AgentMessage::user("three", 220),
+                crate::agent::types::AgentMessage::user("four", 230),
+                crate::agent::types::AgentMessage::user("five", 240),
+                crate::agent::types::AgentMessage::user("six", 250),
+            ],
+        ),
+    );
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-get-thread-offset".to_string(),
+        ToolFunction {
+            name: "get_thread".to_string(),
+            arguments: serde_json::json!({
+                "thread_id": "thread-detail-offset",
+                "limit": 2,
+                "offset": 1
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        "thread-get-thread-offset",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(
+        !result.is_error,
+        "get_thread offset page should succeed with valid arguments: {}",
+        result.content
+    );
+    assert!(result.pending_approval.is_none());
+
+    let payload: serde_json::Value =
+        serde_json::from_str(&result.content).expect("get_thread should return JSON");
+    assert_eq!(
+        payload
+            .get("messages_truncated")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    let messages = payload
+        .get("thread")
+        .and_then(|value| value.get("messages"))
+        .and_then(|value| value.as_array())
+        .expect("thread detail should include messages");
+    let contents = messages
+        .iter()
+        .map(|message| {
+            message
+                .get("content")
+                .and_then(|value| value.as_str())
+                .expect("message content should be present")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(contents, vec!["four", "five"]);
 }
 
 #[tokio::test]

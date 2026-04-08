@@ -457,7 +457,7 @@ async fn get_thread_filtered_truncates_to_last_n_messages() {
     );
 
     let detail = engine
-        .get_thread_filtered("thread-a", false, Some(2))
+        .get_thread_filtered("thread-a", false, Some(2), 0)
         .await
         .expect("visible thread should load");
 
@@ -471,7 +471,7 @@ async fn get_thread_filtered_truncates_to_last_n_messages() {
     assert!(detail.messages_truncated);
 
     let untruncated = engine
-        .get_thread_filtered("thread-a", false, Some(99))
+        .get_thread_filtered("thread-a", false, Some(99), 0)
         .await
         .expect("oversized limit should still return thread");
     assert_eq!(untruncated.thread.messages.len(), 4);
@@ -499,13 +499,13 @@ async fn get_thread_filtered_hides_internal_threads_unless_requested() {
 
     assert!(
         engine
-            .get_thread_filtered("weles-hidden", false, None)
+            .get_thread_filtered("weles-hidden", false, None, 0)
             .await
             .is_none()
     );
 
     let detail = engine
-        .get_thread_filtered("weles-hidden", true, None)
+        .get_thread_filtered("weles-hidden", true, None, 0)
         .await
         .expect("include_internal should reveal hidden thread");
     assert_eq!(detail.thread.id, "weles-hidden");

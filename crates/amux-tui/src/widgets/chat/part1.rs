@@ -133,6 +133,15 @@ struct SelectionSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChatScrollbarLayout {
+    pub(crate) content: Rect,
+    pub(crate) scrollbar: Rect,
+    pub(crate) thumb: Rect,
+    pub(crate) scroll: usize,
+    pub(crate) max_scroll: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RenderCacheKey {
     inner: Rect,
     render_revision: u64,

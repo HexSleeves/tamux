@@ -2120,7 +2120,7 @@ async fn strong_match_requires_read_skill_before_non_discovery_tool() {
     fs::create_dir_all(&skill_dir).expect("create skills directory");
     fs::write(
         skill_dir.join("SKILL.md"),
-        "# Systematic debugging\nUse this workflow to debug panic failures in rust services.\n",
+        "# Systematic debugging\nUse this workflow to debug panic in rust service failures. Choose it when the task is to debug panic in rust service incidents.\n",
     )
     .expect("write skill");
 
@@ -2145,6 +2145,19 @@ async fn strong_match_requires_read_skill_before_non_discovery_tool() {
     config.skill_recommendation.weak_match_threshold = 0.30;
 
     let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let discovery = engine
+        .discover_skill_recommendations_public("debug panic in rust service", None, 3)
+        .await
+        .expect("skill discovery should succeed");
+    assert_eq!(discovery.confidence_tier, "strong");
+    assert!(
+        discovery
+            .recommended_action
+            .contains("read_skill systematic-debugging"),
+        "expected discovery to require reading the matched skill first: {}",
+        discovery.recommended_action
+    );
+
     let thread_id = "thread-strong-skill-gate";
     let mut events = engine.subscribe();
 
@@ -2174,11 +2187,9 @@ async fn strong_match_requires_read_skill_before_non_discovery_tool() {
                 message,
                 ..
             } if event_thread_id == thread_id && kind == "skill-gate" => {
-                saw_gate_notice = true;
-                assert!(
-                    message.contains("read_skill systematic-debugging"),
-                    "expected gate notice to require reading the recommended skill first: {message}"
-                );
+                if message.contains("read_skill systematic-debugging") {
+                    saw_gate_notice = true;
+                }
             }
             AgentEvent::ToolResult {
                 thread_id: event_thread_id,
@@ -2212,7 +2223,7 @@ async fn strong_match_requires_read_skill_before_non_discovery_tool() {
 }
 
 #[tokio::test]
-async fn weak_match_allows_progress_only_after_skip_rationale() {
+async fn weak_match_allows_progress_without_skip_rationale() {
     let root = tempdir().unwrap();
     let skill_dir = root.path().join("skills").join("debugging-playbook");
     fs::create_dir_all(&skill_dir).expect("create skills directory");
@@ -2228,23 +2239,10 @@ async fn weak_match_allows_progress_only_after_skip_rationale() {
     let manager = SessionManager::new_test(root.path()).await;
     let mut config = AgentConfig::default();
     config.provider = PROVIDER_ID_OPENAI.to_string();
-    config.base_url = spawn_scripted_tool_call_server(vec![
-        (
-            "read_file".to_string(),
-            serde_json::json!({ "path": readable_path }).to_string(),
-        ),
-        (
-            "justify_skill_skip".to_string(),
-            serde_json::json!({
-                "rationale": "No installed skill matches this exact panic workflow."
-            })
-            .to_string(),
-        ),
-        (
-            "read_file".to_string(),
-            serde_json::json!({ "path": readable_path }).to_string(),
-        ),
-    ])
+    config.base_url = spawn_scripted_tool_call_server(vec![(
+        "read_file".to_string(),
+        serde_json::json!({ "path": readable_path }).to_string(),
+    )])
     .await;
     config.model = "gpt-4o-mini".to_string();
     config.api_key = "test-key".to_string();
@@ -2288,64 +2286,19 @@ async fn weak_match_allows_progress_only_after_skip_rationale() {
             .cloned()
             .expect("initial read_file result should be recorded")
     };
-    assert_eq!(first_read_attempt.tool_status.as_deref(), Some("error"));
-    assert!(
-        first_read_attempt.content.contains("justify_skill_skip"),
-        "expected weak gate to require explicit skip rationale before continuing: {}",
-        first_read_attempt.content
-    );
-
-    engine
-        .send_message_inner(
-            Some(thread_id),
-            "continue",
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            true,
-        )
-        .await
-        .expect("skip-rationale turn should complete");
-    engine
-        .send_message_inner(
-            Some(thread_id),
-            "continue",
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            true,
-        )
-        .await
-        .expect("post-rationale turn should complete");
+    assert_eq!(first_read_attempt.tool_status.as_deref(), Some("done"));
+    assert!(first_read_attempt.content.contains("allowed through"));
 
     let threads = engine.threads.read().await;
     let thread = threads.get(thread_id).expect("thread should exist");
-    let skip_message = thread
-        .messages
-        .iter()
-        .find(|message| {
-            message.role == MessageRole::Tool
-                && message.tool_name.as_deref() == Some("justify_skill_skip")
-        })
-        .expect("skip rationale tool result should be recorded");
-    assert_eq!(skip_message.tool_status.as_deref(), Some("done"));
-
-    let final_read_attempt = thread
-        .messages
-        .iter()
-        .rev()
-        .find(|message| {
-            message.role == MessageRole::Tool && message.tool_name.as_deref() == Some("read_file")
-        })
-        .expect("final read_file result should be recorded");
-    assert_eq!(final_read_attempt.tool_status.as_deref(), Some("done"));
-    assert!(final_read_attempt.content.contains("allowed through"));
+    let skip_message = thread.messages.iter().find(|message| {
+        message.role == MessageRole::Tool
+            && message.tool_name.as_deref() == Some("justify_skill_skip")
+    });
+    assert!(
+        skip_message.is_none(),
+        "weak matches should not require justify_skill_skip before progress"
+    );
 
     let persisted = engine
         .history
@@ -2354,8 +2307,9 @@ async fn weak_match_allows_progress_only_after_skip_rationale() {
         .expect("read persisted thread")
         .expect("thread should persist");
     let metadata = persisted.metadata_json.expect("thread metadata");
-    assert!(metadata.contains("\"skip_rationale\""));
-    assert!(metadata.contains("\"compliant\":true"));
+    assert!(!metadata.contains("\"skip_rationale\""));
+    assert!(metadata.contains("\"recommended_action\":\"justify_skill_skip\""));
+    assert!(metadata.contains("\"compliant\":false"));
 }
 
 #[tokio::test]

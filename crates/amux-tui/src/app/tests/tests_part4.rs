@@ -515,6 +515,114 @@ fn thread_detail_refresh_clears_active_chat_drag_snapshot() {
 }
 
 #[test]
+fn clicking_chat_scrollbar_track_scrolls_transcript() {
+    let mut model = build_model();
+    model.width = 100;
+    model.height = 40;
+    model.show_sidebar_override = Some(false);
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    for idx in 0..40 {
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: format!("message {idx}"),
+                ..Default::default()
+            },
+        });
+    }
+
+    let chat_area = rendered_chat_area(&model);
+    let before = model.chat.scroll_offset();
+    let column = chat_area.x.saturating_add(chat_area.width).saturating_sub(1);
+    let row = chat_area.y.saturating_add(1);
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert!(
+        model.chat.scroll_offset() > before,
+        "clicking the scrollbar track should scroll toward older transcript content"
+    );
+}
+
+#[test]
+fn dragging_chat_scrollbar_thumb_updates_scroll_offset() {
+    let mut model = build_model();
+    model.width = 100;
+    model.height = 40;
+    model.show_sidebar_override = Some(false);
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    for idx in 0..50 {
+        model.chat.reduce(chat::ChatAction::AppendMessage {
+            thread_id: "thread-1".to_string(),
+            message: chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: format!("message {idx}"),
+                ..Default::default()
+            },
+        });
+    }
+
+    let chat_area = rendered_chat_area(&model);
+    let column = chat_area.x.saturating_add(chat_area.width).saturating_sub(1);
+    let start_row = chat_area.y.saturating_add(chat_area.height / 2);
+    let end_row = chat_area
+        .y
+        .saturating_add(chat_area.height)
+        .saturating_sub(2);
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row: start_row,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    let after_press = model.chat.scroll_offset();
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column,
+        row: end_row,
+        modifiers: KeyModifiers::NONE,
+    });
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column,
+        row: end_row,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert!(
+        model.chat.scroll_offset() != after_press,
+        "dragging the scrollbar thumb should update transcript scroll position"
+    );
+}
+
+#[test]
 fn thread_detail_conversion_preserves_weles_review_metadata() {
     let (daemon_tx, daemon_rx) = mpsc::channel();
     let (cmd_tx, _cmd_rx) = unbounded_channel();

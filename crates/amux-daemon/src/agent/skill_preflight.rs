@@ -296,14 +296,14 @@ fn build_skill_preflight_prompt(
         }
         _ => {
             body.push_str(
-                "- Hard gate: do not call non-discovery tools until you record an explicit skip rationale with `justify_skill_skip`.\n",
+                "- Recommendation: if you proceed without a local skill, record the rationale with `justify_skill_skip`; this is guidance, not a hard prerequisite for other tools.\n",
             );
         }
     }
 
     if result.recommendations.is_empty() {
         body.push_str(
-            "- No installed skill cleared the weak threshold. If you continue, explain why no local skill fits before proceeding.\n",
+            "- No installed skill cleared the weak threshold. If you continue, explain why no local skill fits; `justify_skill_skip` can record that rationale.\n",
         );
         return body;
     }

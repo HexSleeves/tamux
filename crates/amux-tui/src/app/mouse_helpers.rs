@@ -7,6 +7,21 @@ impl TuiModel {
         self.chat_drag_anchor_point = None;
         self.chat_drag_current_point = None;
         self.chat_selection_snapshot = None;
+        self.chat_scrollbar_drag_grab_offset = None;
+    }
+
+    pub(in super::super) fn set_chat_scroll_offset(&mut self, target: usize) {
+        let current = self.chat.scroll_offset();
+        if target == current {
+            return;
+        }
+
+        let delta = if target > current {
+            (target - current).min(i32::MAX as usize) as i32
+        } else {
+            -((current - target).min(i32::MAX as usize) as i32)
+        };
+        self.chat.reduce(chat::ChatAction::ScrollChat(delta));
     }
 
     pub(in super::super) fn clear_work_context_drag_selection(&mut self) {

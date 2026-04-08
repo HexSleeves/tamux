@@ -489,6 +489,7 @@ fn render_snapshot(
     frame: &mut Frame,
     snapshot: &SelectionSnapshot,
     chat: &ChatState,
+    theme: &ThemeTokens,
     mouse_selection: Option<(SelectionPoint, SelectionPoint)>,
 ) {
     let mut all_lines = snapshot.all_lines.clone();
@@ -508,17 +509,39 @@ fn render_snapshot(
         .into_iter()
         .map(|line| line.line)
         .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(visible_lines), snapshot.inner);
+    let scroll = snapshot.all_lines.len().saturating_sub(end_idx);
+    if let Some(layout) = scrollbar_layout_from_metrics(snapshot.inner, snapshot.all_lines.len(), scroll)
+    {
+        frame.render_widget(Paragraph::new(visible_lines), layout.content);
+
+        let scrollbar_lines = (0..layout.scrollbar.height)
+            .map(|offset| {
+                let y = layout.scrollbar.y.saturating_add(offset);
+                let (glyph, style) = if y >= layout.thumb.y
+                    && y < layout.thumb.y.saturating_add(layout.thumb.height)
+                {
+                    ("█", theme.accent_primary)
+                } else {
+                    ("│", theme.fg_dim)
+                };
+                Line::from(Span::styled(glyph, style))
+            })
+            .collect::<Vec<_>>();
+        frame.render_widget(Paragraph::new(scrollbar_lines), layout.scrollbar);
+    } else {
+        frame.render_widget(Paragraph::new(visible_lines), snapshot.inner);
+    }
 }
 
 pub fn render_cached(
     frame: &mut Frame,
     _area: Rect,
     chat: &ChatState,
+    theme: &ThemeTokens,
     snapshot: &CachedSelectionSnapshot,
     mouse_selection: Option<(SelectionPoint, SelectionPoint)>,
 ) {
-    render_snapshot(frame, &snapshot.0, chat, mouse_selection);
+    render_snapshot(frame, &snapshot.0, chat, theme, mouse_selection);
 }
 
 #[cfg(test)]

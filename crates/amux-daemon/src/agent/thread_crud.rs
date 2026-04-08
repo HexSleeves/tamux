@@ -136,7 +136,7 @@ impl AgentEngine {
     }
 
     pub async fn get_thread(&self, thread_id: &str) -> Option<AgentThread> {
-        self.get_thread_filtered(thread_id, false, None)
+        self.get_thread_filtered(thread_id, false, None, 0)
             .await
             .map(|result| result.thread)
     }
@@ -146,23 +146,28 @@ impl AgentEngine {
         thread_id: &str,
         include_internal: bool,
         message_limit: Option<usize>,
+        message_offset: usize,
     ) -> Option<ThreadDetailResult> {
         let mut thread = self.threads.read().await.get(thread_id).cloned()?;
         if !thread_is_query_visible(&thread, include_internal) {
             return None;
         }
 
-        let messages_truncated = if let Some(limit) = message_limit {
-            if thread.messages.len() > limit {
-                let keep_from = thread.messages.len().saturating_sub(limit);
-                thread.messages = thread.messages.into_iter().skip(keep_from).collect();
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+        let total_messages = thread.messages.len();
+        let end = total_messages.saturating_sub(message_offset);
+        let start = message_limit
+            .map(|limit| end.saturating_sub(limit))
+            .unwrap_or(0);
+        let messages_truncated = start > 0 || end < total_messages;
+
+        if messages_truncated {
+            thread.messages = thread
+                .messages
+                .into_iter()
+                .skip(start)
+                .take(end.saturating_sub(start))
+                .collect();
+        }
 
         Some(ThreadDetailResult {
             thread,

@@ -1,5 +1,7 @@
 use crate::agent::thread_crud::ThreadListFilter;
 
+const DEFAULT_GET_THREAD_LIMIT: usize = 5;
+
 fn parse_non_negative_u64_arg(args: &serde_json::Value, field: &str) -> Result<Option<u64>> {
     if args.get(field).is_some_and(|value| value.as_u64().is_none()) {
         anyhow::bail!("'{field}' must be a non-negative integer");
@@ -58,20 +60,23 @@ async fn execute_get_thread(args: &serde_json::Value, agent: &AgentEngine) -> Re
             .ok_or_else(|| anyhow::anyhow!("'thread_id' must be a non-empty string"))?,
         None => anyhow::bail!("missing 'thread_id' argument"),
     };
-    let message_limit = parse_non_negative_usize_arg(args, "message_limit")?;
+    let message_limit = parse_non_negative_usize_arg(args, "limit")?
+        .or(parse_non_negative_usize_arg(args, "message_limit")?)
+        .unwrap_or(DEFAULT_GET_THREAD_LIMIT);
+    let message_offset = parse_non_negative_usize_arg(args, "offset")?.unwrap_or(0);
     let include_internal = args
         .get("include_internal")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
 
     let detail = agent
-        .get_thread_filtered(thread_id, include_internal, message_limit)
+        .get_thread_filtered(thread_id, include_internal, Some(message_limit), message_offset)
         .await;
 
     let Some(detail) = detail else {
         if !include_internal
             && agent
-                .get_thread_filtered(thread_id, true, None)
+                .get_thread_filtered(thread_id, true, None, 0)
                 .await
                 .is_some()
         {

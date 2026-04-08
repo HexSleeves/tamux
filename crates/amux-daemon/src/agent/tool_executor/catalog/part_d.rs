@@ -53,11 +53,12 @@ fn add_available_tools_part_d(
             "offset": { "type": "integer", "minimum": 0, "description": "Optional number of matching thread summaries to skip before returning results" }
         }
     })));
-    tools.push(tool_def("get_thread", "Fetch one agent thread and its messages by thread ID, with optional message truncation and internal-thread access.", serde_json::json!({
+    tools.push(tool_def("get_thread", "Fetch one agent thread and a paged slice of its messages by thread ID, with optional internal-thread access.", serde_json::json!({
         "type": "object",
         "properties": {
             "thread_id": { "type": "string", "description": "Thread ID to fetch" },
-            "message_limit": { "type": "integer", "minimum": 0, "description": "Optional maximum number of most recent messages to return" },
+            "limit": { "type": "integer", "minimum": 0, "description": "Optional maximum number of messages to return from the most recent end of the thread. Defaults to 5." },
+            "offset": { "type": "integer", "minimum": 0, "description": "Optional number of newest messages to skip before applying the limit. Defaults to 0." },
             "include_internal": { "type": "boolean", "description": "Allow access to otherwise hidden WELES and handoff threads when true" }
         },
         "required": ["thread_id"]

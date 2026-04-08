@@ -66,7 +66,7 @@ fn render_local_skills_section(
     generated_skills_root: &std::path::Path,
 ) -> String {
     format!(
-        "- Skills root: {}\n- Generated skills: {}\n- Built-in skills: {}/builtin/ (tamux reference docs for terminals, browser, tasks, goals, memory, safety, etc.)\n- Before non-trivial work, consult MEMORY.md and USER.md, then follow the daemon-provided skill discovery result for this turn.\n- Strong matches require `read_skill` before other substantial tools.\n- Weak or no matches require `justify_skill_skip` with an explicit rationale before continuing.\n- `list_skills` remains the raw catalog view, not the decision authority for the task.\n- The `builtin/cheatsheet` skill provides a quick reference for all available MCP tools.\n- Prefer reusing an existing skill over inventing a brand-new workflow.",
+        "- Skills root: {}\n- Generated skills: {}\n- Built-in skills: {}/builtin/ (tamux reference docs for terminals, browser, tasks, goals, memory, safety, etc.)\n- Before non-trivial work, consult MEMORY.md and USER.md, then follow the daemon-provided skill discovery result for this turn.\n- Strong matches require `read_skill` before other substantial tools.\n- Weak or no matches may use `justify_skill_skip` to record why no local skill fits, but it is guidance rather than a hard blocker.\n- `list_skills` remains the raw catalog view, not the decision authority for the task.\n- The `builtin/cheatsheet` skill provides a quick reference for all available MCP tools.\n- Prefer reusing an existing skill over inventing a brand-new workflow.",
         skills_root.display(),
         generated_skills_root.display(),
         skills_root.display(),

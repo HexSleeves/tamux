@@ -272,7 +272,14 @@ impl TuiModel {
                 .as_ref()
                 .filter(|snapshot| widgets::chat::cached_snapshot_matches_area(snapshot, area))
             {
-                widgets::chat::render_cached(frame, area, &self.chat, snapshot, mouse_selection);
+                widgets::chat::render_cached(
+                    frame,
+                    area,
+                    &self.chat,
+                    &self.theme,
+                    snapshot,
+                    mouse_selection,
+                );
                 return;
             }
         }
@@ -286,7 +293,14 @@ impl TuiModel {
                 self.retry_wait_start_selected,
             )
         }) {
-            widgets::chat::render_cached(frame, area, &self.chat, snapshot, mouse_selection);
+            widgets::chat::render_cached(
+                frame,
+                area,
+                &self.chat,
+                &self.theme,
+                snapshot,
+                mouse_selection,
+            );
             return;
         }
 
@@ -299,7 +313,14 @@ impl TuiModel {
         );
 
         if let Some(snapshot) = self.chat_selection_snapshot.as_ref() {
-            widgets::chat::render_cached(frame, area, &self.chat, snapshot, mouse_selection);
+            widgets::chat::render_cached(
+                frame,
+                area,
+                &self.chat,
+                &self.theme,
+                snapshot,
+                mouse_selection,
+            );
             return;
         }
 

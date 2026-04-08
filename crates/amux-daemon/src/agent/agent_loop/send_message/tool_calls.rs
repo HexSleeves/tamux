@@ -347,26 +347,34 @@ impl<'a> SendMessageRunner<'a> {
             return false;
         }
 
-        let required_action = if state.confidence_tier.eq_ignore_ascii_case("strong") {
-            state.recommended_action.clone()
-        } else {
-            "justify_skill_skip".to_string()
-        };
-        let denied_content = format!(
-            "Tool call blocked by skill discovery gate. Before `{}` you must `{}`.",
-            tc.function.name, required_action
-        );
+        if state.confidence_tier.eq_ignore_ascii_case("strong") {
+            let denied_content = format!(
+                "Tool call blocked by skill discovery gate. Before `{}` you must `{}`.",
+                tc.function.name, state.recommended_action
+            );
+            self.engine.emit_workflow_notice(
+                &self.tid,
+                "skill-gate",
+                format!(
+                    "Skill discovery gate blocked `{}`. Required next step: {}.",
+                    tc.function.name, state.recommended_action
+                ),
+                serde_json::to_string(&state).ok(),
+            );
+            self.persist_denied_tool_result(tc, denied_content).await;
+            return true;
+        }
+
         self.engine.emit_workflow_notice(
             &self.tid,
             "skill-gate",
             format!(
-                "Skill discovery gate blocked `{}`. Required next step: {}.",
-                tc.function.name, required_action
+                "Weak skill discovery recommends `{}` before `{}`; allowing the tool call to proceed.",
+                state.recommended_action, tc.function.name
             ),
             serde_json::to_string(&state).ok(),
         );
-        self.persist_denied_tool_result(tc, denied_content).await;
-        true
+        false
     }
 
     async fn execute_tool_call(&mut self, tc: &ToolCall) -> ToolResult {

@@ -45,6 +45,7 @@ impl<'a> SendMessageRunner<'a> {
             )
             .await?;
         if compaction_inserted {
+            self.engine.clear_thread_continuation_state(&self.tid).await;
             self.recorded_compaction_provenance = true;
         }
         let threads = self.engine.threads.read().await;
