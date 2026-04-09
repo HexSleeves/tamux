@@ -11,7 +11,6 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::history::HistoryStore;
-use crate::policy::{evaluate_command, PolicyDecision};
 use crate::pty_session::PtySession;
 use crate::snapshot::SnapshotStore;
 use crate::state::{save_state, DaemonState, SavedSession};
@@ -27,14 +26,27 @@ pub struct SessionManager {
     history: Arc<HistoryStore>,
     snapshots: SnapshotStore,
     pending_approvals: RwLock<HashMap<String, PendingApproval>>,
+    session_approval_grants: RwLock<HashMap<SessionId, Vec<SessionApprovalGrant>>>,
     pty_channel_capacity: usize,
 }
 
+#[derive(Clone)]
 struct PendingApproval {
     session_id: SessionId,
     workspace_id: Option<String>,
     execution_id: String,
     request: ManagedCommandRequest,
+    policy_fingerprint: String,
+    constraints: Vec<crate::governance::GovernanceConstraint>,
+    transition_kind: crate::governance::TransitionKind,
+    expires_at: Option<u64>,
+}
+
+#[derive(Clone)]
+struct SessionApprovalGrant {
+    approval_id: String,
+    policy_fingerprint: String,
+    expires_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -84,6 +96,7 @@ impl SessionManager {
             history,
             snapshots,
             pending_approvals: RwLock::new(HashMap::new()),
+            session_approval_grants: RwLock::new(HashMap::new()),
             pty_channel_capacity,
         })
     }

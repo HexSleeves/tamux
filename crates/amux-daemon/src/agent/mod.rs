@@ -110,7 +110,9 @@ use aline_startup::{
 };
 use anticipatory::*;
 use anticipatory_support::*;
+pub(crate) use authorship::AuthorshipTag;
 use behavioral_events::*;
+pub(crate) use autonomy::AutonomyLevel;
 use capability_tier::*;
 use compaction::*;
 pub(crate) use config::{

@@ -252,6 +252,43 @@ pub struct GatewayHealthSnapshotRow {
     pub updated_at: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApprovalRecordRow {
+    pub approval_id: String,
+    pub run_id: Option<String>,
+    pub task_id: Option<String>,
+    pub goal_run_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub transition_kind: String,
+    pub stage_id: Option<String>,
+    pub scope_summary: Option<String>,
+    pub target_scope_json: String,
+    pub constraints_json: String,
+    pub risk_class: String,
+    pub rationale_json: String,
+    pub policy_fingerprint: String,
+    pub requested_at: u64,
+    pub resolved_at: Option<u64>,
+    pub expires_at: Option<u64>,
+    pub resolution: Option<String>,
+    pub invalidated_at: Option<u64>,
+    pub invalidation_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GovernanceEvaluationRow {
+    pub id: String,
+    pub run_id: Option<String>,
+    pub task_id: Option<String>,
+    pub goal_run_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub transition_kind: String,
+    pub input_json: String,
+    pub verdict_json: String,
+    pub policy_fingerprint: String,
+    pub created_at: u64,
+}
+
 pub struct ProvenanceEventRecord<'a> {
     pub event_type: &'a str,
     pub summary: &'a str,
@@ -468,6 +505,7 @@ mod context_archive;
 mod core;
 mod gateway_state;
 mod goal_runs;
+mod governance;
 mod integrity_helpers;
 mod operator_profile;
 mod provenance;

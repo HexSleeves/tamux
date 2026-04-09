@@ -255,6 +255,11 @@ async fn hydrate_restores_full_persisted_task_log_history() {
         scheduled_at: None,
         blocked_reason: None,
         awaiting_approval_id: None,
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
         lane_id: None,
         last_error: None,
         logs: (0..log_count)
@@ -338,6 +343,11 @@ async fn hydrate_restores_full_persisted_goal_run_event_history() {
         child_task_count: 0,
         approval_count: 0,
         awaiting_approval_id: None,
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
         active_task_id: None,
         duration_ms: Some(500),
         steps: Vec::new(),
@@ -355,7 +365,7 @@ async fn hydrate_restores_full_persisted_goal_run_event_history() {
         total_prompt_tokens: 0,
         total_completion_tokens: 0,
         estimated_cost_usd: None,
-        autonomy_level: crate::agent::autonomy::AutonomyLevel::Supervised,
+        autonomy_level: crate::agent::AutonomyLevel::Supervised,
         authorship_tag: None,
     });
     engine.persist_goal_runs().await;
