@@ -74,8 +74,22 @@ if matches!(
                     client_agent_threads.insert(thread_id.clone());
                     let thread = agent.get_thread(&thread_id).await;
                     let json = serde_json::to_string(&thread).unwrap_or_default();
-                    for message in chunk_agent_thread_detail_for_ipc(&thread_id, json) {
-                        framed.send(message).await?;
+                    if thread_detail_fits_single_ipc_frame(&json) {
+                        framed
+                            .send(DaemonMessage::AgentThreadDetail { thread_json: json })
+                            .await?;
+                    } else {
+                        let chunks = thread_detail_chunks_for_ipc(&json).collect::<Vec<_>>();
+                        let total_chunks = chunks.len();
+                        for (index, chunk) in chunks.into_iter().enumerate() {
+                            framed
+                                .send(DaemonMessage::AgentThreadDetailChunk {
+                                    thread_id: thread_id.clone(),
+                                    thread_json_chunk: chunk.to_vec(),
+                                    done: index + 1 == total_chunks,
+                                })
+                                .await?;
+                        }
                     }
                 }
 

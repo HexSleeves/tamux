@@ -223,6 +223,13 @@ impl AgentEngine {
                             }
                         })
                         .collect::<Vec<_>>();
+                    let (total_input_tokens, total_output_tokens) =
+                        messages.iter().fold((0u64, 0u64), |(input_acc, output_acc), message| {
+                            (
+                                input_acc.saturating_add(message.input_tokens),
+                                output_acc.saturating_add(message.output_tokens),
+                            )
+                        });
 
                     threads.insert(
                         thread_id.clone(),
@@ -241,8 +248,8 @@ impl AgentEngine {
                             upstream_assistant_id: thread_metadata.upstream_assistant_id,
                             created_at: thread_row.created_at as u64,
                             updated_at: thread_row.updated_at as u64,
-                            total_input_tokens: 0,
-                            total_output_tokens: 0,
+                            total_input_tokens,
+                            total_output_tokens,
                         },
                     );
                     handoff_states.insert(thread_id, handoff_state);

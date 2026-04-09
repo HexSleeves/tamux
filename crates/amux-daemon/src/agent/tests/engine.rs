@@ -148,6 +148,76 @@ async fn hydrate_restores_full_persisted_thread_history() {
 }
 
 #[tokio::test]
+async fn hydrate_restores_thread_token_totals_from_persisted_history() {
+    let (engine, temp_dir) = make_test_engine(AgentConfig::default()).await;
+    let thread_id = "thread-hydrate-token-totals";
+    let assistant = AgentMessage {
+        id: crate::agent::types::generate_message_id(),
+        role: MessageRole::Assistant,
+        content: "done".to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+        tool_name: None,
+        tool_arguments: None,
+        tool_status: None,
+        weles_review: None,
+        input_tokens: 11,
+        output_tokens: 7,
+        provider: None,
+        model: None,
+        api_transport: None,
+        response_id: None,
+        upstream_message: None,
+        provider_final_result: None,
+        reasoning: None,
+        message_kind: AgentMessageKind::Normal,
+        compaction_strategy: None,
+        compaction_payload: None,
+        timestamp: 1_001,
+    };
+    let mut summary = AgentMessage::user("summary", 1_002);
+    summary.input_tokens = 3;
+    summary.output_tokens = 2;
+    summary.message_kind = AgentMessageKind::CompactionArtifact;
+
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Hydrated Tokens".to_string(),
+            messages: vec![assistant, summary],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            created_at: 1_000,
+            updated_at: 1_002,
+            total_input_tokens: 14,
+            total_output_tokens: 9,
+        },
+    );
+    engine.persist_thread_by_id(thread_id).await;
+
+    let rehydrated = AgentEngine::new_test(
+        SessionManager::new_test(temp_dir.path()).await,
+        AgentConfig::default(),
+        temp_dir.path(),
+    )
+    .await;
+    rehydrated.hydrate().await.expect("hydrate should succeed");
+
+    let thread = rehydrated
+        .get_thread(thread_id)
+        .await
+        .expect("thread should be restored after hydrate");
+    assert_eq!(thread.total_input_tokens, 14);
+    assert_eq!(thread.total_output_tokens, 9);
+}
+
+#[tokio::test]
 async fn hydrate_restores_full_persisted_task_log_history() {
     let (engine, temp_dir) = make_test_engine(AgentConfig::default()).await;
     let task_id = "task-hydrate-full-history";
