@@ -352,8 +352,15 @@ if [[ ${#bundle_artifacts[@]} -gt 0 ]]; then
             artifact_os_name="$(printf '%s' "${OS_SLUG:-$OS}" | tr '[:upper:]' '[:lower:]')"
             ;;
     esac
-    checksums_file="$OUT_DIR/SHA256SUMS-${artifact_os_name}-${ARCH}.txt"
-    bundle_file="$OUT_DIR/tamux-${artifact_os_name}-${ARCH}.zip"
+    artifact_arch_name="$ARCH"
+    if [[ "$artifact_os_name" == "windows" ]]; then
+        case "$artifact_arch_name" in
+            x86_64) artifact_arch_name="x64" ;;
+            aarch64) artifact_arch_name="arm64" ;;
+        esac
+    fi
+    checksums_file="$OUT_DIR/SHA256SUMS-${artifact_os_name}-${artifact_arch_name}.txt"
+    bundle_file="$OUT_DIR/tamux-${artifact_os_name}-${artifact_arch_name}.zip"
 
     generate_release_notes_if_missing "$notes_file" "${bundle_artifacts[@]}"
     write_checksums_file "$checksums_file" "${bundle_artifacts[@]}"

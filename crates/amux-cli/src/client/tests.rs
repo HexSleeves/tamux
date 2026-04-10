@@ -1,4 +1,6 @@
-use super::agent_api::{parse_config_set_response, parse_operation_status_response};
+use super::agent_api::{
+    parse_config_set_response, parse_operation_status_response, send_thread_get_query,
+};
 use super::agent_bridge::handle_message_for_test as handle_bridge_message;
 use super::agent_bridge::initial_bridge_messages;
 use super::agent_protocol::AgentBridgeCommand;
@@ -8,7 +10,7 @@ use super::skill_api::{
     parse_skill_publish_terminal_response,
 };
 use amux_protocol::{ClientMessage, DaemonCodec, DaemonMessage};
-use futures::SinkExt;
+use futures::{SinkExt, StreamExt};
 use tokio_util::codec::Framed;
 
 #[test]
@@ -544,4 +546,71 @@ async fn agent_bridge_ignores_operation_acceptance_messages() {
         .expect("operation acceptance should not fail bridge handling");
 
     assert!(should_continue);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn send_thread_get_query_rejects_chunks_for_unexpected_thread() {
+    let runtime_dir = tempfile::tempdir().expect("tempdir");
+    let socket_path = runtime_dir.path().join("tamux-daemon.sock");
+    let listener = tokio::net::UnixListener::bind(&socket_path).expect("bind daemon socket");
+
+    let original_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
+    unsafe {
+        std::env::set_var("XDG_RUNTIME_DIR", runtime_dir.path());
+    }
+
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept client connection");
+        let mut framed = Framed::new(stream, DaemonCodec);
+        let request = framed
+            .next()
+            .await
+            .expect("client request frame")
+            .expect("decode client request");
+        assert!(matches!(request, ClientMessage::AgentGetThread { .. }));
+
+        let thread_json = serde_json::json!({
+            "id": "other-thread",
+            "agent_name": null,
+            "title": "Wrong thread",
+            "messages": [],
+            "pinned": false,
+            "created_at": 1,
+            "updated_at": 1,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0
+        })
+        .to_string()
+        .into_bytes();
+
+        framed
+            .send(DaemonMessage::AgentThreadDetailChunk {
+                thread_id: "other-thread".to_string(),
+                thread_json_chunk: thread_json,
+                done: true,
+            })
+            .await
+            .expect("send mismatched chunk");
+    });
+
+    let result = send_thread_get_query("expected-thread".to_string()).await;
+    server.await.expect("server task should complete");
+
+    match original_runtime_dir {
+        Some(value) => unsafe {
+            std::env::set_var("XDG_RUNTIME_DIR", value);
+        },
+        None => unsafe {
+            std::env::remove_var("XDG_RUNTIME_DIR");
+        },
+    }
+
+    let error = result.expect_err("mismatched chunk should be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("received chunk for unexpected thread"),
+        "unexpected error: {error}"
+    );
 }

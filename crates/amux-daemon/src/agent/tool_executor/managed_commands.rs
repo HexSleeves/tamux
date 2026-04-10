@@ -468,6 +468,39 @@ async fn execute_operation_status_lookup(
     session_manager: &Arc<SessionManager>,
     compatibility_alias: bool,
 ) -> Result<String> {
+    if let Some(status) = session_manager.get_background_task_status(operation_id).await? {
+        let mut payload = serde_json::json!({
+            "operation_id": status.background_task_id,
+            "kind": status.kind,
+            "state": status.state,
+            "background_task_id": operation_id,
+        });
+
+        if let Some(session_id) = status.session_id {
+            payload["session_id"] = serde_json::Value::String(session_id);
+        }
+        if let Some(position) = status.position {
+            payload["position"] = serde_json::Value::Number(position.into());
+        }
+        if let Some(command) = status.command {
+            payload["command"] = serde_json::Value::String(command);
+        }
+        if let Some(exit_code) = status.exit_code {
+            payload["exit_code"] = serde_json::Value::Number(exit_code.into());
+        }
+        if let Some(duration_ms) = status.duration_ms {
+            payload["duration_ms"] = serde_json::Value::Number(duration_ms.into());
+        }
+        if let Some(snapshot_path) = status.snapshot_path {
+            payload["snapshot_path"] = serde_json::Value::String(snapshot_path);
+        }
+        if !compatibility_alias {
+            payload.as_object_mut().map(|obj| obj.remove("background_task_id"));
+        }
+
+        return Ok(payload.to_string());
+    }
+
     if let Some(snapshot) = crate::server::operation_registry().snapshot(operation_id) {
         let mut payload = serde_json::json!({
             "operation_id": snapshot.operation_id,
@@ -484,39 +517,5 @@ async fn execute_operation_status_lookup(
         return Ok(payload.to_string());
     }
 
-    let status = session_manager
-        .get_background_task_status(operation_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("unknown operation id: {operation_id}"))?;
-
-    let mut payload = serde_json::json!({
-        "operation_id": status.background_task_id,
-        "kind": status.kind,
-        "state": status.state,
-        "background_task_id": operation_id,
-    });
-
-    if let Some(session_id) = status.session_id {
-        payload["session_id"] = serde_json::Value::String(session_id);
-    }
-    if let Some(position) = status.position {
-        payload["position"] = serde_json::Value::Number(position.into());
-    }
-    if let Some(command) = status.command {
-        payload["command"] = serde_json::Value::String(command);
-    }
-    if let Some(exit_code) = status.exit_code {
-        payload["exit_code"] = serde_json::Value::Number(exit_code.into());
-    }
-    if let Some(duration_ms) = status.duration_ms {
-        payload["duration_ms"] = serde_json::Value::Number(duration_ms.into());
-    }
-    if let Some(snapshot_path) = status.snapshot_path {
-        payload["snapshot_path"] = serde_json::Value::String(snapshot_path);
-    }
-    if !compatibility_alias {
-        payload.as_object_mut().map(|obj| obj.remove("background_task_id"));
-    }
-
-    Ok(payload.to_string())
+    Err(anyhow::anyhow!("unknown operation id: {operation_id}"))
 }

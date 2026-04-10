@@ -120,6 +120,7 @@ pub struct AgentEngine {
     pub(super) anticipatory: RwLock<AnticipatoryRuntime>,
     pub(super) collaboration: RwLock<HashMap<String, collaboration::CollaborationSession>>,
     pub data_dir: PathBuf,
+    pub workspace_root: Option<PathBuf>,
     pub gateway_process: Mutex<Option<tokio::process::Child>>,
     pub gateway_state: Mutex<Option<gateway::GatewayState>>,
     pub gateway_ipc_sender: Mutex<Option<mpsc::UnboundedSender<amux_protocol::DaemonMessage>>>,
@@ -263,6 +264,7 @@ impl AgentEngine {
 
         let initial_config_runtime_projection =
             super::config::derive_startup_config_runtime_projection(&config);
+        let workspace_root = std::env::current_dir().ok().filter(|path| path.is_dir());
 
         let config = Arc::new(RwLock::new(config));
         let concierge = Arc::new(ConciergeEngine::new(
@@ -298,6 +300,7 @@ impl AgentEngine {
             anticipatory: RwLock::new(AnticipatoryRuntime::default()),
             collaboration: RwLock::new(HashMap::new()),
             data_dir,
+            workspace_root,
             gateway_process: Mutex::new(None),
             gateway_state: Mutex::new(None),
             gateway_ipc_sender: Mutex::new(None),

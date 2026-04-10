@@ -127,6 +127,7 @@ async fn make_test_engine(
         anticipatory: RwLock::new(AnticipatoryRuntime::default()),
         collaboration: RwLock::new(HashMap::new()),
         data_dir,
+        workspace_root: None,
         gateway_process: Mutex::new(None),
         gateway_state: Mutex::new(None),
         gateway_ipc_sender: Mutex::new(None),

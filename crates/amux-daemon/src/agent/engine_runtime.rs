@@ -517,16 +517,21 @@ impl AgentEngine {
         }
 
         let query = trimmed
-            .chars()
-            .take(ONECONTEXT_BOOTSTRAP_QUERY_MAX_CHARS)
-            .collect::<String>();
+            .to_string();
+
+        let Some(query) = super::tool_executor::prepare_onecontext_search_query(
+            &query,
+            true,
+            ONECONTEXT_BOOTSTRAP_QUERY_MAX_CHARS,
+        ) else {
+            return None;
+        };
 
         let mut cmd = tokio::process::Command::new("aline");
         cmd.arg("search")
             .arg(&query)
             .arg("-t")
             .arg("session")
-            .arg("--no-regex")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .stdin(std::process::Stdio::null());

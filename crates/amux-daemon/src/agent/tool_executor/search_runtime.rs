@@ -427,9 +427,6 @@ async fn run_onecontext_search_subprocess(
         .stderr(std::process::Stdio::piped())
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
-    if request.no_regex {
-        cmd.arg("--no-regex");
-    }
 
     let child = cmd
         .spawn()

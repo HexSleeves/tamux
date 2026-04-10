@@ -60,7 +60,6 @@ pub enum DaemonMessage {
     AgentThreadList { threads_json: String },
     AgentThreadDetail { thread_json: String },
     AgentThreadDetailChunk { thread_id: String, thread_json_chunk: Vec<u8>, done: bool },
-    AgentThreadDeleted { thread_id: String, deleted: bool },
     AgentDirectMessageResponse { target: String, thread_id: String, response: String, session_id: Option<String>, #[serde(default)] provider_final_result_json: Option<String> },
     AgentTaskList { tasks_json: String },
     AgentRunList { runs_json: String },
@@ -153,4 +152,5 @@ pub enum DaemonMessage {
     AgentQuestionAnswered { question_id: String, answer: String },
     AgentToolList { result: ToolListResultPublic },
     AgentToolSearchResult { result: ToolSearchResultPublic },
+    AgentThreadDeleted { thread_id: String, deleted: bool },
 }

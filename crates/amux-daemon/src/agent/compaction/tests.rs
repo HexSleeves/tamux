@@ -100,6 +100,21 @@ fn build_llm_compaction_messages_trims_to_fit_model_budget() {
 }
 
 #[test]
+fn api_message_token_estimate_uses_token_units_not_raw_chars() {
+    let message = ApiMessage {
+        role: "user".to_string(),
+        content: ApiContent::Text("x".repeat(APPROX_CHARS_PER_TOKEN * 100)),
+        tool_call_id: None,
+        name: None,
+        tool_calls: None,
+    };
+
+    let estimated = estimate_api_message_tokens(&message);
+
+    assert!(estimated < 200, "expected token estimate, got {estimated}");
+}
+
+#[test]
 fn compaction_candidate_exposes_the_older_slice_boundary() {
     let mut config = AgentConfig::default();
     config.max_context_messages = 3;

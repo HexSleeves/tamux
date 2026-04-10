@@ -11,7 +11,6 @@ pub(crate) enum SkillRecommendationConfidence {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum SkillRecommendationAction {
     ReadSkill,
-    JustifySkip,
     #[default]
     None,
 }

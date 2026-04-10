@@ -332,7 +332,7 @@ async fn onecontext_search_normalizes_simple_query_before_runner() {
         |request| async move {
             assert_eq!(
                 request.bounded_query,
-                "Collaboration Architecture Ideation Elm style broadcast contribution daemon first"
+                "Collaboration.*Architecture.*Ideation.*Elm.*style.*broadcast.*contribution.*daemon.*first"
             );
             Ok::<std::process::Output, anyhow::Error>(std::process::Output {
                 status: successful_exit_status(),
@@ -345,4 +345,16 @@ async fn onecontext_search_normalizes_simple_query_before_runner() {
     .expect("sanitized simple query should be passed to the runner");
 
     assert!(result.contains("OneContext results"));
+}
+
+#[test]
+fn prepare_onecontext_search_query_preserves_explicit_regex_queries() {
+    let prepared = prepare_onecontext_search_query(
+        "JustifySkip|explicit_rationale_required",
+        false,
+        300,
+    )
+    .expect("explicit regex query should be preserved");
+
+    assert_eq!(prepared, "JustifySkip|explicit_rationale_required");
 }

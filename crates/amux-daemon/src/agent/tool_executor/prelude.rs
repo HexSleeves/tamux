@@ -51,7 +51,6 @@ const SEARCH_FILES_MAX_STDERR_BYTES: usize = 64 * 1024;
 struct OnecontextSearchRequest {
     bounded_query: String,
     scope: String,
-    no_regex: bool,
     timeout_seconds: u64,
 }
 
@@ -126,6 +125,32 @@ fn normalize_onecontext_simple_query(query: &str) -> String {
     normalized.trim().to_string()
 }
 
+fn plain_text_onecontext_regex(query: &str) -> String {
+    normalize_onecontext_simple_query(query)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(".*")
+}
+
+pub(super) fn prepare_onecontext_search_query(
+    query: &str,
+    no_regex: bool,
+    max_chars: usize,
+) -> Option<String> {
+    let prepared = if no_regex {
+        plain_text_onecontext_regex(query)
+    } else {
+        query.trim().to_string()
+    };
+
+    let bounded_query = prepared.chars().take(max_chars).collect::<String>();
+    if bounded_query.trim().is_empty() {
+        return None;
+    }
+
+    Some(bounded_query)
+}
+
 fn onecontext_search_request(args: &serde_json::Value) -> Result<OnecontextSearchRequest> {
     let query = args
         .get("query")
@@ -161,27 +186,19 @@ fn onecontext_search_request(args: &serde_json::Value) -> Result<OnecontextSearc
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
-    let prepared_query = if no_regex {
-        normalize_onecontext_simple_query(query)
-    } else {
-        query.to_string()
-    };
-
-    let bounded_query = prepared_query
-        .chars()
-        .take(ONECONTEXT_TOOL_QUERY_MAX_CHARS)
-        .collect::<String>();
-
-    if bounded_query.trim().is_empty() {
+    let Some(bounded_query) = prepare_onecontext_search_query(
+        query,
+        no_regex,
+        ONECONTEXT_TOOL_QUERY_MAX_CHARS,
+    ) else {
         return Err(anyhow::anyhow!(
             "'query' must contain at least one searchable keyword"
         ));
-    }
+    };
 
     Ok(OnecontextSearchRequest {
         bounded_query,
         scope: scope.to_string(),
-        no_regex,
         timeout_seconds: daemon_tool_timeout_seconds("onecontext_search", args),
     })
 }

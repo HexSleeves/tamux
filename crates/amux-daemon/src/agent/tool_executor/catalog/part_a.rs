@@ -133,7 +133,7 @@ fn add_available_tools_part_a(
 
         tools.push(tool_def(
             "apply_file_patch",
-            "Apply one or more exact text replacements to a file in order. Use this for multi-hunk targeted edits.",
+            "Apply one or more exact text replacements to a file in order. Use this for multi-hunk targeted edits. Patch must start with '*** Begin Patch' and end with '*** End Patch'",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -160,6 +160,15 @@ fn add_available_tools_part_a(
             "Apply a harness-style patch with `*** Begin Patch` / `*** End Patch` markers, supporting Add/Update/Delete file actions. Also accepts the legacy `path` + `edits` exact-replacement shape for compatibility.",
             serde_json::json!({
                 "type": "object",
+                "minProperties": 1,
+                "anyOf": [
+                    { "required": ["input"] },
+                    { "required": ["path", "edits"] }
+                ],
+                "dependencies": {
+                    "path": ["edits"],
+                    "edits": ["path"]
+                },
                 "properties": {
                     "input": { "type": "string", "description": "Harness-style patch text in the apply_patch format." },
                     "explanation": { "type": "string", "description": "Optional short explanation for why the patch is being applied." },
