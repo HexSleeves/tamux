@@ -121,6 +121,7 @@
             })
             .collect::<Vec<_>>()
             .join("\n");
+        println!("{}", rendered);
 
         assert!(
             rendered.contains("Rarog is threading a welcome"),
