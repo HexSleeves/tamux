@@ -6,6 +6,7 @@ mod history;
 mod lsp_client;
 mod network;
 mod notifications;
+mod orchestration;
 mod osc;
 pub mod plugin;
 mod policy;

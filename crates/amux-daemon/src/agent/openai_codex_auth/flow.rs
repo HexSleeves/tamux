@@ -232,7 +232,7 @@ fn bind_callback_listener(flow_id: &str, timeout: Duration) -> Result<TcpListene
             }
             Err(error) => {
                 return Err(error)
-                    .context("failed to bind localhost callback listener on port 1455")
+                    .context("failed to bind localhost callback listener on port 1455");
             }
         }
     }

@@ -15,7 +15,7 @@ async fn openai_done_event_exposes_provider_final_result() {
         let response_body = concat!(
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_event_final\"}}\n\n",
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Event response\"}\n\n",
-                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_event_final\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":5,\"output_tokens\":2},\"error\":null,\"metadata\":{\"source\":\"event-test\"}}}\n\n"
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_event_final\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":5,\"output_tokens\":2},\"error\":null,\"metadata\":{\"source\":\"event-test\"}}}\n\n"
         );
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",

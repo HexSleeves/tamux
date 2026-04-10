@@ -69,35 +69,35 @@ impl AgentEngine {
                         require_llm_validation: false,
                     };
 
-                    let validation_failure_reason =
-                        match self.resolve_handoff_log_id_by_task_id(&task.id).await {
-                            Ok(Some(handoff_log_id)) => {
-                                match self
-                                    .validate_specialist_output(&handoff_log_id, &task.id, &criteria)
-                                    .await
-                                {
-                                    Ok(result) if result.passed => None,
-                                    Ok(result) => Some(format!(
-                                        "specialist output validation failed: {}",
-                                        if result.failures.is_empty() {
-                                            "unknown validation failure".to_string()
-                                        } else {
-                                            result.failures.join("; ")
-                                        }
-                                    )),
-                                    Err(e) => Some(format!(
-                                        "specialist output validation error: {e}"
-                                    )),
-                                }
+                    let validation_failure_reason = match self
+                        .resolve_handoff_log_id_by_task_id(&task.id)
+                        .await
+                    {
+                        Ok(Some(handoff_log_id)) => {
+                            match self
+                                .validate_specialist_output(&handoff_log_id, &task.id, &criteria)
+                                .await
+                            {
+                                Ok(result) if result.passed => None,
+                                Ok(result) => Some(format!(
+                                    "specialist output validation failed: {}",
+                                    if result.failures.is_empty() {
+                                        "unknown validation failure".to_string()
+                                    } else {
+                                        result.failures.join("; ")
+                                    }
+                                )),
+                                Err(e) => Some(format!("specialist output validation error: {e}")),
                             }
-                            Ok(None) => Some(format!(
-                                "specialist validation blocked: no persisted handoff_log linkage for task {}",
-                                task.id
-                            )),
-                            Err(e) => Some(format!(
-                                "specialist validation blocked: failed to resolve handoff linkage: {e}"
-                            )),
-                        };
+                        }
+                        Ok(None) => Some(format!(
+                            "specialist validation blocked: no persisted handoff_log linkage for task {}",
+                            task.id
+                        )),
+                        Err(e) => Some(format!(
+                            "specialist validation blocked: failed to resolve handoff linkage: {e}"
+                        )),
+                    };
 
                     if let Some(reason) = validation_failure_reason {
                         tracing::warn!(

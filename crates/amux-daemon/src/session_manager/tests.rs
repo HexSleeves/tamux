@@ -102,10 +102,37 @@ async fn managed_command_governance_persists_evaluation_and_approval() {
         .expect("approval lookup should succeed")
         .expect("approval record should exist");
     assert_eq!(approval.transition_kind, "managed_command_dispatch");
+    assert_eq!(approval.stage_id.as_deref(), Some("managed_dispatch"));
     assert_eq!(approval.risk_class, "high");
     assert!(approval.scope_summary.is_some());
     assert!(approval.policy_fingerprint.len() > 8);
     assert!(approval.target_scope_json.contains("workspace-a"));
+    assert!(approval.target_scope_json.contains(&session_id.to_string()));
+
+    let evaluation = manager
+        .history
+        .conn
+        .call(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT input_json FROM governance_evaluations ORDER BY created_at DESC LIMIT 1",
+            )?;
+            let input_json: String = stmt.query_row([], |row| row.get(0))?;
+            Ok(input_json)
+        })
+        .await
+        .expect("evaluation lookup should succeed");
+    let evaluation: serde_json::Value =
+        serde_json::from_str(&evaluation).expect("evaluation input json should parse");
+    let run_id = evaluation["run_id"]
+        .as_str()
+        .expect("run_id should be a string");
+    assert!(run_id.starts_with("exec_"));
+    assert_eq!(evaluation["stage_id"], "managed_dispatch");
+    assert_eq!(
+        evaluation["lane_ids"],
+        serde_json::json!([session_id.to_string()])
+    );
+    assert_eq!(evaluation["target_ids"], serde_json::json!(["workspace-a"]));
 
     let eval_count: i64 = manager
         .history

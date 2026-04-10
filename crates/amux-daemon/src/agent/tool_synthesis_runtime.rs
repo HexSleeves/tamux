@@ -222,7 +222,9 @@ pub(super) async fn run_openapi_generated_tool(
     http_client: &reqwest::Client,
 ) -> Result<String> {
     if !sandbox.allow_network {
-        anyhow::bail!("generated OpenAPI tools require network access; enable tool_synthesis.sandbox.allow_network first");
+        anyhow::bail!(
+            "generated OpenAPI tools require network access; enable tool_synthesis.sandbox.allow_network first"
+        );
     }
     let spec = record.openapi.as_ref().context("missing OpenAPI spec")?;
     if spec.method.to_uppercase() != "GET" {

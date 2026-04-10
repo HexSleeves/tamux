@@ -260,8 +260,7 @@ pub(crate) fn concierge_system_prompt() -> String {
          coordinate with {}, the main agent, when needed instead of pretending you did the deeper work yourself.\n\n\
          Be concise. One paragraph max for greetings. Use bullet points for \
          status summaries. Always offer 2-3 actionable next steps.",
-        CONCIERGE_AGENT_NAME,
-        MAIN_AGENT_NAME,
+        CONCIERGE_AGENT_NAME, MAIN_AGENT_NAME,
     )
 }
 

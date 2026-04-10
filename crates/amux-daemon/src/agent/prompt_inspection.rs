@@ -56,8 +56,7 @@ fn render_memory_paths_section(memory_paths: &super::task_prompt::MemoryPaths) -
 fn render_shared_user_profile_policy() -> String {
     format!(
         "- USER.md is shared across agents and read-only for you.\n- If a user preference or operator profile fact should change, ask {} via `message_agent` and let {} decide whether to apply it.",
-        MAIN_AGENT_NAME,
-        MAIN_AGENT_NAME,
+        MAIN_AGENT_NAME, MAIN_AGENT_NAME,
     )
 }
 
