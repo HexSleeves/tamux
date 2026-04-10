@@ -390,8 +390,7 @@ mod tests {
             let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
                 .await
                 .unwrap();
-            let request =
-                "GET /callback?code=authcode123&state=WRONG_STATE HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            let request = "GET /callback?code=authcode123&state=WRONG_STATE HTTP/1.1\r\nHost: localhost\r\n\r\n";
             stream.write_all(request.as_bytes()).await.unwrap();
             // Read response
             let mut buf = vec![0u8; 4096];

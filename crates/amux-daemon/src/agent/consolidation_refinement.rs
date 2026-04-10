@@ -19,8 +19,7 @@ impl AgentEngine {
 
         let provider_config = resolve_active_provider_config(config)?;
 
-        let system =
-            "You are a concise memory consolidation agent. Respond with ONLY the merged fact, nothing else.";
+        let system = "You are a concise memory consolidation agent. Respond with ONLY the merged fact, nothing else.";
 
         let messages = vec![ApiMessage {
             role: "user".to_string(),

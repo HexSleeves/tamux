@@ -4,8 +4,7 @@ use super::agent_identity::{CONCIERGE_AGENT_NAME, MAIN_AGENT_NAME};
 use super::memory_curation_guidance;
 use super::types::*;
 
-const LOCAL_SKILL_WORKFLOW_PROMPT: &str =
-    "## Local Skills Workflow\n\
+const LOCAL_SKILL_WORKFLOW_PROMPT: &str = "## Local Skills Workflow\n\
      - Tamux runs local skill discovery before non-trivial work and surfaces the ranked result in the runtime prompt and workflow notices.\n\
      - Treat that discovery result as the source of truth instead of relying on raw `list_skills` output.\n\
      - If the top match is strong, call `read_skill` for the recommended skill before other substantial tools.\n\

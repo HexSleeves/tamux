@@ -152,9 +152,9 @@ async fn execute_tool_guarded_call_uses_weles_runtime_structured_allow_metadata(
         review.audit_id.as_deref(),
         Some("audit-weles-runtime-allow")
     );
-    assert!(review.reasons.iter().any(
-        |reason| reason.contains("runtime review approved controlled browser reconfiguration")
-    ));
+    assert!(review.reasons.iter().any(|reason| {
+        reason.contains("runtime review approved controlled browser reconfiguration")
+    }));
 
     let recorded = recorded_bodies
         .lock()

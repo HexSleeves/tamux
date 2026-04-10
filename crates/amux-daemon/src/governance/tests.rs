@@ -2,8 +2,8 @@ use amux_protocol::{ManagedCommandRequest, ManagedCommandSource, SecurityLevel};
 
 use super::{
     compute_policy_fingerprint, effective_constraints, evaluate_governance,
-    governance_input_for_managed_command, GovernanceInput, ProvenanceCompleteness,
-    ProvenanceStatus, RiskDimensions, TransitionKind, VerdictClass,
+    governance_input_for_managed_command, GovernanceInitiator, GovernanceInput,
+    ProvenanceCompleteness, ProvenanceStatus, RiskDimensions, TransitionKind, VerdictClass,
 };
 
 fn make_request(
@@ -21,6 +21,51 @@ fn make_request(
         language_hint: Some("bash".to_string()),
         source: ManagedCommandSource::Agent,
     }
+}
+
+#[test]
+fn governance_input_for_managed_command_populates_run_stage_and_scope_identity() {
+    let input = governance_input_for_managed_command(
+        "exec_scope",
+        &make_request("echo hello", false, true),
+        Some("workspace-a".to_string()),
+        Some("lane-a".to_string()),
+    );
+
+    assert_eq!(input.run_id.as_deref(), Some("exec_scope"));
+    assert_eq!(input.stage_id.as_deref(), Some("managed_dispatch"));
+    assert_eq!(input.lane_ids, vec!["lane-a".to_string()]);
+    assert_eq!(input.target_ids, vec!["workspace-a".to_string()]);
+    assert_eq!(input.initiator, GovernanceInitiator::Agent);
+}
+
+#[test]
+fn governance_input_for_managed_command_falls_back_to_session_target_without_workspace() {
+    let input = governance_input_for_managed_command(
+        "exec_scope_2",
+        &make_request("echo hello", false, true),
+        None,
+        Some("lane-a".to_string()),
+    );
+
+    assert_eq!(input.target_ids, vec!["lane-a".to_string()]);
+}
+
+#[test]
+fn governance_input_for_managed_command_maps_human_source_to_operator_initiator() {
+    let request = ManagedCommandRequest {
+        source: ManagedCommandSource::Human,
+        ..make_request("echo hello", false, true)
+    };
+
+    let input = governance_input_for_managed_command(
+        "exec_scope_3",
+        &request,
+        Some("workspace-a".to_string()),
+        Some("lane-a".to_string()),
+    );
+
+    assert_eq!(input.initiator, GovernanceInitiator::Operator);
 }
 
 #[test]

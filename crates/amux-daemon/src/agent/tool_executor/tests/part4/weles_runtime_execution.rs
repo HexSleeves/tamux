@@ -206,9 +206,9 @@ async fn execute_tool_shell_python_bypass_under_yolo_never_downgrades_to_managed
     let (event_tx, _) = broadcast::channel(8);
     let marker = root.path().join("python-bypass-yolo-risky.txt");
     let command = format!(
-            "python3 -c \"from pathlib import Path; Path(r'{}').write_text('ran')\" && rm -rf /tmp/tamux-weles-yolo-risk",
-            marker.display()
-        );
+        "python3 -c \"from pathlib import Path; Path(r'{}').write_text('ran')\" && rm -rf /tmp/tamux-weles-yolo-risk",
+        marker.display()
+    );
     let tool_call = ToolCall::with_default_weles_review(
         "tool-python-yolo-risky".to_string(),
         ToolFunction {

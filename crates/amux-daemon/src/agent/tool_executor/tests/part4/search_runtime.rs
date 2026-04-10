@@ -53,9 +53,9 @@ async fn search_files_subprocess_helper_kills_child_when_timeout_drops_future() 
     let dir = tempdir().expect("tempdir should succeed");
     let pid_path = dir.path().join("search-files-timeout.pid");
     let script = format!(
-            "import os, pathlib, time; pid_path = pathlib.Path(r\"{}\"); pid_path.parent.mkdir(parents=True, exist_ok=True); pid_path.write_text(str(os.getpid())); time.sleep(30)",
-            pid_path.display()
-        );
+        "import os, pathlib, time; pid_path = pathlib.Path(r\"{}\"); pid_path.parent.mkdir(parents=True, exist_ok=True); pid_path.write_text(str(os.getpid())); time.sleep(30)",
+        pid_path.display()
+    );
 
     let mut command = tokio::process::Command::new("python3");
     command.arg("-c").arg(script);
@@ -106,9 +106,9 @@ async fn search_files_bounded_subprocess_kills_child_when_global_cap_is_hit() {
     let dir = tempdir().expect("tempdir should succeed");
     let pid_path = dir.path().join("search-files-bounded.pid");
     let script = format!(
-            "import os, pathlib, sys, time; pathlib.Path(r\"{}\").write_text(str(os.getpid())); print('first:1:needle', flush=True); print('second:2:needle', flush=True); time.sleep(30)",
-            pid_path.display()
-        );
+        "import os, pathlib, sys, time; pathlib.Path(r\"{}\").write_text(str(os.getpid())); print('first:1:needle', flush=True); print('second:2:needle', flush=True); time.sleep(30)",
+        pid_path.display()
+    );
 
     let mut command = tokio::process::Command::new("python3");
     command.arg("-c").arg(script);

@@ -83,8 +83,7 @@ impl AgentEngine {
         msg: &gateway::IncomingMessage,
         reply_tool_name: &str,
     ) {
-        let fallback_text =
-            "I’m still processing your message and hit a timeout. Please send it again, or use !new to start a fresh session.";
+        let fallback_text = "I’m still processing your message and hit a timeout. Please send it again, or use !new to start a fresh session.";
         let fallback_tool = ToolCall::with_default_weles_review(
             format!("gateway_timeout_{}", uuid::Uuid::new_v4()),
             ToolFunction {

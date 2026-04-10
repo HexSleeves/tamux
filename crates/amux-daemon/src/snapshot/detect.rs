@@ -21,7 +21,9 @@ pub fn detect_snapshot_backend(
                 tracing::info!("snapshot backend: BTRFS (forced)");
                 return Box::new(BtrfsBackend::new().expect("failed to init BTRFS backend"));
             }
-            tracing::warn!("BTRFS backend requested but workspace is not on a BTRFS filesystem; falling back to tar");
+            tracing::warn!(
+                "BTRFS backend requested but workspace is not on a BTRFS filesystem; falling back to tar"
+            );
         }
         "tar" => {
             tracing::info!("snapshot backend: tar (forced)");
