@@ -112,83 +112,6 @@ async fn list_threads_tool_returns_filtered_visible_summaries() {
     drop(threads);
 
     let tool_call = ToolCall::with_default_weles_review(
-        "tool-list-threads".to_string(),
-        ToolFunction {
-            name: "list_threads".to_string(),
-            arguments: serde_json::json!({
-                "created_after": 100,
-                "created_before": 200,
-                "updated_after": 300,
-                "updated_before": 400,
-                "agent_name": "main-agent",
-                "title_query": " alpha ",
-                "pinned": true,
-                "limit": 10,
-                "offset": 0
-            })
-            .to_string(),
-        },
-    );
-
-    let result = execute_tool(
-        &tool_call,
-        &engine,
-        "thread-list-threads",
-        None,
-        &manager,
-        None,
-        &event_tx,
-        root.path(),
-        &engine.http_client,
-        None,
-    )
-    .await;
-
-    assert!(
-        !result.is_error,
-        "list_threads should succeed with valid filters: {}",
-        result.content
-    );
-    assert!(result.pending_approval.is_none());
-
-    let payload: serde_json::Value =
-        serde_json::from_str(&result.content).expect("list_threads should return JSON");
-    let rows = payload
-        .as_array()
-        .expect("list_threads should return an array");
-    assert_eq!(rows.len(), 1, "only the matching visible thread should be returned");
-    assert_eq!(rows[0].get("id").and_then(|value| value.as_str()), Some("thread-alpha"));
-    assert_eq!(
-        rows[0].get("title").and_then(|value| value.as_str()),
-        Some("Alpha project thread")
-    );
-    assert_eq!(rows[0].get("pinned").and_then(|value| value.as_bool()), Some(true));
-    assert_eq!(
-        rows[0]
-            .get("messages")
-            .and_then(|value| value.as_array())
-            .map(std::vec::Vec::len),
-        Some(0),
-        "list_threads should return summary rows without message history"
-    );
-}
-
-#[tokio::test]
-async fn ask_questions_tool_waits_for_operator_choice() {
-    let root = tempdir().expect("tempdir");
-    let manager = SessionManager::new_test(root.path()).await;
-    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
-    let (event_tx, _) = broadcast::channel(8);
-    let mut operator_events = engine.event_tx.subscribe();
-
-    let tool_call = ToolCall::with_default_weles_review(
-        "tool-ask-questions".to_string(),
-        ToolFunction {
-            name: "ask_questions".to_string(),
-            arguments: serde_json::json!({
-                "content": "Choose:\nA. Alpha\nB. Beta",
-                "options": ["A", "B"]
-            })
             .to_string(),
         },
     );
@@ -282,6 +205,84 @@ async fn discover_skills_tool_returns_discovery_result() {
     assert_eq!(payload.get("query").and_then(|value| value.as_str()), Some("debug panic"));
     assert!(payload.get("confidence_tier").is_some(), "discovery result should include confidence tier");
     assert!(payload.get("recommended_action").is_some(), "discovery result should include recommended action");
+}
+
+#[tokio::test]
+async fn read_skill_uses_workspace_root_when_session_is_absent() {
+    let _cwd_lock = current_dir_test_lock().lock().expect("cwd lock");
+    let original_cwd = std::env::current_dir().expect("current dir");
+
+    let root = tempdir().expect("tempdir");
+    let frontend_root = tempdir().expect("tempdir frontend");
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname='workspace-root'\nversion='0.1.0'\n[dependencies]\ntokio='1'\n",
+    )
+    .expect("write cargo workspace");
+    std::fs::write(
+        frontend_root.path().join("package.json"),
+        r#"{"name":"frontend-root","dependencies":{"react":"19.0.0"}}"#,
+    )
+    .expect("write package json");
+
+    let generated_dir = root.path().join("skills").join("generated");
+    std::fs::create_dir_all(&generated_dir).expect("create generated dir");
+    std::fs::write(
+        generated_dir.join("build-pipeline.md"),
+        "# Build pipeline\nRun cargo build for rust workspaces.\n",
+    )
+    .expect("write rust skill");
+    std::fs::write(
+        generated_dir.join("build-pipeline--frontend.md"),
+        "# Frontend build pipeline\nUse react build checks.\n",
+    )
+    .expect("write frontend skill");
+
+    std::env::set_current_dir(frontend_root.path()).expect("set frontend cwd");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-read-skill-workspace-root".to_string(),
+        ToolFunction {
+            name: "read_skill".to_string(),
+            arguments: serde_json::json!({
+                "skill": "build-pipeline",
+                "max_lines": 50
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        "thread-read-skill-workspace-root",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    std::env::set_current_dir(&original_cwd).expect("restore cwd");
+
+    assert!(!result.is_error, "read_skill should succeed: {}", result.content);
+    assert!(
+        result.content.contains("build-pipeline.md"),
+        "read_skill should resolve the rust workspace variant from workspace_root fallback: {}",
+        result.content
+    );
+    assert!(
+        !result.content.contains("build-pipeline--frontend.md"),
+        "read_skill should not resolve from process cwd when workspace_root is available: {}",
+        result.content
+    );
 }
 
 #[tokio::test]

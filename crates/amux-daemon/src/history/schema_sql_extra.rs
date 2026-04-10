@@ -270,6 +270,53 @@ pub(super) fn extended_schema_sql() -> &'static str {
             CREATE INDEX IF NOT EXISTS idx_op_profile_events_created ON operator_profile_events(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_op_profile_events_field ON operator_profile_events(field_key, created_at DESC);
 
+            CREATE TABLE IF NOT EXISTS memory_distillation_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_thread_id TEXT NOT NULL,
+                source_message_range TEXT,
+                distilled_fact TEXT NOT NULL,
+                target_file TEXT NOT NULL,
+                category TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                applied_to_memory INTEGER DEFAULT 0,
+                agent_id TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_distillation_log_thread ON memory_distillation_log(source_thread_id, created_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_distillation_log_applied ON memory_distillation_log(applied_to_memory, created_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS execution_traces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT,
+                thread_id TEXT,
+                agent_id TEXT NOT NULL,
+                tool_calls_json TEXT,
+                tool_fallbacks INTEGER DEFAULT 0,
+                operator_revisions INTEGER DEFAULT 0,
+                fast_denials INTEGER DEFAULT 0,
+                exit_code INTEGER,
+                duration_ms INTEGER,
+                started_at_ms INTEGER NOT NULL,
+                completed_at_ms INTEGER,
+                outcome TEXT NOT NULL,
+                strategy_hint TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_execution_traces_agent ON execution_traces(agent_id, started_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_execution_traces_outcome ON execution_traces(outcome, started_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS forge_pass_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT NOT NULL,
+                period_start_ms INTEGER NOT NULL,
+                period_end_ms INTEGER NOT NULL,
+                traces_analyzed INTEGER NOT NULL,
+                patterns_found INTEGER NOT NULL,
+                hints_applied INTEGER NOT NULL,
+                hints_logged INTEGER NOT NULL,
+                completed_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_forge_pass_log_agent ON forge_pass_log(agent_id, completed_at_ms DESC);
+
             CREATE TABLE IF NOT EXISTS operator_profile_checkins (
                 id            TEXT PRIMARY KEY,
                 kind          TEXT NOT NULL,
