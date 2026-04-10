@@ -104,6 +104,8 @@ pub struct AgentEngine {
     pub thread_handoff_states: RwLock<HashMap<String, ThreadHandoffState>>,
     pub thread_client_surfaces: RwLock<HashMap<String, amux_protocol::ClientSurface>>,
     pub thread_skill_discovery_states: RwLock<HashMap<String, LatestSkillDiscoveryState>>,
+    pub thread_structural_memories:
+        RwLock<HashMap<String, crate::agent::context::structural_memory::ThreadStructuralMemory>>,
     pub thread_todos: RwLock<HashMap<String, Vec<TodoItem>>>,
     pub thread_work_contexts: RwLock<HashMap<String, ThreadWorkContext>>,
     pub tasks: Mutex<VecDeque<AgentTask>>,
@@ -285,6 +287,7 @@ impl AgentEngine {
             thread_handoff_states: RwLock::new(HashMap::new()),
             thread_client_surfaces: RwLock::new(HashMap::new()),
             thread_skill_discovery_states: RwLock::new(HashMap::new()),
+            thread_structural_memories: RwLock::new(HashMap::new()),
             thread_todos: RwLock::new(HashMap::new()),
             thread_work_contexts: RwLock::new(HashMap::new()),
             tasks: Mutex::new(VecDeque::new()),

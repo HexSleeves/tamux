@@ -5,6 +5,23 @@ impl HistoryStore {
         self.skill_dir.parent().unwrap_or(self.skill_dir.as_path())
     }
 
+    pub(crate) fn data_root(&self) -> &Path {
+        self.skill_dir
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or(self.skill_dir.as_path())
+    }
+
+    pub(crate) fn offloaded_payloads_dir(&self) -> PathBuf {
+        self.data_root().join("offloaded-payloads")
+    }
+
+    pub(crate) fn offloaded_payload_path(&self, thread_id: &str, payload_id: &str) -> PathBuf {
+        self.offloaded_payloads_dir()
+            .join(thread_id)
+            .join(format!("{payload_id}.txt"))
+    }
+
     pub async fn new() -> Result<Self> {
         let base = amux_protocol::ensure_amux_data_dir()?;
         let history_dir = base.join("history");

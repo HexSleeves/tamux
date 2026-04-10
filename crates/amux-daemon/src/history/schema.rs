@@ -6,12 +6,13 @@ use super::schema_sql_extra::extended_schema_sql;
 
 impl HistoryStore {
     pub(super) async fn init_schema(&self) -> Result<()> {
+        let offloaded_payloads_dir = self.offloaded_payloads_dir();
         self.conn
-            .call(|connection| {
+            .call(move |connection| {
                 let schema_sql = format!("{}{}", base_schema_sql(), extended_schema_sql());
                 connection.execute_batch(&schema_sql)?;
                 ensure_context_archive_fts(connection);
-                apply_schema_migrations(connection)?;
+                apply_schema_migrations(connection, &offloaded_payloads_dir)?;
                 Ok(())
             })
             .await

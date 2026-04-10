@@ -138,6 +138,22 @@ impl AgentEngine {
                 "failed to persist sqlite thread snapshot: {e}"
             );
         }
+
+        let structural_memory = self.get_thread_structural_memory(&thread.id).await;
+        let persistence_result = if let Some(structural_memory) = structural_memory {
+            self.history
+                .upsert_thread_structural_memory_state(
+                    &thread.id,
+                    &structural_memory,
+                    thread.updated_at,
+                )
+                .await
+        } else {
+            self.history.delete_thread_structural_memory(&thread.id).await
+        };
+        if let Err(error) = persistence_result {
+            tracing::warn!(thread_id = %thread.id, %error, "failed to persist thread structural memory state");
+        }
     }
 
     pub(crate) async fn persist_thread_by_id(&self, thread_id: &str) {

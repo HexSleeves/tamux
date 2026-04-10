@@ -156,6 +156,8 @@ pub struct AgentConfig {
     pub gateway: GatewayConfig,
     #[serde(default)]
     pub snapshot_retention: SnapshotRetentionSettings,
+    #[serde(default = "default_offload_tool_result_threshold_bytes")]
+    pub offload_tool_result_threshold_bytes: usize,
     /// Agent backend: daemon (built-in LLM), openclaw, hermes, or legacy.
     #[serde(default)]
     pub agent_backend: AgentBackend,

@@ -731,3 +731,552 @@ async fn get_thread_tool_requires_thread_id_argument() {
     assert!(result.pending_approval.is_none());
     assert!(result.content.contains("missing 'thread_id' argument"));
 }
+
+#[test]
+fn default_offload_threshold_is_50kb() {
+    assert_eq!(
+        AgentConfig::default().offload_tool_result_threshold_bytes,
+        50 * 1024
+    );
+}
+
+#[tokio::test]
+async fn read_offloaded_payload_tool_reads_canonical_path_even_if_metadata_storage_path_is_tampered() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let thread_id = "thread-offloaded-read";
+    let payload_id = "payload-read-123";
+    let raw_payload = "first line\nAuthorization: Bearer super_secret_token_123\nthird line";
+    let payload_path = root
+        .path()
+        .join("offloaded-payloads")
+        .join(thread_id)
+        .join(format!("{payload_id}.txt"));
+    std::fs::create_dir_all(payload_path.parent().expect("payload parent"))
+        .expect("create payload directory");
+    std::fs::write(&payload_path, raw_payload).expect("write raw offloaded payload");
+    engine
+        .history
+        .upsert_offloaded_payload_metadata(
+            payload_id,
+            thread_id,
+            "bash_command",
+            Some("tool-call-read"),
+            "text/plain",
+            raw_payload.len() as u64,
+            "summary placeholder",
+            1_700_000_000,
+        )
+        .await
+        .expect("store offloaded payload metadata");
+
+    let tampered_path = root.path().join("outside.txt");
+    std::fs::write(&tampered_path, "tampered path payload")
+        .expect("write tampered payload outside canonical path");
+    let tampered_storage_path = tampered_path.to_string_lossy().into_owned();
+    let payload_id_for_update = payload_id.to_string();
+    engine
+        .history
+        .conn
+        .call(move |conn| {
+            conn.execute(
+                "UPDATE offloaded_payloads SET storage_path = ?1 WHERE payload_id = ?2",
+                rusqlite::params![tampered_storage_path, payload_id_for_update],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("update tampered storage path");
+
+    let tools = get_available_tools(&AgentConfig::default(), root.path(), false);
+    let read_offloaded_payload = tools
+        .iter()
+        .find(|tool| tool.function.name == "read_offloaded_payload")
+        .expect("read_offloaded_payload tool should be available");
+    let properties = read_offloaded_payload
+        .function
+        .parameters
+        .get("properties")
+        .and_then(|value| value.as_object())
+        .expect("read_offloaded_payload schema should expose properties");
+    assert!(
+        properties.contains_key("payload_id"),
+        "read_offloaded_payload schema should include payload_id"
+    );
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-read-offloaded-payload".to_string(),
+        ToolFunction {
+            name: "read_offloaded_payload".to_string(),
+            arguments: serde_json::json!({ "payload_id": payload_id }).to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        thread_id,
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(
+        !result.is_error,
+        "read_offloaded_payload should succeed with valid payload_id: {}",
+        result.content
+    );
+    assert!(result.pending_approval.is_none());
+    assert_eq!(result.content, raw_payload);
+}
+
+#[tokio::test]
+async fn read_offloaded_payload_tool_rejects_cross_thread_metadata_reads() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let owner_thread_id = "thread-offloaded-owner";
+    let caller_thread_id = "thread-offloaded-other";
+    let payload_id = "payload-cross-thread-123";
+    let raw_payload = "cross-thread payload should stay private";
+    let payload_path = root
+        .path()
+        .join("offloaded-payloads")
+        .join(owner_thread_id)
+        .join(format!("{payload_id}.txt"));
+    std::fs::create_dir_all(payload_path.parent().expect("payload parent"))
+        .expect("create payload directory");
+    std::fs::write(&payload_path, raw_payload).expect("write raw offloaded payload");
+
+    engine
+        .history
+        .upsert_offloaded_payload_metadata(
+            payload_id,
+            owner_thread_id,
+            "bash_command",
+            Some("tool-call-cross-thread"),
+            "text/plain",
+            raw_payload.len() as u64,
+            "summary placeholder",
+            1_700_000_002,
+        )
+        .await
+        .expect("store offloaded payload metadata");
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-read-offloaded-payload-cross-thread".to_string(),
+        ToolFunction {
+            name: "read_offloaded_payload".to_string(),
+            arguments: serde_json::json!({ "payload_id": payload_id }).to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        caller_thread_id,
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(result.is_error, "cross-thread read should fail safely");
+    assert!(result.pending_approval.is_none());
+    assert!(
+        result.content.contains("offloaded payload not found"),
+        "expected thread-scoped rejection, got: {}",
+        result.content
+    );
+}
+
+#[tokio::test]
+async fn read_offloaded_payload_tool_rejects_paths_that_escape_the_daemon_root() {
+    let root = tempdir().expect("tempdir");
+    let escaped_root = tempfile::tempdir_in(root.path().parent().expect("root parent"))
+        .expect("external tempdir");
+    std::fs::create_dir_all(root.path().join("offloaded-payloads"))
+        .expect("create daemon offloaded payload root");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let payload_id = "payload-escape-123";
+    let escaped_component = escaped_root
+        .path()
+        .file_name()
+        .and_then(|value| value.to_str())
+        .expect("external tempdir basename");
+    let thread_id = format!("../../{escaped_component}");
+    let escaped_payload_path = escaped_root.path().join(format!("{payload_id}.txt"));
+    std::fs::write(&escaped_payload_path, "outside daemon root")
+        .expect("write escaped payload file");
+
+    engine
+        .history
+        .upsert_offloaded_payload_metadata(
+            payload_id,
+            &thread_id,
+            "bash_command",
+            Some("tool-call-escape"),
+            "text/plain",
+            19,
+            "summary placeholder",
+            1_700_000_001,
+        )
+        .await
+        .expect("store escaped payload metadata");
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-read-offloaded-payload-escape".to_string(),
+        ToolFunction {
+            name: "read_offloaded_payload".to_string(),
+            arguments: serde_json::json!({ "payload_id": payload_id }).to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        &thread_id,
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(result.is_error, "escaped path should fail safely");
+    assert!(result.pending_approval.is_none());
+    assert!(
+        result.content.contains("outside daemon-owned root"),
+        "expected containment failure, got: {}",
+        result.content
+    );
+}
+
+#[tokio::test]
+async fn read_offloaded_payload_tool_rejects_payload_ids_that_escape_the_caller_thread_subtree() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let caller_thread_id = "thread-offloaded-owner";
+    let sibling_thread_id = "thread-offloaded-sibling";
+    let payload_leaf = "payload-cross-scope-123";
+    let payload_id = format!("../{sibling_thread_id}/{payload_leaf}");
+    let raw_payload = "sibling-thread payload should stay private";
+
+    let sibling_payload_path = root
+        .path()
+        .join("offloaded-payloads")
+        .join(sibling_thread_id)
+        .join(format!("{payload_leaf}.txt"));
+    std::fs::create_dir_all(sibling_payload_path.parent().expect("payload parent"))
+        .expect("create sibling payload directory");
+    std::fs::write(&sibling_payload_path, raw_payload).expect("write sibling payload");
+    std::fs::create_dir_all(
+        root.path()
+            .join("offloaded-payloads")
+            .join(caller_thread_id),
+    )
+    .expect("create caller thread directory");
+
+    engine
+        .history
+        .upsert_offloaded_payload_metadata(
+            &payload_id,
+            caller_thread_id,
+            "bash_command",
+            Some("tool-call-payload-traversal"),
+            "text/plain",
+            raw_payload.len() as u64,
+            "summary placeholder",
+            1_700_000_003,
+        )
+        .await
+        .expect("store traversal metadata row");
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-read-offloaded-payload-thread-subtree".to_string(),
+        ToolFunction {
+            name: "read_offloaded_payload".to_string(),
+            arguments: serde_json::json!({ "payload_id": payload_id }).to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        caller_thread_id,
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(result.is_error, "payload subtree escape should fail safely");
+    assert!(result.pending_approval.is_none());
+    assert!(
+        result.content.contains("offloaded payload not found"),
+        "expected thread-scoped rejection, got: {}",
+        result.content
+    );
+}
+
+#[tokio::test]
+async fn large_tool_result_is_offloaded_and_thread_message_keeps_summary() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.offload_tool_result_threshold_bytes = 64;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let raw_payload = "tool output line\n".repeat(16);
+    let prepared = crate::agent::agent_loop::send_message::tool_results::prepare_tool_result_thread_message(
+        &engine,
+        "thread-offload-large",
+        &ToolResult {
+            tool_call_id: "tool-call-large".to_string(),
+            name: "bash_command".to_string(),
+            content: raw_payload.clone(),
+            is_error: false,
+            weles_review: None,
+            pending_approval: None,
+        },
+        1_700_000_123,
+    )
+    .await;
+
+    let payload_id = prepared
+        .offloaded_payload_id
+        .clone()
+        .expect("large tool result should be offloaded");
+    let expected_summary = format!(
+        "Tool result offloaded\n- tool: bash_command\n- status: done\n- bytes: {}\n- payload_id: {}\n- key findings:\n  - tool output line\n  - tool output line\n  - tool output line",
+        raw_payload.len(), payload_id
+    );
+    assert_eq!(prepared.content, expected_summary);
+
+    let metadata = engine
+        .history
+        .get_offloaded_payload_metadata(&payload_id)
+        .await
+        .expect("metadata lookup should succeed")
+        .expect("metadata row should exist for offloaded payload");
+    assert_eq!(metadata.thread_id, "thread-offload-large");
+    assert_eq!(metadata.tool_name, "bash_command");
+    assert_eq!(metadata.tool_call_id.as_deref(), Some("tool-call-large"));
+    assert_eq!(metadata.content_type, "text/plain");
+    assert_eq!(metadata.byte_size, raw_payload.len() as u64);
+    assert_eq!(metadata.summary, expected_summary);
+
+    let payload_path = root
+        .path()
+        .join("offloaded-payloads")
+        .join("thread-offload-large")
+        .join(format!("{payload_id}.txt"));
+    assert_eq!(
+        std::fs::read_to_string(&payload_path).expect("offloaded payload file should exist"),
+        raw_payload
+    );
+}
+
+#[tokio::test]
+async fn large_read_offloaded_payload_result_stays_inline_in_thread_messages() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.offload_tool_result_threshold_bytes = 64;
+    let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let thread_id = "thread-read-inline";
+    let payload_id = "payload-read-inline-123";
+    let raw_payload = "retrieved payload line\n".repeat(16);
+    let payload_path = root
+        .path()
+        .join("offloaded-payloads")
+        .join(thread_id)
+        .join(format!("{payload_id}.txt"));
+    std::fs::create_dir_all(payload_path.parent().expect("payload parent"))
+        .expect("create payload directory");
+    std::fs::write(&payload_path, &raw_payload).expect("write raw offloaded payload");
+
+    engine
+        .history
+        .upsert_offloaded_payload_metadata(
+            payload_id,
+            thread_id,
+            "bash_command",
+            Some("tool-call-read-inline"),
+            "text/plain",
+            raw_payload.len() as u64,
+            "summary placeholder",
+            1_700_000_124,
+        )
+        .await
+        .expect("store offloaded payload metadata");
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-read-offloaded-payload-inline".to_string(),
+        ToolFunction {
+            name: "read_offloaded_payload".to_string(),
+            arguments: serde_json::json!({ "payload_id": payload_id }).to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        thread_id,
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(
+        !result.is_error,
+        "read_offloaded_payload should succeed for inline-preservation regression: {}",
+        result.content
+    );
+    assert_eq!(result.content, raw_payload);
+
+    let prepared = crate::agent::agent_loop::send_message::tool_results::prepare_tool_result_thread_message(
+        &engine,
+        thread_id,
+        &result,
+        1_700_000_125,
+    )
+    .await;
+
+    assert_eq!(prepared.content, raw_payload);
+    assert_eq!(prepared.offloaded_payload_id, None);
+
+    let metadata = engine
+        .history
+        .list_offloaded_payload_metadata_for_thread(thread_id)
+        .await
+        .expect("metadata lookup should succeed");
+    assert_eq!(metadata.len(), 1, "read tool result should not create a second offloaded payload row");
+    assert_eq!(metadata[0].payload_id, payload_id);
+}
+
+#[tokio::test]
+async fn offloaded_tool_result_falls_back_to_inline_content_when_persist_fails() {
+    let root = tempdir().expect("tempdir");
+    std::fs::write(root.path().join("offloaded-payloads"), "blocked")
+        .expect("block offloaded payload directory creation");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.offload_tool_result_threshold_bytes = 8;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let raw_payload = "payload that should have been offloaded".to_string();
+    let prepared = crate::agent::agent_loop::send_message::tool_results::prepare_tool_result_thread_message(
+        &engine,
+        "thread-inline-fallback",
+        &ToolResult {
+            tool_call_id: "tool-call-inline-fallback".to_string(),
+            name: "bash_command".to_string(),
+            content: raw_payload.clone(),
+            is_error: false,
+            weles_review: None,
+            pending_approval: None,
+        },
+        1_700_000_456,
+    )
+    .await;
+
+    assert_eq!(prepared.content, raw_payload);
+    assert_eq!(prepared.offloaded_payload_id, None);
+
+    let metadata = engine
+        .history
+        .list_offloaded_payload_metadata_for_thread("thread-inline-fallback")
+        .await
+        .expect("metadata lookup should succeed");
+    assert!(
+        metadata.is_empty(),
+        "failed offload should not persist metadata rows"
+    );
+}
+
+#[tokio::test]
+async fn offloaded_tool_result_cleans_up_payload_file_when_metadata_write_fails() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.offload_tool_result_threshold_bytes = 8;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .history
+        .conn
+        .call(|conn| {
+            conn.execute("DROP TABLE offloaded_payloads", [])?;
+            Ok(())
+        })
+        .await
+        .expect("drop offloaded payload metadata table");
+
+    let raw_payload = "payload that should be cleaned up after metadata failure".to_string();
+    let prepared = crate::agent::agent_loop::send_message::tool_results::prepare_tool_result_thread_message(
+        &engine,
+        "thread-inline-cleanup",
+        &ToolResult {
+            tool_call_id: "tool-call-inline-cleanup".to_string(),
+            name: "bash_command".to_string(),
+            content: raw_payload.clone(),
+            is_error: false,
+            weles_review: None,
+            pending_approval: None,
+        },
+        1_700_000_789,
+    )
+    .await;
+
+    assert_eq!(prepared.content, raw_payload);
+    assert_eq!(prepared.offloaded_payload_id, None);
+
+    let payload_dir = root
+        .path()
+        .join("offloaded-payloads")
+        .join("thread-inline-cleanup");
+    let remaining_files = if payload_dir.exists() {
+        std::fs::read_dir(&payload_dir)
+            .expect("read payload cleanup directory")
+            .count()
+    } else {
+        0
+    };
+    assert_eq!(remaining_files, 0, "metadata write failure should clean up payload file");
+}

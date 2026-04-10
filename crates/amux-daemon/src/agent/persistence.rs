@@ -161,6 +161,7 @@ impl AgentEngine {
                 let mut handoff_states = HashMap::new();
                 let mut thread_client_surfaces = HashMap::new();
                 let mut thread_skill_discovery_states = HashMap::new();
+                let mut thread_structural_memories = HashMap::new();
                 for thread_row in thread_rows {
                     let thread_id = thread_row.id.clone();
                     let thread_title = thread_row.title.clone();
@@ -256,12 +257,28 @@ impl AgentEngine {
                             total_output_tokens,
                         },
                     );
+                    match self
+                        .history
+                        .get_thread_structural_memory_state::<
+                            crate::agent::context::structural_memory::ThreadStructuralMemory,
+                        >(&thread_id)
+                        .await
+                    {
+                        Ok(Some(state)) => {
+                            thread_structural_memories.insert(thread_id.clone(), state);
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            tracing::warn!(thread_id = %thread_id, %error, "failed to hydrate thread structural memory");
+                        }
+                    }
                     handoff_states.insert(thread_id, handoff_state);
                 }
                 *self.threads.write().await = threads;
                 *self.thread_handoff_states.write().await = handoff_states;
                 *self.thread_client_surfaces.write().await = thread_client_surfaces;
                 *self.thread_skill_discovery_states.write().await = thread_skill_discovery_states;
+                *self.thread_structural_memories.write().await = thread_structural_memories;
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("failed to load agent threads from sqlite: {e}"),

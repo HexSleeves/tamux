@@ -79,6 +79,11 @@ pub(super) fn parse_message_metadata(metadata_json: Option<&str>) -> ParsedMessa
         .as_ref()
         .and_then(|value| value.get("compaction_strategy"))
         .and_then(|value| serde_json::from_value::<CompactionStrategy>(value.clone()).ok());
+    let structural_refs = metadata
+        .as_ref()
+        .and_then(|value| value.get("structural_refs"))
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
+        .unwrap_or_default();
 
     ParsedMessageMetadata {
         tool_call_id: get_str("tool_call_id"),
@@ -94,7 +99,7 @@ pub(super) fn parse_message_metadata(metadata_json: Option<&str>) -> ParsedMessa
         compaction_strategy,
         compaction_payload: get_str("compaction_payload"),
         offloaded_payload_id: get_str("offloaded_payload_id"),
-        structural_refs: get_string_vec("structural_refs"),
+        structural_refs,
     }
 }
 
