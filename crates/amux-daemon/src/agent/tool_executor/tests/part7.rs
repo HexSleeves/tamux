@@ -1,3 +1,8 @@
+fn current_dir_test_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 fn make_thread(
     id: &str,
     agent_name: Option<&str>,
@@ -112,6 +117,83 @@ async fn list_threads_tool_returns_filtered_visible_summaries() {
     drop(threads);
 
     let tool_call = ToolCall::with_default_weles_review(
+        "tool-list-threads".to_string(),
+        ToolFunction {
+            name: "list_threads".to_string(),
+            arguments: serde_json::json!({
+                "created_after": 100,
+                "created_before": 200,
+                "updated_after": 300,
+                "updated_before": 400,
+                "agent_name": "main-agent",
+                "title_query": " alpha ",
+                "pinned": true,
+                "limit": 10,
+                "offset": 0
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        "thread-list-threads",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(
+        !result.is_error,
+        "list_threads should succeed with valid filters: {}",
+        result.content
+    );
+    assert!(result.pending_approval.is_none());
+
+    let payload: serde_json::Value =
+        serde_json::from_str(&result.content).expect("list_threads should return JSON");
+    let rows = payload
+        .as_array()
+        .expect("list_threads should return an array");
+    assert_eq!(rows.len(), 1, "only the matching visible thread should be returned");
+    assert_eq!(rows[0].get("id").and_then(|value| value.as_str()), Some("thread-alpha"));
+    assert_eq!(
+        rows[0].get("title").and_then(|value| value.as_str()),
+        Some("Alpha project thread")
+    );
+    assert_eq!(rows[0].get("pinned").and_then(|value| value.as_bool()), Some(true));
+    assert_eq!(
+        rows[0]
+            .get("messages")
+            .and_then(|value| value.as_array())
+            .map(std::vec::Vec::len),
+        Some(0),
+        "list_threads should return summary rows without message history"
+    );
+}
+
+#[tokio::test]
+async fn ask_questions_tool_waits_for_operator_choice() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+    let mut operator_events = engine.event_tx.subscribe();
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-ask-questions".to_string(),
+        ToolFunction {
+            name: "ask_questions".to_string(),
+            arguments: serde_json::json!({
+                "content": "Choose:\nA. Alpha\nB. Beta",
+                "options": ["A", "B"]
+            })
             .to_string(),
         },
     );

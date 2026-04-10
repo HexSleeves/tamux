@@ -305,25 +305,6 @@ pub(super) fn extended_schema_sql() -> &'static str {
             CREATE INDEX IF NOT EXISTS idx_distillation_log_thread ON memory_distillation_log(source_thread_id, created_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_distillation_log_applied ON memory_distillation_log(applied_to_memory, created_at_ms DESC);
 
-            CREATE TABLE IF NOT EXISTS execution_traces (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id TEXT,
-                thread_id TEXT,
-                agent_id TEXT NOT NULL,
-                tool_calls_json TEXT,
-                tool_fallbacks INTEGER DEFAULT 0,
-                operator_revisions INTEGER DEFAULT 0,
-                fast_denials INTEGER DEFAULT 0,
-                exit_code INTEGER,
-                duration_ms INTEGER,
-                started_at_ms INTEGER NOT NULL,
-                completed_at_ms INTEGER,
-                outcome TEXT NOT NULL,
-                strategy_hint TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_execution_traces_agent ON execution_traces(agent_id, started_at_ms DESC);
-            CREATE INDEX IF NOT EXISTS idx_execution_traces_outcome ON execution_traces(outcome, started_at_ms DESC);
-
             CREATE TABLE IF NOT EXISTS forge_pass_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 agent_id TEXT NOT NULL,
