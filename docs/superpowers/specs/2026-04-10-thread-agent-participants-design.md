@@ -152,6 +152,48 @@ This registry should live in daemon-managed thread metadata and persist across r
 - Display participant contributions as normal queued thread contributions.
 - Add future discoverability affordances if needed, but no new UI is required for the first implementation beyond command parsing and existing queue rendering.
 
+## React And Electron Responsibilities
+
+The desktop frontend should support the same behavior model as the TUI, not a separate agent-command dialect.
+
+### Composer Parsing
+
+- Detect leading `@agent` and `!agent` directives in the React chat composer.
+- Preserve current file-reference and attachment behavior for later `@...` tokens in the same prompt.
+- Use the same known-agent alias resolution rules as the TUI.
+
+### Thread Participant UX
+
+- Show active thread participants in thread detail or header UI.
+- Make it clear that participants are additive and do not replace the main thread owner.
+- Show participant state at minimum as:
+  - agent name
+  - active or inactive
+  - assigned instruction
+- Allow future editing and removal from the UI, but command-driven registration is sufficient for the first implementation.
+
+### Contribution UX
+
+- Participant contributions should render as normal queued thread contributions in the existing chat timeline.
+- The current `send now` mechanism should work the same way for participant-originated queued messages as it does for any other queued thread message.
+- If the main agent is streaming and a participant contribution is queued, the React UI should surface the same interruption affordance the TUI already exposes conceptually.
+
+### Transport
+
+- The Electron preload and IPC layer should expose the same command primitives as the TUI client path:
+  - internal delegation via `!agent`
+  - participant registration and deactivation via `@agent`
+- The renderer should not duplicate daemon decision logic. It should only parse commands and send normalized intents.
+
+### Shared Backend Contract
+
+- React and TUI should converge on the same daemon-facing API for:
+  - register participant
+  - update participant
+  - deactivate participant
+  - internal delegation
+- The daemon remains the source of truth for participant state, queue state, and contribution arbitration.
+
 ## Persistence
 
 Participant state should survive:
@@ -181,6 +223,9 @@ Add tests for:
 - persistence and reload of participant metadata
 - participant contributions entering the normal queued-message path
 - `send now` still interrupting the main agent correctly when a participant contribution is queued
+- React composer parsing and intent normalization for `@agent` and `!agent`
+- Electron IPC transport coverage for participant commands
+- React thread UI rendering of active participants and participant contributions
 
 ## Documentation
 
@@ -194,11 +239,14 @@ This design document is the implementation reference; the follow-up user-facing 
 ## Recommended Implementation Order
 
 1. Add daemon thread-participant data model and persistence.
-2. Add TUI parsing for leading `@agent` and keep `!agent` on the internal path.
-3. Register and deactivate participants from TUI commands.
-4. Wire participant observation and queued contributions.
-5. Add documentation and `README.md` pin.
-6. Run targeted tests for TUI parsing, persistence, and queue behavior.
+2. Add shared daemon-facing command primitives for internal delegation and participant management.
+3. Add TUI parsing for leading `@agent` and keep `!agent` on the internal path.
+4. Add React/Electron composer parsing and IPC transport for the same command intents.
+5. Register and deactivate participants from both TUI and React flows.
+6. Wire participant observation and queued contributions.
+7. Add participant display in the React thread UI.
+8. Add documentation and `README.md` pin.
+9. Run targeted tests for TUI parsing, React parsing, persistence, IPC transport, and queue behavior.
 
 ## Open Questions
 
