@@ -235,22 +235,17 @@ impl TuiModel {
         }
 
         if self.should_show_thread_loading() {
-            let label = self
+            let thread_title = self
                 .chat
                 .active_thread()
-                .map(|thread| thread.title.trim())
-                .filter(|title| !title.is_empty())
-                .unwrap_or("thread");
-            let block = ratatui::widgets::Block::default()
-                .borders(ratatui::widgets::Borders::ALL)
-                .border_style(self.theme.fg_dim)
-                .title(" Loading ");
-            let text = format!("Loading {label}...");
-            let paragraph = ratatui::widgets::Paragraph::new(text)
-                .block(block)
-                .style(self.theme.fg_active)
-                .alignment(ratatui::layout::Alignment::Center);
-            frame.render_widget(paragraph, area);
+                .map(|thread| thread.title.as_str());
+            widgets::concierge_loading::render_thread(
+                frame,
+                area,
+                &self.theme,
+                self.tick_counter,
+                thread_title,
+            );
             return;
         }
 
@@ -577,13 +572,13 @@ impl TuiModel {
         );
 
         if let Some(modal_kind) = self.modal.top() {
-            let overlay_area = match modal_kind {
-                modal::ModalKind::Settings => render_helpers::centered_rect(90, 88, area),
-                modal::ModalKind::ApprovalOverlay => render_helpers::centered_rect(60, 40, area),
-                modal::ModalKind::OperatorQuestionOverlay => {
-                    render_helpers::centered_rect(68, 34, area)
-                }
-                modal::ModalKind::ApprovalCenter => render_helpers::centered_rect(86, 82, area),
+        let overlay_area = match modal_kind {
+            modal::ModalKind::Settings => render_helpers::centered_rect(90, 88, area),
+            modal::ModalKind::ApprovalOverlay => render_helpers::centered_rect(60, 40, area),
+            modal::ModalKind::OperatorQuestionOverlay => {
+                render_helpers::centered_rect(68, 34, area)
+            }
+            modal::ModalKind::ApprovalCenter => render_helpers::centered_rect(86, 82, area),
                 modal::ModalKind::ChatActionConfirm => render_helpers::centered_rect(48, 28, area),
                 modal::ModalKind::CommandPalette => render_helpers::centered_rect(50, 40, area),
                 modal::ModalKind::Status => render_helpers::centered_rect(72, 70, area),
@@ -641,18 +636,7 @@ impl TuiModel {
                 modal::ModalKind::ApprovalOverlay => {
                     widgets::approval::render(frame, overlay_area, &self.approval, &self.theme);
                 }
-                modal::ModalKind::OperatorQuestionOverlay => {
-                    if let Some(question) = &self.operator_question {
-                        widgets::operator_question::render(
-                            frame,
-                            overlay_area,
-                            &question.content,
-                            &question.options,
-                            question.selected_index,
-                            &self.theme,
-                        );
-                    }
-                }
+                modal::ModalKind::OperatorQuestionOverlay => {}
                 modal::ModalKind::ApprovalCenter => {
                     widgets::approval_center::render(
                         frame,

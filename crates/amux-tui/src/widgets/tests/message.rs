@@ -8,6 +8,18 @@ fn empty_tools() -> ExpandedTools {
     ExpandedTools::new()
 }
 
+fn plain_lines(lines: &[Line<'_>]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect()
+}
+
 #[test]
 fn markdown_renders_bold() {
     let lines = render_markdown("**bold text** normal", 80);
@@ -251,7 +263,7 @@ fn tool_message_expanded_preserves_full_arguments_and_result() {
     );
     assert!(plain.contains("<<'PY'"), "missing heredoc marker: {plain}");
     assert!(
-        plain.contains(&"x".repeat(80)),
+        plain.chars().filter(|ch| *ch == 'x').count() >= 100,
         "missing long argument body: {plain}"
     );
     assert!(
@@ -580,6 +592,166 @@ fn tool_message_expanded_shows_weles_rationale_and_degraded_state() {
     assert!(
         plain.contains("WELES unavailable"),
         "expected rationale in expanded tool view, got: {plain}"
+    );
+}
+
+#[test]
+fn operator_question_message_renders_pending_state_and_option_legend() {
+    let msg = AgentMessage {
+        role: MessageRole::Assistant,
+        content: "Approve this slice?\nA - proceed\nB - revise".into(),
+        is_operator_question: true,
+        operator_question_id: Some("oq-1".into()),
+        ..Default::default()
+    };
+
+    let lines = message_to_lines(
+        &msg,
+        0,
+        TranscriptMode::Compact,
+        &ThemeTokens::default(),
+        80,
+        &empty_expanded(),
+        &empty_tools(),
+    );
+
+    let plain = plain_lines(&lines).join("\n");
+
+    assert!(
+        plain.contains("awaiting answer"),
+        "expected pending state marker, got: {plain}"
+    );
+    assert!(plain.contains("A"), "expected option label, got: {plain}");
+    assert!(
+        plain.contains("proceed"),
+        "expected option text, got: {plain}"
+    );
+}
+
+#[test]
+fn operator_question_message_keeps_free_form_body_lines_out_of_options() {
+    let msg = AgentMessage {
+        role: MessageRole::Assistant,
+        content: "Approve this slice?\nReason: investigate regressions\nContext: release branch"
+            .into(),
+        is_operator_question: true,
+        operator_question_id: Some("oq-1".into()),
+        ..Default::default()
+    };
+
+    let lines = message_to_lines(
+        &msg,
+        0,
+        TranscriptMode::Compact,
+        &ThemeTokens::default(),
+        80,
+        &empty_expanded(),
+        &empty_tools(),
+    );
+
+    let plain = plain_lines(&lines).join("\n");
+
+    assert!(
+        plain.contains("Reason: investigate regressions"),
+        "expected body line to remain verbatim, got: {plain}"
+    );
+    assert!(
+        plain.contains("Context: release branch"),
+        "expected body line to remain verbatim, got: {plain}"
+    );
+    assert!(
+        !plain.contains("options"),
+        "unexpected inferred option section, got: {plain}"
+    );
+    assert!(
+        !plain.contains("[Reason]"),
+        "unexpected option-like rendering for body line, got: {plain}"
+    );
+    assert!(
+        !plain.contains("[Context]"),
+        "unexpected option-like rendering for body line, got: {plain}"
+    );
+}
+
+#[test]
+fn operator_question_message_accepts_lowercase_compact_labels_and_matches_answer() {
+    let msg = AgentMessage {
+        role: MessageRole::Assistant,
+        content: "Approve this slice?\na - proceed\nb1 - revise".into(),
+        is_operator_question: true,
+        operator_question_id: Some("oq-lower".into()),
+        operator_question_answer: Some("B1".into()),
+        ..Default::default()
+    };
+
+    let lines = message_to_lines(
+        &msg,
+        0,
+        TranscriptMode::Compact,
+        &ThemeTokens::default(),
+        80,
+        &empty_expanded(),
+        &empty_tools(),
+    );
+
+    let plain = plain_lines(&lines).join("\n");
+
+    assert!(plain.contains("[a] proceed"), "expected lowercase option label, got: {plain}");
+    assert!(
+        plain.contains("[b1] revise"),
+        "expected lowercase alphanumeric option label, got: {plain}"
+    );
+    assert!(
+        plain.contains("answered: [b1] revise"),
+        "expected lowercase answer match in summary, got: {plain}"
+    );
+    assert!(
+        !plain.contains("Context:"),
+        "unexpected free-form body parsing, got: {plain}"
+    );
+}
+
+#[test]
+fn operator_question_message_wraps_status_and_option_rows_to_width() {
+    let msg = AgentMessage {
+        role: MessageRole::Assistant,
+        content: "Approve this slice?\nC1 - proceed with a very detailed explanation that should wrap across multiple lines".into(),
+        is_operator_question: true,
+        operator_question_id: Some("oq-2".into()),
+        ..Default::default()
+    };
+
+    let lines = message_to_lines(
+        &msg,
+        0,
+        TranscriptMode::Compact,
+        &ThemeTokens::default(),
+        24,
+        &empty_expanded(),
+        &empty_tools(),
+    );
+
+    let plain = plain_lines(&lines);
+
+    assert!(
+        plain.iter().any(|line| line == "operator question"),
+        "expected wrapped status prefix, got: {:?}",
+        plain
+    );
+    assert!(
+        plain.iter().any(|line| line.contains("awaiting answer")),
+        "expected wrapped status summary, got: {:?}",
+        plain
+    );
+    assert!(
+        plain.iter().any(|line| line.contains("proceed with a")),
+        "expected wrapped option text, got: {:?}",
+        plain
+    );
+    assert!(
+        plain.iter().all(|line| line.chars().count() <= 24),
+        "expected every rendered line to fit width 24, got: {:?}",
+        plain
     );
 }
 

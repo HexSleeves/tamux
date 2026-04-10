@@ -233,9 +233,124 @@ fn collaboration_sessions_event_surfaces_escalation_notice() {
             .collaboration
             .selected_session()
             .and_then(|session| session.escalation.as_ref())
-            .is_some(),
+        .is_some(),
         "session should carry escalation summary for workspace rendering"
     );
+}
+
+#[test]
+fn operator_question_event_appends_inline_message_and_actions_without_modal() {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    model.handle_client_event(ClientEvent::OperatorQuestion {
+        question_id: "oq-1".to_string(),
+        content: "Approve this slice?\nA - proceed\nB - revise".to_string(),
+        options: vec!["A".to_string(), "B".to_string()],
+        session_id: None,
+        thread_id: Some("thread-1".to_string()),
+    });
+
+    let thread = model.chat.active_thread().expect("thread should exist");
+    assert_eq!(
+        thread.messages.len(),
+        1,
+        "operator question should append an inline transcript message"
+    );
+    let message = thread.messages.last().expect("question message should exist");
+    assert!(message.is_operator_question);
+    assert_eq!(message.operator_question_id.as_deref(), Some("oq-1"));
+    assert_eq!(message.content, "Approve this slice?\nA - proceed\nB - revise");
+    assert_eq!(message.actions.len(), 2);
+    assert_eq!(message.actions[0].label, "A");
+    assert_eq!(message.actions[1].label, "B");
+    assert_eq!(model.modal.top(), None);
+    assert_ne!(model.modal.top(), Some(modal::ModalKind::OperatorQuestionOverlay));
+}
+
+#[test]
+fn operator_question_resolved_event_marks_message_answered_and_clears_actions() {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model.chat.reduce(chat::ChatAction::AppendMessage {
+        thread_id: "thread-1".to_string(),
+        message: chat::AgentMessage {
+            role: chat::MessageRole::Assistant,
+            content: "Approve this slice?\nA - proceed\nB - revise".to_string(),
+            is_operator_question: true,
+            operator_question_id: Some("oq-1".to_string()),
+            actions: vec![chat::MessageAction {
+                label: "A".to_string(),
+                action_type: "operator_question_answer:oq-1:A".to_string(),
+                thread_id: Some("thread-1".to_string()),
+            }],
+            ..Default::default()
+        },
+    });
+
+    model.handle_client_event(ClientEvent::OperatorQuestionResolved {
+        question_id: "oq-1".to_string(),
+        answer: "A".to_string(),
+    });
+
+    let thread = model.chat.active_thread().expect("thread should exist");
+    assert_eq!(thread.messages.len(), 1);
+    let message = thread.messages.last().expect("question message should exist");
+    assert_eq!(message.operator_question_answer.as_deref(), Some("A"));
+    assert!(message.actions.is_empty());
+}
+
+#[test]
+fn operator_question_event_does_not_replace_existing_modal() {
+    let mut model = make_model();
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    model.handle_client_event(ClientEvent::OperatorQuestion {
+        question_id: "oq-1".to_string(),
+        content: "Approve this slice?\nA - proceed\nB - revise".to_string(),
+        options: vec!["A".to_string(), "B".to_string()],
+        session_id: None,
+        thread_id: Some("thread-1".to_string()),
+    });
+
+    let thread = model.chat.active_thread().expect("thread should exist");
+    assert_eq!(
+        thread.messages.len(),
+        1,
+        "operator question should append an inline transcript message"
+    );
+    let message = thread.messages.last().expect("question message should exist");
+    assert!(message.is_operator_question);
+    assert_eq!(message.operator_question_id.as_deref(), Some("oq-1"));
+    assert_eq!(message.content, "Approve this slice?\nA - proceed\nB - revise");
+    assert_eq!(message.actions.len(), 2);
+    assert_eq!(message.actions[0].label, "A");
+    assert_eq!(message.actions[1].label, "B");
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::CommandPalette));
+    model.modal.reduce(modal::ModalAction::Pop);
+    assert_eq!(model.modal.top(), None);
+    assert_ne!(model.modal.top(), Some(modal::ModalKind::OperatorQuestionOverlay));
 }
 
 #[test]

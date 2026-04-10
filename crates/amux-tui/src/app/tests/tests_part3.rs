@@ -105,6 +105,54 @@
     }
 
     #[test]
+    fn operator_question_event_uses_keyboard_submission_from_inline_actions() {
+        let (_daemon_tx, daemon_rx) = mpsc::channel();
+        let (cmd_tx, mut cmd_rx) = unbounded_channel();
+        let mut model = TuiModel::new(daemon_rx, cmd_tx);
+        model.show_sidebar_override = Some(false);
+        model.focus = FocusArea::Chat;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.handle_client_event(ClientEvent::OperatorQuestion {
+            question_id: "oq-1".to_string(),
+            content: "Approve this slice?\nA - proceed\nB - revise".to_string(),
+            options: vec!["A".to_string(), "B".to_string()],
+            session_id: None,
+            thread_id: Some("thread-1".to_string()),
+        });
+        assert_eq!(model.modal.top(), None);
+        let thread = model.chat.active_thread().expect("thread should exist");
+        let message = thread.messages.last().expect("question message should exist");
+        assert!(message.is_operator_question);
+        assert_eq!(message.operator_question_id.as_deref(), Some("oq-1"));
+        assert_eq!(message.actions[0].label, "A");
+        assert_eq!(message.actions[1].label, "B");
+        model.chat.select_message(Some(0));
+
+        let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+        assert!(!handled);
+        let sent = cmd_rx
+            .try_recv()
+            .expect("pressing Enter should answer the operator question");
+        match sent {
+            DaemonCommand::AnswerOperatorQuestion {
+                question_id,
+                answer,
+            } => {
+                assert_eq!(question_id, "oq-1");
+                assert_eq!(answer, "A");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
     fn click_without_drag_uses_press_location_for_message_selection() {
         let mut model = build_model();
         model.show_sidebar_override = Some(false);
@@ -373,4 +421,3 @@
             "dragging upward with autoscroll should extend the selection into older transcript rows: anchor={anchor_point:?} current={current_point:?}"
         );
     }
-

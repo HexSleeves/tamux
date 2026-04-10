@@ -123,7 +123,9 @@ impl AgentEngine {
         limit: usize,
     ) -> Result<SkillDiscoveryComputation> {
         let skills_root = self.history.data_dir().to_path_buf();
-        let context_tags = resolve_skill_context_tags(&self.session_manager, session_id).await;
+        let context_tags =
+            resolve_skill_context_tags(self.workspace_root.as_ref(), &self.session_manager, session_id)
+                .await;
         let cfg = self.config.read().await.skill_recommendation.clone();
         let result = super::skill_recommendation::discover_local_skills(
             &self.history,
@@ -223,6 +225,7 @@ struct SkillDiscoveryComputation {
 }
 
 async fn resolve_skill_context_tags(
+    workspace_root: Option<&PathBuf>,
     session_manager: &Arc<SessionManager>,
     session_id: Option<SessionId>,
 ) -> Vec<String> {
@@ -236,7 +239,7 @@ async fn resolve_skill_context_tags(
     } else {
         None
     }
-    .or_else(|| std::env::current_dir().ok());
+    .or_else(|| workspace_root.cloned());
 
     root.filter(|path| path.is_dir())
         .map(|path| super::semantic_env::infer_workspace_context_tags(&path))
@@ -623,7 +626,6 @@ fn confidence_label(
 fn action_label(value: super::skill_recommendation::SkillRecommendationAction) -> &'static str {
     match value {
         super::skill_recommendation::SkillRecommendationAction::ReadSkill => "read_skill",
-        super::skill_recommendation::SkillRecommendationAction::JustifySkip => "justify_skill_skip",
         super::skill_recommendation::SkillRecommendationAction::None => "none",
     }
 }

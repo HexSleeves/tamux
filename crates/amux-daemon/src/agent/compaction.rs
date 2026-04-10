@@ -1017,7 +1017,7 @@ fn estimate_api_message_tokens(message: &ApiMessage) -> usize {
                 .sum::<usize>()
         })
         .unwrap_or(0);
-    chars
+    chars.div_ceil(APPROX_CHARS_PER_TOKEN) + 12
 }
 
 fn trim_llm_compaction_messages_to_fit(

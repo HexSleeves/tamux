@@ -498,6 +498,56 @@ fn refresh_snapshot_stats_reads_daemon_snapshot_index_db() {
 }
 
 #[test]
+fn refresh_snapshot_stats_ignores_stale_snapshot_index_rows() {
+    let home = tempdir().expect("tempdir");
+    let tamux_dir = home.path().join(".tamux");
+    let history_dir = tamux_dir.join("history");
+    std::fs::create_dir_all(&history_dir).expect("create history dir");
+
+    let snap_a = tamux_dir.join("snap-a.tar.gz");
+    std::fs::write(&snap_a, vec![b'a'; 128]).expect("write snapshot a");
+    let missing = tamux_dir.join("missing.tar.gz");
+
+    let db_path = history_dir.join("command-history.db");
+    let conn = Connection::open(&db_path).expect("open sqlite db");
+    conn.execute(
+        "CREATE TABLE snapshot_index (snapshot_id TEXT PRIMARY KEY, path TEXT NOT NULL)",
+        [],
+    )
+    .expect("create snapshot index table");
+    conn.execute(
+        "INSERT INTO snapshot_index (snapshot_id, path) VALUES (?1, ?2)",
+        rusqlite::params!["snap-a", snap_a.to_string_lossy().to_string()],
+    )
+    .expect("insert snapshot a");
+    conn.execute(
+        "INSERT INTO snapshot_index (snapshot_id, path) VALUES (?1, ?2)",
+        rusqlite::params!["missing", missing.to_string_lossy().to_string()],
+    )
+    .expect("insert missing snapshot row");
+
+    let original_home = std::env::var("HOME").ok();
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+
+    let mut model = make_model();
+    model.load_saved_settings();
+
+    assert_eq!(model.config.snapshot_count, 1);
+    assert_eq!(model.config.snapshot_total_size_bytes, 128);
+
+    match original_home {
+        Some(value) => unsafe {
+            std::env::set_var("HOME", value);
+        },
+        None => unsafe {
+            std::env::remove_var("HOME");
+        },
+    }
+}
+
+#[test]
 fn apply_config_json_prefers_active_provider_transport_over_stale_root_transport() {
     let mut model = make_model();
 

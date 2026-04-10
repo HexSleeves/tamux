@@ -306,7 +306,9 @@ mod tests {
                 "goal \"Test goal\" / step \"Investigate failure\" / task \"Inspect the failing path\"",
             ),
             &state,
-            &[sample_constraint("Retrying the old sync path keeps failing.")],
+            &[sample_constraint(
+                "Retrying the old sync path keeps failing.",
+            )],
             1_000_000_500,
         );
 
@@ -327,7 +329,9 @@ mod tests {
             Some(
                 "You specialize in negotiation between options, comparing tradeoffs, and surfacing the strongest route forward.",
             ),
-            Some("goal \"Spawned goal\" / step \"Investigate failure\" / task \"Investigate failure\""),
+            Some(
+                "goal \"Spawned goal\" / step \"Investigate failure\" / task \"Investigate failure\"",
+            ),
             &CounterWhoState::default(),
             &[],
             1_000_000_500,

@@ -53,9 +53,9 @@ async fn search_files_subprocess_helper_kills_child_when_timeout_drops_future() 
     let dir = tempdir().expect("tempdir should succeed");
     let pid_path = dir.path().join("search-files-timeout.pid");
     let script = format!(
-            "import os, pathlib, time; pid_path = pathlib.Path(r\"{}\"); pid_path.parent.mkdir(parents=True, exist_ok=True); pid_path.write_text(str(os.getpid())); time.sleep(30)",
-            pid_path.display()
-        );
+        "import os, pathlib, time; pid_path = pathlib.Path(r\"{}\"); pid_path.parent.mkdir(parents=True, exist_ok=True); pid_path.write_text(str(os.getpid())); time.sleep(30)",
+        pid_path.display()
+    );
 
     let mut command = tokio::process::Command::new("python3");
     command.arg("-c").arg(script);
@@ -106,9 +106,9 @@ async fn search_files_bounded_subprocess_kills_child_when_global_cap_is_hit() {
     let dir = tempdir().expect("tempdir should succeed");
     let pid_path = dir.path().join("search-files-bounded.pid");
     let script = format!(
-            "import os, pathlib, sys, time; pathlib.Path(r\"{}\").write_text(str(os.getpid())); print('first:1:needle', flush=True); print('second:2:needle', flush=True); time.sleep(30)",
-            pid_path.display()
-        );
+        "import os, pathlib, sys, time; pathlib.Path(r\"{}\").write_text(str(os.getpid())); print('first:1:needle', flush=True); print('second:2:needle', flush=True); time.sleep(30)",
+        pid_path.display()
+    );
 
     let mut command = tokio::process::Command::new("python3");
     command.arg("-c").arg(script);
@@ -332,7 +332,7 @@ async fn onecontext_search_normalizes_simple_query_before_runner() {
         |request| async move {
             assert_eq!(
                 request.bounded_query,
-                "Collaboration Architecture Ideation Elm style broadcast contribution daemon first"
+                "Collaboration.*Architecture.*Ideation.*Elm.*style.*broadcast.*contribution.*daemon.*first"
             );
             Ok::<std::process::Output, anyhow::Error>(std::process::Output {
                 status: successful_exit_status(),
@@ -345,4 +345,16 @@ async fn onecontext_search_normalizes_simple_query_before_runner() {
     .expect("sanitized simple query should be passed to the runner");
 
     assert!(result.contains("OneContext results"));
+}
+
+#[test]
+fn prepare_onecontext_search_query_preserves_explicit_regex_queries() {
+    let prepared = prepare_onecontext_search_query(
+        "JustifySkip|explicit_rationale_required",
+        false,
+        300,
+    )
+    .expect("explicit regex query should be preserved");
+
+    assert_eq!(prepared, "JustifySkip|explicit_rationale_required");
 }

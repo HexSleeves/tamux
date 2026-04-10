@@ -138,6 +138,7 @@ pub async fn send_thread_list_query() -> Result<Vec<AgentThreadRecord>> {
 
 pub async fn send_thread_get_query(thread_id: String) -> Result<Option<AgentThreadRecord>> {
     let mut framed = connect().await?;
+    let requested_thread_id = thread_id.clone();
     framed
         .send(ClientMessage::AgentGetThread { thread_id })
         .await?;
@@ -153,10 +154,18 @@ pub async fn send_thread_get_query(thread_id: String) -> Result<Option<AgentThre
                 return Ok(serde_json::from_str(&thread_json)?);
             }
             DaemonMessage::AgentThreadDetailChunk {
-                thread_id: _,
+                thread_id,
                 thread_json_chunk,
                 done,
             } => {
+                if thread_id != requested_thread_id {
+                    thread_detail_bytes.clear();
+                    anyhow::bail!(
+                        "received chunk for unexpected thread: expected {}, got {}",
+                        requested_thread_id,
+                        thread_id
+                    );
+                }
                 thread_detail_bytes.extend(thread_json_chunk);
                 if done {
                     let thread_json = String::from_utf8(thread_detail_bytes)?;

@@ -368,10 +368,17 @@ impl<'a> SendMessageRunner<'a> {
         self.engine.emit_workflow_notice(
             &self.tid,
             "skill-gate",
-            format!(
-                "Weak skill discovery recommends `{}` before `{}`; allowing the tool call to proceed.",
-                state.recommended_action, tc.function.name
-            ),
+            if state.confidence_tier.eq_ignore_ascii_case("weak") {
+                format!(
+                    "Weak skill discovery recommends `{}` before `{}`; allowing the tool call to proceed.",
+                    state.recommended_action, tc.function.name
+                )
+            } else {
+                format!(
+                    "Skill discovery suggests `{}` before `{}`; allowing the tool call to proceed.",
+                    state.recommended_action, tc.function.name
+                )
+            },
             serde_json::to_string(&state).ok(),
         );
         false

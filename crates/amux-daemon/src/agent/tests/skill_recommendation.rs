@@ -168,7 +168,7 @@ triggers: [service crash]
 }
 
 #[tokio::test]
-async fn confidence_tier_is_none_when_scores_do_not_clear_threshold() -> Result<()> {
+async fn confidence_tier_is_none_and_action_is_none_when_scores_do_not_clear_threshold() -> Result<()> {
     let root = tempdir()?;
     let store = HistoryStore::new_test_store(root.path()).await?;
     let skills_root = root.path().join("skills");
@@ -200,6 +200,50 @@ keywords: [react, css]
     assert_eq!(result.confidence, SkillRecommendationConfidence::None);
     assert_eq!(result.recommended_action, SkillRecommendationAction::None);
     assert!(result.recommendations.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn strong_match_without_hard_read_still_recommends_read_skill() -> Result<()> {
+    let root = tempdir()?;
+    let store = HistoryStore::new_test_store(root.path()).await?;
+    let skills_root = root.path().join("skills");
+
+    let skill_path = write_skill(
+        &skills_root,
+        "systematic-debugging",
+        r#"---
+description: Debug failing Rust code systematically.
+keywords: [debug, rust, failure]
+triggers: [fix bug, failing test, root cause]
+---
+
+# Systematic Debugging
+"#,
+    )?;
+    let record = store.register_skill_document(&skill_path).await?;
+    for _ in 0..4 {
+        store
+            .record_skill_variant_use(&record.variant_id, Some(true))
+            .await?;
+    }
+
+    let result = discover_local_skills(
+        &store,
+        &skills_root,
+        "debug this rust test failure and find the root cause",
+        &["rust".to_string()],
+        3,
+        &SkillRecommendationConfig {
+            require_read_on_strong_match: false,
+            ..SkillRecommendationConfig::default()
+        },
+    )
+    .await?;
+
+    assert_eq!(result.confidence, SkillRecommendationConfidence::Strong);
+    assert_eq!(result.recommended_action, SkillRecommendationAction::ReadSkill);
 
     Ok(())
 }

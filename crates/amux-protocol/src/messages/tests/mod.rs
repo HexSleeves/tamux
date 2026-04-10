@@ -17,6 +17,11 @@ fn assert_bincode_variant_index<T: Serialize>(value: &T, expected_index: u32) {
     );
 }
 
+fn bincode_variant_index<T: Serialize>(value: &T) -> u32 {
+    let bytes = bincode::serialize(value).unwrap();
+    u32::from_le_bytes(bytes[..4].try_into().unwrap())
+}
+
 #[test]
 fn agent_provider_validation_bincode_roundtrip() {
     let msg = DaemonMessage::AgentProviderValidation {
@@ -517,6 +522,26 @@ fn daemon_message_roundtrips_operation_status_snapshot() {
 }
 
 #[test]
+fn daemon_message_keeps_agent_thread_deleted_after_older_thread_responses() {
+    let direct_message_index = bincode_variant_index(&DaemonMessage::AgentDirectMessageResponse {
+        target: "operator".to_string(),
+        thread_id: "thread-1".to_string(),
+        response: "ok".to_string(),
+        session_id: None,
+        provider_final_result_json: None,
+    });
+    let deleted_index = bincode_variant_index(&DaemonMessage::AgentThreadDeleted {
+        thread_id: "thread-1".to_string(),
+        deleted: true,
+    });
+
+    assert!(
+        deleted_index > direct_message_index,
+        "new daemon variants must be appended to preserve older wire indices"
+    );
+}
+
+#[test]
 fn client_message_roundtrips_effective_config_state_query() {
     let msg = ClientMessage::AgentGetEffectiveConfigState;
     let bytes = bincode::serialize(&msg).unwrap();
@@ -799,8 +824,8 @@ fn sample_skill_discovery_result() -> SkillDiscoveryResultPublic {
         query: "git rebase workflow".to_string(),
         required: true,
         confidence_tier: "strong".to_string(),
-        recommended_action: "surface_relevant_skill".to_string(),
-        explicit_rationale_required: true,
+        recommended_action: "read_skill git_rebase_workflow".to_string(),
+        explicit_rationale_required: false,
         workspace_tags: vec!["git".to_string(), "rebase".to_string()],
         candidates: vec![sample_skill_discovery_candidate()],
         next_cursor: Some("cursor:git-rebase".to_string()),
@@ -1037,8 +1062,8 @@ fn skill_discover_result_round_trip() {
             assert_eq!(result.query, "git rebase workflow");
             assert!(result.required);
             assert_eq!(result.confidence_tier, "strong");
-            assert_eq!(result.recommended_action, "surface_relevant_skill");
-            assert!(result.explicit_rationale_required);
+            assert_eq!(result.recommended_action, "read_skill git_rebase_workflow");
+            assert!(!result.explicit_rationale_required);
             assert_eq!(result.workspace_tags, vec!["git", "rebase"]);
             assert_eq!(result.candidates.len(), 1);
             assert_eq!(result.next_cursor.as_deref(), Some("cursor:git-rebase"));

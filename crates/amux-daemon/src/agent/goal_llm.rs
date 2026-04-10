@@ -349,7 +349,11 @@ impl AgentEngine {
              Completed / attempted steps:\n{}\n",
             goal_run.goal,
             failure,
-            if completed.is_empty() { "- none".into() } else { completed }
+            if completed.is_empty() {
+                "- none".into()
+            } else {
+                completed
+            }
         );
         if let Some(causal_guidance) = self.build_causal_guidance_summary().await {
             prompt.push_str("\n");
@@ -370,7 +374,12 @@ impl AgentEngine {
             tracing::warn!(attempt, issues = %issues.join("; "), "goal replan has issues, asking model to fix");
             let fix_prompt = format!(
                 "Your revised plan has issues:\n{}\n\nCurrent plan:\n{}\n\nReturn the COMPLETE corrected plan as JSON.",
-                issues.iter().enumerate().map(|(i, s)| format!("{}. {}", i+1, s)).collect::<Vec<_>>().join("\n"),
+                issues
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| format!("{}. {}", i + 1, s))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
                 serde_json::to_string_pretty(&plan).unwrap_or_default()
             );
             match self

@@ -265,8 +265,8 @@ fn action_for(
         SkillRecommendationConfidence::Strong if cfg.require_read_on_strong_match => {
             SkillRecommendationAction::ReadSkill
         }
+        SkillRecommendationConfidence::Strong => SkillRecommendationAction::ReadSkill,
         SkillRecommendationConfidence::Weak => SkillRecommendationAction::ReadSkill,
-        SkillRecommendationConfidence::Strong => SkillRecommendationAction::JustifySkip,
         SkillRecommendationConfidence::None => SkillRecommendationAction::None,
     }
 }

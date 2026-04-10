@@ -352,10 +352,7 @@ pub(super) fn page_public_discovery_result(
         required: !matches!(result.recommended_action, SkillRecommendationAction::None),
         confidence_tier: confidence_label(result.confidence).to_string(),
         recommended_action: recommended_action_label(result.recommended_action, top_skill_name),
-        explicit_rationale_required: matches!(
-            result.recommended_action,
-            SkillRecommendationAction::JustifySkip
-        ),
+        explicit_rationale_required: false,
         workspace_tags: context_tags.to_vec(),
         candidates: page
             .into_iter()
@@ -412,7 +409,6 @@ fn confidence_label(value: SkillRecommendationConfidence) -> &'static str {
 fn action_label(value: SkillRecommendationAction) -> &'static str {
     match value {
         SkillRecommendationAction::ReadSkill => "read_skill",
-        SkillRecommendationAction::JustifySkip => "justify_skill_skip",
         SkillRecommendationAction::None => "none",
     }
 }

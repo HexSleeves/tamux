@@ -186,15 +186,11 @@ fn stalled_turn_internal_dm_message(
     match candidate.class {
         StalledTurnClass::ActiveStreamIdle => format!(
             "WELES stalled-turn recovery for thread `{}`.\nAttempt {attempt}/3.\nYou are the active responder ({responder_name}). Your stream went idle before completion after partial output: \"{}\"\nResume the original operator request immediately: {}",
-            candidate.thread_id,
-            candidate.last_message_excerpt,
-            prior_user_message,
+            candidate.thread_id, candidate.last_message_excerpt, prior_user_message,
         ),
         _ => format!(
             "WELES stalled-turn recovery for thread `{}`.\nAttempt {attempt}/3.\nYou are the active responder ({responder_name}). Your last unfinished message was: \"{}\"\nContinue the original operator request immediately: {}",
-            candidate.thread_id,
-            candidate.last_message_excerpt,
-            prior_user_message,
+            candidate.thread_id, candidate.last_message_excerpt, prior_user_message,
         ),
     }
 }

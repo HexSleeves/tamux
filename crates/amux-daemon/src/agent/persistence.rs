@@ -457,7 +457,11 @@ impl AgentEngine {
                                 );
                             }
                         } else {
-                            tracing::warn!(imported, failed, "legacy gateway thread map migration partially failed; keeping legacy file");
+                            tracing::warn!(
+                                imported,
+                                failed,
+                                "legacy gateway thread map migration partially failed; keeping legacy file"
+                            );
                         }
 
                         if !items.is_empty() {

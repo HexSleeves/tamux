@@ -344,7 +344,9 @@ fn parse_atom(tokens: &[String], pos: &mut usize) -> Result<TerminationCondition
             Ok(TerminationCondition::ToolCallCount(n))
         }
         other => {
-            bail!("unknown condition '{other}'; expected one of: timeout, tool_success_count, error_count, tool_call_count");
+            bail!(
+                "unknown condition '{other}'; expected one of: timeout, tool_success_count, error_count, tool_call_count"
+            );
         }
     }
 }

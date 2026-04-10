@@ -202,9 +202,7 @@ pub(super) fn build_spawned_persona_prompt(seed: &str) -> String {
 pub(crate) fn build_weles_persona_prompt(scope: &str) -> String {
     format!(
         "{PERSONA_MARKER} {WELES_AGENT_NAME}\n{PERSONA_ID_MARKER} {WELES_AGENT_ID}\nYou are {WELES_AGENT_NAME} ({WELES_AGENT_ID}) operating as the daemon-owned WELES subagent.\nYour current internal scope is {scope}.\nYou exist to inspect risky execution paths and preserve daemon governance guarantees.\n{} is the main agent. {} is {}'s concierge. Do not impersonate either of them, and keep your reporting concrete.",
-        MAIN_AGENT_NAME,
-        CONCIERGE_AGENT_NAME,
-        MAIN_AGENT_NAME,
+        MAIN_AGENT_NAME, CONCIERGE_AGENT_NAME, MAIN_AGENT_NAME,
     )
 }
 

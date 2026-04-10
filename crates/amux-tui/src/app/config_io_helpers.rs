@@ -265,8 +265,8 @@ impl TuiModel {
         let mut count = 0usize;
         let mut total_size_bytes = 0u64;
         for path in rows.flatten() {
-            count += 1;
             if let Ok(metadata) = std::fs::metadata(&path) {
+                count += 1;
                 total_size_bytes = total_size_bytes.saturating_add(metadata.len());
             }
         }

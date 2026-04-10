@@ -170,6 +170,87 @@ fn defer_operator_profile_question_clears_stale_question_immediately() {
 }
 
 #[test]
+fn clicking_bottom_action_bar_submits_operator_question_answer() {
+    let (_daemon_tx, daemon_rx) = mpsc::channel();
+    let (cmd_tx, mut cmd_rx) = unbounded_channel();
+    let mut model = TuiModel::new(daemon_rx, cmd_tx);
+    model.show_sidebar_override = Some(false);
+    model.focus = FocusArea::Chat;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model.handle_client_event(ClientEvent::OperatorQuestion {
+        question_id: "oq-1".to_string(),
+        content: "Approve this slice?\nA - proceed\nB - revise".to_string(),
+        options: vec!["A".to_string(), "B".to_string()],
+        session_id: None,
+        thread_id: Some("thread-1".to_string()),
+    });
+    model.chat.select_message(Some(0));
+
+    let input_start_row = model.height.saturating_sub(model.input_height() + 1);
+    let concierge_height = if model.chat.active_actions().is_empty() {
+        0
+    } else {
+        1
+    };
+    let concierge_area = Rect::new(
+        0,
+        input_start_row.saturating_sub(concierge_height),
+        model.width,
+        concierge_height,
+    );
+    let action_pos = (concierge_area.y..concierge_area.y.saturating_add(concierge_area.height))
+        .find_map(|row| {
+            (concierge_area.x..concierge_area.x.saturating_add(concierge_area.width)).find_map(|column| {
+                let pos = Position::new(column, row);
+                if widgets::concierge::hit_test(
+                    concierge_area,
+                    model.chat.active_actions(),
+                    model.concierge.selected_action,
+                    pos,
+                ) == Some(widgets::concierge::ConciergeHitTarget::Action(0)) {
+                    Some(pos)
+                } else {
+                    None
+                }
+            })
+        })
+        .expect("operator question should expose a clickable concierge action bar");
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: action_pos.x,
+        row: action_pos.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: action_pos.x,
+        row: action_pos.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    let sent = cmd_rx
+        .try_recv()
+        .expect("clicking the action bar should answer the operator question");
+    match sent {
+        DaemonCommand::AnswerOperatorQuestion {
+            question_id,
+            answer,
+        } => {
+            assert_eq!(question_id, "oq-1");
+            assert_eq!(answer, "A");
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[test]
 fn tab_completes_active_file_reference_instead_of_changing_focus() {
     let mut model = build_model();
     let cwd = make_temp_dir();

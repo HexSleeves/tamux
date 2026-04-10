@@ -485,10 +485,12 @@
             apply_patch.function.parameters.get("type"),
             Some(&serde_json::json!("object"))
         );
-        assert!(
-            apply_patch.function.parameters.get("anyOf").is_none(),
-            "apply_patch schema must not use top-level anyOf"
-        );
+        for forbidden_key in ["oneOf", "anyOf", "allOf", "enum", "not"] {
+            assert!(
+                apply_patch.function.parameters.get(forbidden_key).is_none(),
+                "apply_patch schema must not use top-level {forbidden_key}"
+            );
+        }
 
         let properties = apply_patch
             .function

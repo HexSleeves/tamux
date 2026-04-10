@@ -609,7 +609,35 @@ if matches!(
                 }
 
                 ClientMessage::AgentGetOperationStatus { operation_id } => {
-                    if let Some(snapshot) = operation_registry().snapshot(&operation_id) {
+                    if let Some(status) = agent
+                        .session_manager
+                        .get_background_task_status(&operation_id)
+                        .await?
+                    {
+                        let snapshot = amux_protocol::OperationStatusSnapshot {
+                            operation_id: status.background_task_id,
+                            kind: status.kind,
+                            dedup: None,
+                            state: match status.state {
+                                crate::session_manager::BackgroundTaskState::Queued => {
+                                    amux_protocol::OperationLifecycleState::Accepted
+                                }
+                                crate::session_manager::BackgroundTaskState::Running => {
+                                    amux_protocol::OperationLifecycleState::Started
+                                }
+                                crate::session_manager::BackgroundTaskState::Completed => {
+                                    amux_protocol::OperationLifecycleState::Completed
+                                }
+                                crate::session_manager::BackgroundTaskState::Failed => {
+                                    amux_protocol::OperationLifecycleState::Failed
+                                }
+                            },
+                            revision: 0,
+                        };
+                        framed
+                            .send(DaemonMessage::OperationStatus { snapshot })
+                            .await?;
+                    } else if let Some(snapshot) = operation_registry().snapshot(&operation_id) {
                         framed
                             .send(DaemonMessage::OperationStatus { snapshot })
                             .await?;

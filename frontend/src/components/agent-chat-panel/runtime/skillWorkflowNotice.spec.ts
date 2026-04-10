@@ -1,4 +1,4 @@
-import { formatSkillWorkflowNotice } from "./skillWorkflowNotice.ts";
+import { formatSkillWorkflowNotice } from "./skillWorkflowNotice";
 
 function assert(condition: unknown, message: string): void {
   if (!condition) {

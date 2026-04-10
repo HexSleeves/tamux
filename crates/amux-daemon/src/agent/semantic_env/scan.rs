@@ -49,6 +49,7 @@ pub(super) fn scan_workspace_semantics(root: &Path) -> Result<SemanticGraph> {
     let mut import_files = Vec::new();
     for entry in WalkDir::new(root)
         .follow_links(false)
+        .sort_by_file_name()
         .into_iter()
         .filter_entry(should_visit_semantic_entry)
         .filter_map(|entry| entry.ok())
@@ -77,7 +78,7 @@ pub(super) fn scan_workspace_semantics(root: &Path) -> Result<SemanticGraph> {
                 } else if matches!(name.rsplit('.').next(), Some("yaml") | Some("yml")) {
                     infra_resources.extend(parse_kubernetes_resources(entry.path())?);
                 }
-                if is_supported_import_file(entry.path()) {
+                if is_supported_import_file(entry.path()) && import_files.len() < MAX_IMPORT_FILES {
                     if let Some(import_file) = parse_import_file(entry.path())? {
                         import_files.push(import_file);
                     }
@@ -89,9 +90,6 @@ pub(super) fn scan_workspace_semantics(root: &Path) -> Result<SemanticGraph> {
         }
         if services.len() >= MAX_SERVICES {
             services.truncate(MAX_SERVICES);
-        }
-        if import_files.len() >= MAX_IMPORT_FILES {
-            break;
         }
     }
 
