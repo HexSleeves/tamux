@@ -300,10 +300,13 @@ fn operator_question_event_does_not_replace_existing_modal() {
     let message = thread.messages.last().expect("question message should exist");
     assert!(message.is_operator_question);
     assert_eq!(message.operator_question_id.as_deref(), Some("oq-1"));
+    assert_eq!(message.content, "Approve this slice?\nA - proceed\nB - revise");
     assert_eq!(message.actions.len(), 2);
     assert_eq!(message.actions[0].label, "A");
     assert_eq!(message.actions[1].label, "B");
     assert_eq!(model.modal.top(), Some(modal::ModalKind::CommandPalette));
+    model.modal.reduce(modal::ModalAction::Pop);
+    assert_eq!(model.modal.top(), None);
     assert_ne!(model.modal.top(), Some(modal::ModalKind::OperatorQuestionOverlay));
 }
 

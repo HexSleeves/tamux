@@ -125,6 +125,13 @@
             session_id: None,
             thread_id: Some("thread-1".to_string()),
         });
+        assert_eq!(model.modal.top(), None);
+        let thread = model.chat.active_thread().expect("thread should exist");
+        let message = thread.messages.last().expect("question message should exist");
+        assert!(message.is_operator_question);
+        assert_eq!(message.operator_question_id.as_deref(), Some("oq-1"));
+        assert_eq!(message.actions[0].label, "A");
+        assert_eq!(message.actions[1].label, "B");
         model.chat.select_message(Some(0));
 
         let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
