@@ -235,7 +235,17 @@ impl TuiModel {
         }
 
         if self.should_show_thread_loading() {
-            widgets::concierge_loading::render(frame, area, &self.theme, self.tick_counter);
+            let thread_title = self
+                .chat
+                .active_thread()
+                .map(|thread| thread.title.as_str());
+            widgets::concierge_loading::render_thread(
+                frame,
+                area,
+                &self.theme,
+                self.tick_counter,
+                thread_title,
+            );
             return;
         }
 

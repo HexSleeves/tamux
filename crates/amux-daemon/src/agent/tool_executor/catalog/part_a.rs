@@ -161,20 +161,17 @@ fn add_available_tools_part_a(
             serde_json::json!({
                 "type": "object",
                 "minProperties": 1,
-                "anyOf": [
-                    { "required": ["input"] },
-                    { "required": ["path", "edits"] }
-                ],
                 "dependencies": {
                     "path": ["edits"],
                     "edits": ["path"]
                 },
                 "properties": {
-                    "input": { "type": "string", "description": "Harness-style patch text in the apply_patch format." },
+                    "input": { "type": "string", "description": "Harness-style patch text in the apply_patch format. Prefer this form for provider compatibility." },
                     "explanation": { "type": "string", "description": "Optional short explanation for why the patch is being applied." },
-                    "path": { "type": "string", "description": "File path to patch" },
+                    "path": { "type": "string", "description": "Legacy compatibility path for exact-replacement patch mode. Supply together with `edits`." },
                     "edits": {
                         "type": "array",
+                        "description": "Legacy compatibility exact-replacement edits. Supply together with `path` when not using `input`.",
                         "items": {
                             "type": "object",
                             "properties": {

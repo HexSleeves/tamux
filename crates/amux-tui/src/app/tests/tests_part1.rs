@@ -99,7 +99,7 @@
         model.focus = FocusArea::Chat;
         model.chat.reduce(chat::ChatAction::ThreadCreated {
             thread_id: "thread-1".to_string(),
-            title: "Thread".to_string(),
+            title: "Release planning".to_string(),
         });
         model
             .chat
@@ -121,15 +121,18 @@
             })
             .collect::<Vec<_>>()
             .join("\n");
-        println!("{}", rendered);
 
         assert!(
-            rendered.contains("Rarog is threading a welcome"),
-            "thread loading should reuse the dedicated concierge loading animation"
+            rendered.contains("Loading thread: Release planning"),
+            "thread loading should show thread-specific copy in the dedicated animation"
         );
         assert!(
-            !rendered.contains("Loading Thread"),
-            "thread loading should stop rendering the old placeholder paragraph"
+            rendered.contains("Replaying recent turns"),
+            "thread loading should use thread-specific loading stages"
+        );
+        assert!(
+            !rendered.contains("Rarog is threading a welcome"),
+            "thread loading should stop reusing concierge welcome copy"
         );
     }
 
