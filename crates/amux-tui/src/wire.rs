@@ -40,6 +40,13 @@ pub struct AgentMessage {
     pub reasoning: Option<String>,
 
     #[serde(default)]
+    pub is_operator_question: bool,
+    #[serde(default)]
+    pub operator_question_id: Option<String>,
+    #[serde(default)]
+    pub operator_question_answer: Option<String>,
+
+    #[serde(default)]
     pub provider_final_result_json: Option<String>,
 
     #[serde(default)]

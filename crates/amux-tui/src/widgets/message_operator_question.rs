@@ -80,9 +80,7 @@ fn parse_option_line(line: &str) -> Option<OperatorQuestionOption> {
 fn is_option_label(label: &str) -> bool {
     !label.is_empty()
         && label.len() <= 4
-        && label
-            .chars()
-            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+        && label.chars().all(|ch| ch.is_ascii_alphanumeric())
 }
 
 fn render_operator_question(

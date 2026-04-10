@@ -674,6 +674,44 @@ fn operator_question_message_keeps_free_form_body_lines_out_of_options() {
 }
 
 #[test]
+fn operator_question_message_accepts_lowercase_compact_labels_and_matches_answer() {
+    let msg = AgentMessage {
+        role: MessageRole::Assistant,
+        content: "Approve this slice?\na - proceed\nb1 - revise".into(),
+        is_operator_question: true,
+        operator_question_id: Some("oq-lower".into()),
+        operator_question_answer: Some("B1".into()),
+        ..Default::default()
+    };
+
+    let lines = message_to_lines(
+        &msg,
+        0,
+        TranscriptMode::Compact,
+        &ThemeTokens::default(),
+        80,
+        &empty_expanded(),
+        &empty_tools(),
+    );
+
+    let plain = plain_lines(&lines).join("\n");
+
+    assert!(plain.contains("[a] proceed"), "expected lowercase option label, got: {plain}");
+    assert!(
+        plain.contains("[b1] revise"),
+        "expected lowercase alphanumeric option label, got: {plain}"
+    );
+    assert!(
+        plain.contains("answered: [b1] revise"),
+        "expected lowercase answer match in summary, got: {plain}"
+    );
+    assert!(
+        !plain.contains("Context:"),
+        "unexpected free-form body parsing, got: {plain}"
+    );
+}
+
+#[test]
 fn operator_question_message_wraps_status_and_option_rows_to_width() {
     let msg = AgentMessage {
         role: MessageRole::Assistant,

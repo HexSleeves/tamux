@@ -34,9 +34,9 @@ pub(super) fn convert_message(m: crate::wire::AgentMessage) -> chat::AgentMessag
         },
         content: m.content,
         reasoning: m.reasoning,
-        is_operator_question: false,
-        operator_question_id: None,
-        operator_question_answer: None,
+        is_operator_question: m.is_operator_question,
+        operator_question_id: m.operator_question_id,
+        operator_question_answer: m.operator_question_answer,
         provider_final_result_json: m.provider_final_result_json,
         tool_name: m.tool_name,
         tool_arguments: m.tool_arguments,
@@ -296,6 +296,30 @@ pub(super) fn copy_to_clipboard(text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn convert_thread_preserves_operator_question_metadata() {
+        let thread = crate::wire::AgentThread {
+            id: "thread-1".into(),
+            title: "Thread".into(),
+            messages: vec![crate::wire::AgentMessage {
+                role: crate::wire::MessageRole::Assistant,
+                content: "Approve this slice?\na - proceed".into(),
+                is_operator_question: true,
+                operator_question_id: Some("oq-1".into()),
+                operator_question_answer: Some("a".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let converted = convert_thread(thread);
+        let message = &converted.messages[0];
+
+        assert!(message.is_operator_question);
+        assert_eq!(message.operator_question_id.as_deref(), Some("oq-1"));
+        assert_eq!(message.operator_question_answer.as_deref(), Some("a"));
+    }
 
     #[test]
     fn copy_to_clipboard_keeps_owner_alive_after_write() {
