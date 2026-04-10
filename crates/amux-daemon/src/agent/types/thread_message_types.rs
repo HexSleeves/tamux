@@ -82,6 +82,10 @@ pub struct AgentMessage {
     pub compaction_strategy: Option<CompactionStrategy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction_payload: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offloaded_payload_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub structural_refs: Vec<String>,
     pub timestamp: u64,
 }
 
@@ -113,6 +117,8 @@ impl AgentMessage {
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
             compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: now,
         }
     }

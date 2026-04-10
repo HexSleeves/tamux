@@ -276,6 +276,8 @@ pub(super) fn compact_messages_for_request(
                 message_kind: AgentMessageKind::Normal,
                 compaction_strategy: None,
                 compaction_payload: None,
+                offloaded_payload_id: None,
+                structural_refs: Vec::new(),
                 timestamp: messages[split_at - 1].timestamp,
             });
         }
@@ -1250,6 +1252,8 @@ impl AgentEngine {
                 message_kind: AgentMessageKind::CompactionArtifact,
                 compaction_strategy: Some(strategy_used),
                 compaction_payload: Some(payload),
+                offloaded_payload_id: None,
+                structural_refs: Vec::new(),
                 timestamp: messages
                     .last()
                     .map(|message| message.timestamp)

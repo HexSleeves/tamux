@@ -168,6 +168,8 @@ impl AgentEngine {
                     message_kind: metadata.message_kind,
                     compaction_strategy: metadata.compaction_strategy,
                     compaction_payload: metadata.compaction_payload,
+                    offloaded_payload_id: metadata.offloaded_payload_id.clone(),
+                    structural_refs: metadata.structural_refs.clone(),
                     timestamp: msg.created_at as u64,
                 })
             })
@@ -357,6 +359,8 @@ impl AgentEngine {
                     message_kind: metadata.message_kind,
                     compaction_strategy: metadata.compaction_strategy,
                     compaction_payload: metadata.compaction_payload,
+                    offloaded_payload_id: metadata.offloaded_payload_id,
+                    structural_refs: metadata.structural_refs,
                     timestamp: msg.created_at as u64,
                 })
             })

@@ -103,6 +103,8 @@ async fn repair_tool_call_sequence_updates_persisted_history() {
                         message_kind: AgentMessageKind::Normal,
                         compaction_strategy: None,
                         compaction_payload: None,
+                        offloaded_payload_id: None,
+                        structural_refs: Vec::new(),
                         timestamp: 2,
                     },
                     AgentMessage {
@@ -127,6 +129,8 @@ async fn repair_tool_call_sequence_updates_persisted_history() {
                         message_kind: AgentMessageKind::Normal,
                         compaction_strategy: None,
                         compaction_payload: None,
+                        offloaded_payload_id: None,
+                        structural_refs: Vec::new(),
                         timestamp: 3,
                     },
                     AgentMessage::user("continue", 4),

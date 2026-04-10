@@ -34,6 +34,8 @@ use amux_shared::providers::{
                 message_kind: crate::agent::types::AgentMessageKind::Normal,
                 compaction_strategy: None,
                 compaction_payload: None,
+                offloaded_payload_id: None,
+                structural_refs: Vec::new(),
                 timestamp: 42,
             },
             AgentMessage {
@@ -58,6 +60,8 @@ use amux_shared::providers::{
                 message_kind: crate::agent::types::AgentMessageKind::Normal,
                 compaction_strategy: None,
                 compaction_payload: None,
+                offloaded_payload_id: None,
+                structural_refs: Vec::new(),
                 timestamp: 43,
             },
         ];

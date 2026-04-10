@@ -218,6 +218,8 @@ async fn auto_compaction_forces_connection_close_on_next_llm_request() {
                         message_kind: AgentMessageKind::Normal,
                         compaction_strategy: None,
                         compaction_payload: None,
+                        offloaded_payload_id: None,
+                        structural_refs: Vec::new(),
                         timestamp: 2,
                     },
                     crate::agent::types::AgentMessage::user("Need a fresh request boundary", 3),

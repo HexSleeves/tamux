@@ -173,6 +173,8 @@ async fn hydrate_restores_thread_token_totals_from_persisted_history() {
         message_kind: AgentMessageKind::Normal,
         compaction_strategy: None,
         compaction_payload: None,
+        offloaded_payload_id: None,
+        structural_refs: Vec::new(),
         timestamp: 1_001,
     };
     let mut summary = AgentMessage::user("summary", 1_002);

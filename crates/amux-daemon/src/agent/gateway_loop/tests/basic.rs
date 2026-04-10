@@ -152,6 +152,8 @@ fn gateway_auto_send_ignores_historic_send_tools_from_prior_turns() {
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
             compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: 1,
         },
         AgentMessage {
@@ -176,6 +178,8 @@ fn gateway_auto_send_ignores_historic_send_tools_from_prior_turns() {
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
             compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: 2,
         },
         AgentMessage {
@@ -200,6 +204,8 @@ fn gateway_auto_send_ignores_historic_send_tools_from_prior_turns() {
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
             compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: 3,
         },
         AgentMessage::user("What model are you bro?", 4),
@@ -225,6 +231,8 @@ fn gateway_auto_send_ignores_historic_send_tools_from_prior_turns() {
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
             compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: 5,
         },
     ];
@@ -265,6 +273,8 @@ fn gateway_auto_send_keeps_latest_assistant_message_pending_after_earlier_send_t
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
             compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: 2,
         },
         AgentMessage {
@@ -292,6 +302,8 @@ fn gateway_auto_send_keeps_latest_assistant_message_pending_after_earlier_send_t
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
             compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: 3,
         },
         AgentMessage {
@@ -316,6 +328,8 @@ fn gateway_auto_send_keeps_latest_assistant_message_pending_after_earlier_send_t
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
             compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: 4,
         },
     ];
@@ -356,6 +370,8 @@ fn gateway_auto_send_treats_tool_call_only_assistant_messages_as_latest_activity
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
             compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: 2,
         },
         AgentMessage {
@@ -387,6 +403,8 @@ fn gateway_auto_send_treats_tool_call_only_assistant_messages_as_latest_activity
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
             compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: 3,
         },
     ];

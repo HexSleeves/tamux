@@ -110,6 +110,8 @@ async fn persisted_assistant_messages_reload_upstream_message_metadata() {
                         message_kind: AgentMessageKind::Normal,
                         compaction_strategy: None,
                         compaction_payload: None,
+                        offloaded_payload_id: None,
+                        structural_refs: Vec::new(),
                         timestamp: 2,
                     },
                 ],

@@ -15,6 +15,8 @@ pub(super) struct ParsedMessageMetadata {
     pub message_kind: AgentMessageKind,
     pub compaction_strategy: Option<CompactionStrategy>,
     pub compaction_payload: Option<String>,
+    pub offloaded_payload_id: Option<String>,
+    pub structural_refs: Vec<String>,
 }
 
 pub(super) struct ParsedThreadMetadata {
@@ -42,6 +44,13 @@ pub(super) fn parse_message_metadata(metadata_json: Option<&str>) -> ParsedMessa
             .as_ref()
             .and_then(|value| value.get(key).and_then(|entry| entry.as_str()))
             .map(ToOwned::to_owned)
+    };
+    let get_string_vec = |key: &str| -> Vec<String> {
+        metadata
+            .as_ref()
+            .and_then(|value| value.get(key))
+            .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
+            .unwrap_or_default()
     };
     let api_transport = metadata
         .as_ref()
@@ -84,6 +93,8 @@ pub(super) fn parse_message_metadata(metadata_json: Option<&str>) -> ParsedMessa
         message_kind,
         compaction_strategy,
         compaction_payload: get_str("compaction_payload"),
+        offloaded_payload_id: get_str("offloaded_payload_id"),
+        structural_refs: get_string_vec("structural_refs"),
     }
 }
 
@@ -172,6 +183,10 @@ pub(super) fn build_message_metadata_json(message: &AgentMessage) -> Option<Stri
         "message_kind": message.message_kind,
         "compaction_strategy": message.compaction_strategy,
         "compaction_payload": message.compaction_payload,
+        "offloaded_payload_id": message.offloaded_payload_id,
+        "offloadedPayloadId": message.offloaded_payload_id,
+        "structural_refs": message.structural_refs,
+        "structuralRefs": message.structural_refs,
     }))
     .ok()
 }

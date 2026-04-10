@@ -165,6 +165,8 @@ fn heuristic_compaction_summary_uses_checkpoint_schema() {
                 message_kind: AgentMessageKind::Normal,
                 compaction_strategy: None,
                 compaction_payload: None,
+                offloaded_payload_id: None,
+                structural_refs: Vec::new(),
                 timestamp: 2,
             },
             AgentMessage {
@@ -189,6 +191,8 @@ fn heuristic_compaction_summary_uses_checkpoint_schema() {
                 message_kind: AgentMessageKind::Normal,
                 compaction_strategy: None,
                 compaction_payload: None,
+                offloaded_payload_id: None,
+                structural_refs: Vec::new(),
                 timestamp: 3,
             },
         ],
@@ -239,6 +243,8 @@ fn llm_compaction_fallback_keeps_recent_question_context_for_short_user_replies(
         message_kind: AgentMessageKind::Normal,
         compaction_strategy: None,
         compaction_payload: None,
+        offloaded_payload_id: None,
+        structural_refs: Vec::new(),
         timestamp: 30,
     });
     messages.push(AgentMessage::user("1", 31));
@@ -271,6 +277,8 @@ fn llm_compaction_fallback_keeps_recent_question_context_for_short_user_replies(
         message_kind: AgentMessageKind::Normal,
         compaction_strategy: None,
         compaction_payload: None,
+        offloaded_payload_id: None,
+        structural_refs: Vec::new(),
         timestamp: 32,
     });
     messages.push(AgentMessage {
@@ -296,6 +304,8 @@ fn llm_compaction_fallback_keeps_recent_question_context_for_short_user_replies(
         message_kind: AgentMessageKind::Normal,
         compaction_strategy: None,
         compaction_payload: None,
+        offloaded_payload_id: None,
+        structural_refs: Vec::new(),
         timestamp: 33,
     });
 
@@ -387,6 +397,8 @@ fn github_copilot_tool_follow_up_disables_previous_response_continuity() {
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
             compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: 2,
         },
         AgentMessage {
@@ -411,6 +423,8 @@ fn github_copilot_tool_follow_up_disables_previous_response_continuity() {
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
             compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: 3,
         },
         AgentMessage::user("continue", 4),
@@ -469,6 +483,8 @@ fn native_assistant_transport_falls_back_to_compacted_message_stack_when_compact
                 message_kind: AgentMessageKind::Normal,
                 compaction_strategy: None,
                 compaction_payload: None,
+                offloaded_payload_id: None,
+                structural_refs: Vec::new(),
                 timestamp: 2,
             },
             AgentMessage::user("continue with more work", 3),
@@ -536,6 +552,8 @@ fn github_copilot_responses_request_uses_previous_response_id_for_plain_follow_u
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
             compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: 2,
         },
         AgentMessage::user("continue", 3),
@@ -645,6 +663,8 @@ fn compaction_artifact_message_roundtrip_preserves_runtime_metadata() {
         message_kind: AgentMessageKind::CompactionArtifact,
         compaction_strategy: Some(CompactionStrategy::Heuristic),
         compaction_payload: Some("Older context compacted for continuity".to_string()),
+        offloaded_payload_id: None,
+        structural_refs: Vec::new(),
     };
 
     let encoded = serde_json::to_value(&message).expect("message should serialize");
@@ -700,6 +720,8 @@ fn compaction_candidate_ignores_messages_before_latest_artifact() {
             message_kind: AgentMessageKind::CompactionArtifact,
             compaction_strategy: Some(CompactionStrategy::Heuristic),
             compaction_payload: Some("Older context compacted for continuity".to_string()),
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
             timestamp: 3,
         },
         sample_message("recent one"),

@@ -439,6 +439,8 @@ impl AgentEngine {
                     message_kind: AgentMessageKind::Normal,
                     compaction_strategy: None,
                     compaction_payload: None,
+                    offloaded_payload_id: None,
+                    structural_refs: Vec::new(),
                     timestamp: now_millis(),
                 });
             }

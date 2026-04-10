@@ -450,6 +450,8 @@
                 message_kind: crate::agent::types::AgentMessageKind::Normal,
                 compaction_strategy: None,
                 compaction_payload: None,
+                offloaded_payload_id: None,
+                structural_refs: Vec::new(),
                 timestamp: 1,
             },
             AgentMessage {
@@ -474,6 +476,8 @@
                 message_kind: crate::agent::types::AgentMessageKind::Normal,
                 compaction_strategy: None,
                 compaction_payload: None,
+                offloaded_payload_id: None,
+                structural_refs: Vec::new(),
                 timestamp: 2,
             },
             AgentMessage::user("next", 3),
@@ -506,6 +510,8 @@
                 message_kind: crate::agent::types::AgentMessageKind::Normal,
                 compaction_strategy: None,
                 compaction_payload: None,
+                offloaded_payload_id: None,
+                structural_refs: Vec::new(),
                 timestamp: 4,
             },
             AgentMessage {
@@ -530,6 +536,8 @@
                 message_kind: crate::agent::types::AgentMessageKind::Normal,
                 compaction_strategy: None,
                 compaction_payload: None,
+                offloaded_payload_id: None,
+                structural_refs: Vec::new(),
                 timestamp: 5,
             },
         ];
