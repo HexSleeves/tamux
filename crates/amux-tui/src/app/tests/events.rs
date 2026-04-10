@@ -239,11 +239,8 @@ fn collaboration_sessions_event_surfaces_escalation_notice() {
 }
 
 #[test]
-fn operator_question_event_appends_inline_message_and_actions() {
+fn operator_question_event_appends_inline_message_and_actions_without_modal() {
     let mut model = make_model();
-    model
-        .modal
-        .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
     model.chat.reduce(chat::ChatAction::ThreadCreated {
         thread_id: "thread-1".to_string(),
         title: "Thread".to_string(),
@@ -271,15 +268,43 @@ fn operator_question_event_appends_inline_message_and_actions() {
     assert_eq!(message.operator_question_id.as_deref(), Some("oq-1"));
     assert_eq!(message.content, "Approve this slice?\nA - proceed\nB - revise");
     assert_eq!(message.actions.len(), 2);
-    assert_eq!(
-        model.modal.top(),
-        Some(modal::ModalKind::CommandPalette),
-        "operator question should not replace the existing modal"
-    );
-    assert_ne!(
-        model.modal.top(),
-        Some(modal::ModalKind::OperatorQuestionOverlay)
-    );
+    assert_eq!(message.actions[0].label, "A");
+    assert_eq!(message.actions[1].label, "B");
+    assert_eq!(model.modal.top(), None);
+    assert_ne!(model.modal.top(), Some(modal::ModalKind::OperatorQuestionOverlay));
+}
+
+#[test]
+fn operator_question_event_does_not_replace_existing_modal() {
+    let mut model = make_model();
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    model.handle_client_event(ClientEvent::OperatorQuestion {
+        question_id: "oq-1".to_string(),
+        content: "Approve this slice?\nA - proceed\nB - revise".to_string(),
+        options: vec!["A".to_string(), "B".to_string()],
+        session_id: None,
+        thread_id: Some("thread-1".to_string()),
+    });
+
+    let thread = model.chat.active_thread().expect("thread should exist");
+    let message = thread.messages.last().expect("question message should exist");
+    assert!(message.is_operator_question);
+    assert_eq!(message.operator_question_id.as_deref(), Some("oq-1"));
+    assert_eq!(message.actions.len(), 2);
+    assert_eq!(message.actions[0].label, "A");
+    assert_eq!(message.actions[1].label, "B");
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::CommandPalette));
+    assert_ne!(model.modal.top(), Some(modal::ModalKind::OperatorQuestionOverlay));
 }
 
 #[test]
