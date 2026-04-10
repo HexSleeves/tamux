@@ -187,6 +187,8 @@ fn clicking_bottom_action_bar_submits_operator_question_answer() {
         thread_id: "thread-1".to_string(),
         message: chat::AgentMessage {
             role: chat::MessageRole::Assistant,
+            is_operator_question: true,
+            operator_question_id: Some("oq-1".to_string()),
             content: "Approve this slice?\nA - proceed\nB - revise".to_string(),
             actions: vec![
                 chat::MessageAction {

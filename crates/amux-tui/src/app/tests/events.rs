@@ -264,6 +264,8 @@ fn operator_question_event_appends_inline_message_and_actions() {
         "operator question should append an inline transcript message"
     );
     let message = thread.messages.last().expect("question message should exist");
+    assert!(message.is_operator_question);
+    assert_eq!(message.operator_question_id.as_deref(), Some("oq-1"));
     assert_eq!(message.content, "Approve this slice?\nA - proceed\nB - revise");
     assert_eq!(message.actions.len(), 2);
     assert_ne!(
