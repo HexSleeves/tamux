@@ -2221,13 +2221,23 @@ async fn strong_match_requires_read_skill_before_non_discovery_tool() {
     assert!(saw_gate_notice, "expected a skill gate workflow notice");
     assert!(saw_gate_result, "expected a blocked read_file tool result");
 
-    let persisted = engine
-        .history
-        .get_thread(thread_id)
-        .await
-        .expect("read persisted thread")
-        .expect("thread should persist");
-    let metadata = persisted.metadata_json.expect("thread metadata");
+    let metadata = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let persisted = engine
+                .history
+                .get_thread(thread_id)
+                .await
+                .expect("read persisted thread")
+                .expect("thread should persist");
+            let metadata = persisted.metadata_json.expect("thread metadata");
+            if metadata.contains("\"recommended_skill\":\"systematic-debugging\"") {
+                return metadata;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("expected persisted metadata to include the resolved skill recommendation");
     assert!(metadata.contains("\"recommended_skill\":\"systematic-debugging\""));
     assert!(metadata.contains("\"compliant\":false"));
 }
@@ -2758,6 +2768,24 @@ async fn substantive_follow_up_does_not_downgrade_hydrated_mesh_approval_require
         .await
         .expect("send message should complete");
 
+    let finalized_state = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if let Some(state) = engine.get_thread_skill_discovery_state(thread_id).await {
+                if !state.discovery_pending {
+                    return state;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("expected async skill preflight to complete");
+
+    assert_eq!(
+        finalized_state.recommended_skill.as_deref(),
+        Some("systematic-debugging")
+    );
+
     let persisted = engine
         .history
         .get_thread(thread_id)
@@ -2892,6 +2920,24 @@ async fn substantive_follow_up_preserves_hydrated_advisory_mesh_next_step() {
         )
         .await
         .expect("send message should complete");
+
+    let finalized_state = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if let Some(state) = engine.get_thread_skill_discovery_state(thread_id).await {
+                if !state.discovery_pending {
+                    return state;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("expected async skill preflight to complete");
+
+    assert_eq!(
+        finalized_state.recommended_skill.as_deref(),
+        Some("systematic-debugging")
+    );
 
     let persisted = engine
         .history
@@ -3331,13 +3377,41 @@ async fn local_strong_match_still_runs_when_background_community_scout_enabled()
         .await
         .expect("send message should complete");
 
-    let persisted = engine
-        .history
-        .get_thread(thread_id)
-        .await
-        .expect("read persisted thread")
-        .expect("thread should persist");
-    let metadata = persisted.metadata_json.expect("thread metadata");
+    let finalized_state = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if let Some(state) = engine.get_thread_skill_discovery_state(thread_id).await {
+                if !state.discovery_pending {
+                    return state;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("expected async skill preflight to complete");
+
+    assert_eq!(
+        finalized_state.recommended_skill.as_deref(),
+        Some("systematic-debugging")
+    );
+
+    let metadata = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let persisted = engine
+                .history
+                .get_thread(thread_id)
+                .await
+                .expect("read persisted thread")
+                .expect("thread should persist");
+            let metadata = persisted.metadata_json.expect("thread metadata");
+            if metadata.contains("\"recommended_skill\":\"systematic-debugging\"") {
+                return metadata;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("expected persisted metadata to include the resolved skill recommendation");
     assert!(metadata.contains("\"recommended_skill\":\"systematic-debugging\""));
 
     let scout_notice = tokio::time::timeout(std::time::Duration::from_millis(500), async {
@@ -3469,4 +3543,89 @@ async fn disabled_background_community_scout_does_not_search_registry() {
         !saw_scout_notice,
         "community scout should stay disabled for this turn"
     );
+}
+
+#[tokio::test]
+async fn send_message_does_not_wait_for_background_skill_discovery_completion() {
+    let root = tempdir().unwrap();
+    let skill_dir = root.path().join("skills").join("systematic-debugging");
+    fs::create_dir_all(&skill_dir).expect("create skills directory");
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "# Systematic debugging\nUse this workflow to debug panic failures in rust services.\n",
+    )
+    .expect("write skill");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = spawn_scripted_tool_call_server(vec![]).await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 0;
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let release_discovery = Arc::new(tokio::sync::Notify::new());
+    let runner_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    engine.set_skill_discovery_test_runner(
+        crate::agent::skill_preflight::make_delayed_test_skill_discovery_runner(
+            runner_started.clone(),
+            release_discovery.clone(),
+            crate::agent::skill_preflight::sample_test_skill_discovery_completion(
+                "debug panic in rust service",
+                "systematic-debugging",
+            ),
+        ),
+    );
+
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        engine.send_message_inner(
+            None,
+            "debug panic in rust service",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        ),
+    )
+    .await
+    .expect("send_message_inner should not block on skill discovery completion")
+    .expect("send message should complete");
+
+    assert!(
+        runner_started.load(std::sync::atomic::Ordering::SeqCst),
+        "background runner should have started"
+    );
+
+    let pending_state = engine
+        .get_thread_skill_discovery_state(&outcome.thread_id)
+        .await
+        .expect("pending discovery state should be stored");
+    assert!(pending_state.discovery_pending);
+    assert_eq!(pending_state.recommended_action, "await_skill_discovery");
+
+    release_discovery.notify_waiters();
+
+    let completed_state = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if let Some(state) = engine.get_thread_skill_discovery_state(&outcome.thread_id).await {
+                if !state.discovery_pending {
+                    return state;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("background discovery result should be applied");
+
+    assert_eq!(completed_state.recommended_skill.as_deref(), Some("systematic-debugging"));
+    assert!(!completed_state.discovery_pending);
 }

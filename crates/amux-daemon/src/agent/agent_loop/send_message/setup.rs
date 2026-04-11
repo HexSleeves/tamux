@@ -316,7 +316,7 @@ impl<'a> SendMessageRunner<'a> {
         let preferred_session_id =
             resolve_preferred_session_id(&engine.session_manager, preferred_session_hint).await;
         let skill_preflight = engine
-            .build_skill_preflight_context(stored_user_content, preferred_session_id.clone())
+            .build_skill_preflight_context(&tid, stored_user_content, preferred_session_id.clone())
             .await?;
         let mut skill_preflight = match skill_preflight {
             Some(context) => Some(context),
@@ -334,7 +334,9 @@ impl<'a> SendMessageRunner<'a> {
         if let Some(skill_preflight) = skill_preflight.as_mut() {
             let mut next_state = skill_preflight.state.clone();
             if let Some(previous_state) = engine.get_thread_skill_discovery_state(&tid).await {
-                let should_preserve_prior_state = if previous_state.mesh_requires_approval {
+                let should_preserve_prior_state = if next_state.is_discovery_pending() {
+                    false
+                } else if previous_state.mesh_requires_approval {
                     !previous_state.compliant
                 } else {
                     !previous_state.compliant

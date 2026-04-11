@@ -166,6 +166,11 @@ pub struct AgentEngine {
     pub repo_watchers: Mutex<HashMap<String, ThreadRepoWatcher>>,
     pub watcher_refresh_tx: mpsc::UnboundedSender<String>,
     pub watcher_refresh_rx: Mutex<Option<mpsc::UnboundedReceiver<String>>>,
+    pub(super) skill_discovery_result_tx:
+        mpsc::UnboundedSender<super::skill_preflight::AsyncSkillDiscoveryCompletion>,
+    #[cfg(test)]
+    pub(super) skill_discovery_test_runner:
+        std::sync::OnceLock<Arc<dyn super::skill_preflight::SkillDiscoveryTestRunner>>,
     pub(super) aline_startup_reconcile_started: std::sync::atomic::AtomicBool,
     pub(super) aline_startup_test_completion: std::sync::OnceLock<tokio::sync::watch::Sender<bool>>,
     #[cfg(test)]
@@ -248,6 +253,7 @@ impl AgentEngine {
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(config.agent_event_channel_capacity);
         let (watcher_refresh_tx, watcher_refresh_rx) = mpsc::unbounded_channel();
+        let (skill_discovery_result_tx, skill_discovery_result_rx) = mpsc::unbounded_channel();
 
         // Pre-initialize external agent runners for discovery
         let mut runners = HashMap::new();
@@ -279,7 +285,7 @@ impl AgentEngine {
             circuit_breakers.clone(),
         ));
 
-        Arc::new(Self {
+        let engine = Arc::new(Self {
             started_at_ms: now_millis(),
             config,
             http_client,
@@ -342,6 +348,9 @@ impl AgentEngine {
             repo_watchers: Mutex::new(HashMap::new()),
             watcher_refresh_tx,
             watcher_refresh_rx: Mutex::new(Some(watcher_refresh_rx)),
+            skill_discovery_result_tx,
+            #[cfg(test)]
+            skill_discovery_test_runner: std::sync::OnceLock::new(),
             aline_startup_reconcile_started: std::sync::atomic::AtomicBool::new(false),
             aline_startup_test_completion: std::sync::OnceLock::new(),
             #[cfg(test)]
@@ -367,7 +376,14 @@ impl AgentEngine {
             handoff_broker: RwLock::new(super::handoff::HandoffBroker::default()),
             divergent_sessions: RwLock::new(HashMap::new()),
             cost_trackers: Mutex::new(HashMap::new()),
-        })
+        });
+
+        super::skill_preflight::spawn_skill_discovery_result_applier(
+            engine.clone(),
+            skill_discovery_result_rx,
+        );
+
+        engine
     }
 
     // ── Circuit breaker helpers ──────────────────────────────────────────
@@ -502,6 +518,14 @@ impl AgentEngine {
         let data_dir = root.join("agent");
         std::fs::create_dir_all(&data_dir).expect("failed to create test agent data dir");
         Self::new_with_storage(session_manager, config, history, data_dir)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_skill_discovery_test_runner(
+        &self,
+        runner: Arc<dyn super::skill_preflight::SkillDiscoveryTestRunner>,
+    ) {
+        let _ = self.skill_discovery_test_runner.set(runner);
     }
 
     /// Subscribe to agent events (for IPC forwarding to frontend).

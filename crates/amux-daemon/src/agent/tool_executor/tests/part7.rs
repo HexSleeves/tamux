@@ -393,6 +393,7 @@ async fn read_skill_clears_stale_variant_gate_when_same_skill_family_is_read() {
                 mesh_approval_id: None,
                 read_skill_identifier: Some("stale-variant-id".to_string()),
                 skip_rationale: None,
+                discovery_pending: false,
                 skill_read_completed: false,
                 compliant: false,
                 updated_at: 1,

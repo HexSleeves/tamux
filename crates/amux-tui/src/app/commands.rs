@@ -371,6 +371,7 @@ impl TuiModel {
                 | "settings"
                 | "view"
                 | "status"
+                | "participants"
                 | "quit"
                 | "prompt"
                 | "goal"
@@ -462,6 +463,10 @@ impl TuiModel {
                 self.open_status_modal_loading();
                 self.send_daemon_command(DaemonCommand::RequestAgentStatus);
                 self.status_line = "Requesting tamux status...".to_string();
+            }
+            "participants" => {
+                self.open_thread_participants_modal();
+                self.status_line = "Viewing thread participants".to_string();
             }
             "quit" => self.pending_quit = true,
             "prompt" => {

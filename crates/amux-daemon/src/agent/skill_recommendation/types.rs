@@ -1,6 +1,9 @@
 use crate::history::SkillVariantRecord;
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Serialize, Deserialize)]
 pub(crate) enum SkillRecommendationConfidence {
     Strong,
     Weak,
@@ -9,13 +12,14 @@ pub(crate) enum SkillRecommendationConfidence {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Serialize, Deserialize)]
 pub(crate) enum SkillRecommendationAction {
     ReadSkill,
     #[default]
     None,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) struct SkillDocumentMetadata {
     pub summary: Option<String>,
     pub headings: Vec<String>,
@@ -25,7 +29,7 @@ pub(crate) struct SkillDocumentMetadata {
     pub built_in: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SkillRecommendation {
     pub record: SkillVariantRecord,
     pub metadata: SkillDocumentMetadata,
@@ -34,7 +38,7 @@ pub(crate) struct SkillRecommendation {
     pub score: f64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct SkillDiscoveryResult {
     pub recommendations: Vec<SkillRecommendation>,
     pub confidence: SkillRecommendationConfidence,

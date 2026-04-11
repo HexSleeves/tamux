@@ -106,7 +106,30 @@ pub struct AgentThread {
     pub total_output_tokens: u64,
 
     #[serde(default)]
+    pub thread_participants: Vec<ThreadParticipantState>,
+
+    #[serde(default)]
     pub queued_participant_suggestions: Vec<ThreadParticipantSuggestion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ThreadParticipantState {
+    #[serde(default)]
+    pub agent_id: String,
+    #[serde(default)]
+    pub agent_name: String,
+    #[serde(default)]
+    pub instruction: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub created_at: u64,
+    #[serde(default)]
+    pub updated_at: u64,
+    #[serde(default)]
+    pub deactivated_at: Option<u64>,
+    #[serde(default)]
+    pub last_contribution_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

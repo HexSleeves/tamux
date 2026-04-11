@@ -40,6 +40,8 @@ pub struct LatestSkillDiscoveryState {
     pub read_skill_identifier: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip_rationale: Option<String>,
+    #[serde(default, skip_serializing_if = "bool_is_false")]
+    pub discovery_pending: bool,
     #[serde(default)]
     pub skill_read_completed: bool,
     #[serde(default)]
@@ -47,23 +49,36 @@ pub struct LatestSkillDiscoveryState {
     pub updated_at: u64,
 }
 
+fn bool_is_false(value: &bool) -> bool {
+    !*value
+}
+
 impl LatestSkillDiscoveryState {
+    pub fn is_discovery_pending(&self) -> bool {
+        self.discovery_pending || self.confidence_tier.eq_ignore_ascii_case("pending")
+    }
+
     pub fn effective_mesh_next_step(
         &self,
     ) -> crate::agent::skill_mesh::types::SkillMeshNextStep {
+        if self.is_discovery_pending() {
+            return crate::agent::skill_mesh::types::SkillMeshNextStep::JustifySkillSkip;
+        }
         self.mesh_next_step
             .unwrap_or_else(|| self.legacy_mesh_next_step())
     }
 
     pub fn requires_skill_read_before_progress(&self) -> bool {
-        matches!(
+        !self.is_discovery_pending()
+            && matches!(
             self.effective_mesh_next_step(),
             crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill
         )
     }
 
     pub fn has_advisory_skill_read(&self) -> bool {
-        matches!(
+        !self.is_discovery_pending()
+            && matches!(
             self.effective_mesh_next_step(),
             crate::agent::skill_mesh::types::SkillMeshNextStep::ChooseOrBypass
         )

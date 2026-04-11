@@ -357,6 +357,19 @@ impl<'a> SendMessageRunner<'a> {
             return false;
         }
 
+        if state.is_discovery_pending() {
+            self.engine.emit_workflow_notice(
+                &self.tid,
+                "skill-gate",
+                format!(
+                    "Skill discovery is still running asynchronously before `{}`; allowing the tool call to proceed for now.",
+                    tc.function.name
+                ),
+                serde_json::to_string(&state).ok(),
+            );
+            return false;
+        }
+
         if state.mesh_requires_approval {
             let denied_content = format!(
                 "Tool call blocked by skill discovery governance. Before `{}` you must obtain approval for `{}`.",

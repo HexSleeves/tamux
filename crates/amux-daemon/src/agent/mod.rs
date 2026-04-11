@@ -67,7 +67,7 @@ pub(crate) mod skill_mesh;
 pub(crate) mod skill_community;
 mod skill_discovery;
 mod skill_evolution;
-mod skill_preflight;
+pub(crate) mod skill_preflight;
 mod skill_recommendation;
 pub(crate) mod skill_registry;
 mod skill_security;

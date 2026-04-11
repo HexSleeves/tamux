@@ -16,6 +16,33 @@ enum ConversationAgentKind {
 }
 
 impl TuiModel {
+    pub(super) fn conversation_participant_summary_area(&self) -> Option<Rect> {
+        if !matches!(self.main_pane_view, MainPaneView::Conversation) {
+            return None;
+        }
+        if self.should_show_provider_onboarding()
+            || self.should_show_local_landing()
+            || self.should_show_concierge_hero_loading()
+            || self.should_show_thread_loading()
+        {
+            return None;
+        }
+
+        let thread = self.chat.active_thread()?;
+        let has_summary = !thread.thread_participants.is_empty()
+            || !thread.queued_participant_suggestions.is_empty();
+        if !has_summary {
+            return None;
+        }
+
+        let chat_area = self.pane_layout().chat;
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(1)])
+            .split(chat_area);
+        Some(chunks[0])
+    }
+
     fn configured_model_label(model: &str, custom_model_name: &str) -> String {
         let custom = custom_model_name.trim();
         if !custom.is_empty() && custom != model {
@@ -248,6 +275,58 @@ impl TuiModel {
             );
             return;
         }
+
+        let participant_summary = self.chat.active_thread().and_then(|thread| {
+            let active: Vec<&str> = thread
+                .thread_participants
+                .iter()
+                .filter(|participant| participant.status.eq_ignore_ascii_case("active"))
+                .map(|participant| participant.agent_name.as_str())
+                .collect();
+            let inactive_count = thread
+                .thread_participants
+                .iter()
+                .filter(|participant| !participant.status.eq_ignore_ascii_case("active"))
+                .count();
+            let queued_count = thread.queued_participant_suggestions.len();
+            if active.is_empty() && inactive_count == 0 && queued_count == 0 {
+                return None;
+            }
+
+            let active_summary = if active.is_empty() {
+                "active: none".to_string()
+            } else {
+                let names = active.into_iter().take(3).collect::<Vec<_>>().join(", ");
+                format!("active: {names}")
+            };
+
+            Some(format!(
+                "Participants  •  {}  •  inactive: {}  •  queued: {}  •  /participants",
+                active_summary, inactive_count, queued_count
+            ))
+        });
+
+        let area = if let Some(summary) = participant_summary.as_deref() {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(3), Constraint::Min(1)])
+                .split(area);
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(summary.to_string())
+                    .block(
+                        Block::default()
+                            .title(" THREAD PARTICIPANTS ")
+                            .borders(Borders::ALL)
+                            .border_type(BorderType::Rounded)
+                            .border_style(self.theme.accent_secondary),
+                    )
+                    .style(self.theme.fg_dim),
+                chunks[0],
+            );
+            chunks[1]
+        } else {
+            area
+        };
 
         let mouse_selection = self
             .chat_drag_anchor_point
@@ -583,6 +662,7 @@ impl TuiModel {
                 modal::ModalKind::CommandPalette => render_helpers::centered_rect(50, 40, area),
                 modal::ModalKind::Status => render_helpers::centered_rect(72, 70, area),
                 modal::ModalKind::PromptViewer => render_helpers::centered_rect(84, 84, area),
+                modal::ModalKind::ThreadParticipants => render_helpers::centered_rect(76, 68, area),
                 modal::ModalKind::ThreadPicker => render_helpers::centered_rect(60, 50, area),
                 modal::ModalKind::GoalPicker => render_helpers::centered_rect(60, 50, area),
                 modal::ModalKind::QueuedPrompts => render_helpers::centered_rect(72, 42, area),
@@ -755,6 +835,17 @@ impl TuiModel {
                         &self.theme,
                     );
                 }
+                modal::ModalKind::ThreadParticipants => {
+                    render_helpers::render_status_modal(
+                        frame,
+                        overlay_area,
+                        "THREAD PARTICIPANTS",
+                        &self.thread_participants_modal_body(),
+                        self.thread_participants_modal_scroll,
+                        true,
+                        &self.theme,
+                    );
+                }
                 modal::ModalKind::Help => {
                     render_helpers::render_help_modal(frame, overlay_area, &self.theme);
                 }
@@ -779,6 +870,7 @@ impl TuiModel {
             modal::ModalKind::CommandPalette => render_helpers::centered_rect(50, 40, area),
             modal::ModalKind::Status => render_helpers::centered_rect(84, 84, area),
             modal::ModalKind::PromptViewer => render_helpers::centered_rect(84, 84, area),
+            modal::ModalKind::ThreadParticipants => render_helpers::centered_rect(76, 68, area),
             modal::ModalKind::ThreadPicker => render_helpers::centered_rect(60, 50, area),
             modal::ModalKind::GoalPicker => render_helpers::centered_rect(60, 50, area),
             modal::ModalKind::QueuedPrompts => render_helpers::centered_rect(72, 42, area),

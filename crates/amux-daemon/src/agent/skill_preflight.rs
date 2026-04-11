@@ -1,13 +1,20 @@
 use super::*;
 use crate::agent::types::SkillRecommendationConfig;
 use amux_protocol::SessionId;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::process::Stdio;
+#[cfg(test)]
+use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const MAX_SKILL_PREFLIGHT_MATCHES: usize = 3;
 const SKILL_DISCOVERY_NORMALIZER_MARKER: &str = "[[skill_discovery_query_normalizer]]";
 const MAX_NORMALIZED_SKILL_QUERY_CHARS: usize = 160;
 const LOCAL_SKILL_DISCOVERY_NORMALIZER_ID: &str = "local-skill-discovery-heuristic";
+pub(crate) const SKILL_DISCOVERY_WORKER_ARG: &str = "__tamux-skill-discovery-worker";
 
 #[cfg(test)]
 static FORCE_MESH_DISCOVERY_DEGRADED_FOR_TESTS: AtomicBool = AtomicBool::new(false);
@@ -19,6 +26,118 @@ pub(crate) struct SkillPreflightContext {
     pub workflow_details: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct AsyncSkillDiscoveryRequest {
+    pub thread_id: String,
+    pub query: String,
+    pub context_tags: Vec<String>,
+    pub limit: usize,
+    pub history_root: PathBuf,
+    pub cfg: SkillRecommendationConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct AsyncSkillDiscoveryCompletion {
+    pub thread_id: String,
+    pub query: String,
+    pub state: LatestSkillDiscoveryState,
+    pub context_tags: Vec<String>,
+    pub cfg: SkillRecommendationConfig,
+    pub result: super::skill_recommendation::SkillDiscoveryResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[cfg(test)]
+pub(crate) trait SkillDiscoveryTestRunner: Send + Sync {
+    fn spawn(
+        &self,
+        request: AsyncSkillDiscoveryRequest,
+        result_tx: tokio::sync::mpsc::UnboundedSender<AsyncSkillDiscoveryCompletion>,
+    );
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct DelayedTestSkillDiscoveryRunner {
+    started: Arc<AtomicBool>,
+    release: Arc<tokio::sync::Notify>,
+    completion: AsyncSkillDiscoveryCompletion,
+}
+
+#[cfg(test)]
+impl SkillDiscoveryTestRunner for DelayedTestSkillDiscoveryRunner {
+    fn spawn(
+        &self,
+        request: AsyncSkillDiscoveryRequest,
+        result_tx: tokio::sync::mpsc::UnboundedSender<AsyncSkillDiscoveryCompletion>,
+    ) {
+        self.started.store(true, Ordering::SeqCst);
+        let release = self.release.clone();
+        let mut completion = self.completion.clone();
+        completion.thread_id = request.thread_id;
+        completion.query = request.query;
+        tokio::spawn(async move {
+            release.notified().await;
+            let _ = result_tx.send(completion);
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn make_delayed_test_skill_discovery_runner(
+    started: Arc<AtomicBool>,
+    release: Arc<tokio::sync::Notify>,
+    completion: AsyncSkillDiscoveryCompletion,
+) -> Arc<dyn SkillDiscoveryTestRunner> {
+    Arc::new(DelayedTestSkillDiscoveryRunner {
+        started,
+        release,
+        completion,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn sample_test_skill_discovery_completion(
+    query: &str,
+    skill_name: &str,
+) -> AsyncSkillDiscoveryCompletion {
+    AsyncSkillDiscoveryCompletion {
+        thread_id: String::new(),
+        query: query.to_string(),
+        state: LatestSkillDiscoveryState {
+            query: query.to_string(),
+            confidence_tier: "strong".to_string(),
+            recommended_skill: Some(skill_name.to_string()),
+            recommended_action: format!("read_skill {skill_name}"),
+            mesh_next_step: Some(crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill),
+            mesh_requires_approval: false,
+            mesh_approval_id: None,
+            read_skill_identifier: Some(skill_name.to_string()),
+            skip_rationale: None,
+            discovery_pending: false,
+            skill_read_completed: false,
+            compliant: false,
+            updated_at: now_millis(),
+        },
+        context_tags: Vec::new(),
+        cfg: SkillRecommendationConfig::default(),
+        result: super::skill_recommendation::SkillDiscoveryResult::default(),
+        error: None,
+    }
+}
+
+pub(super) fn spawn_skill_discovery_result_applier(
+    engine: Arc<AgentEngine>,
+    mut result_rx: tokio::sync::mpsc::UnboundedReceiver<AsyncSkillDiscoveryCompletion>,
+) {
+    tokio::spawn(async move {
+        while let Some(completion) = result_rx.recv().await {
+            apply_async_skill_discovery_completion(engine.as_ref(), completion).await;
+        }
+    });
+}
+
 impl AgentEngine {
     pub(crate) async fn discover_skill_recommendations_public(
         &self,
@@ -27,7 +146,9 @@ impl AgentEngine {
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<amux_protocol::SkillDiscoveryResultPublic> {
-        let context = self.run_skill_discovery(query, session_id, 512).await?;
+        let context = self
+            .run_public_skill_discovery_via_subprocess(query, session_id, 512)
+            .await?;
 
         super::skill_recommendation::page_public_discovery_result(
             query,
@@ -41,6 +162,7 @@ impl AgentEngine {
 
     pub(super) async fn build_skill_preflight_context(
         &self,
+        thread_id: &str,
         content: &str,
         session_id: Option<SessionId>,
     ) -> Result<Option<SkillPreflightContext>> {
@@ -48,17 +170,126 @@ impl AgentEngine {
             return Ok(None);
         }
 
-        let context = self
-            .run_skill_discovery(content, session_id, MAX_SKILL_PREFLIGHT_MATCHES)
-            .await?;
-        let state = build_latest_skill_discovery_state(content, &context.result);
+        if let Some(state) = self.get_thread_skill_discovery_state(thread_id).await {
+            if state.is_discovery_pending() && state.query == content {
+                return Ok(Some(build_skill_preflight_context_from_state(state)));
+            }
+        }
 
-        Ok(Some(SkillPreflightContext {
-            prompt_context: build_skill_preflight_prompt(content, &context.result, &state),
-            workflow_message: skill_preflight_workflow_message(&state),
-            workflow_details: serde_json::to_string(&state).ok(),
-            state,
-        }))
+        let context_tags =
+            resolve_skill_context_tags(self.workspace_root.as_ref(), &self.session_manager, session_id)
+                .await;
+        let cfg = self.config.read().await.skill_recommendation.clone();
+        let pending_state = build_pending_skill_discovery_state(content);
+
+        self.set_thread_skill_discovery_state(thread_id, pending_state.clone())
+            .await;
+        self.spawn_background_skill_discovery(AsyncSkillDiscoveryRequest {
+            thread_id: thread_id.to_string(),
+            query: content.to_string(),
+            context_tags,
+            limit: MAX_SKILL_PREFLIGHT_MATCHES,
+            history_root: self.history.data_root().to_path_buf(),
+            cfg,
+        });
+
+        Ok(Some(build_skill_preflight_context_from_state(pending_state)))
+    }
+
+    async fn run_public_skill_discovery_via_subprocess(
+        &self,
+        query: &str,
+        session_id: Option<SessionId>,
+        limit: usize,
+    ) -> Result<SkillDiscoveryComputation> {
+        #[cfg(test)]
+        {
+            if self.skill_discovery_test_runner.get().is_none() {
+                return self.run_skill_discovery(query, session_id, limit).await;
+            }
+        }
+
+        let context_tags =
+            resolve_skill_context_tags(self.workspace_root.as_ref(), &self.session_manager, session_id)
+                .await;
+        let cfg = self.config.read().await.skill_recommendation.clone();
+
+        let completion = run_skill_discovery_subprocess(AsyncSkillDiscoveryRequest {
+            thread_id: String::new(),
+            query: query.to_string(),
+            context_tags: context_tags.clone(),
+            limit,
+            history_root: self.history.data_root().to_path_buf(),
+            cfg: cfg.clone(),
+        })
+        .await?;
+
+        let mut result = completion.result;
+        if should_attempt_query_normalization(query, &result) {
+            if let Some((normalized_query, normalizer_agent_id)) = self
+                .normalize_skill_discovery_query(query, &context_tags, session_id)
+                .await
+            {
+                let mut normalized_completion = run_skill_discovery_subprocess(
+                    AsyncSkillDiscoveryRequest {
+                        thread_id: String::new(),
+                        query: normalized_query.clone(),
+                        context_tags: context_tags.clone(),
+                        limit,
+                        history_root: self.history.data_root().to_path_buf(),
+                        cfg: cfg.clone(),
+                    },
+                )
+                .await?;
+                if fallback_result_is_better(&result, &normalized_completion.result) {
+                    annotate_fallback_result(
+                        &mut normalized_completion.result,
+                        &normalized_query,
+                        normalizer_agent_id,
+                    );
+                    result = normalized_completion.result;
+                }
+            }
+        }
+
+        Ok(SkillDiscoveryComputation {
+            context_tags,
+            cfg,
+            result,
+            backend_used: "subprocess",
+            mesh_degraded: false,
+        })
+    }
+
+    fn spawn_background_skill_discovery(&self, request: AsyncSkillDiscoveryRequest) {
+        #[cfg(test)]
+        if let Some(runner) = self.skill_discovery_test_runner.get() {
+            runner.spawn(request, self.skill_discovery_result_tx.clone());
+            return;
+        }
+
+        #[cfg(test)]
+        {
+            let result_tx = self.skill_discovery_result_tx.clone();
+            tokio::spawn(async move {
+                let completion = compute_async_skill_discovery_completion(request).await;
+                let _ = result_tx.send(completion);
+            });
+            return;
+        }
+
+        let result_tx = self.skill_discovery_result_tx.clone();
+        tokio::spawn(async move {
+            let completion = match run_skill_discovery_subprocess(request.clone()).await {
+                Ok(completion) => completion,
+                Err(error) => build_failed_async_skill_discovery_completion(
+                    &request.thread_id,
+                    &request.query,
+                    &error.to_string(),
+                ),
+            };
+            let _ = result_tx.send(completion);
+        });
     }
 
     pub(crate) async fn refresh_thread_skill_discovery_state(
@@ -312,6 +543,30 @@ async fn execute_skill_discovery_backend(
             cfg,
         )
         .await?;
+        if result.recommendations.is_empty()
+            || matches!(
+                result.confidence,
+                super::skill_recommendation::SkillRecommendationConfidence::None
+            )
+        {
+            let fallback = super::skill_recommendation::discover_local_skills(
+                history,
+                skills_root,
+                query,
+                context_tags,
+                limit,
+                cfg,
+            )
+            .await?;
+            if !fallback.recommendations.is_empty()
+                || !matches!(
+                    fallback.confidence,
+                    super::skill_recommendation::SkillRecommendationConfidence::None
+                )
+            {
+                return Ok((fallback, "legacy", false));
+            }
+        }
         return Ok((result, "mesh", false));
     }
 
@@ -325,6 +580,145 @@ async fn execute_skill_discovery_backend(
     )
     .await?;
     Ok((result, "legacy", false))
+}
+
+async fn run_skill_discovery_subprocess(
+    request: AsyncSkillDiscoveryRequest,
+) -> Result<AsyncSkillDiscoveryCompletion> {
+    let executable = std::env::current_exe().context("resolve tamux-daemon executable")?;
+    let mut child = tokio::process::Command::new(executable)
+        .arg(SKILL_DISCOVERY_WORKER_ARG)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawn background skill discovery subprocess")?;
+
+    let request_json =
+        serde_json::to_vec(&request).context("serialize async skill discovery request")?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("background skill discovery stdin unavailable"))?;
+    stdin
+        .write_all(&request_json)
+        .await
+        .context("write async skill discovery request")?;
+    drop(stdin);
+
+    let output = child
+        .wait_with_output()
+        .await
+        .context("wait for background skill discovery subprocess")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "background skill discovery subprocess failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    serde_json::from_slice::<AsyncSkillDiscoveryCompletion>(&output.stdout)
+        .context("parse async skill discovery subprocess output")
+}
+
+pub(crate) async fn run_skill_discovery_worker_from_stdio() -> Result<()> {
+    let mut request_bytes = Vec::new();
+    tokio::io::stdin()
+        .read_to_end(&mut request_bytes)
+        .await
+        .context("read async skill discovery request")?;
+    let request = serde_json::from_slice::<AsyncSkillDiscoveryRequest>(&request_bytes)
+        .context("parse async skill discovery request")?;
+    let completion = compute_async_skill_discovery_completion(request).await;
+    let response =
+        serde_json::to_vec(&completion).context("serialize async skill discovery completion")?;
+    tokio::io::stdout()
+        .write_all(&response)
+        .await
+        .context("write async skill discovery completion")?;
+    Ok(())
+}
+
+async fn compute_async_skill_discovery_completion(
+    request: AsyncSkillDiscoveryRequest,
+) -> AsyncSkillDiscoveryCompletion {
+    let history = match crate::history::HistoryStore::open_for_data_root(&request.history_root).await {
+        Ok(history) => history,
+        Err(error) => {
+            return build_failed_async_skill_discovery_completion(
+                &request.thread_id,
+                &request.query,
+                &error.to_string(),
+            );
+        }
+    };
+    let skills_root = history.data_dir().to_path_buf();
+    match execute_skill_discovery_backend(
+        &history,
+        &skills_root,
+        &request.query,
+        &request.context_tags,
+        request.limit,
+        &request.cfg,
+    )
+    .await
+    {
+        Ok((mut result, _, mesh_degraded)) => {
+            if mesh_degraded {
+                annotate_mesh_degraded_fallback(&mut result);
+            }
+            AsyncSkillDiscoveryCompletion {
+                thread_id: request.thread_id,
+                query: request.query.clone(),
+                state: build_latest_skill_discovery_state(&request.query, &result),
+                context_tags: request.context_tags,
+                cfg: request.cfg,
+                result,
+                error: None,
+            }
+        }
+        Err(error) => build_failed_async_skill_discovery_completion(
+            &request.thread_id,
+            &request.query,
+            &error.to_string(),
+        ),
+    }
+}
+
+async fn apply_async_skill_discovery_completion(
+    engine: &AgentEngine,
+    completion: AsyncSkillDiscoveryCompletion,
+) {
+    let Some(current_state) = engine
+        .get_thread_skill_discovery_state(&completion.thread_id)
+        .await
+    else {
+        return;
+    };
+    if !current_state.is_discovery_pending() || current_state.query != completion.query {
+        return;
+    }
+
+    let state = completion.state.clone();
+    engine
+        .set_thread_skill_discovery_state(&completion.thread_id, state.clone())
+        .await;
+    let message = completion.error.as_ref().map_or_else(
+        || skill_preflight_workflow_message(&state),
+        |_| format!(
+            "Background skill discovery failed for `{}`. Next action: {}.",
+            completion.query, state.recommended_action
+        ),
+    );
+    engine.emit_workflow_notice(
+        &completion.thread_id,
+        "skill-preflight",
+        message,
+        serde_json::to_string(&completion).ok(),
+    );
+    let _ = engine.event_tx.send(AgentEvent::ThreadReloadRequired {
+        thread_id: completion.thread_id,
+    });
 }
 
 struct SkillDiscoveryComputation {
@@ -643,9 +1037,58 @@ fn build_latest_skill_discovery_state(
             .then(|| format!("skill-mesh-approval:{query}")),
         read_skill_identifier: decision.read_skill_identifier,
         skip_rationale: None,
+        discovery_pending: false,
         skill_read_completed: false,
         compliant: false,
         updated_at: now_millis(),
+    }
+}
+
+fn build_pending_skill_discovery_state(query: &str) -> LatestSkillDiscoveryState {
+    LatestSkillDiscoveryState {
+        query: query.to_string(),
+        confidence_tier: "pending".to_string(),
+        recommended_skill: None,
+        recommended_action: "await_skill_discovery".to_string(),
+        mesh_next_step: None,
+        mesh_requires_approval: false,
+        mesh_approval_id: None,
+        read_skill_identifier: None,
+        skip_rationale: None,
+        discovery_pending: true,
+        skill_read_completed: false,
+        compliant: false,
+        updated_at: now_millis(),
+    }
+}
+
+fn build_failed_async_skill_discovery_completion(
+    thread_id: &str,
+    query: &str,
+    error: &str,
+) -> AsyncSkillDiscoveryCompletion {
+    let mut state = build_latest_skill_discovery_state(
+        query,
+        &super::skill_recommendation::SkillDiscoveryResult::default(),
+    );
+    state.skip_rationale = Some(format!("background skill discovery failed: {error}"));
+    AsyncSkillDiscoveryCompletion {
+        thread_id: thread_id.to_string(),
+        query: query.to_string(),
+        state,
+        context_tags: Vec::new(),
+        cfg: SkillRecommendationConfig::default(),
+        result: super::skill_recommendation::SkillDiscoveryResult::default(),
+        error: Some(error.to_string()),
+    }
+}
+
+fn build_skill_preflight_context_from_state(state: LatestSkillDiscoveryState) -> SkillPreflightContext {
+    SkillPreflightContext {
+        prompt_context: build_skill_gate_override_prompt(&state),
+        workflow_message: skill_preflight_workflow_message(&state),
+        workflow_details: serde_json::to_string(&state).ok(),
+        state,
     }
 }
 
@@ -714,6 +1157,13 @@ fn build_skill_preflight_prompt(
 }
 
 pub(crate) fn skill_preflight_workflow_message(state: &LatestSkillDiscoveryState) -> String {
+    if state.is_discovery_pending() {
+        return format!(
+            "Skill discovery is running asynchronously. Next action: {}.",
+            state.recommended_action
+        );
+    }
+
     format!(
         "Skill discovery confidence: {}. Next action: {}.",
         state.confidence_tier, state.recommended_action
@@ -721,6 +1171,14 @@ pub(crate) fn skill_preflight_workflow_message(state: &LatestSkillDiscoveryState
 }
 
 pub(crate) fn build_skill_gate_override_prompt(state: &LatestSkillDiscoveryState) -> String {
+    if state.is_discovery_pending() {
+        return format!(
+            "Skill discovery is running asynchronously in a subprocess for this thread.\n- Query: {}\n- Status: pending\n- Next action: {}\n\nContinue reasoning normally, but prefer to defer heavy tool usage until the background skill result arrives.",
+            state.query,
+            state.recommended_action,
+        );
+    }
+
     if state.mesh_requires_approval {
         let guidance = if state.skill_read_completed {
             format!(
@@ -1144,6 +1602,7 @@ triggers: [panic, failing test]
                     mesh_approval_id: None,
                     read_skill_identifier: Some("variant-systematic-debugging-v1".to_string()),
                     skip_rationale: None,
+                    discovery_pending: false,
                     skill_read_completed: false,
                     compliant: false,
                     updated_at: 1,
@@ -1180,6 +1639,7 @@ triggers: [panic, failing test]
                     mesh_approval_id: Some("approval-1".to_string()),
                     read_skill_identifier: Some("systematic-debugging".to_string()),
                     skip_rationale: None,
+                    discovery_pending: false,
                     skill_read_completed: true,
                     compliant: false,
                     updated_at: 1,
@@ -1216,6 +1676,7 @@ triggers: [panic, failing test]
                     mesh_approval_id: Some("approval-denied".to_string()),
                     read_skill_identifier: Some("systematic-debugging".to_string()),
                     skip_rationale: None,
+                    discovery_pending: false,
                     skill_read_completed: true,
                     compliant: false,
                     updated_at: 1,

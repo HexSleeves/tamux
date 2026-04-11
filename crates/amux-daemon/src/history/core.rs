@@ -1,6 +1,43 @@
 use super::*;
 
 impl HistoryStore {
+    async fn open_for_root(root: &Path) -> Result<Self> {
+        let history_dir = root.join("history");
+        let skill_dir = root.join("skills").join("generated");
+        let telemetry_dir = root.join("semantic-logs");
+        let worm_dir = telemetry_dir.join("worm");
+
+        std::fs::create_dir_all(&history_dir)?;
+        std::fs::create_dir_all(&skill_dir)?;
+        std::fs::create_dir_all(&telemetry_dir)?;
+        std::fs::create_dir_all(&worm_dir)?;
+
+        let db_path = history_dir.join("command-history.db");
+        let conn = tokio_rusqlite::Connection::open(&db_path)
+            .await
+            .context("failed to open SQLite connection via tokio-rusqlite")?;
+
+        conn.call(|conn| {
+            conn.pragma_update(None, "journal_mode", "WAL")?;
+            conn.pragma_update(None, "synchronous", "NORMAL")?;
+            conn.pragma_update(None, "foreign_keys", "ON")?;
+            conn.pragma_update(None, "wal_autocheckpoint", "1000")?;
+            conn.pragma_update(None, "busy_timeout", "5000")?;
+            Ok(())
+        })
+        .await
+        .context("failed to apply WAL pragmas")?;
+
+        let store = Self {
+            conn,
+            skill_dir,
+            telemetry_dir,
+            worm_dir,
+        };
+        store.init_schema().await?;
+        Ok(store)
+    }
+
     pub fn data_dir(&self) -> &Path {
         self.skill_dir.parent().unwrap_or(self.skill_dir.as_path())
     }
@@ -24,42 +61,7 @@ impl HistoryStore {
 
     pub async fn new() -> Result<Self> {
         let base = amux_protocol::ensure_amux_data_dir()?;
-        let history_dir = base.join("history");
-        let skill_dir = base.join("skills").join("generated");
-        let telemetry_dir = base.join("semantic-logs");
-        let worm_dir = telemetry_dir.join("worm");
-
-        std::fs::create_dir_all(&history_dir)?;
-        std::fs::create_dir_all(&skill_dir)?;
-        std::fs::create_dir_all(&telemetry_dir)?;
-        std::fs::create_dir_all(&worm_dir)?;
-
-        let db_path = history_dir.join("command-history.db");
-        let conn = tokio_rusqlite::Connection::open(&db_path)
-            .await
-            .context("failed to open SQLite connection via tokio-rusqlite")?;
-
-        // Apply WAL pragmas on the connection's background thread (FOUN-01, FOUN-06, per D-03)
-        // busy_timeout=5000 also satisfies D-13: SQLite waits up to 5s before SQLITE_BUSY
-        conn.call(|conn| {
-            conn.pragma_update(None, "journal_mode", "WAL")?;
-            conn.pragma_update(None, "synchronous", "NORMAL")?;
-            conn.pragma_update(None, "foreign_keys", "ON")?;
-            conn.pragma_update(None, "wal_autocheckpoint", "1000")?;
-            conn.pragma_update(None, "busy_timeout", "5000")?;
-            Ok(())
-        })
-        .await
-        .context("failed to apply WAL pragmas")?;
-
-        let store = Self {
-            conn,
-            skill_dir,
-            telemetry_dir,
-            worm_dir,
-        };
-        store.init_schema().await?;
-        Ok(store)
+        Self::open_for_root(&base).await
     }
 
     pub async fn list_agent_config_items(&self) -> Result<Vec<(String, serde_json::Value)>> {
@@ -216,36 +218,11 @@ impl HistoryStore {
     }
 
     pub(crate) async fn new_test_store(root: &Path) -> Result<Self> {
-        let history_dir = root.join("history");
-        let skill_dir = root.join("skills").join("generated");
-        let telemetry_dir = root.join("semantic-logs");
-        let worm_dir = telemetry_dir.join("worm");
+        Self::open_for_root(root).await
+    }
 
-        std::fs::create_dir_all(&history_dir)?;
-        std::fs::create_dir_all(&skill_dir)?;
-        std::fs::create_dir_all(&telemetry_dir)?;
-        std::fs::create_dir_all(&worm_dir)?;
-
-        let db_path = history_dir.join("command-history.db");
-        let conn = tokio_rusqlite::Connection::open(&db_path).await?;
-        conn.call(|conn| {
-            conn.pragma_update(None, "journal_mode", "WAL")?;
-            conn.pragma_update(None, "synchronous", "NORMAL")?;
-            conn.pragma_update(None, "foreign_keys", "ON")?;
-            conn.pragma_update(None, "wal_autocheckpoint", "1000")?;
-            conn.pragma_update(None, "busy_timeout", "5000")?;
-            Ok(())
-        })
-        .await?;
-
-        let store = Self {
-            conn,
-            skill_dir,
-            telemetry_dir,
-            worm_dir,
-        };
-        store.init_schema().await?;
-        Ok(store)
+    pub(crate) async fn open_for_data_root(root: &Path) -> Result<Self> {
+        Self::open_for_root(root).await
     }
 
     pub async fn record_managed_finish(&self, record: &ManagedHistoryRecord) -> Result<()> {

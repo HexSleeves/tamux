@@ -489,12 +489,19 @@ impl ChatState {
                 self.threads = new_threads
                     .into_iter()
                     .map(|mut incoming| {
-                        if incoming.messages.is_empty() {
-                            if let Some(existing) = existing_threads
-                                .iter()
-                                .find(|thread| thread.id == incoming.id)
-                            {
+                        if let Some(existing) = existing_threads
+                            .iter()
+                            .find(|thread| thread.id == incoming.id)
+                        {
+                            if incoming.messages.is_empty() {
                                 incoming.messages = existing.messages.clone();
+                            }
+                            if incoming.thread_participants.is_empty() {
+                                incoming.thread_participants = existing.thread_participants.clone();
+                            }
+                            if incoming.queued_participant_suggestions.is_empty() {
+                                incoming.queued_participant_suggestions =
+                                    existing.queued_participant_suggestions.clone();
                             }
                         }
                         incoming
@@ -546,6 +553,13 @@ impl ChatState {
                     existing.total_output_tokens = incoming
                         .total_output_tokens
                         .max(existing.total_output_tokens);
+                    if !incoming.thread_participants.is_empty() {
+                        existing.thread_participants = incoming.thread_participants;
+                    }
+                    if !incoming.queued_participant_suggestions.is_empty() {
+                        existing.queued_participant_suggestions =
+                            incoming.queued_participant_suggestions;
+                    }
                     if incoming.agent_name.is_some() {
                         existing.agent_name = incoming.agent_name;
                     }

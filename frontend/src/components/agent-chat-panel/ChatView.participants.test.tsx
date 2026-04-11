@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import type { AgentThread } from "@/lib/agentStore";
 import { ChatView } from "./ChatView";
 
-describe("ChatView participant suggestions", () => {
-  it("renders queued participant suggestions with badges", () => {
+describe("ChatView participants", () => {
+  it("renders a participant summary entry point with counts", () => {
     const activeThread: AgentThread = {
       id: "thread-1",
       daemonThreadId: "daemon-thread-1",
@@ -22,7 +22,25 @@ describe("ChatView participant suggestions", () => {
       totalTokens: 0,
       compactionCount: 0,
       lastMessagePreview: "",
-      threadParticipants: [],
+      threadParticipants: [
+        {
+          agentId: "weles",
+          agentName: "Weles",
+          instruction: "verify claims",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+        {
+          agentId: "rarog",
+          agentName: "Rarog",
+          instruction: "watch approvals",
+          status: "inactive",
+          createdAt: 1,
+          updatedAt: 1,
+          deactivatedAt: 2,
+        },
+      ],
       queuedParticipantSuggestions: [
         {
           id: "sugg-1",
@@ -43,27 +61,27 @@ describe("ChatView participant suggestions", () => {
         messages={[]}
         todos={[]}
         input=""
-        setInput={() => {}}
+        setInput={() => { }}
         inputRef={createRef<HTMLTextAreaElement>()}
-        onKeyDown={() => {}}
+        onKeyDown={() => { }}
         agentSettings={{ enabled: true, chatFontFamily: "monospace", reasoning_effort: "high" }}
         isStreamingResponse={false}
         activeThread={activeThread}
         messagesEndRef={createRef<HTMLDivElement>()}
-        onSendMessage={() => {}}
-        onSendParticipantSuggestion={() => {}}
-        onDismissParticipantSuggestion={() => {}}
-        onStopStreaming={() => {}}
-        onUpdateReasoningEffort={() => {}}
+        onSendMessage={() => { }}
+        onSendParticipantSuggestion={() => { }}
+        onDismissParticipantSuggestion={() => { }}
+        onStopStreaming={() => { }}
+        onUpdateReasoningEffort={() => { }}
         canStartGoalRun={false}
         onStartGoalRun={async () => false}
       />,
     );
 
-    expect(html).toContain("Participant Suggestions");
-    expect(html).toContain("Weles");
-    expect(html).toContain("Force Send");
-    expect(html).toContain("Failed");
-    expect(html).toContain("provider unavailable");
+    expect(html).toContain("Thread Participants");
+    expect(html).toContain("1 active");
+    expect(html).toContain("1 inactive");
+    expect(html).toContain("1 queued");
+    expect(html).toContain("View Details");
   });
 });

@@ -536,10 +536,13 @@ impl AgentEngine {
             .max_by_key(|state| state.updated_at)
             .cloned();
         let active_skill_gate = if let Some(state) = active_skill_gate_state {
-            let discovery = self
-                .discover_skill_recommendations_public(&state.query, None, 1, None)
-                .await
-                .ok();
+            let discovery = if state.is_discovery_pending() {
+                None
+            } else {
+                self.discover_skill_recommendations_public(&state.query, None, 1, None)
+                    .await
+                    .ok()
+            };
             let rationale = discovery
                 .as_ref()
                 .map(|value| value.rationale.clone())

@@ -545,6 +545,7 @@ mod tests {
             mesh_approval_id: Some("approval-1".to_string()),
             read_skill_identifier: Some("systematic-debugging".to_string()),
             skip_rationale: None,
+            discovery_pending: false,
             skill_read_completed: true,
             compliant: false,
             updated_at: 1,
