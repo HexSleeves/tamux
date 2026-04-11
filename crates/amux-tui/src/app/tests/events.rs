@@ -1413,6 +1413,72 @@ fn prompt_during_text_stream_without_running_tools_waits_for_done() {
 }
 
 #[test]
+fn participant_suggestion_event_queues_prompt_with_agent_name() {
+    let mut model = make_model();
+
+    model.handle_client_event(ClientEvent::ParticipantSuggestion {
+        thread_id: "thread-1".to_string(),
+        suggestion: crate::wire::ThreadParticipantSuggestion {
+            id: "sugg-1".to_string(),
+            target_agent_id: "weles".to_string(),
+            target_agent_name: "Weles".to_string(),
+            instruction: "check claim".to_string(),
+            force_send: false,
+            status: "queued".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            error: None,
+        },
+    });
+
+    assert_eq!(model.queued_prompts.len(), 1);
+    assert_eq!(
+        model.queued_prompts[0].participant_agent_name.as_deref(),
+        Some("Weles")
+    );
+    assert_eq!(model.queued_prompts[0].display_text(), "Weles: check claim");
+}
+
+#[test]
+fn queued_participant_send_now_stops_stream_and_sends_participant_command() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+    model.concierge.auto_cleanup_on_navigate = false;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model.handle_client_event(ClientEvent::Delta {
+        thread_id: "thread-1".to_string(),
+        content: "streaming".to_string(),
+    });
+    model.queue_participant_suggestion(
+        "thread-1".to_string(),
+        "sugg-1".to_string(),
+        "weles".to_string(),
+        "Weles".to_string(),
+        "urgent fix".to_string(),
+        true,
+    );
+    model.open_queued_prompts_modal();
+
+    model.execute_selected_queued_prompt_action();
+
+    assert!(matches!(
+        daemon_rx.try_recv(),
+        Ok(DaemonCommand::StopStream { thread_id }) if thread_id == "thread-1"
+    ));
+    assert!(matches!(
+        daemon_rx.try_recv(),
+        Ok(DaemonCommand::SendParticipantSuggestion { thread_id, suggestion_id })
+            if thread_id == "thread-1" && suggestion_id == "sugg-1"
+    ));
+}
+
+#[test]
 fn follow_up_prompt_after_cancel_keeps_processing_new_events_on_same_thread() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
     model.connected = true;
@@ -1453,6 +1519,86 @@ fn follow_up_prompt_after_cancel_keeps_processing_new_events_on_same_thread() {
         model.chat.streaming_content(),
         "Visible answer",
         "new stream chunks on the same thread should not be dropped after a cancelled turn"
+    );
+}
+
+#[test]
+fn leading_internal_delegate_prompt_routes_to_internal_command() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+    model.concierge.auto_cleanup_on_navigate = false;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    model.submit_prompt("!weles verify the auth regression".to_string());
+
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::InternalDelegate {
+            thread_id,
+            target_agent_id,
+            content,
+            ..
+        }) => {
+            assert_eq!(thread_id.as_deref(), Some("thread-1"));
+            assert_eq!(target_agent_id, "weles");
+            assert_eq!(content, "verify the auth regression");
+        }
+        other => panic!("expected internal delegate command, got {:?}", other),
+    }
+    assert!(
+        model
+            .chat
+            .active_thread()
+            .expect("thread should remain selected")
+            .messages
+            .is_empty(),
+        "internal delegation should not append a visible user turn"
+    );
+}
+
+#[test]
+fn leading_participant_prompt_routes_to_participant_command() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+    model.concierge.auto_cleanup_on_navigate = false;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    model.submit_prompt("@weles verify claims before answering".to_string());
+
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::ThreadParticipantCommand {
+            thread_id,
+            target_agent_id,
+            action,
+            instruction,
+            ..
+        }) => {
+            assert_eq!(thread_id, "thread-1");
+            assert_eq!(target_agent_id, "weles");
+            assert_eq!(action, "upsert");
+            assert_eq!(instruction.as_deref(), Some("verify claims before answering"));
+        }
+        other => panic!("expected participant command, got {:?}", other),
+    }
+    assert!(
+        model
+            .chat
+            .active_thread()
+            .expect("thread should remain selected")
+            .messages
+            .is_empty(),
+        "participant registration should not append a visible user turn"
     );
 }
 

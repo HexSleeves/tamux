@@ -45,6 +45,8 @@ export function AgentChatPanelScaffold({ style, className }: { style?: CSSProper
 export function AgentChatPanelHeader() {
   const runtime = useAgentChatPanelRuntime();
   const { view, activeThread, setActiveThread, setView, chatBackView, setChatBackView, togglePanel, createThread } = runtime;
+  const activeParticipants = activeThread?.threadParticipants?.filter((participant) => participant.status === "active") ?? [];
+  const inactiveParticipants = activeThread?.threadParticipants?.filter((participant) => participant.status === "inactive") ?? [];
 
   return (
     <div
@@ -101,6 +103,29 @@ export function AgentChatPanelHeader() {
           {view === "threads" ? "Live Intelligence Surfaces" : activeThread?.title ?? "Conversation Lane"}
         </span>
       </div>
+
+      {view === "chat" && activeThread && (activeParticipants.length > 0 || inactiveParticipants.length > 0) && (
+        <div style={{ justifyContent: "center", display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+          {activeParticipants.map((participant) => (
+            <span
+              key={`${participant.agentId}:active`}
+              title={participant.instruction}
+              style={{ fontSize: 11, border: "1px solid var(--accent)", color: "var(--accent)", borderRadius: 999, padding: "2px 8px", background: "rgba(94, 231, 223, 0.12)" }}
+            >
+              {participant.agentName}
+            </span>
+          ))}
+          {inactiveParticipants.map((participant) => (
+            <span
+              key={`${participant.agentId}:inactive`}
+              title={participant.instruction}
+              style={{ fontSize: 11, border: "1px solid var(--glass-border)", color: "var(--text-muted)", borderRadius: 999, padding: "2px 8px" }}
+            >
+              {participant.agentName} · inactive
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -194,6 +219,8 @@ export function AgentChatPanelChatSurface() {
       activeThread={runtime.activeThread}
       messagesEndRef={runtime.messagesEndRef}
       onSendMessage={runtime.sendMessage}
+      onSendParticipantSuggestion={runtime.sendParticipantSuggestion}
+      onDismissParticipantSuggestion={runtime.dismissParticipantSuggestion}
       onStopStreaming={() => runtime.stopStreaming(runtime.activeThreadId)}
       onDeleteMessage={(messageId) => {
         const tid = runtime.activeThreadId;

@@ -271,6 +271,46 @@ fn daemon_message_roundtrips_agent_divergent_session_started_with_operation_id()
 }
 
 #[test]
+fn client_message_supports_participant_suggestion_send() {
+    let msg = ClientMessage::AgentSendParticipantSuggestion {
+        thread_id: "thread-1".to_string(),
+        suggestion_id: "sugg-1".to_string(),
+        session_id: None,
+        client_surface: None,
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+    assert!(matches!(
+        decoded,
+        ClientMessage::AgentSendParticipantSuggestion {
+            thread_id,
+            suggestion_id,
+            ..
+        } if thread_id == "thread-1" && suggestion_id == "sugg-1"
+    ));
+}
+
+#[test]
+fn client_message_supports_participant_suggestion_dismiss() {
+    let msg = ClientMessage::AgentDismissParticipantSuggestion {
+        thread_id: "thread-1".to_string(),
+        suggestion_id: "sugg-1".to_string(),
+        session_id: None,
+        client_surface: None,
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+    assert!(matches!(
+        decoded,
+        ClientMessage::AgentDismissParticipantSuggestion {
+            thread_id,
+            suggestion_id,
+            ..
+        } if thread_id == "thread-1" && suggestion_id == "sugg-1"
+    ));
+}
+
+#[test]
 fn client_message_roundtrips_agent_semantic_query() {
     let msg = ClientMessage::AgentSemanticQuery {
         args_json: serde_json::json!({

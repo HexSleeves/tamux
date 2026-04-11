@@ -102,6 +102,9 @@ pub struct AgentEngine {
     pub history: HistoryStore,
     pub threads: RwLock<HashMap<String, AgentThread>>,
     pub thread_handoff_states: RwLock<HashMap<String, ThreadHandoffState>>,
+    pub thread_participants: RwLock<HashMap<String, Vec<ThreadParticipantState>>>,
+    pub thread_participant_suggestions:
+        RwLock<HashMap<String, Vec<ThreadParticipantSuggestion>>>,
     pub thread_client_surfaces: RwLock<HashMap<String, amux_protocol::ClientSurface>>,
     pub thread_skill_discovery_states: RwLock<HashMap<String, LatestSkillDiscoveryState>>,
     pub thread_structural_memories:
@@ -236,7 +239,7 @@ impl AgentEngine {
         )
     }
 
-    fn new_with_storage_and_http_client(
+    pub(crate) fn new_with_storage_and_http_client(
         session_manager: Arc<SessionManager>,
         config: AgentConfig,
         history: HistoryStore,
@@ -285,6 +288,8 @@ impl AgentEngine {
             history,
             threads: RwLock::new(HashMap::new()),
             thread_handoff_states: RwLock::new(HashMap::new()),
+            thread_participants: RwLock::new(HashMap::new()),
+            thread_participant_suggestions: RwLock::new(HashMap::new()),
             thread_client_surfaces: RwLock::new(HashMap::new()),
             thread_skill_discovery_states: RwLock::new(HashMap::new()),
             thread_structural_memories: RwLock::new(HashMap::new()),

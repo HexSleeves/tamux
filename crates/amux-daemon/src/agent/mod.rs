@@ -13,7 +13,7 @@ pub mod llm_client;
 pub mod tool_executor;
 pub mod types;
 
-mod agent_identity;
+pub(crate) mod agent_identity;
 mod agent_loop;
 mod aline_startup;
 mod anticipatory;
@@ -79,6 +79,8 @@ mod task_prompt;
 mod task_scheduler;
 mod thread_crud;
 mod thread_handoffs;
+pub(crate) mod thread_participants;
+mod thread_participant_runner;
 mod tool_synthesis;
 pub(crate) mod weles_governance;
 mod weles_health;
@@ -136,6 +138,7 @@ use system_prompt::*;
 use task_prompt::*;
 use task_scheduler::*;
 use thread_handoffs::*;
+pub(crate) use thread_participants::*;
 
 // Imports needed by child modules via `use super::*;`.
 use std::collections::{HashMap, HashSet, VecDeque};

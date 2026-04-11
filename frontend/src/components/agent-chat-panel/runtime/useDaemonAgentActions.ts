@@ -5,6 +5,7 @@ import { provisionAgentWorkspaceTerminals, provisionTerminalPaneInWorkspace, res
 import { startGoalRun, goalRunSupportAvailable, type GoalRun } from "@/lib/goalRuns";
 import { useWorkspaceStore } from "@/lib/workspaceStore";
 import { appendDaemonSystemMessage, normalizeBridgePayload } from "./daemonHelpers";
+import { parseLeadingAgentDirective } from "./agentDirective";
 
 export function useDaemonAgentActions({
   activePaneId,
@@ -118,6 +119,68 @@ export function useDaemonAgentActions({
             currentThreadId,
           );
         }
+        return;
+      }
+
+      const knownAgentAliases = [
+        "main",
+        "svarog",
+        "swarog",
+        "weles",
+        "rarog",
+        ...useAgentStore.getState().subAgents.flatMap((agent) => [agent.id, agent.name]),
+      ].filter(Boolean);
+      const directive = parseLeadingAgentDirective(text, knownAgentAliases);
+      if (directive) {
+        const daemonThreadId = daemonThreadIdRef.current;
+        if (directive.kind === "internal_delegate") {
+          if (!amux.agentInternalDelegate) {
+            appendDaemonSystemMessage("Internal delegation is not available in this runtime.", currentThreadId);
+            return;
+          }
+          const response = await amux.agentInternalDelegate(
+            daemonThreadId ?? null,
+            directive.agentAlias,
+            directive.body,
+            null,
+          );
+          const payload = normalizeBridgePayload(response);
+          appendDaemonSystemMessage(
+            payload?.ok === false && typeof payload?.error === "string"
+              ? `Failed to delegate to ${directive.agentAlias}: ${payload.error}`
+              : `Delegated internally to ${directive.agentAlias}.`,
+            currentThreadId,
+          );
+          return;
+        }
+
+        if (!daemonThreadId) {
+          appendDaemonSystemMessage(
+            "Participant commands require a daemon-linked thread.",
+            currentThreadId,
+          );
+          return;
+        }
+        if (!amux.agentThreadParticipantCommand) {
+          appendDaemonSystemMessage("Thread participants are not available in this runtime.", currentThreadId);
+          return;
+        }
+        const response = await amux.agentThreadParticipantCommand({
+          threadId: daemonThreadId,
+          targetAgentId: directive.agentAlias,
+          action: directive.kind === "participant_deactivate" ? "deactivate" : "upsert",
+          instruction: directive.kind === "participant_upsert" ? directive.body : null,
+          sessionId: null,
+        });
+        const payload = normalizeBridgePayload(response);
+        appendDaemonSystemMessage(
+          payload?.ok === false && typeof payload?.error === "string"
+            ? `Failed to update participant ${directive.agentAlias}: ${payload.error}`
+            : directive.kind === "participant_deactivate"
+              ? `Participant ${directive.agentAlias} stopped.`
+              : `Participant ${directive.agentAlias} updated.`,
+          currentThreadId,
+        );
         return;
       }
 

@@ -6,6 +6,24 @@ use std::path::{Path, PathBuf};
 mod goal_targets;
 
 impl TuiModel {
+    pub(super) fn known_agent_directive_aliases(&self) -> Vec<String> {
+        let mut aliases = vec![
+            "main".to_string(),
+            "svarog".to_string(),
+            "swarog".to_string(),
+            "weles".to_string(),
+            amux_protocol::AGENT_ID_RAROG.to_string(),
+            amux_protocol::AGENT_NAME_RAROG.to_string(),
+        ];
+        for entry in &self.subagents.entries {
+            aliases.push(entry.id.clone());
+            aliases.push(entry.name.clone());
+        }
+        aliases.sort();
+        aliases.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        aliases
+    }
+
     fn resolve_preview_path(path: &str) -> PathBuf {
         let raw = PathBuf::from(path);
         if raw.is_absolute() {
@@ -191,6 +209,27 @@ impl TuiModel {
         self.sync_queued_prompt_modal_state();
     }
 
+    pub(super) fn queue_participant_suggestion(
+        &mut self,
+        thread_id: String,
+        suggestion_id: String,
+        target_agent_id: String,
+        target_agent_name: String,
+        prompt: String,
+        force_send: bool,
+    ) {
+        self.queued_prompts.push(QueuedPrompt::new_with_agent(
+            prompt,
+            thread_id,
+            suggestion_id,
+            target_agent_id,
+            target_agent_name,
+            force_send,
+        ));
+        self.status_line = format!("QUEUED ({})", self.queued_prompts.len());
+        self.sync_queued_prompt_modal_state();
+    }
+
     fn pop_next_queued_prompt(&mut self) -> Option<QueuedPrompt> {
         if self.queued_prompts.is_empty() {
             return None;
@@ -237,10 +276,19 @@ impl TuiModel {
                 let Some(prompt) = self.remove_queued_prompt_at(index) else {
                     return;
                 };
-                if self.assistant_busy() {
+                if self.assistant_busy() && prompt.force_send {
                     self.interrupt_current_stream();
                 }
-                self.submit_prompt(prompt.text);
+                if let (Some(thread_id), Some(suggestion_id)) =
+                    (prompt.thread_id.clone(), prompt.suggestion_id.clone())
+                {
+                    self.send_daemon_command(DaemonCommand::SendParticipantSuggestion {
+                        thread_id,
+                        suggestion_id,
+                    });
+                } else {
+                    self.submit_prompt(prompt.text);
+                }
             }
             QueuedPromptAction::Copy => {
                 let Some(prompt) = self.queued_prompts.get_mut(index) else {
@@ -251,7 +299,15 @@ impl TuiModel {
                 self.status_line = "Copied queued message".to_string();
             }
             QueuedPromptAction::Delete => {
-                if self.remove_queued_prompt_at(index).is_some() {
+                if let Some(prompt) = self.remove_queued_prompt_at(index) {
+                    if let (Some(thread_id), Some(suggestion_id)) =
+                        (prompt.thread_id, prompt.suggestion_id)
+                    {
+                        self.send_daemon_command(DaemonCommand::DismissParticipantSuggestion {
+                            thread_id,
+                            suggestion_id,
+                        });
+                    }
                     self.status_line = "Removed queued message".to_string();
                 }
             }
@@ -482,6 +538,77 @@ impl TuiModel {
             parts.join("\n\n")
         };
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let known_agent_aliases = self.known_agent_directive_aliases();
+        if let Some(directive) = input_refs::parse_leading_agent_directive(
+            &content_with_attachments,
+            &known_agent_aliases,
+        ) {
+            let directive_content =
+                input_refs::append_referenced_files_footer(&directive.body, &cwd);
+            match directive.kind {
+                input_refs::LeadingAgentDirectiveKind::InternalDelegate => {
+                    self.send_daemon_command(DaemonCommand::InternalDelegate {
+                        thread_id: self.chat.active_thread_id().map(String::from),
+                        target_agent_id: directive.agent_alias.clone(),
+                        content: directive_content,
+                        session_id: None,
+                    });
+                    self.main_pane_view = MainPaneView::Conversation;
+                    self.focus = FocusArea::Chat;
+                    self.input.set_mode(input::InputMode::Insert);
+                    self.status_line =
+                        format!("Delegated internally to {}", directive.agent_alias);
+                    self.agent_activity = None;
+                    self.error_active = false;
+                    return;
+                }
+                input_refs::LeadingAgentDirectiveKind::ParticipantUpsert => {
+                    let Some(thread_id) = self.chat.active_thread_id().map(String::from) else {
+                        self.status_line =
+                            "Participant commands require an active thread".to_string();
+                        return;
+                    };
+                    self.send_daemon_command(DaemonCommand::ThreadParticipantCommand {
+                        thread_id,
+                        target_agent_id: directive.agent_alias.clone(),
+                        action: "upsert".to_string(),
+                        instruction: Some(directive_content),
+                        session_id: None,
+                    });
+                    self.main_pane_view = MainPaneView::Conversation;
+                    self.focus = FocusArea::Chat;
+                    self.input.set_mode(input::InputMode::Insert);
+                    self.status_line =
+                        format!("Participant {} updated", directive.agent_alias);
+                    self.agent_activity = None;
+                    self.error_active = false;
+                    return;
+                }
+                input_refs::LeadingAgentDirectiveKind::ParticipantDeactivate => {
+                    let Some(thread_id) = self.chat.active_thread_id().map(String::from) else {
+                        self.status_line =
+                            "Participant commands require an active thread".to_string();
+                        return;
+                    };
+                    self.send_daemon_command(DaemonCommand::ThreadParticipantCommand {
+                        thread_id,
+                        target_agent_id: directive.agent_alias.clone(),
+                        action: "deactivate".to_string(),
+                        instruction: None,
+                        session_id: None,
+                    });
+                    self.main_pane_view = MainPaneView::Conversation;
+                    self.focus = FocusArea::Chat;
+                    self.input.set_mode(input::InputMode::Insert);
+                    self.status_line =
+                        format!("Participant {} stopped", directive.agent_alias);
+                    self.agent_activity = None;
+                    self.error_active = false;
+                    return;
+                }
+            }
+        }
+
         let final_content =
             input_refs::append_referenced_files_footer(&content_with_attachments, &cwd);
 

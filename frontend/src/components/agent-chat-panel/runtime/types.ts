@@ -73,6 +73,8 @@ export type AgentChatPanelRuntimeValue = {
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
   sendMessage: (text: string) => void;
+  sendParticipantSuggestion: (threadId: string, suggestionId: string, forceSend?: boolean) => Promise<void>;
+  dismissParticipantSuggestion: (threadId: string, suggestionId: string) => Promise<void>;
   deleteMessage: (threadId: string, messageId: string) => void;
   stopStreaming: (threadId?: string | null) => void;
   handleSend: () => void;

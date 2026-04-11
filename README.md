@@ -29,6 +29,8 @@ The TUI is a keyboard-first control room for the daemon with mouse support.
 - move between operator control and agent execution from the same live state used by Electron and the CLI
 - keep working over SSH, inside tmux, or anywhere a browser UI is the wrong tool
 
+Thread command reference: [`docs/tui/agent-directives.md`](docs/tui/agent-directives.md)
+
 ## The Fires
 
 tamux gives its daemon-side agents a slightly mythic face, but the work stays concrete.
@@ -91,6 +93,7 @@ If you want to test the core loop fast, start a goal run and give Swarog a concr
 - [Reference](docs/reference.md)
 - [Getting Started](docs/getting-started.md)
 - [How tamux Works](docs/how-tamux-works.md)
+- [Thread Participants](docs/operating/thread-participants.md)
 - [Goal Runners](docs/goal-runners.md)
 - [Self-Orchestrating Agent Architecture](docs/self-orchestrating-agent.md)
 - [Agentic Mission Control](docs/agentic-mission-control.md)
