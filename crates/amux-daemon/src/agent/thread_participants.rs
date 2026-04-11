@@ -514,6 +514,20 @@ impl AgentEngine {
             instruction.unwrap_or("").trim(),
         )
         .await?;
+        if let Err(error) = self.run_participant_observers(thread_id).await {
+            tracing::warn!(
+                thread_id = %thread_id,
+                participant = %target_agent_id,
+                error = %error,
+                "participant initial observer failed"
+            );
+            let _ = self.event_tx.send(AgentEvent::WorkflowNotice {
+                thread_id: thread_id.to_string(),
+                kind: "participant_observer_error".to_string(),
+                message: "participant observers failed".to_string(),
+                details: Some(error.to_string()),
+            });
+        }
         Ok(())
     }
 

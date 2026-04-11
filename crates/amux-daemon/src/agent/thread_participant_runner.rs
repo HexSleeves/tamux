@@ -28,7 +28,7 @@ fn parse_participant_suggestion_response(response: &str) -> Option<(bool, String
 }
 
 fn should_hide_participant_prompt_message(message: &AgentMessage) -> bool {
-    matches!(message.role, MessageRole::System)
+    matches!(message.role, MessageRole::System | MessageRole::Tool)
         || message
             .tool_name
             .as_deref()
@@ -70,6 +70,23 @@ struct ParticipantObserverResponderConfig {
 }
 
 impl AgentEngine {
+    async fn compact_participant_prompt_messages(
+        &self,
+        target_agent_id: &str,
+        visible_messages: &[AgentMessage],
+    ) -> Result<Vec<AgentMessage>> {
+        let responder = self
+            .participant_observer_responder_config(target_agent_id)
+            .await?;
+        let mut request_config = self.config.read().await.clone();
+        request_config.provider = responder.provider_id;
+        Ok(compact_messages_for_request(
+            visible_messages,
+            &request_config,
+            &responder.provider_config,
+        ))
+    }
+
     async fn participant_observer_responder_config(
         &self,
         target_agent_id: &str,
@@ -317,9 +334,12 @@ impl AgentEngine {
             .into_iter()
             .filter(|message| !should_hide_participant_prompt_message(message))
             .collect::<Vec<_>>();
+        let compacted_messages = self
+            .compact_participant_prompt_messages(target_agent_id, &visible_messages)
+            .await?;
         Ok(build_participant_prompt_from_snapshot(
             participant,
-            &visible_messages,
+            &compacted_messages,
         ))
     }
 
@@ -384,14 +404,37 @@ impl AgentEngine {
             .into_iter()
             .filter(|participant| participant.status == ThreadParticipantStatus::Active)
         {
-            let prompt = build_participant_prompt_from_snapshot(&participant, &visible_messages);
+            let compacted_messages = self
+                .compact_participant_prompt_messages(&participant.agent_id, &visible_messages)
+                .await?;
+            tracing::info!(
+                thread_id = %thread_id,
+                participant = %participant.agent_id,
+                visible_message_count = visible_messages.len(),
+                compacted_message_count = compacted_messages.len(),
+                visible_est_tokens = estimate_message_tokens(&visible_messages),
+                compacted_est_tokens = estimate_message_tokens(&compacted_messages),
+                "running participant observer"
+            );
+            let prompt = build_participant_prompt_from_snapshot(&participant, &compacted_messages);
             let response = self
                 .run_participant_observer_prompt(&participant.agent_id, &prompt)
                 .await?;
             let Some((force_send, message)) = parse_participant_suggestion_response(&response)
             else {
+                tracing::info!(
+                    thread_id = %thread_id,
+                    participant = %participant.agent_id,
+                    "participant observer returned no suggestion"
+                );
                 continue;
             };
+            tracing::info!(
+                thread_id = %thread_id,
+                participant = %participant.agent_id,
+                force_send,
+                "participant observer produced suggestion"
+            );
             if force_send {
                 self.append_visible_thread_participant_message(
                     thread_id,
