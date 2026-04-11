@@ -438,6 +438,64 @@ async fn read_skill_clears_stale_variant_gate_when_same_skill_family_is_read() {
 }
 
 #[tokio::test]
+async fn read_skill_resolves_nested_skill_by_frontmatter_name() {
+    let root = tempdir().expect("tempdir");
+    let agent_data_dir = root.path().join("agent");
+    fs::create_dir_all(&agent_data_dir).expect("create agent data dir");
+    let skill_path = root
+        .path()
+        .join("skills")
+        .join("development")
+        .join("superpowers")
+        .join("alias-dir")
+        .join("SKILL.md");
+    fs::create_dir_all(skill_path.parent().expect("skill directory"))
+        .expect("create skill directory");
+    fs::write(
+        &skill_path,
+        "---\nname: subagent-driven-development\ndescription: Execute implementation work through subagents.\n---\n# Subagent-Driven Development\n",
+    )
+    .expect("write skill");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-read-skill-frontmatter-name".to_string(),
+        ToolFunction {
+            name: "read_skill".to_string(),
+            arguments: serde_json::json!({
+                "skill": "subagent-driven-development",
+                "max_lines": 50
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        "thread-read-skill-frontmatter-name",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        &agent_data_dir,
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(!result.is_error, "read_skill should succeed: {}", result.content);
+    assert!(
+        result.content.contains("alias-dir/SKILL.md"),
+        "read_skill should resolve the nested skill entrypoint: {}",
+        result.content
+    );
+}
+
+#[tokio::test]
 async fn list_tools_tool_returns_paginated_catalog() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
