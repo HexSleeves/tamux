@@ -82,7 +82,9 @@ impl ThreadStructuralMemory {
     }
 
     pub fn has_structural_nodes(&self) -> bool {
-        !self.workspace_seeds.is_empty() || !self.observed_files.is_empty() || !self.edges.is_empty()
+        !self.workspace_seeds.is_empty()
+            || !self.observed_files.is_empty()
+            || !self.edges.is_empty()
     }
 
     pub fn concise_context_entries(
@@ -156,7 +158,11 @@ impl ThreadStructuralMemory {
     }
 
     fn push_workspace_seed(&mut self, seed: WorkspaceSeed) {
-        if !self.workspace_seeds.iter().any(|existing| existing == &seed) {
+        if !self
+            .workspace_seeds
+            .iter()
+            .any(|existing| existing == &seed)
+        {
             self.workspace_seeds.push(seed);
             self.workspace_seeds.sort_by(|left, right| {
                 left.node_id
@@ -196,8 +202,13 @@ impl ThreadStructuralMemory {
     }
 
     fn knows_node(&self, node_id: &str) -> bool {
-        self.observed_files.iter().any(|node| node.node_id == node_id)
-            || self.workspace_seeds.iter().any(|seed| seed.node_id == node_id)
+        self.observed_files
+            .iter()
+            .any(|node| node.node_id == node_id)
+            || self
+                .workspace_seeds
+                .iter()
+                .any(|seed| seed.node_id == node_id)
             || self
                 .edges
                 .iter()
@@ -207,9 +218,16 @@ impl ThreadStructuralMemory {
     fn describe_context_node(&self, node_id: &str) -> String {
         let mut parts = Vec::new();
 
-        if let Some(node) = self.observed_files.iter().find(|node| node.node_id == node_id) {
+        if let Some(node) = self
+            .observed_files
+            .iter()
+            .find(|node| node.node_id == node_id)
+        {
             parts.push(format!("observed file `{}`", node.relative_path));
-        } else if let Some(seed) = self.workspace_seeds.iter().find(|seed| seed.node_id == node_id)
+        } else if let Some(seed) = self
+            .workspace_seeds
+            .iter()
+            .find(|seed| seed.node_id == node_id)
         {
             parts.push(format!(
                 "workspace seed `{}` ({})",
@@ -283,19 +301,23 @@ pub fn observe_successful_file_tool_result(
     tool_arguments: &str,
     tool_content: Option<&str>,
 ) -> Result<Vec<String>> {
-    if !SUPPORTED_TOOL_NAMES.iter().any(|candidate| *candidate == tool_name) {
+    if !SUPPORTED_TOOL_NAMES
+        .iter()
+        .any(|candidate| *candidate == tool_name)
+    {
         return Ok(Vec::new());
     }
 
     let repo_root = repo_root.as_ref();
-    let candidate_paths: Vec<(PathBuf, String)> = extract_tool_file_paths(tool_name, tool_arguments)
-        .into_iter()
-        .filter_map(|raw_path| {
-            let absolute_path = absolutize_tool_path(repo_root, &raw_path)?;
-            let relative_path = normalized_relative_path(repo_root, &absolute_path)?;
-            Some((absolute_path, relative_path))
-        })
-        .collect();
+    let candidate_paths: Vec<(PathBuf, String)> =
+        extract_tool_file_paths(tool_name, tool_arguments)
+            .into_iter()
+            .filter_map(|raw_path| {
+                let absolute_path = absolutize_tool_path(repo_root, &raw_path)?;
+                let relative_path = normalized_relative_path(repo_root, &absolute_path)?;
+                Some((absolute_path, relative_path))
+            })
+            .collect();
 
     if candidate_paths.is_empty() {
         return Ok(Vec::new());
@@ -357,8 +379,15 @@ impl AgentEngine {
     }
 
     pub(crate) async fn clear_thread_structural_memory(&self, thread_id: &str) {
-        self.thread_structural_memories.write().await.remove(thread_id);
-        if let Err(error) = self.history.delete_thread_structural_memory(thread_id).await {
+        self.thread_structural_memories
+            .write()
+            .await
+            .remove(thread_id);
+        if let Err(error) = self
+            .history
+            .delete_thread_structural_memory(thread_id)
+            .await
+        {
             tracing::warn!(thread_id = %thread_id, %error, "failed to delete thread structural memory");
         }
     }
@@ -370,7 +399,10 @@ impl AgentEngine {
         tool_arguments: &str,
         tool_content: Option<&str>,
     ) -> Vec<String> {
-        if !SUPPORTED_TOOL_NAMES.iter().any(|candidate| *candidate == tool_name) {
+        if !SUPPORTED_TOOL_NAMES
+            .iter()
+            .any(|candidate| *candidate == tool_name)
+        {
             return Vec::new();
         }
 
@@ -396,7 +428,10 @@ impl AgentEngine {
         };
         let repo_root_path = PathBuf::from(repo_root);
 
-        let mut state = self.get_thread_structural_memory(thread_id).await.unwrap_or_default();
+        let mut state = self
+            .get_thread_structural_memory(thread_id)
+            .await
+            .unwrap_or_default();
         let structural_refs = match observe_successful_file_tool_result(
             &mut state,
             &repo_root_path,
@@ -447,7 +482,9 @@ fn collect_workspace_manifest_paths(repo_root: &Path) -> Vec<PathBuf> {
 
 fn should_walk_entry(path: &Path) -> bool {
     !path.file_name().is_some_and(|name| {
-        WALK_SKIP_DIRS.iter().any(|candidate| name == std::ffi::OsStr::new(candidate))
+        WALK_SKIP_DIRS
+            .iter()
+            .any(|candidate| name == std::ffi::OsStr::new(candidate))
     })
 }
 
@@ -472,7 +509,12 @@ fn detect_language_hints(repo_root: &Path, manifest_paths: &[PathBuf]) -> Vec<St
         .into_iter()
         .flatten()
         .filter_map(std::result::Result::ok)
-        .any(|entry| entry.path().extension().is_some_and(|extension| extension == "sh"));
+        .any(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "sh")
+        });
 
     let mut hints = Vec::new();
     if has_cargo {
@@ -520,11 +562,9 @@ fn merge_workspace_seed_for_relative_path(
                 relative_path: relative_path.to_string(),
                 kind: "cargo_manifest".to_string(),
             });
-            let crate_root = normalized_relative_path(
-                repo_root,
-                absolute_path.parent().unwrap_or(repo_root),
-            )
-            .unwrap_or_else(|| ".".to_string());
+            let crate_root =
+                normalized_relative_path(repo_root, absolute_path.parent().unwrap_or(repo_root))
+                    .unwrap_or_else(|| ".".to_string());
             memory.push_edge(StructuralEdge {
                 from: node_id_for_relative_path(relative_path),
                 to: node_id_for_relative_path(&crate_root),
@@ -538,11 +578,9 @@ fn merge_workspace_seed_for_relative_path(
                 relative_path: relative_path.to_string(),
                 kind: "manifest".to_string(),
             });
-            let package_root = normalized_relative_path(
-                repo_root,
-                absolute_path.parent().unwrap_or(repo_root),
-            )
-            .unwrap_or_else(|| ".".to_string());
+            let package_root =
+                normalized_relative_path(repo_root, absolute_path.parent().unwrap_or(repo_root))
+                    .unwrap_or_else(|| ".".to_string());
             memory.push_edge(StructuralEdge {
                 from: node_id_for_relative_path(relative_path),
                 to: node_id_for_relative_path(&package_root),
@@ -556,11 +594,9 @@ fn merge_workspace_seed_for_relative_path(
                 relative_path: relative_path.to_string(),
                 kind: "manifest".to_string(),
             });
-            let package_root = normalized_relative_path(
-                repo_root,
-                absolute_path.parent().unwrap_or(repo_root),
-            )
-            .unwrap_or_else(|| ".".to_string());
+            let package_root =
+                normalized_relative_path(repo_root, absolute_path.parent().unwrap_or(repo_root))
+                    .unwrap_or_else(|| ".".to_string());
             memory.push_edge(StructuralEdge {
                 from: node_id_for_relative_path(relative_path),
                 to: node_id_for_relative_path(&package_root),
@@ -575,7 +611,8 @@ fn merge_workspace_seed_for_relative_path(
                 kind: "tsconfig".to_string(),
             });
             for source_root in derive_tsconfig_source_roots(repo_root, absolute_path) {
-                if let Some(relative_source_root) = normalized_relative_path(repo_root, &source_root)
+                if let Some(relative_source_root) =
+                    normalized_relative_path(repo_root, &source_root)
                 {
                     memory.push_edge(StructuralEdge {
                         from: node_id_for_relative_path(relative_path),
@@ -622,7 +659,10 @@ fn derive_tsconfig_source_roots(repo_root: &Path, tsconfig_path: &Path) -> Vec<P
 }
 
 fn extract_tool_file_paths(tool_name: &str, tool_arguments: &str) -> Vec<PathBuf> {
-    if !SUPPORTED_TOOL_NAMES.iter().any(|candidate| *candidate == tool_name) {
+    if !SUPPORTED_TOOL_NAMES
+        .iter()
+        .any(|candidate| *candidate == tool_name)
+    {
         return Vec::new();
     }
 
@@ -633,14 +673,15 @@ fn extract_tool_file_paths(tool_name: &str, tool_arguments: &str) -> Vec<PathBuf
 
     let mut paths = Vec::new();
     let base_dir = match tool_name {
-        "create_file" | "write_file" => crate::agent::tool_executor::get_explicit_cwd_arg(&arguments)
-            .map(PathBuf::from),
+        "create_file" | "write_file" => {
+            crate::agent::tool_executor::get_explicit_cwd_arg(&arguments).map(PathBuf::from)
+        }
         _ => None,
     };
 
-    if let Some(path) = crate::agent::tool_executor::get_file_path_arg(&arguments).or_else(|| {
-        crate::agent::tool_executor::get_string_arg(&arguments, &["filePath"])
-    }) {
+    if let Some(path) = crate::agent::tool_executor::get_file_path_arg(&arguments)
+        .or_else(|| crate::agent::tool_executor::get_string_arg(&arguments, &["filePath"]))
+    {
         paths.push(crate::agent::tool_executor::resolve_tool_path(
             path,
             base_dir.as_deref(),
@@ -649,7 +690,9 @@ fn extract_tool_file_paths(tool_name: &str, tool_arguments: &str) -> Vec<PathBuf
 
     if tool_name == "apply_patch" {
         if let Some(patch_text) = arguments.get("input").and_then(|value| value.as_str()) {
-            if let Ok(patch_paths) = crate::agent::tool_executor::extract_apply_patch_paths(patch_text) {
+            if let Ok(patch_paths) =
+                crate::agent::tool_executor::extract_apply_patch_paths(patch_text)
+            {
                 paths.extend(patch_paths.into_iter().map(PathBuf::from));
             }
         }

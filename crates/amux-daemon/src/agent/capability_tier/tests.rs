@@ -331,15 +331,21 @@ async fn status_snapshot_includes_aline_diagnostics() {
         Some("fresh")
     );
     assert_eq!(
-        active_gate.get("recommended_skill").and_then(|value| value.as_str()),
+        active_gate
+            .get("recommended_skill")
+            .and_then(|value| value.as_str()),
         Some("systematic-debugging")
     );
     assert_eq!(
-        active_gate.get("recommended_action").and_then(|value| value.as_str()),
+        active_gate
+            .get("recommended_action")
+            .and_then(|value| value.as_str()),
         Some("request_approval systematic-debugging")
     );
     assert_eq!(
-        active_gate.get("requires_approval").and_then(|value| value.as_bool()),
+        active_gate
+            .get("requires_approval")
+            .and_then(|value| value.as_bool()),
         Some(true)
     );
     assert_eq!(

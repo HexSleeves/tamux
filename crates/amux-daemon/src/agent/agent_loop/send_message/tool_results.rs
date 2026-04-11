@@ -3,7 +3,11 @@ use super::*;
 const OFFLOAD_SUMMARY_KEY_FINDING_LINES: usize = 3;
 const OFFLOAD_SUMMARY_LINE_CHAR_LIMIT: usize = 160;
 
-fn summarize_offloaded_tool_result(result: &ToolResult, byte_size: usize, payload_id: &str) -> String {
+fn summarize_offloaded_tool_result(
+    result: &ToolResult,
+    byte_size: usize,
+    payload_id: &str,
+) -> String {
     let status = if result.is_error { "error" } else { "done" };
     let key_findings = extract_offload_key_findings(&result.content);
     let findings_block = key_findings
@@ -111,7 +115,9 @@ pub(crate) async fn prepare_tool_result_thread_message(
 
     let payload_id = uuid::Uuid::new_v4().to_string();
     let summary = summarize_offloaded_tool_result(result, byte_size, &payload_id);
-    let payload_path = engine.history.offloaded_payload_path(thread_id, &payload_id);
+    let payload_path = engine
+        .history
+        .offloaded_payload_path(thread_id, &payload_id);
     let persist_result: Result<()> = async {
         let parent = payload_path
             .parent()
@@ -245,7 +251,8 @@ impl<'a> SendMessageRunner<'a> {
         }
 
         let prepared_tool_result =
-            prepare_tool_result_thread_message(self.engine, &self.tid, result, now_epoch_secs).await;
+            prepare_tool_result_thread_message(self.engine, &self.tid, result, now_epoch_secs)
+                .await;
         let structural_refs = if result.is_error {
             Vec::new()
         } else {

@@ -163,35 +163,31 @@ async fn persisted_thread_metadata_reloads_thread_participants() {
             },
         );
     }
-    engine
-        .thread_participants
-        .write()
-        .await
-        .insert(
-            thread_id.to_string(),
-            vec![
-                crate::agent::ThreadParticipantState {
-                    agent_id: "weles".to_string(),
-                    agent_name: "Weles".to_string(),
-                    instruction: "verify claims".to_string(),
-                    status: crate::agent::ThreadParticipantStatus::Active,
-                    created_at: 10,
-                    updated_at: 11,
-                    deactivated_at: None,
-                    last_contribution_at: Some(12),
-                },
-                crate::agent::ThreadParticipantState {
-                    agent_id: "rarog".to_string(),
-                    agent_name: "Rarog".to_string(),
-                    instruction: "watch performance".to_string(),
-                    status: crate::agent::ThreadParticipantStatus::Inactive,
-                    created_at: 20,
-                    updated_at: 21,
-                    deactivated_at: Some(22),
-                    last_contribution_at: None,
-                },
-            ],
-        );
+    engine.thread_participants.write().await.insert(
+        thread_id.to_string(),
+        vec![
+            crate::agent::ThreadParticipantState {
+                agent_id: "weles".to_string(),
+                agent_name: "Weles".to_string(),
+                instruction: "verify claims".to_string(),
+                status: crate::agent::ThreadParticipantStatus::Active,
+                created_at: 10,
+                updated_at: 11,
+                deactivated_at: None,
+                last_contribution_at: Some(12),
+            },
+            crate::agent::ThreadParticipantState {
+                agent_id: "rarog".to_string(),
+                agent_name: "Rarog".to_string(),
+                instruction: "watch performance".to_string(),
+                status: crate::agent::ThreadParticipantStatus::Inactive,
+                created_at: 20,
+                updated_at: 21,
+                deactivated_at: Some(22),
+                last_contribution_at: None,
+            },
+        ],
+    );
 
     engine.persist_thread_by_id(thread_id).await;
     drop(engine);
@@ -431,7 +427,10 @@ async fn force_send_interrupts_stream() {
         .expect("force-send enqueue should succeed");
 
     assert_eq!(suggestion.target_agent_id, "weles");
-    assert!(token.is_cancelled(), "force-send should cancel the active stream");
+    assert!(
+        token.is_cancelled(),
+        "force-send should cancel the active stream"
+    );
 
     let threads = engine.threads.read().await;
     let last = threads

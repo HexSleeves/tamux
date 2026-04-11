@@ -373,6 +373,7 @@ declare global {
         agentResetOperatorModel?: () => Promise<{ ok?: boolean; error?: string } | unknown>;
         agentSetConfigItem?: (keyPath: string, value: unknown) => Promise<unknown>;
         agentSetProviderModel?: (providerId: string, model: string) => Promise<{ ok?: boolean; error?: string }>;
+        agentSetTargetAgentProviderModel?: (targetAgentId: string, providerId: string, model: string) => Promise<{ ok?: boolean; error?: string }>;
         agentSetTierOverride?: (tier: string | null) => Promise<unknown>;
         agentSetSubAgent?: (subAgentJson: string) => Promise<{ ok?: boolean; error?: string }>;
         agentRemoveSubAgent?: (subAgentId: string) => Promise<{ ok?: boolean }>;

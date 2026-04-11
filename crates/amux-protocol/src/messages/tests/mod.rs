@@ -917,7 +917,10 @@ fn minimal_skill_discovery_result_deserializes_with_defaults() {
     assert!(!result.requires_approval);
     assert_eq!(result.mesh_state, "fresh");
     assert_eq!(result.rationale, vec!["matched debug intent".to_string()]);
-    assert_eq!(result.capability_family, vec!["development".to_string(), "debugging".to_string()]);
+    assert_eq!(
+        result.capability_family,
+        vec!["development".to_string(), "debugging".to_string()]
+    );
     assert!(!result.explicit_rationale_required);
     assert!(result.workspace_tags.is_empty());
     assert_eq!(result.candidates.len(), 1);
@@ -943,7 +946,10 @@ fn minimal_skill_discovery_result_deserializes_with_defaults() {
     assert_eq!(candidate.risk_level, "low");
     assert_eq!(candidate.trust_tier, "trusted_builtin");
     assert_eq!(candidate.source_kind, "builtin");
-    assert_eq!(candidate.recommended_action, "read_skill systematic-debugging");
+    assert_eq!(
+        candidate.recommended_action,
+        "read_skill systematic-debugging"
+    );
     assert_eq!(candidate.use_count, 0);
     assert_eq!(candidate.success_count, 0);
     assert_eq!(candidate.failure_count, 0);
@@ -1139,8 +1145,14 @@ fn skill_discover_result_round_trip() {
             assert_eq!(result.recommended_action, "read_skill git_rebase_workflow");
             assert!(!result.requires_approval);
             assert_eq!(result.mesh_state, "fresh");
-            assert_eq!(result.rationale, vec!["matched git rebase workflow".to_string()]);
-            assert_eq!(result.capability_family, vec!["development".to_string(), "git".to_string()]);
+            assert_eq!(
+                result.rationale,
+                vec!["matched git rebase workflow".to_string()]
+            );
+            assert_eq!(
+                result.capability_family,
+                vec!["development".to_string(), "git".to_string()]
+            );
             assert!(!result.explicit_rationale_required);
             assert_eq!(result.workspace_tags, vec!["git", "rebase"]);
             assert_eq!(result.candidates.len(), 1);

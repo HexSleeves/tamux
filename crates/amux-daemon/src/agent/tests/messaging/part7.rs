@@ -31,7 +31,9 @@ async fn participant_runner_enqueues_suggestion() {
             let Ok((mut socket, _)) = listener.accept().await else {
                 break;
             };
-            let _ = read_http_request_body(&mut socket).await.expect("read request");
+            let _ = read_http_request_body(&mut socket)
+                .await
+                .expect("read request");
             let response_body = concat!(
                 "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_participant_runner\"}}\n\n",
                 "data: {\"type\":\"response.output_text.delta\",\"delta\":\"FORCE: no\\nMESSAGE: Verify claim X before sending.\"}\n\n",
@@ -42,7 +44,10 @@ async fn participant_runner_enqueues_suggestion() {
                 response_body.len(),
                 response_body
             );
-            socket.write_all(response.as_bytes()).await.expect("write response");
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
         }
     });
 
@@ -107,7 +112,9 @@ async fn participant_runner_force_send_posts_visible_message() {
             let Ok((mut socket, _)) = listener.accept().await else {
                 break;
             };
-            let body = read_http_request_body(&mut socket).await.expect("read request");
+            let body = read_http_request_body(&mut socket)
+                .await
+                .expect("read request");
             request_count += 1;
             let response_body = match request_count {
                 1 => concat!(
@@ -131,7 +138,10 @@ async fn participant_runner_force_send_posts_visible_message() {
                 response_body.len(),
                 response_body
             );
-            socket.write_all(response.as_bytes()).await.expect("write response");
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
         }
     });
 
@@ -172,7 +182,10 @@ async fn participant_runner_force_send_posts_visible_message() {
         .await
         .expect("participant should register");
 
-    timeout(Duration::from_secs(2), engine.run_participant_observers(thread_id))
+    timeout(
+        Duration::from_secs(2),
+        engine.run_participant_observers(thread_id),
+    )
     .await
     .expect("participant observers should complete without stalling")
     .expect("participant observers should run");
@@ -280,7 +293,10 @@ async fn participant_runner_uses_single_visible_snapshot_per_cycle() {
                     response_body.len(),
                     response_body
                 );
-                socket.write_all(response.as_bytes()).await.expect("write response");
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write response");
             }
         }
     });
@@ -336,8 +352,7 @@ async fn participant_runner_uses_single_visible_snapshot_per_cycle() {
         .expect("lock request log")
         .iter()
         .filter(|body| {
-            body.contains("Role: participant observer")
-                && body.contains("verify the second detail")
+            body.contains("Role: participant observer") && body.contains("verify the second detail")
         })
         .cloned()
         .collect();
@@ -364,7 +379,9 @@ async fn participant_runner_skips_no_suggestion() {
             let Ok((mut socket, _)) = listener.accept().await else {
                 break;
             };
-            let _ = read_http_request_body(&mut socket).await.expect("read request");
+            let _ = read_http_request_body(&mut socket)
+                .await
+                .expect("read request");
             let response_body = concat!(
                 "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_participant_runner_none\"}}\n\n",
                 "data: {\"type\":\"response.output_text.delta\",\"delta\":\"NO_SUGGESTION\"}\n\n",
@@ -375,7 +392,10 @@ async fn participant_runner_skips_no_suggestion() {
                 response_body.len(),
                 response_body
             );
-            socket.write_all(response.as_bytes()).await.expect("write response");
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
         }
     });
 

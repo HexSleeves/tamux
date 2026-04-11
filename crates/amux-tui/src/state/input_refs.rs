@@ -155,9 +155,7 @@ pub fn parse_leading_agent_directive(
         return None;
     }
 
-    let token_end = trimmed
-        .find(char::is_whitespace)
-        .unwrap_or(trimmed.len());
+    let token_end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
     let token = &trimmed[..token_end];
     let agent_alias = token[1..].trim();
     if !is_known_agent_alias(agent_alias, known_agent_aliases) {
@@ -178,9 +176,7 @@ pub fn parse_leading_agent_directive(
     }
 
     let kind = match remainder.to_ascii_lowercase().as_str() {
-        "leave" | "stop" | "done" | "return" => {
-            LeadingAgentDirectiveKind::ParticipantDeactivate
-        }
+        "leave" | "stop" | "done" | "return" => LeadingAgentDirectiveKind::ParticipantDeactivate,
         _ => LeadingAgentDirectiveKind::ParticipantUpsert,
     };
 

@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
 #[cfg(test)]
-use std::sync::Arc;
-#[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(test)]
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const MAX_SKILL_PREFLIGHT_MATCHES: usize = 3;
@@ -176,9 +176,12 @@ impl AgentEngine {
             }
         }
 
-        let context_tags =
-            resolve_skill_context_tags(self.workspace_root.as_ref(), &self.session_manager, session_id)
-                .await;
+        let context_tags = resolve_skill_context_tags(
+            self.workspace_root.as_ref(),
+            &self.session_manager,
+            session_id,
+        )
+        .await;
         let cfg = self.config.read().await.skill_recommendation.clone();
         let pending_state = build_pending_skill_discovery_state(content);
 
@@ -193,7 +196,9 @@ impl AgentEngine {
             cfg,
         });
 
-        Ok(Some(build_skill_preflight_context_from_state(pending_state)))
+        Ok(Some(build_skill_preflight_context_from_state(
+            pending_state,
+        )))
     }
 
     async fn run_public_skill_discovery_via_subprocess(
@@ -209,9 +214,12 @@ impl AgentEngine {
             }
         }
 
-        let context_tags =
-            resolve_skill_context_tags(self.workspace_root.as_ref(), &self.session_manager, session_id)
-                .await;
+        let context_tags = resolve_skill_context_tags(
+            self.workspace_root.as_ref(),
+            &self.session_manager,
+            session_id,
+        )
+        .await;
         let cfg = self.config.read().await.skill_recommendation.clone();
 
         let completion = run_skill_discovery_subprocess(AsyncSkillDiscoveryRequest {
@@ -230,17 +238,16 @@ impl AgentEngine {
                 .normalize_skill_discovery_query(query, &context_tags, session_id)
                 .await
             {
-                let mut normalized_completion = run_skill_discovery_subprocess(
-                    AsyncSkillDiscoveryRequest {
+                let mut normalized_completion =
+                    run_skill_discovery_subprocess(AsyncSkillDiscoveryRequest {
                         thread_id: String::new(),
                         query: normalized_query.clone(),
                         context_tags: context_tags.clone(),
                         limit,
                         history_root: self.history.data_root().to_path_buf(),
                         cfg: cfg.clone(),
-                    },
-                )
-                .await?;
+                    })
+                    .await?;
                 if fallback_result_is_better(&result, &normalized_completion.result) {
                     annotate_fallback_result(
                         &mut normalized_completion.result,
@@ -321,7 +328,8 @@ impl AgentEngine {
             .await
             .ok_or_else(|| anyhow::anyhow!("no active skill discovery state for this thread"))?;
         state.skip_rationale = Some(trimmed.to_string());
-        state.compliant = !state.requires_skill_read_before_progress() && !state.mesh_requires_approval;
+        state.compliant =
+            !state.requires_skill_read_before_progress() && !state.mesh_requires_approval;
         state.updated_at = now_millis();
         self.set_thread_skill_discovery_state(thread_id, state.clone())
             .await;
@@ -339,7 +347,8 @@ impl AgentEngine {
         }
         state.mesh_requires_approval = false;
         state.mesh_approval_id = None;
-        state.compliant = state.skill_read_completed || !state.requires_skill_read_before_progress();
+        state.compliant =
+            state.skill_read_completed || !state.requires_skill_read_before_progress();
         state.updated_at = now_millis();
         self.set_thread_skill_discovery_state(thread_id, state.clone())
             .await;
@@ -357,7 +366,8 @@ impl AgentEngine {
         }
         state.mesh_requires_approval = false;
         state.mesh_approval_id = None;
-        state.mesh_next_step = Some(crate::agent::skill_mesh::types::SkillMeshNextStep::JustifySkillSkip);
+        state.mesh_next_step =
+            Some(crate::agent::skill_mesh::types::SkillMeshNextStep::JustifySkillSkip);
         state.recommended_action = "justify_skill_skip".to_string();
         state.compliant = false;
         state.updated_at = now_millis();
@@ -380,7 +390,9 @@ impl AgentEngine {
             if state
                 .recommended_skill
                 .as_deref()
-                .is_some_and(|expected_skill| skill_identifier_matches(expected_skill, skill_identifier))
+                .is_some_and(|expected_skill| {
+                    skill_identifier_matches(expected_skill, skill_identifier)
+                })
             {
                 state.skill_read_completed = true;
                 state.compliant = !state.mesh_requires_approval;
@@ -406,9 +418,12 @@ impl AgentEngine {
         limit: usize,
     ) -> Result<SkillDiscoveryComputation> {
         let skills_root = self.history.data_dir().to_path_buf();
-        let context_tags =
-            resolve_skill_context_tags(self.workspace_root.as_ref(), &self.session_manager, session_id)
-                .await;
+        let context_tags = resolve_skill_context_tags(
+            self.workspace_root.as_ref(),
+            &self.session_manager,
+            session_id,
+        )
+        .await;
         let cfg = self.config.read().await.skill_recommendation.clone();
         let (mut result, mut backend_used, mesh_degraded) = execute_skill_discovery_backend(
             &self.history,
@@ -425,15 +440,16 @@ impl AgentEngine {
                 .await
             {
                 Some((normalized_query, normalizer_agent_id)) => {
-                    let (mut normalized_result, normalized_backend_used, normalized_mesh_degraded) = execute_skill_discovery_backend(
-                        &self.history,
-                        &skills_root,
-                        &normalized_query,
-                        &context_tags,
-                        limit,
-                        &cfg,
-                    )
-                    .await?;
+                    let (mut normalized_result, normalized_backend_used, normalized_mesh_degraded) =
+                        execute_skill_discovery_backend(
+                            &self.history,
+                            &skills_root,
+                            &normalized_query,
+                            &context_tags,
+                            limit,
+                            &cfg,
+                        )
+                        .await?;
                     if fallback_result_is_better(&result, &normalized_result) {
                         backend_used = normalized_backend_used;
                         annotate_fallback_result(
@@ -517,7 +533,11 @@ async fn execute_skill_discovery_backend(
     context_tags: &[String],
     limit: usize,
     cfg: &SkillRecommendationConfig,
-) -> Result<(super::skill_recommendation::SkillDiscoveryResult, &'static str, bool)> {
+) -> Result<(
+    super::skill_recommendation::SkillDiscoveryResult,
+    &'static str,
+    bool,
+)> {
     if cfg.discovery_backend.eq_ignore_ascii_case("mesh") {
         #[cfg(test)]
         if FORCE_MESH_DISCOVERY_DEGRADED_FOR_TESTS.load(Ordering::SeqCst) {
@@ -642,16 +662,17 @@ pub(crate) async fn run_skill_discovery_worker_from_stdio() -> Result<()> {
 async fn compute_async_skill_discovery_completion(
     request: AsyncSkillDiscoveryRequest,
 ) -> AsyncSkillDiscoveryCompletion {
-    let history = match crate::history::HistoryStore::open_for_data_root(&request.history_root).await {
-        Ok(history) => history,
-        Err(error) => {
-            return build_failed_async_skill_discovery_completion(
-                &request.thread_id,
-                &request.query,
-                &error.to_string(),
-            );
-        }
-    };
+    let history =
+        match crate::history::HistoryStore::open_for_data_root(&request.history_root).await {
+            Ok(history) => history,
+            Err(error) => {
+                return build_failed_async_skill_discovery_completion(
+                    &request.thread_id,
+                    &request.query,
+                    &error.to_string(),
+                );
+            }
+        };
     let skills_root = history.data_dir().to_path_buf();
     match execute_skill_discovery_backend(
         &history,
@@ -705,10 +726,12 @@ async fn apply_async_skill_discovery_completion(
         .await;
     let message = completion.error.as_ref().map_or_else(
         || skill_preflight_workflow_message(&state),
-        |_| format!(
-            "Background skill discovery failed for `{}`. Next action: {}.",
-            completion.query, state.recommended_action
-        ),
+        |_| {
+            format!(
+                "Background skill discovery failed for `{}`. Next action: {}.",
+                completion.query, state.recommended_action
+            )
+        },
     );
     engine.emit_workflow_notice(
         &completion.thread_id,
@@ -1083,7 +1106,9 @@ fn build_failed_async_skill_discovery_completion(
     }
 }
 
-fn build_skill_preflight_context_from_state(state: LatestSkillDiscoveryState) -> SkillPreflightContext {
+fn build_skill_preflight_context_from_state(
+    state: LatestSkillDiscoveryState,
+) -> SkillPreflightContext {
     SkillPreflightContext {
         prompt_context: build_skill_gate_override_prompt(&state),
         workflow_message: skill_preflight_workflow_message(&state),
@@ -1511,8 +1536,14 @@ triggers: [panic, failing test]
 
         let state = build_latest_skill_discovery_state("debug panic in rust service", &result);
 
-        assert_eq!(state.recommended_skill.as_deref(), Some("systematic-debugging"));
-        assert_eq!(state.read_skill_identifier.as_deref(), Some(expected_variant_id.as_str()));
+        assert_eq!(
+            state.recommended_skill.as_deref(),
+            Some("systematic-debugging")
+        );
+        assert_eq!(
+            state.read_skill_identifier.as_deref(),
+            Some(expected_variant_id.as_str())
+        );
     }
 
     #[tokio::test]
@@ -1597,7 +1628,9 @@ triggers: [panic, failing test]
                     confidence_tier: "strong".to_string(),
                     recommended_skill: Some("systematic-debugging".to_string()),
                     recommended_action: "read_skill systematic-debugging".to_string(),
-                    mesh_next_step: Some(crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill),
+                    mesh_next_step: Some(
+                        crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill,
+                    ),
                     mesh_requires_approval: false,
                     mesh_approval_id: None,
                     read_skill_identifier: Some("variant-systematic-debugging-v1".to_string()),
@@ -1634,7 +1667,9 @@ triggers: [panic, failing test]
                     confidence_tier: "strong".to_string(),
                     recommended_skill: Some("systematic-debugging".to_string()),
                     recommended_action: "request_approval systematic-debugging".to_string(),
-                    mesh_next_step: Some(crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill),
+                    mesh_next_step: Some(
+                        crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill,
+                    ),
                     mesh_requires_approval: true,
                     mesh_approval_id: Some("approval-1".to_string()),
                     read_skill_identifier: Some("systematic-debugging".to_string()),
@@ -1671,7 +1706,9 @@ triggers: [panic, failing test]
                     confidence_tier: "strong".to_string(),
                     recommended_skill: Some("systematic-debugging".to_string()),
                     recommended_action: "request_approval systematic-debugging".to_string(),
-                    mesh_next_step: Some(crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill),
+                    mesh_next_step: Some(
+                        crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill,
+                    ),
                     mesh_requires_approval: true,
                     mesh_approval_id: Some("approval-denied".to_string()),
                     read_skill_identifier: Some("systematic-debugging".to_string()),

@@ -218,6 +218,19 @@ where
                 .send(ClientMessage::AgentSetProviderModel { provider_id, model })
                 .await?;
         }
+        AgentBridgeCommand::SetTargetAgentProviderModel {
+            target_agent_id,
+            provider_id,
+            model,
+        } => {
+            framed
+                .send(ClientMessage::AgentSetTargetAgentProviderModel {
+                    target_agent_id,
+                    provider_id,
+                    model,
+                })
+                .await?;
+        }
         AgentBridgeCommand::HeartbeatGetItems => {
             framed.send(ClientMessage::AgentHeartbeatGetItems).await?;
         }

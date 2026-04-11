@@ -10,9 +10,7 @@ use std::sync::{Mutex, OnceLock};
 use anyhow::{bail, Context, Result};
 use arrow_array::builder::{ListBuilder, StringBuilder};
 use arrow_array::types::Float32Type;
-use arrow_array::{
-    ArrayRef, BooleanArray, FixedSizeListArray, RecordBatch, StringArray,
-};
+use arrow_array::{ArrayRef, BooleanArray, FixedSizeListArray, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -268,9 +266,9 @@ impl LanceDbSkillMeshIndex {
             .context("skill mesh embeddings table missing vector column")?;
         let actual_vector_len = match vector_field.data_type() {
             DataType::FixedSizeList(_, vector_len) => *vector_len,
-            other => bail!(
-                "skill mesh embeddings table vector column has unexpected type {other:?}"
-            ),
+            other => {
+                bail!("skill mesh embeddings table vector column has unexpected type {other:?}")
+            }
         };
 
         if actual_vector_len != expected_vector_len {
@@ -286,7 +284,10 @@ impl LanceDbSkillMeshIndex {
         let table = self.ensure_documents_table().await?;
         let storage_key = key.storage_key();
         table
-            .delete(&format!("skill_id = '{}'", escape_sql_literal(&storage_key)))
+            .delete(&format!(
+                "skill_id = '{}'",
+                escape_sql_literal(&storage_key)
+            ))
             .await
             .with_context(|| format!("delete stale LanceDB document for {storage_key}"))?;
         Ok(())
@@ -335,7 +336,10 @@ impl LanceDbSkillMeshIndex {
         records: &[SkillMeshEmbeddingRecord],
     ) -> Result<()> {
         let prepared = prepare_embedding_batch(records)?;
-        let Some(table) = self.open_embeddings_table_for_replace(prepared.as_ref()).await? else {
+        let Some(table) = self
+            .open_embeddings_table_for_replace(prepared.as_ref())
+            .await?
+        else {
             return Ok(());
         };
         let filter = embedding_key_filter(key);
@@ -365,7 +369,8 @@ impl LanceDbSkillMeshIndex {
         match previous {
             Some(previous) => {
                 self.replace_document(key, previous).await?;
-                self.replace_embeddings(key, &previous.embedding_records).await?;
+                self.replace_embeddings(key, &previous.embedding_records)
+                    .await?;
             }
             None => {
                 self.delete_document(key).await?;
@@ -465,7 +470,8 @@ impl SkillMeshIndex for LanceDbSkillMeshIndex {
         .await;
 
         if let Err(error) = write_result {
-            if let Err(rollback_error) = self.restore_document_state(&key, previous.as_ref()).await {
+            if let Err(rollback_error) = self.restore_document_state(&key, previous.as_ref()).await
+            {
                 return Err(error.context(format!(
                     "skill mesh LanceDB upsert rollback failed for {}: {rollback_error:#}",
                     key.storage_key()
@@ -519,8 +525,8 @@ fn prepare_embedding_batch(
         return Ok(None);
     }
 
-    let vector_len = i32::try_from(records[0].vector.len())
-        .context("skill mesh vector dimension overflow")?;
+    let vector_len =
+        i32::try_from(records[0].vector.len()).context("skill mesh vector dimension overflow")?;
     let batch = embedding_batch(records)?;
     Ok(Some(PreparedEmbeddingBatch { vector_len, batch }))
 }
@@ -569,7 +575,11 @@ fn embeddings_schema(vector_len: i32) -> SchemaRef {
         ),
         Field::new(
             "capability_path",
-            DataType::List(std::sync::Arc::new(Field::new("item", DataType::Utf8, true))),
+            DataType::List(std::sync::Arc::new(Field::new(
+                "item",
+                DataType::Utf8,
+                true,
+            ))),
             false,
         ),
         Field::new("trust_tier", DataType::Utf8, false),
@@ -586,8 +596,7 @@ fn document_batch(document: &SkillMeshDocument) -> Result<RecordBatch> {
         documents_schema(),
         vec![
             std::sync::Arc::new(StringArray::from(vec![stored.skill_id.as_str()])) as ArrayRef,
-            std::sync::Arc::new(StringArray::from(vec![stored.document_json.as_str()]))
-                as ArrayRef,
+            std::sync::Arc::new(StringArray::from(vec![stored.document_json.as_str()])) as ArrayRef,
         ],
     )
     .context("build skill mesh document record batch")
@@ -602,7 +611,10 @@ fn embedding_batch(records: &[SkillMeshEmbeddingRecord]) -> Result<RecordBatch> 
     if vector_len == 0 {
         bail!("skill mesh embeddings require at least one dimension");
     }
-    if records.iter().any(|record| record.vector.len() != vector_len) {
+    if records
+        .iter()
+        .any(|record| record.vector.len() != vector_len)
+    {
         bail!("skill mesh embeddings in a batch must share the same dimension");
     }
 
@@ -640,16 +652,9 @@ fn embedding_batch(records: &[SkillMeshEmbeddingRecord]) -> Result<RecordBatch> 
             .collect::<Vec<_>>(),
     );
     let vectors = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
-        records.iter().map(|record| {
-            Some(
-                record
-                    .vector
-                    .iter()
-                    .copied()
-                    .map(Some)
-                    .collect::<Vec<_>>(),
-            )
-        }),
+        records
+            .iter()
+            .map(|record| Some(record.vector.iter().copied().map(Some).collect::<Vec<_>>())),
         vector_len,
     );
     let mut capability_paths = ListBuilder::new(StringBuilder::new());
@@ -738,10 +743,9 @@ async fn maybe_pause_after_document_replace_for_tests(db_path: &Path, storage_ke
         let mut slot = pause_after_document_replace_slot()
             .lock()
             .expect("document-replace pausepoint mutex poisoned");
-        if slot
-            .as_ref()
-            .is_some_and(|pausepoint| pausepoint.db_path == db_path && pausepoint.storage_key == storage_key)
-        {
+        if slot.as_ref().is_some_and(|pausepoint| {
+            pausepoint.db_path == db_path && pausepoint.storage_key == storage_key
+        }) {
             slot.take()
         } else {
             None

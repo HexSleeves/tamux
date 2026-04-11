@@ -106,16 +106,14 @@ impl ChatState {
             .unwrap_or(&[])
     }
 
-    pub fn resolve_operator_question_answer(
-        &mut self,
-        question_id: &str,
-        answer: String,
-    ) -> bool {
+    pub fn resolve_operator_question_answer(&mut self, question_id: &str, answer: String) -> bool {
         let mut updated = false;
         for thread in &mut self.threads {
-            if let Some(message) = thread.messages.iter_mut().find(|message| {
-                message.operator_question_id.as_deref() == Some(question_id)
-            }) {
+            if let Some(message) = thread
+                .messages
+                .iter_mut()
+                .find(|message| message.operator_question_id.as_deref() == Some(question_id))
+            {
                 message.operator_question_answer = Some(answer);
                 message.actions.clear();
                 updated = true;

@@ -7,9 +7,7 @@ use anyhow::Result;
 
 use super::index::{LanceDbSkillMeshIndex, SkillMeshIndex};
 use super::types::{SkillMeshDocument, SkillMeshDocumentKey};
-use super::watcher::{
-    debounce_skill_events, SkillMeshRecompileJob, SkillMeshWatchEvent,
-};
+use super::watcher::{debounce_skill_events, SkillMeshRecompileJob, SkillMeshWatchEvent};
 
 #[derive(Debug)]
 pub struct SkillMeshStore {
@@ -29,7 +27,10 @@ impl SkillMeshStore {
         self.index.upsert_document(document).await
     }
 
-    pub async fn get_document(&self, key: &SkillMeshDocumentKey) -> Result<Option<SkillMeshDocument>> {
+    pub async fn get_document(
+        &self,
+        key: &SkillMeshDocumentKey,
+    ) -> Result<Option<SkillMeshDocument>> {
         self.index.get_document(key).await
     }
 
@@ -40,25 +41,25 @@ impl SkillMeshStore {
     }
 
     pub fn pending_recompile_jobs(&self) -> Vec<SkillMeshRecompileJob> {
-        self.pending_jobs
-            .blocking_lock()
-            .iter()
-            .cloned()
-            .collect()
+        self.pending_jobs.blocking_lock().iter().cloned().collect()
     }
 
     pub fn bump_compile_version_for_tests(&self) {
-        self.pending_jobs.blocking_lock().push(SkillMeshRecompileJob {
-            path: PathBuf::from("compile-version-change"),
-            kind: super::watcher::SkillMeshRecompileJobKind::Invalidate,
-        });
+        self.pending_jobs
+            .blocking_lock()
+            .push(SkillMeshRecompileJob {
+                path: PathBuf::from("compile-version-change"),
+                kind: super::watcher::SkillMeshRecompileJobKind::Invalidate,
+            });
     }
 
     pub fn update_trust_inputs_for_tests(&self) {
-        self.pending_jobs.blocking_lock().push(SkillMeshRecompileJob {
-            path: PathBuf::from("trust-input-change"),
-            kind: super::watcher::SkillMeshRecompileJobKind::Invalidate,
-        });
+        self.pending_jobs
+            .blocking_lock()
+            .push(SkillMeshRecompileJob {
+                path: PathBuf::from("trust-input-change"),
+                kind: super::watcher::SkillMeshRecompileJobKind::Invalidate,
+            });
     }
 }
 
@@ -109,7 +110,9 @@ fn test_store_root(name: &str) -> PathBuf {
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
         .collect::<String>();
-    let root = std::env::temp_dir().join("tamux-skill-mesh-tests").join(&sanitized);
+    let root = std::env::temp_dir()
+        .join("tamux-skill-mesh-tests")
+        .join(&sanitized);
 
     let initialized = INITIALIZED.get_or_init(|| Mutex::new(BTreeSet::new()));
     let mut seen = initialized.lock().expect("test store init mutex poisoned");

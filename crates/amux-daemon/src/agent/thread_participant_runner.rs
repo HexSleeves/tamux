@@ -109,6 +109,12 @@ impl AgentEngine {
         } else {
             None
         };
+        let builtin_persona_overrides = builtin_persona_overrides(&config, &agent_scope_id);
+        if is_explicit_builtin_persona_scope(&agent_scope_id)
+            && builtin_persona_requires_setup(&config, &agent_scope_id)
+        {
+            return Err(builtin_persona_setup_error(&agent_scope_id));
+        }
         let persona_prompt = if agent_scope_id == WELES_AGENT_ID {
             build_weles_persona_prompt(WELES_GOVERNANCE_SCOPE)
         } else if agent_scope_id == MAIN_AGENT_ID {
@@ -120,6 +126,11 @@ impl AgentEngine {
             .as_ref()
             .map(|def| def.provider.clone())
             .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                builtin_persona_overrides
+                    .and_then(|overrides| overrides.provider.clone())
+                    .filter(|value| !value.trim().is_empty())
+            })
             .unwrap_or_else(|| config.provider.clone());
         let mut provider_config = if matched_def.is_some() || agent_scope_id != MAIN_AGENT_ID {
             self.resolve_sub_agent_provider_config(&config, &provider_id)?
@@ -130,6 +141,11 @@ impl AgentEngine {
             .as_ref()
             .map(|def| def.model.clone())
             .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                builtin_persona_overrides
+                    .and_then(|overrides| overrides.model.clone())
+                    .filter(|value| !value.trim().is_empty())
+            })
         {
             provider_config.model = model;
         }
@@ -137,6 +153,11 @@ impl AgentEngine {
             .as_ref()
             .and_then(|def| def.reasoning_effort.clone())
             .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                builtin_persona_overrides
+                    .and_then(|overrides| overrides.reasoning_effort.clone())
+                    .filter(|value| !value.trim().is_empty())
+            })
         {
             provider_config.reasoning_effort = reasoning_effort;
         }

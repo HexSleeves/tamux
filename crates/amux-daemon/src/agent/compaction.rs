@@ -2,8 +2,8 @@
 
 use super::llm_client::messages_to_api_format;
 use super::*;
-use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
 use crate::agent::context::structural_memory::{StructuralContextEntry, ThreadStructuralMemory};
+use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
 
 const HEURISTIC_COMPACTION_VISIBLE_TEXT: &str = "rule based";
 const COMPACTION_NOTICE_KIND: &str = "auto-compaction";
@@ -465,7 +465,10 @@ fn determine_rule_based_compaction_mode(
         return RuleBasedCompactionMode::Conversational;
     }
 
-    let recent_messages = messages.iter().rev().take(COMPACTION_RECENT_SIGNAL_MESSAGES);
+    let recent_messages = messages
+        .iter()
+        .rev()
+        .take(COMPACTION_RECENT_SIGNAL_MESSAGES);
     for message in recent_messages {
         if message_uses_coding_tool(message) || message_contains_coding_signal(message) {
             return RuleBasedCompactionMode::Coding;
@@ -516,7 +519,9 @@ fn text_contains_coding_signal(text: &str) -> bool {
         || text.contains("*** Begin Patch")
         || text.contains("diff --git")
         || text.contains("\n@@")
-        || text.lines().any(|line| line.starts_with("+++ ") || line.starts_with("--- "))
+        || text
+            .lines()
+            .any(|line| line.starts_with("+++ ") || line.starts_with("--- "))
     {
         return true;
     }
@@ -543,8 +548,8 @@ fn text_contains_coding_signal(text: &str) -> bool {
 
 fn contains_path_like_token(text: &str) -> bool {
     const CODE_EXTENSIONS: &[&str] = &[
-        ".rs", ".toml", ".ts", ".tsx", ".js", ".jsx", ".py", ".json", ".md", ".yaml",
-        ".yml", ".cjs", ".mjs",
+        ".rs", ".toml", ".ts", ".tsx", ".js", ".jsx", ".py", ".json", ".md", ".yaml", ".yml",
+        ".cjs", ".mjs",
     ];
 
     text.split_whitespace().any(|token| {
@@ -557,7 +562,10 @@ fn contains_path_like_token(text: &str) -> bool {
         if token.starts_with('/') && token.len() > 1 {
             return true;
         }
-        token.contains('/') && CODE_EXTENSIONS.iter().any(|extension| token.contains(extension))
+        token.contains('/')
+            && CODE_EXTENSIONS
+                .iter()
+                .any(|extension| token.contains(extension))
     })
 }
 
@@ -659,7 +667,9 @@ async fn load_referenced_offloaded_payload_metadata(
         .into_iter()
         .take(CODING_COMPACTION_OFFLOAD_REFERENCE_LIMIT)
     {
-        let Some(metadata) = history.get_offloaded_payload_metadata(payload_id.as_str()).await?
+        let Some(metadata) = history
+            .get_offloaded_payload_metadata(payload_id.as_str())
+            .await?
         else {
             continue;
         };

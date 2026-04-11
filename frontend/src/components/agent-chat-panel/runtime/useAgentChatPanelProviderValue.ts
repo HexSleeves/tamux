@@ -136,9 +136,12 @@ export function useAgentChatPanelProviderValue(): {
   });
 
   const {
+    builtinAgentSetup,
+    cancelBuiltinAgentSetup,
     canStartGoalRun,
     sendDaemonMessage,
     startGoalRunFromPrompt,
+    submitBuiltinAgentSetup,
   } = useDaemonAgentActions({
     activePaneId,
     activeThreadId,
@@ -319,8 +322,11 @@ export function useAgentChatPanelProviderValue(): {
     stopStreaming,
     handleSend,
     handleKeyDown,
+    builtinAgentSetup,
     canStartGoalRun,
+    cancelBuiltinAgentSetup,
     startGoalRunFromPrompt,
+    submitBuiltinAgentSetup,
     tabItems,
     welesHealth,
   }), [
@@ -331,7 +337,9 @@ export function useAgentChatPanelProviderValue(): {
     updateAgentSetting,
     allMessagesByThread,
     chatBackView,
+    builtinAgentSetup,
     canStartGoalRun,
+    cancelBuiltinAgentSetup,
     startGoalRunFromPrompt,
     daemonTodosByThread,
     deleteMessage,
@@ -359,6 +367,7 @@ export function useAgentChatPanelProviderValue(): {
     setSearchQuery,
     snippets,
     stopStreaming,
+    submitBuiltinAgentSetup,
     symbolHits,
     symbolQuery,
     tabItems,

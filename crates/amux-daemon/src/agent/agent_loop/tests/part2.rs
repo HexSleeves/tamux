@@ -2431,7 +2431,10 @@ async fn persisted_mesh_next_step_can_downgrade_legacy_strong_gate_to_advisory()
 
     let thread = {
         let threads = engine.threads.read().await;
-        threads.get(thread_id).cloned().expect("thread should exist")
+        threads
+            .get(thread_id)
+            .cloned()
+            .expect("thread should exist")
     };
 
     let read_result = thread
@@ -2439,8 +2442,7 @@ async fn persisted_mesh_next_step_can_downgrade_legacy_strong_gate_to_advisory()
         .iter()
         .rev()
         .find(|message| {
-            message.role == MessageRole::Tool
-                && message.tool_name.as_deref() == Some("read_file")
+            message.role == MessageRole::Tool && message.tool_name.as_deref() == Some("read_file")
         })
         .expect("read_file result should be recorded");
     assert_eq!(read_result.tool_status.as_deref(), Some("done"));
@@ -2558,7 +2560,10 @@ async fn persisted_mesh_requires_approval_blocks_non_discovery_tool() {
 
     let thread = {
         let threads = engine.threads.read().await;
-        threads.get(thread_id).cloned().expect("thread should exist")
+        threads
+            .get(thread_id)
+            .cloned()
+            .expect("thread should exist")
     };
 
     let read_result = thread
@@ -2566,8 +2571,7 @@ async fn persisted_mesh_requires_approval_blocks_non_discovery_tool() {
         .iter()
         .rev()
         .find(|message| {
-            message.role == MessageRole::Tool
-                && message.tool_name.as_deref() == Some("read_file")
+            message.role == MessageRole::Tool && message.tool_name.as_deref() == Some("read_file")
         })
         .expect("read_file result should be recorded");
     assert_eq!(read_result.tool_status.as_deref(), Some("error"));
@@ -2646,7 +2650,10 @@ async fn reading_skill_does_not_clear_mesh_approval_requirement() {
         .await
         .expect("state should exist after hydrate");
 
-    assert!(!state.compliant, "read_skill compliance alone must not clear approval-required state");
+    assert!(
+        !state.compliant,
+        "read_skill compliance alone must not clear approval-required state"
+    );
     assert!(state.mesh_requires_approval);
 
     let persisted = engine
@@ -2798,15 +2805,17 @@ async fn substantive_follow_up_does_not_downgrade_hydrated_mesh_approval_require
 
     let thread = {
         let threads = engine.threads.read().await;
-        threads.get(thread_id).cloned().expect("thread should exist")
+        threads
+            .get(thread_id)
+            .cloned()
+            .expect("thread should exist")
     };
     let read_result = thread
         .messages
         .iter()
         .rev()
         .find(|message| {
-            message.role == MessageRole::Tool
-                && message.tool_name.as_deref() == Some("read_file")
+            message.role == MessageRole::Tool && message.tool_name.as_deref() == Some("read_file")
         })
         .expect("read_file result should be recorded");
     assert_eq!(read_result.tool_status.as_deref(), Some("error"));
@@ -2889,10 +2898,10 @@ async fn substantive_follow_up_preserves_hydrated_advisory_mesh_next_step() {
     let manager = SessionManager::new_test(root.path()).await;
     let mut config = AgentConfig::default();
     config.provider = PROVIDER_ID_OPENAI.to_string();
-    config.base_url = spawn_scripted_tool_call_server(vec![ (
+    config.base_url = spawn_scripted_tool_call_server(vec![(
         "read_file".to_string(),
         serde_json::json!({ "path": readable_path }).to_string(),
-    ) ])
+    )])
     .await;
     config.model = "gpt-4o-mini".to_string();
     config.api_key = "test-key".to_string();
@@ -2950,15 +2959,17 @@ async fn substantive_follow_up_preserves_hydrated_advisory_mesh_next_step() {
 
     let thread = {
         let threads = engine.threads.read().await;
-        threads.get(thread_id).cloned().expect("thread should exist")
+        threads
+            .get(thread_id)
+            .cloned()
+            .expect("thread should exist")
     };
     let read_result = thread
         .messages
         .iter()
         .rev()
         .find(|message| {
-            message.role == MessageRole::Tool
-                && message.tool_name.as_deref() == Some("read_file")
+            message.role == MessageRole::Tool && message.tool_name.as_deref() == Some("read_file")
         })
         .expect("read_file result should be recorded");
     assert_eq!(read_result.tool_status.as_deref(), Some("done"));
@@ -3066,11 +3077,19 @@ async fn terse_follow_up_still_emits_hydrated_mesh_guidance_without_fresh_prefli
 
     let mut saw_skill_preflight_notice = false;
     while let Ok(event) = events.try_recv() {
-        if let AgentEvent::WorkflowNotice { thread_id: event_thread_id, kind, message, details } = event {
+        if let AgentEvent::WorkflowNotice {
+            thread_id: event_thread_id,
+            kind,
+            message,
+            details,
+        } = event
+        {
             if event_thread_id == thread_id && kind == "skill-preflight" {
                 saw_skill_preflight_notice = true;
                 assert!(message.contains("request_approval systematic-debugging"));
-                assert!(details.unwrap_or_default().contains("\"mesh_requires_approval\":true"));
+                assert!(details
+                    .unwrap_or_default()
+                    .contains("\"mesh_requires_approval\":true"));
             }
         }
     }
@@ -3615,7 +3634,10 @@ async fn send_message_does_not_wait_for_background_skill_discovery_completion() 
 
     let completed_state = tokio::time::timeout(std::time::Duration::from_secs(1), async {
         loop {
-            if let Some(state) = engine.get_thread_skill_discovery_state(&outcome.thread_id).await {
+            if let Some(state) = engine
+                .get_thread_skill_discovery_state(&outcome.thread_id)
+                .await
+            {
                 if !state.discovery_pending {
                     return state;
                 }
@@ -3626,6 +3648,9 @@ async fn send_message_does_not_wait_for_background_skill_discovery_completion() 
     .await
     .expect("background discovery result should be applied");
 
-    assert_eq!(completed_state.recommended_skill.as_deref(), Some("systematic-debugging"));
+    assert_eq!(
+        completed_state.recommended_skill.as_deref(),
+        Some("systematic-debugging")
+    );
     assert!(!completed_state.discovery_pending);
 }

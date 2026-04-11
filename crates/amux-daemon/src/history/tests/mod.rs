@@ -8,9 +8,9 @@ async fn make_test_store() -> Result<(HistoryStore, PathBuf)> {
     Ok((store, root))
 }
 
+mod elastic_context;
 mod goal_runs;
 mod governance;
-mod elastic_context;
 mod misc;
 mod notifications;
 mod provider_auth;

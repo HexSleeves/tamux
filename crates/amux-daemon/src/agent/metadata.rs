@@ -99,10 +99,8 @@ pub(super) fn parse_message_metadata(metadata_json: Option<&str>) -> ParsedMessa
         response_id: get_str("response_id"),
         upstream_message,
         provider_final_result,
-        author_agent_id: get_str("author_agent_id")
-            .or_else(|| get_str("authorAgentId")),
-        author_agent_name: get_str("author_agent_name")
-            .or_else(|| get_str("authorAgentName")),
+        author_agent_id: get_str("author_agent_id").or_else(|| get_str("authorAgentId")),
+        author_agent_name: get_str("author_agent_name").or_else(|| get_str("authorAgentName")),
         message_kind,
         compaction_strategy,
         compaction_payload: get_str("compaction_payload"),
@@ -147,7 +145,9 @@ pub(super) fn parse_thread_metadata(metadata_json: Option<&str>) -> ParsedThread
         thread_participants: metadata
             .as_ref()
             .and_then(|value| value.get("thread_participants"))
-            .and_then(|value| serde_json::from_value::<Vec<ThreadParticipantState>>(value.clone()).ok())
+            .and_then(|value| {
+                serde_json::from_value::<Vec<ThreadParticipantState>>(value.clone()).ok()
+            })
             .map(normalize_thread_participants)
             .unwrap_or_default(),
         thread_participant_suggestions: metadata

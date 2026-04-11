@@ -17,8 +17,8 @@ use amux_protocol::{AmuxCodec, ClientMessage, DaemonMessage};
 
 use crate::wire::{
     AgentConfigSnapshot, AgentTask, AgentThread, AnticipatoryItem, CheckpointSummary, FetchedModel,
-    GoalRun, GoalRunStatus, HeartbeatItem, RestoreOutcome, TaskStatus,
-    ThreadParticipantSuggestion, ThreadWorkContext,
+    GoalRun, GoalRunStatus, HeartbeatItem, RestoreOutcome, TaskStatus, ThreadParticipantSuggestion,
+    ThreadWorkContext,
 };
 
 #[cfg(unix)]

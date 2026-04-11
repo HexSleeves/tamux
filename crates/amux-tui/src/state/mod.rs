@@ -113,6 +113,11 @@ pub enum DaemonCommand {
         provider_id: String,
         model: String,
     },
+    SetTargetAgentProviderModel {
+        target_agent_id: String,
+        provider_id: String,
+        model: String,
+    },
     ControlGoalRun {
         goal_run_id: String,
         action: String,

@@ -14,8 +14,8 @@ use types::SkillCandidateInput;
 
 pub(crate) use metadata::extract_skill_metadata;
 pub(crate) use types::{
-    SkillDiscoveryResult, SkillDocumentMetadata, SkillRecommendation,
-    SkillRecommendationAction, SkillRecommendationConfidence,
+    SkillDiscoveryResult, SkillDocumentMetadata, SkillRecommendation, SkillRecommendationAction,
+    SkillRecommendationConfidence,
 };
 
 const MAX_SKILL_EXCERPT_LINES: usize = 40;

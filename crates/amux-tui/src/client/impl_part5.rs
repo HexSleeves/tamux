@@ -159,6 +159,19 @@ impl DaemonClient {
         self.send(ClientMessage::AgentSetProviderModel { provider_id, model })
     }
 
+    pub fn set_target_agent_provider_model(
+        &self,
+        target_agent_id: String,
+        provider_id: String,
+        model: String,
+    ) -> Result<()> {
+        self.send(ClientMessage::AgentSetTargetAgentProviderModel {
+            target_agent_id,
+            provider_id,
+            model,
+        })
+    }
+
     pub fn get_provider_auth_states(&self) -> Result<()> {
         self.send(ClientMessage::AgentGetProviderAuthStates)
     }

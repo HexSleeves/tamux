@@ -943,6 +943,18 @@ impl TuiModel {
 
         match code {
             KeyCode::Esc => {
+                if matches!(
+                    kind,
+                    modal::ModalKind::ProviderPicker | modal::ModalKind::ModelPicker
+                ) && matches!(
+                    self.settings_picker_target,
+                    Some(SettingsPickerTarget::BuiltinPersonaProvider)
+                        | Some(SettingsPickerTarget::BuiltinPersonaModel)
+                ) {
+                    self.restore_builtin_persona_setup_config_snapshot();
+                    self.pending_builtin_persona_setup = None;
+                    self.settings_picker_target = None;
+                }
                 self.close_top_modal();
                 self.input.reduce(input::InputAction::Clear);
             }

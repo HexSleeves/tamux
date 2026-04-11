@@ -1018,7 +1018,8 @@ async fn coding_compaction_payload_prefers_structural_digest_and_offload_refs() 
     assert!(payload.contains("src/lib.rs"));
     assert!(payload.contains("node:file:src/parser.rs"));
     assert!(payload.contains("payload-1"));
-    println!("PAYLOAD:\n{payload}"); assert!(payload.contains("parse() now returns Result"));
+    println!("PAYLOAD:\n{payload}");
+    assert!(payload.contains("parse() now returns Result"));
     assert!(
         !payload.starts_with("# 🤖 Agent Context: State Checkpoint"),
         "coding payload should not fall back to checkpoint prose when structured assembly succeeds: {payload}"
@@ -1083,7 +1084,10 @@ async fn coding_compaction_payload_renders_offload_refs_from_metadata_fields() {
         threads.insert(
             thread_id.to_string(),
             sample_thread(vec![
-                AgentMessage::user("Update the parser and keep the compacted context deterministic.", 1),
+                AgentMessage::user(
+                    "Update the parser and keep the compacted context deterministic.",
+                    1,
+                ),
                 AgentMessage {
                     id: "tool-older".to_string(),
                     role: MessageRole::Tool,
@@ -1155,8 +1159,7 @@ fn coding_signals_without_structural_state_still_use_conversational_compaction()
         &[AgentMessage {
             id: "tool-result".to_string(),
             role: MessageRole::Tool,
-            content: "cargo test failed in crates/amux-daemon/src/agent/compaction.rs"
-                .to_string(),
+            content: "cargo test failed in crates/amux-daemon/src/agent/compaction.rs".to_string(),
             tool_calls: None,
             tool_call_id: Some("call-1".to_string()),
             tool_name: Some("read_file".to_string()),
@@ -1192,24 +1195,26 @@ fn coding_signals_without_structural_state_still_use_conversational_compaction()
 #[test]
 fn stale_structural_state_without_recent_coding_signals_uses_conversational_compaction() {
     let mode = determine_rule_based_compaction_mode(
-        Some(&crate::agent::context::structural_memory::ThreadStructuralMemory {
-            workspace_seed_scan_complete: true,
-            language_hints: vec!["rust".to_string()],
-            workspace_seeds: vec![crate::agent::context::structural_memory::WorkspaceSeed {
-                node_id: "node:file:Cargo.toml".to_string(),
-                relative_path: "Cargo.toml".to_string(),
-                kind: "cargo_manifest".to_string(),
-            }],
-            observed_files: vec![crate::agent::context::structural_memory::ObservedFileNode {
-                node_id: "node:file:src/lib.rs".to_string(),
-                relative_path: "src/lib.rs".to_string(),
-            }],
-            edges: vec![crate::agent::context::structural_memory::StructuralEdge {
-                from: "node:file:Cargo.toml".to_string(),
-                to: "node:file:src".to_string(),
-                kind: "cargo_manifest_to_crate_path".to_string(),
-            }],
-        }),
+        Some(
+            &crate::agent::context::structural_memory::ThreadStructuralMemory {
+                workspace_seed_scan_complete: true,
+                language_hints: vec!["rust".to_string()],
+                workspace_seeds: vec![crate::agent::context::structural_memory::WorkspaceSeed {
+                    node_id: "node:file:Cargo.toml".to_string(),
+                    relative_path: "Cargo.toml".to_string(),
+                    kind: "cargo_manifest".to_string(),
+                }],
+                observed_files: vec![crate::agent::context::structural_memory::ObservedFileNode {
+                    node_id: "node:file:src/lib.rs".to_string(),
+                    relative_path: "src/lib.rs".to_string(),
+                }],
+                edges: vec![crate::agent::context::structural_memory::StructuralEdge {
+                    from: "node:file:Cargo.toml".to_string(),
+                    to: "node:file:src".to_string(),
+                    kind: "cargo_manifest_to_crate_path".to_string(),
+                }],
+            },
+        ),
         &[
             AgentMessage::user("Please summarize our next meeting agenda.", 1),
             AgentMessage {
@@ -1592,8 +1597,11 @@ mod structural_memory {
         let root = tempdir().expect("tempdir");
         fs::create_dir_all(root.path().join("frontend/src")).expect("frontend src dir");
         fs::create_dir_all(root.path().join("scripts")).expect("scripts dir");
-        fs::write(root.path().join("Cargo.toml"), "[workspace]\nmembers = []\n")
-            .expect("write Cargo.toml");
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[workspace]\nmembers = []\n",
+        )
+        .expect("write Cargo.toml");
         fs::write(
             root.path().join("frontend/package.json"),
             "{\"name\":\"frontend\"}\n",
@@ -1604,13 +1612,17 @@ mod structural_memory {
             "{\"compilerOptions\":{\"rootDir\":\"src\"}}\n",
         )
         .expect("write tsconfig.json");
-        fs::write(root.path().join("pyproject.toml"), "[project]\nname='demo'\n")
-            .expect("write pyproject");
+        fs::write(
+            root.path().join("pyproject.toml"),
+            "[project]\nname='demo'\n",
+        )
+        .expect("write pyproject");
         fs::write(root.path().join("scripts/dev.sh"), "#!/usr/bin/env bash\n")
             .expect("write shell script");
 
-        let memory = crate::agent::context::structural_memory::discover_workspace_seeds(root.path())
-            .expect("workspace seed discovery should succeed");
+        let memory =
+            crate::agent::context::structural_memory::discover_workspace_seeds(root.path())
+                .expect("workspace seed discovery should succeed");
 
         assert!(memory
             .workspace_seeds

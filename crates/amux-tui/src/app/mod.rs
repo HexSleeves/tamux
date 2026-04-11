@@ -84,6 +84,8 @@ enum MainPaneView {
 enum SettingsPickerTarget {
     Provider,
     Model,
+    BuiltinPersonaProvider,
+    BuiltinPersonaModel,
     CompactionWelesProvider,
     CompactionWelesModel,
     CompactionCustomProvider,
@@ -116,6 +118,29 @@ struct InputNotice {
 enum PendingChatActionKind {
     Regenerate,
     Delete,
+}
+
+#[derive(Clone, Debug)]
+struct BuiltinPersonaSetupConfigSnapshot {
+    provider: String,
+    base_url: String,
+    model: String,
+    custom_model_name: String,
+    api_key: String,
+    assistant_id: String,
+    auth_source: String,
+    api_transport: String,
+    custom_context_window_tokens: Option<u32>,
+    context_window_tokens: u32,
+    fetched_models: Vec<config::FetchedModel>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingBuiltinPersonaSetup {
+    target_agent_id: String,
+    target_agent_name: String,
+    prompt: String,
+    config_snapshot: BuiltinPersonaSetupConfigSnapshot,
 }
 
 #[derive(Clone, Debug)]
@@ -334,6 +359,9 @@ pub struct TuiModel {
 
     // Selected target agent for the next brand-new thread started from the thread picker.
     pending_new_thread_target_agent: Option<String>,
+
+    // Builtin persona setup flow launched from @agent / !agent commands.
+    pending_builtin_persona_setup: Option<PendingBuiltinPersonaSetup>,
 
     // Thread currently awaiting full detail from the daemon.
     thread_loading_id: Option<String>,

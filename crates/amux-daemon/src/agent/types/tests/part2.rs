@@ -103,6 +103,16 @@ use amux_shared::providers::{PROVIDER_ID_ARCEE, PROVIDER_ID_GITHUB_COPILOT};
     fn consolidation_result_defaults_are_zero() {
         let result = ConsolidationResult::default();
         assert_eq!(result.traces_reviewed, 0);
+        assert!(!result.distillation_ran);
+        assert_eq!(result.distillation_threads_analyzed, 0);
+        assert_eq!(result.distillation_candidates_generated, 0);
+        assert_eq!(result.distillation_auto_applied, 0);
+        assert_eq!(result.distillation_queued_for_review, 0);
+        assert!(!result.forge_ran);
+        assert_eq!(result.forge_traces_analyzed, 0);
+        assert_eq!(result.forge_patterns_detected, 0);
+        assert_eq!(result.forge_hints_generated, 0);
+        assert_eq!(result.forge_hints_auto_applied, 0);
         assert_eq!(result.facts_decayed, 0);
         assert_eq!(result.tombstones_purged, 0);
         assert_eq!(result.facts_refined, 0);

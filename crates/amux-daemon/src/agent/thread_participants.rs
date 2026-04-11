@@ -338,10 +338,9 @@ impl AgentEngine {
             .ok_or_else(|| anyhow::anyhow!("participant suggestion not found: {suggestion_id}"))?;
 
         match self
-            .send_visible_thread_participant_message(
+            .append_visible_thread_participant_message(
                 thread_id,
                 &suggestion.target_agent_id,
-                preferred_session_hint,
                 &suggestion.instruction,
             )
             .await

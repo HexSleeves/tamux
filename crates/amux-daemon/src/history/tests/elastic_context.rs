@@ -202,12 +202,19 @@ async fn init_schema_repairs_legacy_offloaded_payloads_upgrade_path() -> Result<
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    assert_eq!(status.0, 1, "offloaded payload summary should be required after migration");
+    assert_eq!(
+        status.0, 1,
+        "offloaded payload summary should be required after migration"
+    );
     assert_eq!(
         status.1.as_deref(),
         Some("idx_offloaded_payloads_thread_created")
     );
-    assert_eq!(status.2.len(), 2, "both legacy rows should survive migration");
+    assert_eq!(
+        status.2.len(),
+        2,
+        "both legacy rows should survive migration"
+    );
 
     let primary = &status.2[0];
     assert_eq!(primary.0, "payload-legacy");
@@ -313,34 +320,39 @@ mod structural_memory {
         let (store, root) = make_test_store().await?;
 
         fs::create_dir_all(root.join("src"))?;
-        fs::write(root.join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n")?;
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+        )?;
         fs::write(root.join("src/lib.rs"), "mod parser;\n")?;
         fs::write(root.join("src/parser.rs"), "pub fn parse() {}\n")?;
 
         let mut memory = crate::agent::context::structural_memory::discover_workspace_seeds(&root)
             .expect("workspace seed discovery should succeed");
-        let manifest_refs = crate::agent::context::structural_memory::observe_successful_file_tool_result(
-            &mut memory,
-            &root,
-            "read_file",
-            &serde_json::json!({
-                "filePath": root.join("Cargo.toml").to_string_lossy().to_string(),
-            })
-            .to_string(),
-            None,
-        )
-        .expect("manifest observation should succeed");
-        let source_refs = crate::agent::context::structural_memory::observe_successful_file_tool_result(
-            &mut memory,
-            &root,
-            "read_file",
-            &serde_json::json!({
-                "filePath": root.join("src/lib.rs").to_string_lossy().to_string(),
-            })
-            .to_string(),
-            Some("mod parser;\n"),
-        )
-        .expect("source observation should succeed");
+        let manifest_refs =
+            crate::agent::context::structural_memory::observe_successful_file_tool_result(
+                &mut memory,
+                &root,
+                "read_file",
+                &serde_json::json!({
+                    "filePath": root.join("Cargo.toml").to_string_lossy().to_string(),
+                })
+                .to_string(),
+                None,
+            )
+            .expect("manifest observation should succeed");
+        let source_refs =
+            crate::agent::context::structural_memory::observe_successful_file_tool_result(
+                &mut memory,
+                &root,
+                "read_file",
+                &serde_json::json!({
+                    "filePath": root.join("src/lib.rs").to_string_lossy().to_string(),
+                })
+                .to_string(),
+                Some("mod parser;\n"),
+            )
+            .expect("source observation should succeed");
 
         store
             .upsert_thread_structural_memory_state("thread-structural", &memory, 1_717_170_888)
@@ -379,21 +391,23 @@ mod structural_memory {
         fs::create_dir_all(&cwd)?;
         fs::write(cwd.join("generated.ts"), "export const generated = true;\n")?;
 
-        let mut memory = crate::agent::context::structural_memory::ThreadStructuralMemory::default();
-        let structural_refs = crate::agent::context::structural_memory::observe_successful_file_tool_result(
-            &mut memory,
-            &root,
-            "create_file",
-            &serde_json::json!({
-                "path": "",
-                "filename": "generated.ts",
-                "cwd": cwd.to_string_lossy().to_string(),
-                "content": "export const generated = true;\n",
-            })
-            .to_string(),
-            None,
-        )
-        .expect("create_file observation should resolve filename against cwd");
+        let mut memory =
+            crate::agent::context::structural_memory::ThreadStructuralMemory::default();
+        let structural_refs =
+            crate::agent::context::structural_memory::observe_successful_file_tool_result(
+                &mut memory,
+                &root,
+                "create_file",
+                &serde_json::json!({
+                    "path": "",
+                    "filename": "generated.ts",
+                    "cwd": cwd.to_string_lossy().to_string(),
+                    "content": "export const generated = true;\n",
+                })
+                .to_string(),
+                None,
+            )
+            .expect("create_file observation should resolve filename against cwd");
 
         assert_eq!(
             structural_refs,
@@ -422,14 +436,21 @@ mod structural_memory {
             "// import \"./commented\";\n/*\nexport * from \"./commented-block\";\n*/\nimport \"./live\";\nconst note = \"require('./literal')\";\n",
         )?;
         fs::write(root.join("src/live.ts"), "export const live = true;\n")?;
-        fs::write(root.join("src/commented.ts"), "export const hidden = true;\n")?;
+        fs::write(
+            root.join("src/commented.ts"),
+            "export const hidden = true;\n",
+        )?;
         fs::write(
             root.join("src/commented-block.ts"),
             "export const hiddenBlock = true;\n",
         )?;
-        fs::write(root.join("src/literal.ts"), "export const literal = true;\n")?;
+        fs::write(
+            root.join("src/literal.ts"),
+            "export const literal = true;\n",
+        )?;
 
-        let mut memory = crate::agent::context::structural_memory::ThreadStructuralMemory::default();
+        let mut memory =
+            crate::agent::context::structural_memory::ThreadStructuralMemory::default();
         crate::agent::context::structural_memory::observe_successful_file_tool_result(
             &mut memory,
             &root,
@@ -443,7 +464,11 @@ mod structural_memory {
         .expect("source observation should succeed");
 
         store
-            .upsert_thread_structural_memory_state("thread-commented-imports", &memory, 1_717_170_889)
+            .upsert_thread_structural_memory_state(
+                "thread-commented-imports",
+                &memory,
+                1_717_170_889,
+            )
             .await?;
 
         let restored: crate::agent::context::structural_memory::ThreadStructuralMemory = store
@@ -490,7 +515,8 @@ mod structural_memory {
             "export const parser = () => true;\n",
         )?;
 
-        let mut memory = crate::agent::context::structural_memory::ThreadStructuralMemory::default();
+        let mut memory =
+            crate::agent::context::structural_memory::ThreadStructuralMemory::default();
         crate::agent::context::structural_memory::observe_successful_file_tool_result(
             &mut memory,
             &root,
@@ -526,18 +552,20 @@ mod structural_memory {
     async fn parent_traversal_paths_do_not_persist_observed_file_nodes() -> Result<()> {
         let (_store, root) = make_test_store().await?;
 
-        let mut memory = crate::agent::context::structural_memory::ThreadStructuralMemory::default();
-        let structural_refs = crate::agent::context::structural_memory::observe_successful_file_tool_result(
-            &mut memory,
-            &root,
-            "read_file",
-            &serde_json::json!({
-                "filePath": "../outside/escape.ts",
-            })
-            .to_string(),
-            Some("import \"./nested\";\n"),
-        )
-        .expect("escaped source observation should be skipped");
+        let mut memory =
+            crate::agent::context::structural_memory::ThreadStructuralMemory::default();
+        let structural_refs =
+            crate::agent::context::structural_memory::observe_successful_file_tool_result(
+                &mut memory,
+                &root,
+                "read_file",
+                &serde_json::json!({
+                    "filePath": "../outside/escape.ts",
+                })
+                .to_string(),
+                Some("import \"./nested\";\n"),
+            )
+            .expect("escaped source observation should be skipped");
 
         assert!(structural_refs.is_empty());
         assert!(!memory
@@ -593,7 +621,11 @@ mod structural_memory {
         .expect("escaped apply_patch observation should be skipped");
 
         store
-            .upsert_thread_structural_memory_state("thread-escaped-apply-patch", &memory, 1_717_170_890)
+            .upsert_thread_structural_memory_state(
+                "thread-escaped-apply-patch",
+                &memory,
+                1_717_170_890,
+            )
             .await?;
 
         let restored: crate::agent::context::structural_memory::ThreadStructuralMemory = store
@@ -614,11 +646,15 @@ mod structural_memory {
         let (_store, root) = make_test_store().await?;
 
         fs::create_dir_all(root.join("src"))?;
-        fs::write(root.join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n")?;
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+        )?;
         fs::write(root.join("src/lib.rs"), "mod parser;\n")?;
         fs::write(root.join("src/parser.rs"), "pub fn parse() {}\n")?;
 
-        let mut memory = crate::agent::context::structural_memory::ThreadStructuralMemory::default();
+        let mut memory =
+            crate::agent::context::structural_memory::ThreadStructuralMemory::default();
         crate::agent::context::structural_memory::observe_successful_file_tool_result(
             &mut memory,
             &root,
@@ -639,7 +675,10 @@ mod structural_memory {
         );
 
         fs::create_dir_all(root.join("frontend"))?;
-        fs::write(root.join("frontend/package.json"), "{\"name\":\"late-seed\"}\n")?;
+        fs::write(
+            root.join("frontend/package.json"),
+            "{\"name\":\"late-seed\"}\n",
+        )?;
 
         crate::agent::context::structural_memory::observe_successful_file_tool_result(
             &mut memory,
@@ -672,11 +711,15 @@ mod structural_memory {
         let (_store, root) = make_test_store().await?;
 
         fs::create_dir_all(root.join("src"))?;
-        fs::write(root.join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n")?;
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+        )?;
         fs::write(root.join("src/lib.rs"), "mod parser;\n")?;
         fs::write(root.join("src/parser.rs"), "pub fn parse() {}\n")?;
 
-        let mut memory = crate::agent::context::structural_memory::ThreadStructuralMemory::default();
+        let mut memory =
+            crate::agent::context::structural_memory::ThreadStructuralMemory::default();
         crate::agent::context::structural_memory::observe_successful_file_tool_result(
             &mut memory,
             &root,
@@ -692,20 +735,24 @@ mod structural_memory {
         assert!(memory.workspace_seed_scan_complete);
 
         fs::create_dir_all(root.join("frontend"))?;
-        fs::write(root.join("frontend/package.json"), "{\"name\":\"late-seed\"}\n")?;
+        fs::write(
+            root.join("frontend/package.json"),
+            "{\"name\":\"late-seed\"}\n",
+        )?;
 
-        let structural_refs = crate::agent::context::structural_memory::observe_successful_file_tool_result(
-            &mut memory,
-            &root,
-            "write_file",
-            &serde_json::json!({
-                "path": root.join("frontend/package.json").to_string_lossy().to_string(),
-                "content": "{\"name\":\"late-seed\"}\n",
-            })
-            .to_string(),
-            None,
-        )
-        .expect("late manifest write observation should succeed");
+        let structural_refs =
+            crate::agent::context::structural_memory::observe_successful_file_tool_result(
+                &mut memory,
+                &root,
+                "write_file",
+                &serde_json::json!({
+                    "path": root.join("frontend/package.json").to_string_lossy().to_string(),
+                    "content": "{\"name\":\"late-seed\"}\n",
+                })
+                .to_string(),
+                None,
+            )
+            .expect("late manifest write observation should succeed");
 
         assert_eq!(
             structural_refs,

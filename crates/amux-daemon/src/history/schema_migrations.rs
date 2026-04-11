@@ -14,7 +14,8 @@ const OFFLOADED_PAYLOADS_TABLE_SQL: &str = "CREATE TABLE offloaded_payloads (
     created_at INTEGER NOT NULL
 )";
 
-const OFFLOADED_PAYLOADS_TABLE_IF_MISSING_SQL: &str = "CREATE TABLE IF NOT EXISTS offloaded_payloads (
+const OFFLOADED_PAYLOADS_TABLE_IF_MISSING_SQL: &str =
+    "CREATE TABLE IF NOT EXISTS offloaded_payloads (
     payload_id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL,
     tool_name TEXT NOT NULL,
@@ -108,8 +109,11 @@ fn rebuild_offloaded_payloads_table(
         created_at,
     ) in legacy_rows
     {
-        let storage_path =
-            canonical_offloaded_payload_storage_path(offloaded_payloads_dir, &thread_id, &payload_id);
+        let storage_path = canonical_offloaded_payload_storage_path(
+            offloaded_payloads_dir,
+            &thread_id,
+            &payload_id,
+        );
         insert_stmt.execute(rusqlite::params![
             payload_id,
             thread_id,

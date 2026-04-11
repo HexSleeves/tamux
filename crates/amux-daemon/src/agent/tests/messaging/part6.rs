@@ -53,7 +53,10 @@ async fn thread_participant_update_and_deactivate_persist() {
         .expect("weles participant should reload");
 
     assert_eq!(weles.instruction, "focus on risk");
-    assert_eq!(weles.status, crate::agent::ThreadParticipantStatus::Inactive);
+    assert_eq!(
+        weles.status,
+        crate::agent::ThreadParticipantStatus::Inactive
+    );
 }
 
 #[tokio::test]

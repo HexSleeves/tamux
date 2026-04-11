@@ -82,7 +82,8 @@ impl AgentEngine {
                     .await;
                 if count > 0 {
                     if let Some(thread_id) = thread_id {
-                        let notice_message = format_skill_settlement_notice(count, outcome, &skill_names);
+                        let notice_message =
+                            format_skill_settlement_notice(count, outcome, &skill_names);
                         let settled_skills = skill_names.iter().cloned().collect::<Vec<_>>();
                         self.emit_workflow_notice(
                             thread_id,
@@ -200,11 +201,7 @@ impl AgentEngine {
     }
 }
 
-fn format_skill_settlement_notice(
-    count: usize,
-    outcome: &str,
-    skill_names: &[String],
-) -> String {
+fn format_skill_settlement_notice(count: usize, outcome: &str, skill_names: &[String]) -> String {
     if skill_names.is_empty() {
         return format!("Settled {count} skill consultation(s) with outcome={outcome}.");
     }

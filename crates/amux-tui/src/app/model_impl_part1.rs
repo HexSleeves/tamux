@@ -61,6 +61,7 @@ impl TuiModel {
             operator_profile: OperatorProfileOnboardingState::default(),
             cancelled_thread_id: None,
             pending_new_thread_target_agent: None,
+            pending_builtin_persona_setup: None,
             thread_loading_id: None,
             ignore_pending_concierge_welcome: false,
             gateway_statuses: Vec::new(),

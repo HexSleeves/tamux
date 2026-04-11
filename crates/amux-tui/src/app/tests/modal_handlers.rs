@@ -228,14 +228,32 @@ fn slash_participants_opens_modal_with_thread_participant_sections() {
     let quit = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
 
     assert!(!quit);
-    assert_eq!(model.modal.top(), Some(modal::ModalKind::ThreadParticipants));
+    assert_eq!(
+        model.modal.top(),
+        Some(modal::ModalKind::ThreadParticipants)
+    );
     let body = model.thread_participants_modal_body();
-    assert!(body.contains("Active Participants"), "missing active section: {body}");
+    assert!(
+        body.contains("Active Participants"),
+        "missing active section: {body}"
+    );
     assert!(body.contains("Weles"), "missing active participant: {body}");
-    assert!(body.contains("Inactive Participants"), "missing inactive section: {body}");
-    assert!(body.contains("Rarog"), "missing inactive participant: {body}");
-    assert!(body.contains("Queued Suggestions"), "missing suggestion section: {body}");
-    assert!(body.contains("check the final answer"), "missing queued suggestion: {body}");
+    assert!(
+        body.contains("Inactive Participants"),
+        "missing inactive section: {body}"
+    );
+    assert!(
+        body.contains("Rarog"),
+        "missing inactive participant: {body}"
+    );
+    assert!(
+        body.contains("Queued Suggestions"),
+        "missing suggestion section: {body}"
+    );
+    assert!(
+        body.contains("check the final answer"),
+        "missing queued suggestion: {body}"
+    );
 }
 
 #[test]
@@ -1594,7 +1612,10 @@ fn clicking_participant_summary_opens_thread_participants_modal() {
         modifiers: KeyModifiers::NONE,
     });
 
-    assert_eq!(model.modal.top(), Some(modal::ModalKind::ThreadParticipants));
+    assert_eq!(
+        model.modal.top(),
+        Some(modal::ModalKind::ThreadParticipants)
+    );
 }
 
 #[test]

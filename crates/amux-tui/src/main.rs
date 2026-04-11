@@ -350,6 +350,17 @@ fn start_daemon_bridge(
                             DaemonCommand::SetProviderModel { provider_id, model } => {
                                 let _ = client.set_provider_model(provider_id, model);
                             }
+                            DaemonCommand::SetTargetAgentProviderModel {
+                                target_agent_id,
+                                provider_id,
+                                model,
+                            } => {
+                                let _ = client.set_target_agent_provider_model(
+                                    target_agent_id,
+                                    provider_id,
+                                    model,
+                                );
+                            }
                             DaemonCommand::ControlGoalRun { goal_run_id, action } => {
                                 let _ = client.control_goal_run(goal_run_id, action);
                             }

@@ -145,7 +145,8 @@ pub async fn run_forge_pass(
 
     let period_end_ms = now_millis();
     let period_start_ms = period_end_ms.saturating_sub(config.lookback_hours * 60 * 60 * 1000);
-    let traces = list_recent_trace_rows(db, &config.agent_id, period_start_ms, TRACE_SCAN_LIMIT).await?;
+    let traces =
+        list_recent_trace_rows(db, &config.agent_id, period_start_ms, TRACE_SCAN_LIMIT).await?;
     let traces_analyzed = traces.len();
     let patterns = detect_patterns(&traces, config.min_pattern_frequency);
     let mut hints = generate_hints(&patterns, &config.agent_id);
@@ -188,7 +189,9 @@ pub async fn apply_forge_hints(
     let scope_id = current_agent_scope_id();
     ensure_memory_files_for_scope(agent_data_dir, &scope_id).await?;
     let memory_path = memory_paths_for_scope(agent_data_dir, &scope_id).memory_path;
-    let mut existing = tokio::fs::read_to_string(&memory_path).await.unwrap_or_default();
+    let mut existing = tokio::fs::read_to_string(&memory_path)
+        .await
+        .unwrap_or_default();
     let mut applied = Vec::new();
 
     for hint in hints
@@ -238,12 +241,15 @@ async fn list_recent_trace_rows(
                  ORDER BY started_at_ms DESC
                  LIMIT ?3",
             )?;
-            let rows = stmt.query_map(params![agent_id, period_start_ms as i64, limit as i64], |row| {
-                Ok(ForgeTraceRow {
-                    tool_sequence_json: row.get(0)?,
-                    metrics_json: row.get(1)?,
-                })
-            })?;
+            let rows = stmt.query_map(
+                params![agent_id, period_start_ms as i64, limit as i64],
+                |row| {
+                    Ok(ForgeTraceRow {
+                        tool_sequence_json: row.get(0)?,
+                        metrics_json: row.get(1)?,
+                    })
+                },
+            )?;
             Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
         })
         .await
@@ -288,7 +294,10 @@ fn detect_patterns(traces: &[ForgeTraceRow], min_frequency: usize) -> Vec<Execut
                 *timeout_by_tool.entry(tool.clone()).or_insert(0) += 1;
             }
         }
-        if metrics.success_rate == 0.0 && metrics.step_count > 0 && metrics.total_duration_ms >= 60_000 {
+        if metrics.success_rate == 0.0
+            && metrics.step_count > 0
+            && metrics.total_duration_ms >= 60_000
+        {
             stale_task_count += 1;
         }
     }
@@ -460,7 +469,10 @@ mod tests {
 
     #[test]
     fn pattern_type_display() {
-        assert_eq!(PatternType::ToolFallbackLoop.to_string(), "tool_fallback_loop");
+        assert_eq!(
+            PatternType::ToolFallbackLoop.to_string(),
+            "tool_fallback_loop"
+        );
         assert_eq!(PatternType::TimeoutProne.to_string(), "timeout_prone");
     }
 

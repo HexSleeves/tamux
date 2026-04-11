@@ -372,7 +372,8 @@ impl TuiModel {
         options: Vec<String>,
         thread_id: Option<String>,
     ) {
-        let target_thread_id = thread_id.or_else(|| self.chat.active_thread_id().map(str::to_string));
+        let target_thread_id =
+            thread_id.or_else(|| self.chat.active_thread_id().map(str::to_string));
         let Some(target_thread_id) = target_thread_id else {
             return;
         };

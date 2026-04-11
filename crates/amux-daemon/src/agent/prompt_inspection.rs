@@ -156,15 +156,31 @@ fn render_sub_agent_registry_section(sub_agents: &[SubAgentDefinition]) -> Optio
     }
 }
 
-fn render_active_skill_gate_section(state: &crate::agent::types::LatestSkillDiscoveryState) -> String {
+fn render_active_skill_gate_section(
+    state: &crate::agent::types::LatestSkillDiscoveryState,
+) -> String {
     let mut lines = vec![format!("- Query: {}", state.query)];
     if let Some(skill) = state.recommended_skill.as_deref() {
         lines.push(format!("- Skill: {}", skill));
     }
     lines.push(format!("- Confidence: {}", state.confidence_tier));
     lines.push(format!("- Next action: {}", state.recommended_action));
-    lines.push(format!("- Approval required: {}", if state.mesh_requires_approval { "yes" } else { "no" }));
-    lines.push(format!("- Skill already read: {}", if state.skill_read_completed { "yes" } else { "no" }));
+    lines.push(format!(
+        "- Approval required: {}",
+        if state.mesh_requires_approval {
+            "yes"
+        } else {
+            "no"
+        }
+    ));
+    lines.push(format!(
+        "- Skill already read: {}",
+        if state.skill_read_completed {
+            "yes"
+        } else {
+            "no"
+        }
+    ));
     if let Some(rationale) = state.skip_rationale.as_deref() {
         lines.push(format!("- Skip rationale: {}", rationale));
     }
@@ -270,7 +286,22 @@ fn build_direct_target(
     }
 
     if normalized != MAIN_AGENT_ID && normalized != CONCIERGE_AGENT_ID {
-        let provider_config = engine.resolve_provider_config(config)?;
+        if is_explicit_builtin_persona_scope(normalized)
+            && builtin_persona_requires_setup(config, normalized)
+        {
+            return Err(builtin_persona_setup_error(normalized));
+        }
+        let provider_id = builtin_persona_overrides(config, normalized)
+            .and_then(|overrides| overrides.provider.clone())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| config.provider.clone());
+        let mut provider_config = engine.resolve_sub_agent_provider_config(config, &provider_id)?;
+        if let Some(model) = builtin_persona_overrides(config, normalized)
+            .and_then(|overrides| overrides.model.clone())
+            .filter(|value| !value.trim().is_empty())
+        {
+            provider_config.model = model;
+        }
         return Ok(PromptInspectionTarget {
             agent_id: normalized.to_string(),
             agent_name: canonical_agent_name(normalized).to_string(),
@@ -280,7 +311,7 @@ fn build_direct_target(
                 crate::agent::agent_identity::build_spawned_persona_prompt(normalized),
                 config.system_prompt,
             ),
-            provider_id: config.provider.clone(),
+            provider_id,
             model: provider_config.model,
         });
     }
@@ -535,21 +566,22 @@ mod tests {
 
     #[test]
     fn active_skill_gate_section_includes_key_gate_fields() {
-        let rendered = render_active_skill_gate_section(&crate::agent::types::LatestSkillDiscoveryState {
-            query: "debug panic".to_string(),
-            confidence_tier: "strong".to_string(),
-            recommended_skill: Some("systematic-debugging".to_string()),
-            recommended_action: "request_approval systematic-debugging".to_string(),
-            mesh_next_step: Some(crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill),
-            mesh_requires_approval: true,
-            mesh_approval_id: Some("approval-1".to_string()),
-            read_skill_identifier: Some("systematic-debugging".to_string()),
-            skip_rationale: None,
-            discovery_pending: false,
-            skill_read_completed: true,
-            compliant: false,
-            updated_at: 1,
-        });
+        let rendered =
+            render_active_skill_gate_section(&crate::agent::types::LatestSkillDiscoveryState {
+                query: "debug panic".to_string(),
+                confidence_tier: "strong".to_string(),
+                recommended_skill: Some("systematic-debugging".to_string()),
+                recommended_action: "request_approval systematic-debugging".to_string(),
+                mesh_next_step: Some(crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill),
+                mesh_requires_approval: true,
+                mesh_approval_id: Some("approval-1".to_string()),
+                read_skill_identifier: Some("systematic-debugging".to_string()),
+                skip_rationale: None,
+                discovery_pending: false,
+                skill_read_completed: true,
+                compliant: false,
+                updated_at: 1,
+            });
 
         assert!(rendered.contains("Query: debug panic"));
         assert!(rendered.contains("Skill: systematic-debugging"));

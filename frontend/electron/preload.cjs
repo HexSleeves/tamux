@@ -278,6 +278,7 @@ const bridgeApi = {
     agentResetOperatorModel: () => ipcRenderer.invoke('agent-reset-operator-model'),
     agentSetConfigItem: (keyPath, value) => ipcRenderer.invoke('agent-set-config-item', keyPath, value),
     agentSetProviderModel: (providerId, model) => ipcRenderer.invoke('agent-set-provider-model', providerId, model),
+    agentSetTargetAgentProviderModel: (targetAgentId, providerId, model) => ipcRenderer.invoke('agent-set-target-agent-provider-model', targetAgentId, providerId, model),
     agentSetTierOverride: (tier) => ipcRenderer.invoke('agent-set-tier-override', tier),
     gatewayGetConfig: () => ipcRenderer.invoke('gateway:get-config'),
     gatewaySetConfig: (patch) => ipcRenderer.invoke('gateway:set-config', patch),

@@ -4,6 +4,7 @@ import { useWorkspaceStore } from "@/lib/workspaceStore";
 import type { AgentSettings } from "@/lib/agentStore";
 import { AgentExecutionGraph } from "@/components/AgentExecutionGraph";
 import { AITrainingView } from "../AITrainingView";
+import { BuiltinAgentSetupModal } from "../BuiltinAgentSetupModal";
 import { ChatView } from "../ChatView";
 import { CodingAgentsView } from "../CodingAgentsView";
 import { ContextView } from "../ContextView";
@@ -37,6 +38,7 @@ export function AgentChatPanelScaffold({ style, className }: { style?: CSSProper
       <AgentChatPanelHeader />
       <div style={{ flex: 1, overflow: "hidden", position: "relative", display: "flex", flexDirection: "column" }}>
         <AgentChatPanelCurrentSurface />
+        <BuiltinAgentSetupModal />
       </div>
     </div>
   );

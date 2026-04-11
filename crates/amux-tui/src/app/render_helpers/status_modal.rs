@@ -298,7 +298,9 @@ mod tests {
                 recent_actions_json: r#"[{"action_type":"tool_call","summary":"Ran status"}]"#
                     .to_string(),
             },
-            Some(r#"{"aline":{"available":true,"watcher_state":"running"},"skill_mesh":{"backend":"mesh","state":"fresh","active_gate":{"recommended_skill":"systematic-debugging","recommended_action":"request_approval systematic-debugging","requires_approval":true,"skill_read_completed":true,"rationale":["matched debug panic"],"capability_family":["development","debugging"]}}}"#),
+            Some(
+                r#"{"aline":{"available":true,"watcher_state":"running"},"skill_mesh":{"backend":"mesh","state":"fresh","active_gate":{"recommended_skill":"systematic-debugging","recommended_action":"request_approval systematic-debugging","requires_approval":true,"skill_read_completed":true,"rationale":["matched debug panic"],"capability_family":["development","debugging"]}}}"#,
+            ),
         );
 
         assert!(rendered.contains("Version:"));

@@ -6,8 +6,8 @@
 //! MEMORY.md/USER.md with a `[distilled]` provenance prefix.
 
 use super::*;
-use amux_protocol::AgentDbMessage;
 use crate::history::HistoryStore;
+use amux_protocol::AgentDbMessage;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
@@ -53,8 +53,8 @@ pub struct DistillationCandidate {
     pub distilled_fact: String,
     pub target_file: String, // "MEMORY.md" or "USER.md"
     pub category: MemoryCategory,
-    pub confidence: f64,     // 0.0–1.0
-    pub reasoning: String,   // why this should be saved
+    pub confidence: f64,   // 0.0–1.0
+    pub reasoning: String, // why this should be saved
 }
 
 /// Configuration for the distillation pass.
@@ -255,7 +255,11 @@ fn candidate_from_line(
     {
         (
             MemoryCategory::Correction,
-            if workspace_scoped { "MEMORY.md" } else { "USER.md" },
+            if workspace_scoped {
+                "MEMORY.md"
+            } else {
+                "USER.md"
+            },
             if workspace_scoped { 0.84 } else { 0.72 },
             "high-signal correction language",
         )
@@ -266,7 +270,11 @@ fn candidate_from_line(
     {
         (
             MemoryCategory::Pattern,
-            if workspace_scoped { "MEMORY.md" } else { "USER.md" },
+            if workspace_scoped {
+                "MEMORY.md"
+            } else {
+                "USER.md"
+            },
             0.58,
             "stable-looking behavioral pattern",
         )

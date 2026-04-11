@@ -16,6 +16,82 @@ enum ConversationAgentKind {
 }
 
 impl TuiModel {
+    fn estimate_header_message_tokens(message: &chat::AgentMessage) -> u64 {
+        let content = if message.message_kind == "compaction_artifact" {
+            message
+                .compaction_payload
+                .as_deref()
+                .filter(|payload| !payload.trim().is_empty())
+                .unwrap_or(message.content.as_str())
+        } else {
+            message.content.as_str()
+        };
+
+        let mut chars = content.chars().count();
+        chars += message
+            .tool_name
+            .as_deref()
+            .map(str::chars)
+            .map(Iterator::count)
+            .unwrap_or(0);
+        chars += message
+            .tool_arguments
+            .as_deref()
+            .map(str::chars)
+            .map(Iterator::count)
+            .unwrap_or(0);
+
+        chars.div_ceil(4) as u64 + 12
+    }
+
+    fn active_compaction_window_start(thread: &chat::AgentThread) -> usize {
+        thread
+            .messages
+            .iter()
+            .rposition(|message| message.message_kind == "compaction_artifact")
+            .unwrap_or(0)
+    }
+
+    fn effective_primary_context_window_tokens(&self) -> u32 {
+        if let Some(context_window) = providers::resolve_context_window_for_provider_auth(
+            &self.config.provider,
+            &self.config.auth_source,
+            &self.config.model,
+            &self.config.custom_model_name,
+        ) {
+            context_window
+        } else if providers::model_uses_context_window_override(
+            &self.config.provider,
+            &self.config.auth_source,
+            &self.config.model,
+            &self.config.custom_model_name,
+        ) {
+            self.config
+                .custom_context_window_tokens
+                .unwrap_or(providers::default_custom_model_context_window())
+        } else {
+            providers::known_context_window_for(&self.config.provider, &self.config.model)
+                .unwrap_or(self.config.context_window_tokens)
+        }
+    }
+
+    fn current_header_context_window_tokens(&self) -> u32 {
+        let profile = self.current_header_agent_profile();
+        let fallback = match self.current_conversation_agent_kind() {
+            ConversationAgentKind::Swarog => self.effective_primary_context_window_tokens(),
+            ConversationAgentKind::Rarog => self.effective_primary_context_window_tokens(),
+            ConversationAgentKind::Weles => match self.config.compaction_strategy.as_str() {
+                "custom_model" => self.config.compaction_custom_context_window_tokens,
+                _ => self.config.context_window_tokens,
+            },
+        }
+        .max(1);
+
+        providers::known_context_window_for(&profile.provider, &profile.model)
+            .unwrap_or(fallback)
+            .max(1)
+    }
+
     pub(super) fn conversation_participant_summary_area(&self) -> Option<Rect> {
         if !matches!(self.main_pane_view, MainPaneView::Conversation) {
             return None;
@@ -212,6 +288,42 @@ impl TuiModel {
             provider: runtime.provider.unwrap_or(fallback.provider),
             model: runtime.model.unwrap_or(fallback.model),
             reasoning_effort: runtime.reasoning_effort.or(fallback.reasoning_effort),
+        }
+    }
+
+    pub(crate) fn current_header_usage_summary(&self) -> widgets::header::HeaderUsageDisplay {
+        let max_tokens = self.current_header_context_window_tokens().max(1) as u64;
+        let (total_thread_tokens, current_tokens, total_cost_usd) = self
+            .chat
+            .active_thread()
+            .map(|thread| {
+                let start = Self::active_compaction_window_start(thread);
+                let total_thread_tokens = thread.total_input_tokens + thread.total_output_tokens;
+                let current_tokens = thread.messages[start..]
+                    .iter()
+                    .map(Self::estimate_header_message_tokens)
+                    .sum::<u64>();
+                let total_cost_usd = thread
+                    .messages
+                    .iter()
+                    .filter_map(|message| message.cost)
+                    .reduce(|acc, cost| acc + cost);
+                (total_thread_tokens, current_tokens, total_cost_usd)
+            })
+            .unwrap_or((0, 0, None));
+
+        let utilization_pct = current_tokens
+            .saturating_mul(100)
+            .checked_div(max_tokens)
+            .unwrap_or(0)
+            .min(100) as u8;
+
+        widgets::header::HeaderUsageDisplay {
+            total_thread_tokens,
+            current_tokens,
+            max_tokens,
+            utilization_pct,
+            total_cost_usd,
         }
     }
 
@@ -451,14 +563,15 @@ impl TuiModel {
             .split(area);
 
         let profile = self.current_header_agent_profile();
+        let usage = self.current_header_usage_summary();
 
         widgets::header::render(
             frame,
             chunks[0],
-            &self.chat,
             &profile.provider,
             &profile.model,
             profile.reasoning_effort.as_deref(),
+            &usage,
             &self.theme,
             self.approval.pending_approvals().len(),
             self.modal.top() == Some(modal::ModalKind::ApprovalCenter),
@@ -651,13 +764,13 @@ impl TuiModel {
         );
 
         if let Some(modal_kind) = self.modal.top() {
-        let overlay_area = match modal_kind {
-            modal::ModalKind::Settings => render_helpers::centered_rect(90, 88, area),
-            modal::ModalKind::ApprovalOverlay => render_helpers::centered_rect(60, 40, area),
-            modal::ModalKind::OperatorQuestionOverlay => {
-                render_helpers::centered_rect(68, 34, area)
-            }
-            modal::ModalKind::ApprovalCenter => render_helpers::centered_rect(86, 82, area),
+            let overlay_area = match modal_kind {
+                modal::ModalKind::Settings => render_helpers::centered_rect(90, 88, area),
+                modal::ModalKind::ApprovalOverlay => render_helpers::centered_rect(60, 40, area),
+                modal::ModalKind::OperatorQuestionOverlay => {
+                    render_helpers::centered_rect(68, 34, area)
+                }
+                modal::ModalKind::ApprovalCenter => render_helpers::centered_rect(86, 82, area),
                 modal::ModalKind::ChatActionConfirm => render_helpers::centered_rect(48, 28, area),
                 modal::ModalKind::CommandPalette => render_helpers::centered_rect(50, 40, area),
                 modal::ModalKind::Status => render_helpers::centered_rect(72, 70, area),

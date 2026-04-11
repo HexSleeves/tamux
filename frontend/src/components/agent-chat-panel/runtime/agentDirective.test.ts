@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseLeadingAgentDirective } from "./agentDirective";
 
 describe("parseLeadingAgentDirective", () => {
-  const known = ["weles", "rarog"];
+  const known = ["weles", "rarog", "swarozyc"];
 
   it("parses internal delegation", () => {
     expect(parseLeadingAgentDirective("!weles check claim", known)).toEqual({
@@ -32,6 +32,14 @@ describe("parseLeadingAgentDirective", () => {
       kind: "participant_upsert",
       agentAlias: "weles",
       body: "inspect @src/file.ts",
+    });
+  });
+
+  it("parses builtin persona aliases beyond weles and rarog", () => {
+    expect(parseLeadingAgentDirective("@swarozyc review svarog output", known)).toEqual({
+      kind: "participant_upsert",
+      agentAlias: "swarozyc",
+      body: "review svarog output",
     });
   });
 });

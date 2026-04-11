@@ -55,6 +55,7 @@ pub enum StreamProgressKind {
 
 pub struct ThreadRepoWatcher {
     pub repo_root: String,
+    pub thread_ids: Arc<std::sync::Mutex<HashSet<String>>>,
     pub watcher: RecommendedWatcher,
 }
 
@@ -103,8 +104,7 @@ pub struct AgentEngine {
     pub threads: RwLock<HashMap<String, AgentThread>>,
     pub thread_handoff_states: RwLock<HashMap<String, ThreadHandoffState>>,
     pub thread_participants: RwLock<HashMap<String, Vec<ThreadParticipantState>>>,
-    pub thread_participant_suggestions:
-        RwLock<HashMap<String, Vec<ThreadParticipantSuggestion>>>,
+    pub thread_participant_suggestions: RwLock<HashMap<String, Vec<ThreadParticipantSuggestion>>>,
     pub thread_client_surfaces: RwLock<HashMap<String, amux_protocol::ClientSurface>>,
     pub thread_skill_discovery_states: RwLock<HashMap<String, LatestSkillDiscoveryState>>,
     pub thread_structural_memories:
@@ -558,36 +558,12 @@ impl AgentEngine {
         }
 
         let runner = self.aline_startup_command_runner();
-        let mut persisted_state =
-            super::aline_startup::load_persisted_aline_startup_state(&self.data_dir).await;
-        let summary = super::aline_startup::reconcile_startup_sessions(
+        let summary = super::aline_startup::run_aline_startup_reconciliation_for_data_dir(
             runner.as_ref(),
             &repo_root,
-            chrono::Utc::now(),
-            super::aline_startup::StartupSelectionPolicy::default(),
-            &persisted_state.recent_session_ids(
-                chrono::Utc::now(),
-                super::aline_startup::StartupSelectionPolicy::default().recency_window,
-            ),
+            &self.data_dir,
         )
         .await?;
-
-        if summary.failure_stage.is_none() {
-            persisted_state.record_recently_imported(
-                &summary.recently_imported_session_ids,
-                chrono::Utc::now(),
-            );
-            if let Err(error) =
-                super::aline_startup::persist_aline_startup_state(&self.data_dir, &persisted_state)
-                    .await
-            {
-                tracing::warn!(
-                    path = %super::aline_startup::aline_startup_state_path(&self.data_dir).display(),
-                    %error,
-                    "failed to persist Aline startup dedupe state"
-                );
-            }
-        }
 
         self.record_aline_startup_summary(summary.clone()).await;
         log_aline_startup_summary(&repo_root, &summary);

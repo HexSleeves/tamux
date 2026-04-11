@@ -14,6 +14,14 @@ impl TuiModel {
             "weles".to_string(),
             amux_protocol::AGENT_ID_RAROG.to_string(),
             amux_protocol::AGENT_NAME_RAROG.to_string(),
+            "swarozyc".to_string(),
+            "Swarozyc".to_string(),
+            "radogost".to_string(),
+            "Radogost".to_string(),
+            "domowoj".to_string(),
+            "Domowoj".to_string(),
+            "swietowit".to_string(),
+            "Swietowit".to_string(),
         ];
         for entry in &self.subagents.entries {
             aliases.push(entry.id.clone());
@@ -33,12 +41,107 @@ impl TuiModel {
         if agent_alias.eq_ignore_ascii_case("weles") {
             return "Weles".to_string();
         }
+        if agent_alias.eq_ignore_ascii_case("swarozyc") {
+            return "Swarozyc".to_string();
+        }
+        if agent_alias.eq_ignore_ascii_case("radogost") {
+            return "Radogost".to_string();
+        }
+        if agent_alias.eq_ignore_ascii_case("domowoj") {
+            return "Domowoj".to_string();
+        }
+        if agent_alias.eq_ignore_ascii_case("swietowit") {
+            return "Swietowit".to_string();
+        }
         if let Some(entry) = self.subagents.entries.iter().find(|entry| {
-            entry.id.eq_ignore_ascii_case(agent_alias) || entry.name.eq_ignore_ascii_case(agent_alias)
+            entry.id.eq_ignore_ascii_case(agent_alias)
+                || entry.name.eq_ignore_ascii_case(agent_alias)
         }) {
             return entry.name.clone();
         }
         agent_alias.to_string()
+    }
+
+    fn builtin_persona_configured(&self, agent_alias: &str) -> bool {
+        let Some(raw) = self.config.agent_config_raw.as_ref() else {
+            return false;
+        };
+        let key = match agent_alias.to_ascii_lowercase().as_str() {
+            "swarozyc" => "swarozyc",
+            "radogost" => "radogost",
+            "domowoj" => "domowoj",
+            "swietowit" => "swietowit",
+            _ => return true,
+        };
+        let Some(entry) = raw
+            .get("builtin_sub_agents")
+            .and_then(|value| value.get(key))
+            .and_then(|value| value.as_object())
+        else {
+            return false;
+        };
+        let provider = entry
+            .get("provider")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let model = entry
+            .get("model")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        provider.is_some() && model.is_some()
+    }
+
+    fn open_builtin_persona_setup_flow(&mut self, agent_alias: &str, prompt: String) {
+        let target_agent_id = agent_alias.trim().to_ascii_lowercase();
+        let target_agent_name = self.participant_display_name(agent_alias);
+        let config_snapshot = BuiltinPersonaSetupConfigSnapshot {
+            provider: self.config.provider.clone(),
+            base_url: self.config.base_url.clone(),
+            model: self.config.model.clone(),
+            custom_model_name: self.config.custom_model_name.clone(),
+            api_key: self.config.api_key.clone(),
+            assistant_id: self.config.assistant_id.clone(),
+            auth_source: self.config.auth_source.clone(),
+            api_transport: self.config.api_transport.clone(),
+            custom_context_window_tokens: self.config.custom_context_window_tokens,
+            context_window_tokens: self.config.context_window_tokens,
+            fetched_models: self.config.fetched_models().to_vec(),
+        };
+        self.pending_builtin_persona_setup = Some(PendingBuiltinPersonaSetup {
+            target_agent_id,
+            target_agent_name: target_agent_name.clone(),
+            prompt,
+            config_snapshot,
+        });
+        self.settings_picker_target = Some(SettingsPickerTarget::BuiltinPersonaProvider);
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::ProviderPicker));
+        self.modal.set_picker_item_count(
+            widgets::provider_picker::available_provider_defs(&self.auth).len(),
+        );
+        self.status_line = format!("Configure {} provider", target_agent_name);
+    }
+
+    pub(super) fn restore_builtin_persona_setup_config_snapshot(&mut self) {
+        let Some(setup) = self.pending_builtin_persona_setup.as_ref() else {
+            return;
+        };
+        let snapshot = &setup.config_snapshot;
+        self.config.provider = snapshot.provider.clone();
+        self.config.base_url = snapshot.base_url.clone();
+        self.config.model = snapshot.model.clone();
+        self.config.custom_model_name = snapshot.custom_model_name.clone();
+        self.config.api_key = snapshot.api_key.clone();
+        self.config.assistant_id = snapshot.assistant_id.clone();
+        self.config.auth_source = snapshot.auth_source.clone();
+        self.config.api_transport = snapshot.api_transport.clone();
+        self.config.custom_context_window_tokens = snapshot.custom_context_window_tokens;
+        self.config.context_window_tokens = snapshot.context_window_tokens;
+        self.config.reduce(config::ConfigAction::ModelsFetched(
+            snapshot.fetched_models.clone(),
+        ));
     }
 
     fn resolve_preview_path(path: &str) -> PathBuf {
@@ -565,6 +668,17 @@ impl TuiModel {
             &content_with_attachments,
             &known_agent_aliases,
         ) {
+            if matches!(
+                directive.agent_alias.to_ascii_lowercase().as_str(),
+                "swarozyc" | "radogost" | "domowoj" | "swietowit"
+            ) && !self.builtin_persona_configured(&directive.agent_alias)
+            {
+                self.open_builtin_persona_setup_flow(
+                    &directive.agent_alias,
+                    content_with_attachments.clone(),
+                );
+                return;
+            }
             let directive_content =
                 input_refs::append_referenced_files_footer(&directive.body, &cwd);
             match directive.kind {
@@ -578,8 +692,7 @@ impl TuiModel {
                     self.main_pane_view = MainPaneView::Conversation;
                     self.focus = FocusArea::Chat;
                     self.input.set_mode(input::InputMode::Insert);
-                    self.status_line =
-                        format!("Delegated internally to {}", directive.agent_alias);
+                    self.status_line = format!("Delegated internally to {}", directive.agent_alias);
                     self.agent_activity = None;
                     self.error_active = false;
                     return;
@@ -590,7 +703,9 @@ impl TuiModel {
                         self.status_line =
                             "Participant commands require an active thread".to_string();
                         self.show_input_notice(
-                            format!("Open a thread before adding {participant_name} as a participant"),
+                            format!(
+                                "Open a thread before adding {participant_name} as a participant"
+                            ),
                             InputNoticeKind::Warning,
                             120,
                             false,
@@ -607,8 +722,7 @@ impl TuiModel {
                     self.main_pane_view = MainPaneView::Conversation;
                     self.focus = FocusArea::Chat;
                     self.input.set_mode(input::InputMode::Insert);
-                    self.status_line =
-                        format!("Participant {} updated", directive.agent_alias);
+                    self.status_line = format!("Participant {} updated", directive.agent_alias);
                     self.show_input_notice(
                         format!("Participant {participant_name} updated for this thread"),
                         InputNoticeKind::Success,
@@ -625,7 +739,9 @@ impl TuiModel {
                         self.status_line =
                             "Participant commands require an active thread".to_string();
                         self.show_input_notice(
-                            format!("Open a thread before removing {participant_name} as a participant"),
+                            format!(
+                                "Open a thread before removing {participant_name} as a participant"
+                            ),
                             InputNoticeKind::Warning,
                             120,
                             false,
@@ -642,8 +758,7 @@ impl TuiModel {
                     self.main_pane_view = MainPaneView::Conversation;
                     self.focus = FocusArea::Chat;
                     self.input.set_mode(input::InputMode::Insert);
-                    self.status_line =
-                        format!("Participant {} stopped", directive.agent_alias);
+                    self.status_line = format!("Participant {} stopped", directive.agent_alias);
                     self.show_input_notice(
                         format!("Participant {participant_name} removed from this thread"),
                         InputNoticeKind::Success,

@@ -211,7 +211,10 @@ async fn approval_resolution_clears_thread_skill_gate_when_task_is_approved() {
 
     assert!(
         engine
-            .handle_task_approval_resolution(approval_id, amux_protocol::ApprovalDecision::ApproveOnce)
+            .handle_task_approval_resolution(
+                approval_id,
+                amux_protocol::ApprovalDecision::ApproveOnce
+            )
             .await
     );
 
@@ -307,7 +310,10 @@ async fn unrelated_task_approval_does_not_clear_thread_skill_gate() {
 
     assert!(
         engine
-            .handle_task_approval_resolution("different-approval-id", amux_protocol::ApprovalDecision::ApproveOnce)
+            .handle_task_approval_resolution(
+                "different-approval-id",
+                amux_protocol::ApprovalDecision::ApproveOnce
+            )
             .await
     );
 

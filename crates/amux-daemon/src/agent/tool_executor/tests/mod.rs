@@ -10,6 +10,6 @@ include!("part6.rs");
 include!("part7.rs");
 
 fn current_dir_test_lock() -> &'static std::sync::Mutex<()> {
-	static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
-	LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }

@@ -14,7 +14,8 @@ const USER_LIMIT_CHARS: usize = 1_375;
 
 const DEFAULT_MEMORY: &str = "# Memory\n\n## tamux Architecture (Verified)\n- ~101k LOC Rust, 596 daemon files, 429 agent-module files\n- Daemon-first: daemon owns all state; TUI/Electron/CLI/MCP/gateway are clients\n- Memory: SOUL.md (identity), MEMORY.md (facts), USER.md (operator profile from SQLite)\n- Provenance-backed: every write tracked in SQLite with contradiction checks\n- Persistence: SQLite (threads, tasks, goals, provenance); Files (markdown, skills, ledgers)\n- Goal runners: durable autonomy — plan, dispatch, monitor, replan, reflect\n- M1–M10: operator model, causal traces, skill evolution, semantic env, collaboration,\n  trusted provenance, implicit feedback, tool synthesis, anticipatory runtime\n- Safety: risk labels, blast-radius, approvals, sandbox, rate limits, audit trails\n\n## First-Run Truth\nDaemon = source of truth. Memory = curated, not dumped. Goals = autonomy.\nSafety = visible. Rust codebase — `cargo build`, `./scripts/setup.sh --check --profile source`.\n";
 
-const DEFAULT_USER: &str = "# User\nStable operator preferences, constraints, and workflow habits belong here.\n";
+const DEFAULT_USER: &str =
+    "# User\nStable operator preferences, constraints, and workflow habits belong here.\n";
 
 // Shared SOUL footer — common architecture every agent knows about
 const SHARED_SOUL_FOOTER: &str = "\

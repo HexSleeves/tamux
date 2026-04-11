@@ -120,6 +120,11 @@ pub(super) enum AgentBridgeCommand {
         provider_id: String,
         model: String,
     },
+    SetTargetAgentProviderModel {
+        target_agent_id: String,
+        provider_id: String,
+        model: String,
+    },
     HeartbeatGetItems,
     HeartbeatSetItems {
         items_json: String,

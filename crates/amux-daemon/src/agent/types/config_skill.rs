@@ -251,6 +251,16 @@ impl Default for SkillPromotionConfig {
 #[derive(Debug, Clone, Default)]
 pub struct ConsolidationResult {
     pub traces_reviewed: usize,
+    pub distillation_ran: bool,
+    pub distillation_threads_analyzed: usize,
+    pub distillation_candidates_generated: usize,
+    pub distillation_auto_applied: usize,
+    pub distillation_queued_for_review: usize,
+    pub forge_ran: bool,
+    pub forge_traces_analyzed: usize,
+    pub forge_patterns_detected: usize,
+    pub forge_hints_generated: usize,
+    pub forge_hints_auto_applied: usize,
     pub facts_decayed: usize,
     pub tombstones_purged: usize,
     pub facts_refined: usize,

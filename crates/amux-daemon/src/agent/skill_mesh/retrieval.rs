@@ -7,8 +7,8 @@ use crate::agent::skill_mesh::compiler::{
     compile_skill_document, SkillMeshCompileContext, SkillMeshCompileMode,
 };
 use crate::agent::skill_recommendation::{
-    SkillDiscoveryResult, SkillDocumentMetadata, SkillRecommendation,
-    SkillRecommendationAction, SkillRecommendationConfidence,
+    SkillDiscoveryResult, SkillDocumentMetadata, SkillRecommendation, SkillRecommendationAction,
+    SkillRecommendationConfidence,
 };
 use crate::agent::types::SkillRecommendationConfig;
 use crate::history::{HistoryStore, SkillVariantRecord};
@@ -60,7 +60,8 @@ pub(crate) async fn discover_local_skills_via_mesh(
                 risk_level: "low".to_string(),
             },
         )
-        .await else {
+        .await
+        else {
             continue;
         };
 
@@ -94,8 +95,9 @@ pub(crate) async fn discover_local_skills_via_mesh(
             matched_workspace_tags.len() as f64 / workspace_tags.len() as f64
         };
         let history_score = score_history(&record);
-        let score = ((lexical_overlap * 0.72) + (workspace_overlap * 0.14) + (history_score * 0.14))
-            .clamp(0.0, 1.0);
+        let score =
+            ((lexical_overlap * 0.72) + (workspace_overlap * 0.14) + (history_score * 0.14))
+                .clamp(0.0, 1.0);
         if score < cfg.weak_match_threshold {
             continue;
         }
@@ -143,7 +145,10 @@ pub(crate) async fn discover_local_skills_via_mesh(
         }
     }
     let mut recommendations = deduped;
-    let top_score = recommendations.first().map(|item| item.score).unwrap_or_default();
+    let top_score = recommendations
+        .first()
+        .map(|item| item.score)
+        .unwrap_or_default();
     let confidence = if top_score >= cfg.strong_match_threshold {
         SkillRecommendationConfidence::Strong
     } else if top_score >= cfg.weak_match_threshold {

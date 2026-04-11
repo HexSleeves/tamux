@@ -165,7 +165,9 @@ impl AgentEngine {
                 )
                 .await
         } else {
-            self.history.delete_thread_structural_memory(&thread.id).await
+            self.history
+                .delete_thread_structural_memory(&thread.id)
+                .await
         };
         if let Err(error) = persistence_result {
             tracing::warn!(thread_id = %thread.id, %error, "failed to persist thread structural memory state");

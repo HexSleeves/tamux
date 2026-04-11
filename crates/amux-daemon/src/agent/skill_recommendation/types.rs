@@ -2,8 +2,7 @@ use crate::history::SkillVariantRecord;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) enum SkillRecommendationConfidence {
     Strong,
     Weak,
@@ -11,8 +10,7 @@ pub(crate) enum SkillRecommendationConfidence {
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) enum SkillRecommendationAction {
     ReadSkill,
     #[default]

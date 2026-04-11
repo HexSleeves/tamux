@@ -143,7 +143,10 @@ fn infer_capability_path(source_path: &Path, keywords: &[String]) -> Vec<String>
         .map(|segment| segment.to_string())
         .collect::<Vec<_>>();
 
-    if segments.last().is_some_and(|segment| segment.eq_ignore_ascii_case("skill.md")) {
+    if segments
+        .last()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("skill.md"))
+    {
         segments.pop();
     }
     if segments.is_empty() {
@@ -165,7 +168,11 @@ fn build_synthetic_queries(
     if let Some(summary) = summary {
         queries.push(summary.to_ascii_lowercase());
     }
-    queries.extend(triggers.iter().map(|trigger| format!("help with {trigger}")));
+    queries.extend(
+        triggers
+            .iter()
+            .map(|trigger| format!("help with {trigger}")),
+    );
     queries.extend(keywords.iter().map(|keyword| format!("{keyword} workflow")));
     if queries.is_empty() {
         queries.push(format!("use {skill_name}"));

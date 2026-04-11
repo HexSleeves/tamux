@@ -38,6 +38,60 @@ tamux gives its daemon-side agents a slightly mythic face, but the work stays co
 - **Swarog** is the main working fire: planning, tool use, sub-agent orchestration, memory, and durable goal runs
 - **Rarog** is the guiding flame: onboarding, check-ins, operator context, and the gentler edge of the system
 - **Weles** is the underwatch: governance, risk review, and guarded inspection when the runtime needs a second set of eyes
+- **Swarozyc** is the quick worker: narrower, faster execution and focused implementation help
+- **Radogost** is the negotiator: tradeoff analysis, comparison, and routing toward the strongest next move
+- **Domowoj** is the keeper: local stability, cleanup, careful repair, and environment-aware fixes
+- **Swietowit** is the wide watcher: broader architectural awareness and thread-level situational context
+
+### Working With Them
+
+Use `@agent ...` to add or update a visible thread participant on the current thread.
+
+Examples:
+
+- `@weles verify claims before answering`
+- `@swarozyc review svarog's implementation and step in when needed`
+
+Behavior:
+
+- the current thread owner does not change
+- the participant watches visible thread activity
+- when it decides to contribute, it adds a thread message or a queued visible suggestion instead of using hidden internal messages
+- repeating `@agent ...` updates that participant instead of creating duplicates
+
+Use `!agent ...` for hidden internal DM.
+
+Examples:
+
+- `!weles check whether this is risky`
+- `!radogost compare these two approaches before we answer`
+
+Behavior:
+
+- the current visible thread stays where it is
+- the target agent is contacted on the hidden internal path
+- this is for behind-the-scenes coordination, not visible participation
+
+Use handoff when another agent should own future replies in the thread.
+
+Behavior:
+
+- a handoff changes the active responder for the thread
+- future operator messages route to that agent until a return handoff
+- tamux records the switch as a visible system event while keeping linked handoff context hidden
+
+### Registration And Setup
+
+Builtin personas such as `@swarozyc`, `@radogost`, `@domowoj`, and `@swietowit` need their own provider and model configuration before they can participate or receive internal DM.
+
+If one of those personas is available but not configured yet:
+
+- the desktop app opens a provider then model setup flow
+- the TUI opens the same provider then model picker flow
+- after setup, tamux retries the original `@agent ...` or `!agent ...` request automatically
+
+If the target is not a known built-in persona or registered sub-agent alias, the leading `@agent` form is not treated as an agent directive and remains a normal message/file-mention path.
+
 
 Together they give the system a little presence without hiding what it is doing.
 

@@ -90,8 +90,7 @@ impl SkillMeshFeedbackState {
         match outcome {
             SkillMeshOutcome::Success => {
                 next.success_count += 1;
-                next.negative_feedback_weight =
-                    (next.negative_feedback_weight - 0.2).max(0.0);
+                next.negative_feedback_weight = (next.negative_feedback_weight - 0.2).max(0.0);
             }
             SkillMeshOutcome::Failure => {
                 next.failure_count += 1;
