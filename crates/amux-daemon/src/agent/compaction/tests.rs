@@ -968,6 +968,8 @@ async fn coding_compaction_payload_prefers_structural_digest_and_offload_refs() 
                     response_id: None,
                     upstream_message: None,
                     provider_final_result: None,
+                    author_agent_id: None,
+                    author_agent_name: None,
                     reasoning: None,
                     message_kind: AgentMessageKind::Normal,
                     compaction_strategy: None,
@@ -1102,6 +1104,8 @@ async fn coding_compaction_payload_renders_offload_refs_from_metadata_fields() {
                     response_id: None,
                     upstream_message: None,
                     provider_final_result: None,
+                    author_agent_id: None,
+                    author_agent_name: None,
                     reasoning: None,
                     message_kind: AgentMessageKind::Normal,
                     compaction_strategy: None,
@@ -1170,6 +1174,8 @@ fn coding_signals_without_structural_state_still_use_conversational_compaction()
             response_id: None,
             upstream_message: None,
             provider_final_result: None,
+            author_agent_id: None,
+            author_agent_name: None,
             reasoning: None,
             message_kind: AgentMessageKind::Normal,
             compaction_strategy: None,
@@ -1224,6 +1230,8 @@ fn stale_structural_state_without_recent_coding_signals_uses_conversational_comp
                 response_id: None,
                 upstream_message: None,
                 provider_final_result: None,
+                author_agent_id: None,
+                author_agent_name: None,
                 reasoning: None,
                 message_kind: AgentMessageKind::Normal,
                 compaction_strategy: None,
@@ -1275,6 +1283,8 @@ async fn conversational_compaction_still_uses_checkpoint_summary_path() {
                     response_id: None,
                     upstream_message: None,
                     provider_final_result: None,
+                    author_agent_id: None,
+                    author_agent_name: None,
                     reasoning: None,
                     message_kind: AgentMessageKind::Normal,
                     compaction_strategy: None,
@@ -1312,6 +1322,110 @@ async fn conversational_compaction_still_uses_checkpoint_summary_path() {
     assert!(payload.starts_with("# 🤖 Agent Context: State Checkpoint"));
     assert!(payload.contains("## 🎯 Primary Objective"));
     assert!(payload.contains("## 🛠️ Recent Action Summary (Last 3-5 Turns)"));
+    assert!(artifact.structural_refs.is_empty());
+}
+
+#[tokio::test]
+async fn internal_dm_thread_uses_checkpoint_compaction_even_with_structural_state() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.auto_compact_context = true;
+    config.max_context_messages = 2;
+    config.keep_recent_on_compact = 1;
+    config.compaction.strategy = CompactionStrategy::Heuristic;
+    let engine = AgentEngine::new_test(manager, config.clone(), root.path()).await;
+    let provider = sample_provider_config();
+    let thread_id = crate::agent::agent_identity::internal_dm_thread_id(
+        crate::agent::agent_identity::MAIN_AGENT_ID,
+        crate::agent::agent_identity::WELES_AGENT_ID,
+    );
+
+    engine.thread_structural_memories.write().await.insert(
+        thread_id.clone(),
+        crate::agent::context::structural_memory::ThreadStructuralMemory {
+            workspace_seed_scan_complete: true,
+            language_hints: vec!["rust".to_string()],
+            workspace_seeds: vec![crate::agent::context::structural_memory::WorkspaceSeed {
+                node_id: "node:file:Cargo.toml".to_string(),
+                relative_path: "Cargo.toml".to_string(),
+                kind: "cargo_manifest".to_string(),
+            }],
+            observed_files: vec![crate::agent::context::structural_memory::ObservedFileNode {
+                node_id: "node:file:src/lib.rs".to_string(),
+                relative_path: "src/lib.rs".to_string(),
+            }],
+            edges: vec![crate::agent::context::structural_memory::StructuralEdge {
+                from: "node:file:src/lib.rs".to_string(),
+                to: "node:file:src/parser.rs".to_string(),
+                kind: "imported_file".to_string(),
+            }],
+        },
+    );
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.clone(),
+            sample_thread(vec![
+                AgentMessage::user("Review the recent governance exchange.", 1),
+                AgentMessage {
+                    id: "tool-older".to_string(),
+                    role: MessageRole::Tool,
+                    content: "Tool result offloaded".to_string(),
+                    tool_calls: None,
+                    tool_call_id: Some("call-1".to_string()),
+                    tool_name: Some("read_file".to_string()),
+                    tool_arguments: Some(
+                        serde_json::json!({"filePath":"/repo/src/lib.rs"}).to_string(),
+                    ),
+                    tool_status: Some("done".to_string()),
+                    weles_review: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    provider: None,
+                    model: None,
+                    api_transport: None,
+                    response_id: None,
+                    upstream_message: None,
+                    provider_final_result: None,
+                    author_agent_id: None,
+                    author_agent_name: None,
+                    reasoning: None,
+                    message_kind: AgentMessageKind::Normal,
+                    compaction_strategy: None,
+                    compaction_payload: None,
+                    offloaded_payload_id: Some("payload-1".to_string()),
+                    structural_refs: vec!["node:file:src/lib.rs".to_string()],
+                    timestamp: 2,
+                },
+                AgentMessage::user("Continue the discussion.", 3),
+            ]),
+        );
+        let thread = threads.get_mut(&thread_id).expect("thread should exist");
+        thread.id = thread_id.clone();
+    }
+
+    let inserted = engine
+        .maybe_persist_compaction_artifact(&thread_id, None, &config, &provider)
+        .await
+        .expect("internal dm compaction should succeed");
+    assert!(inserted);
+
+    let thread = {
+        let threads = engine.threads.read().await;
+        threads
+            .get(&thread_id)
+            .cloned()
+            .expect("thread should exist after compaction")
+    };
+    let artifact = &thread.messages[2];
+    let payload = artifact
+        .compaction_payload
+        .as_deref()
+        .expect("artifact should carry payload");
+
+    assert!(payload.starts_with("# 🤖 Agent Context: State Checkpoint"));
     assert!(artifact.structural_refs.is_empty());
 }
 
@@ -1369,6 +1483,8 @@ async fn coding_compaction_falls_back_to_checkpoint_summary_when_structured_asse
                     response_id: None,
                     upstream_message: None,
                     provider_final_result: None,
+                    author_agent_id: None,
+                    author_agent_name: None,
                     reasoning: None,
                     message_kind: AgentMessageKind::Normal,
                     compaction_strategy: None,

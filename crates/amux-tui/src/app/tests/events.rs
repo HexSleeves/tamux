@@ -1600,6 +1600,14 @@ fn leading_participant_prompt_routes_to_participant_command() {
             .is_empty(),
         "participant registration should not append a visible user turn"
     );
+    let (notice, _) = model
+        .input_notice_style()
+        .expect("participant command should surface a visible notice");
+    assert!(notice.contains("Weles"), "expected agent name in notice, got: {notice}");
+    assert!(
+        notice.contains("joined") || notice.contains("updated"),
+        "expected participant update wording in notice, got: {notice}"
+    );
 }
 
 #[test]

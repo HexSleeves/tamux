@@ -1576,6 +1576,16 @@ impl AgentEngine {
     ) -> RuleBasedCompactionPayload {
         let checkpoint_payload = build_checkpoint_compaction_payload(messages, target_tokens);
 
+        if crate::agent::agent_identity::is_internal_dm_thread(thread_id)
+            || super::thread_handoffs::is_internal_handoff_thread(thread_id)
+        {
+            return RuleBasedCompactionPayload {
+                payload: checkpoint_payload,
+                structural_refs: Vec::new(),
+                fallback_notice: None,
+            };
+        }
+
         match determine_rule_based_compaction_mode(structural_memory, messages) {
             RuleBasedCompactionMode::Conversational => RuleBasedCompactionPayload {
                 payload: checkpoint_payload,

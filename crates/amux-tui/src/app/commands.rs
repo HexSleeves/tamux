@@ -24,6 +24,23 @@ impl TuiModel {
         aliases
     }
 
+    fn participant_display_name(&self, agent_alias: &str) -> String {
+        if agent_alias.eq_ignore_ascii_case(amux_protocol::AGENT_ID_RAROG)
+            || agent_alias.eq_ignore_ascii_case(amux_protocol::AGENT_NAME_RAROG)
+        {
+            return amux_protocol::AGENT_NAME_RAROG.to_string();
+        }
+        if agent_alias.eq_ignore_ascii_case("weles") {
+            return "Weles".to_string();
+        }
+        if let Some(entry) = self.subagents.entries.iter().find(|entry| {
+            entry.id.eq_ignore_ascii_case(agent_alias) || entry.name.eq_ignore_ascii_case(agent_alias)
+        }) {
+            return entry.name.clone();
+        }
+        agent_alias.to_string()
+    }
+
     fn resolve_preview_path(path: &str) -> PathBuf {
         let raw = PathBuf::from(path);
         if raw.is_absolute() {
@@ -563,9 +580,16 @@ impl TuiModel {
                     return;
                 }
                 input_refs::LeadingAgentDirectiveKind::ParticipantUpsert => {
+                    let participant_name = self.participant_display_name(&directive.agent_alias);
                     let Some(thread_id) = self.chat.active_thread_id().map(String::from) else {
                         self.status_line =
                             "Participant commands require an active thread".to_string();
+                        self.show_input_notice(
+                            format!("Open a thread before adding {participant_name} as a participant"),
+                            InputNoticeKind::Warning,
+                            120,
+                            false,
+                        );
                         return;
                     };
                     self.send_daemon_command(DaemonCommand::ThreadParticipantCommand {
@@ -580,14 +604,27 @@ impl TuiModel {
                     self.input.set_mode(input::InputMode::Insert);
                     self.status_line =
                         format!("Participant {} updated", directive.agent_alias);
+                    self.show_input_notice(
+                        format!("Participant {participant_name} updated for this thread"),
+                        InputNoticeKind::Success,
+                        120,
+                        false,
+                    );
                     self.agent_activity = None;
                     self.error_active = false;
                     return;
                 }
                 input_refs::LeadingAgentDirectiveKind::ParticipantDeactivate => {
+                    let participant_name = self.participant_display_name(&directive.agent_alias);
                     let Some(thread_id) = self.chat.active_thread_id().map(String::from) else {
                         self.status_line =
                             "Participant commands require an active thread".to_string();
+                        self.show_input_notice(
+                            format!("Open a thread before removing {participant_name} as a participant"),
+                            InputNoticeKind::Warning,
+                            120,
+                            false,
+                        );
                         return;
                     };
                     self.send_daemon_command(DaemonCommand::ThreadParticipantCommand {
@@ -602,6 +639,12 @@ impl TuiModel {
                     self.input.set_mode(input::InputMode::Insert);
                     self.status_line =
                         format!("Participant {} stopped", directive.agent_alias);
+                    self.show_input_notice(
+                        format!("Participant {participant_name} removed from this thread"),
+                        InputNoticeKind::Success,
+                        120,
+                        false,
+                    );
                     self.agent_activity = None;
                     self.error_active = false;
                     return;
