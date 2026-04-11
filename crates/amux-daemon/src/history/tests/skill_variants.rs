@@ -126,7 +126,8 @@ async fn skill_variant_consultation_settlement_updates_outcomes_once() -> Result
     let pending = store
         .settle_skill_variant_usage(Some("thread-1"), Some("task-1"), Some("goal-1"), "success")
         .await?;
-    assert_eq!(pending, 1);
+    assert_eq!(pending.0, 1);
+    assert_eq!(pending.1, vec!["build-pipeline".to_string()]);
     assert_eq!(
         store
             .settle_skill_variant_usage(
@@ -135,7 +136,8 @@ async fn skill_variant_consultation_settlement_updates_outcomes_once() -> Result
                 Some("goal-1"),
                 "success",
             )
-            .await?,
+            .await?
+            .0,
         0
     );
 

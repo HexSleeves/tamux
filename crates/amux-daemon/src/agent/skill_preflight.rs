@@ -1,11 +1,16 @@
 use super::*;
 use crate::agent::types::SkillRecommendationConfig;
 use amux_protocol::SessionId;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_SKILL_PREFLIGHT_MATCHES: usize = 3;
 const SKILL_DISCOVERY_NORMALIZER_MARKER: &str = "[[skill_discovery_query_normalizer]]";
 const MAX_NORMALIZED_SKILL_QUERY_CHARS: usize = 160;
 const LOCAL_SKILL_DISCOVERY_NORMALIZER_ID: &str = "local-skill-discovery-heuristic";
+
+#[cfg(test)]
+static FORCE_MESH_DISCOVERY_DEGRADED_FOR_TESTS: AtomicBool = AtomicBool::new(false);
 
 pub(crate) struct SkillPreflightContext {
     pub prompt_context: String,
@@ -50,10 +55,7 @@ impl AgentEngine {
 
         Ok(Some(SkillPreflightContext {
             prompt_context: build_skill_preflight_prompt(content, &context.result, &state),
-            workflow_message: format!(
-                "Skill discovery confidence: {}. Next action: {}.",
-                state.confidence_tier, state.recommended_action
-            ),
+            workflow_message: skill_preflight_workflow_message(&state),
             workflow_details: serde_json::to_string(&state).ok(),
             state,
         }))
@@ -88,11 +90,49 @@ impl AgentEngine {
             .await
             .ok_or_else(|| anyhow::anyhow!("no active skill discovery state for this thread"))?;
         state.skip_rationale = Some(trimmed.to_string());
-        state.compliant = !state.confidence_tier.eq_ignore_ascii_case("strong");
+        state.compliant = !state.requires_skill_read_before_progress() && !state.mesh_requires_approval;
         state.updated_at = now_millis();
         self.set_thread_skill_discovery_state(thread_id, state.clone())
             .await;
         Ok(state)
+    }
+
+    pub(crate) async fn record_thread_skill_approval_resolution(
+        &self,
+        thread_id: &str,
+        approval_id: &str,
+    ) -> Option<LatestSkillDiscoveryState> {
+        let mut state = self.get_thread_skill_discovery_state(thread_id).await?;
+        if state.mesh_approval_id.as_deref() != Some(approval_id) {
+            return Some(state);
+        }
+        state.mesh_requires_approval = false;
+        state.mesh_approval_id = None;
+        state.compliant = state.skill_read_completed || !state.requires_skill_read_before_progress();
+        state.updated_at = now_millis();
+        self.set_thread_skill_discovery_state(thread_id, state.clone())
+            .await;
+        Some(state)
+    }
+
+    pub(crate) async fn record_thread_skill_approval_denial(
+        &self,
+        thread_id: &str,
+        approval_id: &str,
+    ) -> Option<LatestSkillDiscoveryState> {
+        let mut state = self.get_thread_skill_discovery_state(thread_id).await?;
+        if state.mesh_approval_id.as_deref() != Some(approval_id) {
+            return Some(state);
+        }
+        state.mesh_requires_approval = false;
+        state.mesh_approval_id = None;
+        state.mesh_next_step = Some(crate::agent::skill_mesh::types::SkillMeshNextStep::JustifySkillSkip);
+        state.recommended_action = "justify_skill_skip".to_string();
+        state.compliant = false;
+        state.updated_at = now_millis();
+        self.set_thread_skill_discovery_state(thread_id, state.clone())
+            .await;
+        Some(state)
     }
 
     pub(crate) async fn record_thread_skill_read_compliance(
@@ -106,10 +146,22 @@ impl AgentEngine {
             .as_deref()
             .or(state.recommended_skill.as_deref())?;
         if !skill_identifier_matches(expected, skill_identifier) {
+            if state
+                .recommended_skill
+                .as_deref()
+                .is_some_and(|expected_skill| skill_identifier_matches(expected_skill, skill_identifier))
+            {
+                state.skill_read_completed = true;
+                state.compliant = !state.mesh_requires_approval;
+                state.updated_at = now_millis();
+                self.set_thread_skill_discovery_state(thread_id, state.clone())
+                    .await;
+            }
             return Some(state);
         }
 
-        state.compliant = true;
+        state.skill_read_completed = true;
+        state.compliant = !state.mesh_requires_approval;
         state.updated_at = now_millis();
         self.set_thread_skill_discovery_state(thread_id, state.clone())
             .await;
@@ -127,7 +179,7 @@ impl AgentEngine {
             resolve_skill_context_tags(self.workspace_root.as_ref(), &self.session_manager, session_id)
                 .await;
         let cfg = self.config.read().await.skill_recommendation.clone();
-        let result = super::skill_recommendation::discover_local_skills(
+        let (mut result, mut backend_used, mesh_degraded) = execute_skill_discovery_backend(
             &self.history,
             &skills_root,
             query,
@@ -136,13 +188,13 @@ impl AgentEngine {
             &cfg,
         )
         .await?;
-        let result = if should_attempt_query_normalization(query, &result) {
+        let mut result = if should_attempt_query_normalization(query, &result) {
             match self
                 .normalize_skill_discovery_query(query, &context_tags, session_id)
                 .await
             {
                 Some((normalized_query, normalizer_agent_id)) => {
-                    let mut normalized_result = super::skill_recommendation::discover_local_skills(
+                    let (mut normalized_result, normalized_backend_used, normalized_mesh_degraded) = execute_skill_discovery_backend(
                         &self.history,
                         &skills_root,
                         &normalized_query,
@@ -152,11 +204,15 @@ impl AgentEngine {
                     )
                     .await?;
                     if fallback_result_is_better(&result, &normalized_result) {
+                        backend_used = normalized_backend_used;
                         annotate_fallback_result(
                             &mut normalized_result,
                             &normalized_query,
                             normalizer_agent_id,
                         );
+                        if normalized_mesh_degraded {
+                            annotate_mesh_degraded_fallback(&mut normalized_result);
+                        }
                         normalized_result
                     } else {
                         result
@@ -167,10 +223,15 @@ impl AgentEngine {
         } else {
             result
         };
+        if mesh_degraded {
+            annotate_mesh_degraded_fallback(&mut result);
+        }
         Ok(SkillDiscoveryComputation {
             context_tags,
             cfg,
             result,
+            backend_used,
+            mesh_degraded,
         })
     }
 
@@ -218,10 +279,60 @@ impl AgentEngine {
     }
 }
 
+async fn execute_skill_discovery_backend(
+    history: &HistoryStore,
+    skills_root: &PathBuf,
+    query: &str,
+    context_tags: &[String],
+    limit: usize,
+    cfg: &SkillRecommendationConfig,
+) -> Result<(super::skill_recommendation::SkillDiscoveryResult, &'static str, bool)> {
+    if cfg.discovery_backend.eq_ignore_ascii_case("mesh") {
+        #[cfg(test)]
+        if FORCE_MESH_DISCOVERY_DEGRADED_FOR_TESTS.load(Ordering::SeqCst) {
+            let mut fallback = super::skill_recommendation::discover_local_skills(
+                history,
+                skills_root,
+                query,
+                context_tags,
+                limit,
+                cfg,
+            )
+            .await?;
+            annotate_mesh_degraded_fallback(&mut fallback);
+            return Ok((fallback, "legacy", true));
+        }
+
+        let result = super::skill_mesh::retrieval::discover_local_skills_via_mesh(
+            history,
+            skills_root,
+            query,
+            context_tags,
+            limit,
+            cfg,
+        )
+        .await?;
+        return Ok((result, "mesh", false));
+    }
+
+    let result = super::skill_recommendation::discover_local_skills(
+        history,
+        skills_root,
+        query,
+        context_tags,
+        limit,
+        cfg,
+    )
+    .await?;
+    Ok((result, "legacy", false))
+}
+
 struct SkillDiscoveryComputation {
     context_tags: Vec<String>,
     cfg: SkillRecommendationConfig,
     result: super::skill_recommendation::SkillDiscoveryResult,
+    backend_used: &'static str,
+    mesh_degraded: bool,
 }
 
 async fn resolve_skill_context_tags(
@@ -239,7 +350,8 @@ async fn resolve_skill_context_tags(
     } else {
         None
     }
-    .or_else(|| workspace_root.cloned());
+    .or_else(|| workspace_root.cloned())
+    .or_else(|| std::env::current_dir().ok());
 
     root.filter(|path| path.is_dir())
         .map(|path| super::semantic_env::infer_workspace_context_tags(&path))
@@ -470,6 +582,17 @@ fn annotate_fallback_result(
     }
 }
 
+fn annotate_mesh_degraded_fallback(result: &mut super::skill_recommendation::SkillDiscoveryResult) {
+    let annotation = "mesh backend degraded; fell back to legacy discovery".to_string();
+    for recommendation in &mut result.recommendations {
+        if recommendation.reason.trim().is_empty() {
+            recommendation.reason = annotation.clone();
+        } else {
+            recommendation.reason = format!("{annotation}; {}", recommendation.reason);
+        }
+    }
+}
+
 fn should_run_skill_preflight(content: &str) -> bool {
     let trimmed = content.trim();
     if trimmed.is_empty() {
@@ -506,26 +629,21 @@ fn build_latest_skill_discovery_state(
     query: &str,
     result: &super::skill_recommendation::SkillDiscoveryResult,
 ) -> LatestSkillDiscoveryState {
-    let recommended_skill = result
-        .recommendations
-        .first()
-        .map(|recommendation| recommendation.record.skill_name.clone());
-    let confidence_tier = confidence_label(result.confidence).to_string();
-    let recommended_action =
-        recommended_action_label(result.recommended_action, recommended_skill.as_deref());
+    let decision = super::skill_mesh::retrieval::policy_decision_for_legacy_discovery(result);
 
     LatestSkillDiscoveryState {
         query: query.to_string(),
-        confidence_tier,
-        recommended_skill: recommended_skill.clone(),
-        recommended_action,
-        read_skill_identifier: recommended_skill.filter(|_| {
-            matches!(
-                result.recommended_action,
-                super::skill_recommendation::SkillRecommendationAction::ReadSkill
-            )
-        }),
+        confidence_tier: decision.confidence_band.as_str().to_string(),
+        recommended_skill: decision.recommended_skill,
+        recommended_action: decision.recommended_action,
+        mesh_next_step: Some(decision.next_step),
+        mesh_requires_approval: decision.requires_approval,
+        mesh_approval_id: decision
+            .requires_approval
+            .then(|| format!("skill-mesh-approval:{query}")),
+        read_skill_identifier: decision.read_skill_identifier,
         skip_rationale: None,
+        skill_read_completed: false,
         compliant: false,
         updated_at: now_millis(),
     }
@@ -541,19 +659,19 @@ fn build_skill_preflight_prompt(
         state.confidence_tier, state.recommended_action
     );
 
-    match state.confidence_tier.as_str() {
-        "strong" => {
+    match state.effective_mesh_next_step() {
+        crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill => {
             body.push_str(
                 "- Hard gate: do not call non-discovery tools until you read the recommended skill.\n",
             );
         }
-        _ if state.recommended_action.starts_with("read_skill") => {
+        crate::agent::skill_mesh::types::SkillMeshNextStep::ChooseOrBypass => {
             body.push_str(&format!(
                 "- Recommendation: prefer `{}` before other substantial tools. If you intentionally bypass the suggested local workflow, record why with `justify_skill_skip`.\n",
                 state.recommended_action
             ));
         }
-        _ => {
+        crate::agent::skill_mesh::types::SkillMeshNextStep::JustifySkillSkip => {
             body.push_str(
                 "- Recommendation: if you proceed without a local skill, record the rationale with `justify_skill_skip`; this is guidance, not a hard prerequisite for other tools.\n",
             );
@@ -595,6 +713,42 @@ fn build_skill_preflight_prompt(
     body
 }
 
+pub(crate) fn skill_preflight_workflow_message(state: &LatestSkillDiscoveryState) -> String {
+    format!(
+        "Skill discovery confidence: {}. Next action: {}.",
+        state.confidence_tier, state.recommended_action
+    )
+}
+
+pub(crate) fn build_skill_gate_override_prompt(state: &LatestSkillDiscoveryState) -> String {
+    if state.mesh_requires_approval {
+        let guidance = if state.skill_read_completed {
+            format!(
+                "The recommended skill has already been read. Do not call non-discovery tools until approval is resolved via {}.",
+                state.recommended_action
+            )
+        } else {
+            format!(
+                "Do not call non-discovery tools until the required skill workflow is consulted and approval is resolved via {}.",
+                state.recommended_action
+            )
+        };
+        return format!(
+            "Persisted mesh governance state still applies for this thread.\n- Confidence: {}\n- Next action: {}\n- Approval required: true\n- Skill already read: {}\n\n{}",
+            state.confidence_tier,
+            state.recommended_action,
+            state.skill_read_completed,
+            guidance,
+        );
+    }
+
+    format!(
+        "Persisted mesh gate state still applies for this thread.\n- Confidence: {}\n- Next action: {}\n- Approval required: false\n\nFollow this state over fresh legacy preflight defaults.",
+        state.confidence_tier,
+        state.recommended_action,
+    )
+}
+
 fn skill_identifier_matches(expected: &str, actual: &str) -> bool {
     let expected = expected.trim();
     let actual = actual.trim();
@@ -613,32 +767,10 @@ fn skill_identifier_matches(expected: &str, actual: &str) -> bool {
             .ends_with(expected)
 }
 
-fn confidence_label(
-    value: super::skill_recommendation::SkillRecommendationConfidence,
-) -> &'static str {
-    match value {
-        super::skill_recommendation::SkillRecommendationConfidence::Strong => "strong",
-        super::skill_recommendation::SkillRecommendationConfidence::Weak => "weak",
-        super::skill_recommendation::SkillRecommendationConfidence::None => "none",
-    }
-}
-
 fn action_label(value: super::skill_recommendation::SkillRecommendationAction) -> &'static str {
     match value {
         super::skill_recommendation::SkillRecommendationAction::ReadSkill => "read_skill",
         super::skill_recommendation::SkillRecommendationAction::None => "none",
-    }
-}
-
-fn recommended_action_label(
-    action: super::skill_recommendation::SkillRecommendationAction,
-    top_skill_name: Option<&str>,
-) -> String {
-    match (action, top_skill_name) {
-        (super::skill_recommendation::SkillRecommendationAction::ReadSkill, Some(skill_name)) => {
-            format!("read_skill {skill_name}")
-        }
-        _ => action_label(action).to_string(),
     }
 }
 
@@ -701,12 +833,19 @@ fn reason_usage_summary(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::types::SkillRecommendationConfig;
+    use crate::history::HistoryStore;
     use std::collections::VecDeque;
     use std::fs;
-    use std::sync::{Arc, Mutex as StdMutex};
+    use std::sync::{Arc, Mutex as StdMutex, OnceLock};
     use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    fn current_dir_test_lock() -> &'static StdMutex<()> {
+        static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| StdMutex::new(()))
+    }
 
     fn write_skill(root: &std::path::Path, skill_dir: &str, content: &str) {
         let path = root.join("skills").join(skill_dir).join("SKILL.md");
@@ -839,6 +978,284 @@ mod tests {
             ),
             Some("audit git worktree diff rust orchestration safety governance".to_string())
         );
+    }
+
+    #[cfg(test)]
+    struct MeshDegradedGuard(bool);
+
+    #[cfg(test)]
+    impl Drop for MeshDegradedGuard {
+        fn drop(&mut self) {
+            FORCE_MESH_DISCOVERY_DEGRADED_FOR_TESTS.store(self.0, Ordering::SeqCst);
+        }
+    }
+
+    #[cfg(test)]
+    fn force_mesh_discovery_degraded_for_tests(value: bool) -> MeshDegradedGuard {
+        let previous = FORCE_MESH_DISCOVERY_DEGRADED_FOR_TESTS.swap(value, Ordering::SeqCst);
+        MeshDegradedGuard(previous)
+    }
+
+    #[test]
+    fn no_match_state_requires_explicit_skill_skip_rationale() {
+        let state = build_latest_skill_discovery_state(
+            "obscure request with no local skill",
+            &super::skill_recommendation::SkillDiscoveryResult::default(),
+        );
+
+        assert_eq!(state.confidence_tier, "none");
+        assert_eq!(state.recommended_action, "justify_skill_skip");
+        assert!(state.read_skill_identifier.is_none());
+    }
+
+    #[tokio::test]
+    async fn strong_match_state_tracks_variant_id_for_read_compliance() {
+        let root = tempdir().expect("tempdir");
+        let store = HistoryStore::new_test_store(root.path())
+            .await
+            .expect("history store");
+        let skills_root = root.path().join("skills");
+
+        write_skill(
+            root.path(),
+            "development/systematic-debugging",
+            r#"---
+name: systematic-debugging
+description: Debug failures by tracing root cause before patching.
+keywords: [debug, rust, panic]
+triggers: [panic, failing test]
+---
+
+# Systematic Debugging
+"#,
+        );
+
+        super::skill_recommendation::sync_skill_catalog(&store, &skills_root)
+            .await
+            .expect("sync skill catalog");
+        let result = super::skill_recommendation::discover_local_skills(
+            &store,
+            &skills_root,
+            "debug panic in rust service",
+            &["rust".to_string()],
+            3,
+            &SkillRecommendationConfig::default(),
+        )
+        .await
+        .expect("discover local skills");
+        let expected_variant_id = result
+            .recommendations
+            .first()
+            .expect("top recommendation")
+            .record
+            .variant_id
+            .clone();
+
+        let state = build_latest_skill_discovery_state("debug panic in rust service", &result);
+
+        assert_eq!(state.recommended_skill.as_deref(), Some("systematic-debugging"));
+        assert_eq!(state.read_skill_identifier.as_deref(), Some(expected_variant_id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn run_skill_discovery_uses_mesh_backend_when_configured() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        write_skill(
+            root.path(),
+            "development/systematic-debugging",
+            "# Systematic Debugging\nUse this workflow to debug panic failures in rust services.\n",
+        );
+
+        let mut config = AgentConfig::default();
+        config.skill_recommendation.discovery_backend = "mesh".to_string();
+
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
+        let computation = engine
+            .run_skill_discovery("debug panic in rust service", None, 3)
+            .await
+            .expect("mesh discovery should succeed");
+
+        assert_eq!(computation.backend_used, "mesh");
+        assert!(!computation.mesh_degraded);
+    }
+
+    #[tokio::test]
+    async fn run_skill_discovery_uses_mesh_backend_by_default_after_cutover() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        write_skill(
+            root.path(),
+            "development/systematic-debugging",
+            "# Systematic Debugging\nUse this workflow to debug panic failures in rust services.\n",
+        );
+
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let computation = engine
+            .run_skill_discovery("debug panic in rust service", None, 3)
+            .await
+            .expect("default discovery should succeed");
+
+        assert_eq!(computation.backend_used, "mesh");
+        assert!(!computation.mesh_degraded);
+    }
+
+    #[tokio::test]
+    async fn run_skill_discovery_falls_back_when_mesh_is_degraded() {
+        let _guard = force_mesh_discovery_degraded_for_tests(true);
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        write_skill(
+            root.path(),
+            "development/systematic-debugging",
+            "# Systematic Debugging\nUse this workflow to debug panic failures in rust services.\n",
+        );
+
+        let mut config = AgentConfig::default();
+        config.skill_recommendation.discovery_backend = "mesh".to_string();
+
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
+        let computation = engine
+            .run_skill_discovery("debug panic in rust service", None, 3)
+            .await
+            .expect("mesh fallback should succeed");
+
+        assert_eq!(computation.backend_used, "legacy");
+        assert!(computation.mesh_degraded);
+    }
+
+    #[tokio::test]
+    async fn read_compliance_falls_back_to_recommended_skill_when_variant_id_drifts() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread-variant-drift-read-compliance";
+
+        engine
+            .set_thread_skill_discovery_state(
+                thread_id,
+                LatestSkillDiscoveryState {
+                    query: "debug panic".to_string(),
+                    confidence_tier: "strong".to_string(),
+                    recommended_skill: Some("systematic-debugging".to_string()),
+                    recommended_action: "read_skill systematic-debugging".to_string(),
+                    mesh_next_step: Some(crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill),
+                    mesh_requires_approval: false,
+                    mesh_approval_id: None,
+                    read_skill_identifier: Some("variant-systematic-debugging-v1".to_string()),
+                    skip_rationale: None,
+                    skill_read_completed: false,
+                    compliant: false,
+                    updated_at: 1,
+                },
+            )
+            .await;
+
+        let state = engine
+            .record_thread_skill_read_compliance(thread_id, "systematic-debugging")
+            .await
+            .expect("state should exist");
+
+        assert!(state.compliant);
+        assert!(state.skill_read_completed);
+    }
+
+    #[tokio::test]
+    async fn approval_resolution_clears_mesh_requires_approval_after_skill_read() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread-approval-resolution";
+
+        engine
+            .set_thread_skill_discovery_state(
+                thread_id,
+                LatestSkillDiscoveryState {
+                    query: "debug panic".to_string(),
+                    confidence_tier: "strong".to_string(),
+                    recommended_skill: Some("systematic-debugging".to_string()),
+                    recommended_action: "request_approval systematic-debugging".to_string(),
+                    mesh_next_step: Some(crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill),
+                    mesh_requires_approval: true,
+                    mesh_approval_id: Some("approval-1".to_string()),
+                    read_skill_identifier: Some("systematic-debugging".to_string()),
+                    skip_rationale: None,
+                    skill_read_completed: true,
+                    compliant: false,
+                    updated_at: 1,
+                },
+            )
+            .await;
+
+        let state = engine
+            .record_thread_skill_approval_resolution(thread_id, "approval-1")
+            .await
+            .expect("state should exist");
+
+        assert!(state.compliant);
+        assert!(!state.mesh_requires_approval);
+    }
+
+    #[tokio::test]
+    async fn approval_denial_converts_mesh_gate_to_justify_skip_state() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread-approval-denial";
+
+        engine
+            .set_thread_skill_discovery_state(
+                thread_id,
+                LatestSkillDiscoveryState {
+                    query: "debug panic".to_string(),
+                    confidence_tier: "strong".to_string(),
+                    recommended_skill: Some("systematic-debugging".to_string()),
+                    recommended_action: "request_approval systematic-debugging".to_string(),
+                    mesh_next_step: Some(crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill),
+                    mesh_requires_approval: true,
+                    mesh_approval_id: Some("approval-denied".to_string()),
+                    read_skill_identifier: Some("systematic-debugging".to_string()),
+                    skip_rationale: None,
+                    skill_read_completed: true,
+                    compliant: false,
+                    updated_at: 1,
+                },
+            )
+            .await;
+
+        let state = engine
+            .record_thread_skill_approval_denial(thread_id, "approval-denied")
+            .await
+            .expect("state should exist");
+
+        assert!(!state.mesh_requires_approval);
+        assert_eq!(state.recommended_action, "justify_skill_skip");
+        assert_eq!(
+            state.mesh_next_step,
+            Some(crate::agent::skill_mesh::types::SkillMeshNextStep::JustifySkillSkip)
+        );
+        assert!(!state.compliant);
+    }
+
+    #[tokio::test]
+    async fn resolve_skill_context_tags_falls_back_to_current_dir_when_workspace_root_is_absent() {
+        let _cwd_lock = current_dir_test_lock().lock().expect("cwd lock");
+        let original_cwd = std::env::current_dir().expect("current dir");
+        let cargo_root = tempdir().expect("tempdir cargo root");
+        fs::write(
+            cargo_root.path().join("Cargo.toml"),
+            "[package]\nname = \"cwd-fallback\"\nversion = \"0.1.0\"\n[dependencies]\ntokio = \"1\"\n",
+        )
+        .expect("write cargo manifest");
+        std::env::set_current_dir(cargo_root.path()).expect("set cargo cwd");
+
+        let manager = SessionManager::new_test(cargo_root.path()).await;
+        let expected = super::semantic_env::infer_workspace_context_tags(cargo_root.path());
+        let tags = resolve_skill_context_tags(None, &manager, None).await;
+
+        std::env::set_current_dir(&original_cwd).expect("restore cwd");
+
+        assert_eq!(tags, expected);
     }
 
     #[tokio::test]

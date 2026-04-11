@@ -156,6 +156,8 @@ impl Default for SkillDiscoveryConfig {
 pub struct SkillRecommendationConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default = "default_skill_recommendation_discovery_backend")]
+    pub discovery_backend: String,
     #[serde(default = "default_true")]
     pub require_read_on_strong_match: bool,
     #[serde(default = "default_skill_recommendation_strong_match_threshold")]
@@ -168,6 +170,10 @@ pub struct SkillRecommendationConfig {
     pub community_preapprove_timeout_secs: u64,
     #[serde(default = "default_skill_recommendation_suggest_global_enable_after_approvals")]
     pub suggest_global_enable_after_approvals: u32,
+}
+
+fn default_skill_recommendation_discovery_backend() -> String {
+    "mesh".to_string()
 }
 
 fn default_skill_recommendation_strong_match_threshold() -> f64 {
@@ -190,6 +196,7 @@ impl Default for SkillRecommendationConfig {
     fn default() -> Self {
         Self {
             enabled: default_true(),
+            discovery_backend: default_skill_recommendation_discovery_backend(),
             require_read_on_strong_match: default_true(),
             strong_match_threshold: default_skill_recommendation_strong_match_threshold(),
             weak_match_threshold: default_skill_recommendation_weak_match_threshold(),

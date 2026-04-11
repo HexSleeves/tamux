@@ -976,8 +976,11 @@ async fn thread_metadata_round_trips_latest_skill_discovery_state() {
                         "confidence_tier": "strong",
                         "recommended_skill": "systematic-debugging",
                         "recommended_action": "read_skill systematic-debugging",
-                        "read_skill_identifier": "systematic-debugging",
+                        "mesh_next_step": "read_skill",
+                        "mesh_requires_approval": false,
+                        "read_skill_identifier": "variant-systematic-debugging-v1",
                         "skip_rationale": null,
+                        "skill_read_completed": false,
                         "compliant": false,
                         "updated_at": 123
                     }
@@ -1025,5 +1028,8 @@ async fn thread_metadata_round_trips_latest_skill_discovery_state() {
     );
     assert!(metadata.contains("\"query\":\"debug panic\""));
     assert!(metadata.contains("\"recommended_skill\":\"systematic-debugging\""));
+    assert!(metadata.contains("\"mesh_next_step\":\"read_skill\""));
+    assert!(metadata.contains("\"mesh_requires_approval\":false"));
+    assert!(metadata.contains("\"read_skill_identifier\":\"variant-systematic-debugging-v1\""));
     assert!(metadata.contains("\"compliant\":false"));
 }

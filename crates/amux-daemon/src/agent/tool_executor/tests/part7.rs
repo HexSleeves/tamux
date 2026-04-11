@@ -296,25 +296,27 @@ async fn read_skill_uses_workspace_root_when_session_is_absent() {
 
     let root = tempdir().expect("tempdir");
     let frontend_root = tempdir().expect("tempdir frontend");
-    std::fs::write(
+    let agent_data_dir = root.path().join("agent");
+    fs::create_dir_all(&agent_data_dir).expect("create agent data dir");
+    fs::write(
         root.path().join("Cargo.toml"),
         "[package]\nname='workspace-root'\nversion='0.1.0'\n[dependencies]\ntokio='1'\n",
     )
     .expect("write cargo workspace");
-    std::fs::write(
+    fs::write(
         frontend_root.path().join("package.json"),
         r#"{"name":"frontend-root","dependencies":{"react":"19.0.0"}}"#,
     )
     .expect("write package json");
 
     let generated_dir = root.path().join("skills").join("generated");
-    std::fs::create_dir_all(&generated_dir).expect("create generated dir");
-    std::fs::write(
+    fs::create_dir_all(&generated_dir).expect("create generated dir");
+    fs::write(
         generated_dir.join("build-pipeline.md"),
         "# Build pipeline\nRun cargo build for rust workspaces.\n",
     )
     .expect("write rust skill");
-    std::fs::write(
+    fs::write(
         generated_dir.join("build-pipeline--frontend.md"),
         "# Frontend build pipeline\nUse react build checks.\n",
     )
@@ -346,7 +348,7 @@ async fn read_skill_uses_workspace_root_when_session_is_absent() {
         &manager,
         None,
         &event_tx,
-        root.path(),
+        &agent_data_dir,
         &engine.http_client,
         None,
     )
@@ -365,6 +367,78 @@ async fn read_skill_uses_workspace_root_when_session_is_absent() {
         "read_skill should not resolve from process cwd when workspace_root is available: {}",
         result.content
     );
+}
+
+#[tokio::test]
+async fn read_skill_clears_stale_variant_gate_when_same_skill_family_is_read() {
+    let root = tempdir().expect("tempdir");
+    let agent_data_dir = root.path().join("agent");
+    fs::create_dir_all(&agent_data_dir).expect("create agent data dir");
+    let generated_dir = root.path().join("skills").join("generated");
+    fs::create_dir_all(&generated_dir).expect("create generated dir");
+    fs::write(
+        generated_dir.join("systematic-debugging.md"),
+        "# Systematic debugging\nUse this workflow to debug panic in rust services.\n",
+    )
+    .expect("write skill");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let thread_id = "thread-read-skill-stale-variant";
+    engine
+        .set_thread_skill_discovery_state(
+            thread_id,
+            crate::agent::types::LatestSkillDiscoveryState {
+                query: "debug panic".to_string(),
+                confidence_tier: "strong".to_string(),
+                recommended_skill: Some("systematic-debugging".to_string()),
+                recommended_action: "read_skill systematic-debugging".to_string(),
+                mesh_next_step: Some(crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill),
+                mesh_requires_approval: false,
+                mesh_approval_id: None,
+                read_skill_identifier: Some("stale-variant-id".to_string()),
+                skip_rationale: None,
+                skill_read_completed: false,
+                compliant: false,
+                updated_at: 1,
+            },
+        )
+        .await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-read-skill-stale-variant".to_string(),
+        ToolFunction {
+            name: "read_skill".to_string(),
+            arguments: serde_json::json!({
+                "skill": "systematic-debugging",
+                "max_lines": 50
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        thread_id,
+        None,
+        &manager,
+        None,
+        &event_tx,
+        &agent_data_dir,
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(!result.is_error, "read_skill should succeed: {}", result.content);
+    let state = engine
+        .get_thread_skill_discovery_state(thread_id)
+        .await
+        .expect("thread skill state should remain present");
+    assert!(state.skill_read_completed);
+    assert!(state.compliant);
 }
 
 #[tokio::test]

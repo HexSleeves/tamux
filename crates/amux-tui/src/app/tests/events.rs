@@ -394,6 +394,22 @@ fn status_diagnostics_warning_mentions_sync_state() {
 }
 
 #[test]
+fn status_diagnostics_warning_mentions_mesh_state() {
+    let mut model = make_model();
+    model.handle_client_event(ClientEvent::StatusDiagnostics {
+        operator_profile_sync_state: "clean".to_string(),
+        operator_profile_sync_dirty: false,
+        operator_profile_scheduler_fallback: false,
+        diagnostics_json: r#"{"skill_mesh":{"backend":"mesh","state":"degraded"}}"#
+            .to_string(),
+    });
+    assert!(
+        model.status_line.contains("skill mesh: degraded"),
+        "status line should expose degraded mesh diagnostics"
+    );
+}
+
+#[test]
 fn full_status_event_caches_snapshot_for_status_modal() {
     let mut model = make_model();
 

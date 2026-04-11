@@ -731,6 +731,7 @@ impl TuiModel {
         operator_profile_scheduler_fallback: bool,
         diagnostics_json: String,
     ) {
+        let parsed = serde_json::from_str::<serde_json::Value>(&diagnostics_json).ok();
         self.status_modal_diagnostics_json = Some(diagnostics_json);
         if operator_profile_sync_dirty {
             self.status_line = format!(
@@ -755,6 +756,14 @@ impl TuiModel {
                 120,
                 false,
             );
+        } else if let Some(mesh_state) = parsed
+            .as_ref()
+            .and_then(|value| value.get("skill_mesh"))
+            .and_then(|value| value.get("state"))
+            .and_then(|value| value.as_str())
+            .filter(|state| *state != "fresh" && *state != "legacy")
+        {
+            self.status_line = format!("skill mesh: {mesh_state}");
         }
     }
 

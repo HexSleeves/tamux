@@ -351,7 +351,25 @@ impl<'a> SendMessageRunner<'a> {
             return false;
         }
 
-        if state.confidence_tier.eq_ignore_ascii_case("strong") {
+        if state.mesh_requires_approval {
+            let denied_content = format!(
+                "Tool call blocked by skill discovery governance. Before `{}` you must obtain approval for `{}`.",
+                tc.function.name, state.recommended_action
+            );
+            self.engine.emit_workflow_notice(
+                &self.tid,
+                "skill-gate",
+                format!(
+                    "Skill discovery requires approval before `{}`. Required next step: {}.",
+                    tc.function.name, state.recommended_action
+                ),
+                serde_json::to_string(&state).ok(),
+            );
+            self.persist_denied_tool_result(tc, denied_content).await;
+            return true;
+        }
+
+        if state.requires_skill_read_before_progress() {
             let denied_content = format!(
                 "Tool call blocked by skill discovery gate. Before `{}` you must `{}`.",
                 tc.function.name, state.recommended_action
@@ -372,7 +390,7 @@ impl<'a> SendMessageRunner<'a> {
         self.engine.emit_workflow_notice(
             &self.tid,
             "skill-gate",
-            if state.confidence_tier.eq_ignore_ascii_case("weak") {
+            if state.has_advisory_skill_read() {
                 format!(
                     "Weak skill discovery recommends `{}` before `{}`; allowing the tool call to proceed.",
                     state.recommended_action, tc.function.name
