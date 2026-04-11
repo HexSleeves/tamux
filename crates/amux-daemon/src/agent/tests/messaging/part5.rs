@@ -62,6 +62,8 @@ async fn persisted_assistant_messages_reload_provider_final_result_metadata() {
                                 },
                             ),
                         ),
+                        author_agent_id: None,
+                        author_agent_name: None,
                         reasoning: None,
                         message_kind: AgentMessageKind::Normal,
                         compaction_strategy: None,
@@ -234,24 +236,28 @@ async fn visible_thread_participant_send_records_message_author_and_updates_part
         .expect("participant visible-send addr");
 
     tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("accept");
-        let _ = read_http_request_body(&mut socket)
-            .await
-            .expect("read participant visible-send request");
-        let response_body = concat!(
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_participant_visible\"}}\n\n",
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"I checked that claim and it is inaccurate.\"}\n\n",
-            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_participant_visible\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":11,\"output_tokens\":8},\"error\":null}}\n\n"
-        );
-        let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-            response_body.len(),
-            response_body
-        );
-        socket
-            .write_all(response.as_bytes())
-            .await
-            .expect("write participant visible-send response");
+        for _ in 0..3 {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let _ = read_http_request_body(&mut socket)
+                .await
+                .expect("read participant visible-send request");
+            let response_body = concat!(
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_participant_visible\"}}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"I checked that claim and it is inaccurate.\"}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_participant_visible\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":11,\"output_tokens\":8},\"error\":null}}\n\n"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write participant visible-send response");
+        }
     });
 
     let mut config = AgentConfig::default();
@@ -343,6 +349,224 @@ async fn visible_thread_participant_send_records_message_author_and_updates_part
         weles.last_contribution_at.is_some(),
         "participant send should stamp last contribution time"
     );
+}
+
+#[tokio::test]
+async fn force_send_interrupts_stream() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind participant force server");
+    let addr = listener.local_addr().expect("participant force addr");
+
+    tokio::spawn(async move {
+        for _ in 0..3 {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let _ = read_http_request_body(&mut socket)
+                .await
+                .expect("read participant force request");
+            let response_body = concat!(
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_participant_force\"}}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Urgent fix\"}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_participant_force\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":8,\"output_tokens\":4},\"error\":null}}\n\n"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write participant force response");
+        }
+    });
+    let server_url = format!("http://{addr}/v1");
+
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = server_url;
+    config.model = "gpt-5.4-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.auth_source = AuthSource::ApiKey;
+    config.api_transport = ApiTransport::Responses;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread_participant_force_interrupt";
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Participant force interrupt".to_string(),
+            messages: vec![AgentMessage::user("hello", 1)],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            created_at: 1,
+            updated_at: 1,
+        },
+    );
+    engine
+        .upsert_thread_participant(thread_id, "weles", "verify claims")
+        .await
+        .expect("participant should register");
+
+    let (_generation, token, _retry_now) = engine.begin_stream_cancellation(thread_id).await;
+
+    let suggestion = engine
+        .queue_thread_participant_suggestion(thread_id, "weles", "Urgent fix", true)
+        .await
+        .expect("force-send enqueue should succeed");
+
+    assert_eq!(suggestion.target_agent_id, "weles");
+    assert!(token.is_cancelled(), "force-send should cancel the active stream");
+
+    let threads = engine.threads.read().await;
+    let last = threads
+        .get(thread_id)
+        .and_then(|thread| thread.messages.last())
+        .expect("thread should have a last message");
+    assert_eq!(last.author_agent_id.as_deref(), Some("weles"));
+}
+
+#[tokio::test]
+async fn force_send_auto_posts_on_enqueue() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind participant auto-post server");
+    let addr = listener.local_addr().expect("participant auto-post addr");
+
+    tokio::spawn(async move {
+        for _ in 0..3 {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let _ = read_http_request_body(&mut socket)
+                .await
+                .expect("read participant auto-post request");
+            let response_body = concat!(
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_participant_force_auto\"}}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Auto-posted fix\"}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_participant_force_auto\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":8,\"output_tokens\":4},\"error\":null}}\n\n"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write participant auto-post response");
+        }
+    });
+    let server_url = format!("http://{addr}/v1");
+
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = server_url;
+    config.model = "gpt-5.4-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.auth_source = AuthSource::ApiKey;
+    config.api_transport = ApiTransport::Responses;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread_participant_force_auto";
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Participant force auto".to_string(),
+            messages: vec![AgentMessage::user("hello", 1)],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            created_at: 1,
+            updated_at: 1,
+        },
+    );
+    engine
+        .upsert_thread_participant(thread_id, "weles", "verify claims")
+        .await
+        .expect("participant should register");
+
+    let _ = engine
+        .queue_thread_participant_suggestion(thread_id, "weles", "Auto-posted fix", true)
+        .await
+        .expect("force-send enqueue should succeed");
+
+    let threads = engine.threads.read().await;
+    let last = threads
+        .get(thread_id)
+        .and_then(|thread| thread.messages.last())
+        .expect("thread should have a last message");
+    assert_eq!(last.author_agent_id.as_deref(), Some("weles"));
+}
+
+#[tokio::test]
+async fn participant_suggestions_fifo_order() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let thread_id = "thread_participant_fifo";
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Participant FIFO".to_string(),
+            messages: vec![AgentMessage::user("hello", 1)],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            created_at: 1,
+            updated_at: 1,
+        },
+    );
+    engine
+        .upsert_thread_participant(thread_id, "weles", "verify claims")
+        .await
+        .expect("participant should register");
+
+    let first = engine
+        .queue_thread_participant_suggestion(thread_id, "weles", "A", false)
+        .await
+        .expect("first suggestion");
+    let second = engine
+        .queue_thread_participant_suggestion(thread_id, "weles", "B", false)
+        .await
+        .expect("second suggestion");
+    let suggestions = engine.list_thread_participant_suggestions(thread_id).await;
+    assert_eq!(suggestions[0].id, first.id);
+    assert_eq!(suggestions[1].id, second.id);
 }
 
 #[tokio::test]

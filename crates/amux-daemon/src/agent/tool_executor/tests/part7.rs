@@ -197,9 +197,9 @@ async fn ask_questions_tool_waits_for_operator_choice() {
             .to_string(),
         },
     );
-
     let engine_for_task = engine.clone();
     let manager_for_task = manager.clone();
+    let mut operator_events = event_tx.subscribe();
     let task = tokio::spawn(async move {
         execute_tool(
             &tool_call,

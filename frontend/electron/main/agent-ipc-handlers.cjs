@@ -55,6 +55,32 @@ function registerAgentIpcHandlers(ipcMain, runtime, options = {}) {
             return { ok: false, error: err.message };
         }
     });
+    ipcMain.handle('agent-send-participant-suggestion', async (_event, payload) => {
+        try {
+            sendAgentCommand({
+                type: 'send-participant-suggestion',
+                thread_id: payload?.threadId,
+                suggestion_id: payload?.suggestionId,
+                session_id: typeof payload?.sessionId === 'string' && payload.sessionId.trim() ? payload.sessionId.trim() : null,
+            });
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
+    ipcMain.handle('agent-dismiss-participant-suggestion', async (_event, payload) => {
+        try {
+            sendAgentCommand({
+                type: 'dismiss-participant-suggestion',
+                thread_id: payload?.threadId,
+                suggestion_id: payload?.suggestionId,
+                session_id: typeof payload?.sessionId === 'string' && payload.sessionId.trim() ? payload.sessionId.trim() : null,
+            });
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
     ipcMain.handle('agent-stop-stream', async (_event, threadId) => { try { sendAgentCommand({ type: 'stop-stream', thread_id: threadId }); } catch {} return { ok: true }; });
     ipcMain.handle('agent-list-threads', async () => { try { return await sendAgentQuery({ type: 'list-threads' }, 'thread-list'); } catch { return []; } });
     ipcMain.handle('agent-get-thread', async (_event, threadId) => { try { return await sendAgentQuery({ type: 'get-thread', thread_id: threadId }, 'thread-detail'); } catch { return null; } });

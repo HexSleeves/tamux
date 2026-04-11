@@ -169,6 +169,8 @@ async fn hydrate_restores_thread_token_totals_from_persisted_history() {
         response_id: None,
         upstream_message: None,
         provider_final_result: None,
+        author_agent_id: None,
+        author_agent_name: None,
         reasoning: None,
         message_kind: AgentMessageKind::Normal,
         compaction_strategy: None,

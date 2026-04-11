@@ -79,8 +79,7 @@ async fn unauthorized_participant_suggestion_updates_are_rejected() {
     conn.framed
         .send(ClientMessage::AgentSendParticipantSuggestion {
             thread_id: thread_id.to_string(),
-            target_agent_id: "weles".to_string(),
-            instruction: "verify claims".to_string(),
+            suggestion_id: "sugg-1".to_string(),
             session_id: None,
             client_surface: Some(amux_protocol::ClientSurface::Electron),
         })
@@ -202,6 +201,7 @@ async fn get_thread_includes_failed_participant_suggestions() {
                 target_agent_id: "weles".to_string(),
                 target_agent_name: "Weles".to_string(),
                 instruction: "verify claims".to_string(),
+                force_send: false,
                 status: crate::agent::ThreadParticipantSuggestionStatus::Failed,
                 created_at: 10,
                 updated_at: 11,

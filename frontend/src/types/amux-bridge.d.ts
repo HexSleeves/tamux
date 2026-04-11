@@ -314,8 +314,7 @@ declare global {
         }) => Promise<{ ok?: boolean; error?: string } | unknown>;
         agentSendParticipantSuggestion?: (payload: {
             threadId: string;
-            targetAgentId: string;
-            instruction: string;
+            suggestionId: string;
             sessionId?: string | null;
         }) => Promise<{ ok?: boolean; error?: string } | unknown>;
         agentDismissParticipantSuggestion?: (payload: {

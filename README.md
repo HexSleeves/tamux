@@ -93,6 +93,7 @@ If you want to test the core loop fast, start a goal run and give Swarog a concr
 - [Reference](docs/reference.md)
 - [Getting Started](docs/getting-started.md)
 - [How tamux Works](docs/how-tamux-works.md)
+- [Thread Participants](docs/operating/thread-participants.md)
 - [Goal Runners](docs/goal-runners.md)
 - [Self-Orchestrating Agent Architecture](docs/self-orchestrating-agent.md)
 - [Agentic Mission Control](docs/agentic-mission-control.md)

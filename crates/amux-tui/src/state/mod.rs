@@ -86,6 +86,14 @@ pub enum DaemonCommand {
         instruction: Option<String>,
         session_id: Option<String>,
     },
+    SendParticipantSuggestion {
+        thread_id: String,
+        suggestion_id: String,
+    },
+    DismissParticipantSuggestion {
+        thread_id: String,
+        suggestion_id: String,
+    },
     StopStream {
         thread_id: String,
     },

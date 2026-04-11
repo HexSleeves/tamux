@@ -57,6 +57,8 @@ type AgentDbMessageRecord = {
 export type RemoteAgentMessageRecord = {
   role?: AgentRole;
   content?: string;
+  author_agent_id?: string | null;
+  author_agent_name?: string | null;
   provider?: string | null;
   model?: string | null;
   api_transport?: string | null;
@@ -106,6 +108,7 @@ export type RemoteAgentThreadRecord = {
     target_agent_id?: string;
     target_agent_name?: string;
     instruction?: string;
+    force_send?: boolean;
     status?: "queued" | "failed";
     created_at?: number | null;
     updated_at?: number | null;
@@ -197,6 +200,8 @@ export function buildHydratedRemoteMessage(
     createdAt: Number(message.timestamp ?? Date.now()),
     role: message.role ?? "assistant",
     content: typeof message.content === "string" ? message.content : "",
+    authorAgentId: typeof message.author_agent_id === "string" ? message.author_agent_id : undefined,
+    authorAgentName: typeof message.author_agent_name === "string" ? message.author_agent_name : undefined,
     provider,
     model: typeof message.model === "string" ? message.model : undefined,
     api_transport: typeof message.api_transport === "string"
@@ -321,6 +326,7 @@ export function buildHydratedRemoteThread(
             targetAgentId: suggestion.target_agent_id as string,
             targetAgentName: suggestion.target_agent_name as string,
             instruction: typeof suggestion.instruction === "string" ? suggestion.instruction : "",
+            forceSend: Boolean(suggestion.force_send),
             status: suggestion.status === "failed" ? "failed" : "queued",
             createdAt: Number(suggestion.created_at ?? Date.now()),
             updatedAt: Number(suggestion.updated_at ?? Date.now()),
@@ -426,6 +432,8 @@ export function serializeMessage(message: AgentMessage): AgentDbMessageRecord {
       reasoningTokens: message.reasoningTokens ?? null,
       audioTokens: message.audioTokens ?? null,
       videoTokens: message.videoTokens ?? null,
+      authorAgentId: message.authorAgentId ?? null,
+      authorAgentName: message.authorAgentName ?? null,
       cost: message.cost ?? null,
       tps: message.tps ?? null,
       isCompactionSummary: message.isCompactionSummary,
@@ -504,6 +512,8 @@ export function deserializeMessage(message: AgentDbMessageRecord): AgentMessage 
     createdAt: message.created_at,
     role: message.role as AgentRole,
     content: message.content,
+    authorAgentId: typeof metadata.authorAgentId === "string" ? metadata.authorAgentId : undefined,
+    authorAgentName: typeof metadata.authorAgentName === "string" ? metadata.authorAgentName : undefined,
     provider: message.provider ?? undefined,
     model: message.model ?? undefined,
     api_transport: typeof metadata.api_transport === "string"

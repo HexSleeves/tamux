@@ -127,6 +127,11 @@ struct PendingChatActionConfirm {
 #[derive(Clone, Debug)]
 pub(crate) struct QueuedPrompt {
     pub(crate) text: String,
+    pub(crate) thread_id: Option<String>,
+    pub(crate) suggestion_id: Option<String>,
+    pub(crate) participant_agent_id: Option<String>,
+    pub(crate) participant_agent_name: Option<String>,
+    pub(crate) force_send: bool,
     copied_until_tick: Option<u64>,
 }
 
@@ -134,6 +139,30 @@ impl QueuedPrompt {
     pub(crate) fn new(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
+            thread_id: None,
+            suggestion_id: None,
+            participant_agent_id: None,
+            participant_agent_name: None,
+            force_send: false,
+            copied_until_tick: None,
+        }
+    }
+
+    pub(crate) fn new_with_agent(
+        text: impl Into<String>,
+        thread_id: impl Into<String>,
+        suggestion_id: impl Into<String>,
+        participant_agent_id: impl Into<String>,
+        participant_agent_name: impl Into<String>,
+        force_send: bool,
+    ) -> Self {
+        Self {
+            text: text.into(),
+            thread_id: Some(thread_id.into()),
+            suggestion_id: Some(suggestion_id.into()),
+            participant_agent_id: Some(participant_agent_id.into()),
+            participant_agent_name: Some(participant_agent_name.into()),
+            force_send,
             copied_until_tick: None,
         }
     }
@@ -153,6 +182,13 @@ impl QueuedPrompt {
             .is_some_and(|expires_at| current_tick >= expires_at)
         {
             self.copied_until_tick = None;
+        }
+    }
+
+    pub(crate) fn display_text(&self) -> String {
+        match self.participant_agent_name.as_deref() {
+            Some(agent_name) => format!("{agent_name}: {}", self.text),
+            None => self.text.clone(),
         }
     }
 }

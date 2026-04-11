@@ -25,6 +25,8 @@ export function ChatView({
   activeThread,
   messagesEndRef,
   onSendMessage,
+  onSendParticipantSuggestion,
+  onDismissParticipantSuggestion,
   onStopStreaming,
   onDeleteMessage,
   onUpdateReasoningEffort,
@@ -115,6 +117,70 @@ export function ChatView({
             <div className="amux-empty-state__description">
               {messages.length === 0 ? "Send a message to begin collaborating with the agent" : "Try a different search term."}
             </div>
+          </div>
+        )}
+
+        {activeThread && activeThread.queuedParticipantSuggestions && activeThread.queuedParticipantSuggestions.length > 0 && (
+          <div
+            style={{
+              border: "1px solid var(--border)",
+              background: "var(--bg-secondary)",
+              borderRadius: "var(--radius-lg)",
+              padding: "var(--space-3)",
+              display: "grid",
+              gap: "var(--space-2)",
+            }}
+          >
+            <div style={{ fontSize: "var(--text-xs)", fontWeight: 700, color: "var(--text-muted)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+              Participant Suggestions
+            </div>
+            {activeThread.queuedParticipantSuggestions.map((suggestion) => (
+              <div
+                key={suggestion.id}
+                style={{
+                  display: "grid",
+                  gap: "var(--space-2)",
+                  border: "1px solid var(--glass-border)",
+                  borderRadius: "var(--radius-md)",
+                  padding: "var(--space-2)",
+                  background: "var(--bg-tertiary)",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap" }}>
+                    <span style={{ fontWeight: 700, fontSize: "var(--text-sm)" }}>{suggestion.targetAgentName}</span>
+                    {suggestion.forceSend && (
+                      <span style={{ fontSize: 11, border: "1px solid var(--warning)", color: "var(--warning)", borderRadius: 999, padding: "2px 8px" }}>
+                        Force Send
+                      </span>
+                    )}
+                    {suggestion.status === "failed" && (
+                      <span style={{ fontSize: 11, border: "1px solid #ff7675", color: "#ff7675", borderRadius: 999, padding: "2px 8px" }}>
+                        Failed
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: "var(--space-2)" }}>
+                    <button
+                      type="button"
+                      onClick={() => { void onSendParticipantSuggestion(activeThread.daemonThreadId ?? activeThread.id, suggestion.id, suggestion.forceSend); }}
+                      style={{ border: "1px solid var(--accent)", background: "rgba(94, 231, 223, 0.16)", color: "var(--accent)", borderRadius: "var(--radius-sm)", padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                    >
+                      Send Now
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { void onDismissParticipantSuggestion(activeThread.daemonThreadId ?? activeThread.id, suggestion.id); }}
+                      style={{ border: "1px solid var(--glass-border)", background: "transparent", color: "var(--text-muted)", borderRadius: "var(--radius-sm)", padding: "6px 10px", fontSize: 12, cursor: "pointer" }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+                <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", whiteSpace: "pre-wrap" }}>{suggestion.instruction}</div>
+                {suggestion.error && <div style={{ fontSize: 12, color: "#ff7675" }}>{suggestion.error}</div>}
+              </div>
+            ))}
           </div>
         )}
 

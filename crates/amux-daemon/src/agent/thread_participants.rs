@@ -42,6 +42,8 @@ pub struct ThreadParticipantSuggestion {
     pub target_agent_id: String,
     pub target_agent_name: String,
     pub instruction: String,
+    #[serde(default)]
+    pub force_send: bool,
     pub status: ThreadParticipantSuggestionStatus,
     pub created_at: u64,
     pub updated_at: u64,
@@ -142,6 +144,7 @@ impl AgentEngine {
         thread_id: &str,
         target_agent_id: &str,
         instruction: &str,
+        force_send: bool,
     ) -> Result<ThreadParticipantSuggestion> {
         if !self.threads.read().await.contains_key(thread_id) {
             anyhow::bail!("thread not found: {thread_id}");
@@ -161,6 +164,7 @@ impl AgentEngine {
             target_agent_id: agent_id,
             target_agent_name: agent_name,
             instruction: trimmed_instruction.to_string(),
+            force_send,
             status: ThreadParticipantSuggestionStatus::Queued,
             created_at: now,
             updated_at: now,
@@ -175,9 +179,33 @@ impl AgentEngine {
             .push(suggestion.clone());
 
         self.persist_thread_by_id(thread_id).await;
+        let _ = self.event_tx.send(AgentEvent::ParticipantSuggestion {
+            thread_id: thread_id.to_string(),
+            suggestion: suggestion.clone(),
+        });
         let _ = self.event_tx.send(AgentEvent::ThreadReloadRequired {
             thread_id: thread_id.to_string(),
         });
+        let _ = self
+            .record_behavioral_event(
+                "participant_suggestion",
+                BehavioralEventContext {
+                    thread_id: Some(thread_id),
+                    task_id: None,
+                    goal_run_id: None,
+                    approval_id: None,
+                },
+                serde_json::json!({
+                    "action": "queued",
+                    "suggestion": suggestion,
+                }),
+            )
+            .await;
+
+        if suggestion.force_send {
+            self.send_thread_participant_suggestion(thread_id, &suggestion.id, None)
+                .await?;
+        }
 
         Ok(suggestion)
     }
@@ -192,13 +220,21 @@ impl AgentEngine {
         }
 
         let mut suggestions = self.thread_participant_suggestions.write().await;
-        let (changed, remove_entry) = {
+        let (changed, removed_suggestion, remove_entry) = {
             let Some(entry) = suggestions.get_mut(thread_id) else {
                 return Ok(false);
             };
             let initial_len = entry.len();
+            let removed_suggestion = entry
+                .iter()
+                .find(|suggestion| suggestion.id == suggestion_id)
+                .cloned();
             entry.retain(|suggestion| suggestion.id != suggestion_id);
-            (entry.len() != initial_len, entry.is_empty())
+            (
+                entry.len() != initial_len,
+                removed_suggestion,
+                entry.is_empty(),
+            )
         };
         if remove_entry {
             suggestions.remove(thread_id);
@@ -210,9 +246,138 @@ impl AgentEngine {
             let _ = self.event_tx.send(AgentEvent::ThreadReloadRequired {
                 thread_id: thread_id.to_string(),
             });
+            if let Some(suggestion) = removed_suggestion {
+                let _ = self
+                    .record_behavioral_event(
+                        "participant_suggestion",
+                        BehavioralEventContext {
+                            thread_id: Some(thread_id),
+                            task_id: None,
+                            goal_run_id: None,
+                            approval_id: None,
+                        },
+                        serde_json::json!({
+                            "action": "dismissed",
+                            "suggestion": suggestion,
+                        }),
+                    )
+                    .await;
+            }
         }
 
         Ok(changed)
+    }
+
+    pub async fn fail_thread_participant_suggestion(
+        &self,
+        thread_id: &str,
+        suggestion_id: &str,
+        error: &str,
+    ) -> Result<Option<ThreadParticipantSuggestion>> {
+        if !self.threads.read().await.contains_key(thread_id) {
+            anyhow::bail!("thread not found: {thread_id}");
+        }
+
+        let trimmed_error = error.trim();
+        let mut suggestions = self.thread_participant_suggestions.write().await;
+        let updated = suggestions
+            .get_mut(thread_id)
+            .and_then(|entry| {
+                entry.iter_mut().find(|suggestion| suggestion.id == suggestion_id)
+            })
+            .map(|suggestion| {
+                suggestion.status = ThreadParticipantSuggestionStatus::Failed;
+                suggestion.updated_at = now_millis();
+                suggestion.error = (!trimmed_error.is_empty()).then(|| trimmed_error.to_string());
+                suggestion.clone()
+            });
+        drop(suggestions);
+
+        if updated.is_some() {
+            self.persist_thread_by_id(thread_id).await;
+            if let Some(suggestion) = updated.clone() {
+                let _ = self.event_tx.send(AgentEvent::ParticipantSuggestion {
+                    thread_id: thread_id.to_string(),
+                    suggestion: suggestion.clone(),
+                });
+                let _ = self
+                    .record_behavioral_event(
+                        "participant_suggestion",
+                        BehavioralEventContext {
+                            thread_id: Some(thread_id),
+                            task_id: None,
+                            goal_run_id: None,
+                            approval_id: None,
+                        },
+                        serde_json::json!({
+                            "action": "failed",
+                            "suggestion": suggestion,
+                        }),
+                    )
+                    .await;
+            }
+            let _ = self.event_tx.send(AgentEvent::ThreadReloadRequired {
+                thread_id: thread_id.to_string(),
+            });
+        }
+
+        Ok(updated)
+    }
+
+    pub async fn send_thread_participant_suggestion(
+        &self,
+        thread_id: &str,
+        suggestion_id: &str,
+        preferred_session_hint: Option<&str>,
+    ) -> Result<bool> {
+        if !self.threads.read().await.contains_key(thread_id) {
+            anyhow::bail!("thread not found: {thread_id}");
+        }
+
+        let suggestion = self
+            .list_thread_participant_suggestions(thread_id)
+            .await
+            .into_iter()
+            .find(|entry| entry.id == suggestion_id)
+            .ok_or_else(|| anyhow::anyhow!("participant suggestion not found: {suggestion_id}"))?;
+
+        match self
+            .send_visible_thread_participant_message(
+                thread_id,
+                &suggestion.target_agent_id,
+                preferred_session_hint,
+                &suggestion.instruction,
+            )
+            .await
+        {
+            Ok(()) => {
+                let _ = self
+                    .dismiss_thread_participant_suggestion(thread_id, suggestion_id)
+                    .await?;
+                let _ = self
+                    .record_behavioral_event(
+                        "participant_suggestion",
+                        BehavioralEventContext {
+                            thread_id: Some(thread_id),
+                            task_id: None,
+                            goal_run_id: None,
+                            approval_id: None,
+                        },
+                        serde_json::json!({
+                            "action": "sent",
+                            "suggestion": suggestion,
+                        }),
+                    )
+                    .await;
+                Ok(true)
+            }
+            Err(error) => {
+                let _ = self
+                    .fail_thread_participant_suggestion(thread_id, suggestion_id, &error.to_string())
+                    .await?;
+                Err(error)
+            }
+        }
     }
 
     pub async fn agent_thread_detail_json(&self, thread_id: &str) -> String {
@@ -413,6 +578,113 @@ impl AgentEngine {
             preferred_session_hint,
         )
         .await?;
+
+        Ok(())
+    }
+
+    pub async fn send_visible_thread_participant_message(
+        &self,
+        thread_id: &str,
+        target_agent_id: &str,
+        preferred_session_hint: Option<&str>,
+        content: &str,
+    ) -> Result<()> {
+        if !self.threads.read().await.contains_key(thread_id) {
+            anyhow::bail!("thread not found: {thread_id}");
+        }
+
+        let trimmed_content = content.trim();
+        if trimmed_content.is_empty() {
+            anyhow::bail!("participant message content cannot be empty");
+        }
+
+        let (agent_id, agent_name) = self
+            .resolve_thread_participant_target(target_agent_id)
+            .await?;
+
+        let participant_exists = self
+            .list_thread_participants(thread_id)
+            .await
+            .iter()
+            .any(|participant| {
+                participant.agent_id.eq_ignore_ascii_case(&agent_id)
+                    && participant.status == ThreadParticipantStatus::Active
+            });
+        if !participant_exists {
+            anyhow::bail!("participant is not active on thread: {agent_id}");
+        }
+
+        let existing_message_ids: HashSet<String> = {
+            let threads = self.threads.read().await;
+            threads
+                .get(thread_id)
+                .map(|thread| thread.messages.iter().map(|message| message.id.clone()).collect())
+                .unwrap_or_default()
+        };
+        let client_surface = self.get_thread_client_surface(thread_id).await;
+
+        Box::pin(self.send_message_inner(
+            Some(thread_id),
+            trimmed_content,
+            None,
+            preferred_session_hint,
+            None,
+            None,
+            None,
+            client_surface,
+            true,
+        ))
+        .await?;
+
+        let now = now_millis();
+        let mut tagged_assistant = false;
+        {
+            let mut threads = self.threads.write().await;
+            let thread = threads
+                .get_mut(thread_id)
+                .ok_or_else(|| anyhow::anyhow!("thread not found after participant send: {thread_id}"))?;
+
+            thread.messages.retain(|message| {
+                !(message.role == MessageRole::User && !existing_message_ids.contains(&message.id))
+            });
+
+            for message in thread.messages.iter_mut().rev() {
+                if existing_message_ids.contains(&message.id) {
+                    continue;
+                }
+                if message.role == MessageRole::Assistant {
+                    message.author_agent_id = Some(agent_id.clone());
+                    message.author_agent_name = Some(agent_name.clone());
+                    tagged_assistant = true;
+                    break;
+                }
+            }
+
+            if !tagged_assistant {
+                anyhow::bail!("participant send did not produce an assistant message");
+            }
+
+            thread.updated_at = now;
+        }
+
+        {
+            let mut participants = self.thread_participants.write().await;
+            if let Some(entry) = participants.get_mut(thread_id) {
+                if let Some(participant) = entry
+                    .iter_mut()
+                    .find(|participant| participant.agent_id.eq_ignore_ascii_case(&agent_id))
+                {
+                    participant.last_contribution_at = Some(now);
+                    participant.updated_at = now;
+                    participant.status = ThreadParticipantStatus::Active;
+                }
+            }
+        }
+
+        self.persist_thread_by_id(thread_id).await;
+        let _ = self.event_tx.send(AgentEvent::ThreadReloadRequired {
+            thread_id: thread_id.to_string(),
+        });
 
         Ok(())
     }

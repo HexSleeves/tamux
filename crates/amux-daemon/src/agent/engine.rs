@@ -239,7 +239,7 @@ impl AgentEngine {
         )
     }
 
-    fn new_with_storage_and_http_client(
+    pub(crate) fn new_with_storage_and_http_client(
         session_manager: Arc<SessionManager>,
         config: AgentConfig,
         history: HistoryStore,

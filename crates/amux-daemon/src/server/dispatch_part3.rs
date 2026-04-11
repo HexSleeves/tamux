@@ -571,8 +571,7 @@ if matches!(
                 }
                 ClientMessage::AgentSendParticipantSuggestion {
                     thread_id,
-                    target_agent_id,
-                    instruction,
+                    suggestion_id,
                     client_surface,
                     ..
                 } => {
@@ -596,16 +595,12 @@ if matches!(
                     let agent = agent.clone();
                     tokio::spawn(async move {
                         if let Err(error) = agent
-                            .queue_thread_participant_suggestion(
-                                &thread_id,
-                                &target_agent_id,
-                                &instruction,
-                            )
+                            .send_thread_participant_suggestion(&thread_id, &suggestion_id, None)
                             .await
                         {
                             tracing::warn!(
                                 error = %error,
-                                "thread participant suggestion enqueue failed"
+                                "thread participant suggestion send failed"
                             );
                         }
                     });

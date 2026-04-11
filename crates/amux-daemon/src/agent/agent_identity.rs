@@ -9,7 +9,7 @@ use amux_protocol::{AGENT_ID_RAROG, AGENT_ID_SWAROG, AGENT_NAME_RAROG, AGENT_NAM
 use super::types::AgentTask;
 
 pub(super) const MAIN_AGENT_ID: &str = AGENT_ID_SWAROG;
-pub(super) const MAIN_AGENT_NAME: &str = AGENT_NAME_SWAROG;
+pub(crate) const MAIN_AGENT_NAME: &str = AGENT_NAME_SWAROG;
 pub(super) const CONCIERGE_AGENT_ID: &str = AGENT_ID_RAROG;
 pub(super) const CONCIERGE_AGENT_NAME: &str = AGENT_NAME_RAROG;
 pub(super) const INTERNAL_DM_THREAD_PREFIX: &str = "dm:";
@@ -32,7 +32,7 @@ pub(super) const SWIETOWIT_AGENT_NAME: &str = "Swietowit";
 pub(super) const ROD_AGENT_ID: &str = "rod";
 pub(super) const ROD_AGENT_NAME: &str = "Rod";
 pub(super) const WELES_AGENT_ID: &str = "weles";
-pub(super) const WELES_AGENT_NAME: &str = "Weles";
+pub(crate) const WELES_AGENT_NAME: &str = "Weles";
 pub(crate) const WELES_BUILTIN_SUBAGENT_ID: &str = "weles_builtin";
 pub(crate) const WELES_GOVERNANCE_SCOPE: &str = "governance";
 pub(crate) const WELES_VITALITY_SCOPE: &str = "vitality";

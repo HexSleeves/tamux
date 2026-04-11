@@ -17,6 +17,7 @@ export interface ThreadParticipantSuggestion {
   targetAgentId: string;
   targetAgentName: string;
   instruction: string;
+  forceSend?: boolean;
   status: "queued" | "failed";
   createdAt: number;
   updatedAt: number;
@@ -187,6 +188,8 @@ export interface AgentMessage {
   createdAt: number;
   role: AgentRole;
   content: string;
+  authorAgentId?: string;
+  authorAgentName?: string;
   provider?: string;
   model?: string;
   api_transport?: ApiTransportMode;

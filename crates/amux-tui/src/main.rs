@@ -316,6 +316,18 @@ fn start_daemon_bridge(
                                     session_id,
                                 );
                             }
+                            DaemonCommand::SendParticipantSuggestion {
+                                thread_id,
+                                suggestion_id,
+                            } => {
+                                let _ = client.send_participant_suggestion(thread_id, suggestion_id);
+                            }
+                            DaemonCommand::DismissParticipantSuggestion {
+                                thread_id,
+                                suggestion_id,
+                            } => {
+                                let _ = client.dismiss_participant_suggestion(thread_id, suggestion_id);
+                            }
                             DaemonCommand::StopStream { thread_id } => {
                                 let _ = client.stop_stream(thread_id);
                             }

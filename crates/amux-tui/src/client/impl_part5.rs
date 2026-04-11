@@ -73,6 +73,32 @@ impl DaemonClient {
         })
     }
 
+    pub fn send_participant_suggestion(
+        &self,
+        thread_id: String,
+        suggestion_id: String,
+    ) -> Result<()> {
+        self.send(ClientMessage::AgentSendParticipantSuggestion {
+            thread_id,
+            suggestion_id,
+            session_id: None,
+            client_surface: Some(amux_protocol::ClientSurface::Tui),
+        })
+    }
+
+    pub fn dismiss_participant_suggestion(
+        &self,
+        thread_id: String,
+        suggestion_id: String,
+    ) -> Result<()> {
+        self.send(ClientMessage::AgentDismissParticipantSuggestion {
+            thread_id,
+            suggestion_id,
+            session_id: None,
+            client_surface: Some(amux_protocol::ClientSurface::Tui),
+        })
+    }
+
     pub fn retry_stream_now(&self, thread_id: String) -> Result<()> {
         self.send(ClientMessage::AgentRetryStreamNow { thread_id })
     }

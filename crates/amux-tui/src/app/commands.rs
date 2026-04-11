@@ -209,6 +209,27 @@ impl TuiModel {
         self.sync_queued_prompt_modal_state();
     }
 
+    pub(super) fn queue_participant_suggestion(
+        &mut self,
+        thread_id: String,
+        suggestion_id: String,
+        target_agent_id: String,
+        target_agent_name: String,
+        prompt: String,
+        force_send: bool,
+    ) {
+        self.queued_prompts.push(QueuedPrompt::new_with_agent(
+            prompt,
+            thread_id,
+            suggestion_id,
+            target_agent_id,
+            target_agent_name,
+            force_send,
+        ));
+        self.status_line = format!("QUEUED ({})", self.queued_prompts.len());
+        self.sync_queued_prompt_modal_state();
+    }
+
     fn pop_next_queued_prompt(&mut self) -> Option<QueuedPrompt> {
         if self.queued_prompts.is_empty() {
             return None;
@@ -255,10 +276,19 @@ impl TuiModel {
                 let Some(prompt) = self.remove_queued_prompt_at(index) else {
                     return;
                 };
-                if self.assistant_busy() {
+                if self.assistant_busy() && prompt.force_send {
                     self.interrupt_current_stream();
                 }
-                self.submit_prompt(prompt.text);
+                if let (Some(thread_id), Some(suggestion_id)) =
+                    (prompt.thread_id.clone(), prompt.suggestion_id.clone())
+                {
+                    self.send_daemon_command(DaemonCommand::SendParticipantSuggestion {
+                        thread_id,
+                        suggestion_id,
+                    });
+                } else {
+                    self.submit_prompt(prompt.text);
+                }
             }
             QueuedPromptAction::Copy => {
                 let Some(prompt) = self.queued_prompts.get_mut(index) else {
@@ -269,7 +299,15 @@ impl TuiModel {
                 self.status_line = "Copied queued message".to_string();
             }
             QueuedPromptAction::Delete => {
-                if self.remove_queued_prompt_at(index).is_some() {
+                if let Some(prompt) = self.remove_queued_prompt_at(index) {
+                    if let (Some(thread_id), Some(suggestion_id)) =
+                        (prompt.thread_id, prompt.suggestion_id)
+                    {
+                        self.send_daemon_command(DaemonCommand::DismissParticipantSuggestion {
+                            thread_id,
+                            suggestion_id,
+                        });
+                    }
                     self.status_line = "Removed queued message".to_string();
                 }
             }
