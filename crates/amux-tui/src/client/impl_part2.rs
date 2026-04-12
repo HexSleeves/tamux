@@ -257,6 +257,9 @@ impl DaemonClient {
                     })
                     .await;
             }
+            DaemonMessage::AgentTaskApprovalRules { rules } => {
+                let _ = event_tx.send(ClientEvent::TaskApprovalRules(rules)).await;
+            }
             _ => unreachable!("daemon message part1 should be exhaustive"),
         }
     }

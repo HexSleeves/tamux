@@ -477,6 +477,7 @@ impl TuiModel {
         } else {
             self.modal
                 .reduce(modal::ModalAction::Push(modal::ModalKind::ApprovalCenter));
+            self.send_daemon_command(DaemonCommand::ListTaskApprovalRules);
         }
     }
 
@@ -520,6 +521,35 @@ impl TuiModel {
                 approval_id.clone(),
             ));
         }
+    }
+
+    fn select_approval_center_rule_row(&mut self, index: usize) {
+        if let Some(rule_id) = self.approval.saved_rules().get(index).map(|rule| rule.id.clone()) {
+            self.approval
+                .reduce(crate::state::ApprovalAction::SelectRule(rule_id));
+        }
+    }
+
+    fn create_task_approval_rule(&mut self, approval_id: String) {
+        self.send_daemon_command(DaemonCommand::CreateTaskApprovalRule {
+            approval_id: approval_id.clone(),
+        });
+        self.resolve_approval(approval_id, "allow_once");
+        self.status_line = "Saved always-approve rule".to_string();
+    }
+
+    fn revoke_selected_task_approval_rule(&mut self) {
+        let Some(rule_id) = self
+            .approval
+            .selected_rule()
+            .map(|rule| rule.id.clone())
+        else {
+            return;
+        };
+        self.approval
+            .reduce(crate::state::ApprovalAction::RemoveRule(rule_id.clone()));
+        self.send_daemon_command(DaemonCommand::RevokeTaskApprovalRule { rule_id });
+        self.status_line = "Revoked always-approve rule".to_string();
     }
 
     fn resolve_approval(&mut self, approval_id: String, decision: &str) {

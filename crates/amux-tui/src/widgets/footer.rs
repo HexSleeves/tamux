@@ -545,6 +545,9 @@ mod tests {
             .filter_map(|x| buffer.cell((x, 0)).map(|cell| cell.symbol()))
             .collect::<String>();
 
-        assert!(row.contains("ctrl+i"), "missing notifications hotkey: {row}");
+        assert!(
+            row.contains("ctrl+i"),
+            "missing notifications hotkey: {row}"
+        );
     }
 }

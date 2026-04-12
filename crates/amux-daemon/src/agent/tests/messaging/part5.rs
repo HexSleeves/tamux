@@ -475,7 +475,8 @@ async fn force_send_interrupts_stream() {
             .clone()
     };
     assert!(thread_messages.iter().any(|message| {
-        message.role == MessageRole::Assistant && message.author_agent_id.as_deref() == Some("weles")
+        message.role == MessageRole::Assistant
+            && message.author_agent_id.as_deref() == Some("weles")
     }));
     let follow_up = thread_messages
         .iter()
@@ -582,7 +583,8 @@ async fn force_send_auto_posts_on_enqueue() {
             .clone()
     };
     assert!(thread_messages.iter().any(|message| {
-        message.role == MessageRole::Assistant && message.author_agent_id.as_deref() == Some("weles")
+        message.role == MessageRole::Assistant
+            && message.author_agent_id.as_deref() == Some("weles")
     }));
     let follow_up = thread_messages
         .iter()
@@ -680,30 +682,46 @@ async fn deactivating_missing_thread_participant_returns_ok() {
 async fn internal_delegate_does_not_register_participant() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind internal delegate server");
     let addr = listener.local_addr().expect("internal delegate addr");
+    let recorded_bodies_task = recorded_bodies.clone();
 
     tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("accept");
-        let _ = read_http_request_body(&mut socket)
-            .await
-            .expect("read internal delegate request");
-        let response_body = concat!(
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_internal_delegate\"}}\n\n",
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Internal delegation complete.\"}\n\n",
-            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_internal_delegate\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":5,\"output_tokens\":4},\"error\":null}}\n\n"
-        );
-        let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-            response_body.len(),
-            response_body
-        );
-        socket
-            .write_all(response.as_bytes())
-            .await
-            .expect("write internal delegate response");
+        for attempt in 0..2 {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let body = read_http_request_body(&mut socket)
+                .await
+                .expect("read internal delegate request");
+            recorded_bodies_task
+                .lock()
+                .expect("lock recorded bodies")
+                .push_back(body);
+            let response_body = if attempt == 0 {
+                concat!(
+                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_internal_delegate_dm\"}}\n\n",
+                    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"I will continue on the visible thread, not here.\"}\n\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_internal_delegate_dm\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":5,\"output_tokens\":9},\"error\":null}}\n\n"
+                )
+            } else {
+                concat!(
+                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_internal_delegate_visible\"}}\n\n",
+                    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Weles continued on the visible thread.\"}\n\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_internal_delegate_visible\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":6,\"output_tokens\":7},\"error\":null}}\n\n"
+                )
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write internal delegate response");
+        }
     });
 
     let mut config = AgentConfig::default();
@@ -735,12 +753,73 @@ async fn internal_delegate_does_not_register_participant() {
 
     let before = engine.list_thread_participants(thread_id).await;
     engine
-        .send_internal_delegate_message(Some(thread_id), "weles", None, "check the thread")
+        .send_internal_delegate_message(
+            Some(thread_id),
+            "weles",
+            None,
+            "check the thread and continue the work there",
+        )
         .await
         .expect("internal delegate should succeed");
     let after = engine.list_thread_participants(thread_id).await;
 
     assert_eq!(before, after);
+
+    let recorded = recorded_bodies
+        .lock()
+        .expect("lock recorded bodies")
+        .clone();
+    assert_eq!(recorded.len(), 2, "delegate should use DM plus visible-thread continuation");
+    assert!(
+        recorded[0].contains("Continuation requested on visible thread: yes"),
+        "delegate DM should explicitly mention visible-thread continuation: {}",
+        recorded[0]
+    );
+    assert!(
+        recorded[0].contains("Do not continue work in this internal DM thread."),
+        "delegate DM should explicitly prohibit doing work inside the DM thread: {}",
+        recorded[0]
+    );
+    let first_body: serde_json::Value =
+        serde_json::from_str(&recorded[0]).expect("internal delegate request body should be json");
+    assert!(
+        first_body
+            .get("tools")
+            .and_then(|value| value.as_array())
+            .map(|tools| tools.is_empty())
+            .unwrap_or(true),
+        "internal DM delegate request should not expose tools: {}",
+        recorded[0]
+    );
+
+    let dm_thread_id = crate::agent::agent_identity::internal_dm_thread_id(
+        crate::agent::agent_identity::MAIN_AGENT_ID,
+        crate::agent::agent_identity::WELES_AGENT_ID,
+    );
+    let threads = engine.threads.read().await;
+    let dm_thread = threads
+        .get(&dm_thread_id)
+        .expect("delegate should create the internal DM thread");
+    assert!(
+        dm_thread.messages.iter().any(|message| {
+            message.role == MessageRole::Assistant
+                && message.content == "I will continue on the visible thread, not here."
+        }),
+        "internal DM thread should contain the discussion-only reply"
+    );
+    let visible_thread = threads
+        .get(thread_id)
+        .expect("visible thread should remain present");
+    let visible_follow_up = visible_thread
+        .messages
+        .iter()
+        .rev()
+        .find(|message| {
+            message.role == MessageRole::Assistant
+                && message.author_agent_id.as_deref() == Some("weles")
+        })
+        .expect("delegate should continue the visible thread as the requested agent");
+    assert_eq!(visible_follow_up.content, "Weles continued on the visible thread.");
 }
 
 #[tokio::test]

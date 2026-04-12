@@ -418,6 +418,28 @@ impl AgentEngine {
             }
         }
 
+        let task_approval_rules_path = self.data_dir.join("task-approval-rules.json");
+        if task_approval_rules_path.exists() {
+            match tokio::fs::read_to_string(&task_approval_rules_path).await {
+                Ok(raw) => {
+                    match serde_json::from_str::<Vec<amux_protocol::TaskApprovalRule>>(&raw) {
+                        Ok(mut rules) => {
+                            rules.sort_by(|left, right| left.command.cmp(&right.command));
+                            *self.task_approval_rules.write().await = rules;
+                        }
+                        Err(error) => tracing::warn!(
+                            %error,
+                            "failed to parse persisted task approval rules"
+                        ),
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    %error,
+                    "failed to read persisted task approval rules"
+                ),
+            }
+        }
+
         let work_context_path = self.data_dir.join("work-context.json");
         if work_context_path.exists() {
             match tokio::fs::read_to_string(&work_context_path).await {

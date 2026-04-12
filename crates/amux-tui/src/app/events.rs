@@ -109,6 +109,9 @@ impl TuiModel {
             } => {
                 self.handle_approval_resolved_event(approval_id, decision);
             }
+            ClientEvent::TaskApprovalRules(rules) => {
+                self.handle_task_approval_rules_event(rules);
+            }
             ClientEvent::ThreadList(threads) => {
                 self.handle_thread_list_event(threads);
             }

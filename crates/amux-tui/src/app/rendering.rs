@@ -1,5 +1,7 @@
 use super::*;
 
+const MIN_HEADER_CONTEXT_TARGET_TOKENS: u32 = 1_024;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConversationAgentProfile {
     pub(crate) agent_label: String,
@@ -89,6 +91,41 @@ impl TuiModel {
 
         providers::known_context_window_for(&profile.provider, &profile.model)
             .unwrap_or(fallback)
+            .max(1)
+    }
+
+    fn current_header_context_budget_tokens(&self) -> u32 {
+        if matches!(self.current_conversation_agent_kind(), ConversationAgentKind::Weles) {
+            return self
+                .config
+                .agent_config_raw
+                .as_ref()
+                .and_then(|raw| raw.get("builtin_sub_agents"))
+                .and_then(|value| value.get("weles"))
+                .and_then(|value| value.get("context_budget_tokens"))
+                .and_then(|value| value.as_u64())
+                .map(|value| value.max(MIN_HEADER_CONTEXT_TARGET_TOKENS as u64) as u32)
+                .unwrap_or(self.config.context_budget_tokens);
+        }
+
+        self.config.context_budget_tokens
+    }
+
+    fn current_header_context_target_tokens(&self) -> u32 {
+        let context_window = self.current_header_context_window_tokens().max(1);
+        if !self.config.auto_compact_context {
+            return context_window;
+        }
+
+        let threshold_pct = self.config.compact_threshold_pct.clamp(1, 100);
+        let threshold_target = context_window.saturating_mul(threshold_pct) / 100;
+        let configured_budget = self
+            .current_header_context_budget_tokens()
+            .max(MIN_HEADER_CONTEXT_TARGET_TOKENS);
+
+        threshold_target
+            .max(MIN_HEADER_CONTEXT_TARGET_TOKENS)
+            .min(configured_budget)
             .max(1)
     }
 
@@ -292,7 +329,7 @@ impl TuiModel {
     }
 
     pub(crate) fn current_header_usage_summary(&self) -> widgets::header::HeaderUsageDisplay {
-        let max_tokens = self.current_header_context_window_tokens().max(1) as u64;
+        let max_tokens = self.current_header_context_target_tokens().max(1) as u64;
         let (total_thread_tokens, current_tokens, total_cost_usd) = self
             .chat
             .active_thread()

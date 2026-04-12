@@ -364,6 +364,15 @@ fn start_daemon_bridge(
                             DaemonCommand::ControlGoalRun { goal_run_id, action } => {
                                 let _ = client.control_goal_run(goal_run_id, action);
                             }
+                            DaemonCommand::ListTaskApprovalRules => {
+                                let _ = client.list_task_approval_rules();
+                            }
+                            DaemonCommand::CreateTaskApprovalRule { approval_id } => {
+                                let _ = client.create_task_approval_rule(approval_id);
+                            }
+                            DaemonCommand::RevokeTaskApprovalRule { rule_id } => {
+                                let _ = client.revoke_task_approval_rule(rule_id);
+                            }
                             DaemonCommand::ResolveTaskApproval { approval_id, decision } => {
                                 let _ = client.resolve_task_approval(approval_id, decision);
                             }

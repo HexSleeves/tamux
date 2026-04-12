@@ -593,6 +593,12 @@ impl AgentEngine {
                 Some("daemon".to_string()),
             )
             .await;
+        if self
+            .auto_approve_task_if_rule_matches(&task.id, &request.thread_id, pending_approval)
+            .await
+        {
+            return Ok(task);
+        }
         self.mark_task_awaiting_approval(&task.id, &request.thread_id, pending_approval)
             .await;
         self.record_operator_approval_requested(pending_approval)

@@ -1075,6 +1075,44 @@ fn header_usage_summary_uses_runtime_model_context_window_for_rarog() {
 }
 
 #[test]
+fn header_usage_summary_uses_effective_compaction_target_instead_of_full_window() {
+    let mut model = make_model();
+    model.config.provider = PROVIDER_ID_GITHUB_COPILOT.to_string();
+    model.config.auth_source = "github_copilot".to_string();
+    model.config.model = "gpt-5.4".to_string();
+    model.config.context_window_tokens = 400_000;
+    model.config.context_budget_tokens = 100_000;
+    model.config.compact_threshold_pct = 80;
+
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-budget-capped".to_string(),
+        title: "Budget Capped".to_string(),
+        agent_name: Some("Swarog".to_string()),
+    });
+    model.chat.reduce(chat::ChatAction::SelectThread(
+        "thread-budget-capped".to_string(),
+    ));
+    model.chat.reduce(chat::ChatAction::AppendMessage {
+        thread_id: "thread-budget-capped".to_string(),
+        message: chat::AgentMessage {
+            role: chat::MessageRole::User,
+            content: "A".repeat(20_000),
+            ..Default::default()
+        },
+    });
+
+    let usage = model.current_header_usage_summary();
+    assert_eq!(
+        usage.max_tokens, 100_000,
+        "header should use the same budget-capped compaction target as the daemon"
+    );
+    assert!(
+        usage.utilization_pct >= 5,
+        "with a 100k effective target the same message should consume a visible share"
+    );
+}
+
+#[test]
 fn header_usage_summary_resets_active_window_after_compaction_artifact() {
     let mut model = make_model();
 
@@ -1352,7 +1390,10 @@ fn thread_detail_preserves_message_author_metadata() {
         .iter()
         .find(|thread| thread.id == "thread-user")
         .expect("thread detail should populate chat state");
-    let message = thread.messages.first().expect("thread should contain message");
+    let message = thread
+        .messages
+        .first()
+        .expect("thread should contain message");
     assert_eq!(message.author_agent_id.as_deref(), Some("weles"));
     assert_eq!(message.author_agent_name.as_deref(), Some("Weles"));
 }

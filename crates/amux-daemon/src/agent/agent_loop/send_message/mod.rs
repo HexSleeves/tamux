@@ -27,75 +27,7 @@ pub(super) fn current_epoch_secs() -> u64 {
 }
 
 impl AgentEngine {
-    pub(in crate::agent) async fn agent_scope_id_for_turn(
-        &self,
-        thread_id: Option<&str>,
-        task_id: Option<&str>,
-    ) -> String {
-        if let Some(current_task_id) = task_id {
-            let tasks = self.tasks.lock().await;
-            return agent_scope_id_for_task(tasks.iter().find(|task| task.id == current_task_id));
-        }
-
-        if thread_id == Some(crate::agent::concierge::CONCIERGE_THREAD_ID) {
-            return CONCIERGE_AGENT_ID.to_string();
-        }
-
-        if let Some(existing_thread_id) = thread_id {
-            if let Some(active_agent_id) = self.active_agent_id_for_thread(existing_thread_id).await
-            {
-                return active_agent_id;
-            }
-        }
-
-        MAIN_AGENT_ID.to_string()
-    }
-
-    async fn run_internal_send_loop(
-        &self,
-        initial_thread_id: Option<&str>,
-        stored_user_content: &str,
-        llm_user_content: &str,
-        task_id: Option<&str>,
-        preferred_session_hint: Option<&str>,
-        stream_chunk_timeout_override: Option<std::time::Duration>,
-        client_surface: Option<amux_protocol::ClientSurface>,
-        initial_record_operator: bool,
-        initial_reuse_existing_user_message: bool,
-    ) -> Result<SendMessageOutcome> {
-        let mut thread_id = initial_thread_id.map(str::to_string);
-        let mut record_operator = initial_record_operator;
-        let mut reuse_existing_user_message = initial_reuse_existing_user_message;
-        let mut scheduled_retry_cycles = 0u32;
-
-        loop {
-            let runner = SendMessageRunner::initialize(
-                self,
-                thread_id.as_deref(),
-                stored_user_content,
-                llm_user_content,
-                task_id,
-                preferred_session_hint,
-                stream_chunk_timeout_override,
-                client_surface,
-                record_operator,
-                reuse_existing_user_message,
-                scheduled_retry_cycles,
-            )
-            .await?;
-            let outcome = runner.run().await?;
-            if let Some(retry) = outcome.fresh_runner_retry {
-                thread_id = Some(outcome.thread_id);
-                record_operator = false;
-                reuse_existing_user_message = true;
-                scheduled_retry_cycles = retry.scheduled_retry_cycles;
-                continue;
-            }
-            return Ok(outcome);
-        }
-    }
-
-    pub(in crate::agent) async fn send_message_inner(
+    async fn send_message_inner_with_options(
         &self,
         thread_id: Option<&str>,
         content: &str,
@@ -106,12 +38,14 @@ impl AgentEngine {
         stream_chunk_timeout_override: Option<std::time::Duration>,
         client_surface: Option<amux_protocol::ClientSurface>,
         record_operator: bool,
+        initial_reuse_existing_user_message: bool,
+        allow_auto_participant_queue_drain: bool,
     ) -> Result<SendMessageOutcome> {
         let stored_user_content = content;
         let mut current_thread_id = thread_id.map(str::to_string);
         let mut current_llm_user_content = llm_user_content_override.unwrap_or(content).to_string();
         let mut current_record_operator = record_operator;
-        let mut reuse_existing_user_message = false;
+        let mut reuse_existing_user_message = initial_reuse_existing_user_message;
 
         loop {
             let agent_scope_id = self
@@ -196,8 +130,111 @@ impl AgentEngine {
                 continue;
             }
 
+            if allow_auto_participant_queue_drain && !outcome.interrupted_for_approval {
+                Box::pin(
+                    self.maybe_auto_send_next_thread_participant_suggestion(&outcome.thread_id),
+                )
+                .await?;
+            }
+
             return Ok(outcome);
         }
+    }
+
+    pub(in crate::agent) async fn agent_scope_id_for_turn(
+        &self,
+        thread_id: Option<&str>,
+        task_id: Option<&str>,
+    ) -> String {
+        if let Some(current_task_id) = task_id {
+            let tasks = self.tasks.lock().await;
+            return agent_scope_id_for_task(tasks.iter().find(|task| task.id == current_task_id));
+        }
+
+        if thread_id == Some(crate::agent::concierge::CONCIERGE_THREAD_ID) {
+            return CONCIERGE_AGENT_ID.to_string();
+        }
+
+        if let Some(existing_thread_id) = thread_id {
+            if let Some(active_agent_id) = self.active_agent_id_for_thread(existing_thread_id).await
+            {
+                return active_agent_id;
+            }
+        }
+
+        MAIN_AGENT_ID.to_string()
+    }
+
+    async fn run_internal_send_loop(
+        &self,
+        initial_thread_id: Option<&str>,
+        stored_user_content: &str,
+        llm_user_content: &str,
+        task_id: Option<&str>,
+        preferred_session_hint: Option<&str>,
+        stream_chunk_timeout_override: Option<std::time::Duration>,
+        client_surface: Option<amux_protocol::ClientSurface>,
+        initial_record_operator: bool,
+        initial_reuse_existing_user_message: bool,
+    ) -> Result<SendMessageOutcome> {
+        let mut thread_id = initial_thread_id.map(str::to_string);
+        let mut record_operator = initial_record_operator;
+        let mut reuse_existing_user_message = initial_reuse_existing_user_message;
+        let mut scheduled_retry_cycles = 0u32;
+
+        loop {
+            let runner = SendMessageRunner::initialize(
+                self,
+                thread_id.as_deref(),
+                stored_user_content,
+                llm_user_content,
+                task_id,
+                preferred_session_hint,
+                stream_chunk_timeout_override,
+                client_surface,
+                record_operator,
+                reuse_existing_user_message,
+                scheduled_retry_cycles,
+            )
+            .await?;
+            let outcome = runner.run().await?;
+            if let Some(retry) = outcome.fresh_runner_retry {
+                thread_id = Some(outcome.thread_id);
+                record_operator = false;
+                reuse_existing_user_message = true;
+                scheduled_retry_cycles = retry.scheduled_retry_cycles;
+                continue;
+            }
+            return Ok(outcome);
+        }
+    }
+
+    pub(in crate::agent) async fn send_message_inner(
+        &self,
+        thread_id: Option<&str>,
+        content: &str,
+        task_id: Option<&str>,
+        preferred_session_hint: Option<&str>,
+        backend_override: Option<&str>,
+        llm_user_content_override: Option<&str>,
+        stream_chunk_timeout_override: Option<std::time::Duration>,
+        client_surface: Option<amux_protocol::ClientSurface>,
+        record_operator: bool,
+    ) -> Result<SendMessageOutcome> {
+        self.send_message_inner_with_options(
+            thread_id,
+            content,
+            task_id,
+            preferred_session_hint,
+            backend_override,
+            llm_user_content_override,
+            stream_chunk_timeout_override,
+            client_surface,
+            record_operator,
+            false,
+            true,
+        )
+        .await
     }
 
     pub(in crate::agent) async fn resend_existing_user_message(
@@ -205,16 +242,39 @@ impl AgentEngine {
         thread_id: &str,
         content: &str,
     ) -> Result<SendMessageOutcome> {
-        self.run_internal_send_loop(
+        self.send_message_inner_with_options(
             Some(thread_id),
             content,
-            content,
+            None,
+            None,
             None,
             None,
             None,
             None,
             false,
             true,
+            true,
+        )
+        .await
+    }
+
+    pub(in crate::agent) async fn continue_existing_user_message_without_queue_drain(
+        &self,
+        thread_id: &str,
+        content: &str,
+    ) -> Result<SendMessageOutcome> {
+        self.send_message_inner_with_options(
+            Some(thread_id),
+            content,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            true,
+            false,
         )
         .await
     }

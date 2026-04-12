@@ -559,6 +559,12 @@ fn approval_center_keyboard_resolves_selected_approval() {
     assert!(!quit);
     assert!(model.approval.pending_approvals().is_empty());
     assert!(matches!(
+        daemon_rx
+            .try_recv()
+            .expect("expected approval rules refresh command"),
+        DaemonCommand::ListTaskApprovalRules
+    ));
+    assert!(matches!(
         daemon_rx.try_recv().expect("expected approval resolution command"),
         DaemonCommand::ResolveTaskApproval {
             approval_id,
@@ -629,11 +635,120 @@ fn approval_center_mouse_click_executes_approve_once() {
     });
 
     assert!(matches!(
+        daemon_rx
+            .try_recv()
+            .expect("expected approval rules refresh command"),
+        DaemonCommand::ListTaskApprovalRules
+    ));
+    assert!(matches!(
         daemon_rx.try_recv().expect("expected approval resolution command"),
         DaemonCommand::ResolveTaskApproval {
             approval_id,
             decision
         } if approval_id == "approval-1" && decision == "allow_once"
+    ));
+}
+
+#[test]
+fn approval_center_keyboard_creates_always_approve_rule() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model
+        .approval
+        .reduce(crate::state::ApprovalAction::ApprovalRequired(
+            crate::state::PendingApproval {
+                approval_id: "approval-1".to_string(),
+                task_id: "task-1".to_string(),
+                task_title: Some("Task".to_string()),
+                thread_id: Some("thread-1".to_string()),
+                thread_title: Some("Thread".to_string()),
+                workspace_id: Some(model.config.honcho_workspace_id.clone()),
+                rationale: None,
+                reasons: Vec::new(),
+                command: "orchestrator_policy_escalation".to_string(),
+                risk_level: crate::state::RiskLevel::Medium,
+                blast_radius: "thread".to_string(),
+                received_at: 1,
+                seen_at: None,
+            },
+        ));
+    model.toggle_approval_center();
+
+    let quit = model.handle_key_modal(
+        KeyCode::Char('w'),
+        KeyModifiers::NONE,
+        modal::ModalKind::ApprovalCenter,
+    );
+
+    assert!(!quit);
+    assert!(matches!(
+        daemon_rx
+            .try_recv()
+            .expect("expected approval rules refresh command"),
+        DaemonCommand::ListTaskApprovalRules
+    ));
+    assert!(matches!(
+        daemon_rx
+            .try_recv()
+            .expect("expected rule creation command"),
+        DaemonCommand::CreateTaskApprovalRule { approval_id } if approval_id == "approval-1"
+    ));
+    assert!(matches!(
+        daemon_rx
+            .try_recv()
+            .expect("expected approval resolution command"),
+        DaemonCommand::ResolveTaskApproval {
+            approval_id,
+            decision
+        } if approval_id == "approval-1" && decision == "allow_once"
+    ));
+}
+
+#[test]
+fn approval_center_keyboard_revokes_saved_rule() {
+    let (mut model, mut daemon_rx) = make_model();
+    model
+        .approval
+        .reduce(crate::state::ApprovalAction::SetRules(vec![
+            crate::state::approval::SavedApprovalRule {
+                id: "rule-1".to_string(),
+                command: "orchestrator_policy_escalation".to_string(),
+                created_at: 1,
+                last_used_at: Some(2),
+                use_count: 3,
+            },
+        ]));
+    model
+        .approval
+        .reduce(crate::state::ApprovalAction::SetFilter(
+            crate::state::ApprovalFilter::SavedRules,
+        ));
+    model.toggle_approval_center();
+
+    let quit = model.handle_key_modal(
+        KeyCode::Char('r'),
+        KeyModifiers::NONE,
+        modal::ModalKind::ApprovalCenter,
+    );
+
+    assert!(!quit);
+    assert!(matches!(
+        daemon_rx
+            .try_recv()
+            .expect("expected approval rules refresh command"),
+        DaemonCommand::ListTaskApprovalRules
+    ));
+    assert!(matches!(
+        daemon_rx
+            .try_recv()
+            .expect("expected revoke rule command"),
+        DaemonCommand::RevokeTaskApprovalRule { rule_id } if rule_id == "rule-1"
     ));
 }
 

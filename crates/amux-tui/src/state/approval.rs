@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 
-use std::collections::HashSet;
-
 // ── RiskLevel ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,11 +78,21 @@ pub struct PendingApproval {
     pub seen_at: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedApprovalRule {
+    pub id: String,
+    pub command: String,
+    pub created_at: u64,
+    pub last_used_at: Option<u64>,
+    pub use_count: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalFilter {
     AllPending,
     CurrentThread,
     CurrentWorkspace,
+    SavedRules,
 }
 
 // ── ApprovalAction ────────────────────────────────────────────────────────────
@@ -93,12 +101,14 @@ pub enum ApprovalFilter {
 pub enum ApprovalAction {
     ApprovalRequired(PendingApproval),
     SelectApproval(String),
+    SelectRule(String),
     SetFilter(ApprovalFilter),
     Resolve {
         approval_id: String,
         decision: String,
     },
-    AllowSession(String),  // command pattern to allow for this session
+    SetRules(Vec<SavedApprovalRule>),
+    RemoveRule(String),
     ClearResolved(String), // remove by approval_id
 }
 
@@ -106,8 +116,9 @@ pub enum ApprovalAction {
 
 pub struct ApprovalState {
     pending_approvals: Vec<PendingApproval>,
-    session_allowlist: HashSet<String>,
+    saved_rules: Vec<SavedApprovalRule>,
     selected_approval_id: Option<String>,
+    selected_rule_id: Option<String>,
     filter: ApprovalFilter,
 }
 
@@ -115,8 +126,9 @@ impl ApprovalState {
     pub fn new() -> Self {
         Self {
             pending_approvals: Vec::new(),
-            session_allowlist: HashSet::new(),
+            saved_rules: Vec::new(),
             selected_approval_id: None,
+            selected_rule_id: None,
             filter: ApprovalFilter::AllPending,
         }
     }
@@ -131,6 +143,10 @@ impl ApprovalState {
 
     pub fn filter(&self) -> ApprovalFilter {
         self.filter
+    }
+
+    pub fn saved_rules(&self) -> &[SavedApprovalRule] {
+        &self.saved_rules
     }
 
     pub fn selected_approval(&self) -> Option<&PendingApproval> {
@@ -176,6 +192,7 @@ impl ApprovalState {
                 ApprovalFilter::CurrentWorkspace => {
                     approval.workspace_id.as_deref() == current_workspace_id
                 }
+                ApprovalFilter::SavedRules => false,
             })
             .collect()
     }
@@ -185,9 +202,15 @@ impl ApprovalState {
         self.pending_approvals.first()
     }
 
-    /// Returns true if the given command pattern has been allow-listed for this session.
-    pub fn is_allowed(&self, pattern: &str) -> bool {
-        self.session_allowlist.contains(pattern)
+    pub fn selected_rule_id(&self) -> Option<&str> {
+        self.selected_rule_id.as_deref()
+    }
+
+    pub fn selected_rule(&self) -> Option<&SavedApprovalRule> {
+        self.selected_rule_id
+            .as_deref()
+            .and_then(|rule_id| self.saved_rules.iter().find(|rule| rule.id == rule_id))
+            .or_else(|| self.saved_rules.first())
     }
 
     pub fn reduce(&mut self, action: ApprovalAction) {
@@ -214,12 +237,23 @@ impl ApprovalState {
                     .any(|approval| approval.approval_id == approval_id)
                 {
                     self.selected_approval_id = Some(approval_id);
+                    self.selected_rule_id = None;
+                }
+            }
+
+            ApprovalAction::SelectRule(rule_id) => {
+                if self.saved_rules.iter().any(|rule| rule.id == rule_id) {
+                    self.selected_rule_id = Some(rule_id);
+                    self.selected_approval_id = None;
                 }
             }
 
             ApprovalAction::SetFilter(filter) => {
                 self.filter = filter;
-                self.selected_approval_id = None;
+                match filter {
+                    ApprovalFilter::SavedRules => self.selected_approval_id = None,
+                    _ => self.selected_rule_id = None,
+                }
             }
 
             ApprovalAction::Resolve {
@@ -236,8 +270,20 @@ impl ApprovalState {
                 }
             }
 
-            ApprovalAction::AllowSession(pattern) => {
-                self.session_allowlist.insert(pattern);
+            ApprovalAction::SetRules(mut rules) => {
+                rules.sort_by(|left, right| left.command.cmp(&right.command));
+                let selected_rule_id = self.selected_rule_id.clone();
+                self.saved_rules = rules;
+                self.selected_rule_id = selected_rule_id
+                    .filter(|rule_id| self.saved_rules.iter().any(|rule| &rule.id == rule_id))
+                    .or_else(|| self.saved_rules.first().map(|rule| rule.id.clone()));
+            }
+
+            ApprovalAction::RemoveRule(rule_id) => {
+                self.saved_rules.retain(|rule| rule.id != rule_id);
+                if self.selected_rule_id.as_deref() == Some(rule_id.as_str()) {
+                    self.selected_rule_id = self.saved_rules.first().map(|rule| rule.id.clone());
+                }
             }
 
             ApprovalAction::ClearResolved(approval_id) => {
@@ -346,13 +392,20 @@ mod tests {
     }
 
     #[test]
-    fn allow_session_adds_to_allowlist() {
+    fn set_rules_replaces_saved_rules() {
         let mut state = ApprovalState::new();
-        assert!(!state.is_allowed("git push"));
-
-        state.reduce(ApprovalAction::AllowSession("git push".into()));
-        assert!(state.is_allowed("git push"));
-        assert!(!state.is_allowed("rm -rf"));
+        state.reduce(ApprovalAction::SetRules(vec![SavedApprovalRule {
+            id: "rule-1".into(),
+            command: "git push".into(),
+            created_at: 1,
+            last_used_at: Some(2),
+            use_count: 3,
+        }]));
+        assert_eq!(state.saved_rules().len(), 1);
+        assert_eq!(
+            state.selected_rule().map(|rule| rule.command.as_str()),
+            Some("git push")
+        );
     }
 
     #[test]

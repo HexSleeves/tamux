@@ -402,6 +402,17 @@ pub enum ApprovalDecision {
     Deny,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskApprovalRule {
+    pub id: String,
+    pub command: String,
+    pub created_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<u64>,
+    #[serde(default)]
+    pub use_count: u64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum SecurityLevel {

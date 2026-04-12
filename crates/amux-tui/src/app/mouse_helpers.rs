@@ -488,6 +488,9 @@ impl TuiModel {
                             widgets::approval_center::ApprovalCenterHitTarget::Row(index) => {
                                 self.select_approval_center_row(index);
                             }
+                            widgets::approval_center::ApprovalCenterHitTarget::RuleRow(index) => {
+                                self.select_approval_center_rule_row(index);
+                            }
                             widgets::approval_center::ApprovalCenterHitTarget::ThreadJump(
                                 thread_id,
                             ) => {
@@ -503,6 +506,22 @@ impl TuiModel {
                                 approval_id,
                             ) => {
                                 self.resolve_approval(approval_id, "allow_session");
+                            }
+                            widgets::approval_center::ApprovalCenterHitTarget::AlwaysApprove(
+                                approval_id,
+                            ) => {
+                                self.create_task_approval_rule(approval_id);
+                            }
+                            widgets::approval_center::ApprovalCenterHitTarget::RevokeRule(
+                                rule_id,
+                            ) => {
+                                self.approval
+                                    .reduce(crate::state::ApprovalAction::RemoveRule(
+                                        rule_id.clone(),
+                                    ));
+                                self.send_daemon_command(DaemonCommand::RevokeTaskApprovalRule {
+                                    rule_id,
+                                });
                             }
                             widgets::approval_center::ApprovalCenterHitTarget::Deny(
                                 approval_id,

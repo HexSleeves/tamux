@@ -231,6 +231,7 @@ pub enum ClientEvent {
         approval_id: String,
         decision: String,
     },
+    TaskApprovalRules(Vec<amux_protocol::TaskApprovalRule>),
 
     ProviderAuthStates(Vec<crate::state::ProviderAuthEntry>),
     OpenAICodexAuthStatus(OpenAICodexAuthStatusVm),

@@ -20,6 +20,9 @@ if matches!(
         ClientMessage::AgentSearchTools{ .. } |
         ClientMessage::AgentGetConfig |
         ClientMessage::AgentGetEffectiveConfigState |
+        ClientMessage::AgentListTaskApprovalRules |
+        ClientMessage::AgentCreateTaskApprovalRule{ .. } |
+        ClientMessage::AgentRevokeTaskApprovalRule{ .. } |
         ClientMessage::AgentSetConfigItem{ .. } |
         ClientMessage::AgentSetProviderModel{ .. } |
         ClientMessage::AgentSetTargetAgentProviderModel{ .. } |
@@ -644,6 +647,58 @@ if matches!(
                                 .await?;
                         }
                     }
+                }
+
+                ClientMessage::AgentListTaskApprovalRules => {
+                    let rules = agent.list_task_approval_rules().await;
+                    framed
+                        .send(DaemonMessage::AgentTaskApprovalRules { rules })
+                        .await?;
+                }
+
+                ClientMessage::AgentCreateTaskApprovalRule { approval_id } => {
+                    match agent.create_task_approval_rule_from_pending(&approval_id).await {
+                        Ok(Some(_)) => {
+                            let rules = agent.list_task_approval_rules().await;
+                            framed
+                                .send(DaemonMessage::AgentTaskApprovalRules { rules })
+                                .await?;
+                        }
+                        Ok(None) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!(
+                                        "could not create approval rule: no live approval found for {approval_id}"
+                                    ),
+                                })
+                                .await?;
+                        }
+                        Err(error) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!(
+                                        "failed to create approval rule from {approval_id}: {error}"
+                                    ),
+                                })
+                                .await?;
+                        }
+                    }
+                }
+
+                ClientMessage::AgentRevokeTaskApprovalRule { rule_id } => {
+                    if !agent.revoke_task_approval_rule(&rule_id).await {
+                        framed
+                            .send(DaemonMessage::AgentError {
+                                message: format!(
+                                    "could not revoke approval rule: {rule_id} was not found"
+                                ),
+                            })
+                            .await?;
+                    }
+                    let rules = agent.list_task_approval_rules().await;
+                    framed
+                        .send(DaemonMessage::AgentTaskApprovalRules { rules })
+                        .await?;
                 }
 
                 ClientMessage::AgentResolveTaskApproval {

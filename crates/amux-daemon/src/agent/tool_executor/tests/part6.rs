@@ -254,6 +254,125 @@
     }
 
     #[tokio::test]
+    async fn message_agent_can_request_visible_thread_continuation() {
+        let recorded_bodies = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let root = tempdir().expect("tempdir should succeed");
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.base_url = part4::spawn_stub_assistant_server_for_tool_executor(
+            recorded_bodies.clone(),
+            serde_json::json!({
+                "verdict": "allow",
+                "reasons": ["unused for visible thread continuation test"],
+                "audit_id": "audit-message-agent-visible-thread"
+            })
+            .to_string(),
+        )
+        .await;
+        config.model = "gpt-4o-mini".to_string();
+        config.api_key = "test-key".to_string();
+        config.api_transport = crate::agent::types::ApiTransport::ChatCompletions;
+        config.auto_retry = false;
+        config.max_retries = 0;
+        config.max_tool_loops = 1;
+        let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+        let (event_tx, _) = broadcast::channel(8);
+        let thread_id = "thread-message-agent-visible-thread";
+
+        {
+            let mut threads = engine.threads.write().await;
+            threads.insert(
+                thread_id.to_string(),
+                crate::agent::types::AgentThread {
+                    id: thread_id.to_string(),
+                    agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+                    title: "Thread-scoped internal DM".to_string(),
+                    messages: vec![crate::agent::types::AgentMessage::user("Please continue this work", 1)],
+                    pinned: false,
+                    upstream_thread_id: None,
+                    upstream_transport: None,
+                    upstream_provider: None,
+                    upstream_model: None,
+                    upstream_assistant_id: None,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    created_at: 1,
+                    updated_at: 1,
+                },
+            );
+        }
+
+        let tool_call = ToolCall::with_default_weles_review(
+            "tool-message-agent-visible-thread".to_string(),
+            ToolFunction {
+                name: "message_agent".to_string(),
+                arguments: serde_json::json!({
+                    "target": "weles",
+                    "message": "Please pick up the work from governance scope.",
+                    "request_visible_thread_continuation": true
+                })
+                .to_string(),
+            },
+        );
+
+        let result = execute_tool(
+            &tool_call,
+            &engine,
+            thread_id,
+            None,
+            &manager,
+            None,
+            &event_tx,
+            root.path(),
+            &engine.http_client,
+            None,
+        )
+        .await;
+
+        assert!(
+            !result.is_error,
+            "thread continuation via message_agent should succeed: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains("\"visible_thread_continuation_requested\": true"),
+            "tool result should report that visible-thread continuation was requested: {}",
+            result.content
+        );
+
+        let dm_thread_id = crate::agent::agent_identity::internal_dm_thread_id(
+            crate::agent::agent_identity::MAIN_AGENT_ID,
+            crate::agent::agent_identity::WELES_AGENT_ID,
+        );
+        let threads = engine.threads.read().await;
+        assert!(
+            threads
+                .get(&dm_thread_id)
+                .expect("message_agent should still use internal DM for coordination")
+                .messages
+                .iter()
+                .any(|message| message.role == MessageRole::Assistant),
+            "internal DM thread should contain the discussion reply"
+        );
+        let visible_reply = threads
+            .get(thread_id)
+            .expect("visible thread should remain present")
+            .messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message.role == MessageRole::Assistant
+                    && message.author_agent_id.as_deref() == Some("weles")
+            })
+            .expect("visible thread should receive the Weles continuation");
+        assert!(
+            !visible_reply.content.trim().is_empty(),
+            "visible-thread continuation should append a non-empty assistant reply"
+        );
+    }
+
+    #[tokio::test]
     async fn execute_managed_command_auto_denies_learned_destructive_category() {
         let recorded_bodies = Arc::new(Mutex::new(std::collections::VecDeque::new()));
         let root = tempdir().expect("tempdir should succeed");

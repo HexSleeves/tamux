@@ -401,10 +401,7 @@ impl AgentEngine {
         serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string())
     }
 
-    pub(crate) async fn continue_thread_after_participant_post_or_notice(
-        &self,
-        thread_id: &str,
-    ) {
+    pub(crate) async fn continue_thread_after_participant_post_or_notice(&self, thread_id: &str) {
         let prior_user_message = self.threads.read().await.get(thread_id).and_then(|thread| {
             thread
                 .messages
@@ -419,7 +416,7 @@ impl AgentEngine {
         };
 
         if let Err(error) = self
-            .resend_existing_user_message(thread_id, &prior_user_message)
+            .continue_existing_user_message_without_queue_drain(thread_id, &prior_user_message)
             .await
         {
             tracing::warn!(
@@ -434,6 +431,36 @@ impl AgentEngine {
                 details: Some(error.to_string()),
             });
         }
+    }
+
+    pub(crate) async fn maybe_auto_send_next_thread_participant_suggestion(
+        &self,
+        thread_id: &str,
+    ) -> Result<bool> {
+        {
+            let streams = self.stream_cancellations.lock().await;
+            if streams.contains_key(thread_id) {
+                return Ok(false);
+            }
+        }
+
+        let next_suggestion = self
+            .list_thread_participant_suggestions(thread_id)
+            .await
+            .into_iter()
+            .find(|suggestion| suggestion.status == ThreadParticipantSuggestionStatus::Queued);
+        let Some(next_suggestion) = next_suggestion else {
+            return Ok(false);
+        };
+
+        tracing::info!(
+            thread_id = %thread_id,
+            participant = %next_suggestion.target_agent_id,
+            suggestion_id = %next_suggestion.id,
+            "auto-sending queued participant suggestion after thread became idle"
+        );
+        self.send_thread_participant_suggestion(thread_id, &next_suggestion.id, None)
+            .await
     }
 
     pub async fn upsert_thread_participant(
