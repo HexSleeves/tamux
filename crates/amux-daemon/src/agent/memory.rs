@@ -526,6 +526,13 @@ fn strip_memory_markup(line: &str) -> String {
     if idx > 0 && bytes.get(idx) == Some(&b'.') {
         cleaned = cleaned[idx + 1..].trim_start();
     }
+    while let Some(rest) = cleaned.strip_prefix('[') {
+        if let Some(end_idx) = rest.find(']') {
+            cleaned = rest[end_idx + 1..].trim_start();
+        } else {
+            break;
+        }
+    }
     cleaned
         .trim_matches('`')
         .trim_matches('*')

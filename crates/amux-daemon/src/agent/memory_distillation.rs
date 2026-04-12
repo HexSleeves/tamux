@@ -7,10 +7,11 @@
 
 use super::*;
 use crate::history::HistoryStore;
-use amux_protocol::AgentDbMessage;
+use amux_protocol::{AgentDbMessage, InboxNotification};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 const MIN_FACT_CHARS: usize = 24;
 const MAX_FACT_CHARS: usize = 220;
@@ -91,6 +92,7 @@ pub struct DistillationResult {
     pub auto_applied: usize,
     pub queued_for_review: usize,
     pub discarded: usize,
+    pub review_notifications_emitted: usize,
 }
 
 /// Run a distillation pass over old, undistilled threads.
@@ -109,6 +111,7 @@ pub async fn run_distillation_pass(
     let mut result = DistillationResult::default();
     let mut applied_per_target: HashMap<String, usize> = HashMap::new();
     let mut queued_per_target: HashMap<String, usize> = HashMap::new();
+    let mut review_candidates = Vec::new();
 
     for thread_id in thread_ids {
         result.threads_analyzed += 1;
@@ -131,7 +134,7 @@ pub async fn run_distillation_pass(
             }
 
             if candidate.confidence >= config.confidence_auto_apply {
-                if apply_distilled_candidate(db, agent_data_dir, &candidate).await? {
+                if apply_distilled_candidate(db, agent_data_dir, config, &candidate).await? {
                     *applied_per_target.entry(target_key).or_insert(0) += 1;
                     result.auto_applied += 1;
                     log_distillation_candidate(db, &candidate, true, &config.agent_id).await?;
@@ -142,12 +145,18 @@ pub async fn run_distillation_pass(
             } else if candidate.confidence >= config.confidence_review_queue {
                 *queued_per_target.entry(target_key).or_insert(0) += 1;
                 result.queued_for_review += 1;
+                review_candidates.push(candidate.clone());
                 log_distillation_candidate(db, &candidate, false, &config.agent_id).await?;
             } else {
                 result.discarded += 1;
                 log_distillation_candidate(db, &candidate, false, &config.agent_id).await?;
             }
         }
+    }
+
+    if config.review_notification && !review_candidates.is_empty() {
+        emit_review_notification(db, &review_candidates, &config.agent_id).await?;
+        result.review_notifications_emitted = 1;
     }
 
     Ok(result)
@@ -346,6 +355,7 @@ fn has_workspace_markers(lower: &str) -> bool {
 async fn apply_distilled_candidate(
     db: &HistoryStore,
     agent_data_dir: &std::path::Path,
+    config: &DistillationConfig,
     candidate: &DistillationCandidate,
 ) -> anyhow::Result<bool> {
     let target = match candidate.target_file.as_str() {
@@ -381,7 +391,12 @@ async fn apply_distilled_candidate(
     .await;
 
     match applied {
-        Ok(_) => Ok(true),
+        Ok(_) => {
+            if target != MemoryTarget::User {
+                trim_distilled_entries_to_limit(&path, config.max_entries_per_file).await?;
+            }
+            Ok(true)
+        }
         Err(error) => {
             tracing::warn!(
                 thread_id = %candidate.source_thread_id,
@@ -433,9 +448,124 @@ async fn log_distillation_candidate(
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
+async fn emit_review_notification(
+    db: &HistoryStore,
+    candidates: &[DistillationCandidate],
+    agent_id: &str,
+) -> anyhow::Result<()> {
+    let count = candidates.len();
+    let preview = candidates
+        .iter()
+        .take(3)
+        .map(|candidate| {
+            format!(
+                "- {} [{} → {}]",
+                candidate.distilled_fact, candidate.category, candidate.target_file
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut digest = Sha256::new();
+    for candidate in candidates {
+        digest.update(candidate.source_thread_id.as_bytes());
+        digest.update([0u8]);
+        digest.update(candidate.distilled_fact.as_bytes());
+        digest.update([0xffu8]);
+    }
+    let digest_hex = format!("{:x}", digest.finalize());
+    let now = now_millis() as i64;
+
+    db.upsert_notification(&InboxNotification {
+        id: format!("distillation-review:{}:{}", agent_id, &digest_hex[..16]),
+        source: "memory_distillation".to_string(),
+        kind: "memory_distillation_review".to_string(),
+        title: format!("Memory distillation queued {} review item(s)", count),
+        body: if count > 3 {
+            format!("{}\n- … and {} more", preview, count - 3)
+        } else {
+            preview
+        },
+        subtitle: Some(agent_id.to_string()),
+        severity: "info".to_string(),
+        created_at: now,
+        updated_at: now,
+        read_at: None,
+        archived_at: None,
+        deleted_at: None,
+        actions: Vec::new(),
+        metadata_json: Some(
+            serde_json::json!({
+                "candidate_count": count,
+                "agent_id": agent_id,
+                "target_files": candidates.iter().map(|c| c.target_file.as_str()).collect::<Vec<_>>(),
+                "categories": candidates.iter().map(|c| c.category.to_string()).collect::<Vec<_>>()
+            })
+            .to_string(),
+        ),
+    })
+    .await
+}
+
+async fn trim_distilled_entries_to_limit(
+    path: &std::path::Path,
+    max_entries: usize,
+) -> anyhow::Result<()> {
+    if max_entries == 0 {
+        return Ok(());
+    }
+
+    let existing = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    let trimmed = trim_distilled_entries_in_content(&existing, max_entries);
+    if trimmed != existing {
+        tokio::fs::write(path, trimmed).await?;
+    }
+    Ok(())
+}
+
+fn trim_distilled_entries_in_content(content: &str, max_entries: usize) -> String {
+    if max_entries == 0 {
+        return content.to_string();
+    }
+
+    let lines = content.lines().collect::<Vec<_>>();
+    let distilled_indices = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, line)| is_distilled_entry(line).then_some(idx))
+        .collect::<Vec<_>>();
+    if distilled_indices.len() <= max_entries {
+        return content.to_string();
+    }
+
+    let remove_count = distilled_indices.len() - max_entries;
+    let to_remove = distilled_indices
+        .into_iter()
+        .take(remove_count)
+        .collect::<HashSet<_>>();
+    let kept = lines
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, line)| (!to_remove.contains(&idx)).then_some(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if content.ends_with('\n') && !kept.is_empty() {
+        format!("{kept}\n")
+    } else {
+        kept
+    }
+}
+
+fn is_distilled_entry(line: &str) -> bool {
+    line.trim_start().starts_with("- [distilled]")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use uuid::Uuid;
 
     #[test]
     fn memory_category_display() {
@@ -481,5 +611,55 @@ mod tests {
     fn filters_ephemeral_lines() {
         assert!(candidate_from_line("thread-1", 0, "begin implementation").is_none());
         assert!(candidate_from_line("thread-1", 0, "Can you continue?").is_none());
+    }
+
+    #[test]
+    fn trims_oldest_distilled_entries_only() {
+        let content = "# Memory\n\n- durable fact\n- [distilled] oldest\n- [distilled] middle\n- [distilled] newest\n";
+        let trimmed = trim_distilled_entries_in_content(content, 2);
+        assert!(trimmed.contains("- durable fact"));
+        assert!(!trimmed.contains("- [distilled] oldest"));
+        assert!(trimmed.contains("- [distilled] middle"));
+        assert!(trimmed.contains("- [distilled] newest"));
+    }
+
+    #[tokio::test]
+    async fn review_notification_is_persisted() -> anyhow::Result<()> {
+        let root = std::env::temp_dir().join(format!("tamux-distill-test-{}", Uuid::new_v4()));
+        let history = HistoryStore::new_test_store(&root).await?;
+        let candidates = vec![
+            DistillationCandidate {
+                source_thread_id: "thread-1".into(),
+                source_message_range: Some("msg#1".into()),
+                distilled_fact: "Use the cargo package name `tamux-daemon` for `cargo -p`.".into(),
+                target_file: "MEMORY.md".into(),
+                category: MemoryCategory::Convention,
+                confidence: 0.62,
+                reasoning: "explicit correction".into(),
+            },
+            DistillationCandidate {
+                source_thread_id: "thread-2".into(),
+                source_message_range: Some("msg#2".into()),
+                distilled_fact: "Prefer summary-first answers with hard details below.".into(),
+                target_file: "USER.md".into(),
+                category: MemoryCategory::Preference,
+                confidence: 0.58,
+                reasoning: "explicit operator preference".into(),
+            },
+        ];
+
+        emit_review_notification(&history, &candidates, "rarog").await?;
+
+        let notifications = history.list_notifications(false, Some(10)).await?;
+        let notification = notifications
+            .into_iter()
+            .find(|item| item.kind == "memory_distillation_review")
+            .expect("memory distillation review notification should exist");
+        assert!(notification.title.contains("2 review item"));
+        assert!(notification.body.contains("tamux-daemon"));
+        assert!(notification.body.contains("summary-first"));
+
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 }
