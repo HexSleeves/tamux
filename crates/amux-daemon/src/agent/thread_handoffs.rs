@@ -87,7 +87,10 @@ pub(super) fn default_agent_id_for_thread(
     if thread_id == crate::agent::concierge::CONCIERGE_THREAD_ID {
         return CONCIERGE_AGENT_ID.to_string();
     }
-    if is_internal_dm_thread(thread_id) || is_internal_handoff_thread(thread_id) {
+    if is_internal_dm_thread(thread_id)
+        || is_participant_playground_thread(thread_id)
+        || is_internal_handoff_thread(thread_id)
+    {
         return canonical_agent_id(persisted_agent_name.unwrap_or(MAIN_AGENT_ID)).to_string();
     }
     canonical_agent_id(persisted_agent_name.unwrap_or(MAIN_AGENT_ID)).to_string()
@@ -163,7 +166,10 @@ pub(super) fn active_agent_name_for_thread(
     if thread.id == crate::agent::concierge::CONCIERGE_THREAD_ID {
         return CONCIERGE_AGENT_NAME.to_string();
     }
-    if is_internal_dm_thread(&thread.id) || is_internal_handoff_thread(&thread.id) {
+    if is_internal_dm_thread(&thread.id)
+        || is_participant_playground_thread(&thread.id)
+        || is_internal_handoff_thread(&thread.id)
+    {
         return "Internal DM".to_string();
     }
     MAIN_AGENT_NAME.to_string()

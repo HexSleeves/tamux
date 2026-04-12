@@ -155,6 +155,39 @@ struct ParticipantObserverResponderConfig {
 }
 
 impl AgentEngine {
+    async fn prepare_participant_playground_thread(
+        &self,
+        visible_thread_id: &str,
+        target_agent_id: &str,
+        wrapped_prompt: &str,
+    ) -> String {
+        let playground_thread_id =
+            participant_playground_thread_id(visible_thread_id, target_agent_id);
+        let _ = self
+            .get_or_create_thread_with_target(
+                Some(&playground_thread_id),
+                wrapped_prompt,
+                Some(target_agent_id),
+            )
+            .await;
+        self.set_thread_handoff_state(
+            &playground_thread_id,
+            initial_thread_handoff_state(
+                &playground_thread_id,
+                Some(canonical_agent_name(target_agent_id)),
+                now_millis(),
+            ),
+        )
+        .await;
+        self.ensure_thread_identity(
+            &playground_thread_id,
+            &participant_playground_thread_title(visible_thread_id, target_agent_id),
+            false,
+        )
+        .await;
+        playground_thread_id
+    }
+
     async fn compact_participant_prompt_messages(
         &self,
         target_agent_id: &str,
@@ -283,114 +316,77 @@ impl AgentEngine {
 
     async fn run_hidden_participant_prompt(
         &self,
+        visible_thread_id: &str,
         target_agent_id: &str,
         prompt: &str,
     ) -> Result<String> {
         let target_agent_id = canonical_agent_id(target_agent_id).to_string();
-        let prompt = prompt.to_string();
+        let prompt = prompt.trim().to_string();
+        if prompt.is_empty() {
+            anyhow::bail!("participant playground prompt cannot be empty");
+        }
+        let playground_thread_id = self
+            .prepare_participant_playground_thread(visible_thread_id, &target_agent_id, &prompt)
+            .await;
+        let prior_assistant_message_id = self
+            .threads
+            .read()
+            .await
+            .get(&playground_thread_id)
+            .and_then(|thread| {
+                thread
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|message| {
+                        message.role == MessageRole::Assistant
+                            && message.tool_calls.as_ref().is_none_or(Vec::is_empty)
+                    })
+                    .map(|message| message.id.clone())
+            });
         Box::pin(run_with_agent_scope(target_agent_id.clone(), async move {
-            let responder = self
-                .participant_observer_responder_config(&target_agent_id)
+            let outcome = self
+                .run_internal_send_loop(
+                    Some(&playground_thread_id),
+                    &prompt,
+                    &prompt,
+                    None,
+                    None,
+                    None,
+                    None,
+                    false,
+                    false,
+                )
                 .await?;
-            let sub_agents = self.list_sub_agents().await;
-            let memory = self.current_memory_snapshot().await;
-            let memory_paths = memory_paths_for_scope(&self.data_dir, &target_agent_id);
-            let config = self.config.read().await.clone();
-            let system_prompt = build_system_prompt(
-                &config,
-                &responder.base_prompt,
-                &memory,
-                &memory_paths,
-                &target_agent_id,
-                &sub_agents,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            );
-            let messages = vec![ApiMessage {
-                role: "user".into(),
-                content: ApiContent::Text(prompt),
-                tool_call_id: None,
-                name: None,
-                tool_calls: None,
-            }];
-
-            self.check_circuit_breaker(&responder.provider_id).await?;
-            let mut stream = send_completion_request(
-                &self.http_client,
-                &responder.provider_id,
-                &responder.provider_config,
-                &system_prompt,
-                &messages,
-                &[],
-                responder.provider_config.api_transport,
-                None,
-                None,
-                RetryStrategy::Bounded {
-                    max_retries: 1,
-                    retry_delay_ms: 500,
-                },
-            );
-
-            let mut content = String::new();
-            let mut reasoning = String::new();
-            while let Some(chunk) = stream.next().await {
-                let chunk = match chunk {
-                    Ok(value) => value,
-                    Err(error) => {
-                        self.record_llm_outcome(&responder.provider_id, false).await;
-                        return Err(error);
-                    }
-                };
-                match chunk {
-                    CompletionChunk::Delta {
-                        content: delta,
-                        reasoning: reasoning_delta,
-                    } => {
-                        content.push_str(&delta);
-                        if let Some(reasoning_delta) = reasoning_delta {
-                            reasoning.push_str(&reasoning_delta);
-                        }
-                    }
-                    CompletionChunk::Done {
-                        content: done,
-                        reasoning: done_reasoning,
-                        ..
-                    } => {
-                        self.record_llm_outcome(&responder.provider_id, true).await;
-                        if let Some(done_reasoning) = done_reasoning {
-                            reasoning = done_reasoning;
-                        }
-                        let final_content = if done.is_empty() { content } else { done };
-                        if !final_content.trim().is_empty() {
-                            return Ok(final_content.trim().to_string());
-                        }
-                        if !reasoning.trim().is_empty() {
-                            return Ok(reasoning.trim().to_string());
-                        }
-                        anyhow::bail!("participant observer returned empty output");
-                    }
-                    CompletionChunk::Error { message } => {
-                        self.record_llm_outcome(&responder.provider_id, false).await;
-                        anyhow::bail!(message);
-                    }
-                    CompletionChunk::ToolCalls { .. } => {
-                        self.record_llm_outcome(&responder.provider_id, true).await;
-                        anyhow::bail!("participant observer unexpectedly returned tool calls");
-                    }
-                    CompletionChunk::TransportFallback { .. } | CompletionChunk::Retry { .. } => {}
-                }
-            }
-
-            if !content.trim().is_empty() {
-                return Ok(content.trim().to_string());
-            }
-
-            anyhow::bail!("participant observer returned empty output")
+            self.threads
+                .read()
+                .await
+                .get(&outcome.thread_id)
+                .and_then(|thread| {
+                    thread
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|message| {
+                            message.role == MessageRole::Assistant
+                                && message.tool_calls.as_ref().is_none_or(Vec::is_empty)
+                                && Some(message.id.as_str())
+                                    != prior_assistant_message_id.as_deref()
+                        })
+                        .and_then(|message| {
+                            if !message.content.trim().is_empty() {
+                                Some(message.content.trim().to_string())
+                            } else {
+                                message
+                                    .reasoning
+                                    .as_deref()
+                                    .map(str::trim)
+                                    .filter(|value| !value.is_empty())
+                                    .map(str::to_string)
+                            }
+                        })
+                })
+                .ok_or_else(|| anyhow::anyhow!("participant playground returned empty output"))
         }))
         .await
     }
@@ -425,7 +421,7 @@ impl AgentEngine {
             .await?;
         let prompt =
             build_visible_participant_message_prompt(participant, &compacted_messages, request);
-        self.run_hidden_participant_prompt(target_agent_id, &prompt)
+        self.run_hidden_participant_prompt(thread_id, target_agent_id, &prompt)
             .await
     }
 
@@ -539,7 +535,7 @@ impl AgentEngine {
             );
             let prompt = build_participant_prompt_from_snapshot(&participant, &compacted_messages);
             let response = self
-                .run_hidden_participant_prompt(&participant.agent_id, &prompt)
+                .run_hidden_participant_prompt(thread_id, &participant.agent_id, &prompt)
                 .await?;
             let Some((force_send, message)) = parse_participant_suggestion_response(&response)
             else {

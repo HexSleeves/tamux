@@ -999,12 +999,10 @@ async fn heuristic_compaction_artifact_persists_and_request_uses_hidden_payload(
         artifact.compaction_strategy,
         Some(CompactionStrategy::Heuristic)
     );
-    assert!(
-        artifact
-            .compaction_payload
-            .as_deref()
-            .is_some_and(|payload| payload.starts_with("# 🤖 Agent Context: State Checkpoint"))
-    );
+    assert!(artifact
+        .compaction_payload
+        .as_deref()
+        .is_some_and(|payload| payload.starts_with("# 🤖 Agent Context: State Checkpoint")));
 
     let compacted = compact_messages_for_request(&thread.messages, &config, &provider);
     assert_eq!(compacted.len(), 2);
@@ -1861,24 +1859,18 @@ mod structural_memory {
             crate::agent::context::structural_memory::discover_workspace_seeds(root.path())
                 .expect("workspace seed discovery should succeed");
 
-        assert!(
-            memory
-                .workspace_seeds
-                .iter()
-                .any(|seed| seed.node_id == "node:file:Cargo.toml")
-        );
-        assert!(
-            memory
-                .workspace_seeds
-                .iter()
-                .any(|seed| seed.node_id == "node:file:frontend/package.json")
-        );
-        assert!(
-            memory
-                .workspace_seeds
-                .iter()
-                .any(|seed| seed.node_id == "node:file:frontend/tsconfig.json")
-        );
+        assert!(memory
+            .workspace_seeds
+            .iter()
+            .any(|seed| seed.node_id == "node:file:Cargo.toml"));
+        assert!(memory
+            .workspace_seeds
+            .iter()
+            .any(|seed| seed.node_id == "node:file:frontend/package.json"));
+        assert!(memory
+            .workspace_seeds
+            .iter()
+            .any(|seed| seed.node_id == "node:file:frontend/tsconfig.json"));
         assert_eq!(
             memory.language_hints,
             vec![

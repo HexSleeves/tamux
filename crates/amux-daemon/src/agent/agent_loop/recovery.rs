@@ -188,8 +188,7 @@ fn classify_fixable_upstream_recovery(
         || combined.contains("upstream_thread_id")
         || combined.contains("stale thread")
         || combined.contains("message stack")
-        || (combined.contains("no tool call found")
-            && combined.contains("function call output"));
+        || (combined.contains("no tool call found") && combined.contains("function call output"));
 
     match structured.class.as_str() {
         "request_invalid"
@@ -202,12 +201,10 @@ fn classify_fixable_upstream_recovery(
                 action: FixableUpstreamRecoveryAction::RepairThreadStateAndRetry,
             })
         }
-        "request_invalid" if stale_continuation_like => {
-            Some(FixableUpstreamRecovery {
-                signature: "request-invalid-stale-continuation".to_string(),
-                action: FixableUpstreamRecoveryAction::RepairThreadStateAndRetry,
-            })
-        }
+        "request_invalid" if stale_continuation_like => Some(FixableUpstreamRecovery {
+            signature: "request-invalid-stale-continuation".to_string(),
+            action: FixableUpstreamRecoveryAction::RepairThreadStateAndRetry,
+        }),
         "transport_incompatible"
             if stale_continuation_like
                 || combined.contains("request body")

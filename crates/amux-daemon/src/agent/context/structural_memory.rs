@@ -689,7 +689,8 @@ fn extract_tool_file_paths(tool_name: &str, tool_arguments: &str) -> Vec<PathBuf
     }
 
     if tool_name == "apply_patch" {
-        if let Some(patch_text) = arguments.get("input").and_then(|value| value.as_str()) {
+        if let Some(patch_text) = crate::agent::tool_executor::get_apply_patch_text_arg(&arguments)
+        {
             if let Ok(patch_paths) =
                 crate::agent::tool_executor::extract_apply_patch_paths(patch_text)
             {

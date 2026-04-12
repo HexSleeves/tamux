@@ -126,7 +126,10 @@ async fn current_visible_thread_responder_is_active_participant(
     engine: &AgentEngine,
     thread_id: &str,
 ) -> bool {
-    if is_internal_dm_thread(thread_id) || is_internal_handoff_thread(thread_id) {
+    if is_internal_dm_thread(thread_id)
+        || is_participant_playground_thread(thread_id)
+        || is_internal_handoff_thread(thread_id)
+    {
         return false;
     }
     let Some(active_agent_id) = engine.active_agent_id_for_thread(thread_id).await else {
@@ -143,7 +146,10 @@ async fn current_visible_thread_responder_is_active_participant(
 }
 
 async fn visible_thread_has_participants(engine: &AgentEngine, thread_id: &str) -> bool {
-    if is_internal_dm_thread(thread_id) || is_internal_handoff_thread(thread_id) {
+    if is_internal_dm_thread(thread_id)
+        || is_participant_playground_thread(thread_id)
+        || is_internal_handoff_thread(thread_id)
+    {
         return false;
     }
     !engine.list_thread_participants(thread_id).await.is_empty()
@@ -537,7 +543,8 @@ impl<'a> SendMessageRunner<'a> {
             )
         };
         let internal_dm_thread = is_internal_dm_thread(&tid);
-        if internal_dm_thread {
+        let participant_playground_thread = is_participant_playground_thread(&tid);
+        if internal_dm_thread && !participant_playground_thread {
             task_tool_filter = Some(crate::agent::subagent::tool_filter::ToolFilter::deny_all());
         }
         let initial_copilot_initiator = if record_operator {

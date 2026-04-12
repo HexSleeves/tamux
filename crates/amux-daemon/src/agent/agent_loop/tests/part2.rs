@@ -2266,7 +2266,10 @@ async fn strong_match_recommends_skill_before_non_discovery_tool_without_blockin
         }
     }
     assert!(saw_gate_notice, "expected a skill gate workflow notice");
-    assert!(saw_tool_result, "expected read_file to proceed after the advisory notice");
+    assert!(
+        saw_tool_result,
+        "expected read_file to proceed after the advisory notice"
+    );
 
     let metadata = tokio::time::timeout(std::time::Duration::from_secs(1), async {
         loop {

@@ -22,7 +22,11 @@ const MAX_WAITING_TIMEOUTS_BEFORE_FRESH_RUNNER: u32 = 2;
 
 fn stream_timeout_retry_delay_ms(stream_timeout_count: u32) -> u64 {
     if cfg!(test) {
-        if stream_timeout_count >= 3 { 50 } else { 20 }
+        if stream_timeout_count >= 3 {
+            50
+        } else {
+            20
+        }
     } else if stream_timeout_count >= 3 {
         30_000
     } else {
@@ -793,7 +797,7 @@ impl<'a> SendMessageRunner<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_LLM_STREAM_CHUNK_TIMEOUT_SECS, inter_request_delay};
+    use super::{inter_request_delay, DEFAULT_LLM_STREAM_CHUNK_TIMEOUT_SECS};
     use std::time::Duration;
 
     #[test]

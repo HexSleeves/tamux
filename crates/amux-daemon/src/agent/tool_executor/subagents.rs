@@ -399,6 +399,7 @@ async fn execute_list_participants(agent: &AgentEngine, thread_id: &str) -> Resu
         anyhow::bail!("list_participants requires a thread context");
     }
     if crate::agent::agent_identity::is_internal_dm_thread(thread_id)
+        || crate::agent::agent_identity::is_participant_playground_thread(thread_id)
         || crate::agent::is_internal_handoff_thread(thread_id)
     {
         anyhow::bail!("list_participants is only available on visible operator threads");
@@ -950,6 +951,7 @@ async fn execute_message_agent(
     if request_visible_thread_continuation
         && (thread_id.trim().is_empty()
             || crate::agent::agent_identity::is_internal_dm_thread(thread_id)
+            || crate::agent::agent_identity::is_participant_playground_thread(thread_id)
             || crate::agent::is_internal_handoff_thread(thread_id))
     {
         anyhow::bail!(

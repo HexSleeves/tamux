@@ -116,6 +116,7 @@ Behavior:
 - the participant watches visible thread activity
 - when it decides to contribute, it adds a thread message or a queued visible suggestion instead of using hidden internal messages
 - repeating `@agent ...` updates that participant instead of creating duplicates
+- to stop or remove agent from participants list use @agent stop or @agent leave
 
 Use `!agent ...` for hidden internal DM.
 

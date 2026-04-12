@@ -273,6 +273,7 @@ impl AgentEngine {
 
 fn thread_is_visible_by_default(thread: &AgentThread) -> bool {
     !crate::agent::concierge::is_user_visible_thread(thread)
+        && !crate::agent::agent_identity::is_participant_playground_thread(&thread.id)
         && !crate::agent::is_internal_handoff_thread(&thread.id)
 }
 

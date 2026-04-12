@@ -1,6 +1,6 @@
 //! Context compaction — token-aware message compression for LLM requests.
 
-use super::llm_client::{ApiToolCall, ApiToolCallFunction, messages_to_api_format};
+use super::llm_client::{messages_to_api_format, ApiToolCall, ApiToolCallFunction};
 use super::*;
 use crate::agent::context::structural_memory::{StructuralContextEntry, ThreadStructuralMemory};
 use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
@@ -1882,6 +1882,7 @@ impl AgentEngine {
         let checkpoint_payload = build_checkpoint_compaction_payload(messages, target_tokens);
 
         if crate::agent::agent_identity::is_internal_dm_thread(thread_id)
+            || crate::agent::agent_identity::is_participant_playground_thread(thread_id)
             || super::thread_handoffs::is_internal_handoff_thread(thread_id)
         {
             return RuleBasedCompactionPayload {

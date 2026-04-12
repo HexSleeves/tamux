@@ -692,6 +692,20 @@ async fn visible_thread_participant_send_stays_hidden_until_final_message_is_rea
         }),
         "final visible thread should contain only the completed participant-authored message"
     );
+    let playground_thread_id =
+        crate::agent::agent_identity::participant_playground_thread_id(thread_id, "weles");
+    let playground = engine
+        .get_thread_filtered(&playground_thread_id, true, None, 0)
+        .await
+        .expect("participant playground thread should be created")
+        .thread;
+    assert!(
+        playground
+            .messages
+            .iter()
+            .any(|message| message.role == MessageRole::Assistant),
+        "hidden participant drafting should persist in the dedicated playground thread"
+    );
 }
 
 #[tokio::test]

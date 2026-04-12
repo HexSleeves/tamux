@@ -8,6 +8,7 @@
 use super::*;
 use crate::history::HistoryStore;
 use amux_protocol::{AgentDbMessage, InboxNotification};
+use chrono::{SecondsFormat, Utc};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -171,9 +172,15 @@ async fn list_undistilled_threads(
         .call(move |conn| {
             let mut stmt = conn.prepare(
                 "SELECT id
-                 FROM agent_threads
+                 FROM agent_threads AS threads
                  WHERE updated_at < ?1
-                   AND id NOT IN (SELECT source_thread_id FROM memory_distillation_log)
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM memory_distillation_log AS log
+                       WHERE log.source_thread_id = threads.id
+                         AND log.applied_to_memory = 1
+                         AND log.created_at_ms >= threads.updated_at
+                   )
                  ORDER BY updated_at ASC
                  LIMIT ?2",
             )?;
@@ -188,8 +195,15 @@ fn extract_candidates_from_messages(
     thread_id: &str,
     messages: &[AgentDbMessage],
 ) -> Vec<DistillationCandidate> {
-    let mut seen = BTreeSet::new();
-    let mut candidates = Vec::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut supporting_ranges: Vec<BTreeSet<usize>> = Vec::new();
+    let mut candidates: Vec<DistillationCandidate> = Vec::new();
+    let last_user_message_index = messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, message)| message.role.eq_ignore_ascii_case("user"))
+        .map(|(index, _)| index);
 
     for (index, message) in messages.iter().enumerate() {
         if !message.role.eq_ignore_ascii_case("user") {
@@ -197,16 +211,29 @@ fn extract_candidates_from_messages(
         }
 
         for line in message.content.lines() {
-            let Some(candidate) = candidate_from_line(thread_id, index, line) else {
+            let Some(mut candidate) = candidate_from_line(thread_id, index, line) else {
                 continue;
             };
             let dedupe_key = format!(
                 "{}::{}",
                 candidate.target_file,
-                candidate.distilled_fact.to_ascii_lowercase()
+                normalize_distilled_fact(&candidate.distilled_fact)
             );
-            if seen.insert(dedupe_key) {
+            if let Some(existing_index) = seen.get(&dedupe_key).copied() {
+                if supporting_ranges[existing_index].insert(index) {
+                    candidates[existing_index].source_message_range = format_source_message_range(
+                        &supporting_ranges[existing_index],
+                        last_user_message_index,
+                    );
+                }
+            } else {
+                let mut support = BTreeSet::new();
+                support.insert(index);
+                candidate.source_message_range =
+                    format_source_message_range(&support, last_user_message_index);
+                seen.insert(dedupe_key, candidates.len());
                 candidates.push(candidate);
+                supporting_ranges.push(support);
             }
         }
     }
@@ -214,9 +241,23 @@ fn extract_candidates_from_messages(
     candidates
 }
 
+fn format_source_message_range(
+    message_indices: &BTreeSet<usize>,
+    last_user_message_index: Option<usize>,
+) -> Option<String> {
+    let first = *message_indices.first()?;
+    let last = *message_indices.last()?;
+
+    if first == last && Some(last) == last_user_message_index {
+        Some("last_turn".to_string())
+    } else {
+        Some(format!("{}-{}", first + 1, last + 1))
+    }
+}
+
 fn candidate_from_line(
     thread_id: &str,
-    message_index: usize,
+    _message_index: usize,
     raw_line: &str,
 ) -> Option<DistillationCandidate> {
     let cleaned = sanitize_line(raw_line)?;
@@ -293,7 +334,7 @@ fn candidate_from_line(
 
     Some(DistillationCandidate {
         source_thread_id: thread_id.to_string(),
-        source_message_range: Some(format!("msg#{message_index}")),
+        source_message_range: None,
         distilled_fact: cleaned,
         target_file: target_file.to_string(),
         category,
@@ -369,11 +410,11 @@ async fn apply_distilled_candidate(
         MemoryTarget::Memory => paths.memory_path,
         MemoryTarget::User => paths.user_path,
     };
-    let note = format!("- [distilled] {}", candidate.distilled_fact);
     let existing = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-    if existing.contains(&note) {
+    if content_contains_equivalent_fact(&existing, &candidate.distilled_fact) {
         return Ok(false);
     }
+    let note = format_distilled_note(&candidate.distilled_fact, now_millis());
 
     let applied = apply_memory_update(
         agent_data_dir,
@@ -406,6 +447,83 @@ async fn apply_distilled_candidate(
             Ok(false)
         }
     }
+}
+
+fn format_distilled_note(fact: &str, timestamp_ms: u64) -> String {
+    let timestamp = chrono::DateTime::<Utc>::from_timestamp_millis(timestamp_ms as i64)
+        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
+        .unwrap_or_else(|| timestamp_ms.to_string());
+    format!("- [distilled][{timestamp}] {fact}")
+}
+
+fn content_contains_equivalent_fact(content: &str, fact: &str) -> bool {
+    let normalized_fact = normalize_distilled_fact(fact);
+    if normalized_fact.is_empty() {
+        return false;
+    }
+
+    content.lines().any(|line| {
+        normalized_line_fact(line)
+            .as_ref()
+            .is_some_and(|existing| existing == &normalized_fact)
+    })
+}
+
+fn normalized_line_fact(line: &str) -> Option<String> {
+    let cleaned = strip_distilled_markup(line);
+    if cleaned.is_empty() || cleaned.starts_with('#') {
+        return None;
+    }
+
+    let normalized = normalize_distilled_fact(&cleaned);
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn strip_distilled_markup(line: &str) -> String {
+    let mut cleaned = line.trim();
+    while let Some(rest) = cleaned.strip_prefix(['-', '*', '>', ' ']) {
+        cleaned = rest.trim_start();
+    }
+
+    let bytes = cleaned.as_bytes();
+    let mut idx = 0usize;
+    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+        idx += 1;
+    }
+    if idx > 0 && bytes.get(idx) == Some(&b'.') {
+        cleaned = cleaned[idx + 1..].trim_start();
+    }
+
+    while let Some(rest) = cleaned.strip_prefix('[') {
+        if let Some(end_idx) = rest.find(']') {
+            cleaned = rest[end_idx + 1..].trim_start();
+        } else {
+            break;
+        }
+    }
+
+    cleaned
+        .trim_matches('`')
+        .trim_matches('*')
+        .trim_matches('_')
+        .trim()
+        .to_string()
+}
+
+fn normalize_distilled_fact(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '/' || ch == '.' || ch == '-' {
+                ch.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 async fn log_distillation_candidate(
@@ -564,6 +682,7 @@ fn is_distilled_entry(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use amux_protocol::{AgentDbMessage, AgentDbThread};
     use std::fs;
     use uuid::Uuid;
 
@@ -608,6 +727,114 @@ mod tests {
     }
 
     #[test]
+    fn extract_candidates_uses_real_message_ranges_for_repeated_support() {
+        let messages = vec![
+            AgentDbMessage {
+                id: "m1".into(),
+                thread_id: "thread-1".into(),
+                created_at: 1,
+                role: "user".into(),
+                content: "Use the cargo package name `tamux-daemon` for `cargo -p`.".into(),
+                provider: None,
+                model: None,
+                input_tokens: None,
+                output_tokens: None,
+                total_tokens: None,
+                cost_usd: None,
+                reasoning: None,
+                tool_calls_json: None,
+                metadata_json: None,
+            },
+            AgentDbMessage {
+                id: "m2".into(),
+                thread_id: "thread-1".into(),
+                created_at: 2,
+                role: "assistant".into(),
+                content: "Acknowledged.".into(),
+                provider: None,
+                model: None,
+                input_tokens: None,
+                output_tokens: None,
+                total_tokens: None,
+                cost_usd: None,
+                reasoning: None,
+                tool_calls_json: None,
+                metadata_json: None,
+            },
+            AgentDbMessage {
+                id: "m3".into(),
+                thread_id: "thread-1".into(),
+                created_at: 3,
+                role: "user".into(),
+                content: "Use the cargo package name `tamux-daemon` for `cargo -p`.".into(),
+                provider: None,
+                model: None,
+                input_tokens: None,
+                output_tokens: None,
+                total_tokens: None,
+                cost_usd: None,
+                reasoning: None,
+                tool_calls_json: None,
+                metadata_json: None,
+            },
+        ];
+
+        let candidates = extract_candidates_from_messages("thread-1", &messages);
+        let candidate = candidates
+            .into_iter()
+            .find(|item| item.target_file == "MEMORY.md")
+            .expect("candidate should exist");
+        assert_eq!(candidate.source_message_range.as_deref(), Some("1-3"));
+    }
+
+    #[test]
+    fn extract_candidates_marks_last_user_turn_as_last_turn() {
+        let messages = vec![
+            AgentDbMessage {
+                id: "m1".into(),
+                thread_id: "thread-1".into(),
+                created_at: 1,
+                role: "assistant".into(),
+                content: "What do you prefer?".into(),
+                provider: None,
+                model: None,
+                input_tokens: None,
+                output_tokens: None,
+                total_tokens: None,
+                cost_usd: None,
+                reasoning: None,
+                tool_calls_json: None,
+                metadata_json: None,
+            },
+            AgentDbMessage {
+                id: "m2".into(),
+                thread_id: "thread-1".into(),
+                created_at: 2,
+                role: "user".into(),
+                content:
+                    "I prefer summary-first answers that still include the hard details below."
+                        .into(),
+                provider: None,
+                model: None,
+                input_tokens: None,
+                output_tokens: None,
+                total_tokens: None,
+                cost_usd: None,
+                reasoning: None,
+                tool_calls_json: None,
+                metadata_json: None,
+            },
+        ];
+
+        let candidates = extract_candidates_from_messages("thread-1", &messages);
+        let candidate = candidates
+            .into_iter()
+            .find(|item| item.target_file == "USER.md")
+            .expect("candidate should exist");
+        assert_eq!(candidate.source_message_range.as_deref(), Some("last_turn"));
+    }
+
+    #[test]
     fn filters_ephemeral_lines() {
         assert!(candidate_from_line("thread-1", 0, "begin implementation").is_none());
         assert!(candidate_from_line("thread-1", 0, "Can you continue?").is_none());
@@ -621,6 +848,229 @@ mod tests {
         assert!(!trimmed.contains("- [distilled] oldest"));
         assert!(trimmed.contains("- [distilled] middle"));
         assert!(trimmed.contains("- [distilled] newest"));
+    }
+
+    #[test]
+    fn formatted_distilled_note_includes_rfc3339_timestamp() {
+        let note = format_distilled_note("Use the cargo package name `tamux-daemon`.", 0);
+        assert_eq!(
+            note,
+            "- [distilled][1970-01-01T00:00:00Z] Use the cargo package name `tamux-daemon`."
+        );
+    }
+
+    #[test]
+    fn equivalent_fact_detection_ignores_distilled_provenance_tags() {
+        let content = concat!(
+            "# Memory\n",
+            "- [distilled] Use the cargo package name `tamux-daemon` for `cargo -p`.\n",
+            "- [distilled][2026-04-12T09:10:11Z] Prefer summary-first answers with hard details below.\n"
+        );
+
+        assert!(content_contains_equivalent_fact(
+            content,
+            "Use the cargo package name `tamux-daemon` for `cargo -p`."
+        ));
+        assert!(content_contains_equivalent_fact(
+            content,
+            "Prefer summary-first answers with hard details below."
+        ));
+        assert!(!content_contains_equivalent_fact(
+            content,
+            "Use the crate path when invoking cargo."
+        ));
+    }
+
+    #[tokio::test]
+    async fn apply_distilled_candidate_adds_timestamp_and_skips_equivalent_duplicate(
+    ) -> anyhow::Result<()> {
+        let root = std::env::temp_dir().join(format!("tamux-distill-test-{}", Uuid::new_v4()));
+        let history = HistoryStore::new_test_store(&root).await?;
+        ensure_memory_files(&root).await?;
+
+        let candidate = DistillationCandidate {
+            source_thread_id: "thread-1".into(),
+            source_message_range: Some("msg#1".into()),
+            distilled_fact: "Use the cargo package name `tamux-daemon` for `cargo -p`.".into(),
+            target_file: "MEMORY.md".into(),
+            category: MemoryCategory::Convention,
+            confidence: 0.91,
+            reasoning: "explicit operator correction".into(),
+        };
+        let config = DistillationConfig::default();
+
+        assert!(apply_distilled_candidate(&history, &root, &config, &candidate).await?);
+
+        let memory_path = memory_paths_for_scope(&root, &current_agent_scope_id()).memory_path;
+        let initial = tokio::fs::read_to_string(&memory_path).await?;
+        assert!(initial.contains("- [distilled]["));
+        assert!(initial.contains("Use the cargo package name `tamux-daemon` for `cargo -p`."));
+
+        assert!(!apply_distilled_candidate(&history, &root, &config, &candidate).await?);
+
+        let final_content = tokio::fs::read_to_string(&memory_path).await?;
+        assert_eq!(
+            final_content
+                .matches("Use the cargo package name `tamux-daemon` for `cargo -p`.")
+                .count(),
+            1
+        );
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_undistilled_threads_keeps_reviewed_but_unapplied_threads_eligible(
+    ) -> anyhow::Result<()> {
+        let root = std::env::temp_dir().join(format!("tamux-distill-test-{}", Uuid::new_v4()));
+        let history = HistoryStore::new_test_store(&root).await?;
+
+        for (id, updated_at) in [
+            ("old-never-distilled", 1_000_i64),
+            ("old-reviewed-only", 2_000_i64),
+            ("old-applied", 3_000_i64),
+            ("recent-thread", 9_500_i64),
+        ] {
+            history
+                .create_thread(&AgentDbThread {
+                    id: id.to_string(),
+                    workspace_id: None,
+                    surface_id: None,
+                    pane_id: None,
+                    agent_name: Some("Rarog".to_string()),
+                    title: id.to_string(),
+                    created_at: updated_at,
+                    updated_at,
+                    message_count: 0,
+                    total_tokens: 0,
+                    last_preview: String::new(),
+                    metadata_json: None,
+                })
+                .await?;
+        }
+
+        log_distillation_candidate(
+            &history,
+            &DistillationCandidate {
+                source_thread_id: "old-reviewed-only".into(),
+                source_message_range: Some("1-1".into()),
+                distilled_fact: "Use the cargo package name `tamux-daemon` for `cargo -p`."
+                    .into(),
+                target_file: "MEMORY.md".into(),
+                category: MemoryCategory::Convention,
+                confidence: 0.62,
+                reasoning: "queued for review".into(),
+            },
+            false,
+            "rarog",
+        )
+        .await?;
+
+        log_distillation_candidate(
+            &history,
+            &DistillationCandidate {
+                source_thread_id: "old-applied".into(),
+                source_message_range: Some("1-1".into()),
+                distilled_fact: "Prefer summary-first answers with hard details below.".into(),
+                target_file: "USER.md".into(),
+                category: MemoryCategory::Preference,
+                confidence: 0.88,
+                reasoning: "auto applied".into(),
+            },
+            true,
+            "rarog",
+        )
+        .await?;
+
+        let selected = list_undistilled_threads(&history, 9_000, 10).await?;
+
+        assert!(selected.contains(&"old-never-distilled".to_string()));
+        assert!(selected.contains(&"old-reviewed-only".to_string()));
+        assert!(!selected.contains(&"old-applied".to_string()));
+        assert!(!selected.contains(&"recent-thread".to_string()));
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_undistilled_threads_reincludes_threads_updated_after_applied_distillation(
+    ) -> anyhow::Result<()> {
+        let root = std::env::temp_dir().join(format!("tamux-distill-test-{}", Uuid::new_v4()));
+        let history = HistoryStore::new_test_store(&root).await?;
+
+        for (id, updated_at) in [
+            ("applied-before-last-activity", 8_000_i64),
+            ("applied-after-last-activity", 8_000_i64),
+            ("never-applied", 7_000_i64),
+        ] {
+            history
+                .create_thread(&AgentDbThread {
+                    id: id.to_string(),
+                    workspace_id: None,
+                    surface_id: None,
+                    pane_id: None,
+                    agent_name: Some("Rarog".to_string()),
+                    title: id.to_string(),
+                    created_at: updated_at,
+                    updated_at,
+                    message_count: 0,
+                    total_tokens: 0,
+                    last_preview: String::new(),
+                    metadata_json: None,
+                })
+                .await?;
+        }
+
+        history
+            .conn
+            .call(|conn| {
+                conn.execute(
+                    "INSERT INTO memory_distillation_log \
+                     (source_thread_id, source_message_range, distilled_fact, target_file, category, confidence, created_at_ms, applied_to_memory, agent_id) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    rusqlite::params![
+                        "applied-before-last-activity",
+                        "1-1",
+                        "Use the cargo package name `tamux-daemon` for `cargo -p`.",
+                        "MEMORY.md",
+                        "convention",
+                        0.91_f64,
+                        7_500_i64,
+                        1_i64,
+                        "rarog",
+                    ],
+                )?;
+                conn.execute(
+                    "INSERT INTO memory_distillation_log \
+                     (source_thread_id, source_message_range, distilled_fact, target_file, category, confidence, created_at_ms, applied_to_memory, agent_id) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    rusqlite::params![
+                        "applied-after-last-activity",
+                        "1-1",
+                        "Prefer summary-first answers with hard details below.",
+                        "USER.md",
+                        "preference",
+                        0.88_f64,
+                        8_500_i64,
+                        1_i64,
+                        "rarog",
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let selected = list_undistilled_threads(&history, 9_000, 10).await?;
+
+        assert!(selected.contains(&"applied-before-last-activity".to_string()));
+        assert!(selected.contains(&"never-applied".to_string()));
+        assert!(!selected.contains(&"applied-after-last-activity".to_string()));
+
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[tokio::test]

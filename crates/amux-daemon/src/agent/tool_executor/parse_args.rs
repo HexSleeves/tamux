@@ -148,6 +148,10 @@ pub(crate) fn get_string_arg<'a>(args: &'a serde_json::Value, names: &[&str]) ->
         .find_map(|name| args.get(*name).and_then(|value| value.as_str()))
 }
 
+pub(crate) fn get_apply_patch_text_arg<'a>(args: &'a serde_json::Value) -> Option<&'a str> {
+    get_string_arg(args, &["input", "patch"])
+}
+
 pub(crate) fn get_file_path_arg<'a>(args: &'a serde_json::Value) -> Option<&'a str> {
     ["path", "file_path", "filepath", "filename", "file"]
         .into_iter()

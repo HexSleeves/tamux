@@ -176,6 +176,11 @@ impl TuiModel {
         }
         self.anticipatory
             .reduce(crate::state::AnticipatoryAction::Clear);
+        let live_suggestion_ids = thread
+            .queued_participant_suggestions
+            .iter()
+            .map(|suggestion| suggestion.id.clone())
+            .collect::<std::collections::HashSet<_>>();
         let thread_id = thread.id.clone();
         let should_preserve_prepend_anchor = self.chat.active_thread().is_some_and(|existing| {
             let incoming_total = thread.total_message_count.max(thread.messages.len());
@@ -217,6 +222,7 @@ impl TuiModel {
         self.chat.reduce(chat::ChatAction::ThreadDetailReceived(
             conversion::convert_thread(thread),
         ));
+        self.sync_participant_queued_prompts_for_thread(&thread_id, &live_suggestion_ids);
         if should_preserve_prepend_anchor {
             self.chat.preserve_prepend_scroll_anchor(preserved_scroll);
         }

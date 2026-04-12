@@ -229,12 +229,12 @@ pub(crate) fn extract_apply_patch_paths(input: &str) -> Result<Vec<String>> {
 }
 
 async fn execute_apply_patch(args: &serde_json::Value) -> Result<String> {
-    if args.get("input").and_then(|value| value.as_str()).is_none() {
+    if get_apply_patch_text_arg(args).is_none() {
         return execute_apply_file_patch(args).await;
     }
 
-    let input = get_string_arg(args, &["input", "patch"])
-        .ok_or_else(|| anyhow::anyhow!("missing 'input' argument"))?;
+    let input = get_apply_patch_text_arg(args)
+        .ok_or_else(|| anyhow::anyhow!("missing 'input' or 'patch' argument"))?;
     let actions = parse_harness_patch_actions(input)?;
     if actions.is_empty() {
         anyhow::bail!("patch did not contain any file actions");
@@ -382,7 +382,9 @@ fn build_harness_update_action(path: &str, hunk: &[&str]) -> Result<HarnessPatch
     }
 
     if !saw_change {
-        anyhow::bail!("update patch for {path} did not contain any changed lines");
+        anyhow::bail!(
+            "update patch for {path} did not contain any changed lines; expected at least one '+' or '-' line inside each @@ hunk"
+        );
     }
     if old_lines.is_empty() {
         anyhow::bail!("update patch for {path} needs existing context to locate the change");

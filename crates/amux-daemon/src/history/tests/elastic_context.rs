@@ -642,6 +642,63 @@ mod structural_memory {
     }
 
     #[tokio::test]
+    async fn escaped_apply_patch_alias_paths_leave_structural_memory_unchanged() -> Result<()> {
+        let (store, root) = make_test_store().await?;
+
+        let mut memory = crate::agent::context::structural_memory::ThreadStructuralMemory {
+            workspace_seed_scan_complete: false,
+            language_hints: vec!["rust".to_string()],
+            workspace_seeds: vec![crate::agent::context::structural_memory::WorkspaceSeed {
+                node_id: "node:manifest:Cargo.toml".to_string(),
+                relative_path: "Cargo.toml".to_string(),
+                kind: "manifest".to_string(),
+            }],
+            observed_files: vec![crate::agent::context::structural_memory::ObservedFileNode {
+                node_id: "node:file:src/lib.rs".to_string(),
+                relative_path: "src/lib.rs".to_string(),
+            }],
+            edges: vec![crate::agent::context::structural_memory::StructuralEdge {
+                from: "node:manifest:Cargo.toml".to_string(),
+                to: "node:file:src/lib.rs".to_string(),
+                kind: "contains".to_string(),
+            }],
+        };
+        let expected = memory.clone();
+
+        let structural_refs = crate::agent::context::structural_memory::observe_successful_file_tool_result(
+            &mut memory,
+            &root,
+            "apply_patch",
+            &serde_json::json!({
+                "patch": "*** Begin Patch\n*** Update File: ../outside/file.ts\n@@\n-old\n+new\n*** End Patch",
+            })
+            .to_string(),
+            None,
+        )
+        .expect("escaped apply_patch alias observation should be skipped");
+
+        store
+            .upsert_thread_structural_memory_state(
+                "thread-escaped-apply-patch-alias",
+                &memory,
+                1_717_170_891,
+            )
+            .await?;
+
+        let restored: crate::agent::context::structural_memory::ThreadStructuralMemory = store
+            .get_thread_structural_memory_state("thread-escaped-apply-patch-alias")
+            .await?
+            .expect("typed thread structural memory should be stored");
+
+        assert!(structural_refs.is_empty());
+        assert_eq!(memory, expected);
+        assert_eq!(restored, expected);
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn observed_file_enrichment_reuses_cached_workspace_seed_discovery() -> Result<()> {
         let (_store, root) = make_test_store().await?;
 

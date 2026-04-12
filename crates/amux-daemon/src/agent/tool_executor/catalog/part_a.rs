@@ -157,7 +157,7 @@ fn add_available_tools_part_a(
 
         tools.push(tool_def(
             "apply_patch",
-            "Apply a harness-style patch with `*** Begin Patch` / `*** End Patch` markers, supporting Add/Update/Delete file actions. Also accepts the legacy `path` + `edits` exact-replacement shape for compatibility.",
+            "Apply a harness-style patch with `*** Begin Patch` / `*** End Patch` markers, supporting Add/Update/Delete file actions. Update hunks must include `@@` and at least one `-old` / `+new` line pair. Accepts `input` and legacy alias `patch`, plus the legacy `path` + `edits` exact-replacement shape for compatibility.",
             serde_json::json!({
                 "type": "object",
                 "minProperties": 1,
@@ -167,6 +167,7 @@ fn add_available_tools_part_a(
                 },
                 "properties": {
                     "input": { "type": "string", "description": "Harness-style patch text in the apply_patch format. Prefer this form for provider compatibility." },
+                    "patch": { "type": "string", "description": "Legacy alias for `input` containing the same harness-style patch text." },
                     "explanation": { "type": "string", "description": "Optional short explanation for why the patch is being applied." },
                     "path": { "type": "string", "description": "Legacy compatibility path for exact-replacement patch mode. Supply together with `edits`." },
                     "edits": {

@@ -14,6 +14,7 @@ pub(crate) const MAIN_AGENT_NAME: &str = AGENT_NAME_SWAROG;
 pub(super) const CONCIERGE_AGENT_ID: &str = AGENT_ID_RAROG;
 pub(super) const CONCIERGE_AGENT_NAME: &str = AGENT_NAME_RAROG;
 pub(super) const INTERNAL_DM_THREAD_PREFIX: &str = "dm:";
+pub(super) const PARTICIPANT_PLAYGROUND_THREAD_PREFIX: &str = "playground:";
 pub(super) const PERSONA_MARKER: &str = "Agent persona:";
 pub(super) const PERSONA_ID_MARKER: &str = "Agent persona id:";
 pub(super) const MAIN_AGENT_ALIAS: &str = "main";
@@ -221,6 +222,30 @@ pub(super) fn internal_dm_thread_title(agent_a: &str, agent_b: &str) -> String {
 
 pub(in crate::agent) fn is_internal_dm_thread(thread_id: &str) -> bool {
     thread_id.starts_with(INTERNAL_DM_THREAD_PREFIX)
+}
+
+pub(in crate::agent) fn participant_playground_thread_id(
+    visible_thread_id: &str,
+    participant_agent_id: &str,
+) -> String {
+    format!(
+        "{PARTICIPANT_PLAYGROUND_THREAD_PREFIX}{}:{visible_thread_id}",
+        canonical_agent_id(participant_agent_id)
+    )
+}
+
+pub(in crate::agent) fn participant_playground_thread_title(
+    visible_thread_id: &str,
+    participant_agent_id: &str,
+) -> String {
+    format!(
+        "Participant Playground · {} @ {visible_thread_id}",
+        canonical_agent_name(participant_agent_id)
+    )
+}
+
+pub(in crate::agent) fn is_participant_playground_thread(thread_id: &str) -> bool {
+    thread_id.starts_with(PARTICIPANT_PLAYGROUND_THREAD_PREFIX)
 }
 
 pub(super) fn spawned_persona_name(seed: &str) -> &'static str {

@@ -2006,6 +2006,101 @@ fn participant_suggestion_event_queues_prompt_with_agent_name() {
 }
 
 #[test]
+fn participant_suggestion_does_not_auto_flush_as_user_message_after_done() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+    model.concierge.auto_cleanup_on_navigate = false;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    model.handle_client_event(ClientEvent::ParticipantSuggestion {
+        thread_id: "thread-1".to_string(),
+        suggestion: crate::wire::ThreadParticipantSuggestion {
+            id: "sugg-1".to_string(),
+            target_agent_id: "weles".to_string(),
+            target_agent_name: "Weles".to_string(),
+            instruction: "check claim".to_string(),
+            force_send: false,
+            status: "queued".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            error: None,
+        },
+    });
+
+    model.handle_client_event(ClientEvent::Done {
+        thread_id: "thread-1".to_string(),
+        input_tokens: 0,
+        output_tokens: 0,
+        cost: None,
+        provider: None,
+        model: None,
+        tps: None,
+        generation_ms: None,
+        reasoning: None,
+        provider_final_result_json: None,
+    });
+
+    assert!(
+        daemon_rx.try_recv().is_err(),
+        "participant suggestions must not auto-submit through the normal send-message path"
+    );
+    assert_eq!(model.queued_prompts.len(), 1);
+    assert_eq!(
+        model.queued_prompts[0].suggestion_id.as_deref(),
+        Some("sugg-1")
+    );
+}
+
+#[test]
+fn thread_detail_prunes_stale_participant_prompts_after_daemon_removes_suggestion() {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    model.handle_client_event(ClientEvent::ParticipantSuggestion {
+        thread_id: "thread-1".to_string(),
+        suggestion: crate::wire::ThreadParticipantSuggestion {
+            id: "sugg-1".to_string(),
+            target_agent_id: "weles".to_string(),
+            target_agent_name: "Weles".to_string(),
+            instruction: "check claim".to_string(),
+            force_send: false,
+            status: "queued".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            error: None,
+        },
+    });
+    assert_eq!(model.queued_prompts.len(), 1);
+
+    model.handle_thread_detail_event(crate::wire::AgentThread {
+        id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+        messages: vec![],
+        queued_participant_suggestions: vec![],
+        created_at: 1,
+        updated_at: 2,
+        ..Default::default()
+    });
+
+    assert!(
+        model.queued_prompts.is_empty(),
+        "thread detail should clear stale participant prompts once the daemon no longer reports them"
+    );
+}
+
+#[test]
 fn queued_participant_send_now_stops_stream_and_sends_participant_command() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
     model.connected = true;

@@ -1,7 +1,11 @@
 use super::*;
 use amux_protocol::{AgentDbMessage, AgentDbThread, AgentStatisticsWindow};
 
-async fn seed_statistics_messages(store: &HistoryStore, thread_id: &str, now_ms: i64) -> Result<()> {
+async fn seed_statistics_messages(
+    store: &HistoryStore,
+    thread_id: &str,
+    now_ms: i64,
+) -> Result<()> {
     store
         .create_thread(&AgentDbThread {
             id: thread_id.to_string(),
@@ -144,7 +148,8 @@ async fn seed_statistics_messages(store: &HistoryStore, thread_id: &str, now_ms:
 }
 
 #[tokio::test]
-async fn agent_statistics_all_time_include_provider_model_rankings_and_incomplete_cost_flag() -> Result<()> {
+async fn agent_statistics_all_time_include_provider_model_rankings_and_incomplete_cost_flag(
+) -> Result<()> {
     let (store, root) = make_test_store().await?;
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

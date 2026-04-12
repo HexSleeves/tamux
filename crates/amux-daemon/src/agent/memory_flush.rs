@@ -188,6 +188,7 @@ impl AgentEngine {
         provider_config: &ProviderConfig,
     ) -> Option<(Vec<AgentMessage>, usize)> {
         if crate::agent::agent_identity::is_internal_dm_thread(thread_id)
+            || crate::agent::agent_identity::is_participant_playground_thread(thread_id)
             || super::thread_handoffs::is_internal_handoff_thread(thread_id)
         {
             return None;
