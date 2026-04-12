@@ -88,7 +88,10 @@ fn is_participant_deactivation_action(action: &str) -> bool {
 }
 
 impl AgentEngine {
-    async fn resolve_thread_participant_target(&self, alias: &str) -> Result<(String, String)> {
+    pub(in crate::agent) async fn resolve_thread_participant_target(
+        &self,
+        alias: &str,
+    ) -> Result<(String, String)> {
         let trimmed = alias.trim();
         if trimmed.is_empty() {
             anyhow::bail!("target agent cannot be empty");
@@ -110,6 +113,195 @@ impl AgentEngine {
         }
 
         anyhow::bail!("unknown agent target: {trimmed}");
+    }
+
+    async fn latest_visible_user_message_content(&self, thread_id: &str) -> Option<String> {
+        let threads = self.threads.read().await;
+        threads.get(thread_id).and_then(|thread| {
+            thread
+                .messages
+                .iter()
+                .rev()
+                .find(|message| message.role == MessageRole::User)
+                .map(|message| message.content.clone())
+        })
+    }
+
+    pub(in crate::agent) async fn build_internal_delegate_payload(
+        &self,
+        thread_id: Option<&str>,
+        content: &str,
+        request_visible_thread_continuation: bool,
+    ) -> String {
+        let mut payload = String::new();
+        if let Some(thread_id) = thread_id {
+            payload.push_str(&format!(
+                "Visible thread id: {thread_id}\nThread delegation mode: internal_hidden\n"
+            ));
+            payload.push_str(&format!(
+                "Continuation requested on visible thread: {}\n",
+                if request_visible_thread_continuation {
+                    "yes"
+                } else {
+                    "no"
+                }
+            ));
+            if request_visible_thread_continuation {
+                payload.push_str("Do not continue work in this internal DM thread.\n");
+            }
+            payload.push('\n');
+            if let Some(thread) = self.get_thread(thread_id).await {
+                payload.push_str(&format!("Visible thread title: {}\n", thread.title.trim()));
+                let recent_messages = thread
+                    .messages
+                    .iter()
+                    .rev()
+                    .take(8)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>();
+                if !recent_messages.is_empty() {
+                    payload.push_str("Recent visible thread messages:\n");
+                    for message in recent_messages {
+                        let role = match message.role {
+                            MessageRole::Assistant => "assistant",
+                            MessageRole::System => "system",
+                            MessageRole::Tool => "tool",
+                            _ => "user",
+                        };
+                        payload.push_str(&format!("- {role}: {}\n", message.content.trim()));
+                    }
+                    payload.push('\n');
+                }
+            }
+        }
+        payload.push_str("Delegation request:\n");
+        payload.push_str(content.trim());
+        payload
+    }
+
+    pub(in crate::agent) async fn build_visible_thread_continuation_prompt(
+        &self,
+        thread_id: &str,
+        sender: &str,
+        target_agent_id: &str,
+        content: &str,
+    ) -> String {
+        let sender_name = canonical_agent_name(sender);
+        let target_agent_name = canonical_agent_name(target_agent_id);
+        let latest_operator_request = self
+            .latest_visible_user_message_content(thread_id)
+            .await
+            .unwrap_or_default();
+        if latest_operator_request.trim().is_empty() {
+            format!(
+                "Continue the visible operator thread as {}. This continuation was explicitly requested in an internal DM from {}. Internal DMs are discussion-only; do not continue work there.\n\nInternal delegation request:\n{}",
+                target_agent_name,
+                sender_name,
+                content.trim()
+            )
+        } else {
+            format!(
+                "Continue the visible operator thread as {}. This continuation was explicitly requested in an internal DM from {}. Internal DMs are discussion-only; do not continue work there.\n\nInternal delegation request:\n{}\n\nLatest operator request already on this thread:\n{}",
+                target_agent_name,
+                sender_name,
+                content.trim(),
+                latest_operator_request.trim()
+            )
+        }
+    }
+
+    pub(in crate::agent) async fn enqueue_visible_thread_continuation(
+        &self,
+        thread_id: &str,
+        continuation: DeferredVisibleThreadContinuation,
+    ) {
+        let mut queued = self.deferred_visible_thread_continuations.lock().await;
+        queued
+            .entry(thread_id.to_string())
+            .or_default()
+            .push(continuation);
+    }
+
+    pub(in crate::agent) async fn flush_deferred_visible_thread_continuations(
+        &self,
+        thread_id: &str,
+    ) -> Result<()> {
+        let continuations = {
+            let mut queued = self.deferred_visible_thread_continuations.lock().await;
+            queued.remove(thread_id).unwrap_or_default()
+        };
+        for continuation in continuations {
+            self.continue_visible_thread_as_agent(
+                thread_id,
+                &continuation.agent_id,
+                continuation.preferred_session_hint.as_deref(),
+                &continuation.llm_user_content,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn continue_visible_thread_as_agent(
+        &self,
+        thread_id: &str,
+        agent_id: &str,
+        preferred_session_hint: Option<&str>,
+        llm_user_content: &str,
+    ) -> Result<SendMessageOutcome> {
+        if !self.threads.read().await.contains_key(thread_id) {
+            anyhow::bail!("thread not found: {thread_id}");
+        }
+
+        let stored_user_content = self
+            .latest_visible_user_message_content(thread_id)
+            .await
+            .unwrap_or_else(|| llm_user_content.to_string());
+        let mut current_thread_id = thread_id.to_string();
+        let mut current_llm_user_content = llm_user_content.to_string();
+        let mut current_agent_scope_id = canonical_agent_id(agent_id).to_string();
+
+        loop {
+            let thread_for_turn = current_thread_id.clone();
+            let stored_user_content_for_turn = stored_user_content.clone();
+            let llm_user_content_for_turn = current_llm_user_content.clone();
+            let client_surface_for_turn = self.get_thread_client_surface(&thread_for_turn).await;
+            let outcome = Box::pin(run_with_agent_scope(current_agent_scope_id.clone(), async move {
+                self.run_internal_send_loop(
+                    Some(thread_for_turn.as_str()),
+                    &stored_user_content_for_turn,
+                    &llm_user_content_for_turn,
+                    None,
+                    preferred_session_hint,
+                    None,
+                    client_surface_for_turn,
+                    false,
+                    true,
+                )
+                .await
+            }))
+            .await?;
+
+            if let Some(restart) = outcome.handoff_restart.clone() {
+                current_thread_id = outcome.thread_id.clone();
+                current_llm_user_content = restart.llm_user_content;
+                current_agent_scope_id = self
+                    .agent_scope_id_for_turn(Some(&current_thread_id), None)
+                    .await;
+                continue;
+            }
+
+            if !outcome.interrupted_for_approval {
+                Box::pin(
+                    self.maybe_auto_send_next_thread_participant_suggestion(&outcome.thread_id),
+                )
+                .await?;
+            }
+            return Ok(outcome);
+        }
     }
 
     pub async fn list_thread_participants(&self, thread_id: &str) -> Vec<ThreadParticipantState> {
@@ -198,6 +390,10 @@ impl AgentEngine {
 
         if suggestion.force_send {
             self.send_thread_participant_suggestion(thread_id, &suggestion.id, None)
+                .await?;
+        } else {
+            let _ = self
+                .maybe_auto_send_next_thread_participant_suggestion(thread_id)
                 .await?;
         }
 
@@ -364,6 +560,8 @@ impl AgentEngine {
                         }),
                     )
                     .await;
+                self.continue_thread_after_participant_post_or_notice(thread_id)
+                    .await;
                 Ok(true)
             }
             Err(error) => {
@@ -397,6 +595,91 @@ impl AgentEngine {
         }
 
         serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string())
+    }
+
+    pub(crate) async fn continue_thread_after_participant_post_or_notice(&self, thread_id: &str) {
+        let (prior_user_message, latest_participant_author_id) =
+            self.threads.read().await.get(thread_id).map_or((None, None), |thread| {
+                let prior_user_message = thread
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.role == MessageRole::User)
+                    .map(|message| message.content.clone());
+                let latest_participant_author_id = thread.messages.last().and_then(|message| {
+                    (message.role == MessageRole::Assistant)
+                        .then(|| message.author_agent_id.clone())
+                        .flatten()
+                });
+                (prior_user_message, latest_participant_author_id)
+            });
+        let Some(prior_user_message) = prior_user_message.filter(|value| !value.trim().is_empty())
+        else {
+            return;
+        };
+
+        if let Some(latest_participant_author_id) = latest_participant_author_id {
+            if self
+                .active_agent_id_for_thread(thread_id)
+                .await
+                .as_deref()
+                == Some(latest_participant_author_id.as_str())
+            {
+                tracing::info!(
+                    thread_id = %thread_id,
+                    participant = %latest_participant_author_id,
+                    "skipping participant follow-up continuation because the participant is already the active responder"
+                );
+                return;
+            }
+        }
+
+        if let Err(error) = self
+            .continue_existing_user_message_without_queue_drain(thread_id, &prior_user_message)
+            .await
+        {
+            tracing::warn!(
+                thread_id = %thread_id,
+                error = %error,
+                "participant follow-up continuation failed"
+            );
+            let _ = self.event_tx.send(AgentEvent::WorkflowNotice {
+                thread_id: thread_id.to_string(),
+                kind: "participant_follow_up_error".to_string(),
+                message: "participant follow-up failed".to_string(),
+                details: Some(error.to_string()),
+            });
+        }
+    }
+
+    pub(crate) async fn maybe_auto_send_next_thread_participant_suggestion(
+        &self,
+        thread_id: &str,
+    ) -> Result<bool> {
+        {
+            let streams = self.stream_cancellations.lock().await;
+            if streams.contains_key(thread_id) {
+                return Ok(false);
+            }
+        }
+
+        let next_suggestion = self
+            .list_thread_participant_suggestions(thread_id)
+            .await
+            .into_iter()
+            .find(|suggestion| suggestion.status == ThreadParticipantSuggestionStatus::Queued);
+        let Some(next_suggestion) = next_suggestion else {
+            return Ok(false);
+        };
+
+        tracing::info!(
+            thread_id = %thread_id,
+            participant = %next_suggestion.target_agent_id,
+            suggestion_id = %next_suggestion.id,
+            "auto-sending queued participant suggestion after thread became idle"
+        );
+        self.send_thread_participant_suggestion(thread_id, &next_suggestion.id, None)
+            .await
     }
 
     pub async fn upsert_thread_participant(
@@ -538,6 +821,13 @@ impl AgentEngine {
         preferred_session_hint: Option<&str>,
         content: &str,
     ) -> Result<()> {
+        if let Some(thread_id) = thread_id {
+            if is_internal_dm_thread(thread_id) || is_internal_handoff_thread(thread_id) {
+                anyhow::bail!(
+                    "internal delegate continuation requires a visible operator thread, not an internal thread"
+                );
+            }
+        }
         let (resolved_target_id, _) = self
             .resolve_thread_participant_target(target_agent_id)
             .await?;
@@ -549,41 +839,9 @@ impl AgentEngine {
                 .unwrap_or_else(|| MAIN_AGENT_ID.to_string()),
             None => MAIN_AGENT_ID.to_string(),
         };
-
-        let mut payload = String::new();
-        if let Some(thread_id) = thread_id {
-            payload.push_str(&format!(
-                "Visible thread id: {thread_id}\nThread delegation mode: internal_hidden\n\n"
-            ));
-            if let Some(thread) = self.get_thread(thread_id).await {
-                payload.push_str(&format!("Visible thread title: {}\n", thread.title.trim()));
-                let recent_messages = thread
-                    .messages
-                    .iter()
-                    .rev()
-                    .take(8)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>();
-                if !recent_messages.is_empty() {
-                    payload.push_str("Recent visible thread messages:\n");
-                    for message in recent_messages {
-                        let role = match message.role {
-                            MessageRole::Assistant => "assistant",
-                            MessageRole::System => "system",
-                            MessageRole::Tool => "tool",
-                            _ => "user",
-                        };
-                        payload.push_str(&format!("- {role}: {}\n", message.content.trim()));
-                    }
-                    payload.push('\n');
-                }
-            }
-        }
-        payload.push_str("Delegation request:\n");
-        payload.push_str(content.trim());
+        let payload = self
+            .build_internal_delegate_payload(thread_id, content, thread_id.is_some())
+            .await;
 
         self.send_internal_agent_message(
             &sender,
@@ -592,6 +850,24 @@ impl AgentEngine {
             preferred_session_hint,
         )
         .await?;
+
+        if let Some(thread_id) = thread_id {
+            let continuation_prompt = self
+                .build_visible_thread_continuation_prompt(
+                    thread_id,
+                    &sender,
+                    &resolved_target_id,
+                    content,
+                )
+                .await;
+            self.continue_visible_thread_as_agent(
+                thread_id,
+                &resolved_target_id,
+                preferred_session_hint,
+                &continuation_prompt,
+            )
+            .await?;
+        }
 
         Ok(())
     }
@@ -795,6 +1071,8 @@ impl AgentEngine {
         let _ = self.event_tx.send(AgentEvent::ThreadReloadRequired {
             thread_id: thread_id.to_string(),
         });
+        self.continue_thread_after_participant_post_or_notice(thread_id)
+            .await;
 
         Ok(())
     }

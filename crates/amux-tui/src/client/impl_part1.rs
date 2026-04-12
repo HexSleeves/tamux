@@ -356,6 +356,7 @@ impl DaemonClient {
             | DaemonMessage::AgentDbMessageAck
             | DaemonMessage::SessionSpawned { .. }
             | DaemonMessage::ApprovalRequired { .. }
+            | DaemonMessage::AgentTaskApprovalRules { .. }
             | DaemonMessage::ApprovalResolved { .. }) => {
                 Self::handle_daemon_message_part1(message, event_tx, thread_detail_chunks).await
             }

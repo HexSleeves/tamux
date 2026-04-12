@@ -1,5 +1,7 @@
 use super::*;
 
+const MIN_HEADER_CONTEXT_TARGET_TOKENS: u32 = 1_024;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConversationAgentProfile {
     pub(crate) agent_label: String,
@@ -89,6 +91,46 @@ impl TuiModel {
 
         providers::known_context_window_for(&profile.provider, &profile.model)
             .unwrap_or(fallback)
+            .max(1)
+    }
+
+    fn current_header_weles_compaction_window_tokens(&self, primary_window: u32) -> u32 {
+        let provider = self.config.compaction_weles_provider.trim();
+        let model = self.config.compaction_weles_model.trim();
+        if provider.is_empty() || model.is_empty() {
+            return primary_window.max(1);
+        }
+
+        providers::known_context_window_for(provider, model)
+            .unwrap_or(primary_window)
+            .max(1)
+    }
+
+    fn current_header_context_target_tokens(&self) -> u32 {
+        let context_window = self.current_header_context_window_tokens().max(1);
+        if !self.config.auto_compact_context {
+            return context_window;
+        }
+
+        let threshold_pct = self.config.compact_threshold_pct.clamp(1, 100);
+        let threshold_target = context_window.saturating_mul(threshold_pct) / 100;
+        let strategy_cap = match self.config.compaction_strategy.as_str() {
+            "weles" => self
+                .current_header_weles_compaction_window_tokens(context_window)
+                .saturating_mul(threshold_pct)
+                / 100,
+            "custom_model" => self
+                .config
+                .compaction_custom_context_window_tokens
+                .max(1)
+                .saturating_mul(threshold_pct)
+                / 100,
+            _ => threshold_target,
+        };
+
+        threshold_target
+            .max(MIN_HEADER_CONTEXT_TARGET_TOKENS)
+            .min(strategy_cap.max(MIN_HEADER_CONTEXT_TARGET_TOKENS))
             .max(1)
     }
 
@@ -292,7 +334,8 @@ impl TuiModel {
     }
 
     pub(crate) fn current_header_usage_summary(&self) -> widgets::header::HeaderUsageDisplay {
-        let max_tokens = self.current_header_context_window_tokens().max(1) as u64;
+        let context_window_tokens = self.current_header_context_window_tokens().max(1) as u64;
+        let compaction_target_tokens = self.current_header_context_target_tokens().max(1) as u64;
         let (total_thread_tokens, current_tokens, total_cost_usd) = self
             .chat
             .active_thread()
@@ -314,14 +357,15 @@ impl TuiModel {
 
         let utilization_pct = current_tokens
             .saturating_mul(100)
-            .checked_div(max_tokens)
+            .checked_div(context_window_tokens)
             .unwrap_or(0)
             .min(100) as u8;
 
         widgets::header::HeaderUsageDisplay {
             total_thread_tokens,
             current_tokens,
-            max_tokens,
+            context_window_tokens,
+            compaction_target_tokens,
             utilization_pct,
             total_cost_usd,
         }
@@ -960,7 +1004,12 @@ impl TuiModel {
                     );
                 }
                 modal::ModalKind::Help => {
-                    render_helpers::render_help_modal(frame, overlay_area, &self.theme);
+                    render_helpers::render_help_modal(
+                        frame,
+                        overlay_area,
+                        self.help_modal_scroll,
+                        &self.theme,
+                    );
                 }
                 modal::ModalKind::WhatsAppLink => {
                     widgets::whatsapp_link::render(frame, overlay_area, &self.modal, &self.theme);

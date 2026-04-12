@@ -869,10 +869,6 @@ export function AgentTab({
                     <Toggle value={settings.auto_retry}
                         onChange={(value) => updateSetting("auto_retry", value)} />
                 </SettingRow>
-                <SettingRow label="Budget Tokens">
-                    <NumberInput value={settings.context_budget_tokens} min={10000} max={500000} step={10000}
-                        onChange={(value) => updateSetting("context_budget_tokens", value)} />
-                </SettingRow>
                 <SettingRow label="Compact Threshold %">
                     <NumberInput value={settings.compact_threshold_pct} min={50} max={95}
                         onChange={(value) => updateSetting("compact_threshold_pct", value)} />

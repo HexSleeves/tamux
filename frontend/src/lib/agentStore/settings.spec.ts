@@ -84,3 +84,17 @@ assert(
   normalizedSkillRecommendation.skill_recommendation.suggest_global_enable_after_approvals === 5,
   "Settings normalization should read the global-enable suggestion threshold override",
 );
+
+assert(
+  !("context_budget_tokens" in DEFAULT_AGENT_SETTINGS),
+  "Default frontend settings should not expose removed context budget settings",
+);
+
+const normalizedLegacyBudget = normalizeAgentSettingsFromSource({
+  context_budget_tokens: 222_000,
+} as any);
+
+assert(
+  !("context_budget_tokens" in normalizedLegacyBudget),
+  "Settings normalization should ignore legacy context budget settings",
+);

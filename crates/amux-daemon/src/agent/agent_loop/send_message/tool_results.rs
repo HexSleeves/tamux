@@ -433,6 +433,13 @@ impl<'a> SendMessageRunner<'a> {
                 .await;
             self.interrupted_for_approval = true;
             if let Some(task_id) = self.task_id {
+                if self
+                    .engine
+                    .auto_approve_task_if_rule_matches(task_id, &self.tid, pending_approval)
+                    .await
+                {
+                    return Ok(ToolCallDisposition::BreakLoop);
+                }
                 self.engine
                     .mark_task_awaiting_approval(task_id, &self.tid, pending_approval)
                     .await;

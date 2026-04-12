@@ -30,10 +30,7 @@ fn build_rendered_lines(
             );
             if msg.role == MessageRole::Assistant {
                 if let Some(label) = responder_labels.get(idx).and_then(|value| value.as_deref()) {
-                    msg_lines.push(Line::from(vec![Span::styled(
-                        format!("Responder: {label}"),
-                        theme.fg_dim,
-                    )]));
+                    msg_lines.insert(0, responder_label_line(label, theme));
                 }
             }
             if let Some(first_line) = msg_lines.first_mut() {
@@ -258,15 +255,19 @@ struct HandoffResponderEvent {
     to_agent_name: Option<String>,
 }
 
-fn assistant_responder_labels(
-    thread: &crate::state::chat::AgentThread,
-) -> Vec<Option<String>> {
+fn assistant_responder_labels(thread: &crate::state::chat::AgentThread) -> Vec<Option<String>> {
     let mut labels = vec![None; thread.messages.len()];
     let mut responder = initial_responder_name(thread);
+    let participant_ids = thread
+        .thread_participants
+        .iter()
+        .map(|participant| participant.agent_id.trim().to_ascii_lowercase())
+        .collect::<std::collections::HashSet<_>>();
 
     for (idx, msg) in thread.messages.iter().enumerate() {
         if msg.role == MessageRole::Assistant {
-            labels[idx] = responder.clone();
+            labels[idx] =
+                message_responder_label(msg, &participant_ids).or_else(|| responder.clone());
         }
         if let Some(event) = handoff_responder_event_for_message(msg) {
             if event.to_agent_name.is_some() {
@@ -278,11 +279,61 @@ fn assistant_responder_labels(
     labels
 }
 
+fn responder_label_line(label: &str, theme: &ThemeTokens) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("● ", responder_accent_style(label, theme)),
+        Span::styled("Responder: ", theme.fg_dim),
+        Span::styled(label.to_string(), responder_accent_style(label, theme)),
+    ])
+}
+
+fn responder_accent_style(label: &str, theme: &ThemeTokens) -> Style {
+    let palette = [
+        theme.accent_primary,
+        theme.accent_secondary,
+        theme.accent_success,
+        theme.accent_assistant,
+        Style::default().fg(Color::Indexed(111)),
+        Style::default().fg(Color::Indexed(180)),
+    ];
+    let hash = label.bytes().fold(0u64, |acc, byte| {
+        acc.wrapping_mul(131).wrapping_add(byte as u64)
+    });
+    palette[(hash as usize) % palette.len()]
+}
+
+fn message_responder_label(
+    msg: &AgentMessage,
+    participant_ids: &std::collections::HashSet<String>,
+) -> Option<String> {
+    let author_name = msg
+        .author_agent_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let author_id = msg
+        .author_agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
+    if author_id
+        .as_deref()
+        .is_some_and(|author_id| participant_ids.contains(author_id))
+    {
+        Some(format!("@{author_name}"))
+    } else {
+        Some(author_name.to_string())
+    }
+}
+
 fn initial_responder_name(thread: &crate::state::chat::AgentThread) -> Option<String> {
     thread
         .messages
         .iter()
-        .find_map(|msg| handoff_responder_event_for_message(msg).and_then(|event| event.from_agent_name))
+        .find_map(|msg| {
+            handoff_responder_event_for_message(msg).and_then(|event| event.from_agent_name)
+        })
         .or_else(|| thread.agent_name.clone())
         .or_else(|| Some(amux_protocol::AGENT_NAME_SWAROG.to_string()))
 }
@@ -510,7 +561,8 @@ fn render_snapshot(
         .map(|line| line.line)
         .collect::<Vec<_>>();
     let scroll = snapshot.all_lines.len().saturating_sub(end_idx);
-    if let Some(layout) = scrollbar_layout_from_metrics(snapshot.inner, snapshot.all_lines.len(), scroll)
+    if let Some(layout) =
+        scrollbar_layout_from_metrics(snapshot.inner, snapshot.all_lines.len(), scroll)
     {
         frame.render_widget(Paragraph::new(visible_lines), layout.content);
 

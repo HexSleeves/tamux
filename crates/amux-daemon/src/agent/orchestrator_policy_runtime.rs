@@ -187,6 +187,29 @@ impl AgentEngine {
         decision: &PolicyDecision,
         now_epoch_secs: u64,
     ) -> Result<PolicyLoopAction> {
+        if self
+            .mark_task_approval_rule_used("orchestrator_policy_escalation")
+            .await
+        {
+            self.emit_workflow_notice(
+                thread_id,
+                "policy-escalation-always-approved",
+                "Applied a saved always-approve rule for policy escalation and continued automatically.",
+                Some(decision.reason.clone()),
+            );
+            return Ok(PolicyLoopAction::Continue);
+        }
+
+        if self.has_policy_escalation_session_grant(thread_id).await {
+            self.emit_workflow_notice(
+                thread_id,
+                "policy-escalation-session-grant",
+                "Reused session approval for policy escalation and continued automatically.",
+                Some(decision.reason.clone()),
+            );
+            return Ok(PolicyLoopAction::Continue);
+        }
+
         let task_id = match task_id {
             Some(task_id) => task_id,
             None => return Ok(PolicyLoopAction::Continue),

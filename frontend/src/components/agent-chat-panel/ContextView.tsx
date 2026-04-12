@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getBridge } from "@/lib/bridge";
+import { resolveCompactionTargetTokens } from "../../lib/agentCompactionTarget";
 import { fetchThreadWorkContext, type ThreadWorkContext } from "../../lib/agentWorkContext";
 import { shortenHomePath } from "../../lib/workspaceStore";
 import { ActionButton, ContextCard, MetricRibbon, SectionTitle, inputStyle, memoryAreaStyle } from "./shared";
@@ -8,7 +9,20 @@ type ContextViewProps = {
     agentSettings: {
         active_provider: string;
         context_window_tokens: number;
-        context_budget_tokens: number;
+        auto_compact_context: boolean;
+        max_context_messages: number;
+        compact_threshold_pct: number;
+        keep_recent_on_compact: number;
+        compaction: {
+            strategy: "heuristic" | "weles" | "custom_model";
+            weles: {
+                provider: string;
+                model: string;
+            };
+            custom_model: {
+                context_window_tokens: number;
+            };
+        };
     };
     snippets: Array<unknown>;
     transcripts: Array<unknown>;
@@ -72,6 +86,10 @@ export function ContextView(props: ContextViewProps) {
         const artifacts = workContext.entries.filter((entry) => entry.kind !== "repo_change").length;
         return { changed, artifacts };
     }, [workContext.entries]);
+    const compactionTarget = useMemo(
+        () => resolveCompactionTargetTokens(props.agentSettings),
+        [props.agentSettings],
+    );
 
     return (
         <div style={{ padding: "var(--space-4)", height: "100%", overflow: "auto" }}>
@@ -90,7 +108,7 @@ export function ContextView(props: ContextViewProps) {
                 <ContextCard label="Pane" value={props.scopePaneId ?? "none"} />
                 <ContextCard label="Threads" value={String(props.threads.length)} />
                 <ContextCard label="Context Length" value={`${props.agentSettings.context_window_tokens.toLocaleString()} tok`} />
-                <ContextCard label="Token Budget" value={`${props.agentSettings.context_budget_tokens.toLocaleString()} tok`} />
+                <ContextCard label="Compaction Trigger" value={`${compactionTarget.toLocaleString()} tok`} />
                 <ContextCard label="Snapshot Age" value={props.latestContextSnapshot ? new Date(props.latestContextSnapshot.timestamp).toLocaleTimeString() : "n/a"} />
             </div>
 

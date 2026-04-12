@@ -248,7 +248,8 @@ fn add_available_tools_part_c(
         "type": "object",
         "properties": {
             "target": { "type": "string", "description": "Which agent should receive the internal message. Use a built-in agent id or persona name such as `svarog`, `rarog`, or `weles`." },
-            "message": { "type": "string", "description": "Message to send" }
+            "message": { "type": "string", "description": "Message to send" },
+            "request_visible_thread_continuation": { "type": "boolean", "description": "When true, the internal DM stays discussion-only and the target agent is asked to continue the current visible operator thread after this turn finishes." }
         },
         "required": ["target", "message"]
     })));

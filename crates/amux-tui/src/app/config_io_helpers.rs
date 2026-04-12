@@ -393,7 +393,6 @@ impl TuiModel {
         patch["llm_stream_chunk_timeout_secs"] =
             serde_json::Value::from(self.config.llm_stream_chunk_timeout_secs);
         patch["auto_retry"] = serde_json::Value::Bool(self.config.auto_retry);
-        patch["context_budget_tokens"] = serde_json::Value::from(self.config.context_budget_tokens);
         patch["compact_threshold_pct"] = serde_json::Value::from(self.config.compact_threshold_pct);
         patch["keep_recent_on_compact"] =
             serde_json::Value::from(self.config.keep_recent_on_compact);

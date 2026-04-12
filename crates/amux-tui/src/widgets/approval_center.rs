@@ -10,9 +10,12 @@ use crate::theme::ThemeTokens;
 pub enum ApprovalCenterHitTarget {
     Filter(ApprovalFilter),
     Row(usize),
+    RuleRow(usize),
     ThreadJump(String),
     ApproveOnce(String),
     ApproveSession(String),
+    AlwaysApprove(String),
+    RevokeRule(String),
     Deny(String),
     Close,
 }
@@ -126,6 +129,7 @@ fn render_header(frame: &mut Frame, area: Rect, approval: &ApprovalState, theme:
         (ApprovalFilter::AllPending, "All pending"),
         (ApprovalFilter::CurrentThread, "Current thread"),
         (ApprovalFilter::CurrentWorkspace, "Current workspace"),
+        (ApprovalFilter::SavedRules, "Always approved"),
     ];
     let mut spans = vec![Span::styled(
         format!("{} pending  ", approval.pending_approvals().len()),
@@ -143,17 +147,29 @@ fn render_header(frame: &mut Frame, area: Rect, approval: &ApprovalState, theme:
         }
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
+    let help = if approval.filter() == ApprovalFilter::SavedRules {
+        vec![
+            Span::styled("Ctrl+A", theme.accent_primary),
+            Span::styled(" approvals  ", theme.fg_dim),
+            Span::styled("r", theme.accent_danger),
+            Span::styled(" revoke rule", theme.fg_dim),
+        ]
+    } else {
+        vec![
             Span::styled("Ctrl+A", theme.accent_primary),
             Span::styled(" queue  ", theme.fg_dim),
             Span::styled("a", theme.accent_success),
             Span::styled(" approve once  ", theme.fg_dim),
             Span::styled("s", theme.accent_secondary),
             Span::styled(" approve session  ", theme.fg_dim),
+            Span::styled("w", theme.accent_primary),
+            Span::styled(" always approve  ", theme.fg_dim),
             Span::styled("d", theme.accent_danger),
             Span::styled(" deny", theme.fg_dim),
-        ])),
+        ]
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(help)),
         Rect::new(area.x, area.y.saturating_add(1), area.width, 1),
     );
 }
@@ -166,6 +182,11 @@ fn render_queue(
     current_workspace_id: Option<&str>,
     theme: &ThemeTokens,
 ) {
+    if approval.filter() == ApprovalFilter::SavedRules {
+        render_rules(frame, area, approval, theme);
+        return;
+    }
+
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Pending ")
@@ -217,6 +238,49 @@ fn render_queue(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+fn render_rules(frame: &mut Frame, area: Rect, approval: &ApprovalState, theme: &ThemeTokens) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Always Approved ")
+        .border_style(theme.fg_dim);
+    frame.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+
+    if approval.saved_rules().is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "No saved approval rules",
+                theme.fg_dim,
+            ))),
+            inner,
+        );
+        return;
+    }
+
+    let mut lines = Vec::new();
+    for (index, rule) in approval.saved_rules().iter().enumerate() {
+        let selected = approval.selected_rule_id() == Some(rule.id.as_str());
+        let style = if selected {
+            theme.accent_secondary.add_modifier(Modifier::BOLD)
+        } else {
+            theme.fg_active
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{} {}", if selected { ">" } else { " " }, rule.command),
+            style,
+        )));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("used {} time(s)", rule.use_count), theme.fg_dim),
+        ]));
+        if index < approval.saved_rules().len() - 1 {
+            lines.push(Line::raw(""));
+        }
+    }
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
 fn render_detail(
     frame: &mut Frame,
     area: Rect,
@@ -225,6 +289,11 @@ fn render_detail(
     current_workspace_id: Option<&str>,
     theme: &ThemeTokens,
 ) {
+    if approval.filter() == ApprovalFilter::SavedRules {
+        render_rule_detail(frame, area, approval, theme);
+        return;
+    }
+
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Details ")
@@ -320,9 +389,78 @@ fn render_detail(
             Span::styled("  ", Style::default()),
             Span::styled("[Approve session]", theme.accent_secondary),
             Span::styled("  ", Style::default()),
+            Span::styled("[Always approve]", theme.accent_primary),
+            Span::styled("  ", Style::default()),
             Span::styled("[Deny]", theme.accent_danger),
         ])),
         action_row,
+    );
+}
+
+fn render_rule_detail(
+    frame: &mut Frame,
+    area: Rect,
+    approval: &ApprovalState,
+    theme: &ThemeTokens,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Rule Details ")
+        .border_style(theme.fg_dim);
+    frame.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+    let Some(rule) = approval.selected_rule() else {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled("No rule selected", theme.fg_dim))),
+            inner,
+        );
+        return;
+    };
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("Command: ", theme.fg_dim),
+            Span::styled(rule.command.to_string(), theme.fg_active),
+        ]),
+        Line::from(vec![
+            Span::styled("Use count: ", theme.fg_dim),
+            Span::styled(rule.use_count.to_string(), theme.fg_active),
+        ]),
+        Line::from(vec![
+            Span::styled("Created: ", theme.fg_dim),
+            Span::styled(rule.created_at.to_string(), theme.fg_active),
+        ]),
+        Line::from(vec![
+            Span::styled("Last used: ", theme.fg_dim),
+            Span::styled(
+                rule.last_used_at
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "never".to_string()),
+                theme.fg_active,
+            ),
+        ]),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            inner.height.saturating_sub(3),
+        ),
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled(
+            "[Revoke rule]",
+            theme.accent_danger,
+        )])),
+        Rect::new(
+            inner.x.saturating_add(20),
+            inner.y.saturating_add(inner.height.saturating_sub(2)),
+            inner.width.saturating_sub(22),
+            1,
+        ),
     );
 }
 
@@ -339,6 +477,7 @@ fn header_hit_test(
         (ApprovalFilter::AllPending, "All pending"),
         (ApprovalFilter::CurrentThread, "Current thread"),
         (ApprovalFilter::CurrentWorkspace, "Current workspace"),
+        (ApprovalFilter::SavedRules, "Always approved"),
     ];
     let mut x = area
         .x
@@ -360,6 +499,9 @@ fn queue_hit_test(
     current_workspace_id: Option<&str>,
     position: Position,
 ) -> Option<ApprovalCenterHitTarget> {
+    if approval.filter() == ApprovalFilter::SavedRules {
+        return rule_queue_hit_test(area, approval, position);
+    }
     let block = Block::default().borders(Borders::ALL);
     let inner = block.inner(area);
     if position.x < inner.x
@@ -377,6 +519,28 @@ fn queue_hit_test(
         .map(|_| ApprovalCenterHitTarget::Row(item_index))
 }
 
+fn rule_queue_hit_test(
+    area: Rect,
+    approval: &ApprovalState,
+    position: Position,
+) -> Option<ApprovalCenterHitTarget> {
+    let block = Block::default().borders(Borders::ALL);
+    let inner = block.inner(area);
+    if position.x < inner.x
+        || position.x >= inner.x.saturating_add(inner.width)
+        || position.y < inner.y
+        || position.y >= inner.y.saturating_add(inner.height)
+    {
+        return None;
+    }
+    let row = position.y.saturating_sub(inner.y) as usize;
+    let item_index = row / 3;
+    approval
+        .saved_rules()
+        .get(item_index)
+        .map(|_| ApprovalCenterHitTarget::RuleRow(item_index))
+}
+
 fn detail_hit_test(
     area: Rect,
     approval: &ApprovalState,
@@ -384,6 +548,9 @@ fn detail_hit_test(
     current_workspace_id: Option<&str>,
     position: Position,
 ) -> Option<ApprovalCenterHitTarget> {
+    if approval.filter() == ApprovalFilter::SavedRules {
+        return rule_detail_hit_test(area, approval, position);
+    }
     let block = Block::default().borders(Borders::ALL);
     let inner = block.inner(area);
     if position.x < inner.x
@@ -414,7 +581,9 @@ fn detail_hit_test(
     let approve_once_w = 14;
     let approve_session_x = approve_once_x.saturating_add(16);
     let approve_session_w = 17;
-    let deny_x = approve_session_x.saturating_add(19);
+    let always_approve_x = approve_session_x.saturating_add(19);
+    let always_approve_w = 16;
+    let deny_x = always_approve_x.saturating_add(18);
     let deny_w = 6;
 
     if position.x >= approve_once_x && position.x < approve_once_x.saturating_add(approve_once_w) {
@@ -429,10 +598,44 @@ fn detail_hit_test(
             selected.approval_id.clone(),
         ));
     }
+    if position.x >= always_approve_x
+        && position.x < always_approve_x.saturating_add(always_approve_w)
+    {
+        return Some(ApprovalCenterHitTarget::AlwaysApprove(
+            selected.approval_id.clone(),
+        ));
+    }
     if position.x >= deny_x && position.x < deny_x.saturating_add(deny_w) {
         return Some(ApprovalCenterHitTarget::Deny(selected.approval_id.clone()));
     }
 
+    None
+}
+
+fn rule_detail_hit_test(
+    area: Rect,
+    approval: &ApprovalState,
+    position: Position,
+) -> Option<ApprovalCenterHitTarget> {
+    let block = Block::default().borders(Borders::ALL);
+    let inner = block.inner(area);
+    if position.x < inner.x
+        || position.x >= inner.x.saturating_add(inner.width)
+        || position.y < inner.y
+        || position.y >= inner.y.saturating_add(inner.height)
+    {
+        return None;
+    }
+    let selected = approval.selected_rule()?;
+    let action_y = inner.y.saturating_add(inner.height.saturating_sub(2));
+    let revoke_x = inner.x.saturating_add(20);
+    let revoke_w = 13;
+    if position.y == action_y
+        && position.x >= revoke_x
+        && position.x < revoke_x.saturating_add(revoke_w)
+    {
+        return Some(ApprovalCenterHitTarget::RevokeRule(selected.id.clone()));
+    }
     None
 }
 

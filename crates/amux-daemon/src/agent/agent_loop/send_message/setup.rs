@@ -3,6 +3,13 @@ use crate::agent::llm_client::CopilotInitiator;
 use amux_protocol::SecurityLevel;
 
 const COMMUNITY_SCOUT_RESULT_LIMIT: usize = 5;
+const PARTICIPANT_AGENT_FANOUT_TOOLS: &[&str] = &[
+    "spawn_subagent",
+    "message_agent",
+    "handoff_thread_agent",
+    "route_to_specialist",
+    "run_divergent",
+];
 
 #[derive(Clone)]
 struct DirectThreadResponderConfig {
@@ -114,6 +121,26 @@ fn build_direct_thread_responder_config(
             }
         }),
     }))
+}
+
+async fn current_visible_thread_responder_is_active_participant(
+    engine: &AgentEngine,
+    thread_id: &str,
+) -> bool {
+    if is_internal_dm_thread(thread_id) || is_internal_handoff_thread(thread_id) {
+        return false;
+    }
+    let Some(active_agent_id) = engine.active_agent_id_for_thread(thread_id).await else {
+        return false;
+    };
+    engine
+        .list_thread_participants(thread_id)
+        .await
+        .into_iter()
+        .any(|participant| {
+            participant.status == ThreadParticipantStatus::Active
+                && participant.agent_id.eq_ignore_ascii_case(&active_agent_id)
+        })
 }
 
 fn spawn_background_community_scout(
@@ -312,7 +339,7 @@ impl<'a> SendMessageRunner<'a> {
                             None,
                         )
                         .await;
-                    engine.persist_threads().await;
+                    engine.persist_thread_by_id(&tid).await;
                     engine
                         .emit_turn_error_completion(&tid, &error_text, None, None)
                         .await;
@@ -451,7 +478,7 @@ impl<'a> SendMessageRunner<'a> {
         let (
             current_task_snapshot,
             is_durable_goal_task,
-            task_tool_filter,
+            mut task_tool_filter,
             task_context_budget,
             task_termination_eval,
             task_type_for_trace,
@@ -503,6 +530,10 @@ impl<'a> SendMessageRunner<'a> {
                 task_type,
             )
         };
+        let internal_dm_thread = is_internal_dm_thread(&tid);
+        if internal_dm_thread {
+            task_tool_filter = Some(crate::agent::subagent::tool_filter::ToolFilter::deny_all());
+        }
         let initial_copilot_initiator = if record_operator {
             CopilotInitiator::User
         } else {
@@ -637,6 +668,11 @@ impl<'a> SendMessageRunner<'a> {
             &active_provider_id,
             &provider_config.model,
         ));
+        if internal_dm_thread {
+            system_prompt.push_str(
+                "\n\n## Internal DM Constraints\n- This thread is an internal DM between agents.\n- Internal DMs are for discussion and coordination only.\n- Do not continue visible-thread work here.\n- Do not call tools in this thread.\n- If a visible thread continuation was explicitly requested, reply briefly here and stop. The daemon will continue the visible thread separately.\n",
+            );
+        }
         if let Some(recall) = onecontext_bootstrap.as_deref() {
             system_prompt.push_str("\n\n## OneContext Recall\n");
             system_prompt
@@ -690,6 +726,11 @@ impl<'a> SendMessageRunner<'a> {
             .and_then(|responder| responder.tool_filter.as_ref())
         {
             tools = filter.filtered_tools(tools);
+        }
+        if current_visible_thread_responder_is_active_participant(engine, &tid).await {
+            tools.retain(|tool| {
+                !PARTICIPANT_AGENT_FANOUT_TOOLS.contains(&tool.function.name.as_str())
+            });
         }
         if !task_type_for_trace.is_empty() {
             let hs = engine.heuristic_store.read().await;
@@ -788,5 +829,189 @@ impl<'a> SendMessageRunner<'a> {
             fresh_runner_retry: None,
             handoff_restart: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::agent_identity::{
+        MAIN_AGENT_ID, MAIN_AGENT_NAME, WELES_AGENT_ID, WELES_AGENT_NAME,
+    };
+    use crate::session_manager::SessionManager;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn active_participant_responder_cannot_use_agent_fanout_tools() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread_active_participant_tool_blacklist";
+
+        engine.threads.write().await.insert(
+            thread_id.to_string(),
+            AgentThread {
+                id: thread_id.to_string(),
+                agent_name: Some(WELES_AGENT_NAME.to_string()),
+                title: "Participant tool blacklist".to_string(),
+                messages: vec![AgentMessage::user("check this thread", 1)],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+        engine
+            .set_thread_handoff_state(
+                thread_id,
+                ThreadHandoffState {
+                    origin_agent_id: MAIN_AGENT_ID.to_string(),
+                    active_agent_id: WELES_AGENT_ID.to_string(),
+                    responder_stack: vec![
+                        ThreadResponderFrame {
+                            agent_id: MAIN_AGENT_ID.to_string(),
+                            agent_name: MAIN_AGENT_NAME.to_string(),
+                            entered_at: 1,
+                            entered_via_handoff_event_id: None,
+                            linked_thread_id: None,
+                        },
+                        ThreadResponderFrame {
+                            agent_id: WELES_AGENT_ID.to_string(),
+                            agent_name: WELES_AGENT_NAME.to_string(),
+                            entered_at: 2,
+                            entered_via_handoff_event_id: Some("handoff-1".to_string()),
+                            linked_thread_id: Some("dm:svarog:weles".to_string()),
+                        },
+                    ],
+                    events: Vec::new(),
+                    pending_approval_id: None,
+                },
+            )
+            .await;
+        engine
+            .upsert_thread_participant(thread_id, "weles", "verify claims")
+            .await
+            .expect("participant should register");
+
+        let runner = SendMessageRunner::initialize(
+            &engine,
+            Some(thread_id),
+            "check this thread",
+            "check this thread",
+            None,
+            None,
+            None,
+            None,
+            true,
+            true,
+            0,
+        )
+        .await
+        .expect("runner should initialize");
+
+        let tool_names = runner
+            .tools
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect::<Vec<_>>();
+
+        for forbidden_tool in PARTICIPANT_AGENT_FANOUT_TOOLS {
+            assert!(
+                !tool_names.contains(forbidden_tool),
+                "active participant responder should not see {forbidden_tool}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn non_participant_responder_keeps_agent_fanout_tools() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread_non_participant_tool_access";
+
+        engine.threads.write().await.insert(
+            thread_id.to_string(),
+            AgentThread {
+                id: thread_id.to_string(),
+                agent_name: Some(WELES_AGENT_NAME.to_string()),
+                title: "Non-participant tool access".to_string(),
+                messages: vec![AgentMessage::user("check this thread", 1)],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+        engine
+            .set_thread_handoff_state(
+                thread_id,
+                ThreadHandoffState {
+                    origin_agent_id: MAIN_AGENT_ID.to_string(),
+                    active_agent_id: WELES_AGENT_ID.to_string(),
+                    responder_stack: vec![
+                        ThreadResponderFrame {
+                            agent_id: MAIN_AGENT_ID.to_string(),
+                            agent_name: MAIN_AGENT_NAME.to_string(),
+                            entered_at: 1,
+                            entered_via_handoff_event_id: None,
+                            linked_thread_id: None,
+                        },
+                        ThreadResponderFrame {
+                            agent_id: WELES_AGENT_ID.to_string(),
+                            agent_name: WELES_AGENT_NAME.to_string(),
+                            entered_at: 2,
+                            entered_via_handoff_event_id: Some("handoff-1".to_string()),
+                            linked_thread_id: Some("dm:svarog:weles".to_string()),
+                        },
+                    ],
+                    events: Vec::new(),
+                    pending_approval_id: None,
+                },
+            )
+            .await;
+
+        let runner = SendMessageRunner::initialize(
+            &engine,
+            Some(thread_id),
+            "check this thread",
+            "check this thread",
+            None,
+            None,
+            None,
+            None,
+            true,
+            true,
+            0,
+        )
+        .await
+        .expect("runner should initialize");
+
+        let tool_names = runner
+            .tools
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            tool_names.contains(&"spawn_subagent"),
+            "non-participant responder should still see spawn_subagent"
+        );
+        assert!(
+            tool_names.contains(&"message_agent"),
+            "non-participant responder should still see message_agent"
+        );
     }
 }

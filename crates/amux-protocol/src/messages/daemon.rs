@@ -5,8 +5,8 @@ use super::{
     GatewayBootstrapPayload, GatewayReloadCommand, GatewaySendRequest, GatewayShutdownCommand,
     GitInfo, HistorySearchHit, ManagedCommandSource, OperationStatusSnapshot,
     OscNotificationPayload, PluginCommandInfo, PluginInfo, SessionId, SessionInfo,
-    SkillVariantPublic, SnapshotInfo, SymbolMatch, TelemetryLedgerStatus, ToolListResultPublic,
-    ToolSearchResultPublic,
+    SkillVariantPublic, SnapshotInfo, SymbolMatch, TaskApprovalRule, TelemetryLedgerStatus,
+    ToolListResultPublic, ToolSearchResultPublic,
 };
 
 #[rustfmt::skip]
@@ -73,6 +73,7 @@ pub enum DaemonMessage {
     AgentTodoList { todos_json: String },
     AgentTodoDetail { thread_id: String, todos_json: String },
     AgentWorkContextDetail { thread_id: String, context_json: String },
+    AgentTaskApprovalRules { rules: Vec<TaskApprovalRule> },
     AgentConfigResponse { config_json: String },
     AgentEffectiveConfigState { state_json: String },
     AgentModelsResponse { #[serde(default)] operation_id: Option<String>, models_json: String },

@@ -1,6 +1,154 @@
 use super::*;
 
+const TASK_APPROVAL_REASON_PREFIX: &str = "waiting for operator approval: ";
+
+fn is_policy_escalation_approval(approval_id: &str) -> bool {
+    approval_id.starts_with("policy-escalation-")
+}
+
 impl AgentEngine {
+    fn approval_command_from_task(task: &AgentTask) -> Option<String> {
+        task.blocked_reason
+            .as_deref()
+            .and_then(|reason| reason.strip_prefix(TASK_APPROVAL_REASON_PREFIX))
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+            .map(str::to_string)
+    }
+
+    pub(in crate::agent) async fn has_policy_escalation_session_grant(
+        &self,
+        thread_id: &str,
+    ) -> bool {
+        self.policy_escalation_session_grants
+            .read()
+            .await
+            .contains(thread_id)
+    }
+
+    pub(in crate::agent) async fn store_policy_escalation_session_grant(&self, thread_id: &str) {
+        self.policy_escalation_session_grants
+            .write()
+            .await
+            .insert(thread_id.to_string());
+    }
+
+    async fn persist_task_approval_rules(&self) {
+        let rules = self.task_approval_rules.read().await.clone();
+        if let Err(error) =
+            persist_json(&self.data_dir.join("task-approval-rules.json"), &rules).await
+        {
+            tracing::warn!(%error, "failed to persist task approval rules");
+        }
+    }
+
+    pub async fn list_task_approval_rules(&self) -> Vec<amux_protocol::TaskApprovalRule> {
+        self.task_approval_rules.read().await.clone()
+    }
+
+    pub(in crate::agent) async fn find_task_approval_rule_for_command(
+        &self,
+        command: &str,
+    ) -> Option<amux_protocol::TaskApprovalRule> {
+        self.task_approval_rules
+            .read()
+            .await
+            .iter()
+            .find(|rule| rule.command == command)
+            .cloned()
+    }
+
+    pub(in crate::agent) async fn mark_task_approval_rule_used(&self, command: &str) -> bool {
+        let mut rules = self.task_approval_rules.write().await;
+        let Some(rule) = rules.iter_mut().find(|rule| rule.command == command) else {
+            return false;
+        };
+        rule.last_used_at = Some(now_millis());
+        rule.use_count = rule.use_count.saturating_add(1);
+        drop(rules);
+        self.persist_task_approval_rules().await;
+        true
+    }
+
+    pub async fn create_task_approval_rule_from_pending(
+        &self,
+        approval_id: &str,
+    ) -> Result<Option<amux_protocol::TaskApprovalRule>> {
+        let command = {
+            let tasks = self.tasks.lock().await;
+            tasks.iter().find_map(|task| {
+                (task.awaiting_approval_id.as_deref() == Some(approval_id))
+                    .then(|| Self::approval_command_from_task(task))
+                    .flatten()
+            })
+        };
+        let Some(command) = command else {
+            return Ok(None);
+        };
+
+        let now = now_millis();
+        let rule = {
+            let mut rules = self.task_approval_rules.write().await;
+            if let Some(existing) = rules.iter_mut().find(|rule| rule.command == command) {
+                existing.last_used_at = Some(now);
+                existing.clone()
+            } else {
+                let rule = amux_protocol::TaskApprovalRule {
+                    id: format!("task-approval-rule-{}", Uuid::new_v4()),
+                    command,
+                    created_at: now,
+                    last_used_at: None,
+                    use_count: 0,
+                };
+                rules.push(rule.clone());
+                rules.sort_by(|left, right| left.command.cmp(&right.command));
+                rule
+            }
+        };
+        self.persist_task_approval_rules().await;
+        Ok(Some(rule))
+    }
+
+    pub async fn revoke_task_approval_rule(&self, rule_id: &str) -> bool {
+        let mut rules = self.task_approval_rules.write().await;
+        let original_len = rules.len();
+        rules.retain(|rule| rule.id != rule_id);
+        let removed = rules.len() != original_len;
+        drop(rules);
+        if removed {
+            self.persist_task_approval_rules().await;
+        }
+        removed
+    }
+
+    pub(in crate::agent) async fn auto_approve_task_if_rule_matches(
+        &self,
+        task_id: &str,
+        thread_id: &str,
+        pending_approval: &ToolPendingApproval,
+    ) -> bool {
+        if !self
+            .mark_task_approval_rule_used(&pending_approval.command)
+            .await
+        {
+            return false;
+        }
+        self.mark_task_awaiting_approval(task_id, thread_id, pending_approval)
+            .await;
+        self.handle_task_approval_resolution(
+            &pending_approval.approval_id,
+            amux_protocol::ApprovalDecision::ApproveOnce,
+        )
+        .await;
+        self.emit_workflow_notice(
+            thread_id,
+            "task-approval-auto-approved",
+            "Applied a saved always-approve rule and continued automatically.",
+            Some(pending_approval.command.clone()),
+        );
+        true
+    }
+
     pub async fn add_task(
         &self,
         title: String,
@@ -397,6 +545,22 @@ impl AgentEngine {
             amux_protocol::ApprovalDecision::ApproveOnce
                 | amux_protocol::ApprovalDecision::ApproveSession
         ) {
+            if let Some(goal_run_id) = updated.goal_run_id.as_deref() {
+                self.sync_goal_run_with_task(goal_run_id, &updated).await;
+            }
+        }
+        if matches!(
+            decision,
+            amux_protocol::ApprovalDecision::ApproveOnce
+                | amux_protocol::ApprovalDecision::ApproveSession
+        ) {
+            if matches!(decision, amux_protocol::ApprovalDecision::ApproveSession)
+                && is_policy_escalation_approval(approval_id)
+            {
+                if let Some(thread_id) = updated.thread_id.as_deref() {
+                    self.store_policy_escalation_session_grant(thread_id).await;
+                }
+            }
             if let Some(thread_id) = updated.thread_id.as_deref() {
                 let _ = self
                     .record_thread_skill_approval_resolution(thread_id, approval_id)

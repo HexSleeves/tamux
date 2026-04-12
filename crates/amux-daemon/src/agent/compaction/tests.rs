@@ -626,6 +626,51 @@ fn default_agent_config_exposes_heuristic_compaction_strategy_defaults() {
 }
 
 #[test]
+fn heuristic_effective_context_target_uses_only_primary_model_threshold() {
+    let mut config = AgentConfig::default();
+    config.compaction.strategy = CompactionStrategy::Heuristic;
+    config.context_window_tokens = 400_000;
+    config.compact_threshold_pct = 80;
+    config.compaction.custom_model.context_window_tokens = 128_000;
+    config.compaction.weles.provider = PROVIDER_ID_ALIBABA_CODING_PLAN.to_string();
+    config.compaction.weles.model = "MiniMax-M2.7".to_string();
+
+    let mut provider = sample_provider_config();
+    provider.context_window_tokens = 400_000;
+
+    assert_eq!(effective_context_target_tokens(&config, &provider), 320_000);
+}
+
+#[test]
+fn weles_effective_context_target_caps_primary_threshold_by_weles_window() {
+    let mut config = AgentConfig::default();
+    config.compaction.strategy = CompactionStrategy::Weles;
+    config.context_window_tokens = 400_000;
+    config.compact_threshold_pct = 80;
+    config.compaction.weles.provider = "minimax-coding-plan".to_string();
+    config.compaction.weles.model = "MiniMax-M2.7".to_string();
+
+    let mut provider = sample_provider_config();
+    provider.context_window_tokens = 400_000;
+
+    assert_eq!(effective_context_target_tokens(&config, &provider), 164_000);
+}
+
+#[test]
+fn custom_model_effective_context_target_caps_primary_threshold_by_custom_window() {
+    let mut config = AgentConfig::default();
+    config.compaction.strategy = CompactionStrategy::CustomModel;
+    config.context_window_tokens = 400_000;
+    config.compact_threshold_pct = 80;
+    config.compaction.custom_model.context_window_tokens = 160_000;
+
+    let mut provider = sample_provider_config();
+    provider.context_window_tokens = 400_000;
+
+    assert_eq!(effective_context_target_tokens(&config, &provider), 128_000);
+}
+
+#[test]
 fn agent_config_roundtrip_preserves_nested_compaction_provider_settings() {
     let config: AgentConfig = serde_json::from_value(serde_json::json!({
         "provider": PROVIDER_ID_OPENAI,

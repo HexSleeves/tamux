@@ -419,6 +419,14 @@ fn default_command_items() -> Vec<CommandItem> {
             description: "Show tamux status".into(),
         },
         CommandItem {
+            command: "notifications".into(),
+            description: "Open notifications center".into(),
+        },
+        CommandItem {
+            command: "approvals".into(),
+            description: "Open approvals center".into(),
+        },
+        CommandItem {
             command: "participants".into(),
             description: "Show thread participants".into(),
         },

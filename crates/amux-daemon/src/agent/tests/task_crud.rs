@@ -518,6 +518,129 @@ async fn explicit_acknowledgment_unblocks_goal_and_current_step_task() {
 }
 
 #[tokio::test]
+async fn task_approval_resolution_syncs_parent_goal_run_state() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let goal_run_id = "goal-policy-escalation";
+    let task_id = "task-policy-escalation";
+    let approval_id = "policy-escalation-thread_sync-1000";
+
+    engine
+        .goal_runs
+        .lock()
+        .await
+        .push_back(sample_supervised_goal_run(
+            goal_run_id,
+            task_id,
+            approval_id,
+        ));
+    sample_awaiting_task(&engine, goal_run_id, task_id, approval_id).await;
+
+    assert!(
+        engine
+            .handle_task_approval_resolution(
+                approval_id,
+                amux_protocol::ApprovalDecision::ApproveOnce
+            )
+            .await
+    );
+
+    let goal = engine
+        .get_goal_run(goal_run_id)
+        .await
+        .expect("goal should exist");
+    assert_eq!(goal.status, GoalRunStatus::Running);
+    assert!(goal.awaiting_approval_id.is_none());
+
+    let task = engine
+        .tasks
+        .lock()
+        .await
+        .iter()
+        .find(|task| task.id == task_id)
+        .cloned()
+        .expect("task should exist");
+    assert_eq!(task.status, TaskStatus::Queued);
+    assert!(task.awaiting_approval_id.is_none());
+}
+
+#[tokio::test]
+async fn create_and_revoke_task_approval_rule_tracks_pending_task_command() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let approval_id = "approval-rule-1";
+
+    engine.tasks.lock().await.push_back(AgentTask {
+        id: "task-rule-1".to_string(),
+        title: "policy escalation".to_string(),
+        description: "needs approval".to_string(),
+        status: TaskStatus::AwaitingApproval,
+        priority: TaskPriority::Normal,
+        progress: 40,
+        created_at: now_millis(),
+        started_at: Some(now_millis()),
+        completed_at: None,
+        error: None,
+        result: None,
+        thread_id: Some("thread-1".to_string()),
+        source: "goal_run".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: None,
+        goal_run_id: None,
+        goal_run_title: None,
+        goal_step_id: None,
+        goal_step_title: None,
+        parent_task_id: None,
+        parent_thread_id: None,
+        runtime: "daemon".to_string(),
+        retry_count: 0,
+        max_retries: 3,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: Some(
+            "waiting for operator approval: orchestrator_policy_escalation".to_string(),
+        ),
+        awaiting_approval_id: Some(approval_id.to_string()),
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        lane_id: None,
+        last_error: None,
+        logs: Vec::new(),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        override_provider: None,
+        override_model: None,
+        override_system_prompt: None,
+        sub_agent_def_id: None,
+    });
+
+    let rule = engine
+        .create_task_approval_rule_from_pending(approval_id)
+        .await
+        .expect("create rule should succeed")
+        .expect("rule should be created");
+    assert_eq!(rule.command, "orchestrator_policy_escalation");
+    assert_eq!(engine.list_task_approval_rules().await.len(), 1);
+
+    assert!(engine.revoke_task_approval_rule(&rule.id).await);
+    assert!(engine.list_task_approval_rules().await.is_empty());
+}
+
+#[tokio::test]
 async fn cancelling_goal_run_settles_unresolved_goal_plan_trace() {
     let root = tempdir().expect("temp dir");
     let manager = SessionManager::new_test(root.path()).await;

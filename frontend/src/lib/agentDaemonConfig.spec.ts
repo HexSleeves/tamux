@@ -115,6 +115,11 @@ assert(
 );
 
 assert(
+  !("context_budget_tokens" in configuredDelayDaemonConfig),
+  "Daemon config should not serialize removed context budget settings",
+);
+
+assert(
   buildDaemonAgentConfig(DEFAULT_AGENT_SETTINGS).skill_recommendation?.enabled === true,
   "Daemon config should serialize skill recommendation enablement",
 );

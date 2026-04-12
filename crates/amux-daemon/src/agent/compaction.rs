@@ -402,18 +402,75 @@ pub(super) fn effective_context_target_tokens(
     config: &AgentConfig,
     provider_config: &ProviderConfig,
 ) -> usize {
-    let context_window = provider_config
+    let primary_context_window = provider_config
         .context_window_tokens
         .max(config.context_window_tokens)
         .max(1) as usize;
     let threshold_pct = config.compact_threshold_pct.clamp(1, 100) as usize;
-    let threshold_target = context_window.saturating_mul(threshold_pct) / 100;
-    let configured_budget = config
-        .context_budget_tokens
-        .max(MIN_CONTEXT_TARGET_TOKENS as u32) as usize;
-    threshold_target
+    let primary_target = primary_context_window.saturating_mul(threshold_pct) / 100;
+    let strategy_target_cap = strategy_target_cap_tokens(
+        config,
+        primary_context_window as u32,
+        threshold_pct as u32,
+    )
+    .unwrap_or(primary_target);
+
+    primary_target
+        .min(strategy_target_cap)
         .max(MIN_CONTEXT_TARGET_TOKENS)
-        .min(configured_budget)
+}
+
+fn strategy_target_cap_tokens(
+    config: &AgentConfig,
+    primary_context_window: u32,
+    threshold_pct: u32,
+) -> Option<usize> {
+    let threshold_pct = threshold_pct.clamp(1, 100) as usize;
+    match config.compaction.strategy {
+        CompactionStrategy::Heuristic => None,
+        CompactionStrategy::Weles => {
+            let (provider_id, model_id) = resolved_weles_compaction_model(config);
+            Some(
+                model_context_window(&provider_id, &model_id, primary_context_window) as usize
+                    * threshold_pct
+                    / 100,
+            )
+        }
+        CompactionStrategy::CustomModel => Some(
+            config.compaction.custom_model.context_window_tokens.max(1) as usize * threshold_pct
+                / 100,
+        ),
+    }
+}
+
+fn resolved_weles_compaction_model(config: &AgentConfig) -> (String, String) {
+    let provider_id = config.compaction.weles.provider.trim().to_string();
+    let provider_id = if provider_id.is_empty() {
+        config
+            .builtin_sub_agents
+            .weles
+            .provider
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| config.provider.clone())
+    } else {
+        provider_id
+    };
+
+    let model_id = config.compaction.weles.model.trim().to_string();
+    let model_id = if model_id.is_empty() {
+        config
+            .builtin_sub_agents
+            .weles
+            .model
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| config.model.clone())
+    } else {
+        model_id
+    };
+
+    (provider_id, model_id)
 }
 
 pub(super) fn estimate_message_tokens(messages: &[AgentMessage]) -> usize {

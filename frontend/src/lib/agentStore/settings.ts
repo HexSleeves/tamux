@@ -65,6 +65,7 @@ export interface AgentSettings {
   "z.ai": AgentProviderConfig;
   "z.ai-coding-plan": AgentProviderConfig;
   arcee: AgentProviderConfig;
+  nvidia: AgentProviderConfig;
   openrouter: AgentProviderConfig;
   cerebras: AgentProviderConfig;
   together: AgentProviderConfig;
@@ -136,7 +137,6 @@ export interface AgentSettings {
   llm_stream_chunk_timeout_secs: number;
   auto_retry: boolean;
   context_window_tokens: number;
-  context_budget_tokens: number;
   compact_threshold_pct: number;
   keep_recent_on_compact: number;
   weles_max_concurrent_reviews: number;
@@ -162,6 +162,7 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   "z.ai": { base_url: "https://api.z.ai/api/paas/v4", model: "glm-4-plus", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   "z.ai-coding-plan": { base_url: "https://api.z.ai/api/coding/paas/v4", model: "glm-5", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   arcee: { base_url: "https://api.arcee.ai/api/v1", model: "trinity-large-thinking", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: 256_000 },
+  nvidia: { base_url: "https://integrate.api.nvidia.com/v1", model: "minimaxai/minimax-m2.7", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   openrouter: { base_url: "https://openrouter.ai/api/v1", model: "arcee-ai/trinity-large-thinking", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   cerebras: { base_url: "https://api.cerebras.ai/v1", model: "llama-3.3-70b", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   together: { base_url: "https://api.together.xyz/v1", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
@@ -233,7 +234,6 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   llm_stream_chunk_timeout_secs: 300,
   auto_retry: true,
   context_window_tokens: 128000,
-  context_budget_tokens: 100000,
   compact_threshold_pct: 80,
   keep_recent_on_compact: 10,
   weles_max_concurrent_reviews: 2,
@@ -298,7 +298,6 @@ export type DiskAgentSettings = Partial<AgentSettings> & {
   llm_stream_chunk_timeout_secs?: number;
   auto_retry?: boolean;
   context_window_tokens?: number;
-  context_budget_tokens?: number;
   compact_threshold_pct?: number;
   keep_recent_on_compact?: number;
   weles_max_concurrent_reviews?: number;
@@ -398,12 +397,15 @@ function providerConfigFromRaw(
 }
 
 export function normalizeAgentSettingsFromSource(source: DiskAgentSettings): AgentSettings {
+  const { context_budget_tokens: _legacyContextBudgetTokens, ...sourceSansLegacyBudget } = source as DiskAgentSettings & {
+    context_budget_tokens?: number;
+  };
   const active_provider = normalizeAgentProviderId(source.active_provider ?? source.provider);
   const activeProviderConfig = providerConfigFromRaw(active_provider, source);
   const authSource = normalizeAuthSource(active_provider, source.auth_source ?? activeProviderConfig.auth_source);
   return {
     ...DEFAULT_AGENT_SETTINGS,
-    ...source,
+    ...sourceSansLegacyBudget,
     agent_name: DEFAULT_AGENT_SETTINGS.agent_name,
     active_provider,
     agent_backend: normalizeAgentBackendModeFromSource(source, active_provider, authSource),
@@ -416,6 +418,7 @@ export function normalizeAgentSettingsFromSource(source: DiskAgentSettings): Age
     "kimi-coding-plan": providerConfigFromRaw("kimi-coding-plan", source),
     "z.ai": providerConfigFromRaw("z.ai", source),
     "z.ai-coding-plan": providerConfigFromRaw("z.ai-coding-plan", source),
+    nvidia: providerConfigFromRaw("nvidia", source),
     openrouter: providerConfigFromRaw("openrouter", source),
     cerebras: providerConfigFromRaw("cerebras", source),
     together: providerConfigFromRaw("together", source),
@@ -441,7 +444,6 @@ export function normalizeAgentSettingsFromSource(source: DiskAgentSettings): Age
       source.llm_stream_chunk_timeout_secs ?? DEFAULT_AGENT_SETTINGS.llm_stream_chunk_timeout_secs,
     auto_retry: source.auto_retry ?? DEFAULT_AGENT_SETTINGS.auto_retry,
     context_window_tokens: source.context_window_tokens ?? DEFAULT_AGENT_SETTINGS.context_window_tokens,
-    context_budget_tokens: source.context_budget_tokens ?? DEFAULT_AGENT_SETTINGS.context_budget_tokens,
     compact_threshold_pct: source.compact_threshold_pct ?? DEFAULT_AGENT_SETTINGS.compact_threshold_pct,
     keep_recent_on_compact: source.keep_recent_on_compact ?? DEFAULT_AGENT_SETTINGS.keep_recent_on_compact,
     weles_max_concurrent_reviews:

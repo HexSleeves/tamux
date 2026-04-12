@@ -122,6 +122,13 @@ pub enum DaemonCommand {
         goal_run_id: String,
         action: String,
     },
+    ListTaskApprovalRules,
+    CreateTaskApprovalRule {
+        approval_id: String,
+    },
+    RevokeTaskApprovalRule {
+        rule_id: String,
+    },
     ResolveTaskApproval {
         approval_id: String,
         decision: String,

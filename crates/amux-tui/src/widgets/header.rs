@@ -16,9 +16,32 @@ pub enum HeaderHitTarget {
 pub(crate) struct HeaderUsageDisplay {
     pub(crate) total_thread_tokens: u64,
     pub(crate) current_tokens: u64,
-    pub(crate) max_tokens: u64,
+    pub(crate) context_window_tokens: u64,
+    pub(crate) compaction_target_tokens: u64,
     pub(crate) utilization_pct: u8,
     pub(crate) total_cost_usd: Option<f64>,
+}
+
+const CONTEXT_BAR_WIDTH: usize = 20;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContextFillBand {
+    Green,
+    Orange,
+    Red,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContextBarCellKind {
+    Fill,
+    Empty,
+    Marker,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContextBarCell {
+    ch: char,
+    kind: ContextBarCellKind,
 }
 
 pub fn render(
@@ -111,11 +134,7 @@ pub fn render(
     );
     if let Some(bottom_line_area) = bottom_line_area {
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                build_context_usage_label(usage),
-                theme.fg_dim,
-            )))
-            .alignment(Alignment::Center),
+            Paragraph::new(context_usage_line(usage, theme)).alignment(Alignment::Center),
             bottom_line_area,
         );
     }
@@ -170,14 +189,89 @@ fn build_total_usage_label(usage: &HeaderUsageDisplay) -> String {
 
 fn build_context_usage_label(usage: &HeaderUsageDisplay) -> String {
     let clamped_pct = usage.utilization_pct.min(100);
-    let filled = ((clamped_pct as usize) * 10 / 100).min(10);
-    let bar = format!(
-        "[{}{}]",
-        "=".repeat(filled),
-        "-".repeat(10usize.saturating_sub(filled))
-    );
-    let max_tokens = format_token_count(usage.max_tokens.max(1));
-    format!("ctx {bar} {clamped_pct}% [{max_tokens}]")
+    let bar: String = context_bar_cells(usage).iter().map(|cell| cell.ch).collect();
+    let context_window = format_token_count(usage.context_window_tokens.max(1));
+    format!("ctx [{bar}] {clamped_pct}% [{context_window}]")
+}
+
+fn context_usage_line(usage: &HeaderUsageDisplay, theme: &ThemeTokens) -> Line<'static> {
+    let band = context_fill_band(usage);
+    let fill_style = context_fill_style(band, theme);
+    let pct = usage.utilization_pct.min(100);
+    let context_window = format!("[{}]", format_token_count(usage.context_window_tokens.max(1)));
+
+    let mut spans = Vec::with_capacity(CONTEXT_BAR_WIDTH + 8);
+    spans.push(Span::styled("ctx ", theme.fg_dim));
+    spans.push(Span::styled("[", theme.fg_dim));
+    for cell in context_bar_cells(usage) {
+        let style = match cell.kind {
+            ContextBarCellKind::Fill => fill_style,
+            ContextBarCellKind::Empty => theme.fg_dim,
+            ContextBarCellKind::Marker => theme.accent_primary,
+        };
+        spans.push(Span::styled(cell.ch.to_string(), style));
+    }
+    spans.push(Span::styled("] ", theme.fg_dim));
+    spans.push(Span::styled(format!("{pct}%"), fill_style));
+    spans.push(Span::styled(" ", theme.fg_dim));
+    spans.push(Span::styled(context_window, theme.fg_dim));
+    Line::from(spans)
+}
+
+fn context_fill_style(band: ContextFillBand, theme: &ThemeTokens) -> Style {
+    match band {
+        ContextFillBand::Green => theme.accent_success,
+        ContextFillBand::Orange => theme.accent_secondary,
+        ContextFillBand::Red => theme.accent_danger,
+    }
+}
+
+fn context_fill_band(usage: &HeaderUsageDisplay) -> ContextFillBand {
+    let pct = usage.utilization_pct.min(100);
+    let compaction_threshold_pct = usage
+        .compaction_target_tokens
+        .saturating_mul(100)
+        .checked_div(usage.context_window_tokens.max(1))
+        .unwrap_or(100)
+        .min(100) as u8;
+
+    if pct < 40 {
+        ContextFillBand::Green
+    } else if pct < 60 {
+        ContextFillBand::Orange
+    } else if pct < compaction_threshold_pct {
+        ContextFillBand::Red
+    } else {
+        ContextFillBand::Red
+    }
+}
+
+fn context_bar_cells(usage: &HeaderUsageDisplay) -> Vec<ContextBarCell> {
+    let filled = usage
+        .current_tokens
+        .saturating_mul(CONTEXT_BAR_WIDTH as u64)
+        .checked_div(usage.context_window_tokens.max(1))
+        .unwrap_or(0)
+        .min(CONTEXT_BAR_WIDTH as u64) as usize;
+    let marker_index = usage
+        .compaction_target_tokens
+        .saturating_mul(CONTEXT_BAR_WIDTH as u64)
+        .div_ceil(usage.context_window_tokens.max(1))
+        .clamp(1, CONTEXT_BAR_WIDTH as u64)
+        .saturating_sub(1) as usize;
+
+    let mut cells = Vec::with_capacity(CONTEXT_BAR_WIDTH);
+    for index in 0..CONTEXT_BAR_WIDTH {
+        let (ch, kind) = if index == marker_index {
+            ('|', ContextBarCellKind::Marker)
+        } else if index < filled {
+            ('=', ContextBarCellKind::Fill)
+        } else {
+            ('-', ContextBarCellKind::Empty)
+        };
+        cells.push(ContextBarCell { ch, kind });
+    }
+    cells
 }
 
 pub fn hit_test(
@@ -238,7 +332,8 @@ mod tests {
         let label = build_total_usage_label(&HeaderUsageDisplay {
             total_thread_tokens: 21_000_000,
             current_tokens: 64_000,
-            max_tokens: 128_000,
+            context_window_tokens: 128_000,
+            compaction_target_tokens: 102_400,
             utilization_pct: 50,
             total_cost_usd: Some(1.25),
         });
@@ -254,12 +349,13 @@ mod tests {
     }
 
     #[test]
-    fn context_usage_label_includes_progress_percent_and_max_tokens() {
+    fn context_usage_label_includes_progress_percent_full_context_and_compaction_marker() {
         let label = build_context_usage_label(&HeaderUsageDisplay {
             total_thread_tokens: 21_000_000,
             current_tokens: 64_000,
-            max_tokens: 128_000,
-            utilization_pct: 50,
+            context_window_tokens: 400_000,
+            compaction_target_tokens: 320_000,
+            utilization_pct: 16,
             total_cost_usd: Some(1.25),
         });
 
@@ -268,12 +364,16 @@ mod tests {
             "label should identify context usage: {label}"
         );
         assert!(
-            label.contains("50%"),
-            "label should include utilization percent: {label}"
+            label.contains("16%"),
+            "label should include utilization percent against the full context: {label}"
         );
         assert!(
-            label.contains("[128.0k tok]"),
-            "label should include max context window tokens: {label}"
+            label.contains("[400.0k tok]"),
+            "label should include full context window tokens: {label}"
+        );
+        assert!(
+            label.contains("|"),
+            "label should include a compaction marker: {label}"
         );
         assert!(
             label.contains("="),
@@ -285,8 +385,9 @@ mod tests {
     fn context_usage_label_clamps_overflowing_progress_to_full_bar() {
         let label = build_context_usage_label(&HeaderUsageDisplay {
             total_thread_tokens: 21_000_000,
-            current_tokens: 300_000,
-            max_tokens: 128_000,
+            current_tokens: 500_000,
+            context_window_tokens: 400_000,
+            compaction_target_tokens: 320_000,
             utilization_pct: 100,
             total_cost_usd: None,
         });
@@ -296,8 +397,56 @@ mod tests {
             "overflow should clamp to 100 percent: {label}"
         );
         assert!(
-            label.contains("[==========]"),
-            "overflow should render as a full progress bar: {label}"
+            label.contains("[===============|====]"),
+            "overflow should render as a full context bar with a compaction marker: {label}"
+        );
+    }
+
+    #[test]
+    fn context_fill_band_uses_green_orange_and_red_thresholds() {
+        assert_eq!(
+            context_fill_band(&HeaderUsageDisplay {
+                total_thread_tokens: 0,
+                current_tokens: 0,
+                context_window_tokens: 400_000,
+                compaction_target_tokens: 320_000,
+                utilization_pct: 39,
+                total_cost_usd: None,
+            }),
+            ContextFillBand::Green
+        );
+        assert_eq!(
+            context_fill_band(&HeaderUsageDisplay {
+                total_thread_tokens: 0,
+                current_tokens: 0,
+                context_window_tokens: 400_000,
+                compaction_target_tokens: 320_000,
+                utilization_pct: 55,
+                total_cost_usd: None,
+            }),
+            ContextFillBand::Orange
+        );
+        assert_eq!(
+            context_fill_band(&HeaderUsageDisplay {
+                total_thread_tokens: 0,
+                current_tokens: 0,
+                context_window_tokens: 400_000,
+                compaction_target_tokens: 320_000,
+                utilization_pct: 70,
+                total_cost_usd: None,
+            }),
+            ContextFillBand::Red
+        );
+        assert_eq!(
+            context_fill_band(&HeaderUsageDisplay {
+                total_thread_tokens: 0,
+                current_tokens: 0,
+                context_window_tokens: 400_000,
+                compaction_target_tokens: 320_000,
+                utilization_pct: 90,
+                total_cost_usd: None,
+            }),
+            ContextFillBand::Red
         );
     }
 

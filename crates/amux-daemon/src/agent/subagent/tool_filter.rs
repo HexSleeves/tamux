@@ -63,6 +63,14 @@ impl ToolFilter {
         }
     }
 
+    /// Create a restrictive filter that denies every tool.
+    pub fn deny_all() -> Self {
+        Self {
+            whitelist: Some(Vec::new()),
+            blacklist: None,
+        }
+    }
+
     /// Check whether a specific tool is allowed by this filter.
     pub fn is_allowed(&self, tool_name: &str) -> bool {
         if let Some(whitelist) = &self.whitelist {
@@ -135,6 +143,18 @@ mod tests {
         assert!(filter.is_allowed("bash_command"));
         assert!(filter.is_allowed("read_file"));
         assert!(!filter.has_restrictions());
+    }
+
+    #[test]
+    fn deny_all_blocks_everything() {
+        let filter = ToolFilter::deny_all();
+        assert!(!filter.is_allowed("bash_command"));
+        assert!(!filter.is_allowed("read_file"));
+        assert!(filter.has_restrictions());
+        assert_eq!(
+            filter.deny_reason("bash_command").as_deref(),
+            Some("tool 'bash_command' is not in the whitelist: []")
+        );
     }
 
     #[test]

@@ -225,7 +225,7 @@ impl TuiModel {
                 self.sync_goal_picker_item_count();
                 self.focus = FocusArea::Chat;
             }
-            KeyCode::Char('i') if ctrl => {
+            KeyCode::Char('n') if ctrl => {
                 self.toggle_notifications_modal();
             }
             KeyCode::Char('b') if ctrl => {

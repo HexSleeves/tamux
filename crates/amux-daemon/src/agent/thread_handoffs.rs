@@ -91,7 +91,7 @@ pub(super) fn default_agent_id_for_thread(
     canonical_agent_id(persisted_agent_name.unwrap_or(MAIN_AGENT_ID)).to_string()
 }
 
-pub(super) fn is_internal_handoff_thread(thread_id: &str) -> bool {
+pub(in crate::agent) fn is_internal_handoff_thread(thread_id: &str) -> bool {
     thread_id.starts_with(INTERNAL_HANDOFF_THREAD_PREFIX)
 }
 
@@ -593,6 +593,12 @@ impl AgentEngine {
                 Some("daemon".to_string()),
             )
             .await;
+        if self
+            .auto_approve_task_if_rule_matches(&task.id, &request.thread_id, pending_approval)
+            .await
+        {
+            return Ok(task);
+        }
         self.mark_task_awaiting_approval(&task.id, &request.thread_id, pending_approval)
             .await;
         self.record_operator_approval_requested(pending_approval)

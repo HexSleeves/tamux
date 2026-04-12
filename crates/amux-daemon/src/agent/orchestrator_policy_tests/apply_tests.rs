@@ -233,6 +233,151 @@ async fn apply_escalate_routes_into_existing_escalation_behavior() {
 }
 
 #[tokio::test]
+async fn apply_escalate_reuses_session_approval_for_later_same_thread_escalations() {
+    let engine = test_engine().await;
+    let thread_id = "thread-policy-escalate-session-approval";
+    seed_runtime(&engine, thread_id).await;
+    let decision = PolicyDecision {
+        action: PolicyAction::Escalate,
+        reason: "Repeated failures need operator guidance now.".to_string(),
+        strategy_hint: None,
+        retry_guard: None,
+    };
+    let trigger = PolicyTriggerContext {
+        thread_id: thread_id.to_string(),
+        goal_run_id: Some("goal-1".to_string()),
+        repeated_approach: true,
+        awareness_stuck: true,
+        self_assessment: PolicySelfAssessmentSummary {
+            should_pivot: false,
+            should_escalate: true,
+        },
+    };
+
+    let outcome = engine
+        .apply_orchestrator_policy_decision(
+            thread_id,
+            Some("task-1"),
+            Some("goal-1"),
+            &trigger,
+            &decision,
+            1_000,
+        )
+        .await
+        .expect("initial escalation should apply");
+    assert_eq!(outcome, PolicyLoopAction::InterruptForApproval);
+
+    let approval_id = {
+        let tasks = engine.tasks.lock().await;
+        tasks
+            .iter()
+            .find(|task| task.id == "task-1")
+            .and_then(|task| task.awaiting_approval_id.clone())
+            .expect("task should await approval")
+    };
+
+    assert!(
+        engine
+            .handle_task_approval_resolution(
+                &approval_id,
+                amux_protocol::ApprovalDecision::ApproveSession
+            )
+            .await
+    );
+
+    let outcome = engine
+        .apply_orchestrator_policy_decision(
+            thread_id,
+            Some("task-1"),
+            Some("goal-1"),
+            &trigger,
+            &decision,
+            1_010,
+        )
+        .await
+        .expect("session-approved escalation should not block");
+    assert_eq!(outcome, PolicyLoopAction::Continue);
+
+    let task = engine
+        .tasks
+        .lock()
+        .await
+        .iter()
+        .find(|task| task.id == "task-1")
+        .cloned()
+        .expect("task");
+    assert_ne!(task.status, TaskStatus::AwaitingApproval);
+    assert!(task.awaiting_approval_id.is_none());
+}
+
+#[tokio::test]
+async fn apply_escalate_reuses_saved_always_approve_rule() {
+    let engine = test_engine().await;
+    let thread_id = "thread-policy-always-approve";
+    seed_runtime(&engine, thread_id).await;
+    engine
+        .task_approval_rules
+        .write()
+        .await
+        .push(amux_protocol::TaskApprovalRule {
+            id: "rule-1".to_string(),
+            command: "orchestrator_policy_escalation".to_string(),
+            created_at: 1,
+            last_used_at: None,
+            use_count: 0,
+        });
+    let decision = PolicyDecision {
+        action: PolicyAction::Escalate,
+        reason: "Repeated failures need operator guidance now.".to_string(),
+        strategy_hint: None,
+        retry_guard: None,
+    };
+    let trigger = PolicyTriggerContext {
+        thread_id: thread_id.to_string(),
+        goal_run_id: Some("goal-1".to_string()),
+        repeated_approach: true,
+        awareness_stuck: true,
+        self_assessment: PolicySelfAssessmentSummary {
+            should_pivot: false,
+            should_escalate: true,
+        },
+    };
+
+    let outcome = engine
+        .apply_orchestrator_policy_decision(
+            thread_id,
+            Some("task-1"),
+            Some("goal-1"),
+            &trigger,
+            &decision,
+            1_000,
+        )
+        .await
+        .expect("saved rule escalation should apply");
+    assert_eq!(outcome, PolicyLoopAction::Continue);
+
+    let task = engine
+        .tasks
+        .lock()
+        .await
+        .iter()
+        .find(|task| task.id == "task-1")
+        .cloned()
+        .expect("task");
+    assert_ne!(task.status, TaskStatus::AwaitingApproval);
+    assert!(task.awaiting_approval_id.is_none());
+
+    let rule = engine
+        .list_task_approval_rules()
+        .await
+        .into_iter()
+        .find(|rule| rule.id == "rule-1")
+        .expect("saved rule should remain");
+    assert_eq!(rule.use_count, 1);
+    assert!(rule.last_used_at.is_some());
+}
+
+#[tokio::test]
 async fn apply_continue_leaves_current_flow_unchanged() {
     let engine = test_engine().await;
     let thread_id = "thread-policy-continue";

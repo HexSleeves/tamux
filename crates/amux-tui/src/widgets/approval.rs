@@ -118,6 +118,8 @@ pub fn render(frame: &mut Frame, area: Rect, approval: &ApprovalState, theme: &T
         Span::styled(" Allow once  ", theme.fg_active),
         Span::styled("[A]", theme.accent_secondary),
         Span::styled(" Allow for session  ", theme.fg_active),
+        Span::styled("[W]", theme.accent_primary),
+        Span::styled(" Always approve  ", theme.fg_active),
         Span::styled("[N]", theme.accent_danger),
         Span::styled(" Reject", theme.fg_active),
     ]));

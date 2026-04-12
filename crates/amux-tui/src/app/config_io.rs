@@ -426,8 +426,6 @@ impl TuiModel {
             300,
         );
         self.config.auto_retry = get_bool("auto_retry", "auto_retry", true);
-        self.config.context_budget_tokens =
-            get_u32("context_budget_tokens", "context_budget_tokens", 100000);
         self.config.compact_threshold_pct =
             get_u32("compact_threshold_pct", "compact_threshold_pct", 80);
         self.config.keep_recent_on_compact =

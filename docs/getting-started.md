@@ -10,6 +10,19 @@ For providers, configuration, shortcuts, release packaging, plugin installation,
 - **Runtime data directory:** `~/.tamux` (Unix) or `%LOCALAPPDATA%\tamux` (Windows).
 - **Source builds:** binaries are produced in `target/debug` or `target/release`.
 
+## Quick Install
+
+Use the shell installer when you want the native CLI binaries without npm:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mkurman/tamux/main/scripts/install.sh | sh
+tamux --help
+```
+
+The installer downloads the same GitHub release bundles used by the npm package and installs them into `~/.local/bin` by default. Set `TAMUX_VERSION` to pin a specific release or `TAMUX_INSTALL_DIR` to change the install location.
+
+Later, `tamux upgrade` will upgrade from the same source that installed the current binary: npm-backed installs use npm, and direct-binary installs reuse the direct installer for the active install directory.
+
 ## Required Dependencies
 
 ### Source / Development workflow

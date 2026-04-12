@@ -374,11 +374,6 @@ impl TuiModel {
                                     }
                                 }
                             }
-                            "context_budget_tokens" => {
-                                if let Ok(n) = value.parse::<u32>() {
-                                    self.config.context_budget_tokens = n.clamp(10000, 500000);
-                                }
-                            }
                             "compact_threshold_pct" => {
                                 if let Ok(n) = value.parse::<u32>() {
                                     self.config.compact_threshold_pct = n.clamp(50, 95);
@@ -751,6 +746,17 @@ impl TuiModel {
                         self.close_top_modal();
                     }
                 }
+                KeyCode::Char('w') | KeyCode::Char('W') => {
+                    if let Some(ap) = self.approval.selected_approval() {
+                        self.create_task_approval_rule(ap.approval_id.clone());
+                    }
+                    if let Some(next) = self.next_current_thread_approval_id() {
+                        self.approval
+                            .reduce(crate::state::ApprovalAction::SelectApproval(next));
+                    } else {
+                        self.close_top_modal();
+                    }
+                }
                 KeyCode::Char('n') | KeyCode::Char('N') => {
                     if let Some(ap) = self.approval.selected_approval() {
                         self.resolve_approval(ap.approval_id.clone(), "reject");
@@ -770,18 +776,53 @@ impl TuiModel {
         if kind == modal::ModalKind::ApprovalCenter {
             match code {
                 KeyCode::Esc => self.close_top_modal(),
-                KeyCode::Up | KeyCode::Char('k') => self.step_approval_selection(-1),
-                KeyCode::Down | KeyCode::Char('j') => self.step_approval_selection(1),
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if self.approval.filter() == crate::state::ApprovalFilter::SavedRules {
+                        if let Some(index) = self.approval.selected_rule_id().and_then(|rule_id| {
+                            self.approval
+                                .saved_rules()
+                                .iter()
+                                .position(|rule| rule.id == rule_id)
+                        }) {
+                            self.select_approval_center_rule_row(index.saturating_sub(1));
+                        } else {
+                            self.select_approval_center_rule_row(0);
+                        }
+                    } else {
+                        self.step_approval_selection(-1);
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if self.approval.filter() == crate::state::ApprovalFilter::SavedRules {
+                        let next = self
+                            .approval
+                            .selected_rule_id()
+                            .and_then(|rule_id| {
+                                self.approval
+                                    .saved_rules()
+                                    .iter()
+                                    .position(|rule| rule.id == rule_id)
+                            })
+                            .map(|index| index.saturating_add(1))
+                            .unwrap_or(0);
+                        self.select_approval_center_rule_row(next);
+                    } else {
+                        self.step_approval_selection(1);
+                    }
+                }
                 KeyCode::Left | KeyCode::Char('h') => {
                     let next_filter = match self.approval.filter() {
                         crate::state::ApprovalFilter::AllPending => {
-                            crate::state::ApprovalFilter::CurrentWorkspace
+                            crate::state::ApprovalFilter::SavedRules
                         }
                         crate::state::ApprovalFilter::CurrentThread => {
                             crate::state::ApprovalFilter::AllPending
                         }
                         crate::state::ApprovalFilter::CurrentWorkspace => {
                             crate::state::ApprovalFilter::CurrentThread
+                        }
+                        crate::state::ApprovalFilter::SavedRules => {
+                            crate::state::ApprovalFilter::CurrentWorkspace
                         }
                     };
                     self.approval
@@ -796,6 +837,9 @@ impl TuiModel {
                             crate::state::ApprovalFilter::CurrentWorkspace
                         }
                         crate::state::ApprovalFilter::CurrentWorkspace => {
+                            crate::state::ApprovalFilter::SavedRules
+                        }
+                        crate::state::ApprovalFilter::SavedRules => {
                             crate::state::ApprovalFilter::AllPending
                         }
                     };
@@ -803,27 +847,48 @@ impl TuiModel {
                         .reduce(crate::state::ApprovalAction::SetFilter(next_filter));
                 }
                 KeyCode::Char('a') => {
-                    if let Some(ap) = self.approval.selected_visible_approval(
-                        self.chat.active_thread_id(),
-                        self.current_workspace_id(),
-                    ) {
-                        self.resolve_approval(ap.approval_id.clone(), "allow_once");
+                    if self.approval.filter() != crate::state::ApprovalFilter::SavedRules {
+                        if let Some(ap) = self.approval.selected_visible_approval(
+                            self.chat.active_thread_id(),
+                            self.current_workspace_id(),
+                        ) {
+                            self.resolve_approval(ap.approval_id.clone(), "allow_once");
+                        }
                     }
                 }
                 KeyCode::Char('s') => {
-                    if let Some(ap) = self.approval.selected_visible_approval(
-                        self.chat.active_thread_id(),
-                        self.current_workspace_id(),
-                    ) {
-                        self.resolve_approval(ap.approval_id.clone(), "allow_session");
+                    if self.approval.filter() != crate::state::ApprovalFilter::SavedRules {
+                        if let Some(ap) = self.approval.selected_visible_approval(
+                            self.chat.active_thread_id(),
+                            self.current_workspace_id(),
+                        ) {
+                            self.resolve_approval(ap.approval_id.clone(), "allow_session");
+                        }
+                    }
+                }
+                KeyCode::Char('w') => {
+                    if self.approval.filter() != crate::state::ApprovalFilter::SavedRules {
+                        if let Some(ap) = self.approval.selected_visible_approval(
+                            self.chat.active_thread_id(),
+                            self.current_workspace_id(),
+                        ) {
+                            self.create_task_approval_rule(ap.approval_id.clone());
+                        }
                     }
                 }
                 KeyCode::Char('d') => {
-                    if let Some(ap) = self.approval.selected_visible_approval(
-                        self.chat.active_thread_id(),
-                        self.current_workspace_id(),
-                    ) {
-                        self.resolve_approval(ap.approval_id.clone(), "reject");
+                    if self.approval.filter() != crate::state::ApprovalFilter::SavedRules {
+                        if let Some(ap) = self.approval.selected_visible_approval(
+                            self.chat.active_thread_id(),
+                            self.current_workspace_id(),
+                        ) {
+                            self.resolve_approval(ap.approval_id.clone(), "reject");
+                        }
+                    }
+                }
+                KeyCode::Char('r') => {
+                    if self.approval.filter() == crate::state::ApprovalFilter::SavedRules {
+                        self.revoke_selected_task_approval_rule();
                     }
                 }
                 KeyCode::Enter => {}
@@ -917,6 +982,30 @@ impl TuiModel {
                 KeyCode::End => {
                     let max_scroll = self.status_modal_max_scroll();
                     self.set_status_modal_scroll(max_scroll);
+                }
+                _ => {}
+            }
+            return false;
+        }
+
+        if kind == modal::ModalKind::Help {
+            match code {
+                KeyCode::Esc => {
+                    self.close_top_modal();
+                }
+                KeyCode::Char('/') => {
+                    self.close_top_modal();
+                    self.input.reduce(input::InputAction::InsertChar('/'));
+                    self.focus = FocusArea::Input;
+                }
+                KeyCode::Down | KeyCode::Char('j') => self.step_help_modal_scroll(1),
+                KeyCode::Up | KeyCode::Char('k') => self.step_help_modal_scroll(-1),
+                KeyCode::PageDown => self.page_help_modal_scroll(1),
+                KeyCode::PageUp => self.page_help_modal_scroll(-1),
+                KeyCode::Home => self.set_help_modal_scroll(0),
+                KeyCode::End => {
+                    let max_scroll = self.help_modal_max_scroll();
+                    self.set_help_modal_scroll(max_scroll);
                 }
                 _ => {}
             }

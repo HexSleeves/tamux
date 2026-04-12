@@ -14,6 +14,7 @@ impl TuiModel {
         self.send_daemon_command(DaemonCommand::ListSubAgents);
         self.send_daemon_command(DaemonCommand::GetConciergeConfig);
         self.send_daemon_command(DaemonCommand::ListNotifications);
+        self.send_daemon_command(DaemonCommand::ListTaskApprovalRules);
         self.send_daemon_command(DaemonCommand::PluginList);
         self.send_daemon_command(DaemonCommand::PluginListCommands);
         let cwd = std::env::current_dir()
@@ -157,5 +158,23 @@ impl TuiModel {
             self.close_top_modal();
         }
         self.status_line = "Approval resolved".to_string();
+    }
+
+    pub(in crate::app) fn handle_task_approval_rules_event(
+        &mut self,
+        rules: Vec<amux_protocol::TaskApprovalRule>,
+    ) {
+        self.approval.reduce(crate::state::ApprovalAction::SetRules(
+            rules
+                .into_iter()
+                .map(|rule| crate::state::approval::SavedApprovalRule {
+                    id: rule.id,
+                    command: rule.command,
+                    created_at: rule.created_at,
+                    last_used_at: rule.last_used_at,
+                    use_count: rule.use_count,
+                })
+                .collect(),
+        ));
     }
 }

@@ -878,6 +878,7 @@ async fn execute_handoff_thread_agent(
 async fn execute_message_agent(
     args: &serde_json::Value,
     agent: &AgentEngine,
+    thread_id: &str,
     task_id: Option<&str>,
     preferred_session_id: Option<SessionId>,
 ) -> Result<String> {
@@ -893,6 +894,10 @@ async fn execute_message_agent(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("missing 'message' argument"))?;
+    let request_visible_thread_continuation = args
+        .get("request_visible_thread_continuation")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
 
     let sender = if let Some(current_task_id) = task_id {
         let tasks = agent.tasks.lock().await;
@@ -900,24 +905,67 @@ async fn execute_message_agent(
     } else {
         canonical_agent_name(&current_agent_scope_id()).to_string()
     };
+    let (resolved_target_id, resolved_target_name) =
+        agent.resolve_thread_participant_target(target).await?;
 
-    if canonical_agent_id(&sender) == canonical_agent_id(target) {
+    if canonical_agent_id(&sender) == canonical_agent_id(&resolved_target_id) {
         anyhow::bail!("message_agent cannot target the current active responder");
+    }
+    if request_visible_thread_continuation
+        && (thread_id.trim().is_empty()
+            || crate::agent::agent_identity::is_internal_dm_thread(thread_id)
+            || crate::agent::is_internal_handoff_thread(thread_id))
+    {
+        anyhow::bail!(
+            "request_visible_thread_continuation requires a visible operator thread, not an internal thread"
+        );
     }
 
     let preferred_session_hint = preferred_session_id.as_ref().map(|value| value.to_string());
-    let result = Box::pin(agent.send_internal_agent_message(
-        &sender,
-        target,
-        message,
-        preferred_session_hint.as_deref(),
-    ))
-    .await?;
+    let result = if request_visible_thread_continuation {
+        let payload = agent
+            .build_internal_delegate_payload(Some(thread_id), message, true)
+            .await;
+        let result = Box::pin(agent.send_internal_agent_message(
+            &sender,
+            &resolved_target_id,
+            &payload,
+            preferred_session_hint.as_deref(),
+        ))
+        .await?;
+        let continuation_prompt = agent
+            .build_visible_thread_continuation_prompt(
+                thread_id,
+                &sender,
+                &resolved_target_id,
+                message,
+            )
+            .await;
+        agent.enqueue_visible_thread_continuation(
+            thread_id,
+            crate::agent::DeferredVisibleThreadContinuation {
+                agent_id: resolved_target_id.clone(),
+                preferred_session_hint: preferred_session_hint.clone(),
+                llm_user_content: continuation_prompt,
+            },
+        )
+        .await;
+        result
+    } else {
+        Box::pin(agent.send_internal_agent_message(
+            &sender,
+            &resolved_target_id,
+            message,
+            preferred_session_hint.as_deref(),
+        ))
+        .await?
+    };
     Ok(serde_json::to_string_pretty(&serde_json::json!({
-        "target": canonical_agent_name(target),
+        "target": resolved_target_name,
         "thread_id": result.thread_id,
         "response": result.response,
         "upstream_message": result.upstream_message,
+        "visible_thread_continuation_requested": request_visible_thread_continuation,
     }))
     .unwrap_or_else(|_| "{}".to_string()))
 }

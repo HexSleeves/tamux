@@ -424,6 +424,18 @@ impl DaemonClient {
         self.send(ClientMessage::AgentWhatsAppLinkReset)
     }
 
+    pub fn list_task_approval_rules(&self) -> Result<()> {
+        self.send(ClientMessage::AgentListTaskApprovalRules)
+    }
+
+    pub fn create_task_approval_rule(&self, approval_id: String) -> Result<()> {
+        self.send(ClientMessage::AgentCreateTaskApprovalRule { approval_id })
+    }
+
+    pub fn revoke_task_approval_rule(&self, rule_id: String) -> Result<()> {
+        self.send(ClientMessage::AgentRevokeTaskApprovalRule { rule_id })
+    }
+
     pub fn resolve_task_approval(&self, approval_id: String, decision: String) -> Result<()> {
         let decision = match decision.as_str() {
             "allow_once" | "approve_once" => "approve-once",
