@@ -418,18 +418,31 @@ fn different_responders_get_distinct_label_colors() {
     let main_label_style = responder_lines[0]
         .line
         .spans
-        .last()
+        .iter()
+        .find(|span| span.content.contains("Swarozyc"))
         .expect("main responder label span")
         .style;
     let participant_label_style = responder_lines[1]
         .line
         .spans
-        .last()
+        .iter()
+        .find(|span| span.content.contains("@Weles"))
         .expect("participant responder label span")
         .style;
+    let theme = ThemeTokens::default();
     assert_ne!(
         main_label_style.fg, participant_label_style.fg,
         "different responders should render with distinct label colors"
+    );
+    assert_eq!(
+        main_label_style.fg,
+        theme.accent_assistant.fg,
+        "main responder label should use the assistant violet accent"
+    );
+    assert_ne!(
+        main_label_style.fg,
+        theme.accent_success.fg,
+        "main responder label should stay visually distinct from done/success green"
     );
 }
 

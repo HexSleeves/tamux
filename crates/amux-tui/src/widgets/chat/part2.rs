@@ -288,11 +288,14 @@ fn responder_label_line(label: &str, theme: &ThemeTokens) -> Line<'static> {
 }
 
 fn responder_accent_style(label: &str, theme: &ThemeTokens) -> Style {
+    if !label.starts_with('@') {
+        return theme.accent_assistant;
+    }
+
     let palette = [
         theme.accent_primary,
         theme.accent_secondary,
-        theme.accent_success,
-        theme.accent_assistant,
+        theme.accent_danger,
         Style::default().fg(Color::Indexed(111)),
         Style::default().fg(Color::Indexed(180)),
     ];
