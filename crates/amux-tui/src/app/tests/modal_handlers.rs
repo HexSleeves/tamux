@@ -1427,7 +1427,15 @@ fn thread_picker_enter_selects_filtered_rarog_thread() {
     assert!(!quit);
     assert_eq!(model.chat.active_thread_id(), Some("heartbeat-1"));
     match daemon_rx.try_recv() {
-        Ok(DaemonCommand::RequestThread(thread_id)) => assert_eq!(thread_id, "heartbeat-1"),
+        Ok(DaemonCommand::RequestThread {
+            thread_id,
+            message_limit,
+            message_offset,
+        }) => {
+            assert_eq!(thread_id, "heartbeat-1");
+            assert_eq!(message_limit, Some(50));
+            assert_eq!(message_offset, Some(0));
+        }
         other => panic!("expected thread request, got {:?}", other),
     }
 }

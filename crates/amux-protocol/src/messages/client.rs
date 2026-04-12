@@ -57,7 +57,7 @@ pub enum ClientMessage {
     AgentStopStream { thread_id: String },
     AgentRetryStreamNow { thread_id: String },
     AgentListThreads,
-    AgentGetThread { thread_id: String },
+    AgentGetThread { thread_id: String, #[serde(default)] message_limit: Option<usize>, #[serde(default)] message_offset: Option<usize> },
     AgentDeleteThread { thread_id: String },
     AgentAddTask { title: String, description: String, priority: String, command: Option<String>, session_id: Option<String>, scheduled_at: Option<u64>, #[serde(default)] dependencies: Vec<String> },
     AgentStartGoalRun { goal: String, title: Option<String>, thread_id: Option<String>, session_id: Option<String>, priority: Option<String>, client_request_id: Option<String>, #[serde(default)] autonomy_level: Option<String>, #[serde(default)] client_surface: Option<ClientSurface> },

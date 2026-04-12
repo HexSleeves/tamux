@@ -221,8 +221,16 @@ fn start_daemon_bridge(
                             DaemonCommand::RefreshServices => {
                                 let _ = client.refresh_services();
                             }
-                            DaemonCommand::RequestThread(thread_id) => {
-                                let _ = client.request_thread(thread_id);
+                            DaemonCommand::RequestThread {
+                                thread_id,
+                                message_limit,
+                                message_offset,
+                            } => {
+                                let _ = client.request_thread(
+                                    thread_id,
+                                    message_limit,
+                                    message_offset,
+                                );
                             }
                             DaemonCommand::RequestThreadTodos(thread_id) => {
                                 let _ = client.request_todos(thread_id);

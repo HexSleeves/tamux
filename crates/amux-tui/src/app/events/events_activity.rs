@@ -578,11 +578,14 @@ impl TuiModel {
         self.error_active = true;
         self.error_tick = self.tick_counter;
         if busy && self.modal.top().is_none() {
-            if let Some(thread) = self.chat.active_thread_mut() {
-                thread.messages.push(chat::AgentMessage {
-                    role: chat::MessageRole::System,
-                    content: format!("Error: {}", message),
-                    ..Default::default()
+            if let Some(thread_id) = self.chat.active_thread_id().map(str::to_string) {
+                self.chat.reduce(chat::ChatAction::AppendMessage {
+                    thread_id,
+                    message: chat::AgentMessage {
+                        role: chat::MessageRole::System,
+                        content: format!("Error: {}", message),
+                        ..Default::default()
+                    },
                 });
             }
         } else {

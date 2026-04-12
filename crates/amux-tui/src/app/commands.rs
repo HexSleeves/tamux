@@ -827,15 +827,18 @@ impl TuiModel {
             }
         }
 
-        if let Some(thread) = self.chat.active_thread_mut() {
-            thread.messages.push(chat::AgentMessage {
-                role: chat::MessageRole::User,
-                content: final_content.clone(),
-                timestamp: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0),
-                ..Default::default()
+        if let Some(thread_id) = self.chat.active_thread_id().map(str::to_string) {
+            self.chat.reduce(chat::ChatAction::AppendMessage {
+                thread_id,
+                message: chat::AgentMessage {
+                    role: chat::MessageRole::User,
+                    content: final_content.clone(),
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0),
+                    ..Default::default()
+                },
             });
         }
 
@@ -1096,12 +1099,7 @@ impl TuiModel {
         });
 
         // Remove locally.
-        if let Some(thread) = self.chat.active_thread_mut() {
-            if index < thread.messages.len() {
-                thread.messages.remove(index);
-            }
-        }
-        self.chat.select_message(None);
+        self.chat.delete_active_message(index);
         self.status_line = format!("Deleted message {}", index + 1);
     }
 

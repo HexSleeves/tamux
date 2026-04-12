@@ -614,11 +614,33 @@ impl AgentEngine {
         }
     }
 
-    pub async fn agent_thread_detail_json(&self, thread_id: &str) -> String {
-        let thread = self.get_thread(thread_id).await;
-        let mut value = serde_json::to_value(thread).unwrap_or(serde_json::Value::Null);
+    pub async fn agent_thread_detail_json(
+        &self,
+        thread_id: &str,
+        message_limit: Option<usize>,
+        message_offset: Option<usize>,
+    ) -> String {
+        let detail_result = self
+            .get_thread_filtered(thread_id, false, message_limit, message_offset.unwrap_or(0))
+            .await;
+        let mut value = serde_json::to_value(detail_result.as_ref().map(|result| &result.thread))
+            .unwrap_or(serde_json::Value::Null);
 
         if let Some(detail) = value.as_object_mut() {
+            if let Some(result) = detail_result.as_ref() {
+                detail.insert(
+                    "total_message_count".to_string(),
+                    serde_json::Value::from(result.total_message_count),
+                );
+                detail.insert(
+                    "loaded_message_start".to_string(),
+                    serde_json::Value::from(result.loaded_message_start),
+                );
+                detail.insert(
+                    "loaded_message_end".to_string(),
+                    serde_json::Value::from(result.loaded_message_end),
+                );
+            }
             let participants = self.list_thread_participants(thread_id).await;
             let suggestions = self.list_thread_participant_suggestions(thread_id).await;
             detail.insert(
