@@ -171,17 +171,27 @@ async fn list_undistilled_threads(
     db.conn
         .call(move |conn| {
             let mut stmt = conn.prepare(
-                "SELECT id
+                "SELECT threads.id
                  FROM agent_threads AS threads
-                 WHERE updated_at < ?1
-                   AND NOT EXISTS (
-                       SELECT 1
-                       FROM memory_distillation_log AS log
-                       WHERE log.source_thread_id = threads.id
-                         AND log.applied_to_memory = 1
-                         AND log.created_at_ms >= threads.updated_at
+                 JOIN (
+                     SELECT thread_id, MAX(created_at) AS latest_message_activity_at
+                     FROM agent_messages
+                     GROUP BY thread_id
+                 ) AS activity
+                   ON activity.thread_id = threads.id
+                 LEFT JOIN (
+                     SELECT source_thread_id, MAX(created_at_ms) AS last_distilled_at
+                     FROM memory_distillation_log
+                     WHERE applied_to_memory = 1
+                     GROUP BY source_thread_id
+                 ) AS distillation
+                   ON distillation.source_thread_id = threads.id
+                 WHERE activity.latest_message_activity_at < ?1
+                   AND (
+                       distillation.last_distilled_at IS NULL
+                       OR distillation.last_distilled_at < activity.latest_message_activity_at
                    )
-                 ORDER BY updated_at ASC
+                 ORDER BY activity.latest_message_activity_at ASC
                  LIMIT ?2",
             )?;
             let rows = stmt.query_map(params![cutoff_ms as i64, limit as i64], |row| row.get(0))?;
@@ -686,6 +696,50 @@ mod tests {
     use std::fs;
     use uuid::Uuid;
 
+    async fn create_thread_with_user_message(
+        history: &HistoryStore,
+        thread_id: &str,
+        message_created_at: i64,
+    ) -> anyhow::Result<()> {
+        history
+            .create_thread(&AgentDbThread {
+                id: thread_id.to_string(),
+                workspace_id: None,
+                surface_id: None,
+                pane_id: None,
+                agent_name: Some("Rarog".to_string()),
+                title: thread_id.to_string(),
+                created_at: message_created_at,
+                updated_at: message_created_at,
+                message_count: 0,
+                total_tokens: 0,
+                last_preview: String::new(),
+                metadata_json: None,
+            })
+            .await?;
+
+        history
+            .add_message(&AgentDbMessage {
+                id: format!("{thread_id}-m1"),
+                thread_id: thread_id.to_string(),
+                created_at: message_created_at,
+                role: "user".to_string(),
+                content: "Use the cargo package name `tamux-daemon` for `cargo -p`.".to_string(),
+                provider: None,
+                model: None,
+                input_tokens: None,
+                output_tokens: None,
+                total_tokens: None,
+                cost_usd: None,
+                reasoning: None,
+                tool_calls_json: None,
+                metadata_json: None,
+            })
+            .await?;
+
+        Ok(())
+    }
+
     #[test]
     fn memory_category_display() {
         assert_eq!(MemoryCategory::Preference.to_string(), "preference");
@@ -926,28 +980,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("tamux-distill-test-{}", Uuid::new_v4()));
         let history = HistoryStore::new_test_store(&root).await?;
 
-        for (id, updated_at) in [
+        for (id, message_created_at) in [
             ("old-never-distilled", 1_000_i64),
             ("old-reviewed-only", 2_000_i64),
             ("old-applied", 3_000_i64),
             ("recent-thread", 9_500_i64),
         ] {
-            history
-                .create_thread(&AgentDbThread {
-                    id: id.to_string(),
-                    workspace_id: None,
-                    surface_id: None,
-                    pane_id: None,
-                    agent_name: Some("Rarog".to_string()),
-                    title: id.to_string(),
-                    created_at: updated_at,
-                    updated_at,
-                    message_count: 0,
-                    total_tokens: 0,
-                    last_preview: String::new(),
-                    metadata_json: None,
-                })
-                .await?;
+            create_thread_with_user_message(&history, id, message_created_at).await?;
         }
 
         log_distillation_candidate(
@@ -1000,27 +1039,12 @@ mod tests {
         let root = std::env::temp_dir().join(format!("tamux-distill-test-{}", Uuid::new_v4()));
         let history = HistoryStore::new_test_store(&root).await?;
 
-        for (id, updated_at) in [
+        for (id, message_created_at) in [
             ("applied-before-last-activity", 8_000_i64),
             ("applied-after-last-activity", 8_000_i64),
             ("never-applied", 7_000_i64),
         ] {
-            history
-                .create_thread(&AgentDbThread {
-                    id: id.to_string(),
-                    workspace_id: None,
-                    surface_id: None,
-                    pane_id: None,
-                    agent_name: Some("Rarog".to_string()),
-                    title: id.to_string(),
-                    created_at: updated_at,
-                    updated_at,
-                    message_count: 0,
-                    total_tokens: 0,
-                    last_preview: String::new(),
-                    metadata_json: None,
-                })
-                .await?;
+            create_thread_with_user_message(&history, id, message_created_at).await?;
         }
 
         history
@@ -1068,6 +1092,90 @@ mod tests {
         assert!(selected.contains(&"applied-before-last-activity".to_string()));
         assert!(selected.contains(&"never-applied".to_string()));
         assert!(!selected.contains(&"applied-after-last-activity".to_string()));
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_undistilled_threads_excludes_equal_timestamp_distillations(
+    ) -> anyhow::Result<()> {
+        let root = std::env::temp_dir().join(format!("tamux-distill-test-{}", Uuid::new_v4()));
+        let history = HistoryStore::new_test_store(&root).await?;
+
+        create_thread_with_user_message(&history, "equal-timestamp", 8_000_i64).await?;
+
+        history
+            .conn
+            .call(|conn| {
+                conn.execute(
+                    "INSERT INTO memory_distillation_log \
+                     (source_thread_id, source_message_range, distilled_fact, target_file, category, confidence, created_at_ms, applied_to_memory, agent_id) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    rusqlite::params![
+                        "equal-timestamp",
+                        "1-1",
+                        "Use the cargo package name `tamux-daemon` for `cargo -p`.",
+                        "MEMORY.md",
+                        "convention",
+                        0.91_f64,
+                        8_000_i64,
+                        1_i64,
+                        "rarog",
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let selected = list_undistilled_threads(&history, 9_000, 10).await?;
+
+        assert!(!selected.contains(&"equal-timestamp".to_string()));
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_undistilled_threads_ignores_bookkeeping_only_thread_updates(
+    ) -> anyhow::Result<()> {
+        let root = std::env::temp_dir().join(format!("tamux-distill-test-{}", Uuid::new_v4()));
+        let history = HistoryStore::new_test_store(&root).await?;
+
+        create_thread_with_user_message(&history, "bookkeeping-only", 7_000_i64).await?;
+
+        history
+            .conn
+            .call(|conn| {
+                conn.execute(
+                    "INSERT INTO memory_distillation_log \
+                     (source_thread_id, source_message_range, distilled_fact, target_file, category, confidence, created_at_ms, applied_to_memory, agent_id) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    rusqlite::params![
+                        "bookkeeping-only",
+                        "1-1",
+                        "Use the cargo package name `tamux-daemon` for `cargo -p`.",
+                        "MEMORY.md",
+                        "convention",
+                        0.91_f64,
+                        7_500_i64,
+                        1_i64,
+                        "rarog",
+                    ],
+                )?;
+                conn.execute(
+                    "UPDATE agent_threads SET updated_at = ?2 WHERE id = ?1",
+                    rusqlite::params!["bookkeeping-only", 8_500_i64],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let selected = list_undistilled_threads(&history, 9_000, 10).await?;
+
+        assert!(!selected.contains(&"bookkeeping-only".to_string()));
 
         fs::remove_dir_all(root)?;
         Ok(())

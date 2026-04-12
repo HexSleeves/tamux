@@ -36,11 +36,11 @@ pub struct ChatState {
     scroll_offset: usize,
     scroll_locked: bool,
     transcript_mode: TranscriptMode,
-    expanded_reasoning: std::collections::HashSet<usize>,
-    selected_message: Option<usize>,
+    expanded_reasoning: std::collections::HashSet<StoredMessageRef>,
+    selected_message: Option<StoredMessageRef>,
     selected_message_action: usize,
-    expanded_tools: std::collections::HashSet<usize>,
-    pinned_message_top: Option<usize>,
+    expanded_tools: std::collections::HashSet<StoredMessageRef>,
+    pinned_message_top: Option<StoredMessageRef>,
     copied_message_feedback: Option<CopiedMessageFeedback>,
 }
 
@@ -184,11 +184,52 @@ fn append_message_to_thread(thread: &mut AgentThread, message: AgentMessage, pag
     }
 }
 
-fn rebase_index(index: Option<usize>, delta: isize) -> Option<usize> {
-    match (index, delta) {
-        (Some(index), delta) if delta >= 0 => Some(index.saturating_add(delta as usize)),
-        (Some(index), delta) => index.checked_sub((-delta) as usize),
-        (None, _) => None,
+fn stored_message_ref(thread: &AgentThread, index: usize) -> Option<StoredMessageRef> {
+    let message = thread.messages.get(index)?;
+    Some(StoredMessageRef {
+        thread_id: thread.id.clone(),
+        message_id: message.id.as_ref().filter(|id| !id.is_empty()).cloned(),
+        absolute_index: thread.loaded_message_start.saturating_add(index),
+    })
+}
+
+fn resolve_message_ref(thread: &AgentThread, message_ref: &StoredMessageRef) -> Option<usize> {
+    if message_ref.thread_id != thread.id {
+        return None;
+    }
+
+    if let Some(message_id) = message_ref.message_id.as_deref() {
+        if let Some(index) = thread
+            .messages
+            .iter()
+            .position(|message| message.id.as_deref() == Some(message_id))
+        {
+            return Some(index);
+        }
+    }
+
+    let loaded_end = thread.loaded_message_start + thread.messages.len();
+    (message_ref.absolute_index >= thread.loaded_message_start
+        && message_ref.absolute_index < loaded_end)
+        .then_some(message_ref.absolute_index - thread.loaded_message_start)
+}
+
+fn adjust_message_ref_for_deleted_absolute(
+    mut message_ref: StoredMessageRef,
+    thread_id: &str,
+    deleted_absolute_index: usize,
+) -> Option<StoredMessageRef> {
+    if message_ref.thread_id != thread_id {
+        return Some(message_ref);
+    }
+
+    match message_ref.absolute_index.cmp(&deleted_absolute_index) {
+        std::cmp::Ordering::Less => Some(message_ref),
+        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Greater => {
+            message_ref.absolute_index -= 1;
+            Some(message_ref)
+        }
     }
 }
 
@@ -210,6 +251,29 @@ impl ChatState {
             pinned_message_top: None,
             copied_message_feedback: None,
         }
+    }
+
+    fn message_ref_for_active_index(&self, index: usize) -> Option<StoredMessageRef> {
+        let thread = self.active_thread()?;
+        stored_message_ref(thread, index)
+    }
+
+    fn resolve_active_message_ref(&self, message_ref: &StoredMessageRef) -> Option<usize> {
+        let thread = self.active_thread()?;
+        resolve_message_ref(thread, message_ref)
+    }
+
+    fn resolve_active_message_ref_set(
+        &self,
+        message_refs: &std::collections::HashSet<StoredMessageRef>,
+    ) -> std::collections::HashSet<usize> {
+        let Some(thread) = self.active_thread() else {
+            return std::collections::HashSet::new();
+        };
+        message_refs
+            .iter()
+            .filter_map(|message_ref| resolve_message_ref(thread, message_ref))
+            .collect()
     }
 
     pub fn threads(&self) -> &[AgentThread] {
@@ -332,34 +396,18 @@ impl ChatState {
         }
 
         if dropped > 0 {
-            self.selected_message = rebase_index(self.selected_message, -(dropped as isize));
-            self.expanded_reasoning = self
-                .expanded_reasoning
-                .iter()
-                .filter_map(|index| index.checked_sub(dropped))
-                .collect();
-            self.expanded_tools = self
-                .expanded_tools
-                .iter()
-                .filter_map(|index| index.checked_sub(dropped))
-                .collect();
-            if let Some(feedback) = self.copied_message_feedback.as_mut() {
-                if self.active_thread_id.as_deref() == Some(feedback.thread_id.as_str()) {
-                    if let Some(rebased) = feedback.message_index.checked_sub(dropped) {
-                        feedback.message_index = rebased;
-                    } else {
-                        self.copied_message_feedback = None;
-                    }
-                }
-            }
             self.bump_render_revision();
         }
     }
 
     pub fn delete_active_message(&mut self, index: usize) {
         let mut removed = false;
+        let mut deleted_absolute_index = None;
+        let mut deleted_thread_id = None;
         if let Some(thread) = self.active_thread_mut() {
             if index < thread.messages.len() {
+                deleted_absolute_index = Some(thread.loaded_message_start + index);
+                deleted_thread_id = Some(thread.id.clone());
                 thread.messages.remove(index);
                 thread.total_message_count = thread.total_message_count.saturating_sub(1);
                 thread.loaded_message_end = thread.loaded_message_start + thread.messages.len();
@@ -369,25 +417,62 @@ impl ChatState {
         }
 
         if removed {
-            self.selected_message = None;
+            let deleted_absolute_index =
+                deleted_absolute_index.expect("removed message should have absolute index");
+            let deleted_thread_id =
+                deleted_thread_id.expect("removed message should have thread id");
+            self.selected_message = self.selected_message.take().and_then(|message_ref| {
+                adjust_message_ref_for_deleted_absolute(
+                    message_ref,
+                    &deleted_thread_id,
+                    deleted_absolute_index,
+                )
+            });
             self.expanded_reasoning = self
                 .expanded_reasoning
                 .iter()
-                .filter_map(|message_index| match message_index.cmp(&index) {
-                    std::cmp::Ordering::Less => Some(*message_index),
-                    std::cmp::Ordering::Equal => None,
-                    std::cmp::Ordering::Greater => Some(message_index - 1),
+                .cloned()
+                .filter_map(|message_ref| {
+                    adjust_message_ref_for_deleted_absolute(
+                        message_ref,
+                        &deleted_thread_id,
+                        deleted_absolute_index,
+                    )
                 })
                 .collect();
             self.expanded_tools = self
                 .expanded_tools
                 .iter()
-                .filter_map(|message_index| match message_index.cmp(&index) {
-                    std::cmp::Ordering::Less => Some(*message_index),
-                    std::cmp::Ordering::Equal => None,
-                    std::cmp::Ordering::Greater => Some(message_index - 1),
+                .cloned()
+                .filter_map(|message_ref| {
+                    adjust_message_ref_for_deleted_absolute(
+                        message_ref,
+                        &deleted_thread_id,
+                        deleted_absolute_index,
+                    )
                 })
                 .collect();
+            self.pinned_message_top = self.pinned_message_top.take().and_then(|message_ref| {
+                adjust_message_ref_for_deleted_absolute(
+                    message_ref,
+                    &deleted_thread_id,
+                    deleted_absolute_index,
+                )
+            });
+            self.copied_message_feedback =
+                self.copied_message_feedback
+                    .take()
+                    .and_then(|feedback| {
+                        adjust_message_ref_for_deleted_absolute(
+                            feedback.message_ref,
+                            &deleted_thread_id,
+                            deleted_absolute_index,
+                        )
+                        .map(|message_ref| CopiedMessageFeedback {
+                            message_ref,
+                            expires_at_tick: feedback.expires_at_tick,
+                        })
+                    });
             self.bump_render_revision();
         }
     }
@@ -518,6 +603,8 @@ impl ChatState {
 
     pub fn pinned_message_top(&self) -> Option<usize> {
         self.pinned_message_top
+            .as_ref()
+            .and_then(|message_ref| self.resolve_active_message_ref(message_ref))
     }
 
     pub fn is_streaming(&self) -> bool {
@@ -1010,7 +1097,7 @@ impl ChatState {
 
             ChatAction::PinMessageTop(index) => {
                 should_bump_render_revision = false;
-                self.pinned_message_top = Some(index);
+                self.pinned_message_top = self.message_ref_for_active_index(index);
                 self.scroll_locked = false;
             }
 
