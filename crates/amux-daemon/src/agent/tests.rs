@@ -657,3 +657,132 @@ async fn request_goal_replan_includes_recovery_guidance_when_present() {
         "expected recovery guidance text in the replan prompt"
     );
 }
+
+#[tokio::test]
+async fn request_goal_plan_adapts_prompt_and_truncates_output_when_satisfaction_is_strained() {
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = "openai".to_string();
+    config.base_url = spawn_goal_recording_server(
+        recorded_bodies.clone(),
+        serde_json::json!({
+            "title": "Compressed plan",
+            "summary": "Take the direct path",
+            "steps": [
+                {
+                    "title": "Step 1",
+                    "instructions": "Do first thing.",
+                    "kind": "command",
+                    "success_criteria": "first done",
+                    "session_id": null,
+                    "llm_confidence": "likely",
+                    "llm_confidence_rationale": "known-good path"
+                },
+                {
+                    "title": "Step 2",
+                    "instructions": "Do second thing.",
+                    "kind": "command",
+                    "success_criteria": "second done",
+                    "session_id": null,
+                    "llm_confidence": "likely",
+                    "llm_confidence_rationale": "known-good path"
+                },
+                {
+                    "title": "Step 3",
+                    "instructions": "Do third thing.",
+                    "kind": "command",
+                    "success_criteria": "third done",
+                    "session_id": null,
+                    "llm_confidence": "likely",
+                    "llm_confidence_rationale": "known-good path"
+                },
+                {
+                    "title": "Step 4",
+                    "instructions": "Do fourth thing.",
+                    "kind": "command",
+                    "success_criteria": "fourth done",
+                    "session_id": null,
+                    "llm_confidence": "likely",
+                    "llm_confidence_rationale": "known-good path"
+                },
+                {
+                    "title": "Step 5",
+                    "instructions": "Do fifth thing.",
+                    "kind": "command",
+                    "success_criteria": "fifth done",
+                    "session_id": null,
+                    "llm_confidence": "likely",
+                    "llm_confidence_rationale": "known-good path"
+                },
+                {
+                    "title": "Step 6",
+                    "instructions": "Do sixth thing.",
+                    "kind": "command",
+                    "success_criteria": "sixth done",
+                    "session_id": null,
+                    "llm_confidence": "likely",
+                    "llm_confidence_rationale": "known-good path"
+                }
+            ],
+            "rejected_alternatives": [
+                "Alternative A: too broad",
+                "Alternative B: too slow",
+                "Alternative C: too risky"
+            ]
+        })
+        .to_string(),
+    )
+    .await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.operator_satisfaction.score = 0.18;
+        model.operator_satisfaction.label = "strained".to_string();
+        model.implicit_feedback.top_tool_fallbacks = vec![
+            "read_file -> search_files".to_string(),
+            "bash_command -> read_file".to_string(),
+            "search_files -> search_files".to_string(),
+        ];
+    }
+
+    let mut goal_run = sample_goal_run();
+    goal_run.status = GoalRunStatus::Running;
+    goal_run.goal = "Finish the implementation with minimal churn".to_string();
+
+    let plan = engine
+        .request_goal_plan(&goal_run)
+        .await
+        .expect("goal plan should succeed");
+
+    assert_eq!(plan.steps.len(), 4);
+    assert_eq!(plan.rejected_alternatives.len(), 1);
+
+    let recorded = recorded_bodies.lock().expect("lock recorded bodies");
+    let body = recorded.back().expect("expected one recorded request body");
+    assert!(
+        body.contains("Operator satisfaction is strained"),
+        "expected strained satisfaction guidance in the plan prompt"
+    );
+    assert!(
+        body.contains("Prefer the shortest viable plan"),
+        "expected direct-path guidance in the plan prompt"
+    );
+    assert!(
+        body.contains("Prefer them earlier when they fit"),
+        "expected fallback guidance in the plan prompt"
+    );
+    assert!(
+        body.contains("search_files, read_file"),
+        "expected deduplicated fallback targets in the plan prompt"
+    );
+}

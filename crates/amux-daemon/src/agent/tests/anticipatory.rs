@@ -301,3 +301,75 @@ async fn morning_brief_inherits_route_from_top_goal_surface() {
         .expect("expected a morning brief");
     assert_eq!(item.preferred_client_surface.as_deref(), Some("tui"));
 }
+
+#[tokio::test]
+async fn strained_satisfaction_suppresses_optional_morning_brief() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    config.anticipatory.morning_brief = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let now = now_millis();
+    let mut goal = sample_goal_run("goal-strained", Some("thread-strained"));
+    goal.title = "Resume degraded flow".to_string();
+    goal.status = GoalRunStatus::Running;
+    goal.updated_at = now;
+    goal.current_step_title = Some("retry the command".to_string());
+    engine.goal_runs.lock().await.push_back(goal);
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.operator_satisfaction.score = 0.22;
+        model.operator_satisfaction.label = "strained".to_string();
+    }
+    engine.mark_operator_present("test").await;
+
+    engine.run_anticipatory_tick().await;
+
+    assert!(
+        engine
+            .anticipatory
+            .read()
+            .await
+            .items
+            .iter()
+            .all(|item| item.kind != "morning_brief"),
+        "strained satisfaction should suppress optional morning briefs to reduce proactive noise"
+    );
+}
+
+#[tokio::test]
+async fn strained_satisfaction_skips_predictive_hydration() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    config.anticipatory.predictive_hydration = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let now = now_millis();
+    let mut goal = sample_goal_run("goal-hydration", Some("thread-hydration"));
+    goal.status = GoalRunStatus::Running;
+    goal.updated_at = now;
+    engine.goal_runs.lock().await.push_back(goal);
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.operator_satisfaction.score = 0.24;
+        model.operator_satisfaction.label = "strained".to_string();
+    }
+
+    engine.run_anticipatory_tick().await;
+
+    assert!(
+        !engine
+            .anticipatory
+            .read()
+            .await
+            .hydration_by_thread
+            .contains_key("thread-hydration"),
+        "strained satisfaction should skip predictive hydration so the daemon reduces background churn"
+    );
+}

@@ -8,6 +8,34 @@ mod transport;
 use transport::orchestrator_policy_json_schema;
 
 impl AgentEngine {
+    async fn goal_planning_adaptation(&self) -> (SatisfactionAdaptationMode, Vec<String>) {
+        let model = self.operator_model.read().await;
+        (
+            SatisfactionAdaptationMode::from_label(&model.operator_satisfaction.label),
+            preferred_tool_fallback_targets(&model.implicit_feedback.top_tool_fallbacks, 3),
+        )
+    }
+
+    fn apply_goal_plan_adaptation(
+        &self,
+        plan: &mut GoalPlanResponse,
+        adaptation: SatisfactionAdaptationMode,
+        is_replan: bool,
+    ) {
+        let max_steps = if is_replan {
+            adaptation.max_goal_replan_steps()
+        } else {
+            adaptation.max_goal_plan_steps()
+        };
+        if plan.steps.len() > max_steps {
+            plan.steps.truncate(max_steps);
+        }
+        let max_rejected = adaptation.max_rejected_alternatives();
+        if plan.rejected_alternatives.len() > max_rejected {
+            plan.rejected_alternatives.truncate(max_rejected);
+        }
+    }
+
     pub(super) async fn request_orchestrator_policy_decision(
         &self,
         prompt: &str,
@@ -24,6 +52,10 @@ impl AgentEngine {
     }
 
     pub(super) async fn request_goal_plan(&self, goal_run: &GoalRun) -> Result<GoalPlanResponse> {
+        let (adaptation_mode, preferred_fallback_tools) = self.goal_planning_adaptation().await;
+        let max_steps = adaptation_mode.max_goal_plan_steps();
+        let max_rejected = adaptation_mode.max_rejected_alternatives();
+
         // Surface relevant past episodes before planning (Phase 1: Memory Foundation - EPIS-03)
         let episodic_context = match self.retrieve_relevant_episodes(&goal_run.goal, 5).await {
             Ok(episodes) if !episodes.is_empty() => {
@@ -44,7 +76,7 @@ impl AgentEngine {
              Produce strict JSON only with the shape:\n\
              {{\"title\":\"...\",\"summary\":\"...\",\"steps\":[{{\"title\":\"...\",\"instructions\":\"...\",\"kind\":\"reason|command|research|memory|skill|divergent\",\"success_criteria\":\"...\",\"session_id\":null,\"llm_confidence\":\"confident|likely|uncertain|guessing\",\"llm_confidence_rationale\":\"...\"}}],\"rejected_alternatives\":[\"...\"]}}\n\
              Requirements:\n\
-             - 2 to 6 steps.\n\
+             - 2 to {max_steps} steps.\n\
              - Keep each step actionable and narrow.\n\
              - Use kind=command only when the step should execute via the daemon task queue.\n\
              - Use kind=divergent when a step involves exploring multiple perspectives or tradeoff analysis.\n\
@@ -52,11 +84,27 @@ impl AgentEngine {
              - Prefer one terminal session unless the goal clearly requires otherwise.\n\
              - All work should be done inside the workspace directory. Do not cd above it.\n\
              - For each step, include `llm_confidence` and `llm_confidence_rationale` based on your own self-assessment.\n\
-             - Also include \"rejected_alternatives\": a list of 1-3 alternative approaches you considered but rejected, each with a brief reason why it was not chosen.\n\
+             - Also include \"rejected_alternatives\": a list of 1-{max_rejected} alternative approaches you considered but rejected, each with a brief reason why it was not chosen.\n\
              Goal title: {}\n\
              Goal:\n{}",
             goal_run.title, goal_run.goal
         );
+
+        match adaptation_mode {
+            SatisfactionAdaptationMode::Minimal => prompt.push_str(
+                "\n- Operator satisfaction is strained. Prefer the shortest viable plan, avoid speculative branches, and choose direct high-confidence steps over exploration.\n",
+            ),
+            SatisfactionAdaptationMode::Tightened => prompt.push_str(
+                "\n- Operator satisfaction is fragile. Keep the plan compact, reduce speculative branching, and prefer proven paths over broad exploration.\n",
+            ),
+            SatisfactionAdaptationMode::Normal => {}
+        }
+        if !preferred_fallback_tools.is_empty() {
+            prompt.push_str(&format!(
+                "- Repeated fallback patterns show these tools recovered better than the earlier failing path: {}. Prefer them earlier when they fit, and justify the switch explicitly.\n",
+                preferred_fallback_tools.join(", ")
+            ));
+        }
 
         if !episodic_context.is_empty() {
             prompt.push_str("\n\n");
@@ -117,6 +165,7 @@ impl AgentEngine {
         }
 
         apply_plan_defaults(&mut plan);
+        self.apply_goal_plan_adaptation(&mut plan, adaptation_mode, false);
 
         // Annotate plan steps with confidence labels (UNCR-01, Phase v3.0)
         self.annotate_plan_steps_with_confidence(
@@ -325,6 +374,9 @@ impl AgentEngine {
         goal_run: &GoalRun,
         failure: &str,
     ) -> Result<GoalPlanResponse> {
+        let (adaptation_mode, preferred_fallback_tools) = self.goal_planning_adaptation().await;
+        let max_steps = adaptation_mode.max_goal_replan_steps();
+        let max_rejected = adaptation_mode.max_rejected_alternatives();
         let completed = goal_run
             .steps
             .iter()
@@ -343,6 +395,7 @@ impl AgentEngine {
              Produce strict JSON only with the shape:\n\
              {{\"title\":\"...\",\"summary\":\"...\",\"steps\":[{{\"title\":\"...\",\"instructions\":\"...\",\"kind\":\"reason|command|research|memory|skill|divergent\",\"success_criteria\":\"...\",\"session_id\":null,\"llm_confidence\":\"confident|likely|uncertain|guessing\",\"llm_confidence_rationale\":\"...\"}}],\"rejected_alternatives\":[\"...\"]}}\n\
              Return only the revised remaining steps, not the full history.\n\
+             Limit the revised plan to {max_steps} remaining steps and at most {max_rejected} rejected alternatives.\n\
              For each step, include `llm_confidence` and `llm_confidence_rationale` based on your own self-assessment.\n\
              Goal: {}\n\
              Failure: {}\n\
@@ -355,6 +408,21 @@ impl AgentEngine {
                 completed
             }
         );
+        match adaptation_mode {
+            SatisfactionAdaptationMode::Minimal => prompt.push_str(
+                "\nKeep the recovery path narrow: do not add speculative side quests, and prefer the smallest high-confidence fix sequence that can clear the failure.\n",
+            ),
+            SatisfactionAdaptationMode::Tightened => prompt.push_str(
+                "\nRecovery should be compact and conservative: reduce retries, keep breadth low, and favor proven paths over exploration.\n",
+            ),
+            SatisfactionAdaptationMode::Normal => {}
+        }
+        if !preferred_fallback_tools.is_empty() {
+            prompt.push_str(&format!(
+                "Prefer these later-successful fallback tools earlier in the recovery path when applicable: {}. Explain the switch briefly in step instructions when you pivot.\n",
+                preferred_fallback_tools.join(", ")
+            ));
+        }
         if let Some(causal_guidance) = self.build_causal_guidance_summary().await {
             prompt.push_str("\n");
             prompt.push_str(&causal_guidance);
@@ -395,6 +463,7 @@ impl AgentEngine {
         }
 
         apply_plan_defaults(&mut plan);
+        self.apply_goal_plan_adaptation(&mut plan, adaptation_mode, true);
         self.annotate_plan_steps_with_confidence(
             &mut plan.steps,
             &goal_run.goal,

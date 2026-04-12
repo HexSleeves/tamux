@@ -193,9 +193,19 @@ impl AgentEngine {
     ) -> AgentTask {
         let id = format!("task_{}", Uuid::new_v4());
         let now = now_millis();
+        let adaptation_mode = {
+            let model = self.operator_model.read().await;
+            SatisfactionAdaptationMode::from_label(&model.operator_satisfaction.label)
+        };
         let initial_schedule_reason = scheduled_at
             .filter(|deadline| *deadline > now)
             .map(describe_scheduled_time);
+        let default_max_retries = self.config.read().await.max_retries.max(1);
+        let max_retries = if goal_run_id.is_some() {
+            adaptation_mode.max_goal_task_retries(default_max_retries)
+        } else {
+            default_max_retries
+        };
         let task = AgentTask {
             id: id.clone(),
             title,
@@ -227,7 +237,7 @@ impl AgentEngine {
             parent_thread_id,
             runtime: runtime.unwrap_or_else(|| "daemon".to_string()),
             retry_count: 0,
-            max_retries: self.config.read().await.max_retries.max(1),
+            max_retries,
             next_retry_at: None,
             scheduled_at,
             blocked_reason: initial_schedule_reason.clone(),

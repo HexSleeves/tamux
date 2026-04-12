@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use super::now_millis;
 use super::types::*;
+use super::SatisfactionAdaptationMode;
 
 #[path = "goal_parsing/parsing.rs"]
 mod parsing;
@@ -70,10 +71,11 @@ pub(super) fn collect_plan_issues(plan: &GoalPlanResponse) -> Vec<String> {
     if plan.steps.is_empty() {
         issues.push("Plan has no steps — provide at least 2 steps.".into());
     }
-    if plan.steps.len() > 8 {
+    if plan.steps.len() > SatisfactionAdaptationMode::Normal.max_goal_plan_steps() {
         issues.push(format!(
-            "Plan has {} steps — reduce to 8 or fewer.",
-            plan.steps.len()
+            "Plan has {} steps — reduce to {} or fewer.",
+            plan.steps.len(),
+            SatisfactionAdaptationMode::Normal.max_goal_plan_steps()
         ));
     }
 
@@ -102,7 +104,10 @@ pub(super) fn apply_plan_defaults(plan: &mut GoalPlanResponse) {
     if plan.summary.is_empty() {
         plan.summary = plan
             .title
-            .clone()
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
             .unwrap_or_else(|| "Goal plan".to_string());
     }
     if plan.steps.is_empty() {
@@ -116,8 +121,15 @@ pub(super) fn apply_plan_defaults(plan: &mut GoalPlanResponse) {
             llm_confidence_rationale: None,
         });
     }
-    if plan.steps.len() > 8 {
-        plan.steps.truncate(8);
+    if plan.steps.len() > SatisfactionAdaptationMode::Normal.max_goal_plan_steps() {
+        plan.steps
+            .truncate(SatisfactionAdaptationMode::Normal.max_goal_plan_steps());
+    }
+    if plan.rejected_alternatives.len()
+        > SatisfactionAdaptationMode::Normal.max_rejected_alternatives()
+    {
+        plan.rejected_alternatives
+            .truncate(SatisfactionAdaptationMode::Normal.max_rejected_alternatives());
     }
     for (i, step) in plan.steps.iter_mut().enumerate() {
         step.title = step.title.trim().to_string();

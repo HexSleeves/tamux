@@ -21,9 +21,11 @@ pub(crate) fn goal_plan_json_schema() -> serde_json::Value {
                     "properties": {
                         "title": { "type": "string" },
                         "instructions": { "type": "string" },
-                        "kind": { "type": "string", "enum": ["reason", "command", "research", "memory", "skill"] },
+                        "kind": { "type": "string", "enum": ["reason", "command", "research", "memory", "skill", "divergent"] },
                         "success_criteria": { "type": "string" },
-                        "session_id": { "type": ["string", "null"] }
+                        "session_id": { "type": ["string", "null"] },
+                        "llm_confidence": { "type": ["string", "null"] },
+                        "llm_confidence_rationale": { "type": ["string", "null"] }
                     },
                     "required": ["title", "instructions", "kind", "success_criteria", "session_id"],
                     "additionalProperties": false
@@ -32,10 +34,10 @@ pub(crate) fn goal_plan_json_schema() -> serde_json::Value {
             "rejected_alternatives": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "1-3 alternative approaches you considered but rejected, each with a brief reason."
+                "description": "Alternative approaches you considered but rejected, each with a brief reason. Keep the list short."
             }
         },
-        "required": ["title", "summary", "steps"],
+        "required": ["title", "summary", "steps", "rejected_alternatives"],
         "additionalProperties": false
     })
 }

@@ -9,6 +9,8 @@ const SESSION_RECONNECT_GRACE_MS: u64 = 5 * 60 * 1000;
 const PREDICTIVE_HYDRATION_COOLDOWN_MS: u64 = 10 * 60 * 1000;
 const RECENT_HEALTH_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 
+type AnticipatoryAdaptationMode = SatisfactionAdaptationMode;
+
 #[derive(Debug, Default)]
 pub(super) struct AnticipatoryRuntime {
     pub items: Vec<AnticipatoryItem>,
@@ -131,6 +133,11 @@ impl AgentEngine {
             return;
         }
 
+        let adaptation_mode = self.anticipatory_adaptation_mode().await;
+        if adaptation_mode == AnticipatoryAdaptationMode::Minimal {
+            return;
+        }
+
         let targets = {
             let goal_runs = self.goal_runs.lock().await;
             goal_runs
@@ -155,6 +162,8 @@ impl AgentEngine {
 
         let now = now_millis();
         let attention_target = self.current_attention_target().await;
+        let tightened_to_active_attention =
+            adaptation_mode == AnticipatoryAdaptationMode::Tightened;
         let due_threads = {
             let runtime = self.anticipatory.read().await;
             let mut ordered = Vec::new();
@@ -166,6 +175,9 @@ impl AgentEngine {
             ordered
                 .into_iter()
                 .filter(|(thread_id, _)| seen.insert(thread_id.clone()))
+                .filter(|(thread_id, _)| {
+                    !tightened_to_active_attention || attention_target.as_ref() == Some(thread_id)
+                })
                 .filter(|(thread_id, _)| {
                     runtime
                         .hydration_by_thread
@@ -192,9 +204,12 @@ impl AgentEngine {
     ) -> Vec<AnticipatoryItem> {
         let mut items = Vec::new();
         let attention_surface = self.current_attention_surface().await;
+        let adaptation_mode = self.anticipatory_adaptation_mode().await;
 
         if settings.morning_brief {
-            if should_surface_anticipatory_kind("morning_brief", attention_surface.as_deref()) {
+            if should_surface_anticipatory_kind("morning_brief", attention_surface.as_deref())
+                && adaptation_mode != AnticipatoryAdaptationMode::Minimal
+            {
                 if let Some(item) = self.compute_morning_brief(settings).await {
                     items.push(item);
                 }
@@ -208,8 +223,10 @@ impl AgentEngine {
                 }
             }
         }
-        if let Some(item) = self.compute_collaboration_hint(settings).await {
-            items.push(item);
+        if adaptation_mode == AnticipatoryAdaptationMode::Normal {
+            if let Some(item) = self.compute_collaboration_hint(settings).await {
+                items.push(item);
+            }
         }
 
         items.sort_by(|left, right| {
@@ -219,6 +236,11 @@ impl AgentEngine {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         items
+    }
+
+    async fn anticipatory_adaptation_mode(&self) -> AnticipatoryAdaptationMode {
+        let model = self.operator_model.read().await;
+        AnticipatoryAdaptationMode::from_label(&model.operator_satisfaction.label)
     }
 
     async fn current_attention_surface(&self) -> Option<String> {

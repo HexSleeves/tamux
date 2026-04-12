@@ -357,3 +357,191 @@ async fn operator_messages_learn_summary_first_reasoning_on_demand_preferences()
     assert!(summary.contains("summary-first"));
     assert!(summary.contains("reasoning on demand"));
 }
+
+#[test]
+fn operator_satisfaction_uses_signal_gates_and_friction() {
+    let mut model = OperatorModel::default();
+    refresh_operator_satisfaction(&mut model);
+    assert_eq!(model.operator_satisfaction.label, "unknown");
+    assert!((model.operator_satisfaction.score - 0.8).abs() < f64::EPSILON);
+    assert!(model.diagnostic_summary().contains("strong >=0.80"));
+
+    model.cognitive_style.message_count = 1;
+    refresh_operator_satisfaction(&mut model);
+    assert_eq!(model.operator_satisfaction.label, "strong");
+    assert!((model.operator_satisfaction.score - 0.8).abs() < f64::EPSILON);
+    assert!(model.diagnostic_summary().contains("signal present"));
+
+    model.implicit_feedback.tool_hesitation_count = 1;
+    model.implicit_feedback.revision_message_count = 1;
+    model.implicit_feedback.correction_message_count = 1;
+    model.implicit_feedback.fast_denial_count = 1;
+    model.attention_topology.rapid_switch_count = 2;
+    refresh_operator_satisfaction(&mut model);
+
+    assert_eq!(model.operator_satisfaction.label, "strained");
+    assert!((model.operator_satisfaction.score - 0.18).abs() < 1e-9);
+}
+
+#[test]
+fn operator_model_diagnostic_summary_exposes_thresholds_and_friction() {
+    let mut model = OperatorModel::default();
+    model.cognitive_style.message_count = 1;
+    model.implicit_feedback.tool_hesitation_count = 2;
+    model.implicit_feedback.correction_message_count = 1;
+    model.attention_topology.rapid_switch_count = 3;
+    refresh_operator_satisfaction(&mut model);
+
+    let summary = model.diagnostic_summary();
+    assert!(summary.contains("satisfaction="));
+    assert!(summary.contains("strained <0.35, fragile <0.55, healthy <0.80, strong >=0.80"));
+    assert!(summary.contains("signal present"));
+    assert!(summary.contains("corrections 1"));
+    assert!(summary.contains("tool fallbacks 2"));
+    assert!(summary.contains("rapid switches 3"));
+}
+
+#[tokio::test]
+async fn tool_hesitation_refreshes_persisted_operator_satisfaction_and_summary() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_implicit_feedback = true;
+    config.operator_model.allow_message_statistics = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_message("thread-satisfaction", "Please run tests.", true)
+        .await
+        .expect("record operator message");
+    engine
+        .record_tool_hesitation("read_file", "search_files", true, false)
+        .await
+        .expect("record tool hesitation");
+
+    let json = engine
+        .operator_model_json()
+        .await
+        .expect("read operator model json");
+    let parsed: OperatorModel = serde_json::from_str(&json).expect("parse operator model json");
+    assert_eq!(parsed.cognitive_style.message_count, 1);
+    assert_eq!(parsed.implicit_feedback.tool_hesitation_count, 1);
+    assert_eq!(parsed.operator_satisfaction.label, "healthy");
+    assert!((parsed.operator_satisfaction.score - 0.68).abs() < 1e-9);
+
+    let summary = engine
+        .build_operator_model_prompt_summary()
+        .await
+        .expect("operator model prompt summary");
+    assert!(summary.contains("Implicit feedback: 1 tool fallback(s), 0 revision-style operator message(s), 0 fast denial(s); common fallback read_file -> search_files"));
+    assert!(summary.contains("Satisfaction signal: healthy (0.68); friction markers revisions 0, corrections 0, tool fallbacks 1, fast denials 0"));
+    assert!(summary.contains("Adaptive response mode: keep a normal proactive cadence"));
+    assert!(summary.contains("prefer the later successful fallback earlier"));
+}
+
+#[tokio::test]
+async fn strong_operator_satisfaction_adds_proactive_guidance_without_friction() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_message("thread-strong", "Please run tests.", true)
+        .await
+        .expect("record operator message");
+
+    let summary = engine
+        .build_operator_model_prompt_summary()
+        .await
+        .expect("operator model prompt summary");
+    assert!(summary.contains("Satisfaction signal: strong (0.80); friction markers revisions 0, corrections 0, tool fallbacks 0, fast denials 0"));
+    assert!(summary
+        .contains("Adaptive response mode: trust is high, so stay proactive and exploratory"));
+    assert!(summary.contains("Adaptive delivery rule: start with the conclusion"));
+}
+
+#[tokio::test]
+async fn strained_operator_satisfaction_adds_recovery_guidance() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    config.operator_model.allow_implicit_feedback = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_message("thread-strained", "Please run tests.", true)
+        .await
+        .expect("record operator message");
+    engine
+        .record_tool_hesitation("read_file", "search_files", true, false)
+        .await
+        .expect("record tool hesitation");
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.implicit_feedback.revision_message_count = 1;
+        model.implicit_feedback.correction_message_count = 1;
+        model.implicit_feedback.fast_denial_count = 1;
+        model.attention_topology.rapid_switch_count = 2;
+        refresh_operator_satisfaction(&mut model);
+    }
+
+    let summary = engine
+        .build_operator_model_prompt_summary()
+        .await
+        .expect("operator model prompt summary");
+    assert!(summary.contains("Satisfaction signal: strained (0.18); friction markers revisions 1, corrections 1, tool fallbacks 1, fast denials 1"));
+    assert!(summary.contains("Adaptive response mode: reduce friction aggressively"));
+    assert!(summary.contains("prefer the later successful fallback earlier"));
+}
+
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_operator_satisfaction_summary() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_implicit_feedback = true;
+    config.operator_model.allow_message_statistics = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_message("thread-diagnostics", "Please run tests.", true)
+        .await
+        .expect("record operator message");
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let satisfaction = &snapshot["operator_satisfaction"];
+    assert_eq!(satisfaction["label"], "strong");
+    assert_eq!(satisfaction["message_count"], 1);
+    let summary = satisfaction["summary"]
+        .as_str()
+        .expect("operator satisfaction summary string");
+    assert!(summary.contains("strong >=0.80"));
+    assert!(summary.contains("signal present"));
+}
+
+#[test]
+fn preferred_tool_fallback_targets_deduplicates_and_skips_invalid_pairs() {
+    let preferred = preferred_tool_fallback_targets(
+        &[
+            "read_file -> search_files".to_string(),
+            "READ_FILE -> Search_Files".to_string(),
+            "search_files -> read_file".to_string(),
+            "invalid-pair".to_string(),
+            "tool_a ->   ".to_string(),
+        ],
+        3,
+    );
+
+    assert_eq!(
+        preferred,
+        vec!["search_files".to_string(), "read_file".to_string()]
+    );
+}
