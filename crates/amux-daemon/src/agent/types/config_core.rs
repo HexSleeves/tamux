@@ -114,8 +114,6 @@ pub struct AgentConfig {
     pub auto_compact_context: bool,
     #[serde(default = "default_max_context_messages")]
     pub max_context_messages: u32,
-    #[serde(default = "default_context_budget_tokens")]
-    pub context_budget_tokens: u32,
     #[serde(default = "default_context_window_tokens")]
     pub context_window_tokens: u32,
     #[serde(default = "default_compact_threshold_pct")]

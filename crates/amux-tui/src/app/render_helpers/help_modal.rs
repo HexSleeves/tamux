@@ -21,7 +21,7 @@ fn help_modal_lines(theme: &ThemeTokens) -> Vec<Line<'static>> {
             Span::styled("Open queued messages", theme.fg_dim),
         ]),
         Line::from(vec![
-            Span::styled("  Ctrl+I           ", theme.fg_active),
+            Span::styled("  Ctrl+N           ", theme.fg_active),
             Span::styled("Open notifications", theme.fg_dim),
         ]),
         Line::from(vec![

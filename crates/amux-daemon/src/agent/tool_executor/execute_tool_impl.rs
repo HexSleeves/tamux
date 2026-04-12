@@ -379,7 +379,9 @@ pub fn execute_tool<'a>(
             }
         }
         "list_subagents" => execute_list_subagents(&args, agent, thread_id, task_id).await,
-        "message_agent" => Box::pin(execute_message_agent(&args, agent, task_id, session_id)).await,
+        "message_agent" => {
+            Box::pin(execute_message_agent(&args, agent, thread_id, task_id, session_id)).await
+        }
         "route_to_specialist" => {
             execute_route_to_specialist(&args, agent, thread_id, task_id).await
         }

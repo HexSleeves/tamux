@@ -93,7 +93,6 @@ fn build_config_patch_value_covers_all_daemon_backed_tabs() {
     model.config.tool_call_delay_ms = 750;
     model.config.llm_stream_chunk_timeout_secs = 420;
     model.config.auto_retry = false;
-    model.config.context_budget_tokens = 222_000;
     model.config.compact_threshold_pct = 91;
     model.config.keep_recent_on_compact = 17;
     model.config.bash_timeout_secs = 77;
@@ -159,7 +158,10 @@ fn build_config_patch_value_covers_all_daemon_backed_tabs() {
     assert_eq!(json["tool_call_delay_ms"], 750);
     assert_eq!(json["llm_stream_chunk_timeout_secs"], 420);
     assert_eq!(json["auto_retry"], false);
-    assert_eq!(json["context_budget_tokens"], 222000);
+    assert!(
+        json.get("context_budget_tokens").is_none(),
+        "config patch should not serialize removed context budget settings"
+    );
     assert_eq!(json["compact_threshold_pct"], 91);
     assert_eq!(json["keep_recent_on_compact"], 17);
     assert_eq!(json["bash_timeout_seconds"], 77);
@@ -283,7 +285,6 @@ fn build_config_patch_value_round_trips_daemon_backed_settings() {
     model.config.tool_call_delay_ms = 750;
     model.config.llm_stream_chunk_timeout_secs = 420;
     model.config.auto_retry = false;
-    model.config.context_budget_tokens = 222_000;
     model.config.compact_threshold_pct = 91;
     model.config.keep_recent_on_compact = 17;
     model.config.bash_timeout_secs = 77;
@@ -382,7 +383,6 @@ fn build_config_patch_value_round_trips_daemon_backed_settings() {
     assert_eq!(reloaded.config.tool_call_delay_ms, 750);
     assert_eq!(reloaded.config.llm_stream_chunk_timeout_secs, 420);
     assert_eq!(reloaded.config.auto_retry, false);
-    assert_eq!(reloaded.config.context_budget_tokens, 222_000);
     assert_eq!(reloaded.config.compact_threshold_pct, 91);
     assert_eq!(reloaded.config.keep_recent_on_compact, 17);
     assert_eq!(reloaded.config.bash_timeout_secs, 77);

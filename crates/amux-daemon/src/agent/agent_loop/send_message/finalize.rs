@@ -344,13 +344,25 @@ impl<'a> SendMessageRunner<'a> {
         self.engine
             .finish_stream_cancellation(&self.tid, self.stream_generation)
             .await;
-        Ok(SendMessageOutcome {
+        let outcome = SendMessageOutcome {
             thread_id: self.tid,
             interrupted_for_approval: self.interrupted_for_approval,
             upstream_message: final_upstream_message,
             provider_final_result: self.provider_final_result,
             fresh_runner_retry: self.fresh_runner_retry,
             handoff_restart: self.handoff_restart,
-        })
+        };
+        if let Err(error) = self
+            .engine
+            .flush_deferred_visible_thread_continuations(&outcome.thread_id)
+            .await
+        {
+            tracing::warn!(
+                thread_id = %outcome.thread_id,
+                %error,
+                "failed to flush deferred visible-thread continuations"
+            );
+        }
+        Ok(outcome)
     }
 }

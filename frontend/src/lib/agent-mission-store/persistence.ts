@@ -1,4 +1,5 @@
 import { getBridge } from "../bridge";
+import { resolveCompactionTargetTokens } from "../agentCompactionTarget";
 import { readPersistedJson, readPersistedText, scheduleTextWrite } from "../persistence";
 import { useAgentStore } from "../agentStore";
 import { useSnippetStore } from "../snippetStore";
@@ -278,7 +279,14 @@ export function buildContextSnapshot(opts: {
     model: activeProviderConfig?.model ?? "",
     threadCount: threads.length,
     snippetCount: snippets.length,
-    tokenBudget: agentSettings.context_budget_tokens,
+    tokenBudget: resolveCompactionTargetTokens({
+      auto_compact_context: agentSettings.auto_compact_context,
+      max_context_messages: agentSettings.max_context_messages,
+      context_window_tokens: agentSettings.context_window_tokens,
+      compact_threshold_pct: agentSettings.compact_threshold_pct,
+      keep_recent_on_compact: agentSettings.keep_recent_on_compact,
+      compaction: agentSettings.compaction,
+    }),
     systemMemoryChars: opts.frozenSnapshot.length,
     userMemoryChars: opts.userProfile.length,
   };

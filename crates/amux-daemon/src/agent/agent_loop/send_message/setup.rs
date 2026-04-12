@@ -451,7 +451,7 @@ impl<'a> SendMessageRunner<'a> {
         let (
             current_task_snapshot,
             is_durable_goal_task,
-            task_tool_filter,
+            mut task_tool_filter,
             task_context_budget,
             task_termination_eval,
             task_type_for_trace,
@@ -503,6 +503,10 @@ impl<'a> SendMessageRunner<'a> {
                 task_type,
             )
         };
+        let internal_dm_thread = is_internal_dm_thread(&tid);
+        if internal_dm_thread {
+            task_tool_filter = Some(crate::agent::subagent::tool_filter::ToolFilter::deny_all());
+        }
         let initial_copilot_initiator = if record_operator {
             CopilotInitiator::User
         } else {
@@ -637,6 +641,11 @@ impl<'a> SendMessageRunner<'a> {
             &active_provider_id,
             &provider_config.model,
         ));
+        if internal_dm_thread {
+            system_prompt.push_str(
+                "\n\n## Internal DM Constraints\n- This thread is an internal DM between agents.\n- Internal DMs are for discussion and coordination only.\n- Do not continue visible-thread work here.\n- Do not call tools in this thread.\n- If a visible thread continuation was explicitly requested, reply briefly here and stop. The daemon will continue the visible thread separately.\n",
+            );
+        }
         if let Some(recall) = onecontext_bootstrap.as_deref() {
             system_prompt.push_str("\n\n## OneContext Recall\n");
             system_prompt

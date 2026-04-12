@@ -374,11 +374,6 @@ impl TuiModel {
                                     }
                                 }
                             }
-                            "context_budget_tokens" => {
-                                if let Ok(n) = value.parse::<u32>() {
-                                    self.config.context_budget_tokens = n.clamp(10000, 500000);
-                                }
-                            }
                             "compact_threshold_pct" => {
                                 if let Ok(n) = value.parse::<u32>() {
                                     self.config.compact_threshold_pct = n.clamp(50, 95);

@@ -219,7 +219,7 @@ pub(super) fn internal_dm_thread_title(agent_a: &str, agent_b: &str) -> String {
     format!("Internal DM · {} ↔ {}", names[0], names[1])
 }
 
-pub(super) fn is_internal_dm_thread(thread_id: &str) -> bool {
+pub(in crate::agent) fn is_internal_dm_thread(thread_id: &str) -> bool {
     thread_id.starts_with(INTERNAL_DM_THREAD_PREFIX)
 }
 

@@ -165,7 +165,7 @@ impl AgentEngine {
         MAIN_AGENT_ID.to_string()
     }
 
-    async fn run_internal_send_loop(
+    pub(in crate::agent) async fn run_internal_send_loop(
         &self,
         initial_thread_id: Option<&str>,
         stored_user_content: &str,

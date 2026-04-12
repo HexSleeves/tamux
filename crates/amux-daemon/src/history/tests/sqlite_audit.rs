@@ -157,6 +157,59 @@ async fn replace_thread_snapshot_replaces_messages_without_losing_thread_row() -
     Ok(())
 }
 
+#[tokio::test]
+async fn list_messages_with_limit_returns_latest_messages_in_chronological_order() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    let thread_id = "limited-latest-thread";
+
+    store
+        .create_thread(&AgentDbThread {
+            id: thread_id.to_string(),
+            workspace_id: None,
+            surface_id: None,
+            pane_id: None,
+            agent_name: Some("test-agent".to_string()),
+            title: "Latest limited slice".to_string(),
+            created_at: 1_000,
+            updated_at: 1_000,
+            message_count: 0,
+            total_tokens: 0,
+            last_preview: String::new(),
+            metadata_json: None,
+        })
+        .await?;
+
+    for index in 0..8 {
+        store
+            .add_message(&AgentDbMessage {
+                id: format!("msg-{index}"),
+                thread_id: thread_id.to_string(),
+                created_at: 1_000 + index,
+                role: "user".to_string(),
+                content: format!("message-{index}"),
+                provider: None,
+                model: None,
+                input_tokens: Some(0),
+                output_tokens: Some(0),
+                total_tokens: Some(0),
+                reasoning: None,
+                tool_calls_json: None,
+                metadata_json: None,
+            })
+            .await?;
+    }
+
+    let loaded_messages = store.list_messages(thread_id, Some(3)).await?;
+    let contents = loaded_messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(contents, vec!["message-5", "message-6", "message-7"]);
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
 /// FOUN-01 + FOUN-02: Concurrent reads and writes do not produce "database is locked" errors.
 #[tokio::test]
 async fn concurrent_read_write() -> Result<()> {

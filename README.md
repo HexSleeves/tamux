@@ -97,6 +97,15 @@ Together they give the system a little presence without hiding what it is doing.
 
 ## Quick Start
 
+### Quick Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mkurman/tamux/main/scripts/install.sh | sh
+tamux --help
+```
+
+The quick installer downloads the same native release bundle family that the npm package uses, installs the binaries into `~/.local/bin` by default, and works without Node.js or npm.
+
 ### NPM
 
 ```bash

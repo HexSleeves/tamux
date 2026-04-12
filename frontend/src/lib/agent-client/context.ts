@@ -9,6 +9,7 @@ import {
   getSupportedApiTransports,
   providerSupportsResponseContinuity,
 } from "../agentStore";
+import { resolveCompactionTargetTokens } from "../agentCompactionTarget.ts";
 import type {
   ApiChatMessage,
   ContextCompactionSettings,
@@ -171,7 +172,7 @@ function compactMessagesForRequest(
     return messages;
   }
 
-  const targetTokens = effectiveContextTargetTokens(settings);
+  const targetTokens = resolveContextCompactionTargetTokens(settings);
   const maxMessages = Math.max(1, Number(settings.max_context_messages || 100));
   if (
     estimateMessageTokens(messages) <= targetTokens &&
@@ -222,24 +223,12 @@ function trimCompactedMessages(
   return trimmed;
 }
 
-function effectiveContextTargetTokens(
+export function resolveContextCompactionTargetTokens(
   settings: ContextCompactionSettings,
 ): number {
-  const contextWindow = Math.max(
-    1,
-    Number(settings.context_window_tokens || 128000),
-  );
-  const budgetTokens = Math.max(
-    MIN_CONTEXT_TARGET_TOKENS,
-    Number(settings.context_budget_tokens || 100000),
-  );
-  const thresholdPercent = Math.min(
-    100,
-    Math.max(1, Number(settings.compact_threshold_pct || 80)),
-  );
   return Math.max(
     MIN_CONTEXT_TARGET_TOKENS,
-    Math.min(budgetTokens, Math.floor((contextWindow * thresholdPercent) / 100)),
+    resolveCompactionTargetTokens(settings),
   );
 }
 

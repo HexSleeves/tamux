@@ -1062,7 +1062,8 @@ fn header_usage_summary_uses_runtime_model_context_window_for_rarog() {
     });
 
     let usage = model.current_header_usage_summary();
-    assert_eq!(usage.max_tokens, 205_000);
+    assert_eq!(usage.context_window_tokens, 205_000);
+    assert_eq!(usage.compaction_target_tokens, 164_000);
     let total_cost = usage
         .total_cost_usd
         .expect("header should expose total cost");
@@ -1075,25 +1076,25 @@ fn header_usage_summary_uses_runtime_model_context_window_for_rarog() {
 }
 
 #[test]
-fn header_usage_summary_uses_effective_compaction_target_instead_of_full_window() {
+fn header_usage_summary_uses_primary_threshold_for_heuristic_compaction() {
     let mut model = make_model();
     model.config.provider = PROVIDER_ID_GITHUB_COPILOT.to_string();
     model.config.auth_source = "github_copilot".to_string();
     model.config.model = "gpt-5.4".to_string();
     model.config.context_window_tokens = 400_000;
-    model.config.context_budget_tokens = 100_000;
     model.config.compact_threshold_pct = 80;
+    model.config.compaction_strategy = "heuristic".to_string();
 
     model.handle_client_event(ClientEvent::ThreadCreated {
-        thread_id: "thread-budget-capped".to_string(),
-        title: "Budget Capped".to_string(),
+        thread_id: "thread-heuristic-target".to_string(),
+        title: "Heuristic".to_string(),
         agent_name: Some("Swarog".to_string()),
     });
     model.chat.reduce(chat::ChatAction::SelectThread(
-        "thread-budget-capped".to_string(),
+        "thread-heuristic-target".to_string(),
     ));
     model.chat.reduce(chat::ChatAction::AppendMessage {
-        thread_id: "thread-budget-capped".to_string(),
+        thread_id: "thread-heuristic-target".to_string(),
         message: chat::AgentMessage {
             role: chat::MessageRole::User,
             content: "A".repeat(20_000),
@@ -1103,13 +1104,61 @@ fn header_usage_summary_uses_effective_compaction_target_instead_of_full_window(
 
     let usage = model.current_header_usage_summary();
     assert_eq!(
-        usage.max_tokens, 100_000,
-        "header should use the same budget-capped compaction target as the daemon"
+        usage.compaction_target_tokens, 320_000,
+        "heuristic compaction should use the main model threshold"
     );
-    assert!(
-        usage.utilization_pct >= 5,
-        "with a 100k effective target the same message should consume a visible share"
-    );
+    assert_eq!(usage.context_window_tokens, 400_000);
+}
+
+#[test]
+fn header_usage_summary_caps_target_by_weles_compaction_window() {
+    let mut model = make_model();
+    model.config.provider = PROVIDER_ID_GITHUB_COPILOT.to_string();
+    model.config.auth_source = "github_copilot".to_string();
+    model.config.model = "gpt-5.4".to_string();
+    model.config.context_window_tokens = 400_000;
+    model.config.compact_threshold_pct = 80;
+    model.config.compaction_strategy = "weles".to_string();
+    model.config.compaction_weles_provider = "minimax-coding-plan".to_string();
+    model.config.compaction_weles_model = "MiniMax-M2.7".to_string();
+
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-weles-target".to_string(),
+        title: "Weles".to_string(),
+        agent_name: Some("Swarog".to_string()),
+    });
+    model.chat.reduce(chat::ChatAction::SelectThread(
+        "thread-weles-target".to_string(),
+    ));
+
+    let usage = model.current_header_usage_summary();
+    assert_eq!(usage.compaction_target_tokens, 164_000);
+    assert_eq!(usage.context_window_tokens, 400_000);
+}
+
+#[test]
+fn header_usage_summary_caps_target_by_custom_compaction_window() {
+    let mut model = make_model();
+    model.config.provider = PROVIDER_ID_GITHUB_COPILOT.to_string();
+    model.config.auth_source = "github_copilot".to_string();
+    model.config.model = "gpt-5.4".to_string();
+    model.config.context_window_tokens = 400_000;
+    model.config.compact_threshold_pct = 80;
+    model.config.compaction_strategy = "custom_model".to_string();
+    model.config.compaction_custom_context_window_tokens = 160_000;
+
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-custom-target".to_string(),
+        title: "Custom".to_string(),
+        agent_name: Some("Swarog".to_string()),
+    });
+    model.chat.reduce(chat::ChatAction::SelectThread(
+        "thread-custom-target".to_string(),
+    ));
+
+    let usage = model.current_header_usage_summary();
+    assert_eq!(usage.compaction_target_tokens, 128_000);
+    assert_eq!(usage.context_window_tokens, 400_000);
 }
 
 #[test]

@@ -253,6 +253,13 @@ pub struct ToolResult {
     pub pending_approval: Option<ToolPendingApproval>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredVisibleThreadContinuation {
+    pub agent_id: String,
+    pub preferred_session_hint: Option<String>,
+    pub llm_user_content: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolPendingApproval {
     pub approval_id: String,

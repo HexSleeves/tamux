@@ -269,6 +269,16 @@ fn slash_notifications_opens_notifications_modal() {
 }
 
 #[test]
+fn ctrl_n_opens_notifications_modal() {
+    let (mut model, _daemon_rx) = make_model();
+
+    let quit = model.handle_key(KeyCode::Char('n'), KeyModifiers::CONTROL);
+
+    assert!(!quit);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::Notifications));
+}
+
+#[test]
 fn slash_approvals_opens_approval_center_modal() {
     let (mut model, _daemon_rx) = make_model();
     model.connected = true;

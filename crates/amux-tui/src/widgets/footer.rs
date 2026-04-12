@@ -456,7 +456,7 @@ pub fn render_status_bar(
     spans.push(Span::styled(":goals  ", theme.fg_dim));
     spans.push(Span::styled("ctrl+a", theme.fg_active));
     spans.push(Span::styled(":approvals  ", theme.fg_dim));
-    spans.push(Span::styled("ctrl+i", theme.fg_active));
+    spans.push(Span::styled("ctrl+n", theme.fg_active));
     spans.push(Span::styled(":notifications  ", theme.fg_dim));
     spans.push(Span::styled("ctrl+p", theme.fg_active));
     spans.push(Span::styled(":cmd  ", theme.fg_dim));
@@ -546,7 +546,7 @@ mod tests {
             .collect::<String>();
 
         assert!(
-            row.contains("ctrl+i"),
+            row.contains("ctrl+n"),
             "missing notifications hotkey: {row}"
         );
     }

@@ -98,6 +98,20 @@ fn command_palette_seeds_include_status_command() {
 }
 
 #[test]
+fn command_palette_seeds_include_notifications_and_approvals_commands() {
+    let state = ModalState::new();
+
+    assert!(state
+        .command_items()
+        .iter()
+        .any(|item| item.command == "notifications"));
+    assert!(state
+        .command_items()
+        .iter()
+        .any(|item| item.command == "approvals"));
+}
+
+#[test]
 fn navigation_clamps_to_bounds() {
     let mut state = ModalState::new();
     state.reduce(ModalAction::Navigate(-1));

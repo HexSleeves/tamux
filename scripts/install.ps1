@@ -5,18 +5,19 @@
     Install tamux binaries to C:\Program Files\tamux
 
 .DESCRIPTION
-    Downloads pre-built tamux binaries from GitLab Releases, verifies SHA256
-    checksums, installs to C:\Program Files\tamux, and updates system PATH.
+    Downloads pre-built tamux binaries from GitHub Releases, verifies SHA256
+    checksums for the extracted binaries, installs to C:\Program Files\tamux,
+    and updates system PATH.
 
 .PARAMETER DryRun
     Print what would be done without downloading or modifying files.
 
 .EXAMPLE
-    irm https://tamux.dev/install.ps1 | iex
+    irm https://raw.githubusercontent.com/mkurman/tamux/main/scripts/install.ps1 | iex
     Download and run the installer.
 
 .EXAMPLE
-    $env:TAMUX_VERSION = "0.1.10"; .\install.ps1
+    $env:TAMUX_VERSION = "0.4.2"; .\install.ps1
     Install a specific version.
 
 .EXAMPLE
@@ -31,9 +32,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$InstallDir = "C:\Program Files\tamux"
-$BaseUrl = "https://gitlab.com/api/v4/projects/PROJECT_ID/packages/generic/tamux"
-$Binaries = @("tamux-daemon.exe", "tamux.exe", "tamux-tui.exe")
+$InstallDir = if ($env:TAMUX_INSTALL_DIR) { $env:TAMUX_INSTALL_DIR } else { "C:\Program Files\tamux" }
+$GitHubOwner = "mkurman"
+$GitHubRepo = "tamux"
+$GitHubApiUrl = "https://api.github.com/repos/$GitHubOwner/$GitHubRepo"
+$DownloadBaseUrl = "https://github.com/$GitHubOwner/$GitHubRepo/releases/download"
+$RequestHeaders = @{
+    "Accept" = "application/vnd.github+json"
+    "User-Agent" = "tamux-installer"
+}
+$Binaries = @("tamux.exe", "tamux-daemon.exe", "tamux-tui.exe", "tamux-gateway.exe", "tamux-mcp.exe")
+
+function Normalize-Version {
+    param([string]$Value)
+
+    if (-not $Value) {
+        return $Value
+    }
+
+    return $Value.TrimStart("v")
+}
 
 # ---------------------------------------------------------------------------
 # Platform detection
@@ -52,6 +70,8 @@ function Detect-Platform {
     }
 
     $script:Target = "windows-$script:ArchName"
+    $script:ArchiveName = "tamux-windows-$script:ArchName.zip"
+    $script:ChecksumName = "SHA256SUMS-windows-$script:ArchName.txt"
     Write-Host "Detected platform: $script:Target"
 }
 
@@ -61,18 +81,16 @@ function Detect-Platform {
 
 function Get-LatestVersion {
     if ($env:TAMUX_VERSION) {
-        $script:Version = $env:TAMUX_VERSION
+        $script:Version = Normalize-Version $env:TAMUX_VERSION
         Write-Host "Using specified version: $script:Version"
         return
     }
 
     try {
-        $response = Invoke-WebRequest -Uri "https://gitlab.com/api/v4/projects/PROJECT_ID/releases" `
-            -UseBasicParsing -ErrorAction Stop
-        $content = $response.Content
-        if ($content -match '"tag_name":"v([^"]+)"') {
-            $script:Version = $Matches[1]
-        } else {
+        $release = Invoke-RestMethod -Uri "$GitHubApiUrl/releases/latest" `
+            -Headers $RequestHeaders -ErrorAction Stop
+        $script:Version = Normalize-Version $release.tag_name
+        if (-not $script:Version) {
             throw "No version tag found"
         }
     } catch {
@@ -87,42 +105,68 @@ function Get-LatestVersion {
 # Download and verify
 # ---------------------------------------------------------------------------
 
+function Get-ChecksumMap {
+    param([string]$Path)
+
+    $checksums = @{}
+    foreach ($line in Get-Content -Path $Path) {
+        if ($line -match '^([A-Fa-f0-9]+)\s+\*?(.+)$') {
+            $checksums[$Matches[2]] = $Matches[1].ToLower()
+        }
+    }
+
+    return $checksums
+}
+
+function Verify-ExtractedBinary {
+    param(
+        [string]$BinaryName,
+        [hashtable]$Checksums
+    )
+
+    $binaryPath = Join-Path $script:ExtractDir $BinaryName
+    if (-not (Test-Path $binaryPath)) {
+        throw "Release bundle is missing required binary $BinaryName"
+    }
+
+    $expectedHash = $Checksums[$BinaryName]
+    if (-not $expectedHash) {
+        throw "Checksum not found for $BinaryName in $script:ChecksumName"
+    }
+
+    $actualHash = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash.ToLower()
+    if ($actualHash -ne $expectedHash) {
+        throw "SHA256 checksum mismatch for $BinaryName"
+    }
+}
+
 function Download-AndVerify {
-    $script:Tarball = "tamux-binaries-$script:Target.tar.gz"
-    $script:Sums = "SHA256SUMS-$script:Target.txt"
-    $script:TmpDir = Join-Path $env:TEMP "tamux-install"
+    $script:TmpDir = Join-Path $env:TEMP "tamux-install-$PID"
+    $script:ArchivePath = Join-Path $script:TmpDir $script:ArchiveName
+    $script:ChecksumPath = Join-Path $script:TmpDir $script:ChecksumName
+    $script:ExtractDir = Join-Path $script:TmpDir "extract"
 
     # Clean and create temp directory
     if (Test-Path $script:TmpDir) {
         Remove-Item -Recurse -Force $script:TmpDir
     }
     New-Item -ItemType Directory -Force -Path $script:TmpDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $script:ExtractDir | Out-Null
 
     Write-Host "Downloading tamux v$script:Version for $script:Target..."
-    Invoke-WebRequest -Uri "$BaseUrl/$script:Version/$script:Tarball" `
-        -OutFile (Join-Path $script:TmpDir $script:Tarball) `
-        -UseBasicParsing
-    Invoke-WebRequest -Uri "$BaseUrl/$script:Version/$script:Sums" `
-        -OutFile (Join-Path $script:TmpDir $script:Sums) `
-        -UseBasicParsing
+    Invoke-WebRequest -Uri $script:ChecksumUrl -Headers $RequestHeaders `
+        -OutFile $script:ChecksumPath -ErrorAction Stop
+    Invoke-WebRequest -Uri $script:ArchiveUrl -Headers $RequestHeaders `
+        -OutFile $script:ArchivePath -ErrorAction Stop
 
-    # SHA256 checksum verification
-    Write-Host "Verifying SHA256 checksum..."
-    $sumsContent = Get-Content (Join-Path $script:TmpDir $script:Sums)
-    $expectedLine = $sumsContent | Select-String $script:Tarball
-    if (-not $expectedLine) {
-        Write-Warning "Tarball not found in checksums file, skipping verification"
-        return
+    Write-Host "Extracting binaries..."
+    Expand-Archive -Path $script:ArchivePath -DestinationPath $script:ExtractDir -Force
+
+    Write-Host "Verifying extracted binaries..."
+    $script:Checksums = Get-ChecksumMap -Path $script:ChecksumPath
+    foreach ($bin in $Binaries) {
+        Verify-ExtractedBinary -BinaryName $bin -Checksums $script:Checksums
     }
-
-    $ExpectedHash = $expectedLine.ToString().Split(" ")[0].ToLower()
-    $ActualHash = (Get-FileHash (Join-Path $script:TmpDir $script:Tarball) -Algorithm SHA256).Hash.ToLower()
-
-    if ($ActualHash -ne $ExpectedHash) {
-        Write-Warning "SHA256 checksum mismatch! Expected: $ExpectedHash, Got: $ActualHash"
-        throw "Checksum verification failed"
-    }
-    Write-Host "SHA256 checksum verified."
 }
 
 # ---------------------------------------------------------------------------
@@ -132,20 +176,17 @@ function Download-AndVerify {
 function Install-Binaries {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-    Write-Host "Extracting binaries..."
-    tar xzf (Join-Path $script:TmpDir $script:Tarball) -C $InstallDir
-
-    # Verify binaries exist after extraction
     foreach ($bin in $Binaries) {
-        $binPath = Join-Path $InstallDir $bin
-        if (Test-Path $binPath) {
-            Write-Host "  Installed: $bin"
-        } else {
-            Write-Warning "$bin not found after extraction"
+        $sourcePath = Join-Path $script:ExtractDir $bin
+        if (-not (Test-Path $sourcePath)) {
+            throw "Expected extracted binary not found: $bin"
         }
+
+        Copy-Item -Path $sourcePath -Destination (Join-Path $InstallDir $bin) -Force
+        Write-Host "  Installed: $bin"
     }
 
-    Write-Host "Installed: tamux-daemon.exe, tamux.exe, tamux-tui.exe -> $InstallDir"
+    Write-Host "Installed: $($Binaries -join ', ') -> $InstallDir"
 }
 
 # ---------------------------------------------------------------------------
@@ -154,9 +195,12 @@ function Install-Binaries {
 
 function Update-Path {
     $CurrentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    if (-not $CurrentPath) {
+        $CurrentPath = ""
+    }
 
     # Check if InstallDir already in PATH
-    if ($CurrentPath -split ";" | Where-Object { $_ -eq $InstallDir }) {
+    if ($CurrentPath -split ";" | Where-Object { $_.TrimEnd('\\') -ieq $InstallDir.TrimEnd('\\') }) {
         Write-Host "$InstallDir is already in system PATH."
         return
     }
@@ -178,23 +222,30 @@ function Update-Path {
 Detect-Platform
 Get-LatestVersion
 
+$script:ArchiveUrl = "$DownloadBaseUrl/v$Version/$script:ArchiveName"
+$script:ChecksumUrl = "$DownloadBaseUrl/v$Version/$script:ChecksumName"
+
 if ($DryRun) {
-    $tarball = "tamux-binaries-$Target.tar.gz"
     Write-Host ""
     Write-Host "Platform: $Target"
     Write-Host "Version: $Version"
-    Write-Host "Would download: $BaseUrl/$Version/$tarball"
+    Write-Host "Would download: $script:ArchiveUrl"
+    Write-Host "Checksum URL: $script:ChecksumUrl"
     Write-Host "Would install to: $InstallDir"
+    Write-Host "Binaries: $($Binaries -join ', ')"
     Write-Host "Dry run complete -- no files downloaded or modified."
     exit 0
 }
 
-Download-AndVerify
-Install-Binaries
-Update-Path
-
-# Cleanup
-Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
+try {
+    Download-AndVerify
+    Install-Binaries
+    Update-Path
+} finally {
+    if ($script:TmpDir -and (Test-Path $script:TmpDir)) {
+        Remove-Item -Recurse -Force $script:TmpDir -ErrorAction SilentlyContinue
+    }
+}
 
 Write-Host ""
 Write-Host "tamux installed successfully! Run 'tamux' to get started."

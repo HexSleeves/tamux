@@ -59,9 +59,18 @@ export interface ContextCompactionSettings {
   auto_compact_context: boolean;
   max_context_messages: number;
   context_window_tokens: number;
-  context_budget_tokens: number;
   compact_threshold_pct: number;
   keep_recent_on_compact: number;
+  compaction?: {
+    strategy?: "heuristic" | "weles" | "custom_model";
+    weles?: {
+      provider?: string;
+      model?: string;
+    };
+    custom_model?: {
+      context_window_tokens?: number;
+    };
+  };
 }
 
 export type OpenAICodexAuthStatus = {

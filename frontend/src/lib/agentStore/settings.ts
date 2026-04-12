@@ -136,7 +136,6 @@ export interface AgentSettings {
   llm_stream_chunk_timeout_secs: number;
   auto_retry: boolean;
   context_window_tokens: number;
-  context_budget_tokens: number;
   compact_threshold_pct: number;
   keep_recent_on_compact: number;
   weles_max_concurrent_reviews: number;
@@ -233,7 +232,6 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   llm_stream_chunk_timeout_secs: 300,
   auto_retry: true,
   context_window_tokens: 128000,
-  context_budget_tokens: 100000,
   compact_threshold_pct: 80,
   keep_recent_on_compact: 10,
   weles_max_concurrent_reviews: 2,
@@ -298,7 +296,6 @@ export type DiskAgentSettings = Partial<AgentSettings> & {
   llm_stream_chunk_timeout_secs?: number;
   auto_retry?: boolean;
   context_window_tokens?: number;
-  context_budget_tokens?: number;
   compact_threshold_pct?: number;
   keep_recent_on_compact?: number;
   weles_max_concurrent_reviews?: number;
@@ -398,12 +395,15 @@ function providerConfigFromRaw(
 }
 
 export function normalizeAgentSettingsFromSource(source: DiskAgentSettings): AgentSettings {
+  const { context_budget_tokens: _legacyContextBudgetTokens, ...sourceSansLegacyBudget } = source as DiskAgentSettings & {
+    context_budget_tokens?: number;
+  };
   const active_provider = normalizeAgentProviderId(source.active_provider ?? source.provider);
   const activeProviderConfig = providerConfigFromRaw(active_provider, source);
   const authSource = normalizeAuthSource(active_provider, source.auth_source ?? activeProviderConfig.auth_source);
   return {
     ...DEFAULT_AGENT_SETTINGS,
-    ...source,
+    ...sourceSansLegacyBudget,
     agent_name: DEFAULT_AGENT_SETTINGS.agent_name,
     active_provider,
     agent_backend: normalizeAgentBackendModeFromSource(source, active_provider, authSource),
@@ -441,7 +441,6 @@ export function normalizeAgentSettingsFromSource(source: DiskAgentSettings): Age
       source.llm_stream_chunk_timeout_secs ?? DEFAULT_AGENT_SETTINGS.llm_stream_chunk_timeout_secs,
     auto_retry: source.auto_retry ?? DEFAULT_AGENT_SETTINGS.auto_retry,
     context_window_tokens: source.context_window_tokens ?? DEFAULT_AGENT_SETTINGS.context_window_tokens,
-    context_budget_tokens: source.context_budget_tokens ?? DEFAULT_AGENT_SETTINGS.context_budget_tokens,
     compact_threshold_pct: source.compact_threshold_pct ?? DEFAULT_AGENT_SETTINGS.compact_threshold_pct,
     keep_recent_on_compact: source.keep_recent_on_compact ?? DEFAULT_AGENT_SETTINGS.keep_recent_on_compact,
     weles_max_concurrent_reviews:

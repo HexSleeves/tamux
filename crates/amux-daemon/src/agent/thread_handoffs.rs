@@ -91,7 +91,7 @@ pub(super) fn default_agent_id_for_thread(
     canonical_agent_id(persisted_agent_name.unwrap_or(MAIN_AGENT_ID)).to_string()
 }
 
-pub(super) fn is_internal_handoff_thread(thread_id: &str) -> bool {
+pub(in crate::agent) fn is_internal_handoff_thread(thread_id: &str) -> bool {
     thread_id.starts_with(INTERNAL_HANDOFF_THREAD_PREFIX)
 }
 

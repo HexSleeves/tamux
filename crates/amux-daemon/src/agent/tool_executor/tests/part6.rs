@@ -340,6 +340,10 @@
             "tool result should report that visible-thread continuation was requested: {}",
             result.content
         );
+        engine
+            .flush_deferred_visible_thread_continuations(thread_id)
+            .await
+            .expect("deferred visible-thread continuation should flush");
 
         let dm_thread_id = crate::agent::agent_identity::internal_dm_thread_id(
             crate::agent::agent_identity::MAIN_AGENT_ID,
@@ -352,7 +356,7 @@
                 .expect("message_agent should still use internal DM for coordination")
                 .messages
                 .iter()
-                .any(|message| message.role == MessageRole::Assistant),
+                .any(|message| message.role == crate::agent::MessageRole::Assistant),
             "internal DM thread should contain the discussion reply"
         );
         let visible_reply = threads
@@ -362,7 +366,7 @@
             .iter()
             .rev()
             .find(|message| {
-                message.role == MessageRole::Assistant
+                message.role == crate::agent::MessageRole::Assistant
                     && message.author_agent_id.as_deref() == Some("weles")
             })
             .expect("visible thread should receive the Weles continuation");

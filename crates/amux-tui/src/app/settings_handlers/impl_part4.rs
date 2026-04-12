@@ -306,10 +306,6 @@ impl TuiModel {
                 self.config.auto_retry = !self.config.auto_retry;
                 self.sync_config_to_daemon();
             }
-            "context_budget_tokens" => self.settings.start_editing(
-                "context_budget_tokens",
-                &self.config.context_budget_tokens.to_string(),
-            ),
             "compact_threshold_pct" => self.settings.start_editing(
                 "compact_threshold_pct",
                 &self.config.compact_threshold_pct.to_string(),

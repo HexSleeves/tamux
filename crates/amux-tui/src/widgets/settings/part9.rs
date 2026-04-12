@@ -255,17 +255,6 @@ fn render_advanced_tab<'a>(
         settings,
         config,
         13,
-        "Budget Tokens:   ",
-        config.context_budget_tokens.to_string(),
-        "context_budget_tokens",
-        "  [Enter: edit]",
-        theme,
-    );
-    render_advanced_value(
-        &mut lines,
-        settings,
-        config,
-        14,
         "Compact Thres %: ",
         config.compact_threshold_pct.to_string(),
         "compact_threshold_pct",
@@ -276,7 +265,7 @@ fn render_advanced_tab<'a>(
         &mut lines,
         settings,
         config,
-        15,
+        14,
         "Keep Recent:     ",
         config.keep_recent_on_compact.to_string(),
         "keep_recent_on_compact",
@@ -287,7 +276,7 @@ fn render_advanced_tab<'a>(
         &mut lines,
         settings,
         config,
-        16,
+        15,
         "Bash Timeout (s):",
         config.bash_timeout_secs.to_string(),
         "bash_timeout_secs",
@@ -298,7 +287,7 @@ fn render_advanced_tab<'a>(
         &mut lines,
         settings,
         config,
-        17,
+        16,
         "WELES Reviews:  ",
         config.weles_max_concurrent_reviews.to_string(),
         "weles_max_concurrent_reviews",
@@ -318,7 +307,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                18,
+                17,
                 "WELES Provider: ",
                 config.compaction_weles_provider.clone(),
                 "compaction_weles_provider",
@@ -329,7 +318,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                19,
+                18,
                 "WELES Model:    ",
                 config.compaction_weles_model.clone(),
                 "compaction_weles_model",
@@ -340,21 +329,21 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                20,
+                19,
                 "WELES Reasoning:",
                 config.compaction_weles_reasoning_effort.clone(),
                 "compaction_weles_reasoning_effort",
                 "  [Enter/Space: cycle]",
                 theme,
             );
-            21
+            20
         }
         "custom_model" => {
             render_advanced_value(
                 &mut lines,
                 settings,
                 config,
-                18,
+                17,
                 "Custom Provider:",
                 config.compaction_custom_provider.clone(),
                 "compaction_custom_provider",
@@ -365,7 +354,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                19,
+                18,
                 "Custom Base URL:",
                 config.compaction_custom_base_url.clone(),
                 "compaction_custom_base_url",
@@ -376,7 +365,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                20,
+                19,
                 "Custom Auth:    ",
                 config.compaction_custom_auth_source.clone(),
                 "compaction_custom_auth_source",
@@ -387,7 +376,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                21,
+                20,
                 "Custom Model:   ",
                 config.compaction_custom_model.clone(),
                 "compaction_custom_model",
@@ -398,7 +387,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                22,
+                21,
                 "Custom Transport:",
                 config.compaction_custom_api_transport.clone(),
                 "compaction_custom_api_transport",
@@ -409,7 +398,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                23,
+                22,
                 "Custom API Key: ",
                 if config.compaction_custom_api_key.is_empty() {
                     "(empty)".to_string()
@@ -424,7 +413,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                24,
+                23,
                 "Assistant ID:   ",
                 if config.compaction_custom_assistant_id.is_empty() {
                     "(empty)".to_string()
@@ -439,7 +428,7 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                25,
+                24,
                 "Custom Reasoning:",
                 config.compaction_custom_reasoning_effort.clone(),
                 "compaction_custom_reasoning_effort",
@@ -450,21 +439,21 @@ fn render_advanced_tab<'a>(
                 &mut lines,
                 settings,
                 config,
-                26,
+                25,
                 "Custom Ctx Tok: ",
                 config.compaction_custom_context_window_tokens.to_string(),
                 "compaction_custom_context_window_tokens",
                 "  [Enter: edit]",
                 theme,
             );
-            27
+            26
         }
         _ => {
             lines.push(Line::from(Span::styled(
                 "  Heuristic compaction uses the built-in rule based summary path.",
                 theme.fg_dim,
             )));
-            18
+            17
         }
     };
 
