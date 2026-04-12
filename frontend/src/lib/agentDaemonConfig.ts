@@ -139,6 +139,8 @@ export function buildDaemonAgentConfig(
     system_prompt: agentSettings.system_prompt,
     auto_compact_context: agentSettings.auto_compact_context,
     max_context_messages: agentSettings.max_context_messages,
+    react_chat_history_page_size: agentSettings.react_chat_history_page_size,
+    tui_chat_history_page_size: agentSettings.tui_chat_history_page_size,
     max_tool_loops: agentSettings.max_tool_loops,
     max_retries: agentSettings.max_retries,
     retry_delay_ms: agentSettings.retry_delay_ms,

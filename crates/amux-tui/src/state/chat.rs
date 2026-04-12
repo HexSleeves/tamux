@@ -13,7 +13,7 @@ pub use chat_types::*;
 
 use amux_protocol::AGENT_NAME_RAROG;
 
-pub const CHAT_HISTORY_PAGE_SIZE: usize = 50;
+pub const CHAT_HISTORY_PAGE_SIZE: usize = 100;
 pub const CHAT_HISTORY_COLLAPSE_DELAY_TICKS: u64 = 20;
 pub const CHAT_HISTORY_FETCH_DEBOUNCE_TICKS: u64 = 6;
 
@@ -29,6 +29,7 @@ struct ThreadActivityState {
 
 pub struct ChatState {
     threads: Vec<AgentThread>,
+    history_page_size: usize,
     active_thread_id: Option<String>,
     thread_activity: std::collections::HashMap<String, ThreadActivityState>,
     render_revision: u64,
@@ -151,15 +152,15 @@ fn merge_thread_window(
     )
 }
 
-fn trim_thread_to_latest_page(thread: &mut AgentThread) -> usize {
+fn trim_thread_to_latest_page(thread: &mut AgentThread, page_size: usize) -> usize {
     normalize_thread_window(thread);
-    if thread.messages.len() <= CHAT_HISTORY_PAGE_SIZE {
+    if thread.messages.len() <= page_size {
         thread.history_window_expanded = false;
         thread.collapse_deadline_tick = None;
         return 0;
     }
 
-    let drop_count = thread.messages.len().saturating_sub(CHAT_HISTORY_PAGE_SIZE);
+    let drop_count = thread.messages.len().saturating_sub(page_size);
     thread.messages.drain(0..drop_count);
     thread.loaded_message_start = thread.loaded_message_start.saturating_add(drop_count);
     thread.loaded_message_end = thread.loaded_message_start + thread.messages.len();
@@ -168,7 +169,7 @@ fn trim_thread_to_latest_page(thread: &mut AgentThread) -> usize {
     drop_count
 }
 
-fn append_message_to_thread(thread: &mut AgentThread, message: AgentMessage) {
+fn append_message_to_thread(thread: &mut AgentThread, message: AgentMessage, page_size: usize) {
     normalize_thread_window(thread);
     thread.messages.push(message);
     thread.total_message_count = thread.total_message_count.saturating_add(1);
@@ -176,8 +177,8 @@ fn append_message_to_thread(thread: &mut AgentThread, message: AgentMessage) {
     thread.loaded_message_start = thread
         .loaded_message_end
         .saturating_sub(thread.messages.len());
-    if !thread.history_window_expanded && thread.messages.len() > CHAT_HISTORY_PAGE_SIZE {
-        trim_thread_to_latest_page(thread);
+    if !thread.history_window_expanded && thread.messages.len() > page_size {
+        trim_thread_to_latest_page(thread, page_size);
     } else {
         normalize_thread_window(thread);
     }
@@ -195,6 +196,7 @@ impl ChatState {
     pub fn new() -> Self {
         Self {
             threads: Vec::new(),
+            history_page_size: CHAT_HISTORY_PAGE_SIZE,
             active_thread_id: None,
             thread_activity: std::collections::HashMap::new(),
             render_revision: 0,
@@ -212,6 +214,16 @@ impl ChatState {
 
     pub fn threads(&self) -> &[AgentThread] {
         &self.threads
+    }
+
+    pub fn set_history_page_size(&mut self, page_size: usize) {
+        self.history_page_size = page_size.max(1);
+        for thread in &mut self.threads {
+            if !thread.history_window_expanded && thread.messages.len() > self.history_page_size {
+                trim_thread_to_latest_page(thread, self.history_page_size);
+            }
+        }
+        self.bump_render_revision();
     }
 
     pub fn active_thread_id(&self) -> Option<&str> {
@@ -284,18 +296,16 @@ impl ChatState {
         }
     }
 
-    pub fn preserve_prepend_scroll_anchor(&mut self, added_lines: usize) {
-        if added_lines == 0 {
-            return;
-        }
-        self.scroll_offset = self.scroll_offset.saturating_add(added_lines);
+    pub fn preserve_prepend_scroll_anchor(&mut self, resolved_scroll: usize) {
+        self.scroll_offset = resolved_scroll;
         self.scroll_locked = true;
         self.bump_render_revision();
     }
 
     pub fn schedule_history_collapse(&mut self, current_tick: u64, delay_ticks: u64) {
+        let history_page_size = self.history_page_size;
         if let Some(thread) = self.active_thread_mut() {
-            if thread.history_window_expanded && thread.messages.len() > CHAT_HISTORY_PAGE_SIZE {
+            if thread.history_window_expanded && thread.messages.len() > history_page_size {
                 thread.collapse_deadline_tick = Some(current_tick.saturating_add(delay_ticks));
             }
         }
@@ -310,13 +320,14 @@ impl ChatState {
         }
 
         let mut dropped = 0usize;
+        let history_page_size = self.history_page_size;
         if let Some(thread) = self.active_thread_mut() {
             let should_collapse = thread
                 .collapse_deadline_tick
                 .is_some_and(|deadline| current_tick >= deadline)
                 && thread.history_window_expanded;
             if should_collapse {
-                dropped = trim_thread_to_latest_page(thread);
+                dropped = trim_thread_to_latest_page(thread, history_page_size);
             }
         }
 
@@ -594,6 +605,7 @@ impl ChatState {
                                 reasoning,
                                 ..Default::default()
                             },
+                            self.history_page_size,
                         );
                     }
                 }
@@ -611,6 +623,7 @@ impl ChatState {
                             weles_review: weles_review.clone(),
                             ..Default::default()
                         },
+                        self.history_page_size,
                     );
                 }
 
@@ -731,7 +744,7 @@ impl ChatState {
                     };
 
                     if let Some(thread) = self.threads.iter_mut().find(|t| t.id == thread_id) {
-                        append_message_to_thread(thread, msg);
+                        append_message_to_thread(thread, msg, self.history_page_size);
                         thread.total_input_tokens += input_tokens;
                         thread.total_output_tokens += output_tokens;
                     }
@@ -842,7 +855,7 @@ impl ChatState {
                         .older_page_request_cooldown_until_tick
                         .max(incoming.older_page_request_cooldown_until_tick);
                     existing.history_window_expanded =
-                        existing.messages.len() > CHAT_HISTORY_PAGE_SIZE;
+                        existing.messages.len() > self.history_page_size;
                     if disjoint && incoming.loaded_message_end <= existing.loaded_message_end {
                         existing.collapse_deadline_tick = None;
                     }
@@ -867,7 +880,7 @@ impl ChatState {
                     normalize_thread_window(existing);
                 } else {
                     incoming.history_window_expanded =
-                        incoming.messages.len() > CHAT_HISTORY_PAGE_SIZE;
+                        incoming.messages.len() > self.history_page_size;
                     self.threads.push(incoming);
                 }
             }
@@ -950,7 +963,7 @@ impl ChatState {
                     if thread_id == "concierge" && message.is_concierge_welcome {
                         thread.messages.retain(|msg| !msg.is_concierge_welcome);
                     }
-                    append_message_to_thread(thread, message);
+                    append_message_to_thread(thread, message, self.history_page_size);
                 } else {
                     let title = if thread_id == "concierge" {
                         AGENT_NAME_RAROG.to_string()
@@ -1055,6 +1068,7 @@ impl ChatState {
                                 },
                                 ..Default::default()
                             },
+                            self.history_page_size,
                         );
                     }
                 }

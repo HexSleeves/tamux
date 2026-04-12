@@ -1,4 +1,8 @@
 impl TuiModel {
+    fn chat_history_page_size(&self) -> usize {
+        self.config.tui_chat_history_page_size.max(25) as usize
+    }
+
     fn request_thread_page(
         &mut self,
         thread_id: String,
@@ -17,7 +21,7 @@ impl TuiModel {
     }
 
     fn request_latest_thread_page(&mut self, thread_id: String, show_loading: bool) {
-        self.request_thread_page(thread_id, chat::CHAT_HISTORY_PAGE_SIZE, 0, show_loading);
+        self.request_thread_page(thread_id, self.chat_history_page_size(), 0, show_loading);
     }
 
     fn maybe_request_older_chat_history(&mut self) {
@@ -49,7 +53,7 @@ impl TuiModel {
         );
         self.request_thread_page(
             thread_id,
-            chat::CHAT_HISTORY_PAGE_SIZE,
+            self.chat_history_page_size(),
             message_offset,
             false,
         );

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getBridge } from "@/lib/bridge";
+import { resolveReactChatHistoryMessageLimit } from "@/lib/chatHistoryPageSize";
 import { allLeafIds, findLeaf } from "../../lib/bspTree";
 import { fetchAgentRuns, formatRunStatus, formatRunTimestamp, isRunActive, isSubagentRun, runStatusColor, type AgentRun } from "../../lib/agentRuns";
 import { fetchThreadTodos } from "../../lib/agentTodos";
@@ -92,6 +93,7 @@ export function SubagentsView({ onOpenThreadView, onOpenTasksView }: SubagentsVi
     const setThreadDaemonId = useAgentStore((state) => state.setThreadDaemonId);
     const setThreadTodos = useAgentStore((state) => state.setThreadTodos);
     const threads = useAgentStore((state) => state.threads);
+    const reactChatHistoryPageSize = useAgentStore((state) => state.agentSettings.react_chat_history_page_size);
 
     const refreshRuns = useCallback(async () => {
         const result = await fetchAgentRuns();
@@ -177,7 +179,9 @@ export function SubagentsView({ onOpenThreadView, onOpenTasksView }: SubagentsVi
             return;
         }
 
-        const remoteThread = await amux.agentGetThread(run.thread_id) as RemoteAgentThread | null;
+        const remoteThread = await amux.agentGetThread(run.thread_id, {
+            messageLimit: resolveReactChatHistoryMessageLimit(reactChatHistoryPageSize) ?? null,
+        }) as RemoteAgentThread | null;
         if (!remoteThread) {
             return;
         }
@@ -199,7 +203,7 @@ export function SubagentsView({ onOpenThreadView, onOpenTasksView }: SubagentsVi
         setThreadTodos(localThreadId, todos);
         setActiveThread(localThreadId);
         onOpenThreadView?.();
-    }, [addMessage, amux, createThread, onOpenThreadView, setActiveThread, setThreadDaemonId, setThreadTodos, threads, workspaces]);
+    }, [addMessage, amux, createThread, onOpenThreadView, reactChatHistoryPageSize, setActiveThread, setThreadDaemonId, setThreadTodos, threads, workspaces]);
 
     const voteOnDisagreement = useCallback(async (
         session: CollaborationSessionRecord,

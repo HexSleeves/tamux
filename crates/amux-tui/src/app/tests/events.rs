@@ -1414,6 +1414,7 @@ fn hidden_handoff_threads_are_filtered_from_thread_list() {
 #[test]
 fn thread_list_requests_detail_for_selected_thread_with_only_summary_data() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.config.tui_chat_history_page_size = 123;
 
     model.chat.reduce(chat::ChatAction::ThreadListReceived(vec![
         crate::state::chat::AgentThread {
@@ -1440,7 +1441,7 @@ fn thread_list_requests_detail_for_selected_thread_with_only_summary_data() {
             message_offset,
         }) => {
             assert_eq!(thread_id, "thread-user");
-            assert_eq!(message_limit, Some(50));
+            assert_eq!(message_limit, Some(123));
             assert_eq!(message_offset, Some(0));
         }
         other => panic!("expected thread detail request, got {other:?}"),
@@ -1473,14 +1474,15 @@ fn thread_detail_clears_loading_state() {
 #[test]
 fn on_tick_requests_next_older_thread_page_when_scrolled_to_top_of_loaded_window() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.config.tui_chat_history_page_size = 123;
     model.chat.reduce(chat::ChatAction::ThreadDetailReceived(
         crate::state::chat::AgentThread {
             id: "thread-user".to_string(),
             title: "User Thread".to_string(),
             total_message_count: 120,
-            loaded_message_start: 70,
+            loaded_message_start: 20,
             loaded_message_end: 120,
-            messages: (70..120)
+            messages: (20..120)
                 .map(|index| crate::state::chat::AgentMessage {
                     id: Some(format!("msg-{index}")),
                     role: crate::state::chat::MessageRole::Assistant,
@@ -1507,8 +1509,8 @@ fn on_tick_requests_next_older_thread_page_when_scrolled_to_top_of_loaded_window
             message_offset,
         }) => {
             assert_eq!(thread_id, "thread-user");
-            assert_eq!(message_limit, Some(50));
-            assert_eq!(message_offset, Some(50));
+            assert_eq!(message_limit, Some(123));
+            assert_eq!(message_offset, Some(100));
         }
         other => panic!("expected older-page request, got {other:?}"),
     }
@@ -1517,14 +1519,15 @@ fn on_tick_requests_next_older_thread_page_when_scrolled_to_top_of_loaded_window
 #[test]
 fn on_tick_debounces_follow_up_older_thread_page_requests_after_reload() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.config.tui_chat_history_page_size = 123;
     model.chat.reduce(chat::ChatAction::ThreadDetailReceived(
         crate::state::chat::AgentThread {
             id: "thread-user".to_string(),
             title: "User Thread".to_string(),
             total_message_count: 120,
-            loaded_message_start: 70,
+            loaded_message_start: 20,
             loaded_message_end: 120,
-            messages: (70..120)
+            messages: (20..120)
                 .map(|index| crate::state::chat::AgentMessage {
                     id: Some(format!("msg-{index}")),
                     role: crate::state::chat::MessageRole::Assistant,
@@ -1547,8 +1550,8 @@ fn on_tick_debounces_follow_up_older_thread_page_requests_after_reload() {
     match next_thread_request(&mut daemon_rx) {
         Some((thread_id, message_limit, message_offset)) => {
             assert_eq!(thread_id, "thread-user");
-            assert_eq!(message_limit, Some(50));
-            assert_eq!(message_offset, Some(50));
+            assert_eq!(message_limit, Some(123));
+            assert_eq!(message_offset, Some(100));
         }
         other => panic!("expected first older-page request, got {other:?}"),
     }
@@ -1556,10 +1559,10 @@ fn on_tick_debounces_follow_up_older_thread_page_requests_after_reload() {
     model.handle_client_event(ClientEvent::ThreadDetail(Some(crate::wire::AgentThread {
         id: "thread-user".to_string(),
         title: "User Thread".to_string(),
-        total_message_count: 120,
-        loaded_message_start: 20,
-        loaded_message_end: 70,
-        messages: (20..70)
+        total_message_count: 240,
+        loaded_message_start: 5,
+        loaded_message_end: 128,
+        messages: (5..128)
             .map(|index| crate::wire::AgentMessage {
                 id: Some(format!("msg-{index}")),
                 role: crate::wire::MessageRole::Assistant,
@@ -1587,11 +1590,82 @@ fn on_tick_debounces_follow_up_older_thread_page_requests_after_reload() {
     match next_thread_request(&mut daemon_rx) {
         Some((thread_id, message_limit, message_offset)) => {
             assert_eq!(thread_id, "thread-user");
-            assert_eq!(message_limit, Some(50));
-            assert_eq!(message_offset, Some(100));
+            assert_eq!(message_limit, Some(123));
+            assert_eq!(message_offset, Some(235));
         }
         other => panic!("expected debounced older-page request after cooldown, got {other:?}"),
     }
+}
+
+#[test]
+fn prepending_older_history_releases_the_top_edge_until_user_scrolls_again() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.config.tui_chat_history_page_size = 123;
+    model.chat.reduce(chat::ChatAction::ThreadDetailReceived(
+        crate::state::chat::AgentThread {
+            id: "thread-user".to_string(),
+            title: "User Thread".to_string(),
+            total_message_count: 400,
+            loaded_message_start: 277,
+            loaded_message_end: 400,
+            messages: (277..400)
+                .map(|index| crate::state::chat::AgentMessage {
+                    id: Some(format!("msg-{index}")),
+                    role: crate::state::chat::MessageRole::Assistant,
+                    content: format!("msg {index}"),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        },
+    ));
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-user".to_string()));
+    model
+        .chat
+        .reduce(chat::ChatAction::ScrollChat(i32::MAX / 2));
+
+    model.on_tick();
+
+    match next_thread_request(&mut daemon_rx) {
+        Some((thread_id, message_limit, message_offset)) => {
+            assert_eq!(thread_id, "thread-user");
+            assert_eq!(message_limit, Some(123));
+            assert_eq!(message_offset, Some(123));
+        }
+        other => panic!("expected first older-page request, got {other:?}"),
+    }
+
+    model.handle_client_event(ClientEvent::ThreadDetail(Some(crate::wire::AgentThread {
+        id: "thread-user".to_string(),
+        title: "User Thread".to_string(),
+        total_message_count: 400,
+        loaded_message_start: 154,
+        loaded_message_end: 277,
+        messages: (154..277)
+            .map(|index| crate::wire::AgentMessage {
+                id: Some(format!("msg-{index}")),
+                role: crate::wire::MessageRole::Assistant,
+                content: format!("msg {index}"),
+                timestamp: index as u64,
+                message_kind: "normal".to_string(),
+                ..Default::default()
+            })
+            .collect(),
+        created_at: 1,
+        updated_at: 1,
+        ..Default::default()
+    })));
+
+    for _ in 0..chat::CHAT_HISTORY_FETCH_DEBOUNCE_TICKS {
+        model.on_tick();
+    }
+
+    assert!(
+        next_thread_request(&mut daemon_rx).is_none(),
+        "prepend anchor should move the viewport below the new top so history does not auto-fetch again"
+    );
 }
 
 #[test]

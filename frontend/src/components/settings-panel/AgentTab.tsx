@@ -9,6 +9,14 @@ import { deriveOpenAICodexAuthUi } from "./openaiSubscriptionAuth";
 import { GeneratedToolsPanel } from "../generated-tools/GeneratedToolsPanel";
 import { OperatorModelControls } from "./OperatorModelControls";
 import { PromptPreviewSection } from "./PromptPreviewSection";
+import {
+    DEFAULT_CHAT_HISTORY_PAGE_SIZE,
+    MAX_TUI_CHAT_HISTORY_PAGE_SIZE,
+    MIN_CHAT_HISTORY_PAGE_SIZE,
+    REACT_CHAT_HISTORY_PAGE_SIZE_ALL,
+    normalizeReactChatHistoryPageSize,
+    normalizeTuiChatHistoryPageSize,
+} from "../../lib/chatHistoryPageSize";
 import { addBtnStyle, ModelSelector, NumberInput, PasswordInput, Section, SelectInput, SettingRow, TextInput, Toggle, inputStyle, smallBtnStyle } from "./shared";
 
 export function normalizeLlmStreamTimeoutInput(value: string): number | null {
@@ -104,6 +112,7 @@ export function AgentTab({
     const daemonDelayInputStyle = daemonDelayControlsDisabled
         ? { ...inputStyle, width: 80, opacity: 0.6, cursor: "not-allowed" as const }
         : { ...inputStyle, width: 80 };
+    const reactHistoryIsUnlimited = settings.react_chat_history_page_size === REACT_CHAT_HISTORY_PAGE_SIZE_ALL;
 
     useEffect(() => {
         void refreshProviderAuthStates();
@@ -797,6 +806,55 @@ export function AgentTab({
                 <SettingRow label="Max Context Messages">
                     <NumberInput value={settings.max_context_messages} min={10} max={500}
                         onChange={(value) => updateSetting("max_context_messages", value)} />
+                </SettingRow>
+                <SettingRow label="TUI Thread History">
+                    <NumberInput
+                        value={settings.tui_chat_history_page_size}
+                        min={MIN_CHAT_HISTORY_PAGE_SIZE}
+                        max={MAX_TUI_CHAT_HISTORY_PAGE_SIZE}
+                        onChange={(value) =>
+                            updateSetting("tui_chat_history_page_size", normalizeTuiChatHistoryPageSize(value))}
+                    />
+                </SettingRow>
+                <SettingRow label="React Thread History">
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <input
+                            type="number"
+                            value={reactHistoryIsUnlimited ? "" : settings.react_chat_history_page_size}
+                            min={MIN_CHAT_HISTORY_PAGE_SIZE}
+                            step={1}
+                            placeholder={reactHistoryIsUnlimited ? "All" : undefined}
+                            disabled={reactHistoryIsUnlimited}
+                            onChange={(event) => {
+                                const nextValue = normalizeReactChatHistoryPageSize(event.target.value);
+                                if (nextValue !== REACT_CHAT_HISTORY_PAGE_SIZE_ALL) {
+                                    updateSetting("react_chat_history_page_size", nextValue);
+                                }
+                            }}
+                            style={{
+                                ...inputStyle,
+                                width: 80,
+                                opacity: reactHistoryIsUnlimited ? 0.6 : 1,
+                                cursor: reactHistoryIsUnlimited ? "not-allowed" : "text",
+                            }}
+                        />
+                        <button
+                            type="button"
+                            onClick={() => updateSetting(
+                                "react_chat_history_page_size",
+                                reactHistoryIsUnlimited
+                                    ? DEFAULT_CHAT_HISTORY_PAGE_SIZE
+                                    : REACT_CHAT_HISTORY_PAGE_SIZE_ALL,
+                            )}
+                            style={{
+                                ...smallBtnStyle,
+                                borderColor: reactHistoryIsUnlimited ? "var(--accent)" : "var(--border)",
+                                color: reactHistoryIsUnlimited ? "var(--accent)" : "var(--text-primary)",
+                            }}
+                        >
+                            All
+                        </button>
+                    </div>
                 </SettingRow>
                 <SettingRow label="Max Tool Loops">
                     <NumberInput value={settings.max_tool_loops} min={0} max={1000}

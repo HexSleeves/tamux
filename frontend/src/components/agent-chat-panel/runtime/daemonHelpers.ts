@@ -5,6 +5,7 @@ import { useAgentMissionStore } from "@/lib/agentMissionStore";
 import { getAgentBridge } from "@/lib/agentDaemonConfig";
 import { fetchThreadTodos } from "@/lib/agentTodos";
 import { useWorkspaceStore } from "@/lib/workspaceStore";
+import { resolveReactChatHistoryMessageLimit } from "@/lib/chatHistoryPageSize";
 import type { GoalRun } from "@/lib/goalRuns";
 import type { WelesHealthState } from "@/lib/agentStore/types";
 import { formatSkillWorkflowNotice } from "./skillWorkflowNotice";
@@ -103,7 +104,11 @@ export async function reloadDaemonThreadIntoLocalState({
   )?.id;
   if (!localThreadId) return;
 
-  const remoteThread = await amux.agentGetThread(daemonThreadId).catch(() => null) as any;
+  const remoteThread = await amux.agentGetThread(daemonThreadId, {
+    messageLimit: resolveReactChatHistoryMessageLimit(
+      useAgentStore.getState().agentSettings.react_chat_history_page_size,
+    ) ?? null,
+  }).catch(() => null) as any;
   const hydrated = buildHydratedRemoteThread(
     (remoteThread ?? {}) as any,
     remoteThread?.agent_name ?? "assistant",

@@ -330,6 +330,11 @@ impl TuiModel {
                                     self.config.max_context_messages = n.clamp(10, 500);
                                 }
                             }
+                            "tui_chat_history_page_size" => {
+                                if let Ok(n) = value.parse::<u32>() {
+                                    self.config.tui_chat_history_page_size = n.clamp(25, 500);
+                                }
+                            }
                             "max_tool_loops" => {
                                 if let Ok(n) = value.parse::<u32>() {
                                     self.config.max_tool_loops = n.clamp(0, 1000);

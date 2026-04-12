@@ -12,8 +12,12 @@ import type {
   ApiTransportMode,
   AuthSource,
 } from "./types.ts";
-
 import { PRIMARY_AGENT_NAME } from "../agentNames.ts";
+import {
+  DEFAULT_CHAT_HISTORY_PAGE_SIZE,
+  normalizeReactChatHistoryPageSize,
+  normalizeTuiChatHistoryPageSize,
+} from "../chatHistoryPageSize.ts";
 
 export type CompactionStrategy = "heuristic" | "weles" | "custom_model";
 
@@ -129,6 +133,8 @@ export interface AgentSettings {
   reasoning_effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
   auto_compact_context: boolean;
   max_context_messages: number;
+  react_chat_history_page_size: number;
+  tui_chat_history_page_size: number;
   max_tool_loops: number;
   max_retries: number;
   retry_delay_ms: number;
@@ -226,6 +232,8 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   reasoning_effort: "high",
   auto_compact_context: true,
   max_context_messages: 100,
+  react_chat_history_page_size: DEFAULT_CHAT_HISTORY_PAGE_SIZE,
+  tui_chat_history_page_size: DEFAULT_CHAT_HISTORY_PAGE_SIZE,
   max_tool_loops: 0,
   max_retries: 3,
   retry_delay_ms: 2000,
@@ -290,6 +298,8 @@ export type DiskAgentSettings = Partial<AgentSettings> & {
   system_prompt?: string;
   auto_compact_context?: boolean;
   max_context_messages?: number;
+  react_chat_history_page_size?: number;
+  tui_chat_history_page_size?: number;
   max_tool_loops?: number;
   max_retries?: number;
   retry_delay_ms?: number;
@@ -435,6 +445,14 @@ export function normalizeAgentSettingsFromSource(source: DiskAgentSettings): Age
     reasoning_effort: (source.reasoning_effort ?? DEFAULT_AGENT_SETTINGS.reasoning_effort) as AgentSettings["reasoning_effort"],
     auto_compact_context: source.auto_compact_context ?? DEFAULT_AGENT_SETTINGS.auto_compact_context,
     max_context_messages: source.max_context_messages ?? DEFAULT_AGENT_SETTINGS.max_context_messages,
+    react_chat_history_page_size: normalizeReactChatHistoryPageSize(
+      source.react_chat_history_page_size
+        ?? DEFAULT_AGENT_SETTINGS.react_chat_history_page_size,
+    ),
+    tui_chat_history_page_size: normalizeTuiChatHistoryPageSize(
+      source.tui_chat_history_page_size
+        ?? DEFAULT_AGENT_SETTINGS.tui_chat_history_page_size,
+    ),
     max_tool_loops: source.max_tool_loops ?? DEFAULT_AGENT_SETTINGS.max_tool_loops,
     max_retries: source.max_retries ?? DEFAULT_AGENT_SETTINGS.max_retries,
     retry_delay_ms: source.retry_delay_ms ?? DEFAULT_AGENT_SETTINGS.retry_delay_ms,

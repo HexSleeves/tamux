@@ -693,7 +693,7 @@ impl TuiModel {
                 if thread_id == active_thread_id {
                     self.request_thread_page(
                         thread_id.to_string(),
-                        chat::CHAT_HISTORY_PAGE_SIZE,
+                        self.chat_history_page_size(),
                         message_offset,
                         false,
                     );

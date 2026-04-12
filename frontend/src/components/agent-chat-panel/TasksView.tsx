@@ -21,6 +21,7 @@ import {
   buildHydratedRemoteMessage,
   useAgentStore,
 } from "../../lib/agentStore";
+import { resolveReactChatHistoryMessageLimit } from "../../lib/chatHistoryPageSize";
 import { useWorkspaceStore } from "../../lib/workspaceStore";
 import { GoalRunPanel } from "./tasks-view/GoalRunPanel";
 import { HeartbeatSection } from "./tasks-view/HeartbeatSection";
@@ -67,6 +68,9 @@ export function TasksView({ onOpenThreadView }: TasksViewProps) {
   const setThreadDaemonId = useAgentStore((state) => state.setThreadDaemonId);
   const setThreadTodos = useAgentStore((state) => state.setThreadTodos);
   const threads = useAgentStore((state) => state.threads);
+  const reactChatHistoryPageSize = useAgentStore(
+    (state) => state.agentSettings.react_chat_history_page_size,
+  );
 
   const refreshTasks = useCallback(async () => {
     const result = await fetchAgentTasks();
@@ -243,6 +247,10 @@ export function TasksView({ onOpenThreadView }: TasksViewProps) {
 
       const remoteThread = (await amux.agentGetThread(
         task.thread_id,
+        {
+          messageLimit:
+            resolveReactChatHistoryMessageLimit(reactChatHistoryPageSize) ?? null,
+        },
       )) as RemoteAgentThread | null;
       if (!remoteThread) {
         return;
@@ -274,6 +282,7 @@ export function TasksView({ onOpenThreadView }: TasksViewProps) {
       amux,
       createThread,
       onOpenThreadView,
+      reactChatHistoryPageSize,
       setActiveThread,
       setThreadDaemonId,
       setThreadTodos,

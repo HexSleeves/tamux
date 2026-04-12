@@ -83,7 +83,24 @@ function registerAgentIpcHandlers(ipcMain, runtime, options = {}) {
     });
     ipcMain.handle('agent-stop-stream', async (_event, threadId) => { try { sendAgentCommand({ type: 'stop-stream', thread_id: threadId }); } catch {} return { ok: true }; });
     ipcMain.handle('agent-list-threads', async () => { try { return await sendAgentQuery({ type: 'list-threads' }, 'thread-list'); } catch { return []; } });
-    ipcMain.handle('agent-get-thread', async (_event, threadId) => { try { return await sendAgentQuery({ type: 'get-thread', thread_id: threadId }, 'thread-detail'); } catch { return null; } });
+    ipcMain.handle('agent-get-thread', async (_event, threadId, options) => {
+        try {
+            const messageLimit = Number.isFinite(options?.messageLimit)
+                ? Number(options.messageLimit)
+                : null;
+            const messageOffset = Number.isFinite(options?.messageOffset)
+                ? Number(options.messageOffset)
+                : null;
+            return await sendAgentQuery({
+                type: 'get-thread',
+                thread_id: threadId,
+                message_limit: messageLimit,
+                message_offset: messageOffset,
+            }, 'thread-detail');
+        } catch {
+            return null;
+        }
+    });
     ipcMain.handle('agent-delete-thread', async (_event, threadId) => { try { sendAgentCommand({ type: 'delete-thread', thread_id: threadId }); return true; } catch { return false; } });
     ipcMain.handle('agent-add-task', async (_event, payload) => {
         try {

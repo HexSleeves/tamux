@@ -385,6 +385,8 @@ impl TuiModel {
         });
         patch["auto_compact_context"] = serde_json::Value::Bool(self.config.auto_compact_context);
         patch["max_context_messages"] = serde_json::Value::from(self.config.max_context_messages);
+        patch["tui_chat_history_page_size"] =
+            serde_json::Value::from(self.config.tui_chat_history_page_size);
         patch["max_tool_loops"] = serde_json::Value::from(self.config.max_tool_loops);
         patch["max_retries"] = serde_json::Value::from(self.config.max_retries);
         patch["retry_delay_ms"] = serde_json::Value::from(self.config.retry_delay_ms);

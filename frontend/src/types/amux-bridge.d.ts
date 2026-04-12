@@ -362,7 +362,13 @@ declare global {
             sessionId?: string | null;
         }) => Promise<{ ok?: boolean; error?: string } | unknown>;
         agentListThreads?: () => Promise<unknown[]>;
-        agentGetThread?: (threadId: string) => Promise<unknown | null>;
+        agentGetThread?: (
+            threadId: string,
+            options?: {
+                messageLimit?: number | null;
+                messageOffset?: number | null;
+            },
+        ) => Promise<unknown | null>;
         openAICodexAuthStatus?: (options?: { refresh?: boolean }) => Promise<AmuxOpenAICodexAuthStatus>;
         openAICodexAuthLogin?: () => Promise<AmuxOpenAICodexAuthLogin>;
         openAICodexAuthLogout?: () => Promise<{ ok: boolean }>;

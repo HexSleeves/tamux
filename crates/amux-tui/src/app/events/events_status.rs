@@ -90,6 +90,8 @@ impl TuiModel {
     pub(in crate::app) fn handle_agent_config_raw_event(&mut self, raw: serde_json::Value) {
         let was_loaded = self.agent_config_loaded;
         self.apply_config_json(&raw);
+        self.chat
+            .set_history_page_size(self.config.tui_chat_history_page_size as usize);
         self.agent_config_loaded = true;
         if self.connected && !was_loaded {
             self.request_concierge_welcome();
