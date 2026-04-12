@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 pub(super) const THREAD_HANDOFF_SYSTEM_MARKER: &str = "[[handoff_event]]";
 pub(super) const INTERNAL_HANDOFF_THREAD_PREFIX: &str = "handoff:";
+const PARTICIPANT_HANDOFF_RETURN_INSTRUCTION: &str =
+    "Remain attached to this thread so ownership can be handed back when your skills are needed again.";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -428,6 +430,7 @@ impl AgentEngine {
         let event_id = format!("handoff_{}", Uuid::new_v4());
         let from_agent_id = state.active_agent_id.clone();
         let stack_depth_before = state.responder_stack.len();
+        let thread_participants = self.list_thread_participants(thread_id).await;
 
         let (to_agent_id, to_agent_name, linked_thread_id, stack_depth_after) = match request.kind {
             ThreadHandoffKind::Push => {
@@ -435,11 +438,39 @@ impl AgentEngine {
                     .target_agent_id
                     .as_deref()
                     .ok_or_else(|| anyhow::anyhow!("push_handoff requires target_agent_id"))?;
-                let (target_agent_id, target_agent_name) =
+                let participant_managed_thread = !thread_participants.is_empty();
+                let (target_agent_id, target_agent_name) = if participant_managed_thread {
+                    let (resolved_id, resolved_name) =
+                        self.resolve_thread_participant_target(target_alias).await?;
+                    let active_participant = thread_participants.iter().find(|participant| {
+                        participant.status == ThreadParticipantStatus::Active
+                            && participant.agent_id.eq_ignore_ascii_case(&resolved_id)
+                    });
+                    if active_participant.is_none() {
+                        anyhow::bail!(
+                            "participant-managed threads may hand off only to active thread participants"
+                        );
+                    }
+                    (resolved_id, resolved_name)
+                } else {
                     resolve_thread_handoff_agent(target_alias)
-                        .ok_or_else(|| anyhow::anyhow!("unknown handoff target: {target_alias}"))?;
+                        .ok_or_else(|| anyhow::anyhow!("unknown handoff target: {target_alias}"))?
+                };
                 if target_agent_id == from_agent_id {
                     anyhow::bail!("cannot hand off a thread to the current active responder");
+                }
+                if participant_managed_thread
+                    && !thread_participants.iter().any(|participant| {
+                        participant.status == ThreadParticipantStatus::Active
+                            && participant.agent_id.eq_ignore_ascii_case(&from_agent_id)
+                    })
+                {
+                    self.upsert_thread_participant(
+                        thread_id,
+                        &from_agent_id,
+                        PARTICIPANT_HANDOFF_RETURN_INSTRUCTION,
+                    )
+                    .await?;
                 }
                 let linked_thread_id = self
                     .ensure_linked_handoff_thread(

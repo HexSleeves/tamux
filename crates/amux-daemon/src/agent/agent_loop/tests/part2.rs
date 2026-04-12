@@ -2091,6 +2091,48 @@ async fn concierge_recovery_fixable_request_invalid_starts_one_background_invest
 }
 
 #[tokio::test]
+async fn concierge_recovery_copilot_missing_tool_call_output_signature_retries() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    let structured = StructuredUpstreamFailure {
+        class: "request_invalid".to_string(),
+        summary: "github-copilot rejected the daemon request as invalid: No tool call found for function call output with call_id call_function_9d83w4vhn3me_1.".to_string(),
+        diagnostics: serde_json::json!({
+            "raw_message": "No tool call found for function call output with call_id call_function_9d83w4vhn3me_1."
+        }),
+    };
+    let mut attempted = std::collections::HashSet::new();
+
+    let disposition = engine
+        .maybe_recover_fixable_upstream_failure(
+            "thread-missing-tool-call",
+            &structured,
+            false,
+            false,
+            &mut attempted,
+        )
+        .await
+        .expect("recovery evaluation should succeed");
+
+    assert!(disposition.started_investigation);
+    assert!(disposition.retry_attempted);
+    assert_eq!(
+        disposition.signature.as_deref(),
+        Some("request-invalid-stale-continuation")
+    );
+
+    let tasks = engine.tasks.lock().await;
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].source, "concierge_recovery");
+    assert_eq!(
+        tasks[0].parent_thread_id.as_deref(),
+        Some("thread-missing-tool-call")
+    );
+}
+
+#[tokio::test]
 async fn concierge_recovery_transport_signature_is_blocked_after_committed_output() {
     let root = tempdir().unwrap();
     let manager = SessionManager::new_test(root.path()).await;

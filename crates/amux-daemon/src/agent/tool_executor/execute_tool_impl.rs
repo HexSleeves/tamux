@@ -356,6 +356,7 @@ pub fn execute_tool<'a>(
         "fetch_provider_models" => execute_fetch_provider_models(&args, agent).await,
         "list_models" => execute_list_models(&args, agent).await,
         "list_agents" => execute_list_agents(agent).await,
+        "list_participants" => execute_list_participants(agent, thread_id).await,
         "switch_model" => execute_switch_model(&args, agent).await,
         "spawn_subagent" => {
             execute_spawn_subagent(

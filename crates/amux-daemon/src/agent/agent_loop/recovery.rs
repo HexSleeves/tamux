@@ -184,6 +184,12 @@ fn classify_fixable_upstream_recovery(
         structured.summary.to_ascii_lowercase(),
         structured.diagnostics.to_string().to_ascii_lowercase()
     );
+    let stale_continuation_like = combined.contains("previous_response_id")
+        || combined.contains("upstream_thread_id")
+        || combined.contains("stale thread")
+        || combined.contains("message stack")
+        || (combined.contains("no tool call found")
+            && combined.contains("function call output"));
 
     match structured.class.as_str() {
         "request_invalid"
@@ -196,23 +202,16 @@ fn classify_fixable_upstream_recovery(
                 action: FixableUpstreamRecoveryAction::RepairThreadStateAndRetry,
             })
         }
-        "request_invalid"
-            if combined.contains("previous_response_id")
-                || combined.contains("upstream_thread_id")
-                || combined.contains("stale thread")
-                || combined.contains("message stack") =>
-        {
+        "request_invalid" if stale_continuation_like => {
             Some(FixableUpstreamRecovery {
                 signature: "request-invalid-stale-continuation".to_string(),
                 action: FixableUpstreamRecoveryAction::RepairThreadStateAndRetry,
             })
         }
         "transport_incompatible"
-            if combined.contains("previous_response_id")
-                || combined.contains("upstream_thread_id")
+            if stale_continuation_like
                 || combined.contains("request body")
-                || combined.contains("payload mismatch")
-                || combined.contains("message stack") =>
+                || combined.contains("payload mismatch") =>
         {
             Some(FixableUpstreamRecovery {
                 signature: "transport-incompatible-request-shape".to_string(),

@@ -393,6 +393,42 @@ async fn execute_list_agents(agent: &AgentEngine) -> Result<String> {
         .map_err(|error| anyhow::anyhow!("failed to serialize agent targets: {error}"))
 }
 
+async fn execute_list_participants(agent: &AgentEngine, thread_id: &str) -> Result<String> {
+    let thread_id = thread_id.trim();
+    if thread_id.is_empty() {
+        anyhow::bail!("list_participants requires a thread context");
+    }
+    if crate::agent::agent_identity::is_internal_dm_thread(thread_id)
+        || crate::agent::is_internal_handoff_thread(thread_id)
+    {
+        anyhow::bail!("list_participants is only available on visible operator threads");
+    }
+
+    let rows = agent
+        .list_thread_participants(thread_id)
+        .await
+        .into_iter()
+        .map(|participant| {
+            serde_json::json!({
+                "agent": participant.agent_id,
+                "name": participant.agent_name,
+                "instruction": participant.instruction,
+                "status": match participant.status {
+                    crate::agent::ThreadParticipantStatus::Active => "active",
+                    crate::agent::ThreadParticipantStatus::Inactive => "inactive",
+                },
+                "created_at": participant.created_at,
+                "updated_at": participant.updated_at,
+                "deactivated_at": participant.deactivated_at,
+                "last_contribution_at": participant.last_contribution_at,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::to_string_pretty(&rows)
+        .map_err(|error| anyhow::anyhow!("failed to serialize thread participants: {error}"))
+}
+
 async fn execute_switch_model(
     args: &serde_json::Value,
     agent: &AgentEngine,
