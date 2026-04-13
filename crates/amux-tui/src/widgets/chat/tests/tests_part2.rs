@@ -30,7 +30,7 @@ fn compaction_artifact_renders_trigger_summary_above_payload_preview() {
     let chat = chat_with_messages(vec![AgentMessage {
         role: MessageRole::Assistant,
         content:
-            "Pre-compaction context: ~182,400 / 200,000 tokens (threshold 160,000)\nrule based"
+            "Pre-compaction context: ~182,400 / 200,000 tokens (threshold 160,000)\nTrigger: message-count\nStrategy: rule based"
                 .into(),
         message_kind: "compaction_artifact".into(),
         ..Default::default()
@@ -51,8 +51,14 @@ fn compaction_artifact_renders_trigger_summary_above_payload_preview() {
     assert!(
         plain_lines
             .iter()
-            .any(|line| line.contains("rule based")),
-        "expected compaction payload preview in rendered lines: {plain_lines:?}"
+            .any(|line| line.contains("Trigger: message-count")),
+        "expected compaction trigger line in rendered lines: {plain_lines:?}"
+    );
+    assert!(
+        plain_lines
+            .iter()
+            .any(|line| line.contains("Strategy: rule based")),
+        "expected compaction strategy line in rendered lines: {plain_lines:?}"
     );
 }
 

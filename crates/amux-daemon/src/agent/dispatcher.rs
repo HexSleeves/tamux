@@ -325,6 +325,16 @@ impl AgentEngine {
                             );
                         }
                     }
+                    if updated.source == "handoff" {
+                        if let Err(error) =
+                            self.record_handoff_task_outcome(&updated, "success").await
+                        {
+                            tracing::warn!(
+                                task_id = %updated.id,
+                                "failed to record handoff success outcome: {error}"
+                            );
+                        }
+                    }
                 }
                 if updated.source == "subagent" {
                     self.record_collaboration_outcome(&updated, "success").await;
@@ -410,6 +420,16 @@ impl AgentEngine {
                 if updated.status == TaskStatus::Failed {
                     self.settle_task_skill_consultations(&updated, "failure")
                         .await;
+                    if updated.source == "handoff" {
+                        if let Err(error) =
+                            self.record_handoff_task_outcome(&updated, "failure").await
+                        {
+                            tracing::warn!(
+                                task_id = %updated.id,
+                                "failed to record handoff failure outcome: {error}"
+                            );
+                        }
+                    }
                 }
                 if updated.source == "subagent"
                     && matches!(updated.status, TaskStatus::Failed | TaskStatus::Cancelled)
@@ -472,5 +492,60 @@ impl AgentEngine {
             self.persist_tasks().await;
             self.emit_task_update(&parent, Some("Subagent update received".into()));
         }
+    }
+
+    async fn record_handoff_task_outcome(&self, task: &AgentTask, outcome: &str) -> Result<()> {
+        let Some(context) = self
+            .get_handoff_learning_context_by_task_id(&task.id)
+            .await?
+        else {
+            return Ok(());
+        };
+
+        let duration_ms = task
+            .started_at
+            .zip(task.completed_at)
+            .map(|(started, completed)| completed.saturating_sub(started));
+        let error_message = if matches!(outcome, "failure") {
+            task.last_error.as_deref().or(task.error.as_deref())
+        } else {
+            None
+        };
+
+        let thread_tokens = if let Some(thread_id) = task.thread_id.as_deref() {
+            let threads = self.threads.read().await;
+            threads
+                .get(thread_id)
+                .map(|thread| thread.total_input_tokens + thread.total_output_tokens)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        let ema_alpha = self.config.read().await.routing.confidence_ema_alpha;
+
+        self.update_handoff_outcome(
+            &context.handoff_log_id,
+            if matches!(outcome, "success") {
+                "completed"
+            } else {
+                "failed"
+            },
+            duration_ms,
+            error_message,
+        )
+        .await?;
+
+        self.record_capability_outcome(
+            &context.to_specialist_id,
+            &context.capability_tags,
+            outcome,
+            context.routing_score,
+            thread_tokens,
+            ema_alpha,
+        )
+        .await?;
+
+        Ok(())
     }
 }

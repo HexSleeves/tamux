@@ -464,19 +464,17 @@ impl ChatState {
                 )
             });
             self.copied_message_feedback =
-                self.copied_message_feedback
-                    .take()
-                    .and_then(|feedback| {
-                        adjust_message_ref_for_deleted_absolute(
-                            feedback.message_ref,
-                            &deleted_thread_id,
-                            deleted_absolute_index,
-                        )
-                        .map(|message_ref| CopiedMessageFeedback {
-                            message_ref,
-                            expires_at_tick: feedback.expires_at_tick,
-                        })
-                    });
+                self.copied_message_feedback.take().and_then(|feedback| {
+                    adjust_message_ref_for_deleted_absolute(
+                        feedback.message_ref,
+                        &deleted_thread_id,
+                        deleted_absolute_index,
+                    )
+                    .map(|message_ref| CopiedMessageFeedback {
+                        message_ref,
+                        expires_at_tick: feedback.expires_at_tick,
+                    })
+                });
             self.bump_render_revision();
         }
     }

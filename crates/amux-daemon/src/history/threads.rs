@@ -716,9 +716,8 @@ impl HistoryStore {
     ) -> Result<()> {
         let source_thread_id = source_thread_id.to_string();
         let source_message_range = source_message_range.map(str::to_string);
-        let source_message_span_json = source_message_span
-            .map(serde_json::to_string)
-            .transpose()?;
+        let source_message_span_json =
+            source_message_span.map(serde_json::to_string).transpose()?;
         let distilled_fact = distilled_fact.to_string();
         let target_file = target_file.to_string();
         let category = category.to_string();

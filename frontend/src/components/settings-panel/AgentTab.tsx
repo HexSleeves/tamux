@@ -803,10 +803,13 @@ export function AgentTab({
                         <option value="custom_model">Custom model</option>
                     </select>
                 </SettingRow>
-                <SettingRow label="Max Context Messages">
+                <SettingRow label="Heuristic Max Context Messages">
                     <NumberInput value={settings.max_context_messages} min={10} max={500}
                         onChange={(value) => updateSetting("max_context_messages", value)} />
                 </SettingRow>
+                <div style={{ marginTop: 4, marginBottom: 8, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                    Applies only to heuristic compaction. WELES and custom-model compaction trigger on token budget only.
+                </div>
                 <SettingRow label="TUI Thread History">
                     <NumberInput
                         value={settings.tui_chat_history_page_size}

@@ -627,8 +627,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_forge_hints_adds_timestamp_and_skips_equivalent_duplicates(
-    ) -> anyhow::Result<()> {
+    async fn apply_forge_hints_adds_timestamp_and_skips_equivalent_duplicates() -> anyhow::Result<()>
+    {
         crate::agent::agent_identity::run_with_agent_scope(
             crate::agent::agent_identity::RADOGOST_AGENT_ID.to_string(),
             async {

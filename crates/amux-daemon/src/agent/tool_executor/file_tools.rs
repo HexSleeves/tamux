@@ -341,7 +341,9 @@ fn parse_harness_update_actions(path: &str, body: &[&str]) -> Result<Vec<Harness
     for line in body {
         if line.starts_with("@@") {
             if !current_hunk.is_empty() {
-                actions.push(build_harness_update_action(path, &current_hunk)?);
+                if hunk_has_changed_lines(&current_hunk) {
+                    actions.push(build_harness_update_action(path, &current_hunk)?);
+                }
                 current_hunk.clear();
             }
             continue;
@@ -350,7 +352,9 @@ fn parse_harness_update_actions(path: &str, body: &[&str]) -> Result<Vec<Harness
     }
 
     if !current_hunk.is_empty() {
-        actions.push(build_harness_update_action(path, &current_hunk)?);
+        if hunk_has_changed_lines(&current_hunk) {
+            actions.push(build_harness_update_action(path, &current_hunk)?);
+        }
     }
 
     if actions.is_empty() {
@@ -358,6 +362,11 @@ fn parse_harness_update_actions(path: &str, body: &[&str]) -> Result<Vec<Harness
     }
 
     Ok(actions)
+}
+
+fn hunk_has_changed_lines(hunk: &[&str]) -> bool {
+    hunk.iter()
+        .any(|line| line.starts_with('+') || line.starts_with('-'))
 }
 
 fn build_harness_update_action(path: &str, hunk: &[&str]) -> Result<HarnessPatchAction> {

@@ -596,6 +596,14 @@ impl<'a> SendMessageRunner<'a> {
             runtime_context_query.as_deref(),
         )
         .await;
+        let structured_memory_summary =
+            crate::agent::memory_context::build_structured_memory_summary(
+                &memory,
+                &memory_paths,
+                runtime_continuity.continuity_summary.as_deref(),
+                runtime_continuity.negative_constraints_context.as_deref(),
+            );
+        let existing_memory_injection_state = engine.get_thread_memory_injection_state(&tid).await;
         let mut system_prompt = if let Some((scope, _marker, inspection_context)) =
             weles_runtime_override.as_ref()
         {
@@ -681,6 +689,18 @@ impl<'a> SendMessageRunner<'a> {
             &active_provider_id,
             &provider_config.model,
         ));
+        if let Some(injection_state) =
+            crate::agent::memory_context::append_structured_memory_summary_if_needed(
+                &mut system_prompt,
+                existing_memory_injection_state.as_ref(),
+                &structured_memory_summary,
+                false,
+            )
+        {
+            engine
+                .set_thread_memory_injection_state(&tid, injection_state)
+                .await;
+        }
         if internal_dm_thread {
             system_prompt.push_str(
                 "\n\n## Internal DM Constraints\n- This thread is an internal DM between agents.\n- Internal DMs are for discussion and coordination only.\n- Do not continue visible-thread work here.\n- Do not call tools in this thread.\n- If a visible thread continuation was explicitly requested, reply briefly here and stop. The daemon will continue the visible thread separately.\n",

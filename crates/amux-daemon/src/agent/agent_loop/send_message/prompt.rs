@@ -22,6 +22,17 @@ impl<'a> SendMessageRunner<'a> {
         let memory = self.engine.current_memory_snapshot().await;
         let causal_guidance = self.engine.build_causal_guidance_summary().await;
         let sub_agents = self.engine.list_sub_agents().await;
+        let structured_memory_summary =
+            crate::agent::memory_context::build_structured_memory_summary(
+                &memory,
+                &self.memory_paths,
+                self.continuity_summary.as_deref(),
+                self.negative_constraints_context.as_deref(),
+            );
+        let existing_memory_injection_state = self
+            .engine
+            .get_thread_memory_injection_state(&self.tid)
+            .await;
         self.system_prompt = build_system_prompt(
             &self.config,
             &self.base_prompt,
@@ -43,6 +54,18 @@ impl<'a> SendMessageRunner<'a> {
             &self.active_provider_id,
             &self.provider_config.model,
         ));
+        if let Some(injection_state) =
+            crate::agent::memory_context::append_structured_memory_summary_if_needed(
+                &mut self.system_prompt,
+                existing_memory_injection_state.as_ref(),
+                &structured_memory_summary,
+                true,
+            )
+        {
+            self.engine
+                .set_thread_memory_injection_state(&self.tid, injection_state)
+                .await;
+        }
         if let Some(recall) = self.onecontext_bootstrap.as_deref() {
             self.system_prompt.push_str("\n\n## OneContext Recall\n");
             self.system_prompt

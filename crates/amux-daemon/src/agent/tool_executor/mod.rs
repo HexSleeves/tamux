@@ -232,6 +232,7 @@ pub(crate) fn search_available_tools_public(
 }
 
 include!("memory_flush.rs");
+include!("memory_tools.rs");
 include!("execute_tool_impl.rs");
 
 include!("parse_args.rs");

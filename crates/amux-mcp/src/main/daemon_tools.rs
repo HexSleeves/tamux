@@ -411,6 +411,48 @@ pub(super) async fn tool_semantic_query(args: &Value) -> Result<Value> {
     }
 }
 
+async fn tool_memory_roundtrip(tool_name: &str, args: &Value) -> Result<Value> {
+    let args_json = serde_json::to_string(args)?;
+    let resp = daemon_roundtrip(ClientMessage::AgentExecuteMemoryTool {
+        tool_name: tool_name.to_string(),
+        args_json,
+    })
+    .await?;
+
+    match resp {
+        DaemonMessage::AgentMemoryToolResult { content } => serde_json::from_str(&content)
+            .map_err(|error| anyhow::anyhow!("invalid daemon memory tool payload: {error}")),
+        DaemonMessage::Error { message } | DaemonMessage::AgentError { message } => {
+            anyhow::bail!("daemon error: {message}")
+        }
+        other => anyhow::bail!("unexpected daemon response: {other:?}"),
+    }
+}
+
+pub(super) async fn tool_read_memory(args: &Value) -> Result<Value> {
+    tool_memory_roundtrip("read_memory", args).await
+}
+
+pub(super) async fn tool_read_user(args: &Value) -> Result<Value> {
+    tool_memory_roundtrip("read_user", args).await
+}
+
+pub(super) async fn tool_read_soul(args: &Value) -> Result<Value> {
+    tool_memory_roundtrip("read_soul", args).await
+}
+
+pub(super) async fn tool_search_memory(args: &Value) -> Result<Value> {
+    tool_memory_roundtrip("search_memory", args).await
+}
+
+pub(super) async fn tool_search_user(args: &Value) -> Result<Value> {
+    tool_memory_roundtrip("search_user", args).await
+}
+
+pub(super) async fn tool_search_soul(args: &Value) -> Result<Value> {
+    tool_memory_roundtrip("search_soul", args).await
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -420,5 +462,23 @@ mod tests {
             source.contains("\"semantic_query\" => tool_semantic_query(args).await"),
             "main dispatch should route semantic_query to tool_semantic_query"
         );
+    }
+
+    #[test]
+    fn memory_tools_are_declared_in_main_dispatch() {
+        let source = include_str!("../main.rs");
+        for route in [
+            "\"read_memory\" => tool_read_memory(args).await",
+            "\"read_user\" => tool_read_user(args).await",
+            "\"read_soul\" => tool_read_soul(args).await",
+            "\"search_memory\" => tool_search_memory(args).await",
+            "\"search_user\" => tool_search_user(args).await",
+            "\"search_soul\" => tool_search_soul(args).await",
+        ] {
+            assert!(
+                source.contains(route),
+                "main dispatch should route memory tool: {route}"
+            );
+        }
     }
 }

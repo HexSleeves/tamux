@@ -174,9 +174,13 @@ function compactMessagesForRequest(
 
   const targetTokens = resolveContextCompactionTargetTokens(settings);
   const maxMessages = Math.max(1, Number(settings.max_context_messages || 100));
+  const strategy = settings.compaction?.strategy ?? "heuristic";
+  const overMessageLimit =
+    strategy === "heuristic" && messages.length > maxMessages;
+  const overTokenLimit = estimateMessageTokens(messages) > targetTokens;
   if (
-    estimateMessageTokens(messages) <= targetTokens &&
-    messages.length <= maxMessages
+    !overTokenLimit &&
+    !overMessageLimit
   ) {
     return messages;
   }

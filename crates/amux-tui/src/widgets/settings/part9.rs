@@ -150,7 +150,7 @@ fn render_advanced_tab<'a>(
         settings,
         config,
         4,
-        "Max Context Msgs:",
+        "Heuristic Max Msgs:",
         config.max_context_messages.to_string(),
         "max_context_messages",
         "  [Enter: edit]",

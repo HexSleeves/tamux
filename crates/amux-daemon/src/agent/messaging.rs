@@ -311,6 +311,20 @@ impl AgentEngine {
                 .await
                 .insert(thread_id.to_string(), client_surface);
         }
+        match thread_metadata.prompt_memory_injection_state {
+            Some(prompt_memory_injection_state) => {
+                self.thread_memory_injection_state_map()
+                    .write()
+                    .await
+                    .insert(thread_id.to_string(), prompt_memory_injection_state);
+            }
+            None => {
+                self.thread_memory_injection_state_map()
+                    .write()
+                    .await
+                    .remove(thread_id);
+            }
+        }
         let handoff_state = normalized_thread_handoff_state(
             thread_id,
             db_thread.agent_name.as_deref(),

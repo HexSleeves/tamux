@@ -8,11 +8,27 @@ struct PromptInspectionSection {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+struct PromptTimestampBlock {
+    local_timestamp: String,
+    utc_timestamp: String,
+    unix_timestamp_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct TrackedThreadMemoryInjectionStateView {
+    thread_id: String,
+    #[serde(flatten)]
+    state: crate::agent::memory_context::PromptMemoryInjectionState,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 struct PromptInspectionPayload {
     agent_id: String,
     agent_name: String,
     provider_id: String,
     model: String,
+    timestamp_block: PromptTimestampBlock,
+    tracked_thread_memory_injection_states: Vec<TrackedThreadMemoryInjectionStateView>,
     sections: Vec<PromptInspectionSection>,
     final_prompt: String,
 }
@@ -44,6 +60,16 @@ fn push_section(
     });
 }
 
+fn build_timestamp_block() -> PromptTimestampBlock {
+    let local_now = chrono::Local::now();
+    let utc_now = chrono::Utc::now();
+    PromptTimestampBlock {
+        local_timestamp: local_now.format("%A, %Y-%m-%d %H:%M:%S %Z").to_string(),
+        utc_timestamp: utc_now.format("%A, %Y-%m-%d %H:%M:%S UTC").to_string(),
+        unix_timestamp_ms: utc_now.timestamp_millis().max(0) as u64,
+    }
+}
+
 fn render_memory_paths_section(memory_paths: &super::task_prompt::MemoryPaths) -> String {
     format!(
         "- MEMORY.md: {}\n- SOUL.md: {}\n- USER.md: {}\n- Use these exact paths when reading or explaining where tamux agent memory lives on this platform.",
@@ -65,7 +91,7 @@ fn render_local_skills_section(
     generated_skills_root: &std::path::Path,
 ) -> String {
     format!(
-        "- Skills root: {}\n- Generated skills: {}\n- Curated local skills live directly under {} (tamux reference docs for terminals, browser, tasks, goals, memory, safety, etc.).\n- Before non-trivial work, use `discover_skills` to find the best tailored to your task, consult MEMORY.md and USER.md, then follow the daemon-provided skill discovery result for this turn.\n- Strong matches require `read_skill` before other substantial tools.\n- Weak matches still point to the best-fit local workflow. Prefer `read_skill` for that candidate first, and use `justify_skill_skip` only if you intentionally bypass it or no local skill fits.\n- When you need clarification or the operator must choose among options, call `ask_questions`. Do not ask clarifying questions in plain text when this tool fits.\n- For `ask_questions`, keep buttons compact with ordered tokens like `A`, `B`, `C`, `D` or `1`, `2`, `3`, and place the full answer text in `content`.\n- `list_skills` remains the raw catalog view, not the decision authority for the task.\n- The `cheatsheet` skill provides a quick reference for all available MCP tools.\n- Prefer reusing an existing skill over inventing a brand-new workflow.",
+        "- Skills root: {}\n- Generated skills: {}\n- Curated local skills live directly under {} (tamux reference docs for terminals, browser, tasks, goals, memory, safety, etc.).\n- Before non-trivial work, use `discover_skills` to find the best tailored to your task, consult MEMORY.md and USER.md, then follow the daemon-provided skill discovery result for this turn.\n- If you call `discover_skills` directly, start with a brief 3-6 word intent query instead of pasting the whole task.\n- Strong matches require `read_skill` before other substantial tools.\n- Weak matches still point to the best-fit local workflow. Prefer `read_skill` for that candidate first, and use `justify_skill_skip` only if you intentionally bypass it or no local skill fits.\n- When you need clarification or the operator must choose among options, call `ask_questions`. Do not ask clarifying questions in plain text when this tool fits.\n- For `ask_questions`, keep buttons compact with ordered tokens like `A`, `B`, `C`, `D` or `1`, `2`, `3`, and place the full answer text in `content`.\n- `list_skills` remains the raw catalog view, not the decision authority for the task.\n- The `cheatsheet` skill provides a quick reference for all available MCP tools.\n- Prefer reusing an existing skill over inventing a brand-new workflow.",
         skills_root.display(),
         generated_skills_root.display(),
         skills_root.display(),
@@ -128,6 +154,51 @@ fn render_terminal_session_discipline_section() -> &'static str {
 
 fn render_large_file_writes_section() -> &'static str {
     "- Avoid giant JSON file payloads when content is large or heavily escaped.\n- Prefer multipart-style `create_file` inputs when available.\n- If you must write through a terminal, prefer a minimal Python writer over brittle shell heredocs.\n- Before executing generated Python, inspect it for unintended side effects. It should only perform the intended file operation and should not add unrelated process, network, or shell behavior."
+}
+
+fn render_prompt_timestamp_block_section(block: &PromptTimestampBlock) -> String {
+    format!(
+        "- Local timestamp: {}\n- UTC timestamp: {}\n- Unix timestamp (ms): {}",
+        block.local_timestamp, block.utc_timestamp, block.unix_timestamp_ms
+    )
+}
+
+fn render_prompt_memory_injection_state_section(
+    states: &[TrackedThreadMemoryInjectionStateView],
+) -> String {
+    if states.is_empty() {
+        return "- No tracked thread memory injection states.\n- This inspection payload is thread-agnostic, so `final_prompt` excludes bootstrap-only structured memory.".to_string();
+    }
+
+    let mut lines = vec![
+        format!("- Tracked thread injection states: {}", states.len()),
+        "- This inspection payload is thread-agnostic, so `final_prompt` excludes bootstrap-only structured memory.".to_string(),
+    ];
+    for entry in states {
+        lines.push(format!(
+            "- Thread `{}`: base_injected={}, base_hash={}, base_updated_at_ms={}, structured_summary_hash={}, injected_after_compaction={}",
+            entry.thread_id,
+            if entry.state.is_base_layer_injected() { "yes" } else { "no" },
+            entry.state
+                .base_markdown_hash
+                .as_deref()
+                .unwrap_or("unknown"),
+            entry.state
+                .base_markdown_updated_at_ms
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            entry.state
+                .structured_summary_hash
+                .as_deref()
+                .unwrap_or("unknown"),
+            if entry.state.injected_after_compaction {
+                "yes"
+            } else {
+                "no"
+            }
+        ));
+    }
+    lines.join("\n")
 }
 
 fn render_subagent_supervision_section(config: &AgentConfig) -> String {
@@ -502,6 +573,18 @@ impl AgentEngine {
         let operator_model_summary = self.build_operator_model_prompt_summary().await;
         let operational_context = self.build_operational_context_summary().await;
         let causal_guidance = self.build_causal_guidance_summary().await;
+        let tracked_thread_memory_injection_states = {
+            let states = self.thread_memory_injection_states.read().await;
+            let mut entries = states
+                .iter()
+                .map(|(thread_id, state)| TrackedThreadMemoryInjectionStateView {
+                    thread_id: thread_id.clone(),
+                    state: state.clone(),
+                })
+                .collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.thread_id.cmp(&right.thread_id));
+            entries
+        };
         let learned_patterns = {
             let store = self.heuristic_store.read().await;
             let patterns = build_learned_patterns_section(&store);
@@ -533,8 +616,15 @@ impl AgentEngine {
             &target.provider_id,
             &target.model,
         ));
-
-        let sections = build_sections(
+        let structured_memory_summary =
+            crate::agent::memory_context::build_structured_memory_summary(
+                &memory,
+                &memory_paths,
+                None,
+                None,
+            );
+        let timestamp_block = build_timestamp_block();
+        let mut sections = build_sections(
             &config,
             &target,
             &memory,
@@ -546,12 +636,32 @@ impl AgentEngine {
             learned_patterns.as_deref(),
             active_skill_gate.as_ref(),
         );
+        push_section(
+            &mut sections,
+            "current_timestamp_block",
+            "Current Timestamp Block",
+            render_prompt_timestamp_block_section(&timestamp_block),
+        );
+        push_section(
+            &mut sections,
+            "structured_memory_summary",
+            "Structured Memory Summary",
+            structured_memory_summary.rendered_markdown.clone(),
+        );
+        push_section(
+            &mut sections,
+            "prompt_memory_injection_state",
+            "Prompt Memory Injection State",
+            render_prompt_memory_injection_state_section(&tracked_thread_memory_injection_states),
+        );
 
         let payload = PromptInspectionPayload {
             agent_id: target.agent_id,
             agent_name: target.agent_name,
             provider_id: target.provider_id,
             model: target.model,
+            timestamp_block,
+            tracked_thread_memory_injection_states,
             sections,
             final_prompt,
         };
@@ -563,6 +673,8 @@ impl AgentEngine {
 #[cfg(test)]
 mod tests {
     use super::render_active_skill_gate_section;
+    use crate::agent::{AgentConfig, AgentEngine, SessionManager};
+    use tempfile::tempdir;
 
     #[test]
     fn active_skill_gate_section_includes_key_gate_fields() {
@@ -588,5 +700,140 @@ mod tests {
         assert!(rendered.contains("Next action: request_approval systematic-debugging"));
         assert!(rendered.contains("Approval required: yes"));
         assert!(rendered.contains("Skill already read: yes"));
+    }
+
+    #[tokio::test]
+    async fn inspect_prompt_reports_structured_summary_without_claiming_it_is_always_injected() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+        let payload: serde_json::Value = serde_json::from_str(
+            &engine
+                .inspect_prompt_json(None)
+                .await
+                .expect("inspect prompt should succeed"),
+        )
+        .expect("inspect prompt should return json");
+
+        let final_prompt = payload
+            .get("final_prompt")
+            .and_then(|value| value.as_str())
+            .expect("payload should include final_prompt");
+        assert!(
+            !final_prompt.contains("## Structured Memory Summary"),
+            "thread-agnostic prompt inspection should not claim the structured summary is always injected into the final prompt"
+        );
+
+        let sections = payload
+            .get("sections")
+            .and_then(|value| value.as_array())
+            .expect("payload should include sections");
+        assert!(
+            sections.iter().any(|section| {
+                section.get("id").and_then(|value| value.as_str())
+                    == Some("structured_memory_summary")
+                    && section
+                        .get("content")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|content| content.contains("## Structured Memory Summary"))
+            }),
+            "inspection output should expose the structured memory summary as a separate section"
+        );
+        assert!(
+            sections.iter().any(|section| {
+                section.get("id").and_then(|value| value.as_str())
+                    == Some("prompt_memory_injection_state")
+            }),
+            "inspection output should expose prompt memory injection state diagnostics"
+        );
+        assert!(
+            sections.iter().any(|section| {
+                section.get("id").and_then(|value| value.as_str())
+                    == Some("current_timestamp_block")
+            }),
+            "inspection output should expose the current timestamp block"
+        );
+
+        let timestamp_block = payload
+            .get("timestamp_block")
+            .and_then(|value| value.as_object())
+            .expect("payload should expose timestamp_block");
+        assert!(timestamp_block.contains_key("local_timestamp"));
+        assert!(timestamp_block.contains_key("utc_timestamp"));
+        assert!(timestamp_block.contains_key("unix_timestamp_ms"));
+
+        let tracked_states = payload
+            .get("tracked_thread_memory_injection_states")
+            .and_then(|value| value.as_array())
+            .expect("payload should expose tracked_thread_memory_injection_states");
+        assert!(
+            tracked_states.is_empty(),
+            "thread-agnostic inspection should not synthesize a single merged memory state"
+        );
+    }
+
+    #[tokio::test]
+    async fn inspect_prompt_exposes_explicit_tracked_thread_memory_injection_states() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        engine
+            .set_thread_memory_injection_state(
+                "thread-explicit-memory-state",
+                crate::agent::memory_context::PromptMemoryInjectionState {
+                    base_markdown_hash: Some("sha256:base".to_string()),
+                    base_markdown_updated_at_ms: Some(111),
+                    soul_markdown_hash: Some("sha256:soul".to_string()),
+                    soul_markdown_updated_at_ms: Some(112),
+                    memory_markdown_hash: Some("sha256:memory".to_string()),
+                    memory_markdown_updated_at_ms: Some(113),
+                    user_markdown_hash: Some("sha256:user".to_string()),
+                    user_markdown_updated_at_ms: Some(114),
+                    structured_summary_hash: Some("sha256:summary".to_string()),
+                    base_markdown_injected_at_ms: Some(115),
+                    injected_after_compaction: true,
+                },
+            )
+            .await;
+
+        let payload: serde_json::Value = serde_json::from_str(
+            &engine
+                .inspect_prompt_json(None)
+                .await
+                .expect("inspect prompt should succeed"),
+        )
+        .expect("inspect prompt should return json");
+
+        let tracked_states = payload
+            .get("tracked_thread_memory_injection_states")
+            .and_then(|value| value.as_array())
+            .expect("payload should expose tracked thread memory injection states");
+        assert_eq!(tracked_states.len(), 1);
+        let state = tracked_states[0]
+            .as_object()
+            .expect("tracked state should be an object");
+        assert_eq!(
+            state.get("thread_id").and_then(|value| value.as_str()),
+            Some("thread-explicit-memory-state")
+        );
+        assert_eq!(
+            state
+                .get("base_markdown_hash")
+                .and_then(|value| value.as_str()),
+            Some("sha256:base")
+        );
+        assert_eq!(
+            state
+                .get("structured_summary_hash")
+                .and_then(|value| value.as_str()),
+            Some("sha256:summary")
+        );
+        assert_eq!(
+            state
+                .get("injected_after_compaction")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
     }
 }

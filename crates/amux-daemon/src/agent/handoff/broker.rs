@@ -7,11 +7,12 @@
 use anyhow::{Context, Result};
 use uuid::Uuid;
 
-use super::profiles::select_specialist;
+use super::profiles::{compute_learned_routing_weights, match_specialist, select_specialist};
 use super::{
-    AcceptanceCriteria, ContextBundle, EpisodeRef, HandoffResult, ValidationResult,
+    AcceptanceCriteria, ContextBundle, EpisodeRef, HandoffResult, RoutingMethod, ValidationResult,
 };
 use crate::agent::engine::AgentEngine;
+use crate::agent::types::RoutingMode;
 
 /// Maximum handoff depth before escalating to operator (HAND-08).
 const MAX_HANDOFF_DEPTH: u8 = 3;
@@ -144,13 +145,81 @@ impl AgentEngine {
 
         // Read broker profiles
         let broker = self.handoff_broker.read().await;
-        let profiles = &broker.profiles;
+        let profiles = broker.profiles.clone();
         let threshold = broker.match_threshold;
+        drop(broker);
         validate_match_threshold(threshold)?;
+        let routing_cfg = self.config.read().await.routing.clone();
+
+        let learned_weights =
+            if routing_cfg.enabled && matches!(routing_cfg.method, RoutingMode::Probabilistic) {
+                let score_rows = self
+                    .load_capability_score_rows(capability_tags)
+                    .await
+                    .context("loading capability score rows for handoff routing")?;
+                compute_learned_routing_weights(
+                    &profiles,
+                    capability_tags,
+                    &score_rows,
+                    &routing_cfg,
+                    crate::history::now_ts() * 1000,
+                )
+            } else {
+                Vec::new()
+            };
+
+        let learned_selection = if learned_weights.len() >= 2 {
+            let weights: Vec<f64> = learned_weights.iter().map(|entry| entry.weight).collect();
+            if let Ok(dist) = rand::distributions::WeightedIndex::new(&weights) {
+                let selected = &learned_weights
+                    [rand::distributions::Distribution::sample(&dist, &mut rand::thread_rng())];
+                if selected.weight >= routing_cfg.confidence_threshold {
+                    Some((selected.profile_idx, selected.weight))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            learned_weights
+                .first()
+                .filter(|entry| entry.weight >= routing_cfg.confidence_threshold)
+                .map(|entry| (entry.profile_idx, entry.weight))
+        };
 
         // Match specialist
-        let selection = select_specialist(profiles, capability_tags, threshold)
-            .context("selecting specialist profile for handoff")?;
+        let selection = if let Some((profile_idx, routing_score)) = learned_selection {
+            super::profiles::RoutingSelection {
+                profile_idx,
+                routing_method: RoutingMethod::Probabilistic,
+                routing_score,
+                fallback_used: false,
+            }
+        } else if matches!(routing_cfg.method, RoutingMode::Deterministic) {
+            if let Some((idx, score)) = match_specialist(&profiles, capability_tags, threshold) {
+                super::profiles::RoutingSelection {
+                    profile_idx: idx,
+                    routing_method: RoutingMethod::Deterministic,
+                    routing_score: score,
+                    fallback_used: false,
+                }
+            } else {
+                super::profiles::RoutingSelection {
+                    profile_idx: profiles.len().saturating_sub(1),
+                    routing_method: RoutingMethod::Deterministic,
+                    routing_score: 0.0,
+                    fallback_used: true,
+                }
+            }
+        } else {
+            let mut fallback = select_specialist(&profiles, capability_tags, threshold)
+                .context("selecting specialist profile for handoff")?;
+            if !learned_weights.is_empty() {
+                fallback.fallback_used = true;
+            }
+            fallback
+        };
         let profile_idx = selection.profile_idx;
         let routing_method = selection.routing_method;
         let routing_score = selection.routing_score;
@@ -161,7 +230,6 @@ impl AgentEngine {
         let specialist_name = specialist.name.clone();
         let specialist_role = specialist.role.clone();
         let system_prompt_snippet = specialist.system_prompt_snippet.clone();
-        drop(broker);
 
         // Assemble context bundle
         let bundle = self

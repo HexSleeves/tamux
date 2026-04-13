@@ -312,20 +312,42 @@ impl AgentEngine {
         &self,
         thread_id: &str,
     ) -> Result<()> {
-        let continuations = {
-            let mut queued = self.deferred_visible_thread_continuations.lock().await;
-            queued.remove(thread_id).unwrap_or_default()
+        let acquired_flush_slot = {
+            let mut active = self.active_visible_thread_continuation_flushes.lock().await;
+            active.insert(thread_id.to_string())
         };
-        for continuation in continuations {
-            self.continue_visible_thread_as_agent(
-                thread_id,
-                &continuation.agent_id,
-                continuation.preferred_session_hint.as_deref(),
-                &continuation.llm_user_content,
-            )
-            .await?;
+        if !acquired_flush_slot {
+            return Ok(());
         }
-        Ok(())
+
+        let result = async {
+            loop {
+                let continuations = {
+                    let mut queued = self.deferred_visible_thread_continuations.lock().await;
+                    queued.remove(thread_id).unwrap_or_default()
+                };
+                if continuations.is_empty() {
+                    break;
+                }
+                for continuation in continuations {
+                    self.continue_visible_thread_as_agent(
+                        thread_id,
+                        &continuation.agent_id,
+                        continuation.preferred_session_hint.as_deref(),
+                        &continuation.llm_user_content,
+                    )
+                    .await?;
+                }
+            }
+            Ok(())
+        }
+        .await;
+
+        self.active_visible_thread_continuation_flushes
+            .lock()
+            .await
+            .remove(thread_id);
+        result
     }
 
     async fn continue_visible_thread_as_agent(

@@ -187,6 +187,77 @@
     }
 
     #[test]
+    fn memory_read_tools_are_exposed_with_injection_aware_schema() {
+        let config = AgentConfig::default();
+        let temp_dir = std::env::temp_dir();
+        let tools = get_available_tools(&config, &temp_dir, false);
+
+        for (tool_name, expected_layers) in [
+            (
+                "read_memory",
+                vec![
+                    "include_base_markdown",
+                    "include_operator_profile_json",
+                    "include_operator_model_summary",
+                    "include_thread_structural_memory",
+                ],
+            ),
+            (
+                "read_user",
+                vec![
+                    "include_base_markdown",
+                    "include_operator_profile_json",
+                    "include_operator_model_summary",
+                    "include_thread_structural_memory",
+                ],
+            ),
+            (
+                "read_soul",
+                vec![
+                    "include_base_markdown",
+                    "include_operator_profile_json",
+                    "include_operator_model_summary",
+                    "include_thread_structural_memory",
+                ],
+            ),
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool.function.name == tool_name)
+                .unwrap_or_else(|| panic!("{tool_name} should be available"));
+            let properties = tool
+                .function
+                .parameters
+                .get("properties")
+                .and_then(|value| value.as_object())
+                .unwrap_or_else(|| panic!("{tool_name} schema should expose properties"));
+
+            assert!(
+                properties.contains_key("include_already_injected"),
+                "{tool_name} should expose include_already_injected"
+            );
+            assert!(
+                properties.contains_key("limit_per_layer"),
+                "{tool_name} should expose limit_per_layer"
+            );
+            for layer in expected_layers {
+                assert!(
+                    properties.contains_key(layer),
+                    "{tool_name} should expose {layer}"
+                );
+                assert_eq!(
+                    properties
+                        .get(layer)
+                        .and_then(|value| value.get("type"))
+                        .and_then(|value| value.as_str()),
+                    Some("boolean"),
+                    "{tool_name} {layer} should be a boolean toggle"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn get_background_task_status_tool_is_exposed_with_expected_schema() {
         let config = AgentConfig::default();
         let temp_dir = std::env::temp_dir();
@@ -288,6 +359,10 @@
             .iter()
             .find(|tool| tool.function.name == "discover_skills")
             .expect("discover_skills tool should be available");
+        assert_eq!(
+            discover_skills.function.description,
+            "Find matching local skills fast."
+        );
 
         let properties = discover_skills
             .function
@@ -299,6 +374,13 @@
         assert!(properties.get("query").is_some(), "schema should include query");
         assert!(properties.get("limit").is_some(), "schema should include limit");
         assert!(properties.get("session").is_some(), "schema should include session");
+        assert_eq!(
+            properties
+                .get("query")
+                .and_then(|value| value.get("description"))
+                .and_then(|value| value.as_str()),
+            Some("Brief intent query, 3-6 words.")
+        );
 
         let required = discover_skills
             .function

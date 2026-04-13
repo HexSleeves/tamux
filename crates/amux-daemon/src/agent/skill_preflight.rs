@@ -12,6 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const MAX_SKILL_PREFLIGHT_MATCHES: usize = 3;
 const SKILL_DISCOVERY_NORMALIZER_MARKER: &str = "[[skill_discovery_query_normalizer]]";
+const SKILL_DISCOVERY_SEMANTIC_SHORTLIST_MARKER: &str = "[[skill_discovery_semantic_shortlist]]";
 const MAX_NORMALIZED_SKILL_QUERY_CHARS: usize = 160;
 const LOCAL_SKILL_DISCOVERY_NORMALIZER_ID: &str = "local-skill-discovery-heuristic";
 pub(crate) const SKILL_DISCOVERY_WORKER_ARG: &str = "__tamux-skill-discovery-worker";
@@ -46,6 +47,18 @@ pub(crate) struct AsyncSkillDiscoveryCompletion {
     pub result: super::skill_recommendation::SkillDiscoveryResult,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SemanticSkillCatalogEntry {
+    record: crate::history::SkillVariantRecord,
+    metadata: crate::agent::skill_recommendation::SkillDocumentMetadata,
+    excerpt: String,
+}
+
+#[derive(Debug, Clone)]
+struct SemanticResearchFallback {
+    result: super::skill_recommendation::SkillDiscoveryResult,
 }
 
 #[cfg(test)]
@@ -152,6 +165,7 @@ impl AgentEngine {
 
         super::skill_recommendation::page_public_discovery_result(
             query,
+            &context.normalized_intent,
             &context.context_tags,
             &context.result,
             &context.cfg,
@@ -233,7 +247,9 @@ impl AgentEngine {
         .await?;
 
         let mut result = completion.result;
-        if should_attempt_query_normalization(query, &result) {
+        let mut normalized_intent = query.trim().to_string();
+        let skills_root = self.history.data_dir().to_path_buf();
+        if cfg.llm_normalize_on_no_match && should_attempt_query_normalization(query, &result) {
             if let Some((normalized_query, normalizer_agent_id)) = self
                 .normalize_skill_discovery_query(query, &context_tags, session_id)
                 .await
@@ -254,7 +270,25 @@ impl AgentEngine {
                         &normalized_query,
                         normalizer_agent_id,
                     );
+                    normalized_intent = normalized_query;
                     result = normalized_completion.result;
+                }
+            }
+        }
+        if should_attempt_semantic_skill_research(&result, &cfg) {
+            if let Some(fallback) = self
+                .attempt_semantic_skill_research(
+                    query,
+                    session_id,
+                    &context_tags,
+                    &skills_root,
+                    &cfg,
+                    limit,
+                )
+                .await
+            {
+                if fallback_result_is_better(&result, &fallback.result) {
+                    result = fallback.result;
                 }
             }
         }
@@ -263,6 +297,7 @@ impl AgentEngine {
             context_tags,
             cfg,
             result,
+            normalized_intent,
             backend_used: "subprocess",
             mesh_degraded: false,
         })
@@ -425,7 +460,7 @@ impl AgentEngine {
         )
         .await;
         let cfg = self.config.read().await.skill_recommendation.clone();
-        let (mut result, mut backend_used, mesh_degraded) = execute_skill_discovery_backend(
+        let (result, mut backend_used, mesh_degraded) = execute_skill_discovery_backend(
             &self.history,
             &skills_root,
             query,
@@ -434,7 +469,10 @@ impl AgentEngine {
             &cfg,
         )
         .await?;
-        let mut result = if should_attempt_query_normalization(query, &result) {
+        let mut normalized_intent = query.trim().to_string();
+        let mut result = if cfg.llm_normalize_on_no_match
+            && should_attempt_query_normalization(query, &result)
+        {
             match self
                 .normalize_skill_discovery_query(query, &context_tags, session_id)
                 .await
@@ -460,6 +498,7 @@ impl AgentEngine {
                         if normalized_mesh_degraded {
                             annotate_mesh_degraded_fallback(&mut normalized_result);
                         }
+                        normalized_intent = normalized_query;
                         normalized_result
                     } else {
                         result
@@ -470,6 +509,23 @@ impl AgentEngine {
         } else {
             result
         };
+        if should_attempt_semantic_skill_research(&result, &cfg) {
+            if let Some(fallback) = self
+                .attempt_semantic_skill_research(
+                    query,
+                    session_id,
+                    &context_tags,
+                    &skills_root,
+                    &cfg,
+                    limit,
+                )
+                .await
+            {
+                if fallback_result_is_better(&result, &fallback.result) {
+                    result = fallback.result;
+                }
+            }
+        }
         if mesh_degraded {
             annotate_mesh_degraded_fallback(&mut result);
         }
@@ -477,6 +533,7 @@ impl AgentEngine {
             context_tags,
             cfg,
             result,
+            normalized_intent,
             backend_used,
             mesh_degraded,
         })
@@ -523,6 +580,102 @@ impl AgentEngine {
         }
 
         Some((normalized_query, normalizer_agent_id))
+    }
+
+    async fn attempt_semantic_skill_research(
+        &self,
+        query: &str,
+        session_id: Option<SessionId>,
+        context_tags: &[String],
+        skills_root: &PathBuf,
+        cfg: &SkillRecommendationConfig,
+        limit: usize,
+    ) -> Option<SemanticResearchFallback> {
+        let catalog = self
+            .load_semantic_skill_catalog(skills_root, cfg)
+            .await
+            .ok()?;
+        if catalog.is_empty() {
+            return None;
+        }
+
+        let research_agent_id = normalization_agent_id_for_query(query);
+        let prompt = build_skill_semantic_shortlist_prompt(query, context_tags, &catalog);
+        let preferred_session_hint = session_id.as_ref().map(ToString::to_string);
+        let response = match self
+            .send_internal_agent_message(
+                MAIN_AGENT_ID,
+                research_agent_id,
+                &prompt,
+                preferred_session_hint.as_deref(),
+            )
+            .await
+        {
+            Ok(result) => result.response,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    researcher = %research_agent_id,
+                    "skill discovery semantic shortlist fallback failed"
+                );
+                return None;
+            }
+        };
+
+        let selected = parse_semantic_skill_shortlist(&response)?;
+        if selected.is_empty() {
+            return None;
+        }
+
+        let result =
+            semantic_shortlist_to_result(&catalog, &selected, cfg, limit, research_agent_id);
+        (!result.recommendations.is_empty()).then_some(SemanticResearchFallback { result })
+    }
+
+    async fn load_semantic_skill_catalog(
+        &self,
+        skills_root: &PathBuf,
+        cfg: &SkillRecommendationConfig,
+    ) -> Result<Vec<SemanticSkillCatalogEntry>> {
+        let mut records = self.history.list_skill_variants(None, 512).await?;
+        if records.is_empty() {
+            super::skill_recommendation::sync_skill_catalog(&self.history, skills_root).await?;
+            records = self.history.list_skill_variants(None, 512).await?;
+        }
+
+        let mut entries = Vec::new();
+        for record in records {
+            if matches!(record.status.as_str(), "archived" | "merged" | "draft") {
+                continue;
+            }
+
+            let (skill_path, metadata_relative_path) =
+                super::skill_recommendation::resolve_skill_document_path(
+                    skills_root,
+                    &record.relative_path,
+                );
+            let Ok(content) = std::fs::read_to_string(&skill_path) else {
+                continue;
+            };
+            entries.push(SemanticSkillCatalogEntry {
+                metadata: super::skill_recommendation::extract_skill_metadata(
+                    &metadata_relative_path,
+                    &content,
+                ),
+                excerpt: content.lines().take(8).collect::<Vec<_>>().join("\n"),
+                record,
+            });
+        }
+
+        entries.sort_by(|left, right| {
+            right
+                .record
+                .use_count
+                .cmp(&left.record.use_count)
+                .then_with(|| left.record.skill_name.cmp(&right.record.skill_name))
+        });
+        entries.truncate(cfg.llm_semantic_search_max_skills.max(1) as usize);
+        Ok(entries)
     }
 }
 
@@ -748,6 +901,7 @@ struct SkillDiscoveryComputation {
     context_tags: Vec<String>,
     cfg: SkillRecommendationConfig,
     result: super::skill_recommendation::SkillDiscoveryResult,
+    normalized_intent: String,
     backend_used: &'static str,
     mesh_degraded: bool,
 }
@@ -788,6 +942,18 @@ fn should_attempt_query_normalization(
             ))
 }
 
+fn should_attempt_semantic_skill_research(
+    result: &super::skill_recommendation::SkillDiscoveryResult,
+    cfg: &SkillRecommendationConfig,
+) -> bool {
+    cfg.llm_semantic_search_on_no_match
+        && result.recommendations.is_empty()
+        && matches!(
+            result.confidence,
+            super::skill_recommendation::SkillRecommendationConfidence::None
+        )
+}
+
 fn normalization_agent_id_for_query(query: &str) -> &'static str {
     let lower = query.to_ascii_lowercase();
     let governance_terms = [
@@ -822,6 +988,47 @@ fn build_skill_discovery_normalization_prompt(query: &str, context_tags: &[Strin
     )
 }
 
+fn build_skill_semantic_shortlist_prompt(
+    query: &str,
+    context_tags: &[String],
+    catalog: &[SemanticSkillCatalogEntry],
+) -> String {
+    let workspace_tags = if context_tags.is_empty() {
+        "none".to_string()
+    } else {
+        context_tags.join(", ")
+    };
+
+    let mut prompt = format!(
+        "{SKILL_DISCOVERY_SEMANTIC_SHORTLIST_MARKER}\nSelect the best local tamux skills for this operator request.\nReturn JSON only in the form {{\"skills\":[\"skill-name\"]}}.\n\nRules:\n- Choose at most 3 skills.\n- Only return skill names from the catalog below.\n- Prefer semantic workflow fit over exact lexical overlap.\n- If nothing fits, return {{\"skills\":[]}}.\n\nWorkspace tags: {workspace_tags}\nOperator request: {query}\nCatalog:\n"
+    );
+
+    for entry in catalog {
+        let summary = entry.metadata.summary.as_deref().unwrap_or("No summary.");
+        let keywords = if entry.metadata.keywords.is_empty() {
+            "none".to_string()
+        } else {
+            entry.metadata.keywords.join(", ")
+        };
+        let triggers = if entry.metadata.triggers.is_empty() {
+            "none".to_string()
+        } else {
+            entry.metadata.triggers.join(", ")
+        };
+        let tags = if entry.record.context_tags.is_empty() {
+            "none".to_string()
+        } else {
+            entry.record.context_tags.join(", ")
+        };
+        prompt.push_str(&format!(
+            "- {skill} | summary={summary} | keywords={keywords} | triggers={triggers} | tags={tags}\n",
+            skill = entry.record.skill_name
+        ));
+    }
+
+    prompt
+}
+
 fn parse_normalized_skill_query(response: &str) -> Option<String> {
     let trimmed = strip_code_fences(response.trim());
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
@@ -835,6 +1042,30 @@ fn parse_normalized_skill_query(response: &str) -> Option<String> {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .and_then(sanitize_normalized_skill_query)
+}
+
+fn parse_semantic_skill_shortlist(response: &str) -> Option<Vec<String>> {
+    let trimmed = strip_code_fences(response.trim());
+    let mut skills = if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        value
+            .get("skills")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .filter_map(sanitize_skill_shortlist_item)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        trimmed
+            .lines()
+            .filter_map(sanitize_skill_shortlist_item)
+            .collect::<Vec<_>>()
+    };
+    skills.dedup();
+    (!skills.is_empty()).then_some(skills)
 }
 
 fn strip_code_fences(input: &str) -> &str {
@@ -866,6 +1097,16 @@ fn sanitize_normalized_skill_query(query: &str) -> Option<String> {
     }
 
     (!normalized.is_empty()).then_some(normalized)
+}
+
+fn sanitize_skill_shortlist_item(item: &str) -> Option<String> {
+    let cleaned = item
+        .trim()
+        .trim_matches('`')
+        .trim_start_matches("- ")
+        .trim_start_matches("* ")
+        .trim();
+    (!cleaned.is_empty()).then(|| cleaned.to_string())
 }
 
 fn heuristic_skill_discovery_query_rewrite(query: &str, context_tags: &[String]) -> Option<String> {
@@ -1007,6 +1248,69 @@ fn annotate_mesh_degraded_fallback(result: &mut super::skill_recommendation::Ski
         } else {
             recommendation.reason = format!("{annotation}; {}", recommendation.reason);
         }
+    }
+}
+
+fn semantic_shortlist_to_result(
+    catalog: &[SemanticSkillCatalogEntry],
+    selected: &[String],
+    cfg: &SkillRecommendationConfig,
+    limit: usize,
+    research_agent_id: &str,
+) -> super::skill_recommendation::SkillDiscoveryResult {
+    let agent_name = canonical_agent_name(research_agent_id);
+    let shortlist_score = (cfg.strong_match_threshold - 0.08)
+        .max(cfg.weak_match_threshold + 0.08)
+        .min((cfg.strong_match_threshold - 0.01).max(cfg.weak_match_threshold));
+    let secondary_score = (shortlist_score - 0.04).max(cfg.weak_match_threshold);
+
+    let mut recommendations = Vec::new();
+    for selected_skill in selected.iter().take(limit.max(1)) {
+        let needle = selected_skill.trim();
+        let Some(entry) = catalog.iter().find(|entry| {
+            entry.record.skill_name.eq_ignore_ascii_case(needle)
+                || entry.record.relative_path.eq_ignore_ascii_case(needle)
+                || entry
+                    .record
+                    .relative_path
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|stem| stem.eq_ignore_ascii_case(needle))
+        }) else {
+            continue;
+        };
+
+        let score = if recommendations.is_empty() {
+            shortlist_score
+        } else {
+            secondary_score
+        };
+        recommendations.push(super::skill_recommendation::SkillRecommendation {
+            record: entry.record.clone(),
+            metadata: entry.metadata.clone(),
+            excerpt: entry.excerpt.clone(),
+            score,
+            reason: format!(
+                "semantic shortlist via {agent_name}; selected from local skill catalog"
+            ),
+        });
+    }
+
+    let confidence = if recommendations.is_empty() {
+        super::skill_recommendation::SkillRecommendationConfidence::None
+    } else {
+        super::skill_recommendation::SkillRecommendationConfidence::Weak
+    };
+    let recommended_action = if recommendations.is_empty() {
+        super::skill_recommendation::SkillRecommendationAction::None
+    } else {
+        super::skill_recommendation::SkillRecommendationAction::ReadSkill
+    };
+
+    super::skill_recommendation::SkillDiscoveryResult {
+        recommendations,
+        confidence,
+        recommended_action,
     }
 }
 
@@ -1808,6 +2112,7 @@ triggers: [bug fix, failure investigation]
         assert_eq!(result.candidates.len(), 1);
         assert_eq!(result.candidates[0].skill_name, "systematic-debugging");
         assert_ne!(result.confidence_tier, "none");
+        assert_eq!(result.normalized_intent, "debug root cause workflow");
         assert!(result.candidates[0]
             .reasons
             .iter()
@@ -1819,6 +2124,72 @@ triggers: [bug fix, failure investigation]
             .pop_front()
             .expect("fallback normalization should call the model");
         assert!(request_body.contains("tamux concierge"));
+    }
+
+    #[tokio::test]
+    async fn discover_skill_recommendations_public_can_use_llm_semantic_search_after_no_match() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+        let base_url = spawn_normalization_server(
+            recorded_bodies.clone(),
+            "{\"skills\":[\"using-git-worktrees\"]}",
+        )
+        .await;
+
+        write_skill(
+            root.path(),
+            "development/superpowers/using-git-worktrees",
+            r#"---
+name: using-git-worktrees
+description: Create an isolated git worktree before risky feature work.
+keywords: [git, worktree, branch, isolation]
+triggers: [isolated workspace, dirty checkout, parallel feature work]
+---
+
+# Using Git Worktrees
+"#,
+        );
+
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.base_url = base_url;
+        config.model = "gpt-5.4-mini".to_string();
+        config.api_key = "test-key".to_string();
+        config.auth_source = AuthSource::ApiKey;
+        config.api_transport = ApiTransport::ChatCompletions;
+        config.auto_retry = false;
+        config.max_retries = 0;
+        config.max_tool_loops = 1;
+        config.skill_recommendation.llm_normalize_on_no_match = false;
+        config.skill_recommendation.llm_semantic_search_on_no_match = true;
+
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+        let result = engine
+            .discover_skill_recommendations_public(
+                "make me a safe isolated copy of this repo so I can work without touching the dirty checkout",
+                None,
+                3,
+                None,
+            )
+            .await
+            .expect("skill discovery should succeed");
+
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].skill_name, "using-git-worktrees");
+        assert_eq!(result.confidence_tier, "weak");
+        assert!(result.candidates[0]
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("semantic shortlist")));
+
+        let request_body = recorded_bodies
+            .lock()
+            .expect("lock recorded bodies")
+            .pop_front()
+            .expect("semantic search fallback should call the model");
+        assert!(request_body.contains("using-git-worktrees"));
     }
 
     #[tokio::test]

@@ -7,6 +7,7 @@ use super::types::*;
 const LOCAL_SKILL_WORKFLOW_PROMPT: &str = "## Local Skills Workflow\n\
      - Tamux runs local skill discovery before non-trivial work and surfaces the ranked result in the runtime prompt and workflow notices.\n\
      - Treat that discovery result as the source of truth instead of relying on raw `list_skills` output.\n\
+     - When you call `discover_skills`, send a very short intent query first: usually 3-6 words, not the full task transcript.\n\
      - If the top match is strong, call `read_skill` for the recommended skill before other substantial tools.\n\
     - Weak matches still point to the best-fit local workflow. Prefer `read_skill` for that candidate first, and use `justify_skill_skip` only if you intentionally bypass it or no local skill fits.\n\
     - When you need clarification or the operator must choose among options, call `ask_questions`. Do not ask clarifying questions in plain text when this tool fits.\n\
@@ -15,9 +16,13 @@ const LOCAL_SKILL_WORKFLOW_PROMPT: &str = "## Local Skills Workflow\n\
      - Use `semantic_query` when you need codebase-wide structure or dependency context before editing.\n";
 
 fn build_time_context_prompt() -> String {
+    let local_now = chrono::Local::now();
+    let utc_now = chrono::Utc::now();
     format!(
-        "## Time Context\n- Current local day: {}\n- Use this when reasoning about today, freshness, and schedule-sensitive work.\n",
-        chrono::Local::now().format("%A, %Y-%m-%d")
+        "## Time Context\n- Current local timestamp: {}\n- Current UTC timestamp: {}\n- Unix timestamp (ms): {}\n- Use this when reasoning about today, freshness, and schedule-sensitive work.\n",
+        local_now.format("%A, %Y-%m-%d %H:%M:%S %Z"),
+        utc_now.format("%A, %Y-%m-%d %H:%M:%S UTC"),
+        utc_now.timestamp_millis()
     )
 }
 
@@ -102,7 +107,8 @@ pub(super) fn build_system_prompt(
              - Skills root: {}\n\
              - Generated skills: {}\n\
              - Curated local skills live directly under {} (tamux reference docs for terminals, browser, tasks, goals, memory, safety, etc.).\n\
-             - Before non-trivial work, consult MEMORY.md and USER.md, then follow the daemon-provided skill discovery result for this turn.\n\
+             - Before non-trivial work, use `read_memory`, `read_user`, and `read_soul` when you need memory recall, then follow the daemon-provided skill discovery result for this turn.\n\
+             - If you call `discover_skills` directly, start with a brief 3-6 word intent query instead of pasting the whole task.\n\
              - Strong matches require `read_skill` before other substantial tools.\n\
              - Weak matches still point to the best-fit local workflow. Prefer `read_skill` for that candidate first, and use `justify_skill_skip` only if you intentionally bypass it or no local skill fits.\n\
              - When you need clarification or the operator must choose among options, call `ask_questions`. Do not ask clarifying questions in plain text when this tool fits.\n\
@@ -148,6 +154,7 @@ pub(super) fn build_system_prompt(
 
     prompt.push_str(
         "\n\n## Recall and Memory Maintenance\n\
+         - Prefer `read_memory`, `read_user`, and `read_soul` for memory recall before raw file reads. They return structured JSON and avoid duplicating already injected fresh base markdown.\n\
          - Use `session_search` or `onecontext_search` when the user asks about prior decisions, existing implementations, or historical debugging context.\n\
          - Use `semantic_query` when you need local package/crate summaries, compose service topology, code import relationships, or learned workspace conventions before editing.\n\
          - For any non-trivial or multi-step task, call `update_todo` early to enter plan mode, then keep that todo list current as work progresses.\n\
@@ -457,10 +464,12 @@ pub(super) fn build_external_agent_prompt(
         memory_paths.soul_path.display(),
         memory_paths.user_path.display(),
     ));
-    context_parts.push(format!(
-        "Time context:\n- Current local day: {}\n",
-        chrono::Local::now().format("%A, %Y-%m-%d")
-    ));
+    let rendered_time_context = build_time_context_prompt();
+    let time_context_body = rendered_time_context
+        .trim()
+        .strip_prefix("## Time Context\n")
+        .unwrap_or(rendered_time_context.trim());
+    context_parts.push(format!("Time context:\n{}\n", time_context_body));
     if !super::agent_identity::is_main_agent_scope(agent_scope_id) {
         context_parts
             .push("USER.md is shared across agents and read-only for this scope.\n".to_string());
@@ -546,7 +555,9 @@ mod tests {
         );
 
         assert!(prompt.contains("## Time Context"));
-        assert!(prompt.contains("Current local day:"));
+        assert!(prompt.contains("Current local timestamp:"));
+        assert!(prompt.contains("Current UTC timestamp:"));
+        assert!(prompt.contains("Unix timestamp (ms):"));
         assert!(prompt.contains("read_skill"));
         assert!(prompt.contains("justify_skill_skip"));
         assert!(prompt.contains("source of truth"));
@@ -566,7 +577,9 @@ mod tests {
         );
 
         assert!(prompt.contains("## Time Context"));
-        assert!(prompt.contains("Current local day:"));
+        assert!(prompt.contains("Current local timestamp:"));
+        assert!(prompt.contains("Current UTC timestamp:"));
+        assert!(prompt.contains("Unix timestamp (ms):"));
         assert!(prompt.contains("read_skill"));
         assert!(prompt.contains("justify_skill_skip"));
         assert!(prompt.contains("source of truth"));
@@ -634,5 +647,38 @@ mod tests {
         assert!(prompt.contains("`ask_questions`"));
         assert!(prompt.contains("Do not ask clarifying questions in plain text"));
         assert!(prompt.contains("buttons must stay compact"));
+    }
+
+    #[tokio::test]
+    async fn system_prompt_prefers_memory_tools_over_raw_memory_file_reads() {
+        let root = tempfile::tempdir().expect("tempdir should succeed");
+        let manager = crate::session_manager::SessionManager::new_test(root.path()).await;
+        let engine =
+            crate::agent::AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+        let prompt = build_system_prompt(
+            &AgentConfig::default(),
+            "Base prompt",
+            &crate::agent::types::AgentMemory::default(),
+            &crate::agent::task_prompt::memory_paths_for_scope(
+                root.path(),
+                crate::agent::agent_identity::MAIN_AGENT_ID,
+            ),
+            crate::agent::agent_identity::MAIN_AGENT_ID,
+            &engine.list_sub_agents().await,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert!(prompt.contains("Prefer `read_memory`, `read_user`, and `read_soul`"));
+        assert!(
+            !prompt.contains("consult MEMORY.md and USER.md"),
+            "system prompt should not keep the old raw-file-first memory guidance"
+        );
     }
 }

@@ -6,7 +6,9 @@
 //! MEMORY.md/USER.md with a `[distilled]` provenance prefix.
 
 use super::*;
-use crate::history::{AgentMessageCursor, AgentMessageSpan, HistoryStore, MemoryDistillationProgressRow};
+use crate::history::{
+    AgentMessageCursor, AgentMessageSpan, HistoryStore, MemoryDistillationProgressRow,
+};
 use amux_protocol::{AgentDbMessage, InboxNotification};
 use chrono::{SecondsFormat, Utc};
 use rusqlite::params;
@@ -197,7 +199,8 @@ pub async fn run_distillation_pass(
                 updated_at_ms: now as i64,
                 agent_id: config.agent_id.clone(),
             };
-            db.upsert_memory_distillation_progress(&progress_row).await?;
+            db.upsert_memory_distillation_progress(&progress_row)
+                .await?;
         }
     }
 
@@ -300,7 +303,8 @@ fn extract_candidates_from_messages(
             );
             if let Some(existing_index) = seen.get(&dedupe_key).copied() {
                 if supporting_ranges[existing_index].insert(index) {
-                    let span = build_source_message_span(messages, &supporting_ranges[existing_index]);
+                    let span =
+                        build_source_message_span(messages, &supporting_ranges[existing_index]);
                     candidates[existing_index].source_message_range = format_source_message_range(
                         &supporting_ranges[existing_index],
                         last_user_message_index,
@@ -1083,8 +1087,7 @@ mod tests {
                 source_message_range: Some("1-1".into()),
                 source_message_span: None,
                 last_processed_cursor: None,
-                distilled_fact: "Use the cargo package name `tamux-daemon` for `cargo -p`."
-                    .into(),
+                distilled_fact: "Use the cargo package name `tamux-daemon` for `cargo -p`.".into(),
                 target_file: "MEMORY.md".into(),
                 category: MemoryCategory::Convention,
                 confidence: 0.62,
@@ -1189,8 +1192,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_undistilled_threads_excludes_equal_timestamp_distillations(
-    ) -> anyhow::Result<()> {
+    async fn list_undistilled_threads_excludes_equal_timestamp_distillations() -> anyhow::Result<()>
+    {
         let root = std::env::temp_dir().join(format!("tamux-distill-test-{}", Uuid::new_v4()));
         let history = HistoryStore::new_test_store(&root).await?;
 
@@ -1283,8 +1286,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_undistilled_threads_ignores_bookkeeping_only_thread_updates(
-    ) -> anyhow::Result<()> {
+    async fn list_undistilled_threads_ignores_bookkeeping_only_thread_updates() -> anyhow::Result<()>
+    {
         let root = std::env::temp_dir().join(format!("tamux-distill-test-{}", Uuid::new_v4()));
         let history = HistoryStore::new_test_store(&root).await?;
 

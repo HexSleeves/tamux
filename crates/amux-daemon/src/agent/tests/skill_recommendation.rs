@@ -327,6 +327,7 @@ triggers: [runtime failure]
 
     let page_one = super::page_public_discovery_result(
         "debug rust failure",
+        "debug rust failure",
         &["rust".to_string()],
         &result,
         &SkillRecommendationConfig::default(),
@@ -337,6 +338,7 @@ triggers: [runtime failure]
     assert!(page_one.next_cursor.is_some());
 
     let page_two = super::page_public_discovery_result(
+        "debug rust failure",
         "debug rust failure",
         &["rust".to_string()],
         &result,

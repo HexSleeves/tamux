@@ -67,6 +67,14 @@ pub(super) struct PreparedLlmRequest {
 pub(super) struct CompactionCandidate {
     pub split_at: usize,
     pub target_tokens: usize,
+    pub trigger: CompactionTrigger,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CompactionTrigger {
+    MessageCount,
+    TokenThreshold,
+    MessageCountAndTokenThreshold,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -548,11 +556,15 @@ pub(super) fn compaction_candidate(
 
     let max_messages = config.max_context_messages.max(1) as usize;
     let target_tokens = effective_context_target_tokens(config, provider_config);
-    if active_messages.len() <= max_messages
-        && estimate_message_tokens(active_messages) <= target_tokens
-    {
-        return None;
-    }
+    let over_message_limit = config.compaction.strategy == CompactionStrategy::Heuristic
+        && active_messages.len() > max_messages;
+    let over_token_limit = estimate_message_tokens(active_messages) > target_tokens;
+    let trigger = match (over_message_limit, over_token_limit) {
+        (false, false) => return None,
+        (true, false) => CompactionTrigger::MessageCount,
+        (false, true) => CompactionTrigger::TokenThreshold,
+        (true, true) => CompactionTrigger::MessageCountAndTokenThreshold,
+    };
 
     let keep_recent = config
         .keep_recent_on_compact
@@ -585,6 +597,7 @@ pub(super) fn compaction_candidate(
     Some(CompactionCandidate {
         split_at,
         target_tokens,
+        trigger,
     })
 }
 
@@ -692,17 +705,35 @@ fn compaction_visible_strategy_label(strategy: CompactionStrategy) -> &'static s
     }
 }
 
+fn compaction_visible_trigger_label(trigger: CompactionTrigger) -> &'static str {
+    match trigger {
+        CompactionTrigger::MessageCount => "message-count",
+        CompactionTrigger::TokenThreshold => "token-threshold",
+        CompactionTrigger::MessageCountAndTokenThreshold => "message-count + token-threshold",
+    }
+}
+
+fn compaction_trigger_detail_value(trigger: CompactionTrigger) -> &'static str {
+    match trigger {
+        CompactionTrigger::MessageCount => "message_count",
+        CompactionTrigger::TokenThreshold => "token_threshold",
+        CompactionTrigger::MessageCountAndTokenThreshold => "message_count_and_token_threshold",
+    }
+}
+
 fn build_compaction_visible_content(
     pre_compaction_total_tokens: usize,
     effective_context_window_tokens: usize,
     target_tokens: usize,
+    trigger: CompactionTrigger,
     strategy_used: CompactionStrategy,
 ) -> String {
     format!(
-        "Pre-compaction context: ~{} / {} tokens (threshold {})\nStrategy: {}",
+        "Pre-compaction context: ~{} / {} tokens (threshold {})\nTrigger: {}\nStrategy: {}",
         format_token_count(pre_compaction_total_tokens),
         format_token_count(effective_context_window_tokens),
         format_token_count(target_tokens),
+        compaction_visible_trigger_label(trigger),
         compaction_visible_strategy_label(strategy_used),
     )
 }
@@ -1722,6 +1753,7 @@ impl AgentEngine {
                 thread_id,
                 &source_messages,
                 candidate.target_tokens,
+                candidate.trigger,
                 pre_compaction_total_tokens,
                 effective_context_window_tokens,
                 config,
@@ -1732,6 +1764,7 @@ impl AgentEngine {
             pre_compaction_total_tokens,
             effective_context_window_tokens,
             candidate.target_tokens,
+            candidate.trigger,
             strategy_used,
         );
 
@@ -1757,6 +1790,7 @@ impl AgentEngine {
             "pre_compaction_total_tokens": pre_compaction_total_tokens,
             "effective_context_window_tokens": effective_context_window_tokens,
             "target_tokens": candidate.target_tokens,
+            "trigger": compaction_trigger_detail_value(candidate.trigger),
             "strategy": strategy_used,
         })
         .to_string();
@@ -1769,6 +1803,7 @@ impl AgentEngine {
                 "thread_id": thread_id,
                 "split_at": split_at,
                 "target_tokens": candidate.target_tokens,
+                "trigger": compaction_trigger_detail_value(candidate.trigger),
                 "message_count": message_count,
                 "strategy": strategy_used,
             }),
@@ -1819,6 +1854,7 @@ impl AgentEngine {
         thread_id: &str,
         messages: &[AgentMessage],
         target_tokens: usize,
+        trigger: CompactionTrigger,
         pre_compaction_total_tokens: usize,
         effective_context_window_tokens: usize,
         config: &AgentConfig,
@@ -1907,6 +1943,7 @@ impl AgentEngine {
             pre_compaction_total_tokens,
             effective_context_window_tokens,
             target_tokens,
+            trigger,
             strategy_used,
         );
 

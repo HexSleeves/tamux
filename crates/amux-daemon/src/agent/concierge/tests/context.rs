@@ -317,3 +317,52 @@ async fn context_summary_hides_weles_internal_threads_and_tasks() {
     assert_eq!(context.pending_tasks.len(), 1);
     assert!(context.pending_tasks[0].contains("real task"));
 }
+
+#[tokio::test]
+async fn context_summary_excludes_internal_dm_threads() {
+    let config = Arc::new(RwLock::new(AgentConfig::default()));
+    let (event_tx, _) = broadcast::channel(8);
+    let circuit_breakers = Arc::new(CircuitBreakerRegistry::from_provider_keys(
+        std::iter::empty(),
+    ));
+    let engine = ConciergeEngine::new(config, event_tx, reqwest::Client::new(), circuit_breakers);
+    let now = test_now_millis();
+    let dm_thread_id = crate::agent::agent_identity::internal_dm_thread_id(
+        crate::agent::agent_identity::MAIN_AGENT_ID,
+        crate::agent::agent_identity::CONCIERGE_AGENT_ID,
+    );
+    let threads = RwLock::new(HashMap::from([
+        (
+            "thread-real".to_string(),
+            thread_with_messages(
+                "thread-real",
+                "Actual work",
+                now - 100,
+                vec![
+                    user_message("fix concierge context", now - 120),
+                    assistant_message("working on it", now - 110),
+                ],
+            ),
+        ),
+        (
+            dm_thread_id.clone(),
+            thread_with_messages(
+                &dm_thread_id,
+                "Internal DM",
+                now,
+                vec![
+                    user_message("Continue Spec 03 work", now - 20),
+                    assistant_message("Proceeding internally", now - 10),
+                ],
+            ),
+        ),
+    ]));
+    let tasks = Mutex::new(std::collections::VecDeque::new());
+
+    let context = engine
+        .gather_context(&threads, &tasks, ConciergeDetailLevel::ContextSummary)
+        .await;
+
+    assert_eq!(context.recent_threads.len(), 1);
+    assert_eq!(context.recent_threads[0].id, "thread-real");
+}

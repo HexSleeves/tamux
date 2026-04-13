@@ -1011,7 +1011,10 @@ fn selected_message_tracks_same_message_when_older_page_is_prepended() {
     let selected_index = state.selected_message().expect("selection should survive");
     let thread = state.active_thread().expect("thread should exist");
     assert_eq!(selected_index, 60);
-    assert_eq!(thread.messages[selected_index].id.as_deref(), Some("msg-80"));
+    assert_eq!(
+        thread.messages[selected_index].id.as_deref(),
+        Some("msg-80")
+    );
 }
 
 #[test]
@@ -1049,7 +1052,10 @@ fn selected_message_tracks_same_message_when_append_trims_latest_window() {
     let selected_index = state.selected_message().expect("selection should survive");
     let thread = state.active_thread().expect("thread should exist");
     assert_eq!(selected_index, 79);
-    assert_eq!(thread.messages[selected_index].id.as_deref(), Some("msg-80"));
+    assert_eq!(
+        thread.messages[selected_index].id.as_deref(),
+        Some("msg-80")
+    );
 }
 
 #[test]
@@ -1134,7 +1140,10 @@ fn expanded_reasoning_and_tools_track_same_messages_across_window_updates() {
         .copied()
         .next()
         .expect("tool expansion should survive");
-    assert_eq!(thread.messages[reasoning_index].id.as_deref(), Some("msg-80"));
+    assert_eq!(
+        thread.messages[reasoning_index].id.as_deref(),
+        Some("msg-80")
+    );
     assert_eq!(thread.messages[tool_index].id.as_deref(), Some("msg-90"));
 
     state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
@@ -1167,7 +1176,10 @@ fn expanded_reasoning_and_tools_track_same_messages_across_window_updates() {
         .copied()
         .next()
         .expect("tool expansion should survive prepend");
-    assert_eq!(thread.messages[reasoning_index].id.as_deref(), Some("msg-80"));
+    assert_eq!(
+        thread.messages[reasoning_index].id.as_deref(),
+        Some("msg-80")
+    );
     assert_eq!(thread.messages[tool_index].id.as_deref(), Some("msg-90"));
 }
 

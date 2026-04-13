@@ -76,11 +76,29 @@ pub const HANDOFF_SCHEMA: &str = "
     CREATE INDEX IF NOT EXISTS idx_handoff_log_specialist ON handoff_log(to_specialist_id);
     CREATE INDEX IF NOT EXISTS idx_handoff_log_outcome ON handoff_log(outcome);
     CREATE INDEX IF NOT EXISTS idx_handoff_log_created ON handoff_log(created_at);
+
+    CREATE TABLE IF NOT EXISTS agent_capability_scores (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id              TEXT NOT NULL,
+        capability_tag        TEXT NOT NULL,
+        attempts              INTEGER NOT NULL DEFAULT 0,
+        successes             INTEGER NOT NULL DEFAULT 0,
+        failures              INTEGER NOT NULL DEFAULT 0,
+        partials              INTEGER NOT NULL DEFAULT 0,
+        last_attempt_ms       INTEGER,
+        avg_confidence_score  REAL NOT NULL DEFAULT 0.5,
+        total_tokens_used     INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(agent_id, capability_tag)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_capability_scores_agent_tag
+        ON agent_capability_scores(agent_id, capability_tag);
+    CREATE INDEX IF NOT EXISTS idx_agent_capability_scores_tag
+        ON agent_capability_scores(capability_tag);
 ";
 
 /// Initialize the handoff schema in the given SQLite connection.
 ///
-/// Creates specialist_profiles and handoff_log tables with indexes.
+/// Creates specialist_profiles, handoff_log, and agent_capability_scores tables with indexes.
 /// Safe to call multiple times (all statements use IF NOT EXISTS).
 pub fn init_handoff_schema(conn: &rusqlite::Connection) -> Result<()> {
     conn.execute_batch(HANDOFF_SCHEMA)?;
@@ -101,6 +119,18 @@ pub fn init_handoff_schema(conn: &rusqlite::Connection) -> Result<()> {
         conn,
         "handoff_log",
         "fallback_used",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        conn,
+        "agent_capability_scores",
+        "avg_confidence_score",
+        "REAL NOT NULL DEFAULT 0.5",
+    )?;
+    ensure_column(
+        conn,
+        "agent_capability_scores",
+        "total_tokens_used",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
     Ok(())

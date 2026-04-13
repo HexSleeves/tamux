@@ -137,6 +137,7 @@ pub(crate) fn is_user_visible_thread(thread: &AgentThread) -> bool {
 
 fn include_thread_in_concierge_context(thread: &AgentThread) -> bool {
     thread.id != CONCIERGE_THREAD_ID
+        && !crate::agent::agent_identity::is_internal_dm_thread(&thread.id)
         && !is_heartbeat_thread(thread)
         && !is_user_visible_thread(thread)
         && thread

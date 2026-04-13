@@ -62,15 +62,246 @@
             })
             .await;
 
-        let result = send_task
-            .await
-            .expect("send task should join")
-            .expect("send should succeed");
-        assert_eq!(result, "Discord message sent to user:123456789");
-    }
+	    let result = send_task
+	        .await
+	        .expect("send task should join")
+	        .expect("send should succeed");
+	    assert_eq!(result, "Discord message sent to user:123456789");
+	}
 
-    #[tokio::test]
-    async fn execute_managed_command_auto_approves_learned_git_category() {
+	async fn spawn_scripted_tool_call_server_for_tool_executor(
+	    script: Vec<Option<(String, String)>>,
+	) -> String {
+	    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+	    use tokio::net::TcpListener;
+
+	    let listener = TcpListener::bind("127.0.0.1:0")
+	        .await
+	        .expect("bind scripted tool call server");
+	    let addr = listener
+	        .local_addr()
+	        .expect("scripted tool call server local addr");
+	    let script = Arc::new(script);
+	    let next_response = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+	    tokio::spawn(async move {
+	        loop {
+	            let Ok((mut socket, _)) = listener.accept().await else {
+	                break;
+	            };
+	            let script = Arc::clone(&script);
+	            let next_response = Arc::clone(&next_response);
+	            tokio::spawn(async move {
+	                let mut buffer = vec![0u8; 65536];
+	                let read = socket
+	                    .read(&mut buffer)
+	                    .await
+	                    .expect("read scripted tool call request");
+	                let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+	                let body = request
+	                    .split("\r\n\r\n")
+	                    .nth(1)
+	                    .unwrap_or_default()
+	                    .to_string();
+	                let response = if body.contains("internal_hidden") {
+	                    concat!(
+	                        "HTTP/1.1 200 OK\r\n",
+	                        "content-type: text/event-stream\r\n",
+	                        "cache-control: no-cache\r\n",
+	                        "connection: close\r\n",
+	                        "\r\n",
+	                        "data: {\"choices\":[{\"delta\":{\"content\":\"Acknowledged.\"}}]}\n\n",
+	                        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+	                        "data: [DONE]\n\n"
+	                    )
+	                    .to_string()
+	                } else {
+	                    let index =
+	                        next_response.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+	                    match script.get(index).and_then(|entry| entry.as_ref()) {
+	                        Some((tool_name, arguments)) => {
+	                            let chunk = serde_json::json!({
+	                                "choices": [{
+	                                    "delta": {
+	                                        "tool_calls": [{
+	                                            "index": 0,
+	                                            "id": format!("call_scripted_{index}"),
+	                                            "function": {
+	                                                "name": tool_name,
+	                                                "arguments": arguments,
+	                                            }
+	                                        }]
+	                                    }
+	                                }],
+	                                "usage": {
+	                                    "prompt_tokens": 7,
+	                                    "completion_tokens": 3
+	                                }
+	                            })
+	                            .to_string();
+	                            format!(
+	                                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\ndata: {chunk}\n\ndata: [DONE]\n\n",
+	                                chunk = chunk
+	                            )
+	                        }
+	                        None => concat!(
+	                            "HTTP/1.1 200 OK\r\n",
+	                            "content-type: text/event-stream\r\n",
+	                            "cache-control: no-cache\r\n",
+	                            "connection: close\r\n",
+	                            "\r\n",
+	                            "data: {\"choices\":[{\"delta\":{\"content\":\"Acknowledged.\"}}]}\n\n",
+	                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+	                            "data: [DONE]\n\n"
+	                        )
+	                        .to_string(),
+	                    }
+	                };
+	                socket
+	                    .write_all(response.as_bytes())
+	                    .await
+	                    .expect("write scripted tool call response");
+	            });
+	        }
+	    });
+
+	    format!("http://{addr}/v1")
+	}
+
+	#[test]
+	fn visible_thread_continuation_chain_does_not_overflow_small_worker_stack() {
+	    let join = std::thread::Builder::new()
+	        .name("continuation-stack-regression".to_string())
+	        .stack_size(256 * 1024)
+	        .spawn(|| {
+	            let runtime = tokio::runtime::Builder::new_multi_thread()
+	                .worker_threads(1)
+	                .enable_all()
+	                .thread_stack_size(256 * 1024)
+	                .build()
+	                .expect("build runtime");
+	            runtime.block_on(async {
+	                let chain_len = 96usize;
+	                let mut script = Vec::with_capacity((chain_len - 1) * 2);
+	                for index in 0..(chain_len - 1) {
+	                    let target = if index % 2 == 0 { "svarog" } else { "weles" };
+	                    script.push(Some((
+	                        "message_agent".to_string(),
+	                        serde_json::json!({
+	                            "target": target,
+	                            "message": format!("continue visible chain step {}", index + 1),
+	                            "request_visible_thread_continuation": true
+	                        })
+	                        .to_string(),
+	                    )));
+	                    script.push(None);
+	                }
+
+	                let root = tempdir().expect("tempdir should succeed");
+	                let manager = SessionManager::new_test(root.path()).await;
+	                let mut config = AgentConfig::default();
+	                config.provider = "openai".to_string();
+	                config.base_url = spawn_scripted_tool_call_server_for_tool_executor(script).await;
+	                config.model = "gpt-4o-mini".to_string();
+	                config.api_key = "test-key".to_string();
+	                config.api_transport = crate::agent::types::ApiTransport::ChatCompletions;
+	                config.auto_retry = false;
+	                config.max_retries = 0;
+	                config.max_tool_loops = 1;
+	                let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+	                let (event_tx, _) = broadcast::channel(8);
+	                let thread_id = "thread-visible-continuation-recursion";
+
+	                {
+	                    let mut threads = engine.threads.write().await;
+	                    threads.insert(
+	                        thread_id.to_string(),
+	                        crate::agent::types::AgentThread {
+	                            id: thread_id.to_string(),
+	                            agent_name: Some(
+	                                crate::agent::agent_identity::MAIN_AGENT_NAME.to_string(),
+	                            ),
+	                            title: "Visible continuation recursion".to_string(),
+	                            messages: vec![crate::agent::types::AgentMessage::user(
+	                                "Keep the visible thread moving forward",
+	                                1,
+	                            )],
+	                            pinned: false,
+	                            upstream_thread_id: None,
+	                            upstream_transport: None,
+	                            upstream_provider: None,
+	                            upstream_model: None,
+	                            upstream_assistant_id: None,
+	                            total_input_tokens: 0,
+	                            total_output_tokens: 0,
+	                            created_at: 1,
+	                            updated_at: 1,
+	                        },
+	                    );
+	                }
+
+	                let tool_call = ToolCall::with_default_weles_review(
+	                    "tool-message-agent-visible-recursion".to_string(),
+	                    ToolFunction {
+	                        name: "message_agent".to_string(),
+	                        arguments: serde_json::json!({
+	                            "target": "weles",
+	                            "message": "Start the visible continuation chain.",
+	                            "request_visible_thread_continuation": true
+	                        })
+	                        .to_string(),
+	                    },
+	                );
+
+	                let result = execute_tool(
+	                    &tool_call,
+	                    &engine,
+	                    thread_id,
+	                    None,
+	                    &manager,
+	                    None,
+	                    &event_tx,
+	                    root.path(),
+	                    &engine.http_client,
+	                    None,
+	                )
+	                .await;
+
+	                assert!(
+	                    !result.is_error,
+	                    "initial visible continuation request should succeed: {}",
+	                    result.content
+	                );
+
+	                engine
+	                    .flush_deferred_visible_thread_continuations(thread_id)
+	                    .await
+	                    .expect("visible continuation chain should flush");
+
+	                let assistant_count = engine
+	                    .threads
+	                    .read()
+	                    .await
+	                    .get(thread_id)
+	                    .expect("visible thread should exist")
+	                    .messages
+	                    .iter()
+	                    .filter(|message| message.role == crate::agent::MessageRole::Assistant)
+	                    .count();
+	                assert!(
+	                    assistant_count >= chain_len,
+	                    "expected at least {chain_len} visible assistant turns, got {assistant_count}"
+	                );
+	            });
+	        })
+	        .expect("spawn regression thread");
+
+	    join.join()
+	        .expect("continuation chain should complete without stack overflow");
+	}
+
+	#[tokio::test]
+	async fn execute_managed_command_auto_approves_learned_git_category() {
         let recorded_bodies = Arc::new(Mutex::new(std::collections::VecDeque::new()));
         let root = tempdir().expect("tempdir should succeed");
         let manager = SessionManager::new_test(root.path()).await;

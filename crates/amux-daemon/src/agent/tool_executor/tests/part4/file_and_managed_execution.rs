@@ -210,6 +210,30 @@ fn apply_patch_reports_expected_change_marker_format() {
 }
 
 #[test]
+fn apply_patch_ignores_context_only_hunks_before_real_changes() {
+    let root = tempdir().expect("tempdir");
+    let existing = root.path().join("existing.txt");
+    std::fs::write(&existing, "alpha\nbeta\nomega\n").expect("write existing file");
+
+    let patch = format!(
+        "*** Begin Patch\n*** Update File: {}\n@@\n alpha\n@@\n alpha\n-beta\n+gamma\n omega\n*** End Patch\n",
+        existing.display(),
+    );
+
+    tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(execute_apply_patch(&serde_json::json!({
+            "input": patch
+        })))
+        .expect("apply_patch should ignore context-only hunks when a later hunk has changes");
+
+    assert_eq!(
+        std::fs::read_to_string(&existing).expect("read existing file"),
+        "alpha\ngamma\nomega\n"
+    );
+}
+
+#[test]
 fn apply_patch_is_classified_like_other_file_mutations() {
     let classification = crate::agent::weles_governance::classify_tool_call(
         "apply_patch",

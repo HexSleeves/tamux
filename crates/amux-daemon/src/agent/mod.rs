@@ -45,6 +45,7 @@ mod heartbeat;
 mod heartbeat_checks;
 mod honcho;
 mod memory;
+mod memory_context;
 mod memory_distillation;
 mod memory_flush;
 mod messaging;
