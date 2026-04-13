@@ -4,10 +4,10 @@ use crate::agent::types::{
     GoalRunStepKind, GoalRunStepStatus, TaskLogLevel, TaskPriority, TaskStatus,
 };
 use amux_protocol::{
-    AgentDbMessage, AgentDbThread, AgentEventRow, AgentStatisticsSnapshot,
-    AgentStatisticsTotals, AgentStatisticsWindow, CommandLogEntry, GatewayHealthState,
-    HistorySearchHit, ModelStatisticsRow, ProviderStatisticsRow, SnapshotIndexEntry,
-    TranscriptIndexEntry, WormChainTip,
+    AgentDbMessage, AgentDbThread, AgentEventRow, AgentStatisticsSnapshot, AgentStatisticsTotals,
+    AgentStatisticsWindow, CommandLogEntry, GatewayHealthState, HistorySearchHit,
+    ModelStatisticsRow, ProviderStatisticsRow, SnapshotIndexEntry, TranscriptIndexEntry,
+    WormChainTip,
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -252,6 +252,59 @@ pub struct GatewayHealthSnapshotRow {
     pub platform: String,
     pub state_json: String,
     pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentMessageCursor {
+    pub created_at: i64,
+    pub message_id: String,
+}
+
+impl AgentMessageCursor {
+    pub fn from_message(message: &AgentDbMessage) -> Self {
+        Self {
+            created_at: message.created_at,
+            message_id: message.id.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentMessageSpan {
+    Range {
+        start: AgentMessageCursor,
+        end: AgentMessageCursor,
+    },
+    LastTurn {
+        message: AgentMessageCursor,
+    },
+}
+
+impl AgentMessageSpan {
+    pub fn legacy_label(&self) -> String {
+        match self {
+            Self::Range { start, end } => format!("{}..{}", start.message_id, end.message_id),
+            Self::LastTurn { .. } => "last_turn".to_string(),
+        }
+    }
+
+    pub fn end_cursor(&self) -> AgentMessageCursor {
+        match self {
+            Self::Range { end, .. } => end.clone(),
+            Self::LastTurn { message } => message.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryDistillationProgressRow {
+    pub source_thread_id: String,
+    pub last_processed_cursor: AgentMessageCursor,
+    pub last_processed_span: Option<AgentMessageSpan>,
+    pub last_run_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub agent_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -519,8 +572,8 @@ mod schema_helpers;
 mod schema_migrations;
 mod schema_sql;
 mod schema_sql_extra;
-mod statistics;
 mod skill_generation;
+mod statistics;
 pub(crate) use skill_generation::page_skill_variants;
 mod skill_metadata;
 pub(crate) use skill_metadata::{derive_skill_metadata, DerivedSkillMetadata};

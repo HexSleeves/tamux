@@ -294,6 +294,7 @@ pub(super) fn extended_schema_sql() -> &'static str {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source_thread_id TEXT NOT NULL,
                 source_message_range TEXT,
+                source_message_span_json TEXT,
                 distilled_fact TEXT NOT NULL,
                 target_file TEXT NOT NULL,
                 category TEXT NOT NULL,
@@ -304,6 +305,17 @@ pub(super) fn extended_schema_sql() -> &'static str {
             );
             CREATE INDEX IF NOT EXISTS idx_distillation_log_thread ON memory_distillation_log(source_thread_id, created_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_distillation_log_applied ON memory_distillation_log(applied_to_memory, created_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS memory_distillation_progress (
+                source_thread_id TEXT PRIMARY KEY,
+                last_processed_created_at_ms INTEGER NOT NULL,
+                last_processed_message_id TEXT NOT NULL,
+                last_processed_span_json TEXT,
+                last_run_at_ms INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL,
+                agent_id TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_distillation_progress_updated ON memory_distillation_progress(updated_at_ms DESC);
 
             CREATE TABLE IF NOT EXISTS forge_pass_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

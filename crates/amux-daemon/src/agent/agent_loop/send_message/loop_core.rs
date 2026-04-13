@@ -70,8 +70,13 @@ impl<'a> SendMessageRunner<'a> {
                 last_user_message.content = self.llm_user_content.to_string();
             }
         }
-        let mut prepared =
-            prepare_llm_request(&request_thread, &self.config, &self.provider_config);
+        let mut prepared = prepare_llm_request_with_reused_user_message(
+            &request_thread,
+            &self.config,
+            &self.provider_config,
+            self.reuse_existing_user_message
+                .then_some(self.llm_user_content),
+        );
         prepared.force_connection_close = compaction_inserted;
         if !self.recorded_compaction_provenance {
             if let Some(candidate) = compaction_candidate(

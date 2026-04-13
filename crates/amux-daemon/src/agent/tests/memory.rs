@@ -39,6 +39,18 @@ fn extract_fact_candidates_uses_subject_before_colon() {
 }
 
 #[test]
+fn extract_fact_candidates_ignore_distilled_prefix_tags() {
+    let facts = extract_memory_fact_candidates(
+        "- [distilled] Shell: bash\n- [Discord — mariuszkurman] editor: helix",
+    );
+    assert_eq!(facts.len(), 2);
+    assert_eq!(facts[0].key, "editor");
+    assert_eq!(facts[0].display, "editor: helix");
+    assert_eq!(facts[1].key, "shell");
+    assert_eq!(facts[1].display, "Shell: bash");
+}
+
+#[test]
 fn contradiction_detection_blocks_conflicting_subject_fact() {
     let err =
         validate_no_memory_contradictions(MemoryTarget::User, "- shell: bash", "- shell: zsh")

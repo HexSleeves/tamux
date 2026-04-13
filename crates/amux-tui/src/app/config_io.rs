@@ -11,6 +11,8 @@ use helpers::{
 
 impl TuiModel {
     pub(super) fn sync_config_to_daemon(&mut self) {
+        self.chat
+            .set_history_page_size(self.config.tui_chat_history_page_size as usize);
         if !self.connected {
             self.status_line = "Config change not saved: daemon is disconnected".to_string();
             return;
@@ -414,6 +416,12 @@ impl TuiModel {
             get_bool("auto_compact_context", "auto_compact_context", true);
         self.config.max_context_messages =
             get_u32("max_context_messages", "max_context_messages", 100);
+        self.config.tui_chat_history_page_size = get_u32(
+            "tui_chat_history_page_size",
+            "tui_chat_history_page_size",
+            100,
+        )
+        .clamp(25, 500);
         self.config.max_tool_loops = get_u32("max_tool_loops", "max_tool_loops", 25);
         self.config.max_retries = get_u32("max_retries", "max_retries", 3);
         self.config.retry_delay_ms = get_u32("retry_delay_ms", "retry_delay_ms", 5_000);

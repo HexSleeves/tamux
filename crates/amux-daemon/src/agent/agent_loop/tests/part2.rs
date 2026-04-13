@@ -2091,6 +2091,48 @@ async fn concierge_recovery_fixable_request_invalid_starts_one_background_invest
 }
 
 #[tokio::test]
+async fn concierge_recovery_copilot_missing_tool_call_output_signature_retries() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    let structured = StructuredUpstreamFailure {
+        class: "request_invalid".to_string(),
+        summary: "github-copilot rejected the daemon request as invalid: No tool call found for function call output with call_id call_function_9d83w4vhn3me_1.".to_string(),
+        diagnostics: serde_json::json!({
+            "raw_message": "No tool call found for function call output with call_id call_function_9d83w4vhn3me_1."
+        }),
+    };
+    let mut attempted = std::collections::HashSet::new();
+
+    let disposition = engine
+        .maybe_recover_fixable_upstream_failure(
+            "thread-missing-tool-call",
+            &structured,
+            false,
+            false,
+            &mut attempted,
+        )
+        .await
+        .expect("recovery evaluation should succeed");
+
+    assert!(disposition.started_investigation);
+    assert!(disposition.retry_attempted);
+    assert_eq!(
+        disposition.signature.as_deref(),
+        Some("request-invalid-stale-continuation")
+    );
+
+    let tasks = engine.tasks.lock().await;
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].source, "concierge_recovery");
+    assert_eq!(
+        tasks[0].parent_thread_id.as_deref(),
+        Some("thread-missing-tool-call")
+    );
+}
+
+#[tokio::test]
 async fn concierge_recovery_transport_signature_is_blocked_after_committed_output() {
     let root = tempdir().unwrap();
     let manager = SessionManager::new_test(root.path()).await;
@@ -2124,7 +2166,7 @@ async fn concierge_recovery_transport_signature_is_blocked_after_committed_outpu
 }
 
 #[tokio::test]
-async fn strong_match_requires_read_skill_before_non_discovery_tool() {
+async fn strong_match_recommends_skill_before_non_discovery_tool_without_blocking() {
     let root = tempdir().unwrap();
     let skill_dir = root.path().join("skills").join("systematic-debugging");
     fs::create_dir_all(&skill_dir).expect("create skills directory");
@@ -2188,7 +2230,7 @@ async fn strong_match_requires_read_skill_before_non_discovery_tool() {
     assert!(!outcome.interrupted_for_approval);
 
     let mut saw_gate_notice = false;
-    let mut saw_gate_result = false;
+    let mut saw_tool_result = false;
     while let Ok(event) = events.try_recv() {
         match event {
             AgentEvent::WorkflowNotice {
@@ -2197,7 +2239,9 @@ async fn strong_match_requires_read_skill_before_non_discovery_tool() {
                 message,
                 ..
             } if event_thread_id == thread_id && kind == "skill-gate" => {
-                if message.contains("read_skill systematic-debugging") {
+                if message.contains("read_skill systematic-debugging")
+                    && message.contains("allowing the tool call to proceed")
+                {
                     saw_gate_notice = true;
                 }
             }
@@ -2208,18 +2252,24 @@ async fn strong_match_requires_read_skill_before_non_discovery_tool() {
                 is_error,
                 ..
             } if event_thread_id == thread_id && name == "read_file" => {
-                saw_gate_result = true;
-                assert!(is_error, "blocked tool should surface as an error result");
+                saw_tool_result = true;
                 assert!(
-                    content.contains("read_skill systematic-debugging"),
-                    "expected blocked tool result to point at the required skill read: {content}"
+                    !is_error,
+                    "recommended skill reads should not block normal tool execution"
+                );
+                assert!(
+                    content.contains("allowed through"),
+                    "expected read_file to run successfully after the advisory notice: {content}"
                 );
             }
             _ => {}
         }
     }
     assert!(saw_gate_notice, "expected a skill gate workflow notice");
-    assert!(saw_gate_result, "expected a blocked read_file tool result");
+    assert!(
+        saw_tool_result,
+        "expected read_file to proceed after the advisory notice"
+    );
 
     let metadata = tokio::time::timeout(std::time::Duration::from_secs(1), async {
         loop {

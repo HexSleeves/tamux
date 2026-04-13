@@ -580,6 +580,176 @@ impl HistoryStore {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
+    pub async fn list_messages_after_cursor(
+        &self,
+        thread_id: &str,
+        after: Option<&AgentMessageCursor>,
+        limit: Option<usize>,
+    ) -> Result<Vec<AgentDbMessage>> {
+        let thread_id = thread_id.to_string();
+        let after = after.cloned();
+        self.conn
+            .call(move |conn| {
+                let messages = match (after.as_ref(), limit) {
+                    (Some(cursor), Some(limit)) => {
+                        let limit = limit.max(1) as i64;
+                        let mut stmt = conn.prepare(
+                            "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
+                             FROM agent_messages \
+                             WHERE thread_id = ?1 AND (created_at > ?2 OR (created_at = ?2 AND id > ?3)) \
+                             ORDER BY created_at ASC, id ASC LIMIT ?4",
+                        )?;
+                        let rows = stmt.query_map(
+                            params![thread_id, cursor.created_at, cursor.message_id, limit],
+                            map_agent_message,
+                        )?;
+                        rows.filter_map(|row| row.ok()).collect()
+                    }
+                    (Some(cursor), None) => {
+                        let mut stmt = conn.prepare(
+                            "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
+                             FROM agent_messages \
+                             WHERE thread_id = ?1 AND (created_at > ?2 OR (created_at = ?2 AND id > ?3)) \
+                             ORDER BY created_at ASC, id ASC",
+                        )?;
+                        let rows = stmt.query_map(
+                            params![thread_id, cursor.created_at, cursor.message_id],
+                            map_agent_message,
+                        )?;
+                        rows.filter_map(|row| row.ok()).collect()
+                    }
+                    (None, Some(limit)) => {
+                        let limit = limit.max(1) as i64;
+                        let mut stmt = conn.prepare(
+                            "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
+                             FROM agent_messages WHERE thread_id = ?1 ORDER BY created_at ASC, id ASC LIMIT ?2",
+                        )?;
+                        let rows = stmt.query_map(params![thread_id, limit], map_agent_message)?;
+                        rows.filter_map(|row| row.ok()).collect()
+                    }
+                    (None, None) => {
+                        let mut stmt = conn.prepare(
+                            "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
+                             FROM agent_messages WHERE thread_id = ?1 ORDER BY created_at ASC, id ASC",
+                        )?;
+                        let rows = stmt.query_map(params![thread_id], map_agent_message)?;
+                        rows.filter_map(|row| row.ok()).collect()
+                    }
+                };
+                Ok(messages)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn get_memory_distillation_progress(
+        &self,
+        source_thread_id: &str,
+    ) -> Result<Option<MemoryDistillationProgressRow>> {
+        let source_thread_id = source_thread_id.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.query_row(
+                    "SELECT source_thread_id, last_processed_created_at_ms, last_processed_message_id, last_processed_span_json, last_run_at_ms, updated_at_ms, agent_id \
+                     FROM memory_distillation_progress WHERE source_thread_id = ?1",
+                    params![source_thread_id],
+                    map_memory_distillation_progress_row,
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn upsert_memory_distillation_progress(
+        &self,
+        progress: &MemoryDistillationProgressRow,
+    ) -> Result<()> {
+        let progress = progress.clone();
+        let last_processed_span_json = progress
+            .last_processed_span
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT INTO memory_distillation_progress \
+                     (source_thread_id, last_processed_created_at_ms, last_processed_message_id, last_processed_span_json, last_run_at_ms, updated_at_ms, agent_id) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+                     ON CONFLICT(source_thread_id) DO UPDATE SET \
+                        last_processed_created_at_ms = excluded.last_processed_created_at_ms, \
+                        last_processed_message_id = excluded.last_processed_message_id, \
+                        last_processed_span_json = excluded.last_processed_span_json, \
+                        last_run_at_ms = excluded.last_run_at_ms, \
+                        updated_at_ms = excluded.updated_at_ms, \
+                        agent_id = excluded.agent_id",
+                    params![
+                        progress.source_thread_id,
+                        progress.last_processed_cursor.created_at,
+                        progress.last_processed_cursor.message_id,
+                        last_processed_span_json,
+                        progress.last_run_at_ms,
+                        progress.updated_at_ms,
+                        progress.agent_id,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn append_memory_distillation_log(
+        &self,
+        source_thread_id: &str,
+        source_message_range: Option<&str>,
+        source_message_span: Option<&AgentMessageSpan>,
+        distilled_fact: &str,
+        target_file: &str,
+        category: &str,
+        confidence: f64,
+        created_at_ms: i64,
+        applied_to_memory: bool,
+        agent_id: &str,
+    ) -> Result<()> {
+        let source_thread_id = source_thread_id.to_string();
+        let source_message_range = source_message_range.map(str::to_string);
+        let source_message_span_json = source_message_span
+            .map(serde_json::to_string)
+            .transpose()?;
+        let distilled_fact = distilled_fact.to_string();
+        let target_file = target_file.to_string();
+        let category = category.to_string();
+        let applied_flag = if applied_to_memory { 1_i64 } else { 0_i64 };
+        let agent_id = agent_id.to_string();
+
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT INTO memory_distillation_log \
+                     (source_thread_id, source_message_range, source_message_span_json, distilled_fact, target_file, category, confidence, created_at_ms, applied_to_memory, agent_id) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    params![
+                        source_thread_id,
+                        source_message_range,
+                        source_message_span_json,
+                        distilled_fact,
+                        target_file,
+                        category,
+                        confidence,
+                        created_at_ms,
+                        applied_flag,
+                        agent_id,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     pub async fn get_worm_chain_tip(&self, kind: &str) -> Result<Option<WormChainTip>> {
         let kind = kind.to_string();
         let kind = kind.to_string();

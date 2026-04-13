@@ -38,10 +38,7 @@ impl AgentEngine {
             return None;
         }
         let model = self.operator_model.read().await;
-        if model.cognitive_style.message_count == 0
-            && model.risk_fingerprint.approval_requests == 0
-            && model.attention_topology.focus_event_count == 0
-        {
+        if !has_operator_satisfaction_signal(&model) {
             return None;
         }
 
@@ -132,6 +129,16 @@ impl AgentEngine {
                 fallback,
             ));
         }
+        lines.push(format!(
+            "- Satisfaction signal: {} ({:.2}); friction markers revisions {}, corrections {}, tool fallbacks {}, fast denials {}",
+            model.operator_satisfaction.label,
+            model.operator_satisfaction.score,
+            model.implicit_feedback.revision_message_count,
+            model.implicit_feedback.correction_message_count,
+            model.implicit_feedback.tool_hesitation_count,
+            model.implicit_feedback.fast_denial_count,
+        ));
+        lines.extend(operator_adaptation_lines(&model));
         if lines.is_empty() {
             return None;
         }
@@ -255,6 +262,7 @@ impl AgentEngine {
                 }
             }
 
+            refresh_operator_satisfaction(&mut model);
             persist_operator_model(&self.data_dir, &model)?;
         }
         self.record_behavioral_event(
@@ -306,6 +314,7 @@ impl AgentEngine {
             .entry(category.to_string())
             .or_insert(0) += 1;
         refresh_risk_metrics(&mut model.risk_fingerprint);
+        refresh_operator_satisfaction(&mut model);
         persist_operator_model(&self.data_dir, &model)?;
         self.record_behavioral_event(
             "approval_requested",
@@ -358,6 +367,7 @@ impl AgentEngine {
             .or_insert(0) += 1;
         model.implicit_feedback.top_tool_fallbacks =
             top_keys(&model.implicit_feedback.fallback_histogram, 3);
+        refresh_operator_satisfaction(&mut model);
         persist_operator_model(&self.data_dir, &model)?;
         self.record_behavioral_event(
             "tool_fallback",
@@ -393,6 +403,7 @@ impl AgentEngine {
         let mut model = self.operator_model.write().await;
         model.last_updated = now;
         record_attention_event(&mut model, &normalized, now);
+        refresh_operator_satisfaction(&mut model);
         persist_operator_model(&self.data_dir, &model)?;
         self.record_behavioral_event(
             "attention_surface",
@@ -469,6 +480,7 @@ impl AgentEngine {
             }
         }
         refresh_risk_metrics(&mut model.risk_fingerprint);
+        refresh_operator_satisfaction(&mut model);
         persist_operator_model(&self.data_dir, &model)?;
         self.record_behavioral_event(
             "approval_resolved",
@@ -568,11 +580,25 @@ impl AgentEngine {
         } else {
             None
         };
+        let operator_model = self.operator_model.read().await.clone();
 
         serde_json::json!({
             "operator_profile_sync_state": sync_state,
             "operator_profile_sync_dirty": sync_state != "clean",
             "operator_profile_scheduler_fallback": false,
+            "operator_satisfaction": {
+                "label": operator_model.operator_satisfaction.label,
+                "score": operator_model.operator_satisfaction.score,
+                "summary": operator_model.diagnostic_summary(),
+                "message_count": operator_model.cognitive_style.message_count,
+                "approval_requests": operator_model.risk_fingerprint.approval_requests,
+                "focus_event_count": operator_model.attention_topology.focus_event_count,
+                "tool_hesitation_count": operator_model.implicit_feedback.tool_hesitation_count,
+                "revision_message_count": operator_model.implicit_feedback.revision_message_count,
+                "correction_message_count": operator_model.implicit_feedback.correction_message_count,
+                "fast_denial_count": operator_model.implicit_feedback.fast_denial_count,
+                "rapid_switch_count": operator_model.attention_topology.rapid_switch_count,
+            },
             "aline": {
                 "available": aline_available,
                 "watcher_state": watcher_state,
@@ -609,4 +635,50 @@ fn fallback_skill_gate_family(recommended_skill: Option<&str>) -> Vec<String> {
     } else {
         vec!["development".to_string()]
     }
+}
+
+fn operator_adaptation_lines(model: &OperatorModel) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    let response_mode = match model.operator_satisfaction.label.as_str() {
+        "strained" => {
+            "- Adaptive response mode: reduce friction aggressively: lead with the answer, keep reasoning minimal, prefer high-confidence actions, avoid repeated retries, and explain tool switches after corrections or fallbacks.".to_string()
+        }
+        "fragile" => {
+            "- Adaptive response mode: tighten the loop: lead with the answer, keep reasoning compact, prefer proven tool paths, and acknowledge adjustments quickly when feedback appears.".to_string()
+        }
+        "healthy" => {
+            "- Adaptive response mode: keep a normal proactive cadence: front-load the answer, keep execution deliberate, and make plan changes explicit when they help reduce friction.".to_string()
+        }
+        "strong" => {
+            "- Adaptive response mode: trust is high, so stay proactive and exploratory when it materially helps, but keep execution disciplined and front-load the answer.".to_string()
+        }
+        _ => {
+            "- Adaptive response mode: keep execution legible, adapt quickly to operator feedback, and avoid unnecessary retries or speculative branches.".to_string()
+        }
+    };
+    lines.push(response_mode);
+
+    let delivery_mode = if model.cognitive_style.prefers_summaries
+        || model.cognitive_style.skips_reasoning
+    {
+        "- Adaptive delivery rule: default to summary-first and keep reasoning on demand unless the operator explicitly asks for detail.".to_string()
+    } else if matches!(model.cognitive_style.reading_depth, ReadingDepth::Deep) {
+        "- Adaptive delivery rule: include fuller reasoning and step-by-step traces when they materially improve confidence or debugging speed.".to_string()
+    } else {
+        "- Adaptive delivery rule: start with the conclusion, then add only the detail needed to support the next action.".to_string()
+    };
+    lines.push(delivery_mode);
+
+    if model.implicit_feedback.tool_hesitation_count > 0 {
+        lines.push(
+            "- Adaptive execution rule: after a failed tool path, prefer the later successful fallback earlier and justify the switch explicitly instead of repeating the same sequence.".to_string(),
+        );
+    } else if model.attention_topology.rapid_switch_count >= 3 {
+        lines.push(
+            "- Adaptive execution rule: attention churn is elevated, so use tighter updates, bounded reads, and fewer concurrent branches.".to_string(),
+        );
+    }
+
+    lines
 }

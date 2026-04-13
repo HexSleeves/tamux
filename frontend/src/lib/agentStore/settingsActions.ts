@@ -1,4 +1,5 @@
 import { getBridge } from "../bridge";
+import { resolveReactChatHistoryMessageLimit } from "../chatHistoryPageSize";
 import { normalizeAgentProviderId } from "./providers";
 import { normalizeDaemonBackedAgentMode } from "./daemonBackedSettings";
 import {
@@ -156,7 +157,11 @@ export function createConciergeActions(
         if (!bridge.agentGetThread) {
           return;
         }
-        const remoteThread = await bridge.agentGetThread("concierge").catch(() => null);
+        const remoteThread = await bridge.agentGetThread("concierge", {
+          messageLimit: resolveReactChatHistoryMessageLimit(
+            get().agentSettings.react_chat_history_page_size,
+          ) ?? null,
+        }).catch(() => null);
         const hydrated = buildHydratedRemoteThread(
           (remoteThread ?? {}) as RemoteAgentThreadRecord,
           get().agentSettings.agent_name,

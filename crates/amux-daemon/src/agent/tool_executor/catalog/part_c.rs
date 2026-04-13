@@ -208,6 +208,10 @@ fn add_available_tools_part_c(
         "type": "object",
         "properties": {}
     })));
+    tools.push(tool_def("list_participants", "List the current thread participants, including active/inactive status and instructions. On participant-managed threads, use this instead of `list_agents` when choosing who can own the thread.", serde_json::json!({
+        "type": "object",
+        "properties": {}
+    })));
     if current_agent_scope_id() == MAIN_AGENT_ID {
         tools.push(tool_def("switch_model", "Update which provider and model a target agent uses as its LLM access point. This writes the same persisted settings the Settings UI edits. Only svarog can call this tool.", serde_json::json!({
             "type": "object",
@@ -253,11 +257,11 @@ fn add_available_tools_part_c(
         },
         "required": ["target", "message"]
     })));
-    tools.push(tool_def("handoff_thread_agent", "Switch the active responder for the current thread. Use this when the operator wants to talk directly to another agent persona or when another agent should own future replies. push_handoff moves responsibility to another agent with a structured summary; return_handoff returns responsibility to the previous responder on the thread handoff stack. Agent-initiated push handoffs require approval outside yolo mode.", serde_json::json!({
+    tools.push(tool_def("handoff_thread_agent", "Switch the active responder for the current thread. Use this when the operator wants to talk directly to another agent persona or when another agent should own future replies. push_handoff moves responsibility to another agent with a structured summary; return_handoff returns responsibility to the previous responder on the thread handoff stack. On participant-managed threads, push_handoff may target only active thread participants. Agent-initiated push handoffs require approval outside yolo mode.", serde_json::json!({
         "type": "object",
         "properties": {
             "action": { "type": "string", "enum": ["push_handoff", "return_handoff"], "description": "push_handoff moves the thread to another agent; return_handoff pops back to the previous responder." },
-            "target_agent_id": { "type": "string", "description": "Required for push_handoff. Agent id or persona name that should take over the thread." },
+            "target_agent_id": { "type": "string", "description": "Required for push_handoff. Agent id or persona name that should take over the thread. On participant-managed threads, this must be an active participant from `list_participants`." },
             "reason": { "type": "string", "description": "Why the handoff is happening." },
             "summary": { "type": "string", "description": "Compact summary the receiving agent should use to continue." },
             "requested_by": { "type": "string", "enum": ["user", "agent"], "description": "Whether this handoff reflects an operator request or the current agent's own judgment." }

@@ -86,6 +86,8 @@ assert(
 
 const configuredDelaySettings = {
   ...DEFAULT_AGENT_SETTINGS,
+  react_chat_history_page_size: 0,
+  tui_chat_history_page_size: 222,
   message_loop_delay_ms: 250,
   tool_call_delay_ms: 750,
   llm_stream_chunk_timeout_secs: 420,
@@ -107,6 +109,16 @@ assert(
 assert(
   configuredDelayDaemonConfig.llm_stream_chunk_timeout_secs === 420,
   "Daemon config should forward LLM stream chunk timeout settings",
+);
+
+assert(
+  configuredDelayDaemonConfig.react_chat_history_page_size === 0,
+  "Daemon config should forward the React unlimited history sentinel",
+);
+
+assert(
+  configuredDelayDaemonConfig.tui_chat_history_page_size === 222,
+  "Daemon config should forward the TUI history page size setting",
 );
 
 assert(

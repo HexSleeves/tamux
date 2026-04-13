@@ -500,6 +500,7 @@
             .expect("apply_patch schema should expose top-level properties");
 
         assert!(properties.get("input").is_some(), "schema should include harness patch input");
+        assert!(properties.get("patch").is_some(), "schema should include patch alias");
         assert!(properties.get("path").is_some(), "schema should include legacy patch path");
         assert!(properties.get("edits").is_some(), "schema should include legacy edits");
     }

@@ -23,7 +23,11 @@ pub(crate) async fn discover_local_skills_via_mesh(
     limit: usize,
     cfg: &SkillRecommendationConfig,
 ) -> Result<SkillDiscoveryResult> {
-    let records = history.list_skill_variants(None, 512).await?;
+    let mut records = history.list_skill_variants(None, 512).await?;
+    if records.is_empty() {
+        crate::agent::skill_recommendation::sync_skill_catalog(history, skills_root).await?;
+        records = history.list_skill_variants(None, 512).await?;
+    }
     let query_tokens = tokenize(query);
     if !cfg.enabled || query_tokens.is_empty() || limit == 0 {
         return Ok(SkillDiscoveryResult::default());
@@ -110,15 +114,13 @@ pub(crate) async fn discover_local_skills_via_mesh(
             search_text,
             built_in: compiled.source_kind == "builtin",
         };
-        let reason = if matched_workspace_tags.is_empty() {
-            format!("mesh synthetic match {}", matched_terms.join(", "))
-        } else {
-            format!(
-                "mesh synthetic match {}; workspace {}",
-                matched_terms.join(", "),
-                matched_workspace_tags.join(", ")
-            )
-        };
+        let reason = build_reason(
+            &record,
+            &matched_terms,
+            &matched_workspace_tags,
+            lexical_overlap,
+            workspace_overlap,
+        );
         recommendations.push(SkillRecommendation {
             record,
             metadata,
@@ -184,6 +186,40 @@ fn tokenize(text: &str) -> BTreeSet<String> {
 fn score_history(record: &SkillVariantRecord) -> f64 {
     let use_score = (record.use_count as f64 / 8.0).clamp(0.0, 1.0);
     (record.success_rate() * 0.65) + (use_score * 0.35)
+}
+
+fn build_reason(
+    record: &SkillVariantRecord,
+    matched_terms: &[String],
+    matched_workspace_tags: &[String],
+    lexical_overlap: f64,
+    workspace_overlap: f64,
+) -> String {
+    let mut reasons = Vec::new();
+    if !matched_terms.is_empty() {
+        reasons.push(format!(
+            "matched request terms {}",
+            matched_terms.join(", ")
+        ));
+    }
+    if !matched_workspace_tags.is_empty() {
+        reasons.push(format!(
+            "matched workspace tags {}",
+            matched_workspace_tags.join(", ")
+        ));
+    }
+    if reasons.is_empty() && lexical_overlap > 0.0 {
+        reasons.push("partial lexical overlap with the request".to_string());
+    }
+    if workspace_overlap > 0.0 && matched_workspace_tags.is_empty() {
+        reasons.push("partial workspace overlap".to_string());
+    }
+    reasons.push(format!(
+        "historical success {:.0}% across {} uses",
+        record.success_rate() * 100.0,
+        record.use_count
+    ));
+    reasons.join("; ")
 }
 
 pub fn policy_decision_for_legacy_discovery(

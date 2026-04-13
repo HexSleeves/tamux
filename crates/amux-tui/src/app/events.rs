@@ -17,7 +17,9 @@ impl TuiModel {
         let normalized_id = thread_id.trim().to_ascii_lowercase();
         let normalized_title = title.unwrap_or_default().trim().to_ascii_lowercase();
         normalized_id.starts_with("handoff:")
+            || normalized_id.starts_with("playground:")
             || normalized_title.starts_with("handoff ")
+            || normalized_title.starts_with("participant playground ")
             || normalized_title == "weles"
             || normalized_title.starts_with("weles ")
     }
@@ -530,11 +532,12 @@ impl TuiModel {
                 );
             }
             ClientEvent::WorkflowNotice {
+                thread_id,
                 kind,
                 message,
                 details,
             } => {
-                self.handle_workflow_notice_event(kind, message, details);
+                self.handle_workflow_notice_event(thread_id, kind, message, details);
             }
             ClientEvent::WelesHealthUpdate {
                 state,

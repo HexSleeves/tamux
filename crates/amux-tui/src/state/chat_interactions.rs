@@ -1,21 +1,26 @@
 use super::*;
 
 impl ChatState {
-    pub fn expanded_reasoning(&self) -> &std::collections::HashSet<usize> {
-        &self.expanded_reasoning
+    pub fn expanded_reasoning(&self) -> std::collections::HashSet<usize> {
+        self.resolve_active_message_ref_set(&self.expanded_reasoning)
     }
 
     pub fn toggle_reasoning(&mut self, msg_index: usize) {
-        if self.expanded_reasoning.contains(&msg_index) {
-            self.expanded_reasoning.remove(&msg_index);
+        let Some(message_ref) = self.message_ref_for_active_index(msg_index) else {
+            return;
+        };
+        if self.expanded_reasoning.contains(&message_ref) {
+            self.expanded_reasoning.remove(&message_ref);
         } else {
-            self.expanded_reasoning.insert(msg_index);
+            self.expanded_reasoning.insert(message_ref);
         }
         self.bump_render_revision();
     }
 
     pub fn selected_message(&self) -> Option<usize> {
         self.selected_message
+            .as_ref()
+            .and_then(|message_ref| self.resolve_active_message_ref(message_ref))
     }
 
     pub fn selected_message_action(&self) -> usize {
@@ -42,17 +47,17 @@ impl ChatState {
     }
 
     pub fn select_message(&mut self, index: Option<usize>) {
-        self.selected_message = index;
+        self.selected_message = index.and_then(|index| self.message_ref_for_active_index(index));
         self.selected_message_action = 0;
         self.bump_render_revision();
     }
 
     pub fn toggle_message_selection(&mut self, index: usize) {
-        if self.selected_message == Some(index) {
+        if self.selected_message() == Some(index) {
             self.selected_message = None;
             self.selected_message_action = 0;
         } else {
-            self.selected_message = Some(index);
+            self.selected_message = self.message_ref_for_active_index(index);
             self.selected_message_action = 0;
         }
         self.bump_render_revision();
@@ -68,14 +73,14 @@ impl ChatState {
             self.selected_message_action = 0;
             return;
         }
-        match self.selected_message {
+        match self.selected_message() {
             None => {
-                self.selected_message = Some(0);
+                self.selected_message = self.message_ref_for_active_index(0);
                 self.selected_message_action = 0;
             }
             Some(index) => {
                 if index + 1 < count {
-                    self.selected_message = Some(index + 1);
+                    self.selected_message = self.message_ref_for_active_index(index + 1);
                     self.selected_message_action = 0;
                 }
             }
@@ -84,35 +89,38 @@ impl ChatState {
     }
 
     pub fn select_prev_message(&mut self) {
-        match self.selected_message {
+        match self.selected_message() {
             None => {
                 let count = self
                     .active_thread()
                     .map(|thread| thread.messages.len())
                     .unwrap_or(0);
                 if count > 0 {
-                    self.selected_message = Some(count - 1);
+                    self.selected_message = self.message_ref_for_active_index(count - 1);
                     self.selected_message_action = 0;
                 }
             }
             Some(0) => {}
             Some(index) => {
-                self.selected_message = Some(index - 1);
+                self.selected_message = self.message_ref_for_active_index(index - 1);
                 self.selected_message_action = 0;
             }
         }
         self.bump_render_revision();
     }
 
-    pub fn expanded_tools(&self) -> &std::collections::HashSet<usize> {
-        &self.expanded_tools
+    pub fn expanded_tools(&self) -> std::collections::HashSet<usize> {
+        self.resolve_active_message_ref_set(&self.expanded_tools)
     }
 
     pub fn toggle_tool_expansion(&mut self, msg_index: usize) {
-        if self.expanded_tools.contains(&msg_index) {
-            self.expanded_tools.remove(&msg_index);
+        let Some(message_ref) = self.message_ref_for_active_index(msg_index) else {
+            return;
+        };
+        if self.expanded_tools.contains(&message_ref) {
+            self.expanded_tools.remove(&message_ref);
         } else {
-            self.expanded_tools.insert(msg_index);
+            self.expanded_tools.insert(message_ref);
         }
         self.bump_render_revision();
     }
@@ -121,10 +129,13 @@ impl ChatState {
         if let Some(thread) = self.active_thread() {
             for (index, message) in thread.messages.iter().enumerate().rev() {
                 if message.role == MessageRole::Assistant && message.reasoning.is_some() {
-                    if self.expanded_reasoning.contains(&index) {
-                        self.expanded_reasoning.remove(&index);
+                    let Some(message_ref) = stored_message_ref(thread, index) else {
+                        return;
+                    };
+                    if self.expanded_reasoning.contains(&message_ref) {
+                        self.expanded_reasoning.remove(&message_ref);
                     } else {
-                        self.expanded_reasoning.insert(index);
+                        self.expanded_reasoning.insert(message_ref);
                     }
                     self.bump_render_revision();
                     return;
@@ -134,12 +145,11 @@ impl ChatState {
     }
 
     pub fn mark_message_copied(&mut self, message_index: usize, expires_at_tick: u64) {
-        let Some(thread_id) = self.active_thread_id.clone() else {
+        let Some(message_ref) = self.message_ref_for_active_index(message_index) else {
             return;
         };
         self.copied_message_feedback = Some(CopiedMessageFeedback {
-            thread_id,
-            message_index,
+            message_ref,
             expires_at_tick,
         });
         self.bump_render_revision();
@@ -161,8 +171,7 @@ impl ChatState {
             .as_ref()
             .is_some_and(|feedback| {
                 current_tick < feedback.expires_at_tick
-                    && self.active_thread_id.as_deref() == Some(feedback.thread_id.as_str())
-                    && feedback.message_index == message_index
+                    && self.resolve_active_message_ref(&feedback.message_ref) == Some(message_index)
             })
     }
 }

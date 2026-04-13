@@ -176,9 +176,33 @@ pub struct RetryStatusVm {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct CopiedMessageFeedback {
+pub(super) struct StoredMessageRef {
     pub(super) thread_id: String,
-    pub(super) message_index: usize,
+    pub(super) message_id: Option<String>,
+    pub(super) absolute_index: usize,
+}
+
+impl PartialEq for StoredMessageRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.thread_id == other.thread_id
+            && self.message_id == other.message_id
+            && self.absolute_index == other.absolute_index
+    }
+}
+
+impl Eq for StoredMessageRef {}
+
+impl std::hash::Hash for StoredMessageRef {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.thread_id.hash(state);
+        self.message_id.hash(state);
+        self.absolute_index.hash(state);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct CopiedMessageFeedback {
+    pub(super) message_ref: StoredMessageRef,
     pub(super) expires_at_tick: u64,
 }
 

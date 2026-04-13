@@ -1191,3 +1191,91 @@ async fn suppressed_session_id_skips_goal_start_episode_recording() {
         "suppressed session ids should prevent per-session episodic recording"
     );
 }
+
+#[tokio::test]
+async fn strained_satisfaction_clamps_new_goal_run_max_replans() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.operator_satisfaction.score = 0.21;
+        model.operator_satisfaction.label = "strained".to_string();
+    }
+
+    let goal = engine
+        .start_goal_run(
+            "reduce background churn".to_string(),
+            Some("Satisfaction clamp".to_string()),
+            Some("thread-satisfaction-goal".to_string()),
+            Some("session-satisfaction-goal".to_string()),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        goal.max_replans, 1,
+        "strained satisfaction should clamp new goal runs to one replan"
+    );
+}
+
+#[tokio::test]
+async fn strained_satisfaction_clamps_goal_task_retries_but_not_regular_tasks() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.max_retries = 4;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.operator_satisfaction.score = 0.23;
+        model.operator_satisfaction.label = "strained".to_string();
+    }
+
+    let goal_task = engine
+        .enqueue_task(
+            "goal step".to_string(),
+            "execute goal-linked work".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "goal_run",
+            Some("goal-satisfaction-retries".to_string()),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    let regular_task = engine
+        .enqueue_task(
+            "regular task".to_string(),
+            "execute non-goal work".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "user",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        goal_task.max_retries, 1,
+        "strained satisfaction should clamp goal-linked task retries to one"
+    );
+    assert_eq!(
+        regular_task.max_retries, 4,
+        "non-goal tasks should keep the configured retry budget"
+    );
+}

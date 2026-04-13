@@ -1,6 +1,7 @@
 use super::*;
 use amux_shared::providers::PROVIDER_ID_OPENAI;
 use tempfile::TempDir;
+use tokio::sync::Notify;
 use tokio::time::{timeout, Duration};
 
 async fn make_runner_test_engine(config: AgentConfig) -> (Arc<AgentEngine>, TempDir) {
@@ -87,6 +88,21 @@ async fn participant_runner_enqueues_suggestion() {
         .upsert_thread_participant(thread_id, "weles", "verify claims")
         .await
         .expect("participant should register");
+    {
+        let mut streams = engine.stream_cancellations.lock().await;
+        streams.insert(
+            thread_id.to_string(),
+            StreamCancellationEntry {
+                generation: 1,
+                token: CancellationToken::new(),
+                retry_now: Arc::new(Notify::new()),
+                started_at: 1,
+                last_progress_at: 1,
+                last_progress_kind: StreamProgressKind::Started,
+                last_progress_excerpt: String::new(),
+            },
+        );
+    }
 
     timeout(
         Duration::from_secs(2),
@@ -1092,5 +1108,164 @@ async fn participant_prompt_compacts_older_visible_messages() {
     assert!(
         !prompt.contains("older assistant detail that should compact away"),
         "older visible assistant content should be compacted out of the observer prompt: {prompt}"
+    );
+}
+
+#[tokio::test]
+async fn participant_observer_executes_tools_in_hidden_playground_and_queues_only_final_message() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+
+    tokio::spawn(async move {
+        let mut request_count = 0usize;
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let body = read_http_request_body(&mut socket)
+                .await
+                .expect("read request");
+            request_count += 1;
+            let response_body = match request_count {
+                1 => {
+                    assert!(
+                        body.contains("Role: participant observer"),
+                        "first request should start the hidden participant observer turn"
+                    );
+                    concat!(
+                        "data: {\"id\":\"chatcmpl_participant_playground_tool_1\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_participant_list_threads\",\"function\":{\"name\":\"list_threads\",\"arguments\":\"{}\"}}]}}]}\n\n",
+                        "data: {\"id\":\"chatcmpl_participant_playground_tool_1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+                        "data: [DONE]\n\n"
+                    )
+                }
+                _ => {
+                    assert!(
+                        body.contains("call_participant_list_threads"),
+                        "follow-up request should include the hidden tool call result"
+                    );
+                    concat!(
+                        "data: {\"id\":\"chatcmpl_participant_playground_tool_2\",\"choices\":[{\"delta\":{\"content\":\"FORCE: no\\nMESSAGE: Verified via tool.\"}}]}\n\n",
+                        "data: {\"id\":\"chatcmpl_participant_playground_tool_2\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":4}}\n\n",
+                        "data: [DONE]\n\n"
+                    )
+                }
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+        }
+    });
+
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = format!("http://{addr}/v1");
+    config.model = "gpt-5.4-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.auth_source = AuthSource::ApiKey;
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 2;
+    let (engine, _temp_dir) = make_runner_test_engine(config).await;
+    let thread_id = "thread_participant_playground_tool_queue";
+
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Participant playground tool queue".to_string(),
+            messages: vec![AgentMessage::user("Check claim X", 1)],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            created_at: 1,
+            updated_at: 1,
+        },
+    );
+    engine
+        .upsert_thread_participant(thread_id, "weles", "verify claims")
+        .await
+        .expect("participant should register");
+    {
+        let mut streams = engine.stream_cancellations.lock().await;
+        streams.insert(
+            thread_id.to_string(),
+            StreamCancellationEntry {
+                generation: 1,
+                token: CancellationToken::new(),
+                retry_now: Arc::new(Notify::new()),
+                started_at: 1,
+                last_progress_at: 1,
+                last_progress_kind: StreamProgressKind::Started,
+                last_progress_excerpt: String::new(),
+            },
+        );
+    }
+
+    timeout(
+        Duration::from_secs(2),
+        engine.run_participant_observers(thread_id),
+    )
+    .await
+    .expect("participant observer should finish")
+    .expect("participant observer should succeed");
+
+    let suggestions = engine.list_thread_participant_suggestions(thread_id).await;
+    assert_eq!(suggestions.len(), 1);
+    assert_eq!(suggestions[0].instruction, "Verified via tool.");
+
+    let visible_thread = engine
+        .get_thread(thread_id)
+        .await
+        .expect("visible thread should still exist");
+    assert_eq!(
+        visible_thread
+            .messages
+            .iter()
+            .filter(|message| message.role == MessageRole::Assistant)
+            .count(),
+        0,
+        "only the final queued participant suggestion should be surfaced, not hidden playground chatter"
+    );
+    assert!(
+        visible_thread
+            .messages
+            .iter()
+            .all(|message| !message.content.contains("[TOOL_CALL]")),
+        "hidden tool-call markup must not leak into the visible thread"
+    );
+
+    let playground_thread_id =
+        crate::agent::agent_identity::participant_playground_thread_id(thread_id, "weles");
+    let playground_thread = engine
+        .get_thread_filtered(&playground_thread_id, true, None, 0)
+        .await
+        .expect("hidden participant playground thread should exist")
+        .thread;
+    assert!(
+        playground_thread
+            .messages
+            .iter()
+            .any(|message| message.role == MessageRole::Tool),
+        "tool execution should stay inside the hidden participant playground"
+    );
+    assert!(
+        playground_thread.messages.iter().any(|message| {
+            message.role == MessageRole::Assistant
+                && message.content == "FORCE: no\nMESSAGE: Verified via tool."
+        }),
+        "the final hidden participant response should stay in the playground thread"
     );
 }

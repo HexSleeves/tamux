@@ -973,7 +973,10 @@ impl AgentEngine {
         content: &str,
     ) -> Result<()> {
         if let Some(thread_id) = thread_id {
-            if is_internal_dm_thread(thread_id) || is_internal_handoff_thread(thread_id) {
+            if is_internal_dm_thread(thread_id)
+                || is_participant_playground_thread(thread_id)
+                || is_internal_handoff_thread(thread_id)
+            {
                 anyhow::bail!(
                     "internal delegate continuation requires a visible operator thread, not an internal thread"
                 );

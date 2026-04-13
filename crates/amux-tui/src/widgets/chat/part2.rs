@@ -25,8 +25,8 @@ fn build_rendered_lines(
                 mode,
                 theme,
                 content_width,
-                expanded,
-                expanded_tools,
+                &expanded,
+                &expanded_tools,
             );
             if msg.role == MessageRole::Assistant {
                 if let Some(label) = responder_labels.get(idx).and_then(|value| value.as_deref()) {
@@ -37,7 +37,7 @@ fn build_rendered_lines(
                 append_tool_file_chip(first_line, msg, theme);
             }
             let mut kinds =
-                classify_message_lines(msg, idx, mode, inner_width, expanded, expanded_tools);
+                classify_message_lines(msg, idx, mode, inner_width, &expanded, &expanded_tools);
 
             if kinds.len() < msg_lines.len() {
                 kinds.resize(msg_lines.len(), RenderedLineKind::MessageBody);
@@ -288,11 +288,14 @@ fn responder_label_line(label: &str, theme: &ThemeTokens) -> Line<'static> {
 }
 
 fn responder_accent_style(label: &str, theme: &ThemeTokens) -> Style {
+    if !label.starts_with('@') {
+        return theme.accent_assistant;
+    }
+
     let palette = [
         theme.accent_primary,
         theme.accent_secondary,
-        theme.accent_success,
-        theme.accent_assistant,
+        theme.accent_danger,
         Style::default().fg(Color::Indexed(111)),
         Style::default().fg(Color::Indexed(180)),
     ];

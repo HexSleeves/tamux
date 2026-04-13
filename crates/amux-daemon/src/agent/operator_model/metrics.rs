@@ -344,3 +344,67 @@ pub(crate) fn risk_tolerance_label(value: RiskTolerance) -> &'static str {
         RiskTolerance::Aggressive => "aggressive",
     }
 }
+
+pub(crate) fn satisfaction_label(score: f64) -> &'static str {
+    // Boundary semantics are intentional and should stay aligned with tests/diagnostics.
+    // [0.00, 0.35) => strained
+    // [0.35, 0.55) => fragile
+    // [0.55, 0.80) => healthy
+    // [0.80, 1.00] => strong
+    if score < 0.35 {
+        "strained"
+    } else if score < 0.55 {
+        "fragile"
+    } else if score < 0.8 {
+        "healthy"
+    } else {
+        "strong"
+    }
+}
+
+fn normalize_satisfaction_score(score: f64) -> f64 {
+    (score.clamp(0.0, 1.0) * 100.0).round() / 100.0
+}
+
+pub(crate) fn refresh_operator_satisfaction(model: &mut OperatorModel) {
+    let approval_rate = if model.risk_fingerprint.approval_requests > 0 {
+        model.risk_fingerprint.approvals as f64 / model.risk_fingerprint.approval_requests as f64
+    } else {
+        0.5
+    };
+
+    let fast_positive_approval_bonus = if model.risk_fingerprint.approval_requests > 0
+        && model.risk_fingerprint.avg_response_time_secs <= 8.0
+        && model.risk_fingerprint.approvals > model.risk_fingerprint.denials
+    {
+        0.08
+    } else {
+        0.0
+    };
+
+    let friction = model.implicit_feedback.tool_hesitation_count as f64 * 0.12
+        + model.implicit_feedback.revision_message_count as f64 * 0.10
+        + model.implicit_feedback.correction_message_count as f64 * 0.16
+        + model.implicit_feedback.fast_denial_count as f64 * 0.18
+        + model.attention_topology.rapid_switch_count.min(10) as f64 * 0.03;
+
+    let score = normalize_satisfaction_score(
+        0.7 + approval_rate * 0.2 + fast_positive_approval_bonus - friction,
+    );
+    model.operator_satisfaction.score = score;
+    model.operator_satisfaction.label = if has_operator_satisfaction_signal(model) {
+        satisfaction_label(score).to_string()
+    } else {
+        "unknown".to_string()
+    };
+}
+
+pub(crate) fn has_operator_satisfaction_signal(model: &OperatorModel) -> bool {
+    model.cognitive_style.message_count > 0
+        || model.risk_fingerprint.approval_requests > 0
+        || model.attention_topology.focus_event_count > 0
+        || model.implicit_feedback.tool_hesitation_count > 0
+        || model.implicit_feedback.revision_message_count > 0
+        || model.implicit_feedback.correction_message_count > 0
+        || model.implicit_feedback.fast_denial_count > 0
+}

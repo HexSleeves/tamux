@@ -110,6 +110,29 @@ pub(super) fn map_agent_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Age
     })
 }
 
+pub(super) fn map_memory_distillation_progress_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<MemoryDistillationProgressRow> {
+    let span_json: Option<String> = row.get(3)?;
+    let last_processed_span = span_json
+        .as_deref()
+        .map(|json| serde_json::from_str::<AgentMessageSpan>(json))
+        .transpose()
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+
+    Ok(MemoryDistillationProgressRow {
+        source_thread_id: row.get(0)?,
+        last_processed_cursor: AgentMessageCursor {
+            created_at: row.get(1)?,
+            message_id: row.get(2)?,
+        },
+        last_processed_span,
+        last_run_at_ms: row.get(4)?,
+        updated_at_ms: row.get(5)?,
+        agent_id: row.get(6)?,
+    })
+}
+
 pub(super) fn map_transcript_index_entry(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<TranscriptIndexEntry> {

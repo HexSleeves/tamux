@@ -138,11 +138,13 @@ fn whatsapp_status_events_update_modal_state() {
         model.modal.whatsapp_link().phase(),
         crate::state::modal::WhatsAppLinkPhase::Error
     );
-    assert!(model
-        .modal
-        .whatsapp_link()
-        .status_text()
-        .contains("scan timeout"));
+    assert!(
+        model
+            .modal
+            .whatsapp_link()
+            .status_text()
+            .contains("scan timeout")
+    );
 
     model.handle_client_event(ClientEvent::WhatsAppLinkDisconnected {
         reason: Some("socket closed".to_string()),
@@ -151,11 +153,13 @@ fn whatsapp_status_events_update_modal_state() {
         model.modal.whatsapp_link().phase(),
         crate::state::modal::WhatsAppLinkPhase::Disconnected
     );
-    assert!(model
-        .modal
-        .whatsapp_link()
-        .status_text()
-        .contains("socket closed"));
+    assert!(
+        model
+            .modal
+            .whatsapp_link()
+            .status_text()
+            .contains("socket closed")
+    );
 }
 
 #[test]
@@ -394,6 +398,7 @@ fn operator_question_event_does_not_replace_existing_modal() {
 fn operator_profile_workflow_warning_surfaces_retry_notice() {
     let mut model = make_model();
     model.handle_client_event(ClientEvent::WorkflowNotice {
+        thread_id: None,
         kind: "operator-profile-warning".to_string(),
         message: "Operator profile operation failed".to_string(),
         details: Some("{\"retry_action\":\"request_concierge_welcome\"}".to_string()),
@@ -405,6 +410,33 @@ fn operator_profile_workflow_warning_surfaces_retry_notice() {
         rendered.0.contains("Ctrl+R"),
         "warning notice should include retry hint"
     );
+}
+
+#[test]
+fn auto_compaction_workflow_notice_requests_page_containing_artifact() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-compaction".to_string(),
+        title: "Compaction".to_string(),
+        agent_name: Some("Swarog".to_string()),
+    });
+    model.chat.reduce(chat::ChatAction::SelectThread(
+        "thread-compaction".to_string(),
+    ));
+
+    model.handle_client_event(ClientEvent::WorkflowNotice {
+        thread_id: Some("thread-compaction".to_string()),
+        kind: "auto-compaction".to_string(),
+        message: "Auto compaction applied using heuristic.".to_string(),
+        details: Some("{\"split_at\":20,\"total_message_count\":121}".to_string()),
+    });
+
+    let (thread_id, message_limit, message_offset) =
+        next_thread_request(&mut daemon_rx).expect("expected targeted thread reload request");
+    assert_eq!(thread_id, "thread-compaction");
+    assert_eq!(message_limit, Some(chat::CHAT_HISTORY_PAGE_SIZE));
+    assert_eq!(message_offset, Some(100));
 }
 
 #[test]
@@ -766,11 +798,13 @@ fn approval_required_in_background_thread_shows_notice_without_modal() {
 
     assert_eq!(model.modal.top(), None);
     assert_eq!(model.approval.pending_approvals().len(), 1);
-    assert!(model
-        .input_notice_style()
-        .expect("approval banner should be visible")
-        .0
-        .contains("Ctrl+A"));
+    assert!(
+        model
+            .input_notice_style()
+            .expect("approval banner should be visible")
+            .0
+            .contains("Ctrl+A")
+    );
 }
 
 #[test]
@@ -1380,6 +1414,7 @@ fn hidden_handoff_threads_are_filtered_from_thread_list() {
 #[test]
 fn thread_list_requests_detail_for_selected_thread_with_only_summary_data() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.config.tui_chat_history_page_size = 123;
 
     model.chat.reduce(chat::ChatAction::ThreadListReceived(vec![
         crate::state::chat::AgentThread {
@@ -1406,7 +1441,7 @@ fn thread_list_requests_detail_for_selected_thread_with_only_summary_data() {
             message_offset,
         }) => {
             assert_eq!(thread_id, "thread-user");
-            assert_eq!(message_limit, Some(50));
+            assert_eq!(message_limit, Some(123));
             assert_eq!(message_offset, Some(0));
         }
         other => panic!("expected thread detail request, got {other:?}"),
@@ -1439,14 +1474,15 @@ fn thread_detail_clears_loading_state() {
 #[test]
 fn on_tick_requests_next_older_thread_page_when_scrolled_to_top_of_loaded_window() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.config.tui_chat_history_page_size = 123;
     model.chat.reduce(chat::ChatAction::ThreadDetailReceived(
         crate::state::chat::AgentThread {
             id: "thread-user".to_string(),
             title: "User Thread".to_string(),
             total_message_count: 120,
-            loaded_message_start: 70,
+            loaded_message_start: 20,
             loaded_message_end: 120,
-            messages: (70..120)
+            messages: (20..120)
                 .map(|index| crate::state::chat::AgentMessage {
                     id: Some(format!("msg-{index}")),
                     role: crate::state::chat::MessageRole::Assistant,
@@ -1473,8 +1509,8 @@ fn on_tick_requests_next_older_thread_page_when_scrolled_to_top_of_loaded_window
             message_offset,
         }) => {
             assert_eq!(thread_id, "thread-user");
-            assert_eq!(message_limit, Some(50));
-            assert_eq!(message_offset, Some(50));
+            assert_eq!(message_limit, Some(123));
+            assert_eq!(message_offset, Some(100));
         }
         other => panic!("expected older-page request, got {other:?}"),
     }
@@ -1483,14 +1519,15 @@ fn on_tick_requests_next_older_thread_page_when_scrolled_to_top_of_loaded_window
 #[test]
 fn on_tick_debounces_follow_up_older_thread_page_requests_after_reload() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.config.tui_chat_history_page_size = 123;
     model.chat.reduce(chat::ChatAction::ThreadDetailReceived(
         crate::state::chat::AgentThread {
             id: "thread-user".to_string(),
             title: "User Thread".to_string(),
             total_message_count: 120,
-            loaded_message_start: 70,
+            loaded_message_start: 20,
             loaded_message_end: 120,
-            messages: (70..120)
+            messages: (20..120)
                 .map(|index| crate::state::chat::AgentMessage {
                     id: Some(format!("msg-{index}")),
                     role: crate::state::chat::MessageRole::Assistant,
@@ -1513,8 +1550,8 @@ fn on_tick_debounces_follow_up_older_thread_page_requests_after_reload() {
     match next_thread_request(&mut daemon_rx) {
         Some((thread_id, message_limit, message_offset)) => {
             assert_eq!(thread_id, "thread-user");
-            assert_eq!(message_limit, Some(50));
-            assert_eq!(message_offset, Some(50));
+            assert_eq!(message_limit, Some(123));
+            assert_eq!(message_offset, Some(100));
         }
         other => panic!("expected first older-page request, got {other:?}"),
     }
@@ -1522,10 +1559,10 @@ fn on_tick_debounces_follow_up_older_thread_page_requests_after_reload() {
     model.handle_client_event(ClientEvent::ThreadDetail(Some(crate::wire::AgentThread {
         id: "thread-user".to_string(),
         title: "User Thread".to_string(),
-        total_message_count: 120,
-        loaded_message_start: 20,
-        loaded_message_end: 70,
-        messages: (20..70)
+        total_message_count: 240,
+        loaded_message_start: 5,
+        loaded_message_end: 128,
+        messages: (5..128)
             .map(|index| crate::wire::AgentMessage {
                 id: Some(format!("msg-{index}")),
                 role: crate::wire::MessageRole::Assistant,
@@ -1553,11 +1590,82 @@ fn on_tick_debounces_follow_up_older_thread_page_requests_after_reload() {
     match next_thread_request(&mut daemon_rx) {
         Some((thread_id, message_limit, message_offset)) => {
             assert_eq!(thread_id, "thread-user");
-            assert_eq!(message_limit, Some(50));
-            assert_eq!(message_offset, Some(100));
+            assert_eq!(message_limit, Some(123));
+            assert_eq!(message_offset, Some(235));
         }
         other => panic!("expected debounced older-page request after cooldown, got {other:?}"),
     }
+}
+
+#[test]
+fn prepending_older_history_releases_the_top_edge_until_user_scrolls_again() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.config.tui_chat_history_page_size = 123;
+    model.chat.reduce(chat::ChatAction::ThreadDetailReceived(
+        crate::state::chat::AgentThread {
+            id: "thread-user".to_string(),
+            title: "User Thread".to_string(),
+            total_message_count: 400,
+            loaded_message_start: 277,
+            loaded_message_end: 400,
+            messages: (277..400)
+                .map(|index| crate::state::chat::AgentMessage {
+                    id: Some(format!("msg-{index}")),
+                    role: crate::state::chat::MessageRole::Assistant,
+                    content: format!("msg {index}"),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        },
+    ));
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-user".to_string()));
+    model
+        .chat
+        .reduce(chat::ChatAction::ScrollChat(i32::MAX / 2));
+
+    model.on_tick();
+
+    match next_thread_request(&mut daemon_rx) {
+        Some((thread_id, message_limit, message_offset)) => {
+            assert_eq!(thread_id, "thread-user");
+            assert_eq!(message_limit, Some(123));
+            assert_eq!(message_offset, Some(123));
+        }
+        other => panic!("expected first older-page request, got {other:?}"),
+    }
+
+    model.handle_client_event(ClientEvent::ThreadDetail(Some(crate::wire::AgentThread {
+        id: "thread-user".to_string(),
+        title: "User Thread".to_string(),
+        total_message_count: 400,
+        loaded_message_start: 154,
+        loaded_message_end: 277,
+        messages: (154..277)
+            .map(|index| crate::wire::AgentMessage {
+                id: Some(format!("msg-{index}")),
+                role: crate::wire::MessageRole::Assistant,
+                content: format!("msg {index}"),
+                timestamp: index as u64,
+                message_kind: "normal".to_string(),
+                ..Default::default()
+            })
+            .collect(),
+        created_at: 1,
+        updated_at: 1,
+        ..Default::default()
+    })));
+
+    for _ in 0..chat::CHAT_HISTORY_FETCH_DEBOUNCE_TICKS {
+        model.on_tick();
+    }
+
+    assert!(
+        next_thread_request(&mut daemon_rx).is_none(),
+        "prepend anchor should move the viewport below the new top so history does not auto-fetch again"
+    );
 }
 
 #[test]
@@ -1895,6 +2003,101 @@ fn participant_suggestion_event_queues_prompt_with_agent_name() {
         Some("Weles")
     );
     assert_eq!(model.queued_prompts[0].display_text(), "Weles: check claim");
+}
+
+#[test]
+fn participant_suggestion_does_not_auto_flush_as_user_message_after_done() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+    model.concierge.auto_cleanup_on_navigate = false;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    model.handle_client_event(ClientEvent::ParticipantSuggestion {
+        thread_id: "thread-1".to_string(),
+        suggestion: crate::wire::ThreadParticipantSuggestion {
+            id: "sugg-1".to_string(),
+            target_agent_id: "weles".to_string(),
+            target_agent_name: "Weles".to_string(),
+            instruction: "check claim".to_string(),
+            force_send: false,
+            status: "queued".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            error: None,
+        },
+    });
+
+    model.handle_client_event(ClientEvent::Done {
+        thread_id: "thread-1".to_string(),
+        input_tokens: 0,
+        output_tokens: 0,
+        cost: None,
+        provider: None,
+        model: None,
+        tps: None,
+        generation_ms: None,
+        reasoning: None,
+        provider_final_result_json: None,
+    });
+
+    assert!(
+        daemon_rx.try_recv().is_err(),
+        "participant suggestions must not auto-submit through the normal send-message path"
+    );
+    assert_eq!(model.queued_prompts.len(), 1);
+    assert_eq!(
+        model.queued_prompts[0].suggestion_id.as_deref(),
+        Some("sugg-1")
+    );
+}
+
+#[test]
+fn thread_detail_prunes_stale_participant_prompts_after_daemon_removes_suggestion() {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    model.handle_client_event(ClientEvent::ParticipantSuggestion {
+        thread_id: "thread-1".to_string(),
+        suggestion: crate::wire::ThreadParticipantSuggestion {
+            id: "sugg-1".to_string(),
+            target_agent_id: "weles".to_string(),
+            target_agent_name: "Weles".to_string(),
+            instruction: "check claim".to_string(),
+            force_send: false,
+            status: "queued".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            error: None,
+        },
+    });
+    assert_eq!(model.queued_prompts.len(), 1);
+
+    model.handle_thread_detail_event(crate::wire::AgentThread {
+        id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+        messages: vec![],
+        queued_participant_suggestions: vec![],
+        created_at: 1,
+        updated_at: 2,
+        ..Default::default()
+    });
+
+    assert!(
+        model.queued_prompts.is_empty(),
+        "thread detail should clear stale participant prompts once the daemon no longer reports them"
+    );
 }
 
 #[test]
@@ -2262,10 +2465,12 @@ fn openai_codex_auth_events_update_config_and_modal_state() {
         model.openai_auth_url.as_deref(),
         Some("https://auth.openai.com/oauth/authorize?flow=tui")
     );
-    assert!(model
-        .openai_auth_status_text
-        .as_deref()
-        .is_some_and(|text| text.contains("complete ChatGPT authentication")));
+    assert!(
+        model
+            .openai_auth_status_text
+            .as_deref()
+            .is_some_and(|text| text.contains("complete ChatGPT authentication"))
+    );
     assert!(matches!(
         daemon_rx
             .try_recv()

@@ -203,6 +203,12 @@ pub(super) fn apply_schema_migrations(
     ensure_column(connection, "agent_tasks", "success_criteria", "TEXT")?;
     ensure_column(connection, "agent_tasks", "max_duration_secs", "INTEGER")?;
     ensure_column(connection, "agent_tasks", "supervisor_config_json", "TEXT")?;
+    ensure_column(
+        connection,
+        "memory_distillation_log",
+        "source_message_span_json",
+        "TEXT",
+    )?;
     ensure_column(connection, "agent_tasks", "policy_fingerprint", "TEXT")?;
     ensure_column(connection, "agent_tasks", "approval_expires_at", "INTEGER")?;
     ensure_column(connection, "agent_tasks", "containment_scope", "TEXT")?;

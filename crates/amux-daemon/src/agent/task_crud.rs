@@ -568,6 +568,10 @@ impl AgentEngine {
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| summarize_goal_title(&goal));
+        let adaptation_mode = {
+            let model = self.operator_model.read().await;
+            SatisfactionAdaptationMode::from_label(&model.operator_satisfaction.label)
+        };
         let goal_run = GoalRun {
             id: format!("goal_{}", Uuid::new_v4()),
             title: normalized_title,
@@ -585,7 +589,7 @@ impl AgentEngine {
             current_step_title: None,
             current_step_kind: None,
             replan_count: 0,
-            max_replans: 2,
+            max_replans: adaptation_mode.max_goal_replans(2),
             plan_summary: None,
             reflection_summary: None,
             memory_updates: Vec::new(),

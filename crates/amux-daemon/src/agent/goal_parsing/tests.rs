@@ -79,3 +79,69 @@ fn goal_plan_response_with_rejected_alternatives_round_trips() {
     assert_eq!(decoded.rejected_alternatives[0], "Alternative A: too risky");
     assert_eq!(decoded.rejected_alternatives[1], "Alternative B: too slow");
 }
+
+#[test]
+fn apply_plan_defaults_truncates_and_normalizes_plan_fields() {
+    let mut plan = GoalPlanResponse {
+        title: Some("  Compact Plan  ".to_string()),
+        summary: "   ".to_string(),
+        steps: (0..8)
+            .map(|index| GoalPlanStepResponse {
+                title: if index == 0 {
+                    "   ".to_string()
+                } else {
+                    format!(" Step {} ", index + 1)
+                },
+                instructions: if index == 0 {
+                    "   ".to_string()
+                } else {
+                    format!(" Do {} ", index + 1)
+                },
+                kind: if index == 0 {
+                    GoalRunStepKind::Unknown
+                } else {
+                    GoalRunStepKind::Command
+                },
+                success_criteria: if index == 0 {
+                    "   ".to_string()
+                } else {
+                    format!(" Done {} ", index + 1)
+                },
+                session_id: Some("  session-1  ".to_string()),
+                llm_confidence: Some("  LIKELY  ".to_string()),
+                llm_confidence_rationale: Some("  deterministic fix path  ".to_string()),
+            })
+            .collect(),
+        rejected_alternatives: vec![
+            "A".to_string(),
+            "B".to_string(),
+            "C".to_string(),
+            "D".to_string(),
+        ],
+    };
+
+    apply_plan_defaults(&mut plan);
+
+    assert_eq!(plan.summary, "Compact Plan");
+    assert_eq!(
+        plan.steps.len(),
+        SatisfactionAdaptationMode::Normal.max_goal_plan_steps()
+    );
+    assert_eq!(
+        plan.rejected_alternatives.len(),
+        SatisfactionAdaptationMode::Normal.max_rejected_alternatives()
+    );
+    assert_eq!(plan.steps[0].title, "Step 1");
+    assert_eq!(plan.steps[0].instructions, "Step 1");
+    assert_eq!(
+        plan.steps[0].success_criteria,
+        "Step completed successfully"
+    );
+    assert_eq!(plan.steps[0].kind, GoalRunStepKind::Command);
+    assert_eq!(plan.steps[0].session_id.as_deref(), Some("session-1"));
+    assert_eq!(plan.steps[0].llm_confidence.as_deref(), Some("likely"));
+    assert_eq!(
+        plan.steps[0].llm_confidence_rationale.as_deref(),
+        Some("deterministic fix path")
+    );
+}

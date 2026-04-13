@@ -6,7 +6,6 @@ const COMMUNITY_SCOUT_RESULT_LIMIT: usize = 5;
 const PARTICIPANT_AGENT_FANOUT_TOOLS: &[&str] = &[
     "spawn_subagent",
     "message_agent",
-    "handoff_thread_agent",
     "route_to_specialist",
     "run_divergent",
 ];
@@ -127,7 +126,10 @@ async fn current_visible_thread_responder_is_active_participant(
     engine: &AgentEngine,
     thread_id: &str,
 ) -> bool {
-    if is_internal_dm_thread(thread_id) || is_internal_handoff_thread(thread_id) {
+    if is_internal_dm_thread(thread_id)
+        || is_participant_playground_thread(thread_id)
+        || is_internal_handoff_thread(thread_id)
+    {
         return false;
     }
     let Some(active_agent_id) = engine.active_agent_id_for_thread(thread_id).await else {
@@ -141,6 +143,16 @@ async fn current_visible_thread_responder_is_active_participant(
             participant.status == ThreadParticipantStatus::Active
                 && participant.agent_id.eq_ignore_ascii_case(&active_agent_id)
         })
+}
+
+async fn visible_thread_has_participants(engine: &AgentEngine, thread_id: &str) -> bool {
+    if is_internal_dm_thread(thread_id)
+        || is_participant_playground_thread(thread_id)
+        || is_internal_handoff_thread(thread_id)
+    {
+        return false;
+    }
+    !engine.list_thread_participants(thread_id).await.is_empty()
 }
 
 fn spawn_background_community_scout(
@@ -531,7 +543,8 @@ impl<'a> SendMessageRunner<'a> {
             )
         };
         let internal_dm_thread = is_internal_dm_thread(&tid);
-        if internal_dm_thread {
+        let participant_playground_thread = is_participant_playground_thread(&tid);
+        if internal_dm_thread && !participant_playground_thread {
             task_tool_filter = Some(crate::agent::subagent::tool_filter::ToolFilter::deny_all());
         }
         let initial_copilot_initiator = if record_operator {
@@ -727,6 +740,12 @@ impl<'a> SendMessageRunner<'a> {
         {
             tools = filter.filtered_tools(tools);
         }
+        let participant_managed_thread = visible_thread_has_participants(engine, &tid).await;
+        if participant_managed_thread {
+            tools.retain(|tool| tool.function.name != "list_agents");
+        } else {
+            tools.retain(|tool| tool.function.name != "list_participants");
+        }
         if current_visible_thread_responder_is_active_participant(engine, &tid).await {
             tools.retain(|tool| {
                 !PARTICIPANT_AGENT_FANOUT_TOOLS.contains(&tool.function.name.as_str())
@@ -768,6 +787,7 @@ impl<'a> SendMessageRunner<'a> {
             llm_user_content,
             stream_chunk_timeout_override,
             tid,
+            reuse_existing_user_message,
             config,
             provider_config,
             preferred_session_id,
@@ -927,6 +947,73 @@ mod tests {
                 "active participant responder should not see {forbidden_tool}"
             );
         }
+        assert!(
+            tool_names.contains(&"handoff_thread_agent"),
+            "active participant responder should still see handoff_thread_agent"
+        );
+    }
+
+    #[tokio::test]
+    async fn participant_managed_thread_replaces_list_agents_with_list_participants() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread_participant_managed_tool_substitution";
+
+        engine.threads.write().await.insert(
+            thread_id.to_string(),
+            AgentThread {
+                id: thread_id.to_string(),
+                agent_name: Some(MAIN_AGENT_NAME.to_string()),
+                title: "Participant-managed thread".to_string(),
+                messages: vec![AgentMessage::user("check this thread", 1)],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+        engine
+            .upsert_thread_participant(thread_id, "weles", "watch this thread")
+            .await
+            .expect("participant should register");
+
+        let runner = SendMessageRunner::initialize(
+            &engine,
+            Some(thread_id),
+            "check this thread",
+            "check this thread",
+            None,
+            None,
+            None,
+            None,
+            true,
+            true,
+            0,
+        )
+        .await
+        .expect("runner should initialize");
+
+        let tool_names = runner
+            .tools
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            !tool_names.contains(&"list_agents"),
+            "participant-managed thread should hide list_agents"
+        );
+        assert!(
+            tool_names.contains(&"list_participants"),
+            "participant-managed thread should expose list_participants"
+        );
     }
 
     #[tokio::test]

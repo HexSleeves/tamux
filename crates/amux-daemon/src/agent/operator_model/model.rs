@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 pub(crate) const OPERATOR_MODEL_VERSION: &str = "1.0";
 pub(crate) const OPERATOR_PROFILE_VERSION: &str = "1.0";
@@ -196,6 +197,100 @@ pub(crate) struct ImplicitFeedback {
     pub top_tool_fallbacks: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SatisfactionAdaptationMode {
+    Normal,
+    Tightened,
+    Minimal,
+}
+
+impl SatisfactionAdaptationMode {
+    pub(crate) fn from_label(label: &str) -> Self {
+        match label {
+            "strained" => Self::Minimal,
+            "fragile" => Self::Tightened,
+            _ => Self::Normal,
+        }
+    }
+
+    pub(crate) fn max_goal_plan_steps(self) -> usize {
+        match self {
+            Self::Normal => 6,
+            Self::Tightened => 5,
+            Self::Minimal => 4,
+        }
+    }
+
+    pub(crate) fn max_goal_replan_steps(self) -> usize {
+        match self {
+            Self::Normal => 4,
+            Self::Tightened | Self::Minimal => 3,
+        }
+    }
+
+    pub(crate) fn max_rejected_alternatives(self) -> usize {
+        match self {
+            Self::Normal => 3,
+            Self::Tightened => 2,
+            Self::Minimal => 1,
+        }
+    }
+
+    pub(crate) fn max_goal_replans(self, default: u32) -> u32 {
+        match self {
+            Self::Normal => default,
+            Self::Tightened | Self::Minimal => default.min(1),
+        }
+    }
+
+    pub(crate) fn max_goal_task_retries(self, default: u32) -> u32 {
+        match self {
+            Self::Normal => default,
+            Self::Tightened | Self::Minimal => default.min(1),
+        }
+    }
+}
+
+pub(crate) fn preferred_tool_fallback_targets(pairs: &[String], limit: usize) -> Vec<String> {
+    let mut preferred = Vec::new();
+    let mut seen = HashSet::new();
+
+    for pair in pairs {
+        let Some((_, to_tool)) = pair.split_once("->") else {
+            continue;
+        };
+        let target = to_tool.trim();
+        if target.is_empty() {
+            continue;
+        }
+        let normalized = target.to_ascii_lowercase();
+        if seen.insert(normalized) {
+            preferred.push(target.to_string());
+        }
+        if preferred.len() >= limit {
+            break;
+        }
+    }
+
+    preferred
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct OperatorSatisfaction {
+    pub score: f64,
+    pub label: String,
+}
+
+impl Default for OperatorSatisfaction {
+    fn default() -> Self {
+        Self {
+            score: 0.5,
+            label: "unknown".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct OperatorModel {
@@ -207,6 +302,8 @@ pub(crate) struct OperatorModel {
     pub session_rhythm: SessionRhythm,
     pub attention_topology: AttentionTopology,
     pub implicit_feedback: ImplicitFeedback,
+    #[serde(default)]
+    pub operator_satisfaction: OperatorSatisfaction,
     #[serde(default)]
     pub unique_tools_seen: Vec<String>,
     #[serde(default)]
@@ -230,8 +327,34 @@ impl Default for OperatorModel {
             session_rhythm: SessionRhythm::default(),
             attention_topology: AttentionTopology::default(),
             implicit_feedback: ImplicitFeedback::default(),
+            operator_satisfaction: OperatorSatisfaction::default(),
             unique_tools_seen: Vec::new(),
             goal_runs_completed: 0,
         }
+    }
+}
+
+impl OperatorModel {
+    pub(crate) fn diagnostic_summary(&self) -> String {
+        let signal_present = self.cognitive_style.message_count > 0
+            || self.risk_fingerprint.approval_requests > 0
+            || self.attention_topology.focus_event_count > 0
+            || self.implicit_feedback.tool_hesitation_count > 0
+            || self.implicit_feedback.revision_message_count > 0
+            || self.implicit_feedback.correction_message_count > 0
+            || self.implicit_feedback.fast_denial_count > 0;
+
+        let signal_state = if signal_present { "present" } else { "missing" };
+        format!(
+            "satisfaction={} ({:.2}) [strained <0.35, fragile <0.55, healthy <0.80, strong >=0.80]; signal {}; friction revisions {}, corrections {}, tool fallbacks {}, fast denials {}, rapid switches {}",
+            self.operator_satisfaction.label,
+            self.operator_satisfaction.score,
+            signal_state,
+            self.implicit_feedback.revision_message_count,
+            self.implicit_feedback.correction_message_count,
+            self.implicit_feedback.tool_hesitation_count,
+            self.implicit_feedback.fast_denial_count,
+            self.attention_topology.rapid_switch_count,
+        )
     }
 }

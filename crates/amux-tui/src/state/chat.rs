@@ -13,7 +13,7 @@ pub use chat_types::*;
 
 use amux_protocol::AGENT_NAME_RAROG;
 
-pub const CHAT_HISTORY_PAGE_SIZE: usize = 50;
+pub const CHAT_HISTORY_PAGE_SIZE: usize = 100;
 pub const CHAT_HISTORY_COLLAPSE_DELAY_TICKS: u64 = 20;
 pub const CHAT_HISTORY_FETCH_DEBOUNCE_TICKS: u64 = 6;
 
@@ -29,17 +29,18 @@ struct ThreadActivityState {
 
 pub struct ChatState {
     threads: Vec<AgentThread>,
+    history_page_size: usize,
     active_thread_id: Option<String>,
     thread_activity: std::collections::HashMap<String, ThreadActivityState>,
     render_revision: u64,
     scroll_offset: usize,
     scroll_locked: bool,
     transcript_mode: TranscriptMode,
-    expanded_reasoning: std::collections::HashSet<usize>,
-    selected_message: Option<usize>,
+    expanded_reasoning: std::collections::HashSet<StoredMessageRef>,
+    selected_message: Option<StoredMessageRef>,
     selected_message_action: usize,
-    expanded_tools: std::collections::HashSet<usize>,
-    pinned_message_top: Option<usize>,
+    expanded_tools: std::collections::HashSet<StoredMessageRef>,
+    pinned_message_top: Option<StoredMessageRef>,
     copied_message_feedback: Option<CopiedMessageFeedback>,
 }
 
@@ -151,15 +152,15 @@ fn merge_thread_window(
     )
 }
 
-fn trim_thread_to_latest_page(thread: &mut AgentThread) -> usize {
+fn trim_thread_to_latest_page(thread: &mut AgentThread, page_size: usize) -> usize {
     normalize_thread_window(thread);
-    if thread.messages.len() <= CHAT_HISTORY_PAGE_SIZE {
+    if thread.messages.len() <= page_size {
         thread.history_window_expanded = false;
         thread.collapse_deadline_tick = None;
         return 0;
     }
 
-    let drop_count = thread.messages.len().saturating_sub(CHAT_HISTORY_PAGE_SIZE);
+    let drop_count = thread.messages.len().saturating_sub(page_size);
     thread.messages.drain(0..drop_count);
     thread.loaded_message_start = thread.loaded_message_start.saturating_add(drop_count);
     thread.loaded_message_end = thread.loaded_message_start + thread.messages.len();
@@ -168,7 +169,7 @@ fn trim_thread_to_latest_page(thread: &mut AgentThread) -> usize {
     drop_count
 }
 
-fn append_message_to_thread(thread: &mut AgentThread, message: AgentMessage) {
+fn append_message_to_thread(thread: &mut AgentThread, message: AgentMessage, page_size: usize) {
     normalize_thread_window(thread);
     thread.messages.push(message);
     thread.total_message_count = thread.total_message_count.saturating_add(1);
@@ -176,18 +177,59 @@ fn append_message_to_thread(thread: &mut AgentThread, message: AgentMessage) {
     thread.loaded_message_start = thread
         .loaded_message_end
         .saturating_sub(thread.messages.len());
-    if !thread.history_window_expanded && thread.messages.len() > CHAT_HISTORY_PAGE_SIZE {
-        trim_thread_to_latest_page(thread);
+    if !thread.history_window_expanded && thread.messages.len() > page_size {
+        trim_thread_to_latest_page(thread, page_size);
     } else {
         normalize_thread_window(thread);
     }
 }
 
-fn rebase_index(index: Option<usize>, delta: isize) -> Option<usize> {
-    match (index, delta) {
-        (Some(index), delta) if delta >= 0 => Some(index.saturating_add(delta as usize)),
-        (Some(index), delta) => index.checked_sub((-delta) as usize),
-        (None, _) => None,
+fn stored_message_ref(thread: &AgentThread, index: usize) -> Option<StoredMessageRef> {
+    let message = thread.messages.get(index)?;
+    Some(StoredMessageRef {
+        thread_id: thread.id.clone(),
+        message_id: message.id.as_ref().filter(|id| !id.is_empty()).cloned(),
+        absolute_index: thread.loaded_message_start.saturating_add(index),
+    })
+}
+
+fn resolve_message_ref(thread: &AgentThread, message_ref: &StoredMessageRef) -> Option<usize> {
+    if message_ref.thread_id != thread.id {
+        return None;
+    }
+
+    if let Some(message_id) = message_ref.message_id.as_deref() {
+        if let Some(index) = thread
+            .messages
+            .iter()
+            .position(|message| message.id.as_deref() == Some(message_id))
+        {
+            return Some(index);
+        }
+    }
+
+    let loaded_end = thread.loaded_message_start + thread.messages.len();
+    (message_ref.absolute_index >= thread.loaded_message_start
+        && message_ref.absolute_index < loaded_end)
+        .then_some(message_ref.absolute_index - thread.loaded_message_start)
+}
+
+fn adjust_message_ref_for_deleted_absolute(
+    mut message_ref: StoredMessageRef,
+    thread_id: &str,
+    deleted_absolute_index: usize,
+) -> Option<StoredMessageRef> {
+    if message_ref.thread_id != thread_id {
+        return Some(message_ref);
+    }
+
+    match message_ref.absolute_index.cmp(&deleted_absolute_index) {
+        std::cmp::Ordering::Less => Some(message_ref),
+        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Greater => {
+            message_ref.absolute_index -= 1;
+            Some(message_ref)
+        }
     }
 }
 
@@ -195,6 +237,7 @@ impl ChatState {
     pub fn new() -> Self {
         Self {
             threads: Vec::new(),
+            history_page_size: CHAT_HISTORY_PAGE_SIZE,
             active_thread_id: None,
             thread_activity: std::collections::HashMap::new(),
             render_revision: 0,
@@ -210,8 +253,41 @@ impl ChatState {
         }
     }
 
+    fn message_ref_for_active_index(&self, index: usize) -> Option<StoredMessageRef> {
+        let thread = self.active_thread()?;
+        stored_message_ref(thread, index)
+    }
+
+    fn resolve_active_message_ref(&self, message_ref: &StoredMessageRef) -> Option<usize> {
+        let thread = self.active_thread()?;
+        resolve_message_ref(thread, message_ref)
+    }
+
+    fn resolve_active_message_ref_set(
+        &self,
+        message_refs: &std::collections::HashSet<StoredMessageRef>,
+    ) -> std::collections::HashSet<usize> {
+        let Some(thread) = self.active_thread() else {
+            return std::collections::HashSet::new();
+        };
+        message_refs
+            .iter()
+            .filter_map(|message_ref| resolve_message_ref(thread, message_ref))
+            .collect()
+    }
+
     pub fn threads(&self) -> &[AgentThread] {
         &self.threads
+    }
+
+    pub fn set_history_page_size(&mut self, page_size: usize) {
+        self.history_page_size = page_size.max(1);
+        for thread in &mut self.threads {
+            if !thread.history_window_expanded && thread.messages.len() > self.history_page_size {
+                trim_thread_to_latest_page(thread, self.history_page_size);
+            }
+        }
+        self.bump_render_revision();
     }
 
     pub fn active_thread_id(&self) -> Option<&str> {
@@ -284,18 +360,16 @@ impl ChatState {
         }
     }
 
-    pub fn preserve_prepend_scroll_anchor(&mut self, added_lines: usize) {
-        if added_lines == 0 {
-            return;
-        }
-        self.scroll_offset = self.scroll_offset.saturating_add(added_lines);
+    pub fn preserve_prepend_scroll_anchor(&mut self, resolved_scroll: usize) {
+        self.scroll_offset = resolved_scroll;
         self.scroll_locked = true;
         self.bump_render_revision();
     }
 
     pub fn schedule_history_collapse(&mut self, current_tick: u64, delay_ticks: u64) {
+        let history_page_size = self.history_page_size;
         if let Some(thread) = self.active_thread_mut() {
-            if thread.history_window_expanded && thread.messages.len() > CHAT_HISTORY_PAGE_SIZE {
+            if thread.history_window_expanded && thread.messages.len() > history_page_size {
                 thread.collapse_deadline_tick = Some(current_tick.saturating_add(delay_ticks));
             }
         }
@@ -310,45 +384,30 @@ impl ChatState {
         }
 
         let mut dropped = 0usize;
+        let history_page_size = self.history_page_size;
         if let Some(thread) = self.active_thread_mut() {
             let should_collapse = thread
                 .collapse_deadline_tick
                 .is_some_and(|deadline| current_tick >= deadline)
                 && thread.history_window_expanded;
             if should_collapse {
-                dropped = trim_thread_to_latest_page(thread);
+                dropped = trim_thread_to_latest_page(thread, history_page_size);
             }
         }
 
         if dropped > 0 {
-            self.selected_message = rebase_index(self.selected_message, -(dropped as isize));
-            self.expanded_reasoning = self
-                .expanded_reasoning
-                .iter()
-                .filter_map(|index| index.checked_sub(dropped))
-                .collect();
-            self.expanded_tools = self
-                .expanded_tools
-                .iter()
-                .filter_map(|index| index.checked_sub(dropped))
-                .collect();
-            if let Some(feedback) = self.copied_message_feedback.as_mut() {
-                if self.active_thread_id.as_deref() == Some(feedback.thread_id.as_str()) {
-                    if let Some(rebased) = feedback.message_index.checked_sub(dropped) {
-                        feedback.message_index = rebased;
-                    } else {
-                        self.copied_message_feedback = None;
-                    }
-                }
-            }
             self.bump_render_revision();
         }
     }
 
     pub fn delete_active_message(&mut self, index: usize) {
         let mut removed = false;
+        let mut deleted_absolute_index = None;
+        let mut deleted_thread_id = None;
         if let Some(thread) = self.active_thread_mut() {
             if index < thread.messages.len() {
+                deleted_absolute_index = Some(thread.loaded_message_start + index);
+                deleted_thread_id = Some(thread.id.clone());
                 thread.messages.remove(index);
                 thread.total_message_count = thread.total_message_count.saturating_sub(1);
                 thread.loaded_message_end = thread.loaded_message_start + thread.messages.len();
@@ -358,25 +417,62 @@ impl ChatState {
         }
 
         if removed {
-            self.selected_message = None;
+            let deleted_absolute_index =
+                deleted_absolute_index.expect("removed message should have absolute index");
+            let deleted_thread_id =
+                deleted_thread_id.expect("removed message should have thread id");
+            self.selected_message = self.selected_message.take().and_then(|message_ref| {
+                adjust_message_ref_for_deleted_absolute(
+                    message_ref,
+                    &deleted_thread_id,
+                    deleted_absolute_index,
+                )
+            });
             self.expanded_reasoning = self
                 .expanded_reasoning
                 .iter()
-                .filter_map(|message_index| match message_index.cmp(&index) {
-                    std::cmp::Ordering::Less => Some(*message_index),
-                    std::cmp::Ordering::Equal => None,
-                    std::cmp::Ordering::Greater => Some(message_index - 1),
+                .cloned()
+                .filter_map(|message_ref| {
+                    adjust_message_ref_for_deleted_absolute(
+                        message_ref,
+                        &deleted_thread_id,
+                        deleted_absolute_index,
+                    )
                 })
                 .collect();
             self.expanded_tools = self
                 .expanded_tools
                 .iter()
-                .filter_map(|message_index| match message_index.cmp(&index) {
-                    std::cmp::Ordering::Less => Some(*message_index),
-                    std::cmp::Ordering::Equal => None,
-                    std::cmp::Ordering::Greater => Some(message_index - 1),
+                .cloned()
+                .filter_map(|message_ref| {
+                    adjust_message_ref_for_deleted_absolute(
+                        message_ref,
+                        &deleted_thread_id,
+                        deleted_absolute_index,
+                    )
                 })
                 .collect();
+            self.pinned_message_top = self.pinned_message_top.take().and_then(|message_ref| {
+                adjust_message_ref_for_deleted_absolute(
+                    message_ref,
+                    &deleted_thread_id,
+                    deleted_absolute_index,
+                )
+            });
+            self.copied_message_feedback =
+                self.copied_message_feedback
+                    .take()
+                    .and_then(|feedback| {
+                        adjust_message_ref_for_deleted_absolute(
+                            feedback.message_ref,
+                            &deleted_thread_id,
+                            deleted_absolute_index,
+                        )
+                        .map(|message_ref| CopiedMessageFeedback {
+                            message_ref,
+                            expires_at_tick: feedback.expires_at_tick,
+                        })
+                    });
             self.bump_render_revision();
         }
     }
@@ -507,6 +603,8 @@ impl ChatState {
 
     pub fn pinned_message_top(&self) -> Option<usize> {
         self.pinned_message_top
+            .as_ref()
+            .and_then(|message_ref| self.resolve_active_message_ref(message_ref))
     }
 
     pub fn is_streaming(&self) -> bool {
@@ -594,6 +692,7 @@ impl ChatState {
                                 reasoning,
                                 ..Default::default()
                             },
+                            self.history_page_size,
                         );
                     }
                 }
@@ -611,6 +710,7 @@ impl ChatState {
                             weles_review: weles_review.clone(),
                             ..Default::default()
                         },
+                        self.history_page_size,
                     );
                 }
 
@@ -731,7 +831,7 @@ impl ChatState {
                     };
 
                     if let Some(thread) = self.threads.iter_mut().find(|t| t.id == thread_id) {
-                        append_message_to_thread(thread, msg);
+                        append_message_to_thread(thread, msg, self.history_page_size);
                         thread.total_input_tokens += input_tokens;
                         thread.total_output_tokens += output_tokens;
                     }
@@ -842,7 +942,7 @@ impl ChatState {
                         .older_page_request_cooldown_until_tick
                         .max(incoming.older_page_request_cooldown_until_tick);
                     existing.history_window_expanded =
-                        existing.messages.len() > CHAT_HISTORY_PAGE_SIZE;
+                        existing.messages.len() > self.history_page_size;
                     if disjoint && incoming.loaded_message_end <= existing.loaded_message_end {
                         existing.collapse_deadline_tick = None;
                     }
@@ -851,13 +951,9 @@ impl ChatState {
                     existing.total_output_tokens = incoming
                         .total_output_tokens
                         .max(existing.total_output_tokens);
-                    if !incoming.thread_participants.is_empty() {
-                        existing.thread_participants = incoming.thread_participants;
-                    }
-                    if !incoming.queued_participant_suggestions.is_empty() {
-                        existing.queued_participant_suggestions =
-                            incoming.queued_participant_suggestions;
-                    }
+                    existing.thread_participants = incoming.thread_participants;
+                    existing.queued_participant_suggestions =
+                        incoming.queued_participant_suggestions;
                     if incoming.agent_name.is_some() {
                         existing.agent_name = incoming.agent_name;
                     }
@@ -867,7 +963,7 @@ impl ChatState {
                     normalize_thread_window(existing);
                 } else {
                     incoming.history_window_expanded =
-                        incoming.messages.len() > CHAT_HISTORY_PAGE_SIZE;
+                        incoming.messages.len() > self.history_page_size;
                     self.threads.push(incoming);
                 }
             }
@@ -950,7 +1046,7 @@ impl ChatState {
                     if thread_id == "concierge" && message.is_concierge_welcome {
                         thread.messages.retain(|msg| !msg.is_concierge_welcome);
                     }
-                    append_message_to_thread(thread, message);
+                    append_message_to_thread(thread, message, self.history_page_size);
                 } else {
                     let title = if thread_id == "concierge" {
                         AGENT_NAME_RAROG.to_string()
@@ -1001,7 +1097,7 @@ impl ChatState {
 
             ChatAction::PinMessageTop(index) => {
                 should_bump_render_revision = false;
-                self.pinned_message_top = Some(index);
+                self.pinned_message_top = self.message_ref_for_active_index(index);
                 self.scroll_locked = false;
             }
 
@@ -1055,6 +1151,7 @@ impl ChatState {
                                 },
                                 ..Default::default()
                             },
+                            self.history_page_size,
                         );
                     }
                 }

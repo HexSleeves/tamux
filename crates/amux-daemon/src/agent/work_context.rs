@@ -130,7 +130,7 @@ impl AgentEngine {
                     return;
                 };
                 if tool_name == "apply_patch" {
-                    if let Some(input) = args.get("input").and_then(|value| value.as_str()) {
+                    if let Some(input) = super::tool_executor::get_apply_patch_text_arg(&args) {
                         if let Ok(paths) = super::tool_executor::extract_apply_patch_paths(input) {
                             for path in paths {
                                 self.record_file_work_context(thread_id, task_id, tool_name, &path)

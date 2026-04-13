@@ -932,6 +932,7 @@ fn older_thread_page_prepends_into_loaded_window() {
 #[test]
 fn collapse_history_keeps_latest_page_only() {
     let mut state = ChatState::new();
+    state.set_history_page_size(50);
     state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
         id: "t1".into(),
         title: "Test".into(),
@@ -966,6 +967,180 @@ fn collapse_history_keeps_latest_page_only() {
             .and_then(|message| message.id.as_deref()),
         Some("msg-70")
     );
+}
+
+#[test]
+fn selected_message_tracks_same_message_when_older_page_is_prepended() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Test".into(),
+        total_message_count: 120,
+        loaded_message_start: 70,
+        loaded_message_end: 120,
+        messages: (70..120)
+            .map(|index| AgentMessage {
+                id: Some(format!("msg-{index}")),
+                role: MessageRole::User,
+                content: format!("msg {index}"),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }));
+    state.reduce(ChatAction::SelectThread("t1".into()));
+    state.select_message(Some(10));
+
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Test".into(),
+        total_message_count: 120,
+        loaded_message_start: 20,
+        loaded_message_end: 70,
+        messages: (20..70)
+            .map(|index| AgentMessage {
+                id: Some(format!("msg-{index}")),
+                role: MessageRole::User,
+                content: format!("msg {index}"),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }));
+
+    let selected_index = state.selected_message().expect("selection should survive");
+    let thread = state.active_thread().expect("thread should exist");
+    assert_eq!(selected_index, 60);
+    assert_eq!(thread.messages[selected_index].id.as_deref(), Some("msg-80"));
+}
+
+#[test]
+fn selected_message_tracks_same_message_when_append_trims_latest_window() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Test".into(),
+        total_message_count: 100,
+        loaded_message_start: 0,
+        loaded_message_end: 100,
+        messages: (0..100)
+            .map(|index| AgentMessage {
+                id: Some(format!("msg-{index}")),
+                role: MessageRole::User,
+                content: format!("msg {index}"),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }));
+    state.reduce(ChatAction::SelectThread("t1".into()));
+    state.select_message(Some(80));
+
+    state.reduce(ChatAction::AppendMessage {
+        thread_id: "t1".into(),
+        message: AgentMessage {
+            id: Some("msg-100".into()),
+            role: MessageRole::Assistant,
+            content: "msg 100".into(),
+            ..Default::default()
+        },
+    });
+
+    let selected_index = state.selected_message().expect("selection should survive");
+    let thread = state.active_thread().expect("thread should exist");
+    assert_eq!(selected_index, 79);
+    assert_eq!(thread.messages[selected_index].id.as_deref(), Some("msg-80"));
+}
+
+#[test]
+fn expanded_reasoning_and_tools_track_same_messages_across_window_updates() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Test".into(),
+        total_message_count: 100,
+        loaded_message_start: 0,
+        loaded_message_end: 100,
+        messages: (0..100)
+            .map(|index| AgentMessage {
+                id: Some(format!("msg-{index}")),
+                role: if index == 80 {
+                    MessageRole::Assistant
+                } else if index == 90 {
+                    MessageRole::Tool
+                } else {
+                    MessageRole::User
+                },
+                content: format!("msg {index}"),
+                reasoning: (index == 80).then(|| "reasoning".to_string()),
+                tool_name: (index == 90).then(|| "bash".to_string()),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }));
+    state.reduce(ChatAction::SelectThread("t1".into()));
+    state.toggle_reasoning(80);
+    state.toggle_tool_expansion(90);
+
+    state.reduce(ChatAction::AppendMessage {
+        thread_id: "t1".into(),
+        message: AgentMessage {
+            id: Some("msg-100".into()),
+            role: MessageRole::Assistant,
+            content: "msg 100".into(),
+            ..Default::default()
+        },
+    });
+
+    let thread = state.active_thread().expect("thread should exist");
+    let expanded_reasoning = state.expanded_reasoning();
+    let expanded_tools = state.expanded_tools();
+    let reasoning_index = expanded_reasoning
+        .iter()
+        .copied()
+        .next()
+        .expect("reasoning expansion should survive");
+    let tool_index = expanded_tools
+        .iter()
+        .copied()
+        .next()
+        .expect("tool expansion should survive");
+    assert_eq!(thread.messages[reasoning_index].id.as_deref(), Some("msg-80"));
+    assert_eq!(thread.messages[tool_index].id.as_deref(), Some("msg-90"));
+
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Test".into(),
+        total_message_count: 101,
+        loaded_message_start: 0,
+        loaded_message_end: 50,
+        messages: (0..50)
+            .map(|index| AgentMessage {
+                id: Some(format!("msg-{index}")),
+                role: MessageRole::User,
+                content: format!("msg {index}"),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }));
+
+    let thread = state.active_thread().expect("thread should exist");
+    let expanded_reasoning = state.expanded_reasoning();
+    let expanded_tools = state.expanded_tools();
+    let reasoning_index = expanded_reasoning
+        .iter()
+        .copied()
+        .next()
+        .expect("reasoning expansion should survive prepend");
+    let tool_index = expanded_tools
+        .iter()
+        .copied()
+        .next()
+        .expect("tool expansion should survive prepend");
+    assert_eq!(thread.messages[reasoning_index].id.as_deref(), Some("msg-80"));
+    assert_eq!(thread.messages[tool_index].id.as_deref(), Some("msg-90"));
 }
 
 #[test]

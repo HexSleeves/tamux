@@ -338,14 +338,24 @@ impl TuiModel {
         prompt: String,
         force_send: bool,
     ) {
-        self.queued_prompts.push(QueuedPrompt::new_with_agent(
-            prompt,
-            thread_id,
-            suggestion_id,
-            target_agent_id,
-            target_agent_name,
-            force_send,
-        ));
+        if let Some(existing) = self.queued_prompts.iter_mut().find(|queued| {
+            queued.thread_id.as_deref() == Some(thread_id.as_str())
+                && queued.suggestion_id.as_deref() == Some(suggestion_id.as_str())
+        }) {
+            existing.text = prompt;
+            existing.participant_agent_id = Some(target_agent_id);
+            existing.participant_agent_name = Some(target_agent_name);
+            existing.force_send = force_send;
+        } else {
+            self.queued_prompts.push(QueuedPrompt::new_with_agent(
+                prompt,
+                thread_id,
+                suggestion_id,
+                target_agent_id,
+                target_agent_name,
+                force_send,
+            ));
+        }
         self.status_line = format!("QUEUED ({})", self.queued_prompts.len());
         self.sync_queued_prompt_modal_state();
     }
@@ -372,8 +382,38 @@ impl TuiModel {
         if self.queue_barrier_active() {
             return;
         }
-        if let Some(prompt) = self.pop_next_queued_prompt() {
+        let Some(index) = self
+            .queued_prompts
+            .iter()
+            .position(|prompt| prompt.suggestion_id.is_none())
+        else {
+            return;
+        };
+        if let Some(prompt) = self.remove_queued_prompt_at(index) {
             self.submit_prompt(prompt.text);
+        }
+    }
+
+    pub(super) fn sync_participant_queued_prompts_for_thread(
+        &mut self,
+        thread_id: &str,
+        live_suggestion_ids: &std::collections::HashSet<String>,
+    ) {
+        let before = self.queued_prompts.len();
+        self.queued_prompts.retain(|prompt| {
+            let Some(prompt_thread_id) = prompt.thread_id.as_deref() else {
+                return true;
+            };
+            let Some(suggestion_id) = prompt.suggestion_id.as_deref() else {
+                return true;
+            };
+            if prompt_thread_id != thread_id {
+                return true;
+            }
+            live_suggestion_ids.contains(suggestion_id)
+        });
+        if self.queued_prompts.len() != before {
+            self.sync_queued_prompt_modal_state();
         }
     }
 

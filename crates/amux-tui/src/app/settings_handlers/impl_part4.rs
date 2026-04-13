@@ -281,6 +281,10 @@ impl TuiModel {
                 "max_context_messages",
                 &self.config.max_context_messages.to_string(),
             ),
+            "tui_chat_history_page_size" => self.settings.start_editing(
+                "tui_chat_history_page_size",
+                &self.config.tui_chat_history_page_size.to_string(),
+            ),
             "max_tool_loops" => self
                 .settings
                 .start_editing("max_tool_loops", &self.config.max_tool_loops.to_string()),

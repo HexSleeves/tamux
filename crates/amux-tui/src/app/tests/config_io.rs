@@ -86,6 +86,7 @@ fn build_config_patch_value_covers_all_daemon_backed_tabs() {
     model.config.whatsapp_token = "whatsapp-secret".to_string();
     model.config.auto_compact_context = false;
     model.config.max_context_messages = 123;
+    model.config.tui_chat_history_page_size = 222;
     model.config.max_tool_loops = 44;
     model.config.max_retries = 7;
     model.config.retry_delay_ms = 9_000;
@@ -151,6 +152,7 @@ fn build_config_patch_value_covers_all_daemon_backed_tabs() {
     assert_eq!(json["gateway"]["whatsapp_phone_id"], "phone-1");
     assert_eq!(json["auto_compact_context"], false);
     assert_eq!(json["max_context_messages"], 123);
+    assert_eq!(json["tui_chat_history_page_size"], 222);
     assert_eq!(json["max_tool_loops"], 44);
     assert_eq!(json["max_retries"], 7);
     assert_eq!(json["retry_delay_ms"], 9000);
@@ -278,6 +280,7 @@ fn build_config_patch_value_round_trips_daemon_backed_settings() {
     model.config.whatsapp_phone_id = "phone-1".to_string();
     model.config.auto_compact_context = false;
     model.config.max_context_messages = 123;
+    model.config.tui_chat_history_page_size = 222;
     model.config.max_tool_loops = 44;
     model.config.max_retries = 7;
     model.config.retry_delay_ms = 9_000;
@@ -376,6 +379,7 @@ fn build_config_patch_value_round_trips_daemon_backed_settings() {
     assert_eq!(reloaded.config.whatsapp_phone_id, "phone-1");
     assert_eq!(reloaded.config.auto_compact_context, false);
     assert_eq!(reloaded.config.max_context_messages, 123);
+    assert_eq!(reloaded.config.tui_chat_history_page_size, 222);
     assert_eq!(reloaded.config.max_tool_loops, 44);
     assert_eq!(reloaded.config.max_retries, 7);
     assert_eq!(reloaded.config.retry_delay_ms, 9_000);
@@ -606,6 +610,7 @@ fn apply_config_json_uses_daemon_retry_delay_default_when_missing() {
     }));
 
     assert_eq!(model.config.retry_delay_ms, 5_000);
+    assert_eq!(model.config.tui_chat_history_page_size, 100);
     assert_eq!(model.config.message_loop_delay_ms, 500);
     assert_eq!(model.config.tool_call_delay_ms, 500);
 }
@@ -775,6 +780,7 @@ fn sync_config_to_daemon_does_not_emit_null_api_key_for_advanced_edits() {
     model.config.auth_source = "api_key".to_string();
     model.config.api_transport = "responses".to_string();
     model.config.max_context_messages = 123;
+    model.config.tui_chat_history_page_size = 222;
     model.config.agent_config_raw = Some(serde_json::json!({
         "provider": "openai",
         "base_url": "https://api.openai.com/v1",
@@ -783,6 +789,7 @@ fn sync_config_to_daemon_does_not_emit_null_api_key_for_advanced_edits() {
         "auth_source": "api_key",
         "api_transport": "responses",
         "max_context_messages": 100,
+        "tui_chat_history_page_size": 100,
         "providers": {
             "openai": {
                 "base_url": "https://api.openai.com/v1",
@@ -798,6 +805,7 @@ fn sync_config_to_daemon_does_not_emit_null_api_key_for_advanced_edits() {
     model.sync_config_to_daemon();
 
     let mut emitted_max_context_messages = false;
+    let mut emitted_tui_chat_history_page_size = false;
     while let Ok(command) = daemon_rx.try_recv() {
         match command {
             DaemonCommand::SetConfigItem {
@@ -812,6 +820,10 @@ fn sync_config_to_daemon_does_not_emit_null_api_key_for_advanced_edits() {
                     emitted_max_context_messages = true;
                     assert_eq!(value_json, "123");
                 }
+                if key_path == "/tui_chat_history_page_size" {
+                    emitted_tui_chat_history_page_size = true;
+                    assert_eq!(value_json, "222");
+                }
             }
             DaemonCommand::SetProviderModel { .. } => {}
             other => panic!("unexpected daemon command: {other:?}"),
@@ -821,6 +833,10 @@ fn sync_config_to_daemon_does_not_emit_null_api_key_for_advanced_edits() {
     assert!(
         emitted_max_context_messages,
         "expected max_context_messages update to be emitted"
+    );
+    assert!(
+        emitted_tui_chat_history_page_size,
+        "expected tui_chat_history_page_size update to be emitted"
     );
 }
 

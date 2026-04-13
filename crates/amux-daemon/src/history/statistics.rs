@@ -183,7 +183,9 @@ fn window_cutoff_ms(window: AgentStatisticsWindow) -> Option<i64> {
                 .unwrap_or(now);
             Some(start_of_day.timestamp_millis())
         }
-        AgentStatisticsWindow::Last7Days => Some((Local::now() - Duration::days(7)).timestamp_millis()),
+        AgentStatisticsWindow::Last7Days => {
+            Some((Local::now() - Duration::days(7)).timestamp_millis())
+        }
         AgentStatisticsWindow::Last30Days => {
             Some((Local::now() - Duration::days(30)).timestamp_millis())
         }

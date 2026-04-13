@@ -33,6 +33,16 @@ assert(
 );
 
 assert(
+  DEFAULT_AGENT_SETTINGS.react_chat_history_page_size === 100,
+  "Default React chat history page size should be 100 messages",
+);
+
+assert(
+  DEFAULT_AGENT_SETTINGS.tui_chat_history_page_size === 100,
+  "Default TUI chat history page size should be 100 messages",
+);
+
+assert(
   DEFAULT_AGENT_SETTINGS.skill_recommendation.enabled === true,
   "Default skill recommendation gate should be enabled",
 );
@@ -54,6 +64,21 @@ const normalizedTimeout = normalizeAgentSettingsFromSource({
 assert(
   normalizedTimeout.llm_stream_chunk_timeout_secs === 420,
   "Settings normalization should preserve LLM stream chunk timeout overrides",
+);
+
+const normalizedHistoryPageSizes = normalizeAgentSettingsFromSource({
+  react_chat_history_page_size: 0,
+  tui_chat_history_page_size: 222,
+});
+
+assert(
+  normalizedHistoryPageSizes.react_chat_history_page_size === 0,
+  "Settings normalization should preserve the React unlimited history sentinel",
+);
+
+assert(
+  normalizedHistoryPageSizes.tui_chat_history_page_size === 222,
+  "Settings normalization should preserve the TUI history page size override",
 );
 
 const normalizedSkillRecommendation = normalizeAgentSettingsFromSource({
