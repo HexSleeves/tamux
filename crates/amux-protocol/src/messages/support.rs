@@ -533,6 +533,59 @@ pub struct AgentDbMessage {
     pub metadata_json: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentMessageCursor {
+    pub created_at: i64,
+    pub message_id: String,
+}
+
+impl AgentMessageCursor {
+    pub fn from_message(message: &AgentDbMessage) -> Self {
+        Self {
+            created_at: message.created_at,
+            message_id: message.id.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentMessageSpan {
+    Range {
+        start: AgentMessageCursor,
+        end: AgentMessageCursor,
+    },
+    LastTurn {
+        message: AgentMessageCursor,
+    },
+}
+
+impl AgentMessageSpan {
+    pub fn legacy_label(&self) -> String {
+        match self {
+            Self::Range { start, end } => format!("{}..{}", start.message_id, end.message_id),
+            Self::LastTurn { .. } => "last_turn".to_string(),
+        }
+    }
+
+    pub fn end_cursor(&self) -> AgentMessageCursor {
+        match self {
+            Self::Range { end, .. } => end.clone(),
+            Self::LastTurn { message } => message.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryDistillationProgressRow {
+    pub source_thread_id: String,
+    pub last_processed_cursor: AgentMessageCursor,
+    pub last_processed_span: Option<AgentMessageSpan>,
+    pub last_run_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub agent_id: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum AgentStatisticsWindow {
     #[serde(rename = "today")]

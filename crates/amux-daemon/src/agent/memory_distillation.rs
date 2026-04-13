@@ -6,7 +6,7 @@
 //! MEMORY.md/USER.md with a `[distilled]` provenance prefix.
 
 use super::*;
-use crate::history::HistoryStore;
+use crate::history::{AgentMessageCursor, AgentMessageSpan, HistoryStore, MemoryDistillationProgressRow};
 use amux_protocol::{AgentDbMessage, InboxNotification};
 use chrono::{SecondsFormat, Utc};
 use rusqlite::params;
@@ -52,6 +52,8 @@ impl std::fmt::Display for MemoryCategory {
 pub struct DistillationCandidate {
     pub source_thread_id: String,
     pub source_message_range: Option<String>,
+    pub source_message_span: Option<AgentMessageSpan>,
+    pub last_processed_cursor: Option<AgentMessageCursor>,
     pub distilled_fact: String,
     pub target_file: String, // "MEMORY.md" or "USER.md"
     pub category: MemoryCategory,
@@ -116,11 +118,43 @@ pub async fn run_distillation_pass(
 
     for thread_id in thread_ids {
         result.threads_analyzed += 1;
-        let messages = db.list_recent_messages(&thread_id, 40).await?;
+        let progress = db.get_memory_distillation_progress(&thread_id).await?;
+        let messages = db
+            .list_messages_after_cursor(
+                &thread_id,
+                progress.as_ref().map(|row| &row.last_processed_cursor),
+                Some(40),
+            )
+            .await?;
+        if messages.is_empty() {
+            if let Some(progress) = progress {
+                let refreshed_progress = MemoryDistillationProgressRow {
+                    last_run_at_ms: now as i64,
+                    updated_at_ms: now as i64,
+                    agent_id: config.agent_id.clone(),
+                    ..progress
+                };
+                db.upsert_memory_distillation_progress(&refreshed_progress)
+                    .await?;
+            }
+            continue;
+        }
         let candidates = extract_candidates_from_messages(&thread_id, &messages);
+
+        let mut thread_last_cursor = progress
+            .as_ref()
+            .map(|row| row.last_processed_cursor.clone())
+            .or_else(|| messages.last().map(AgentMessageCursor::from_message));
+        let mut thread_last_span = progress.and_then(|row| row.last_processed_span);
 
         for candidate in candidates {
             result.candidates_generated += 1;
+            if let Some(cursor) = candidate.last_processed_cursor.clone() {
+                thread_last_cursor = Some(cursor);
+            }
+            if let Some(span) = candidate.source_message_span.clone() {
+                thread_last_span = Some(span);
+            }
             let target_key = candidate.target_file.clone();
             let applied_count = *applied_per_target.get(&target_key).unwrap_or(&0);
             let queued_count = *queued_per_target.get(&target_key).unwrap_or(&0);
@@ -153,6 +187,18 @@ pub async fn run_distillation_pass(
                 log_distillation_candidate(db, &candidate, false, &config.agent_id).await?;
             }
         }
+
+        if let Some(last_processed_cursor) = thread_last_cursor {
+            let progress_row = MemoryDistillationProgressRow {
+                source_thread_id: thread_id.clone(),
+                last_processed_cursor,
+                last_processed_span: thread_last_span,
+                last_run_at_ms: now as i64,
+                updated_at_ms: now as i64,
+                agent_id: config.agent_id.clone(),
+            };
+            db.upsert_memory_distillation_progress(&progress_row).await?;
+        }
     }
 
     if config.review_notification && !review_candidates.is_empty() {
@@ -174,22 +220,45 @@ async fn list_undistilled_threads(
                 "SELECT threads.id
                  FROM agent_threads AS threads
                  JOIN (
-                     SELECT thread_id, MAX(created_at) AS latest_message_activity_at
-                     FROM agent_messages
-                     GROUP BY thread_id
+                     SELECT current.thread_id,
+                            current.created_at AS latest_message_activity_at,
+                            current.id AS latest_message_id
+                     FROM agent_messages AS current
+                     WHERE NOT EXISTS (
+                         SELECT 1
+                         FROM agent_messages AS newer
+                         WHERE newer.thread_id = current.thread_id
+                           AND (
+                               newer.created_at > current.created_at
+                               OR (
+                                   newer.created_at = current.created_at
+                                   AND newer.id > current.id
+                               )
+                           )
+                     )
                  ) AS activity
                    ON activity.thread_id = threads.id
+                 LEFT JOIN memory_distillation_progress AS progress
+                   ON progress.source_thread_id = threads.id
                  LEFT JOIN (
-                     SELECT source_thread_id, MAX(created_at_ms) AS last_distilled_at
+                     SELECT source_thread_id, MAX(created_at_ms) AS last_applied_at
                      FROM memory_distillation_log
                      WHERE applied_to_memory = 1
                      GROUP BY source_thread_id
-                 ) AS distillation
-                   ON distillation.source_thread_id = threads.id
+                 ) AS applied
+                   ON applied.source_thread_id = threads.id
                  WHERE activity.latest_message_activity_at < ?1
                    AND (
-                       distillation.last_distilled_at IS NULL
-                       OR distillation.last_distilled_at < activity.latest_message_activity_at
+                       progress.last_processed_created_at_ms IS NULL
+                       OR progress.last_processed_created_at_ms < activity.latest_message_activity_at
+                       OR (
+                           progress.last_processed_created_at_ms = activity.latest_message_activity_at
+                           AND progress.last_processed_message_id < activity.latest_message_id
+                       )
+                   )
+                   AND (
+                       applied.last_applied_at IS NULL
+                       OR applied.last_applied_at < activity.latest_message_activity_at
                    )
                  ORDER BY activity.latest_message_activity_at ASC
                  LIMIT ?2",
@@ -231,16 +300,23 @@ fn extract_candidates_from_messages(
             );
             if let Some(existing_index) = seen.get(&dedupe_key).copied() {
                 if supporting_ranges[existing_index].insert(index) {
+                    let span = build_source_message_span(messages, &supporting_ranges[existing_index]);
                     candidates[existing_index].source_message_range = format_source_message_range(
                         &supporting_ranges[existing_index],
                         last_user_message_index,
                     );
+                    candidates[existing_index].source_message_span = span.clone();
+                    candidates[existing_index].last_processed_cursor =
+                        span.as_ref().map(AgentMessageSpan::end_cursor);
                 }
             } else {
                 let mut support = BTreeSet::new();
                 support.insert(index);
+                let span = build_source_message_span(messages, &support);
                 candidate.source_message_range =
                     format_source_message_range(&support, last_user_message_index);
+                candidate.source_message_span = span.clone();
+                candidate.last_processed_cursor = span.as_ref().map(AgentMessageSpan::end_cursor);
                 seen.insert(dedupe_key, candidates.len());
                 candidates.push(candidate);
                 supporting_ranges.push(support);
@@ -249,6 +325,22 @@ fn extract_candidates_from_messages(
     }
 
     candidates
+}
+
+fn build_source_message_span(
+    messages: &[AgentDbMessage],
+    message_indices: &BTreeSet<usize>,
+) -> Option<AgentMessageSpan> {
+    let first = *message_indices.first()?;
+    let last = *message_indices.last()?;
+    let start = AgentMessageCursor::from_message(messages.get(first)?);
+    let end = AgentMessageCursor::from_message(messages.get(last)?);
+
+    if first == last {
+        Some(AgentMessageSpan::LastTurn { message: end })
+    } else {
+        Some(AgentMessageSpan::Range { start, end })
+    }
 }
 
 fn format_source_message_range(
@@ -345,6 +437,8 @@ fn candidate_from_line(
     Some(DistillationCandidate {
         source_thread_id: thread_id.to_string(),
         source_message_range: None,
+        source_message_span: None,
+        last_processed_cursor: None,
         distilled_fact: cleaned,
         target_file: target_file.to_string(),
         category,
@@ -544,36 +638,27 @@ async fn log_distillation_candidate(
 ) -> anyhow::Result<()> {
     let source_thread_id = candidate.source_thread_id.clone();
     let source_message_range = candidate.source_message_range.clone();
+    let source_message_span = candidate.source_message_span.clone();
     let distilled_fact = candidate.distilled_fact.clone();
     let target_file = candidate.target_file.clone();
     let category = candidate.category.to_string();
     let confidence = candidate.confidence;
     let created_at_ms = now_millis() as i64;
-    let applied_flag = if applied_to_memory { 1_i64 } else { 0_i64 };
     let agent_id = agent_id.to_string();
 
-    db.conn
-        .call(move |conn| {
-            conn.execute(
-                "INSERT INTO memory_distillation_log \
-                 (source_thread_id, source_message_range, distilled_fact, target_file, category, confidence, created_at_ms, applied_to_memory, agent_id) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    source_thread_id,
-                    source_message_range,
-                    distilled_fact,
-                    target_file,
-                    category,
-                    confidence,
-                    created_at_ms,
-                    applied_flag,
-                    agent_id,
-                ],
-            )?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))
+    db.append_memory_distillation_log(
+        &source_thread_id,
+        source_message_range.as_deref(),
+        source_message_span.as_ref(),
+        &distilled_fact,
+        &target_file,
+        &category,
+        confidence,
+        created_at_ms,
+        applied_to_memory,
+        &agent_id,
+    )
+    .await
 }
 
 async fn emit_review_notification(
@@ -945,6 +1030,8 @@ mod tests {
         let candidate = DistillationCandidate {
             source_thread_id: "thread-1".into(),
             source_message_range: Some("msg#1".into()),
+            source_message_span: None,
+            last_processed_cursor: None,
             distilled_fact: "Use the cargo package name `tamux-daemon` for `cargo -p`.".into(),
             target_file: "MEMORY.md".into(),
             category: MemoryCategory::Convention,
@@ -994,6 +1081,8 @@ mod tests {
             &DistillationCandidate {
                 source_thread_id: "old-reviewed-only".into(),
                 source_message_range: Some("1-1".into()),
+                source_message_span: None,
+                last_processed_cursor: None,
                 distilled_fact: "Use the cargo package name `tamux-daemon` for `cargo -p`."
                     .into(),
                 target_file: "MEMORY.md".into(),
@@ -1011,6 +1100,8 @@ mod tests {
             &DistillationCandidate {
                 source_thread_id: "old-applied".into(),
                 source_message_range: Some("1-1".into()),
+                source_message_span: None,
+                last_processed_cursor: None,
                 distilled_fact: "Prefer summary-first answers with hard details below.".into(),
                 target_file: "USER.md".into(),
                 category: MemoryCategory::Preference,
@@ -1138,6 +1229,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_undistilled_threads_detects_same_timestamp_newer_message_after_progress(
+    ) -> anyhow::Result<()> {
+        let root = std::env::temp_dir().join(format!("tamux-distill-test-{}", Uuid::new_v4()));
+        let history = HistoryStore::new_test_store(&root).await?;
+
+        create_thread_with_user_message(&history, "same-ts-newer-id", 8_000_i64).await?;
+
+        history
+            .upsert_memory_distillation_progress(&MemoryDistillationProgressRow {
+                source_thread_id: "same-ts-newer-id".into(),
+                last_processed_cursor: AgentMessageCursor {
+                    created_at: 8_000_i64,
+                    message_id: "same-ts-newer-id-m1".into(),
+                },
+                last_processed_span: Some(AgentMessageSpan::LastTurn {
+                    message: AgentMessageCursor {
+                        created_at: 8_000_i64,
+                        message_id: "same-ts-newer-id-m1".into(),
+                    },
+                }),
+                last_run_at_ms: 8_100_i64,
+                updated_at_ms: 8_100_i64,
+                agent_id: "rarog".into(),
+            })
+            .await?;
+
+        history
+            .add_message(&AgentDbMessage {
+                id: "same-ts-newer-id-m2".into(),
+                thread_id: "same-ts-newer-id".into(),
+                created_at: 8_000_i64,
+                role: "user".into(),
+                content: "Prefer summary-first answers with hard details below.".into(),
+                provider: None,
+                model: None,
+                input_tokens: None,
+                output_tokens: None,
+                total_tokens: None,
+                cost_usd: None,
+                reasoning: None,
+                tool_calls_json: None,
+                metadata_json: None,
+            })
+            .await?;
+
+        let selected = list_undistilled_threads(&history, 9_000, 10).await?;
+
+        assert!(selected.contains(&"same-ts-newer-id".to_string()));
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn list_undistilled_threads_ignores_bookkeeping_only_thread_updates(
     ) -> anyhow::Result<()> {
         let root = std::env::temp_dir().join(format!("tamux-distill-test-{}", Uuid::new_v4()));
@@ -1189,6 +1334,8 @@ mod tests {
             DistillationCandidate {
                 source_thread_id: "thread-1".into(),
                 source_message_range: Some("msg#1".into()),
+                source_message_span: None,
+                last_processed_cursor: None,
                 distilled_fact: "Use the cargo package name `tamux-daemon` for `cargo -p`.".into(),
                 target_file: "MEMORY.md".into(),
                 category: MemoryCategory::Convention,
@@ -1198,6 +1345,8 @@ mod tests {
             DistillationCandidate {
                 source_thread_id: "thread-2".into(),
                 source_message_range: Some("msg#2".into()),
+                source_message_span: None,
+                last_processed_cursor: None,
                 distilled_fact: "Prefer summary-first answers with hard details below.".into(),
                 target_file: "USER.md".into(),
                 category: MemoryCategory::Preference,
