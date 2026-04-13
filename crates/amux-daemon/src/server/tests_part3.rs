@@ -631,14 +631,10 @@ async fn force_compact_request_queues_continuation_and_cancels_active_stream() {
         token.is_cancelled(),
         "force compact should cancel active stream"
     );
-    let queued = conn
+    let queued_for_thread = conn
         .agent
-        .deferred_visible_thread_continuations
-        .lock()
+        .deferred_visible_thread_continuations_for(thread_id)
         .await;
-    let queued_for_thread = queued
-        .get(thread_id)
-        .expect("force compact should queue a continuation");
     assert_eq!(queued_for_thread.len(), 1);
     assert!(queued_for_thread[0].force_compaction);
 

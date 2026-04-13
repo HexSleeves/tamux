@@ -311,6 +311,14 @@ impl AgentEngine {
             .push(continuation);
     }
 
+    pub(crate) async fn deferred_visible_thread_continuations_for(
+        &self,
+        thread_id: &str,
+    ) -> Vec<DeferredVisibleThreadContinuation> {
+        let queued = self.deferred_visible_thread_continuations.lock().await;
+        queued.get(thread_id).cloned().unwrap_or_default()
+    }
+
     pub(in crate::agent) async fn flush_deferred_visible_thread_continuations(
         &self,
         thread_id: &str,
