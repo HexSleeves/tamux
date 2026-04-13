@@ -7,9 +7,12 @@
 use anyhow::{Context, Result};
 use uuid::Uuid;
 
-use super::profiles::match_specialist;
-use super::{AcceptanceCriteria, ContextBundle, EpisodeRef, HandoffResult, ValidationResult};
+use super::profiles::{compute_learned_routing_weights, match_specialist, select_specialist};
+use super::{
+    AcceptanceCriteria, ContextBundle, EpisodeRef, HandoffResult, RoutingMethod, ValidationResult,
+};
 use crate::agent::engine::AgentEngine;
+use crate::agent::types::RoutingMode;
 
 /// Maximum handoff depth before escalating to operator (HAND-08).
 const MAX_HANDOFF_DEPTH: u8 = 3;
@@ -19,6 +22,16 @@ const CONTEXT_BUNDLE_TOKEN_CEILING: u32 = 2000;
 
 /// Maximum episodic refs to include in a context bundle.
 const MAX_EPISODIC_REFS: usize = 3;
+
+fn validate_match_threshold(threshold: f64) -> Result<()> {
+    if !threshold.is_finite() {
+        anyhow::bail!("handoff match_threshold must be finite");
+    }
+    if !(0.0..=1.0).contains(&threshold) {
+        anyhow::bail!("handoff match_threshold must be within 0.0..=1.0, got {threshold}");
+    }
+    Ok(())
+}
 
 impl AgentEngine {
     /// Assemble a context bundle for a specialist handoff.
@@ -132,25 +145,91 @@ impl AgentEngine {
 
         // Read broker profiles
         let broker = self.handoff_broker.read().await;
-        let profiles = &broker.profiles;
+        let profiles = broker.profiles.clone();
         let threshold = broker.match_threshold;
+        drop(broker);
+        validate_match_threshold(threshold)?;
+        let routing_cfg = self.config.read().await.routing.clone();
+
+        let learned_weights =
+            if routing_cfg.enabled && matches!(routing_cfg.method, RoutingMode::Probabilistic) {
+                let score_rows = self
+                    .load_capability_score_rows(capability_tags)
+                    .await
+                    .context("loading capability score rows for handoff routing")?;
+                compute_learned_routing_weights(
+                    &profiles,
+                    capability_tags,
+                    &score_rows,
+                    &routing_cfg,
+                    crate::history::now_ts() * 1000,
+                )
+            } else {
+                Vec::new()
+            };
+
+        let learned_selection = if learned_weights.len() >= 2 {
+            let weights: Vec<f64> = learned_weights.iter().map(|entry| entry.weight).collect();
+            if let Ok(dist) = rand::distributions::WeightedIndex::new(&weights) {
+                let selected = &learned_weights
+                    [rand::distributions::Distribution::sample(&dist, &mut rand::thread_rng())];
+                if selected.weight >= routing_cfg.confidence_threshold {
+                    Some((selected.profile_idx, selected.weight))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            learned_weights
+                .first()
+                .filter(|entry| entry.weight >= routing_cfg.confidence_threshold)
+                .map(|entry| (entry.profile_idx, entry.weight))
+        };
 
         // Match specialist
-        let (profile_idx, _score) = match match_specialist(profiles, capability_tags, threshold) {
-            Some(result) => result,
-            None => {
-                // Fallback to generalist (last profile)
-                let generalist_idx = profiles.len().saturating_sub(1);
-                (generalist_idx, 0.0)
+        let selection = if let Some((profile_idx, routing_score)) = learned_selection {
+            super::profiles::RoutingSelection {
+                profile_idx,
+                routing_method: RoutingMethod::Probabilistic,
+                routing_score,
+                fallback_used: false,
             }
+        } else if matches!(routing_cfg.method, RoutingMode::Deterministic) {
+            if let Some((idx, score)) = match_specialist(&profiles, capability_tags, threshold) {
+                super::profiles::RoutingSelection {
+                    profile_idx: idx,
+                    routing_method: RoutingMethod::Deterministic,
+                    routing_score: score,
+                    fallback_used: false,
+                }
+            } else {
+                super::profiles::RoutingSelection {
+                    profile_idx: profiles.len().saturating_sub(1),
+                    routing_method: RoutingMethod::Deterministic,
+                    routing_score: 0.0,
+                    fallback_used: true,
+                }
+            }
+        } else {
+            let mut fallback = select_specialist(&profiles, capability_tags, threshold)
+                .context("selecting specialist profile for handoff")?;
+            if !learned_weights.is_empty() {
+                fallback.fallback_used = true;
+            }
+            fallback
         };
+        let profile_idx = selection.profile_idx;
+        let routing_method = selection.routing_method;
+        let routing_score = selection.routing_score;
+        let fallback_used = selection.fallback_used;
 
         let specialist = &profiles[profile_idx];
         let specialist_id = specialist.id.clone();
         let specialist_name = specialist.name.clone();
         let specialist_role = specialist.role.clone();
         let system_prompt_snippet = specialist.system_prompt_snippet.clone();
-        drop(broker);
 
         // Assemble context bundle
         let bundle = self
@@ -178,6 +257,8 @@ impl AgentEngine {
             require_llm_validation: false,
         })
         .unwrap_or_else(|_| "{}".to_string());
+        let capability_tags_json =
+            serde_json::to_string(capability_tags).unwrap_or_else(|_| "[]".to_string());
 
         // Log detailed handoff record
         if let Err(e) = self
@@ -189,9 +270,13 @@ impl AgentEngine {
                 task_description,
                 &criteria_json,
                 &bundle_json,
+                &capability_tags_json,
                 current_depth,
                 "dispatched",
                 None,
+                routing_method.as_str(),
+                routing_score,
+                fallback_used,
             )
             .await
         {
@@ -209,6 +294,10 @@ impl AgentEngine {
                 None,
                 None,
                 &handoff_log_id,
+                routing_method.as_str(),
+                &capability_tags_json,
+                routing_score,
+                fallback_used,
             )
             .await
         {
@@ -283,6 +372,9 @@ impl AgentEngine {
             specialist_name,
             handoff_log_id,
             context_bundle_tokens: bundle_tokens,
+            routing_method,
+            routing_score,
+            fallback_used,
         })
     }
 
@@ -339,6 +431,10 @@ impl AgentEngine {
                         None,
                         None,
                         handoff_log_id,
+                        "deterministic",
+                        "[]",
+                        0.0,
+                        false,
                     )
                     .await
                 {
@@ -383,6 +479,10 @@ impl AgentEngine {
                 None,
                 None,
                 handoff_log_id,
+                "deterministic",
+                "[]",
+                0.0,
+                false,
             )
             .await
         {

@@ -163,6 +163,7 @@ impl AgentEngine {
                 let mut thread_participant_suggestions = HashMap::new();
                 let mut thread_client_surfaces = HashMap::new();
                 let mut thread_skill_discovery_states = HashMap::new();
+                let mut thread_memory_injection_states = HashMap::new();
                 let mut thread_structural_memories = HashMap::new();
                 for thread_row in thread_rows {
                     let thread_id = thread_row.id.clone();
@@ -177,6 +178,12 @@ impl AgentEngine {
                     {
                         thread_skill_discovery_states
                             .insert(thread_id.clone(), latest_skill_discovery_state);
+                    }
+                    if let Some(prompt_memory_injection_state) =
+                        thread_metadata.prompt_memory_injection_state.clone()
+                    {
+                        thread_memory_injection_states
+                            .insert(thread_id.clone(), prompt_memory_injection_state);
                     }
                     if !thread_metadata.thread_participants.is_empty() {
                         thread_participants.insert(
@@ -297,6 +304,8 @@ impl AgentEngine {
                 *self.thread_participant_suggestions.write().await = thread_participant_suggestions;
                 *self.thread_client_surfaces.write().await = thread_client_surfaces;
                 *self.thread_skill_discovery_states.write().await = thread_skill_discovery_states;
+                *self.thread_memory_injection_state_map().write().await =
+                    thread_memory_injection_states;
                 *self.thread_structural_memories.write().await = thread_structural_memories;
             }
             Ok(_) => {}

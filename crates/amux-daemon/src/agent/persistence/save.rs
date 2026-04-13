@@ -82,6 +82,8 @@ impl AgentEngine {
             .cloned()
             .unwrap_or_default();
         let latest_skill_discovery_state = self.get_thread_skill_discovery_state(&thread.id).await;
+        let prompt_memory_injection_state =
+            self.get_thread_memory_injection_state(&thread.id).await;
         let thread_row = amux_protocol::AgentDbThread {
             id: thread.id.clone(),
             workspace_id: None,
@@ -108,6 +110,7 @@ impl AgentEngine {
                 &thread_participants,
                 &thread_participant_suggestions,
                 latest_skill_discovery_state.as_ref(),
+                prompt_memory_injection_state.as_ref(),
             ),
         };
 

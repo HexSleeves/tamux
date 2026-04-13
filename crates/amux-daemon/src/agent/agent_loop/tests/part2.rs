@@ -3,6 +3,252 @@ use amux_shared::providers::{
     PROVIDER_ID_CUSTOM, PROVIDER_ID_MINIMAX_CODING_PLAN, PROVIDER_ID_OPENAI,
 };
 
+async fn spawn_pre_compaction_memory_update_server(
+    recorded_bodies: Arc<StdMutex<VecDeque<String>>>,
+) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind pre-compaction memory update server");
+    let addr = listener
+        .local_addr()
+        .expect("pre-compaction memory update server local addr");
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let recorded_bodies = recorded_bodies.clone();
+            tokio::spawn(async move {
+                let request =
+                    read_http_request(&mut socket, "pre-compaction memory update request").await;
+                let body = request_body(&request);
+                recorded_bodies
+                    .lock()
+                    .expect("lock recorded pre-compaction request log")
+                    .push_back(body.clone());
+
+                let response = if body.contains("## Pre-Compaction Memory Flush") {
+                    concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "content-type: text/event-stream\r\n",
+                        "cache-control: no-cache\r\n",
+                        "connection: close\r\n",
+                        "\r\n",
+                        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_memory_flush_1\",\"function\":{\"name\":\"update_memory\",\"arguments\":\"{\\\"target\\\":\\\"memory\\\",\\\"mode\\\":\\\"append\\\",\\\"content\\\":\\\"- Durable correction from compaction\\\"}\"}}]}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+                        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+                        "data: [DONE]\n\n"
+                    )
+                } else {
+                    concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "content-type: text/event-stream\r\n",
+                        "cache-control: no-cache\r\n",
+                        "connection: close\r\n",
+                        "\r\n",
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"Acknowledged.\"}}]}\n\n",
+                        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+                        "data: [DONE]\n\n"
+                    )
+                };
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write pre-compaction memory update response");
+            });
+        }
+    });
+
+    format!("http://{addr}/v1")
+}
+
+#[tokio::test]
+async fn first_turn_runner_bootstrap_includes_structured_memory_summary() {
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = spawn_recording_assistant_server(recorded_bodies.clone()).await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let outcome = engine
+        .send_message_inner(
+            None,
+            "Bootstrap me with memory context",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect("send message should succeed");
+
+    assert!(!outcome.interrupted_for_approval);
+
+    let recorded = recorded_bodies
+        .lock()
+        .expect("lock recorded assistant request log");
+    assert!(
+        recorded
+            .iter()
+            .any(|body| body.contains("## Structured Memory Summary")),
+        "expected first-turn prompt bootstrap to include structured memory summary"
+    );
+    assert!(
+        recorded
+            .iter()
+            .any(|body| body.contains("## Freshness Summary")),
+        "expected first-turn prompt bootstrap to include freshness summary"
+    );
+}
+
+#[tokio::test]
+async fn post_compaction_prompt_rebuild_refreshes_memory_summary_and_injection_state() {
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = spawn_pre_compaction_memory_update_server(recorded_bodies.clone()).await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    config.auto_compact_context = true;
+    config.max_context_messages = 2;
+    config.keep_recent_on_compact = 1;
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread-memory-bootstrap-rebuild";
+
+    let memory_paths = crate::agent::task_prompt::memory_paths_for_scope(
+        root.path(),
+        crate::agent::agent_identity::MAIN_AGENT_ID,
+    );
+    std::fs::write(
+        &memory_paths.memory_path,
+        "# Memory\n\n- Stable fact before compaction\n",
+    )
+    .expect("seed memory file");
+    engine.refresh_memory_cache().await;
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            crate::agent::types::AgentThread {
+                id: thread_id.to_string(),
+                agent_name: None,
+                title: "Compaction memory rebuild".to_string(),
+                messages: vec![
+                    crate::agent::types::AgentMessage::user("First request", 1),
+                    crate::agent::types::AgentMessage {
+                        id: "assistant-1".to_string(),
+                        role: MessageRole::Assistant,
+                        content: "Observed earlier state".to_string(),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        tool_name: None,
+                        tool_arguments: None,
+                        tool_status: None,
+                        weles_review: None,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cost: None,
+                        provider: None,
+                        model: None,
+                        api_transport: None,
+                        response_id: None,
+                        upstream_message: None,
+                        provider_final_result: None,
+                        author_agent_id: None,
+                        author_agent_name: None,
+                        reasoning: None,
+                        message_kind: AgentMessageKind::Normal,
+                        compaction_strategy: None,
+                        compaction_payload: None,
+                        offloaded_payload_id: None,
+                        structural_refs: Vec::new(),
+                        timestamp: 2,
+                    },
+                    crate::agent::types::AgentMessage::user("Need a fresh request boundary", 3),
+                ],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+    }
+
+    let outcome = engine
+        .send_message_inner(
+            Some(thread_id),
+            "Need a fresh request boundary",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect("send message should succeed");
+
+    assert!(!outcome.interrupted_for_approval);
+
+    let injection_state = engine
+        .get_thread_memory_injection_state(thread_id)
+        .await
+        .expect("expected thread injection state after rebuild");
+    assert!(
+        injection_state.base_markdown_injected_at_ms.is_some(),
+        "expected rebuild to refresh prompt memory injection state"
+    );
+
+    let recorded = recorded_bodies
+        .lock()
+        .expect("lock recorded pre-compaction request log");
+    assert!(
+        recorded
+            .iter()
+            .any(|body| body.contains("## Pre-Compaction Memory Flush")),
+        "expected the rebuild path to execute the pre-compaction memory flush request"
+    );
+    assert!(
+        recorded
+            .iter()
+            .any(|body| body.contains("## Structured Memory Summary")),
+        "expected post-compaction rebuild to keep structured memory summary"
+    );
+    assert!(
+        recorded
+            .iter()
+            .any(|body| body.contains("Durable correction from compaction")),
+        "expected rebuilt prompt summary to reflect refreshed durable memory"
+    );
+}
+
 #[tokio::test]
 async fn send_message_request_includes_runtime_continuity_and_negative_knowledge() {
     let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));

@@ -313,6 +313,7 @@ fn synthetic_skill_variant_record(
 
 pub(super) fn page_public_discovery_result(
     query: &str,
+    normalized_intent: &str,
     context_tags: &[String],
     result: &SkillDiscoveryResult,
     cfg: &SkillRecommendationConfig,
@@ -350,7 +351,7 @@ pub(super) fn page_public_discovery_result(
 
     Ok(amux_protocol::SkillDiscoveryResultPublic {
         query: query.to_string(),
-        normalized_intent: query.to_string(),
+        normalized_intent: normalized_intent.to_string(),
         required: !matches!(result.recommended_action, SkillRecommendationAction::None),
         confidence_tier: confidence_label(result.confidence).to_string(),
         recommended_action: recommended_action_label(result.recommended_action, top_skill_name),

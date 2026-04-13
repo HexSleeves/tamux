@@ -107,8 +107,10 @@ pub struct AgentEngine {
     pub thread_participant_suggestions: RwLock<HashMap<String, Vec<ThreadParticipantSuggestion>>>,
     pub(super) deferred_visible_thread_continuations:
         Mutex<HashMap<String, Vec<DeferredVisibleThreadContinuation>>>,
+    pub(super) active_visible_thread_continuation_flushes: Mutex<HashSet<String>>,
     pub thread_client_surfaces: RwLock<HashMap<String, amux_protocol::ClientSurface>>,
     pub thread_skill_discovery_states: RwLock<HashMap<String, LatestSkillDiscoveryState>>,
+    pub thread_memory_injection_states: RwLock<HashMap<String, PromptMemoryInjectionState>>,
     pub thread_structural_memories:
         RwLock<HashMap<String, crate::agent::context::structural_memory::ThreadStructuralMemory>>,
     pub thread_todos: RwLock<HashMap<String, Vec<TodoItem>>>,
@@ -301,8 +303,10 @@ impl AgentEngine {
             thread_participants: RwLock::new(HashMap::new()),
             thread_participant_suggestions: RwLock::new(HashMap::new()),
             deferred_visible_thread_continuations: Mutex::new(HashMap::new()),
+            active_visible_thread_continuation_flushes: Mutex::new(HashSet::new()),
             thread_client_surfaces: RwLock::new(HashMap::new()),
             thread_skill_discovery_states: RwLock::new(HashMap::new()),
+            thread_memory_injection_states: RwLock::new(HashMap::new()),
             thread_structural_memories: RwLock::new(HashMap::new()),
             thread_todos: RwLock::new(HashMap::new()),
             thread_work_contexts: RwLock::new(HashMap::new()),
@@ -391,6 +395,12 @@ impl AgentEngine {
         );
 
         engine
+    }
+
+    pub(crate) fn thread_memory_injection_state_map(
+        &self,
+    ) -> &RwLock<HashMap<String, PromptMemoryInjectionState>> {
+        &self.thread_memory_injection_states
     }
 
     // ── Circuit breaker helpers ──────────────────────────────────────────

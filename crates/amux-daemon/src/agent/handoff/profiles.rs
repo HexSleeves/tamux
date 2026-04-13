@@ -1,6 +1,26 @@
 //! Default specialist profiles and capability-based matching.
 
-use super::{CapabilityTag, HandoffEscalationRule, Proficiency, SpecialistProfile};
+use rand::distributions::{Distribution, WeightedIndex};
+use rand::thread_rng;
+
+use crate::agent::handoff::audit::CapabilityScoreRow;
+use crate::agent::types::RoutingConfig;
+
+use super::{CapabilityTag, Proficiency, RoutingMethod, SpecialistProfile};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutingSelection {
+    pub profile_idx: usize,
+    pub routing_method: RoutingMethod,
+    pub routing_score: f64,
+    pub fallback_used: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LearnedRoutingWeight {
+    pub profile_idx: usize,
+    pub weight: f64,
+}
 
 /// Returns the 5 built-in specialist profiles.
 pub fn default_specialist_profiles() -> Vec<SpecialistProfile> {
@@ -246,6 +266,154 @@ pub fn match_specialist(
     }
 }
 
+fn compute_recency_decay(last_attempt_ms: Option<u64>, half_life_hours: f64, now_ms: u64) -> f64 {
+    let Some(last_attempt_ms) = last_attempt_ms else {
+        return 1.0;
+    };
+    if !half_life_hours.is_finite() || half_life_hours <= 0.0 || now_ms <= last_attempt_ms {
+        return 1.0;
+    }
+    let elapsed_hours = (now_ms - last_attempt_ms) as f64 / 3_600_000.0;
+    let decay_constant = std::f64::consts::LN_2 / half_life_hours;
+    (-elapsed_hours * decay_constant).exp()
+}
+
+pub(crate) fn compute_learned_routing_weights(
+    profiles: &[SpecialistProfile],
+    required_tags: &[String],
+    score_rows: &[CapabilityScoreRow],
+    routing: &RoutingConfig,
+    now_ms: u64,
+) -> Vec<LearnedRoutingWeight> {
+    if profiles.is_empty() || required_tags.is_empty() || !routing.enabled {
+        return Vec::new();
+    }
+
+    let mut weights = Vec::new();
+    for (profile_idx, profile) in profiles.iter().enumerate() {
+        let mut aggregate_weight = 0.0_f64;
+        let mut matched_any_tag = false;
+
+        for required_tag in required_tags {
+            let supports_tag = profile
+                .capabilities
+                .iter()
+                .any(|cap| cap.tag == *required_tag);
+            if !supports_tag {
+                continue;
+            }
+            matched_any_tag = true;
+
+            let learned = score_rows
+                .iter()
+                .find(|row| row.agent_id == profile.id && row.capability_tag == *required_tag);
+
+            let tag_weight = if let Some(row) = learned {
+                let attempts = row.attempts as f64;
+                let successes = row.successes as f64;
+                let bayesian_success_rate = (successes + routing.bayesian_alpha)
+                    / (attempts + (2.0 * routing.bayesian_alpha));
+                let confidence_factor = row.avg_confidence_score.clamp(0.0, 1.0);
+                let recency_decay = compute_recency_decay(
+                    row.last_attempt_ms,
+                    routing.recency_decay_half_life_hours,
+                    now_ms,
+                );
+                bayesian_success_rate * confidence_factor * recency_decay
+            } else {
+                0.25
+            };
+
+            aggregate_weight += tag_weight;
+        }
+
+        if matched_any_tag && aggregate_weight > 0.0 {
+            weights.push(LearnedRoutingWeight {
+                profile_idx,
+                weight: aggregate_weight,
+            });
+        }
+    }
+
+    weights.sort_by(|a, b| {
+        b.weight
+            .partial_cmp(&a.weight)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    weights
+}
+
+/// Select a specialist using a probabilistic pass across all non-zero matches,
+/// with deterministic fallback when no candidate clears the threshold.
+pub fn select_specialist(
+    profiles: &[SpecialistProfile],
+    required_tags: &[String],
+    threshold: f64,
+) -> Option<RoutingSelection> {
+    if profiles.is_empty() || required_tags.is_empty() {
+        return None;
+    }
+
+    let scored: Vec<(usize, f64)> = profiles
+        .iter()
+        .enumerate()
+        .map(|(idx, profile)| {
+            let total_weight = required_tags
+                .iter()
+                .filter_map(|req_tag| {
+                    profile
+                        .capabilities
+                        .iter()
+                        .find(|cap| cap.tag == *req_tag)
+                        .map(|cap| cap.proficiency.weight())
+                })
+                .sum::<f64>();
+            let score = total_weight / required_tags.len() as f64;
+            (idx, score)
+        })
+        .collect();
+
+    let probabilistic_candidates: Vec<(usize, f64)> = scored
+        .iter()
+        .copied()
+        .filter(|(_, score)| *score > 0.0)
+        .collect();
+
+    if probabilistic_candidates.len() >= 2 {
+        let weights: Vec<f64> = probabilistic_candidates
+            .iter()
+            .map(|(_, score)| *score)
+            .collect();
+        if let Ok(dist) = WeightedIndex::new(&weights) {
+            let selected = probabilistic_candidates[dist.sample(&mut thread_rng())];
+            if selected.1 >= threshold {
+                return Some(RoutingSelection {
+                    profile_idx: selected.0,
+                    routing_method: RoutingMethod::Probabilistic,
+                    routing_score: selected.1,
+                    fallback_used: false,
+                });
+            }
+        }
+    }
+
+    if let Some((idx, score)) = match_specialist(profiles, required_tags, threshold) {
+        return Some(RoutingSelection {
+            profile_idx: idx,
+            routing_method: RoutingMethod::Deterministic,
+            routing_score: score,
+            fallback_used: false,
+        });
+    }
+
+    Some(RoutingSelection {
+        profile_idx: profiles.len().saturating_sub(1),
+        routing_method: RoutingMethod::Deterministic,
+        routing_score: 0.0,
+        fallback_used: true,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,6 +568,138 @@ mod tests {
         let tags = vec!["quantum-physics".to_string(), "neurosurgery".to_string()];
         let result = match_specialist(&profiles, &tags, 0.3);
         assert!(result.is_none(), "should return None when below threshold");
+    }
+
+    #[test]
+    fn select_specialist_uses_generalist_fallback_for_zero_match() {
+        let profiles = default_specialist_profiles();
+        let tags = vec!["quantum-physics".to_string(), "neurosurgery".to_string()];
+        let result = select_specialist(&profiles, &tags, 0.3).expect("selection result");
+        assert_eq!(profiles[result.profile_idx].id, "generalist");
+        assert_eq!(result.routing_method, RoutingMethod::Deterministic);
+        assert!(result.fallback_used);
+        assert!((result.routing_score - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn select_specialist_returns_probabilistic_when_multiple_candidates_clear_threshold() {
+        let profiles = default_specialist_profiles();
+        let tags = vec!["research".to_string()];
+        let result = select_specialist(&profiles, &tags, 0.3).expect("selection result");
+        assert_eq!(result.routing_method, RoutingMethod::Probabilistic);
+        assert!(result.routing_score >= 0.5);
+        assert!(!result.fallback_used);
+        assert!(matches!(
+            profiles[result.profile_idx].id.as_str(),
+            "researcher" | "generalist"
+        ));
+    }
+
+    #[test]
+    fn compute_learned_routing_weights_prefers_stronger_historical_agent() {
+        let profiles = default_specialist_profiles();
+        let routing = RoutingConfig::default();
+        let rows = vec![
+            CapabilityScoreRow {
+                agent_id: "researcher".to_string(),
+                capability_tag: "research".to_string(),
+                attempts: 10,
+                successes: 9,
+                failures: 1,
+                partials: 0,
+                last_attempt_ms: Some(1_000_000),
+                avg_confidence_score: 0.9,
+                total_tokens_used: 1000,
+            },
+            CapabilityScoreRow {
+                agent_id: "generalist".to_string(),
+                capability_tag: "research".to_string(),
+                attempts: 10,
+                successes: 4,
+                failures: 6,
+                partials: 0,
+                last_attempt_ms: Some(1_000_000),
+                avg_confidence_score: 0.6,
+                total_tokens_used: 1000,
+            },
+        ];
+        let tags = vec!["research".to_string()];
+
+        let weights = compute_learned_routing_weights(&profiles, &tags, &rows, &routing, 1_000_000);
+        assert!(!weights.is_empty());
+        let top = &weights[0];
+        assert_eq!(profiles[top.profile_idx].id, "researcher");
+        assert!(top.weight > weights[1].weight);
+    }
+
+    #[test]
+    fn compute_learned_routing_weights_uses_cold_start_prior() {
+        let profiles = default_specialist_profiles();
+        let routing = RoutingConfig::default();
+        let tags = vec!["research".to_string()];
+
+        let weights = compute_learned_routing_weights(&profiles, &tags, &[], &routing, 1_000_000);
+        assert!(weights.iter().any(|entry| profiles[entry.profile_idx].id == "researcher"));
+        let researcher = weights
+            .iter()
+            .find(|entry| profiles[entry.profile_idx].id == "researcher")
+            .expect("researcher weight");
+        assert!((researcher.weight - 0.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn compute_learned_routing_weights_converge_toward_higher_success_history() {
+        let profiles = default_specialist_profiles();
+        let routing = RoutingConfig::default();
+        let tags = vec!["research".to_string()];
+        let now_ms = 10_000_000;
+
+        let cold = compute_learned_routing_weights(&profiles, &tags, &[], &routing, now_ms);
+        let cold_researcher = cold
+            .iter()
+            .find(|entry| profiles[entry.profile_idx].id == "researcher")
+            .expect("cold researcher weight")
+            .weight;
+        let cold_generalist = cold
+            .iter()
+            .find(|entry| profiles[entry.profile_idx].id == "generalist")
+            .expect("cold generalist weight")
+            .weight;
+        assert!((cold_researcher - cold_generalist).abs() < f64::EPSILON);
+
+        let converged_rows = vec![
+            CapabilityScoreRow {
+                agent_id: "researcher".to_string(),
+                capability_tag: "research".to_string(),
+                attempts: 100,
+                successes: 92,
+                failures: 8,
+                partials: 0,
+                last_attempt_ms: Some(now_ms),
+                avg_confidence_score: 0.95,
+                total_tokens_used: 20_000,
+            },
+            CapabilityScoreRow {
+                agent_id: "generalist".to_string(),
+                capability_tag: "research".to_string(),
+                attempts: 100,
+                successes: 18,
+                failures: 82,
+                partials: 0,
+                last_attempt_ms: Some(now_ms),
+                avg_confidence_score: 0.55,
+                total_tokens_used: 20_000,
+            },
+        ];
+
+        let converged =
+            compute_learned_routing_weights(&profiles, &tags, &converged_rows, &routing, now_ms);
+        let top = &converged[0];
+        let runner_up = &converged[1];
+        assert_eq!(profiles[top.profile_idx].id, "researcher");
+        assert_eq!(profiles[runner_up.profile_idx].id, "generalist");
+        assert!(top.weight > runner_up.weight * 2.0);
+        assert!(top.weight > cold_researcher);
     }
 
     #[test]

@@ -210,6 +210,9 @@ pub struct AgentConfig {
     /// Runtime skill recommender controls.
     #[serde(default)]
     pub skill_recommendation: SkillRecommendationConfig,
+    /// Specialist routing controls (Spec-03 probabilistic agent routing).
+    #[serde(default)]
+    pub routing: RoutingConfig,
     /// Skill promotion thresholds (Phase 6).
     #[serde(default)]
     pub skill_promotion: SkillPromotionConfig,

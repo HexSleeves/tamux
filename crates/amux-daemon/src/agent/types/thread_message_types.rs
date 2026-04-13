@@ -1,3 +1,5 @@
+pub use crate::agent::memory_context::PromptMemoryInjectionState;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentThread {
     pub id: String,

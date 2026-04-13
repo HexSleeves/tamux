@@ -61,8 +61,10 @@ use agent_tools::{
 use daemon::{connect_daemon, daemon_roundtrip};
 use daemon_tools::{
     tool_execute_command, tool_find_symbol, tool_get_git_status, tool_get_terminal_content,
-    tool_list_sessions, tool_list_snapshots, tool_restore_snapshot, tool_scrub_sensitive,
-    tool_search_history, tool_semantic_query, tool_type_in_terminal, tool_verify_integrity,
+    tool_list_sessions, tool_list_snapshots, tool_read_memory, tool_read_soul, tool_read_user,
+    tool_restore_snapshot, tool_scrub_sensitive, tool_search_history, tool_search_memory,
+    tool_search_soul, tool_search_user, tool_semantic_query, tool_type_in_terminal,
+    tool_verify_integrity,
 };
 use rpc::{handle_initialize, handle_tools_list, JsonRpcRequest, JsonRpcResponse};
 use skills::{collect_skill_documents, resolve_skill_path, tamux_root_dir, tamux_skills_dir};
@@ -113,6 +115,12 @@ async fn dispatch_tool(name: &str, args: &Value) -> Result<Value> {
         "verify_integrity" => tool_verify_integrity(args).await,
         "get_terminal_content" => tool_get_terminal_content(args).await,
         "type_in_terminal" => tool_type_in_terminal(args).await,
+        "read_memory" => tool_read_memory(args).await,
+        "read_user" => tool_read_user(args).await,
+        "read_soul" => tool_read_soul(args).await,
+        "search_memory" => tool_search_memory(args).await,
+        "search_user" => tool_search_user(args).await,
+        "search_soul" => tool_search_soul(args).await,
         "enqueue_task" => tool_enqueue_task(args).await,
         "list_tasks" => tool_list_tasks().await,
         "cancel_task" => tool_cancel_task(args).await,

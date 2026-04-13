@@ -170,6 +170,12 @@ pub struct SkillRecommendationConfig {
     pub community_preapprove_timeout_secs: u64,
     #[serde(default = "default_skill_recommendation_suggest_global_enable_after_approvals")]
     pub suggest_global_enable_after_approvals: u32,
+    #[serde(default = "default_true")]
+    pub llm_normalize_on_no_match: bool,
+    #[serde(default = "default_true")]
+    pub llm_semantic_search_on_no_match: bool,
+    #[serde(default = "default_skill_recommendation_llm_semantic_search_max_skills")]
+    pub llm_semantic_search_max_skills: u32,
 }
 
 fn default_skill_recommendation_discovery_backend() -> String {
@@ -192,6 +198,10 @@ fn default_skill_recommendation_suggest_global_enable_after_approvals() -> u32 {
     3
 }
 
+fn default_skill_recommendation_llm_semantic_search_max_skills() -> u32 {
+    64
+}
+
 impl Default for SkillRecommendationConfig {
     fn default() -> Self {
         Self {
@@ -205,6 +215,73 @@ impl Default for SkillRecommendationConfig {
                 default_skill_recommendation_community_preapprove_timeout_secs(),
             suggest_global_enable_after_approvals:
                 default_skill_recommendation_suggest_global_enable_after_approvals(),
+            llm_normalize_on_no_match: default_true(),
+            llm_semantic_search_on_no_match: default_true(),
+            llm_semantic_search_max_skills:
+                default_skill_recommendation_llm_semantic_search_max_skills(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Specialist routing config (Spec 03)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingMode {
+    Probabilistic,
+    Deterministic,
+}
+
+impl Default for RoutingMode {
+    fn default() -> Self {
+        Self::Probabilistic
+    }
+}
+
+/// Controls learned specialist routing behavior.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub method: RoutingMode,
+    #[serde(default = "default_routing_bayesian_alpha")]
+    pub bayesian_alpha: f64,
+    #[serde(default = "default_routing_confidence_threshold")]
+    pub confidence_threshold: f64,
+    #[serde(default = "default_routing_recency_half_life_hours")]
+    pub recency_decay_half_life_hours: f64,
+    #[serde(default = "default_routing_confidence_ema_alpha")]
+    pub confidence_ema_alpha: f64,
+}
+
+fn default_routing_bayesian_alpha() -> f64 {
+    1.0
+}
+
+fn default_routing_confidence_threshold() -> f64 {
+    0.3
+}
+
+fn default_routing_recency_half_life_hours() -> f64 {
+    168.0
+}
+
+fn default_routing_confidence_ema_alpha() -> f64 {
+    0.3
+}
+
+impl Default for RoutingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            method: RoutingMode::default(),
+            bayesian_alpha: default_routing_bayesian_alpha(),
+            confidence_threshold: default_routing_confidence_threshold(),
+            recency_decay_half_life_hours: default_routing_recency_half_life_hours(),
+            confidence_ema_alpha: default_routing_confidence_ema_alpha(),
         }
     }
 }

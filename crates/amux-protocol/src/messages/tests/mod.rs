@@ -349,6 +349,54 @@ fn daemon_message_roundtrips_agent_semantic_query_result() {
 }
 
 #[test]
+fn client_message_roundtrips_agent_execute_memory_tool() {
+    let msg = ClientMessage::AgentExecuteMemoryTool {
+        tool_name: "search_memory".to_string(),
+        args_json: serde_json::json!({
+            "query": "operator preferences",
+            "limit": 5,
+        })
+        .to_string(),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+    match decoded {
+        ClientMessage::AgentExecuteMemoryTool {
+            tool_name,
+            args_json,
+        } => {
+            let payload: serde_json::Value = serde_json::from_str(&args_json).unwrap();
+            assert_eq!(tool_name, "search_memory");
+            assert_eq!(payload["query"], "operator preferences");
+            assert_eq!(payload["limit"], 5);
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
+}
+
+#[test]
+fn daemon_message_roundtrips_agent_memory_tool_result() {
+    let msg = DaemonMessage::AgentMemoryToolResult {
+        content: serde_json::json!({
+            "scope": "memory",
+            "matches": [],
+            "truncated": false,
+        })
+        .to_string(),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    match decoded {
+        DaemonMessage::AgentMemoryToolResult { content } => {
+            let payload: serde_json::Value = serde_json::from_str(&content).unwrap();
+            assert_eq!(payload["scope"], "memory");
+            assert_eq!(payload["truncated"], false);
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
+}
+
+#[test]
 fn client_message_roundtrips_agent_vote_on_collaboration_disagreement() {
     let msg = ClientMessage::AgentVoteOnCollaborationDisagreement {
         parent_task_id: "task-1".to_string(),

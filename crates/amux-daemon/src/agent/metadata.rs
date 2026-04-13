@@ -32,6 +32,7 @@ pub(super) struct ParsedThreadMetadata {
     pub thread_participants: Vec<ThreadParticipantState>,
     pub thread_participant_suggestions: Vec<ThreadParticipantSuggestion>,
     pub latest_skill_discovery_state: Option<LatestSkillDiscoveryState>,
+    pub prompt_memory_injection_state: Option<PromptMemoryInjectionState>,
 }
 
 pub(super) fn parse_message_metadata(metadata_json: Option<&str>) -> ParsedMessageMetadata {
@@ -163,6 +164,12 @@ pub(super) fn parse_thread_metadata(metadata_json: Option<&str>) -> ParsedThread
             .and_then(|value| {
                 serde_json::from_value::<LatestSkillDiscoveryState>(value.clone()).ok()
             }),
+        prompt_memory_injection_state: metadata
+            .as_ref()
+            .and_then(|value| value.get("prompt_memory_injection_state"))
+            .and_then(|value| {
+                serde_json::from_value::<PromptMemoryInjectionState>(value.clone()).ok()
+            }),
         handoff_state: metadata.as_ref().and_then(|value| {
             let origin_agent_id = value
                 .get("origin_agent_id")
@@ -228,6 +235,7 @@ pub(super) fn build_thread_metadata_json(
     thread_participants: &[ThreadParticipantState],
     thread_participant_suggestions: &[ThreadParticipantSuggestion],
     latest_skill_discovery_state: Option<&LatestSkillDiscoveryState>,
+    prompt_memory_injection_state: Option<&PromptMemoryInjectionState>,
 ) -> Option<String> {
     serde_json::to_string(&serde_json::json!({
         "client_surface": client_surface,
@@ -250,6 +258,7 @@ pub(super) fn build_thread_metadata_json(
         "thread_participants": thread_participants,
         "thread_participant_suggestions": thread_participant_suggestions,
         "latest_skill_discovery_state": latest_skill_discovery_state,
+        "prompt_memory_injection_state": prompt_memory_injection_state,
     }))
     .ok()
 }

@@ -26,6 +26,11 @@ fn emit_workflow_notice_for_tool(
             "Agent updated persistent memory.".to_string(),
             Some(args.to_string()),
         ),
+        "read_memory" | "read_user" | "read_soul" => (
+            "memory-consulted",
+            format!("Agent consulted persistent memory via {tool_name}."),
+            Some(args.to_string()),
+        ),
         "list_tools" | "tool_search" => (
             "tool-catalog",
             format!("Agent inspected available tools via {tool_name}."),

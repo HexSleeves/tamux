@@ -155,4 +155,5 @@ pub enum DaemonMessage {
     AgentToolList { result: ToolListResultPublic },
     AgentToolSearchResult { result: ToolSearchResultPublic },
     AgentThreadDeleted { thread_id: String, deleted: bool },
+    AgentMemoryToolResult { content: String },
 }

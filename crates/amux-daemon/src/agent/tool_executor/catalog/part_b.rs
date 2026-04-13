@@ -142,6 +142,108 @@ fn add_available_tools_part_b(
     ));
 
     tools.push(tool_def(
+        "read_memory",
+        "Read persistent MEMORY.md plus related structured memory layers. This response is injection-aware and avoids re-sending already injected fresh base markdown unless explicitly requested.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "include_already_injected": { "type": "boolean", "description": "Force inclusion of base markdown even when a fresh copy is already injected in the prompt (default: false)" },
+                "include_base_markdown": { "type": "boolean", "description": "Include MEMORY.md content when not skipped by injection state (default: true)" },
+                "include_operator_profile_json": { "type": "boolean", "description": "Include structured operator profile JSON (default: true)" },
+                "include_operator_model_summary": { "type": "boolean", "description": "Include operator-model prompt summary when available (default: true)" },
+                "include_thread_structural_memory": { "type": "boolean", "description": "Include thread structural memory summaries when available (default: true)" },
+                "limit_per_layer": { "type": "integer", "description": "Maximum items returned for list-style layers (default: 5, max: 25)" }
+            }
+        }),
+    ));
+
+    tools.push(tool_def(
+        "read_user",
+        "Read persistent USER.md plus related structured operator layers. This response is injection-aware and avoids re-sending already injected fresh base markdown unless explicitly requested.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "include_already_injected": { "type": "boolean", "description": "Force inclusion of base markdown even when a fresh copy is already injected in the prompt (default: false)" },
+                "include_base_markdown": { "type": "boolean", "description": "Include USER.md content when not skipped by injection state (default: true)" },
+                "include_operator_profile_json": { "type": "boolean", "description": "Include structured operator profile JSON (default: true)" },
+                "include_operator_model_summary": { "type": "boolean", "description": "Include operator-model prompt summary when available (default: true)" },
+                "include_thread_structural_memory": { "type": "boolean", "description": "Include thread structural memory summaries when available (default: false)" },
+                "limit_per_layer": { "type": "integer", "description": "Maximum items returned for list-style layers (default: 5, max: 25)" }
+            }
+        }),
+    ));
+
+    tools.push(tool_def(
+        "read_soul",
+        "Read persistent SOUL.md plus related structured context layers. This response is injection-aware and avoids re-sending already injected fresh base markdown unless explicitly requested.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "include_already_injected": { "type": "boolean", "description": "Force inclusion of base markdown even when a fresh copy is already injected in the prompt (default: false)" },
+                "include_base_markdown": { "type": "boolean", "description": "Include SOUL.md content when not skipped by injection state (default: true)" },
+                "include_operator_profile_json": { "type": "boolean", "description": "Include structured operator profile JSON (default: true)" },
+                "include_operator_model_summary": { "type": "boolean", "description": "Include operator-model prompt summary when available (default: true)" },
+                "include_thread_structural_memory": { "type": "boolean", "description": "Include thread structural memory summaries when available (default: false)" },
+                "limit_per_layer": { "type": "integer", "description": "Maximum items returned for list-style layers (default: 5, max: 25)" }
+            }
+        }),
+    ));
+
+    tools.push(tool_def(
+        "search_memory",
+        "Search MEMORY.md plus related structured memory layers. This response is injection-aware and skips already injected fresh base markdown unless explicitly requested.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Search query" },
+                "limit": { "type": "integer", "description": "Maximum matches to return (default: 5, max: 25)" },
+                "include_already_injected": { "type": "boolean", "description": "Allow fresh injected MEMORY.md content to appear in search matches (default: false)" },
+                "include_base_markdown": { "type": "boolean", "description": "Search MEMORY.md when not skipped by injection state (default: true)" },
+                "include_operator_profile_json": { "type": "boolean", "description": "Search structured operator profile JSON (default: true)" },
+                "include_operator_model_summary": { "type": "boolean", "description": "Search operator-model prompt summary when available (default: true)" },
+                "include_thread_structural_memory": { "type": "boolean", "description": "Search thread structural memory summaries when available (default: true)" }
+            },
+            "required": ["query"]
+        }),
+    ));
+
+    tools.push(tool_def(
+        "search_user",
+        "Search USER.md plus related structured operator layers. This response is injection-aware and skips already injected fresh base markdown unless explicitly requested.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Search query" },
+                "limit": { "type": "integer", "description": "Maximum matches to return (default: 5, max: 25)" },
+                "include_already_injected": { "type": "boolean", "description": "Allow fresh injected USER.md content to appear in search matches (default: false)" },
+                "include_base_markdown": { "type": "boolean", "description": "Search USER.md when not skipped by injection state (default: true)" },
+                "include_operator_profile_json": { "type": "boolean", "description": "Search structured operator profile JSON (default: true)" },
+                "include_operator_model_summary": { "type": "boolean", "description": "Search operator-model prompt summary when available (default: true)" },
+                "include_thread_structural_memory": { "type": "boolean", "description": "Search thread structural memory summaries when available (default: false)" }
+            },
+            "required": ["query"]
+        }),
+    ));
+
+    tools.push(tool_def(
+        "search_soul",
+        "Search SOUL.md plus related structured context layers. This response is injection-aware and skips already injected fresh base markdown unless explicitly requested.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Search query" },
+                "limit": { "type": "integer", "description": "Maximum matches to return (default: 5, max: 25)" },
+                "include_already_injected": { "type": "boolean", "description": "Allow fresh injected SOUL.md content to appear in search matches (default: false)" },
+                "include_base_markdown": { "type": "boolean", "description": "Search SOUL.md when not skipped by injection state (default: true)" },
+                "include_operator_profile_json": { "type": "boolean", "description": "Search structured operator profile JSON (default: true)" },
+                "include_operator_model_summary": { "type": "boolean", "description": "Search operator-model prompt summary when available (default: true)" },
+                "include_thread_structural_memory": { "type": "boolean", "description": "Search thread structural memory summaries when available (default: false)" }
+            },
+            "required": ["query"]
+        }),
+    ));
+
+    tools.push(tool_def(
         "list_skills",
         "List reusable local skills available to the tamux agent from ~/.tamux/skills (platform dependent). Includes built-in, generated, community, and plugin-bundled skills.",
         serde_json::json!({
@@ -217,11 +319,11 @@ fn add_available_tools_part_b(
 
     tools.push(tool_def(
         "discover_skills",
-        "Rank installed local skills for the current task and return the recommended next action. Use this before non-trivial work instead of treating `list_skills` as the decision authority.",
+        "Find matching local skills fast.",
         serde_json::json!({
             "type": "object",
             "properties": {
-                "query": { "type": "string", "description": "Task or problem description to rank skills against" },
+                "query": { "type": "string", "description": "Brief intent query, 3-6 words." },
                 "limit": { "type": "integer", "description": "Maximum number of ranked skill candidates to return (default: 3)" },
                 "session": { "type": "string", "description": "Optional live terminal session UUID for workspace-aware ranking" }
             },

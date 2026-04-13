@@ -184,6 +184,71 @@ fn compaction_candidate_exposes_the_older_slice_boundary() {
 
     assert_eq!(candidate.split_at, 2);
     assert!(candidate.target_tokens >= MIN_CONTEXT_TARGET_TOKENS);
+    assert_eq!(candidate.trigger, CompactionTrigger::MessageCount);
+}
+
+#[test]
+fn heuristic_message_count_alone_still_triggers_compaction() {
+    let mut config = AgentConfig::default();
+    config.compaction.strategy = CompactionStrategy::Heuristic;
+    config.max_context_messages = 100;
+    config.keep_recent_on_compact = 10;
+    config.context_window_tokens = 400_000;
+    config.compact_threshold_pct = 80;
+
+    let mut provider = sample_provider_config();
+    provider.context_window_tokens = 400_000;
+
+    let messages = (0..101)
+        .map(|idx| AgentMessage::user(format!("m{idx}"), idx as u64 + 1))
+        .collect::<Vec<_>>();
+
+    let candidate =
+        compaction_candidate(&messages, &config, &provider).expect("candidate should exist");
+
+    assert_eq!(candidate.target_tokens, 320_000);
+    assert_eq!(candidate.trigger, CompactionTrigger::MessageCount);
+}
+
+#[test]
+fn custom_model_message_count_alone_does_not_trigger_compaction() {
+    let mut config = AgentConfig::default();
+    config.compaction.strategy = CompactionStrategy::CustomModel;
+    config.max_context_messages = 100;
+    config.keep_recent_on_compact = 10;
+    config.context_window_tokens = 400_000;
+    config.compact_threshold_pct = 80;
+    config.compaction.custom_model.context_window_tokens = 1_000_000;
+
+    let mut provider = sample_provider_config();
+    provider.context_window_tokens = 400_000;
+
+    let messages = (0..101)
+        .map(|idx| AgentMessage::user(format!("m{idx}"), idx as u64 + 1))
+        .collect::<Vec<_>>();
+
+    assert_eq!(compaction_candidate(&messages, &config, &provider), None);
+}
+
+#[test]
+fn weles_message_count_alone_does_not_trigger_compaction() {
+    let mut config = AgentConfig::default();
+    config.compaction.strategy = CompactionStrategy::Weles;
+    config.max_context_messages = 100;
+    config.keep_recent_on_compact = 10;
+    config.context_window_tokens = 400_000;
+    config.compact_threshold_pct = 80;
+    config.compaction.weles.provider = PROVIDER_ID_ALIBABA_CODING_PLAN.to_string();
+    config.compaction.weles.model = "qwen3.6-plus".to_string();
+
+    let mut provider = sample_provider_config();
+    provider.context_window_tokens = 400_000;
+
+    let messages = (0..101)
+        .map(|idx| AgentMessage::user(format!("m{idx}"), idx as u64 + 1))
+        .collect::<Vec<_>>();
+
+    assert_eq!(compaction_candidate(&messages, &config, &provider), None);
 }
 
 #[test]
@@ -854,7 +919,9 @@ fn compaction_artifact_message_roundtrip_preserves_runtime_metadata() {
     let message = AgentMessage {
         id: "compaction-1".to_string(),
         role: MessageRole::Assistant,
-        content: "rule based".to_string(),
+        content:
+            "Pre-compaction context: ~182,400 / 200,000 tokens (threshold 160,000)\nTrigger: message-count\nStrategy: rule based"
+                .to_string(),
         tool_calls: None,
         tool_call_id: None,
         tool_name: None,
@@ -900,7 +967,7 @@ fn compaction_artifact_message_roundtrip_preserves_runtime_metadata() {
         decoded.compaction_payload.as_deref(),
         Some("Older context compacted for continuity")
     );
-    assert_eq!(decoded.content, "rule based");
+    assert_eq!(decoded.content, message.content);
 }
 
 #[test]
@@ -994,10 +1061,23 @@ async fn heuristic_compaction_artifact_persists_and_request_uses_hidden_payload(
     assert_eq!(thread.messages.len(), 4);
     let artifact = &thread.messages[2];
     assert_eq!(artifact.message_kind, AgentMessageKind::CompactionArtifact);
-    assert_eq!(artifact.content, "rule based");
     assert_eq!(
         artifact.compaction_strategy,
         Some(CompactionStrategy::Heuristic)
+    );
+    assert!(
+        artifact.content.contains("Pre-compaction context:"),
+        "expected a visible trigger summary on the compaction artifact"
+    );
+    assert!(
+        artifact.content.contains("Strategy: rule based"),
+        "expected the visible content to mention the compaction strategy: {}",
+        artifact.content
+    );
+    assert!(
+        artifact.content.contains("Trigger:"),
+        "expected the visible content to mention the compaction trigger: {}",
+        artifact.content
     );
     assert!(artifact
         .compaction_payload
@@ -1030,7 +1110,7 @@ async fn heuristic_compaction_artifact_persists_and_request_uses_hidden_payload(
         restored_artifact.message_kind,
         AgentMessageKind::CompactionArtifact
     );
-    assert_eq!(restored_artifact.content, "rule based");
+    assert_eq!(restored_artifact.content, artifact.content);
     assert_eq!(
         restored_artifact.compaction_strategy,
         Some(CompactionStrategy::Heuristic)
@@ -1081,7 +1161,7 @@ async fn auto_compaction_notice_includes_artifact_location_details() {
     assert!(persisted, "expected compaction artifact to be persisted");
 
     let notices = collect_workflow_notices(&mut events, thread_id);
-    let (_, _, details) = notices
+    let (_, message, details) = notices
         .into_iter()
         .find(|(kind, _, _)| kind == "auto-compaction")
         .expect("expected auto-compaction workflow notice");
@@ -1102,6 +1182,40 @@ async fn auto_compaction_notice_includes_artifact_location_details() {
             .and_then(serde_json::Value::as_u64)
             .is_some(),
         "expected total_message_count in auto-compaction details: {parsed}"
+    );
+    assert!(
+        parsed
+            .get("pre_compaction_total_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .is_some(),
+        "expected pre_compaction_total_tokens in auto-compaction details: {parsed}"
+    );
+    assert!(
+        parsed
+            .get("effective_context_window_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .is_some(),
+        "expected effective_context_window_tokens in auto-compaction details: {parsed}"
+    );
+    assert!(
+        parsed
+            .get("target_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .is_some(),
+        "expected target_tokens in auto-compaction details: {parsed}"
+    );
+    assert_eq!(
+        parsed.get("trigger").and_then(serde_json::Value::as_str),
+        Some("token_threshold"),
+        "expected machine-readable trigger in auto-compaction details: {parsed}"
+    );
+    assert!(
+        message.contains("Pre-compaction context:"),
+        "expected trigger summary in auto-compaction message: {message}"
+    );
+    assert!(
+        message.contains("Trigger: token-threshold"),
+        "expected trigger line in auto-compaction message: {message}"
     );
 }
 

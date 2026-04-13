@@ -1011,7 +1011,10 @@ fn selected_message_tracks_same_message_when_older_page_is_prepended() {
     let selected_index = state.selected_message().expect("selection should survive");
     let thread = state.active_thread().expect("thread should exist");
     assert_eq!(selected_index, 60);
-    assert_eq!(thread.messages[selected_index].id.as_deref(), Some("msg-80"));
+    assert_eq!(
+        thread.messages[selected_index].id.as_deref(),
+        Some("msg-80")
+    );
 }
 
 #[test]
@@ -1049,7 +1052,38 @@ fn selected_message_tracks_same_message_when_append_trims_latest_window() {
     let selected_index = state.selected_message().expect("selection should survive");
     let thread = state.active_thread().expect("thread should exist");
     assert_eq!(selected_index, 79);
-    assert_eq!(thread.messages[selected_index].id.as_deref(), Some("msg-80"));
+    assert_eq!(
+        thread.messages[selected_index].id.as_deref(),
+        Some("msg-80")
+    );
+}
+
+#[test]
+fn resolve_message_ref_ignores_absolute_indexes_before_loaded_window() {
+    let thread = AgentThread {
+        id: "t1".into(),
+        title: "Test".into(),
+        total_message_count: 8,
+        loaded_message_start: 5,
+        loaded_message_end: 8,
+        messages: (5..8)
+            .map(|index| AgentMessage {
+                id: Some(format!("msg-{index}")),
+                role: MessageRole::User,
+                content: format!("msg {index}"),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+
+    let message_ref = StoredMessageRef {
+        thread_id: "t1".into(),
+        message_id: None,
+        absolute_index: 2,
+    };
+
+    assert_eq!(resolve_message_ref(&thread, &message_ref), None);
 }
 
 #[test]
@@ -1106,7 +1140,10 @@ fn expanded_reasoning_and_tools_track_same_messages_across_window_updates() {
         .copied()
         .next()
         .expect("tool expansion should survive");
-    assert_eq!(thread.messages[reasoning_index].id.as_deref(), Some("msg-80"));
+    assert_eq!(
+        thread.messages[reasoning_index].id.as_deref(),
+        Some("msg-80")
+    );
     assert_eq!(thread.messages[tool_index].id.as_deref(), Some("msg-90"));
 
     state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
@@ -1139,7 +1176,10 @@ fn expanded_reasoning_and_tools_track_same_messages_across_window_updates() {
         .copied()
         .next()
         .expect("tool expansion should survive prepend");
-    assert_eq!(thread.messages[reasoning_index].id.as_deref(), Some("msg-80"));
+    assert_eq!(
+        thread.messages[reasoning_index].id.as_deref(),
+        Some("msg-80")
+    );
     assert_eq!(thread.messages[tool_index].id.as_deref(), Some("msg-90"));
 }
 

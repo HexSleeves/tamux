@@ -104,6 +104,43 @@ impl AgentEngine {
         }
     }
 
+    pub async fn set_thread_memory_injection_state(
+        &self,
+        thread_id: &str,
+        state: PromptMemoryInjectionState,
+    ) {
+        self.thread_memory_injection_state_map()
+            .write()
+            .await
+            .insert(thread_id.to_string(), state);
+        let thread_exists = self.threads.read().await.contains_key(thread_id);
+        if thread_exists {
+            self.persist_thread_by_id(thread_id).await;
+        }
+    }
+
+    pub async fn get_thread_memory_injection_state(
+        &self,
+        thread_id: &str,
+    ) -> Option<PromptMemoryInjectionState> {
+        self.thread_memory_injection_state_map()
+            .read()
+            .await
+            .get(thread_id)
+            .cloned()
+    }
+
+    pub async fn clear_thread_memory_injection_state(&self, thread_id: &str) {
+        self.thread_memory_injection_state_map()
+            .write()
+            .await
+            .remove(thread_id);
+        let thread_exists = self.threads.read().await.contains_key(thread_id);
+        if thread_exists {
+            self.persist_thread_by_id(thread_id).await;
+        }
+    }
+
     pub async fn set_goal_run_client_surface(
         &self,
         goal_run_id: &str,
@@ -253,6 +290,7 @@ impl AgentEngine {
         if removed {
             self.clear_thread_client_surface(thread_id).await;
             self.clear_thread_skill_discovery_state(thread_id).await;
+            self.clear_thread_memory_injection_state(thread_id).await;
             self.clear_thread_structural_memory(thread_id).await;
             self.thread_handoff_states.write().await.remove(thread_id);
             self.thread_participants.write().await.remove(thread_id);

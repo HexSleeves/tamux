@@ -1054,6 +1054,175 @@ async fn thread_metadata_round_trips_latest_skill_discovery_state() {
 }
 
 #[tokio::test]
+async fn thread_metadata_round_trips_memory_injection_state() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let seed_engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let thread_id = "thread_memory_injection_metadata";
+    let expected_state = PromptMemoryInjectionState {
+        base_markdown_hash: Some("sha256:memory-base-v1".to_string()),
+        base_markdown_updated_at_ms: Some(123),
+        structured_summary_hash: Some("sha256:summary-v1".to_string()),
+        base_markdown_injected_at_ms: Some(456),
+        ..Default::default()
+    };
+
+    seed_engine
+        .history
+        .create_thread(&amux_protocol::AgentDbThread {
+            id: thread_id.to_string(),
+            workspace_id: None,
+            surface_id: None,
+            pane_id: None,
+            agent_name: Some(MAIN_AGENT_NAME.to_string()),
+            title: "Memory injection metadata".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            message_count: 1,
+            total_tokens: 0,
+            last_preview: "memory bootstrap".to_string(),
+            metadata_json: Some(
+                serde_json::json!({
+                    "prompt_memory_injection_state": {
+                        "base_markdown_hash": "sha256:memory-base-v1",
+                        "base_markdown_updated_at_ms": 123,
+                        "structured_summary_hash": "sha256:summary-v1",
+                        "base_markdown_injected_at_ms": 456
+                    }
+                })
+                .to_string(),
+            ),
+        })
+        .await
+        .expect("seed thread row");
+    seed_engine
+        .history
+        .add_message(&amux_protocol::AgentDbMessage {
+            id: "seed-memory-message-1".to_string(),
+            thread_id: thread_id.to_string(),
+            created_at: 1,
+            role: "user".to_string(),
+            content: "bootstrap memory".to_string(),
+            provider: None,
+            model: None,
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            total_tokens: Some(0),
+            cost_usd: None,
+            reasoning: None,
+            tool_calls_json: None,
+            metadata_json: None,
+        })
+        .await
+        .expect("seed thread message");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    engine.hydrate().await.expect("hydrate");
+    engine.persist_thread_by_id(thread_id).await;
+
+    assert!(expected_state.is_base_layer_injected());
+    assert!(!expected_state.is_base_layer_stale(Some("sha256:memory-base-v1"), Some(123)));
+    assert!(expected_state.is_base_layer_stale(Some("sha256:memory-base-v2"), Some(123)));
+
+    let rehydrated_state = engine
+        .get_thread_memory_injection_state(thread_id)
+        .await
+        .expect("memory injection state should restore");
+    assert_eq!(rehydrated_state, expected_state);
+
+    let persisted = engine
+        .history
+        .get_thread(thread_id)
+        .await
+        .expect("read thread")
+        .expect("thread should persist");
+    let metadata = persisted.metadata_json.expect("thread metadata");
+    assert!(metadata.contains("\"prompt_memory_injection_state\""));
+    assert!(metadata.contains("\"base_markdown_hash\":\"sha256:memory-base-v1\""));
+    assert!(metadata.contains("\"base_markdown_updated_at_ms\":123"));
+    assert!(metadata.contains("\"structured_summary_hash\":\"sha256:summary-v1\""));
+    assert!(metadata.contains("\"base_markdown_injected_at_ms\":456"));
+}
+
+#[tokio::test]
+async fn get_or_create_thread_restores_memory_injection_state_from_db_metadata() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let seed_engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let thread_id = "thread_memory_injection_restore";
+    let expected_state = PromptMemoryInjectionState {
+        base_markdown_hash: Some("sha256:memory-base-v1".to_string()),
+        base_markdown_updated_at_ms: Some(123),
+        structured_summary_hash: Some("sha256:summary-v1".to_string()),
+        base_markdown_injected_at_ms: Some(456),
+        ..Default::default()
+    };
+
+    seed_engine
+        .history
+        .create_thread(&amux_protocol::AgentDbThread {
+            id: thread_id.to_string(),
+            workspace_id: None,
+            surface_id: None,
+            pane_id: None,
+            agent_name: Some(MAIN_AGENT_NAME.to_string()),
+            title: "Memory injection restore".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            message_count: 1,
+            total_tokens: 0,
+            last_preview: "memory restore".to_string(),
+            metadata_json: Some(
+                serde_json::json!({
+                    "prompt_memory_injection_state": {
+                        "base_markdown_hash": "sha256:memory-base-v1",
+                        "base_markdown_updated_at_ms": 123,
+                        "structured_summary_hash": "sha256:summary-v1",
+                        "base_markdown_injected_at_ms": 456
+                    }
+                })
+                .to_string(),
+            ),
+        })
+        .await
+        .expect("seed thread row");
+    seed_engine
+        .history
+        .add_message(&amux_protocol::AgentDbMessage {
+            id: "seed-memory-restore-message-1".to_string(),
+            thread_id: thread_id.to_string(),
+            created_at: 1,
+            role: "user".to_string(),
+            content: "restore memory".to_string(),
+            provider: None,
+            model: None,
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            total_tokens: Some(0),
+            cost_usd: None,
+            reasoning: None,
+            tool_calls_json: None,
+            metadata_json: None,
+        })
+        .await
+        .expect("seed thread message");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    let (_, created) = engine
+        .get_or_create_thread(Some(thread_id), "ignored")
+        .await;
+
+    assert!(!created, "thread should restore from persisted history");
+    assert_eq!(
+        engine.get_thread_memory_injection_state(thread_id).await,
+        Some(expected_state)
+    );
+}
+
+#[tokio::test]
 async fn hydrated_thread_message_preserves_cost() {
     let root = tempdir().unwrap();
     let manager = SessionManager::new_test(root.path()).await;

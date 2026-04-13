@@ -67,6 +67,14 @@ pub(super) struct PreparedLlmRequest {
 pub(super) struct CompactionCandidate {
     pub split_at: usize,
     pub target_tokens: usize,
+    pub trigger: CompactionTrigger,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CompactionTrigger {
+    MessageCount,
+    TokenThreshold,
+    MessageCountAndTokenThreshold,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -548,11 +556,15 @@ pub(super) fn compaction_candidate(
 
     let max_messages = config.max_context_messages.max(1) as usize;
     let target_tokens = effective_context_target_tokens(config, provider_config);
-    if active_messages.len() <= max_messages
-        && estimate_message_tokens(active_messages) <= target_tokens
-    {
-        return None;
-    }
+    let over_message_limit = config.compaction.strategy == CompactionStrategy::Heuristic
+        && active_messages.len() > max_messages;
+    let over_token_limit = estimate_message_tokens(active_messages) > target_tokens;
+    let trigger = match (over_message_limit, over_token_limit) {
+        (false, false) => return None,
+        (true, false) => CompactionTrigger::MessageCount,
+        (false, true) => CompactionTrigger::TokenThreshold,
+        (true, true) => CompactionTrigger::MessageCountAndTokenThreshold,
+    };
 
     let keep_recent = config
         .keep_recent_on_compact
@@ -585,6 +597,7 @@ pub(super) fn compaction_candidate(
     Some(CompactionCandidate {
         split_at,
         target_tokens,
+        trigger,
     })
 }
 
@@ -634,10 +647,7 @@ pub(super) fn effective_context_target_tokens(
     config: &AgentConfig,
     provider_config: &ProviderConfig,
 ) -> usize {
-    let primary_context_window = provider_config
-        .context_window_tokens
-        .max(config.context_window_tokens)
-        .max(1) as usize;
+    let primary_context_window = primary_context_window_tokens(config, provider_config);
     let threshold_pct = config.compact_threshold_pct.clamp(1, 100) as usize;
     let primary_target = primary_context_window.saturating_mul(threshold_pct) / 100;
     let strategy_target_cap =
@@ -647,6 +657,85 @@ pub(super) fn effective_context_target_tokens(
     primary_target
         .min(strategy_target_cap)
         .max(MIN_CONTEXT_TARGET_TOKENS)
+}
+
+fn primary_context_window_tokens(config: &AgentConfig, provider_config: &ProviderConfig) -> usize {
+    provider_config
+        .context_window_tokens
+        .max(config.context_window_tokens)
+        .max(1) as usize
+}
+
+fn effective_compaction_window_tokens(
+    config: &AgentConfig,
+    provider_config: &ProviderConfig,
+) -> usize {
+    let primary_context_window = primary_context_window_tokens(config, provider_config);
+    match config.compaction.strategy {
+        CompactionStrategy::Heuristic => primary_context_window,
+        CompactionStrategy::Weles => {
+            let (provider_id, model_id) = resolved_weles_compaction_model(config);
+            model_context_window(&provider_id, &model_id, primary_context_window as u32) as usize
+        }
+        CompactionStrategy::CustomModel => {
+            config.compaction.custom_model.context_window_tokens.max(1) as usize
+        }
+    }
+    .min(primary_context_window)
+    .max(1)
+}
+
+fn format_token_count(value: usize) -> String {
+    let digits = value.to_string();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            formatted.push(',');
+        }
+        formatted.push(ch);
+    }
+    formatted.chars().rev().collect()
+}
+
+fn compaction_visible_strategy_label(strategy: CompactionStrategy) -> &'static str {
+    match strategy {
+        CompactionStrategy::Heuristic => HEURISTIC_COMPACTION_VISIBLE_TEXT,
+        CompactionStrategy::Weles => "model generated",
+        CompactionStrategy::CustomModel => "custom model generated",
+    }
+}
+
+fn compaction_visible_trigger_label(trigger: CompactionTrigger) -> &'static str {
+    match trigger {
+        CompactionTrigger::MessageCount => "message-count",
+        CompactionTrigger::TokenThreshold => "token-threshold",
+        CompactionTrigger::MessageCountAndTokenThreshold => "message-count + token-threshold",
+    }
+}
+
+fn compaction_trigger_detail_value(trigger: CompactionTrigger) -> &'static str {
+    match trigger {
+        CompactionTrigger::MessageCount => "message_count",
+        CompactionTrigger::TokenThreshold => "token_threshold",
+        CompactionTrigger::MessageCountAndTokenThreshold => "message_count_and_token_threshold",
+    }
+}
+
+fn build_compaction_visible_content(
+    pre_compaction_total_tokens: usize,
+    effective_context_window_tokens: usize,
+    target_tokens: usize,
+    trigger: CompactionTrigger,
+    strategy_used: CompactionStrategy,
+) -> String {
+    format!(
+        "Pre-compaction context: ~{} / {} tokens (threshold {})\nTrigger: {}\nStrategy: {}",
+        format_token_count(pre_compaction_total_tokens),
+        format_token_count(effective_context_window_tokens),
+        format_token_count(target_tokens),
+        compaction_visible_trigger_label(trigger),
+        compaction_visible_strategy_label(strategy_used),
+    )
 }
 
 fn strategy_target_cap_tokens(
@@ -1651,6 +1740,9 @@ impl AgentEngine {
         else {
             return Ok(false);
         };
+        let pre_compaction_total_tokens = estimate_message_tokens(&thread.messages[window_start..]);
+        let effective_context_window_tokens =
+            effective_compaction_window_tokens(config, provider_config);
         let split_at = window_start + candidate.split_at;
         let source_messages = thread.messages[window_start..split_at].to_vec();
         let message_count = thread.messages.len();
@@ -1661,10 +1753,20 @@ impl AgentEngine {
                 thread_id,
                 &source_messages,
                 candidate.target_tokens,
+                candidate.trigger,
+                pre_compaction_total_tokens,
+                effective_context_window_tokens,
                 config,
                 structural_memory.as_ref(),
             )
             .await?;
+        let compaction_trigger_summary = build_compaction_visible_content(
+            pre_compaction_total_tokens,
+            effective_context_window_tokens,
+            candidate.target_tokens,
+            candidate.trigger,
+            strategy_used,
+        );
 
         let current_split_at = {
             let mut threads = self.threads.write().await;
@@ -1685,7 +1787,10 @@ impl AgentEngine {
         let compaction_notice_details = serde_json::json!({
             "split_at": current_split_at,
             "total_message_count": message_count.saturating_add(1),
+            "pre_compaction_total_tokens": pre_compaction_total_tokens,
+            "effective_context_window_tokens": effective_context_window_tokens,
             "target_tokens": candidate.target_tokens,
+            "trigger": compaction_trigger_detail_value(candidate.trigger),
             "strategy": strategy_used,
         })
         .to_string();
@@ -1698,6 +1803,7 @@ impl AgentEngine {
                 "thread_id": thread_id,
                 "split_at": split_at,
                 "target_tokens": candidate.target_tokens,
+                "trigger": compaction_trigger_detail_value(candidate.trigger),
                 "message_count": message_count,
                 "strategy": strategy_used,
             }),
@@ -1724,10 +1830,11 @@ impl AgentEngine {
             thread_id: thread_id.to_string(),
             kind: COMPACTION_NOTICE_KIND.to_string(),
             message: format!(
-                "Auto compaction applied using {}.",
+                "Auto compaction applied using {}. {}",
                 serde_json::to_string(&strategy_used)
                     .unwrap_or_else(|_| "\"heuristic\"".to_string())
-                    .trim_matches('"')
+                    .trim_matches('"'),
+                compaction_trigger_summary,
             ),
             details: Some(compaction_notice_details.clone()),
         });
@@ -1747,6 +1854,9 @@ impl AgentEngine {
         thread_id: &str,
         messages: &[AgentMessage],
         target_tokens: usize,
+        trigger: CompactionTrigger,
+        pre_compaction_total_tokens: usize,
+        effective_context_window_tokens: usize,
         config: &AgentConfig,
         structural_memory: Option<&ThreadStructuralMemory>,
     ) -> Result<(AgentMessage, CompactionStrategy, Option<String>)> {
@@ -1829,10 +1939,13 @@ impl AgentEngine {
             }
         };
 
-        let visible_content = match strategy_used {
-            CompactionStrategy::Heuristic => HEURISTIC_COMPACTION_VISIBLE_TEXT.to_string(),
-            CompactionStrategy::Weles | CompactionStrategy::CustomModel => payload.clone(),
-        };
+        let visible_content = build_compaction_visible_content(
+            pre_compaction_total_tokens,
+            effective_context_window_tokens,
+            target_tokens,
+            trigger,
+            strategy_used,
+        );
 
         Ok((
             AgentMessage {

@@ -400,6 +400,114 @@ pub(super) fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "read_memory",
+            "description": "Read persistent MEMORY.md plus related structured memory layers. This response is injection-aware and avoids re-sending already injected fresh base markdown unless explicitly requested.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "thread_id": { "type": "string", "description": "Optional agent thread ID for thread-scoped injection-state and structural-memory lookups" },
+                    "task_id": { "type": "string", "description": "Optional task ID for task-scoped memory lookup; overrides thread_id when both are provided" },
+                    "include_already_injected": { "type": "boolean", "description": "Force inclusion of base markdown even when a fresh copy is already injected in the prompt (default: false)" },
+                    "include_base_markdown": { "type": "boolean", "description": "Include MEMORY.md content when not skipped by injection state (default: true)" },
+                    "include_operator_profile_json": { "type": "boolean", "description": "Include structured operator profile JSON (default: true)" },
+                    "include_operator_model_summary": { "type": "boolean", "description": "Include operator-model prompt summary when available (default: true)" },
+                    "include_thread_structural_memory": { "type": "boolean", "description": "Include thread structural memory summaries when available (default: true)" },
+                    "limit_per_layer": { "type": "integer", "description": "Maximum items returned for list-style layers (default: 5, max: 25)" }
+                }
+            }
+        },
+        {
+            "name": "read_user",
+            "description": "Read persistent USER.md plus related structured operator layers. This response is injection-aware and avoids re-sending already injected fresh base markdown unless explicitly requested.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "thread_id": { "type": "string", "description": "Optional agent thread ID for thread-scoped injection-state and structural-memory lookups" },
+                    "task_id": { "type": "string", "description": "Optional task ID for task-scoped memory lookup; overrides thread_id when both are provided" },
+                    "include_already_injected": { "type": "boolean", "description": "Force inclusion of base markdown even when a fresh copy is already injected in the prompt (default: false)" },
+                    "include_base_markdown": { "type": "boolean", "description": "Include USER.md content when not skipped by injection state (default: true)" },
+                    "include_operator_profile_json": { "type": "boolean", "description": "Include structured operator profile JSON (default: true)" },
+                    "include_operator_model_summary": { "type": "boolean", "description": "Include operator-model prompt summary when available (default: true)" },
+                    "include_thread_structural_memory": { "type": "boolean", "description": "Include thread structural memory summaries when available (default: false)" },
+                    "limit_per_layer": { "type": "integer", "description": "Maximum items returned for list-style layers (default: 5, max: 25)" }
+                }
+            }
+        },
+        {
+            "name": "read_soul",
+            "description": "Read persistent SOUL.md plus related structured context layers. This response is injection-aware and avoids re-sending already injected fresh base markdown unless explicitly requested.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "thread_id": { "type": "string", "description": "Optional agent thread ID for thread-scoped injection-state and structural-memory lookups" },
+                    "task_id": { "type": "string", "description": "Optional task ID for task-scoped memory lookup; overrides thread_id when both are provided" },
+                    "include_already_injected": { "type": "boolean", "description": "Force inclusion of base markdown even when a fresh copy is already injected in the prompt (default: false)" },
+                    "include_base_markdown": { "type": "boolean", "description": "Include SOUL.md content when not skipped by injection state (default: true)" },
+                    "include_operator_profile_json": { "type": "boolean", "description": "Include structured operator profile JSON (default: true)" },
+                    "include_operator_model_summary": { "type": "boolean", "description": "Include operator-model prompt summary when available (default: true)" },
+                    "include_thread_structural_memory": { "type": "boolean", "description": "Include thread structural memory summaries when available (default: false)" },
+                    "limit_per_layer": { "type": "integer", "description": "Maximum items returned for list-style layers (default: 5, max: 25)" }
+                }
+            }
+        },
+        {
+            "name": "search_memory",
+            "description": "Search MEMORY.md plus related structured memory layers. This response is injection-aware and skips already injected fresh base markdown unless explicitly requested.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "thread_id": { "type": "string", "description": "Optional agent thread ID for thread-scoped injection-state and structural-memory lookups" },
+                    "task_id": { "type": "string", "description": "Optional task ID for task-scoped memory lookup; overrides thread_id when both are provided" },
+                    "query": { "type": "string", "description": "Search query" },
+                    "limit": { "type": "integer", "description": "Maximum matches to return (default: 5, max: 25)" },
+                    "include_already_injected": { "type": "boolean", "description": "Allow fresh injected MEMORY.md content to appear in search matches (default: false)" },
+                    "include_base_markdown": { "type": "boolean", "description": "Search MEMORY.md when not skipped by injection state (default: true)" },
+                    "include_operator_profile_json": { "type": "boolean", "description": "Search structured operator profile JSON (default: true)" },
+                    "include_operator_model_summary": { "type": "boolean", "description": "Search operator-model prompt summary when available (default: true)" },
+                    "include_thread_structural_memory": { "type": "boolean", "description": "Search thread structural memory summaries when available (default: true)" }
+                },
+                "required": ["query"]
+            }
+        },
+        {
+            "name": "search_user",
+            "description": "Search USER.md plus related structured operator layers. This response is injection-aware and skips already injected fresh base markdown unless explicitly requested.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "thread_id": { "type": "string", "description": "Optional agent thread ID for thread-scoped injection-state and structural-memory lookups" },
+                    "task_id": { "type": "string", "description": "Optional task ID for task-scoped memory lookup; overrides thread_id when both are provided" },
+                    "query": { "type": "string", "description": "Search query" },
+                    "limit": { "type": "integer", "description": "Maximum matches to return (default: 5, max: 25)" },
+                    "include_already_injected": { "type": "boolean", "description": "Allow fresh injected USER.md content to appear in search matches (default: false)" },
+                    "include_base_markdown": { "type": "boolean", "description": "Search USER.md when not skipped by injection state (default: true)" },
+                    "include_operator_profile_json": { "type": "boolean", "description": "Search structured operator profile JSON (default: true)" },
+                    "include_operator_model_summary": { "type": "boolean", "description": "Search operator-model prompt summary when available (default: true)" },
+                    "include_thread_structural_memory": { "type": "boolean", "description": "Search thread structural memory summaries when available (default: false)" }
+                },
+                "required": ["query"]
+            }
+        },
+        {
+            "name": "search_soul",
+            "description": "Search SOUL.md plus related structured context layers. This response is injection-aware and skips already injected fresh base markdown unless explicitly requested.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "thread_id": { "type": "string", "description": "Optional agent thread ID for thread-scoped injection-state and structural-memory lookups" },
+                    "task_id": { "type": "string", "description": "Optional task ID for task-scoped memory lookup; overrides thread_id when both are provided" },
+                    "query": { "type": "string", "description": "Search query" },
+                    "limit": { "type": "integer", "description": "Maximum matches to return (default: 5, max: 25)" },
+                    "include_already_injected": { "type": "boolean", "description": "Allow fresh injected SOUL.md content to appear in search matches (default: false)" },
+                    "include_base_markdown": { "type": "boolean", "description": "Search SOUL.md when not skipped by injection state (default: true)" },
+                    "include_operator_profile_json": { "type": "boolean", "description": "Search structured operator profile JSON (default: true)" },
+                    "include_operator_model_summary": { "type": "boolean", "description": "Search operator-model prompt summary when available (default: true)" },
+                    "include_thread_structural_memory": { "type": "boolean", "description": "Search thread structural memory summaries when available (default: false)" }
+                },
+                "required": ["query"]
+            }
+        },
+        {
             "name": "get_provenance_report",
             "description": "Inspect trusted execution provenance, including hash/signature validity and recent event summaries.",
             "inputSchema": {
@@ -617,5 +725,41 @@ mod tests {
             .filter_map(|item| item.as_str())
             .collect::<Vec<_>>();
         assert_eq!(required, vec!["content", "options"]);
+    }
+
+    #[test]
+    fn tool_definitions_include_read_memory() {
+        let defs = tool_definitions();
+        let tools = defs
+            .as_array()
+            .expect("tool definitions should be an array");
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "read_memory")
+            .expect("read_memory tool definition should be present");
+        assert!(
+            tool["inputSchema"]["properties"]
+                .as_object()
+                .is_some_and(|properties| properties.contains_key("thread_id")),
+            "read_memory should expose thread_id for thread-scoped lookup"
+        );
+    }
+
+    #[test]
+    fn tool_definitions_include_search_memory() {
+        let defs = tool_definitions();
+        let tools = defs
+            .as_array()
+            .expect("tool definitions should be an array");
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "search_memory")
+            .expect("search_memory tool definition should be present");
+        assert!(
+            tool["inputSchema"]["properties"]
+                .as_object()
+                .is_some_and(|properties| properties.contains_key("thread_id")),
+            "search_memory should expose thread_id for thread-scoped lookup"
+        );
     }
 }

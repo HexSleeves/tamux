@@ -447,8 +447,11 @@ fn statistics_modal_keyboard_cycles_tabs_and_filters() {
         top_models_by_cost: Vec::new(),
     });
 
-    let quit =
-        model.handle_key_modal(KeyCode::Right, KeyModifiers::NONE, modal::ModalKind::Statistics);
+    let quit = model.handle_key_modal(
+        KeyCode::Right,
+        KeyModifiers::NONE,
+        modal::ModalKind::Statistics,
+    );
     assert!(!quit);
     assert_eq!(
         model.statistics_modal_tab,

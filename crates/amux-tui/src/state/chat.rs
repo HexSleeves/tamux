@@ -209,9 +209,13 @@ fn resolve_message_ref(thread: &AgentThread, message_ref: &StoredMessageRef) -> 
     }
 
     let loaded_end = thread.loaded_message_start + thread.messages.len();
-    (message_ref.absolute_index >= thread.loaded_message_start
-        && message_ref.absolute_index < loaded_end)
-        .then_some(message_ref.absolute_index - thread.loaded_message_start)
+    if message_ref.absolute_index >= thread.loaded_message_start
+        && message_ref.absolute_index < loaded_end
+    {
+        Some(message_ref.absolute_index - thread.loaded_message_start)
+    } else {
+        None
+    }
 }
 
 fn adjust_message_ref_for_deleted_absolute(
@@ -460,19 +464,17 @@ impl ChatState {
                 )
             });
             self.copied_message_feedback =
-                self.copied_message_feedback
-                    .take()
-                    .and_then(|feedback| {
-                        adjust_message_ref_for_deleted_absolute(
-                            feedback.message_ref,
-                            &deleted_thread_id,
-                            deleted_absolute_index,
-                        )
-                        .map(|message_ref| CopiedMessageFeedback {
-                            message_ref,
-                            expires_at_tick: feedback.expires_at_tick,
-                        })
-                    });
+                self.copied_message_feedback.take().and_then(|feedback| {
+                    adjust_message_ref_for_deleted_absolute(
+                        feedback.message_ref,
+                        &deleted_thread_id,
+                        deleted_absolute_index,
+                    )
+                    .map(|message_ref| CopiedMessageFeedback {
+                        message_ref,
+                        expires_at_tick: feedback.expires_at_tick,
+                    })
+                });
             self.bump_render_revision();
         }
     }

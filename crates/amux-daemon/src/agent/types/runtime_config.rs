@@ -211,6 +211,7 @@ impl Default for AgentConfig {
             consolidation: ConsolidationConfig::default(),
             skill_discovery: SkillDiscoveryConfig::default(),
             skill_recommendation: SkillRecommendationConfig::default(),
+            routing: RoutingConfig::default(),
             skill_promotion: SkillPromotionConfig::default(),
             tier: TierConfig::default(),
             episodic: super::episodic::EpisodicConfig::default(),

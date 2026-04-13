@@ -179,7 +179,8 @@ use amux_shared::providers::{
         let json = serde_json::json!({
             "enabled": false,
             "strong_match_threshold": 0.91,
-            "community_preapprove_timeout_secs": 45
+            "community_preapprove_timeout_secs": 45,
+            "llm_semantic_search_on_no_match": false
         })
         .to_string();
 
@@ -192,6 +193,9 @@ use amux_shared::providers::{
         assert!(cfg.background_community_search);
         assert_eq!(cfg.community_preapprove_timeout_secs, 45);
         assert_eq!(cfg.suggest_global_enable_after_approvals, 3);
+        assert!(cfg.llm_normalize_on_no_match);
+        assert!(!cfg.llm_semantic_search_on_no_match);
+        assert_eq!(cfg.llm_semantic_search_max_skills, 64);
     }
 
     #[test]
@@ -221,6 +225,52 @@ use amux_shared::providers::{
         assert!(cfg.background_community_search);
         assert_eq!(cfg.community_preapprove_timeout_secs, 30);
         assert_eq!(cfg.suggest_global_enable_after_approvals, 3);
+        assert!(cfg.llm_normalize_on_no_match);
+        assert!(cfg.llm_semantic_search_on_no_match);
+        assert_eq!(cfg.llm_semantic_search_max_skills, 64);
+    }
+
+    #[test]
+    fn routing_config_defaults() {
+        let cfg = RoutingConfig::default();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.method, RoutingMode::Probabilistic);
+        assert!((cfg.bayesian_alpha - 1.0).abs() < f64::EPSILON);
+        assert!((cfg.confidence_threshold - 0.3).abs() < f64::EPSILON);
+        assert!((cfg.recency_decay_half_life_hours - 168.0).abs() < f64::EPSILON);
+        assert!((cfg.confidence_ema_alpha - 0.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn agent_config_deserializes_routing_without_disturbing_other_defaults() {
+        let json = serde_json::json!({
+            "routing": {
+                "enabled": false,
+                "method": "deterministic",
+                "bayesian_alpha": 2.0,
+                "confidence_threshold": 0.55,
+                "recency_decay_half_life_hours": 24.0,
+                "confidence_ema_alpha": 0.45
+            }
+        })
+        .to_string();
+
+        let cfg: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert!(!cfg.routing.enabled);
+        assert_eq!(cfg.routing.method, RoutingMode::Deterministic);
+        assert!((cfg.routing.bayesian_alpha - 2.0).abs() < f64::EPSILON);
+        assert!((cfg.routing.confidence_threshold - 0.55).abs() < f64::EPSILON);
+        assert!((cfg.routing.recency_decay_half_life_hours - 24.0).abs() < f64::EPSILON);
+        assert!((cfg.routing.confidence_ema_alpha - 0.45).abs() < f64::EPSILON);
+        assert!(cfg.skill_recommendation.enabled);
+    }
+
+    #[test]
+    fn agent_config_defaults_include_routing() {
+        let cfg: AgentConfig = serde_json::from_str("{}").unwrap();
+        assert!(cfg.routing.enabled);
+        assert_eq!(cfg.routing.method, RoutingMode::Probabilistic);
+        assert!((cfg.routing.confidence_threshold - 0.3).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -248,6 +298,9 @@ use amux_shared::providers::{
         assert!(cfg.skill_recommendation.background_community_search);
         assert_eq!(cfg.skill_recommendation.community_preapprove_timeout_secs, 30);
         assert_eq!(cfg.skill_recommendation.suggest_global_enable_after_approvals, 3);
+        assert!(cfg.skill_recommendation.llm_normalize_on_no_match);
+        assert!(cfg.skill_recommendation.llm_semantic_search_on_no_match);
+        assert_eq!(cfg.skill_recommendation.llm_semantic_search_max_skills, 64);
     }
 
     #[test]

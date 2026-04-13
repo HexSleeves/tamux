@@ -476,6 +476,24 @@ pub fn execute_tool<'a>(
         "update_memory" => {
             execute_update_memory(&args, agent, thread_id, task_id, agent_data_dir).await
         }
+        "read_memory" => {
+            execute_read_memory(&args, agent, Some(thread_id), task_id, agent_data_dir).await
+        }
+        "read_user" => {
+            execute_read_user(&args, agent, Some(thread_id), task_id, agent_data_dir).await
+        }
+        "read_soul" => {
+            execute_read_soul(&args, agent, Some(thread_id), task_id, agent_data_dir).await
+        }
+        "search_memory" => {
+            execute_search_memory(&args, agent, Some(thread_id), task_id, agent_data_dir).await
+        }
+        "search_user" => {
+            execute_search_user(&args, agent, Some(thread_id), task_id, agent_data_dir).await
+        }
+        "search_soul" => {
+            execute_search_soul(&args, agent, Some(thread_id), task_id, agent_data_dir).await
+        }
         "list_tools" => execute_list_tools(&args, agent, session_manager, agent_data_dir).await,
         "tool_search" => {
             execute_tool_search(&args, agent, session_manager, agent_data_dir).await

@@ -138,13 +138,11 @@ fn whatsapp_status_events_update_modal_state() {
         model.modal.whatsapp_link().phase(),
         crate::state::modal::WhatsAppLinkPhase::Error
     );
-    assert!(
-        model
-            .modal
-            .whatsapp_link()
-            .status_text()
-            .contains("scan timeout")
-    );
+    assert!(model
+        .modal
+        .whatsapp_link()
+        .status_text()
+        .contains("scan timeout"));
 
     model.handle_client_event(ClientEvent::WhatsAppLinkDisconnected {
         reason: Some("socket closed".to_string()),
@@ -153,13 +151,11 @@ fn whatsapp_status_events_update_modal_state() {
         model.modal.whatsapp_link().phase(),
         crate::state::modal::WhatsAppLinkPhase::Disconnected
     );
-    assert!(
-        model
-            .modal
-            .whatsapp_link()
-            .status_text()
-            .contains("socket closed")
-    );
+    assert!(model
+        .modal
+        .whatsapp_link()
+        .status_text()
+        .contains("socket closed"));
 }
 
 #[test]
@@ -798,13 +794,11 @@ fn approval_required_in_background_thread_shows_notice_without_modal() {
 
     assert_eq!(model.modal.top(), None);
     assert_eq!(model.approval.pending_approvals().len(), 1);
-    assert!(
-        model
-            .input_notice_style()
-            .expect("approval banner should be visible")
-            .0
-            .contains("Ctrl+A")
-    );
+    assert!(model
+        .input_notice_style()
+        .expect("approval banner should be visible")
+        .0
+        .contains("Ctrl+A"));
 }
 
 #[test]
@@ -2465,12 +2459,10 @@ fn openai_codex_auth_events_update_config_and_modal_state() {
         model.openai_auth_url.as_deref(),
         Some("https://auth.openai.com/oauth/authorize?flow=tui")
     );
-    assert!(
-        model
-            .openai_auth_status_text
-            .as_deref()
-            .is_some_and(|text| text.contains("complete ChatGPT authentication"))
-    );
+    assert!(model
+        .openai_auth_status_text
+        .as_deref()
+        .is_some_and(|text| text.contains("complete ChatGPT authentication")));
     assert!(matches!(
         daemon_rx
             .try_recv()

@@ -1,12 +1,28 @@
 import { describe, expect, it } from "vitest";
 import { buildDaemonAgentConfig } from "./agentDaemonConfig.ts";
-import { resolveContextCompactionTargetTokens } from "./agent-client/context.ts";
+import {
+  buildApiMessagesForRequest,
+  resolveContextCompactionTargetTokens,
+} from "./agent-client/context.ts";
 import {
   DEFAULT_AGENT_SETTINGS,
   normalizeAgentSettingsFromSource,
 } from "./agentStore/settings.ts";
 
 describe("agent compaction target", () => {
+  const shortMessages = Array.from({ length: 101 }, (_, index) => ({
+    id: `msg-${index}`,
+    threadId: "thread-1",
+    createdAt: index + 1,
+    role: "user" as const,
+    content: `m${index}`,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    isCompactionSummary: false,
+    isStreaming: false,
+  }));
+
   it("does not serialize removed context budget settings", () => {
     expect(buildDaemonAgentConfig(DEFAULT_AGENT_SETTINGS)).not.toHaveProperty(
       "context_budget_tokens",
@@ -73,5 +89,64 @@ describe("agent compaction target", () => {
         },
       }),
     ).toBe(128_000);
+  });
+
+  it("keeps heuristic message-count compaction active", () => {
+    const prepared = buildApiMessagesForRequest(shortMessages, {
+      auto_compact_context: true,
+      max_context_messages: 100,
+      context_window_tokens: 400_000,
+      compact_threshold_pct: 80,
+      keep_recent_on_compact: 10,
+      compaction: {
+        ...DEFAULT_AGENT_SETTINGS.compaction,
+        strategy: "heuristic",
+      },
+    });
+
+    expect(prepared[0]?.content).toContain("[Compacted earlier context]");
+  });
+
+  it("does not compact custom-model requests on message count alone", () => {
+    const prepared = buildApiMessagesForRequest(shortMessages, {
+      auto_compact_context: true,
+      max_context_messages: 100,
+      context_window_tokens: 400_000,
+      compact_threshold_pct: 80,
+      keep_recent_on_compact: 10,
+      compaction: {
+        ...DEFAULT_AGENT_SETTINGS.compaction,
+        strategy: "custom_model",
+        custom_model: {
+          ...DEFAULT_AGENT_SETTINGS.compaction.custom_model,
+          context_window_tokens: 1_000_000,
+        },
+      },
+    });
+
+    expect(prepared).toHaveLength(101);
+    expect(prepared[0]?.content).toBe("m0");
+  });
+
+  it("does not compact weles requests on message count alone", () => {
+    const prepared = buildApiMessagesForRequest(shortMessages, {
+      auto_compact_context: true,
+      max_context_messages: 100,
+      context_window_tokens: 400_000,
+      compact_threshold_pct: 80,
+      keep_recent_on_compact: 10,
+      compaction: {
+        ...DEFAULT_AGENT_SETTINGS.compaction,
+        strategy: "weles",
+        weles: {
+          provider: "alibaba-coding-plan",
+          model: "qwen3.6-plus",
+          reasoning_effort: "medium",
+        },
+      },
+    });
+
+    expect(prepared).toHaveLength(101);
+    expect(prepared[0]?.content).toBe("m0");
   });
 });

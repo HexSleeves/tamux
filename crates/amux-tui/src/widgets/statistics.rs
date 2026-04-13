@@ -274,19 +274,19 @@ fn format_providers(snapshot: &amux_protocol::AgentStatisticsSnapshot) -> String
     for row in &snapshot.providers {
         body.push_str(&format!(
             "{:<18} {:>10} {:>10} {:>10}  ${:>9.6}\n",
-            row.provider,
-            row.input_tokens,
-            row.output_tokens,
-            row.total_tokens,
-            row.cost_usd,
+            row.provider, row.input_tokens, row.output_tokens, row.total_tokens, row.cost_usd,
         ));
     }
     body
 }
 
 fn format_models(snapshot: &amux_protocol::AgentStatisticsSnapshot) -> String {
-    let mut body = String::from("Provider         Model                      In         Out        Total      Cost\n");
-    body.push_str("---------------------------------------------------------------------------------\n");
+    let mut body = String::from(
+        "Provider         Model                      In         Out        Total      Cost\n",
+    );
+    body.push_str(
+        "---------------------------------------------------------------------------------\n",
+    );
     for row in &snapshot.models {
         body.push_str(&format!(
             "{:<16} {:<26} {:>10} {:>10} {:>10}  ${:>9.6}\n",

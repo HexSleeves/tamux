@@ -8,6 +8,7 @@ if matches!(
         ClientMessage::AgentGetMemoryProvenanceReport{ .. } |
         ClientMessage::AgentGetProvenanceReport{ .. } |
         ClientMessage::AgentGenerateSoc2Artifact{ .. } |
+        ClientMessage::AgentExecuteMemoryTool{ .. } |
         ClientMessage::AgentGetCollaborationSessions{ .. } |
         ClientMessage::AgentGetDivergentSession{ .. } |
         ClientMessage::AgentListGeneratedTools |
@@ -279,6 +280,48 @@ if matches!(
                             framed
                                 .send(DaemonMessage::AgentError {
                                     message: format!("failed to execute semantic query: {e}"),
+                                })
+                                .await
+                                .ok();
+                        }
+                    }
+                }
+
+                ClientMessage::AgentExecuteMemoryTool { tool_name, args_json } => {
+                    match serde_json::from_str::<serde_json::Value>(&args_json) {
+                        Ok(args) => {
+                            match crate::agent::tool_executor::execute_memory_tool_for_mcp(
+                                &tool_name,
+                                &args,
+                                &agent,
+                                &agent.data_dir,
+                            )
+                            .await
+                            {
+                                Ok(content) => {
+                                    framed
+                                        .send(DaemonMessage::AgentMemoryToolResult { content })
+                                        .await
+                                        .ok();
+                                }
+                                Err(error) => {
+                                    framed
+                                        .send(DaemonMessage::AgentError {
+                                            message: format!(
+                                                "failed to execute memory tool `{tool_name}`: {error}"
+                                            ),
+                                        })
+                                        .await
+                                        .ok();
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            framed
+                                .send(DaemonMessage::AgentError {
+                                    message: format!(
+                                        "invalid memory tool arguments for `{tool_name}`: {error}"
+                                    ),
                                 })
                                 .await
                                 .ok();

@@ -26,4 +26,30 @@ describe("MessageBubble participant authorship", () => {
     expect(html).toContain("Weles");
     expect(html).toContain("I verified the claim.");
   });
+
+  it("renders compaction trigger context for compaction artifacts", () => {
+    const html = renderToStaticMarkup(
+      <MessageBubble
+        message={{
+          id: "msg-compaction-1",
+          threadId: "thread-1",
+          createdAt: 1,
+          role: "assistant",
+          content:
+            "Pre-compaction context: ~182,400 / 200,000 tokens (threshold 160,000)\nTrigger: message-count\nStrategy: rule based",
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          isCompactionSummary: true,
+          messageKind: "compaction_artifact",
+          isStreaming: false,
+        }}
+      />,
+    );
+
+    expect(html).toContain("auto compaction");
+    expect(html).toContain("Pre-compaction context: ~182,400 / 200,000 tokens");
+    expect(html).toContain("Trigger: message-count");
+    expect(html).toContain("Strategy: rule based");
+  });
 });

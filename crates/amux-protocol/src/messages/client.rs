@@ -187,4 +187,5 @@ pub enum ClientMessage {
     AgentThreadParticipantCommand { thread_id: String, target_agent_id: String, action: String, #[serde(default)] instruction: Option<String>, session_id: Option<String>, #[serde(default)] client_surface: Option<ClientSurface> },
     AgentSendParticipantSuggestion { thread_id: String, suggestion_id: String, session_id: Option<String>, #[serde(default)] client_surface: Option<ClientSurface> },
     AgentDismissParticipantSuggestion { thread_id: String, suggestion_id: String, session_id: Option<String>, #[serde(default)] client_surface: Option<ClientSurface> },
+    AgentExecuteMemoryTool { tool_name: String, args_json: String },
 }
