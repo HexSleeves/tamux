@@ -277,6 +277,7 @@ impl AgentEngine {
                     GoalRunStepKind::Skill => "execute_command",
                     GoalRunStepKind::Specialist(_) => "execute_command",
                     GoalRunStepKind::Divergent => "read_file",
+                    GoalRunStepKind::Debate => "read_file",
                     GoalRunStepKind::Unknown => "unknown",
                 };
                 super::embodied::dimensions::compute_weight(tool_name)
