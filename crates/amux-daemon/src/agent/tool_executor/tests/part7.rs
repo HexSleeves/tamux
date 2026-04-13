@@ -1501,6 +1501,130 @@ async fn critique_preflight_blocks_risky_bash_command_when_enabled() {
 }
 
 #[tokio::test]
+async fn get_critique_session_tool_returns_persisted_blocked_preflight_payload() {
+    let recorded_bodies = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.critique.enabled = true;
+    config.critique.mode = crate::agent::types::CritiqueMode::Deterministic;
+    config.extra.insert(
+        "weles_review_available".to_string(),
+        serde_json::Value::Bool(false),
+    );
+    config.provider = "openai".to_string();
+    config.base_url = part4::spawn_stub_assistant_server_for_tool_executor(
+        recorded_bodies,
+        serde_json::json!({
+            "verdict": "allow",
+            "reasons": ["unused stub"],
+            "audit_id": "unused-audit"
+        })
+        .to_string(),
+    )
+    .await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-api-key".to_string();
+    config.api_transport = crate::agent::types::ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+
+    let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+    {
+        let mut model = engine.operator_model.write().await;
+        model.risk_fingerprint.risk_tolerance =
+            crate::agent::operator_model::RiskTolerance::Conservative;
+    }
+    let (event_tx, _) = broadcast::channel(8);
+
+    let blocked_call = ToolCall::with_default_weles_review(
+        "tool-critique-block-roundtrip".to_string(),
+        ToolFunction {
+            name: "bash_command".to_string(),
+            arguments: serde_json::json!({
+                "command": "rm -rf /tmp/spec13-roundtrip-demo",
+                "rationale": "cleanup demo",
+                "allow_network": false,
+                "sandbox_enabled": true,
+                "security_level": "moderate",
+                "wait_for_completion": true,
+                "timeout_seconds": 5
+            })
+            .to_string(),
+        },
+    );
+
+    let blocked_result = execute_tool(
+        &blocked_call,
+        &engine,
+        "thread-critique-roundtrip",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(blocked_result.is_error);
+    let review = blocked_result
+        .weles_review
+        .expect("blocked critique preflight should expose review metadata");
+    let critique_reason = review
+        .reasons
+        .iter()
+        .find(|reason| reason.contains("critique_preflight:"))
+        .cloned()
+        .expect("critique session id should be exposed in review reasons");
+    let mut parts = critique_reason.split(':');
+    let _prefix = parts.next();
+    let session_id = parts.next().expect("critique reason should include session id");
+    let decision = parts.next().expect("critique reason should include decision");
+
+    let get_call = ToolCall::with_default_weles_review(
+        "tool-get-critique-session".to_string(),
+        ToolFunction {
+            name: "get_critique_session".to_string(),
+            arguments: serde_json::json!({ "session_id": session_id }).to_string(),
+        },
+    );
+
+    let get_result = execute_tool(
+        &get_call,
+        &engine,
+        "thread-critique-roundtrip",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(
+        !get_result.is_error,
+        "get_critique_session should succeed: {}",
+        get_result.content
+    );
+    let payload: serde_json::Value =
+        serde_json::from_str(&get_result.content).expect("payload should be valid JSON");
+    assert_eq!(payload["session_id"].as_str(), Some(session_id));
+    assert_eq!(payload["tool_name"].as_str(), Some("bash_command"));
+    assert_eq!(payload["resolution"]["decision"].as_str(), Some(decision));
+    let expected_status = if decision == "defer" {
+        "deferred"
+    } else {
+        "resolved"
+    };
+    assert_eq!(payload["status"].as_str(), Some(expected_status));
+}
+
+#[tokio::test]
 async fn critique_preflight_skips_non_guarded_read_file_even_when_enabled() {
     let root = tempdir().expect("tempdir should succeed");
     let manager = SessionManager::new_test(root.path()).await;
