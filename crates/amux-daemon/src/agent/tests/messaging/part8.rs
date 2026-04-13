@@ -1510,6 +1510,154 @@ async fn hydrate_runs_participant_observers_for_restored_main_agent_tail() {
 }
 
 #[tokio::test]
+async fn hydrate_returns_before_background_participant_observer_restore_finishes() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let observer_requests = Arc::new(AtomicUsize::new(0));
+    let request_started = Arc::new(tokio::sync::Notify::new());
+    let release_response = Arc::new(tokio::sync::Notify::new());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind hydrate background observer server");
+    let addr = listener
+        .local_addr()
+        .expect("hydrate background observer addr");
+
+    tokio::spawn({
+        let observer_requests = observer_requests.clone();
+        let request_started = request_started.clone();
+        let release_response = release_response.clone();
+        async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let observer_requests = observer_requests.clone();
+                let request_started = request_started.clone();
+                let release_response = release_response.clone();
+                tokio::spawn(async move {
+                    let body = read_http_request_body(&mut socket)
+                        .await
+                        .expect("read hydrate background observer request");
+                    if body.contains("Role: participant observer") {
+                        observer_requests.fetch_add(1, Ordering::SeqCst);
+                        request_started.notify_one();
+                        release_response.notified().await;
+                    }
+
+                    let response_body = concat!(
+                        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_hydrate_background_observer\"}}\n\n",
+                        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"NO_SUGGESTION\"}\n\n",
+                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_hydrate_background_observer\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":6,\"output_tokens\":1},\"error\":null}}\n\n"
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        response_body.len(),
+                        response_body
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("write hydrate background observer response");
+                });
+            }
+        }
+    });
+
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = format!("http://{addr}/v1");
+    config.model = "gpt-5.4-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.auth_source = AuthSource::ApiKey;
+    config.api_transport = ApiTransport::Responses;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+
+    let engine = AgentEngine::new_test(manager, config.clone(), root.path()).await;
+    let thread_id = "thread_hydrate_background_participant_observers";
+
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Hydrate background participant observer restore".to_string(),
+            messages: vec![
+                AgentMessage::user("hello", 1),
+                AgentMessage {
+                    id: generate_message_id(),
+                    role: MessageRole::Assistant,
+                    content: "Main agent reply before restart.".to_string(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    tool_status: None,
+                    weles_review: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cost: None,
+                    provider: None,
+                    model: None,
+                    api_transport: None,
+                    response_id: None,
+                    upstream_message: None,
+                    provider_final_result: None,
+                    author_agent_id: None,
+                    author_agent_name: None,
+                    reasoning: None,
+                    message_kind: AgentMessageKind::Normal,
+                    compaction_strategy: None,
+                    compaction_payload: None,
+                    offloaded_payload_id: None,
+                    structural_refs: Vec::new(),
+                    timestamp: 2,
+                },
+            ],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            created_at: 1,
+            updated_at: 2,
+        },
+    );
+    engine
+        .upsert_thread_participant(thread_id, "weles", "verify claims")
+        .await
+        .expect("participant should register before restart");
+    engine.persist_thread_by_id(thread_id).await;
+
+    drop(engine);
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let reloaded = AgentEngine::new_test(manager, config, root.path()).await;
+
+    timeout(Duration::from_millis(100), reloaded.hydrate())
+        .await
+        .expect("hydrate should return without waiting for participant observer replay")
+        .expect("hydrate should succeed");
+
+    timeout(Duration::from_secs(1), request_started.notified())
+        .await
+        .expect("background participant observer replay should still start after hydrate");
+
+    assert_eq!(
+        observer_requests.load(Ordering::SeqCst),
+        1,
+        "hydrate should schedule exactly one observer replay request in the background"
+    );
+
+    release_response.notify_one();
+}
+
+#[tokio::test]
 async fn hydrate_does_not_rerun_participant_observers_for_already_reviewed_message() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
