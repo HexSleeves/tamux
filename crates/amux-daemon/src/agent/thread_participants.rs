@@ -28,6 +28,8 @@ pub struct ThreadParticipantState {
     pub deactivated_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_contribution_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_observed_visible_message_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +98,34 @@ fn is_participant_remove_action(action: &str) -> bool {
 }
 
 impl AgentEngine {
+    async fn run_deferred_visible_thread_continuation(
+        &self,
+        thread_id: &str,
+        continuation: DeferredVisibleThreadContinuation,
+    ) -> Result<()> {
+        if let (Some(sender), Some(message)) = (
+            continuation.internal_delegate_sender.as_deref(),
+            continuation.internal_delegate_message.as_deref(),
+        ) {
+            Box::pin(self.send_internal_agent_message(
+                sender,
+                &continuation.agent_id,
+                message,
+                continuation.preferred_session_hint.as_deref(),
+            ))
+            .await?;
+        }
+        Box::pin(self.continue_visible_thread_as_agent(
+            thread_id,
+            &continuation.agent_id,
+            continuation.preferred_session_hint.as_deref(),
+            &continuation.llm_user_content,
+            continuation.force_compaction,
+        ))
+        .await?;
+        Ok(())
+    }
+
     async fn clear_thread_participant_suggestions_for_agent(
         &self,
         thread_id: &str,
@@ -112,6 +142,34 @@ impl AgentEngine {
             suggestions.remove(thread_id);
         }
         changed
+    }
+
+    pub(super) async fn mark_thread_participant_observed_visible_message(
+        &self,
+        thread_id: &str,
+        agent_id: &str,
+        visible_message_timestamp: u64,
+    ) -> bool {
+        let mut participants = self.thread_participants.write().await;
+        let Some(entry) = participants.get_mut(thread_id) else {
+            return false;
+        };
+        let Some(participant) = entry
+            .iter_mut()
+            .find(|participant| participant.agent_id.eq_ignore_ascii_case(agent_id))
+        else {
+            return false;
+        };
+        if participant
+            .last_observed_visible_message_at
+            .is_some_and(|timestamp| timestamp >= visible_message_timestamp)
+        {
+            return false;
+        }
+
+        participant.last_observed_visible_message_at = Some(visible_message_timestamp);
+        participant.updated_at = now_millis();
+        true
     }
 
     pub(in crate::agent) async fn resolve_thread_participant_target(
@@ -341,12 +399,8 @@ impl AgentEngine {
                     break;
                 }
                 for continuation in continuations {
-                    self.continue_visible_thread_as_agent(
-                        thread_id,
-                        &continuation.agent_id,
-                        continuation.preferred_session_hint.as_deref(),
-                        &continuation.llm_user_content,
-                        continuation.force_compaction,
+                    Box::pin(
+                        self.run_deferred_visible_thread_continuation(thread_id, continuation),
                     )
                     .await?;
                 }
@@ -408,7 +462,7 @@ impl AgentEngine {
             let outcome = Box::pin(run_with_agent_scope(
                 current_agent_scope_id.clone(),
                 async move {
-                    self.run_internal_send_loop(
+                    Box::pin(self.run_internal_send_loop(
                         Some(thread_for_turn.as_str()),
                         &stored_user_content_for_turn,
                         &llm_user_content_for_turn,
@@ -418,7 +472,7 @@ impl AgentEngine {
                         client_surface_for_turn,
                         false,
                         true,
-                    )
+                    ))
                     .await
                 },
             ))
@@ -801,14 +855,21 @@ impl AgentEngine {
                 &participant_message,
             )
             .await;
+        self.enqueue_visible_thread_continuation(
+            thread_id,
+            DeferredVisibleThreadContinuation {
+                agent_id: continuation_agent_id.clone(),
+                preferred_session_hint: None,
+                llm_user_content: continuation_prompt,
+                force_compaction: false,
+                internal_delegate_sender: None,
+                internal_delegate_message: None,
+            },
+        )
+        .await;
+
         if let Err(error) = self
-            .continue_visible_thread_as_agent(
-                thread_id,
-                &continuation_agent_id,
-                None,
-                &continuation_prompt,
-                false,
-            )
+            .flush_deferred_visible_thread_continuations(thread_id)
             .await
         {
             tracing::warn!(
@@ -829,62 +890,88 @@ impl AgentEngine {
         &self,
         thread_id: &str,
     ) -> Result<bool> {
-        {
-            let streams = self.stream_cancellations.lock().await;
-            if streams.contains_key(thread_id) {
-                return Ok(false);
-            }
+        let acquired_drain_slot = {
+            let mut active = self
+                .active_thread_participant_suggestion_drains
+                .lock()
+                .await;
+            active.insert(thread_id.to_string())
+        };
+        if !acquired_drain_slot {
+            return Ok(false);
         }
 
-        let participants = self.list_thread_participants(thread_id).await;
-        let active_participant_ids = participants
-            .into_iter()
-            .filter(|participant| participant.status == ThreadParticipantStatus::Active)
-            .map(|participant| participant.agent_id)
-            .collect::<HashSet<_>>();
-        let mut stale_suggestion_ids = Vec::new();
-        let next_suggestion = self
-            .list_thread_participant_suggestions(thread_id)
-            .await
-            .into_iter()
-            .find(|suggestion| {
-                if suggestion.status != ThreadParticipantSuggestionStatus::Queued {
-                    return false;
+        let result = async {
+            let mut sent_any = false;
+
+            loop {
+                {
+                    let streams = self.stream_cancellations.lock().await;
+                    if streams.contains_key(thread_id) {
+                        break;
+                    }
                 }
-                let target_is_active = active_participant_ids
-                    .iter()
-                    .any(|agent_id| agent_id.eq_ignore_ascii_case(&suggestion.target_agent_id));
-                let looks_like_no_suggestion =
-                    crate::agent::thread_participant_runner::participant_response_is_no_suggestion(
-                        &suggestion.instruction,
-                    )
-                        || crate::agent::thread_participant_runner::parse_participant_suggestion_response(
+
+                let participants = self.list_thread_participants(thread_id).await;
+                let active_participant_ids = participants
+                    .into_iter()
+                    .filter(|participant| participant.status == ThreadParticipantStatus::Active)
+                    .map(|participant| participant.agent_id)
+                    .collect::<HashSet<_>>();
+                let mut stale_suggestion_ids = Vec::new();
+                let next_suggestion = self
+                    .list_thread_participant_suggestions(thread_id)
+                    .await
+                    .into_iter()
+                    .find(|suggestion| {
+                        if suggestion.status != ThreadParticipantSuggestionStatus::Queued {
+                            return false;
+                        }
+                        let target_is_active = active_participant_ids.iter().any(|agent_id| {
+                            agent_id.eq_ignore_ascii_case(&suggestion.target_agent_id)
+                        });
+                        let looks_like_no_suggestion = crate::agent::thread_participant_runner::participant_response_is_no_suggestion(
+                            &suggestion.instruction,
+                        ) || crate::agent::thread_participant_runner::parse_participant_suggestion_response(
                             &suggestion.instruction,
                         )
                         .is_none();
-                if !target_is_active || looks_like_no_suggestion {
-                    stale_suggestion_ids.push(suggestion.id.clone());
-                    return false;
+                        if !target_is_active || looks_like_no_suggestion {
+                            stale_suggestion_ids.push(suggestion.id.clone());
+                            return false;
+                        }
+                        true
+                    });
+                for stale_suggestion_id in stale_suggestion_ids {
+                    let _ = self
+                        .dismiss_thread_participant_suggestion(thread_id, &stale_suggestion_id)
+                        .await?;
                 }
-                true
-            });
-        for stale_suggestion_id in stale_suggestion_ids {
-            let _ = self
-                .dismiss_thread_participant_suggestion(thread_id, &stale_suggestion_id)
-                .await?;
-        }
-        let Some(next_suggestion) = next_suggestion else {
-            return Ok(false);
-        };
 
-        tracing::info!(
-            thread_id = %thread_id,
-            participant = %next_suggestion.target_agent_id,
-            suggestion_id = %next_suggestion.id,
-            "auto-sending queued participant suggestion after thread became idle"
-        );
-        self.send_thread_participant_suggestion(thread_id, &next_suggestion.id, None)
+                let Some(next_suggestion) = next_suggestion else {
+                    break;
+                };
+
+                tracing::info!(
+                    thread_id = %thread_id,
+                    participant = %next_suggestion.target_agent_id,
+                    suggestion_id = %next_suggestion.id,
+                    "auto-sending queued participant suggestion after thread became idle"
+                );
+                sent_any |= self
+                    .send_thread_participant_suggestion(thread_id, &next_suggestion.id, None)
+                    .await?;
+            }
+
+            Ok(sent_any)
+        }
+        .await;
+
+        self.active_thread_participant_suggestion_drains
+            .lock()
             .await
+            .remove(thread_id);
+        result
     }
 
     pub async fn upsert_thread_participant(
@@ -929,6 +1016,7 @@ impl AgentEngine {
                 updated_at: now,
                 deactivated_at: None,
                 last_contribution_at: None,
+                last_observed_visible_message_at: None,
             };
             entry.push(state.clone());
             state
@@ -1107,14 +1195,6 @@ impl AgentEngine {
             .build_internal_delegate_payload(thread_id, content, thread_id.is_some())
             .await;
 
-        self.send_internal_agent_message(
-            &sender,
-            &resolved_target_id,
-            &payload,
-            preferred_session_hint,
-        )
-        .await?;
-
         if let Some(thread_id) = thread_id {
             let continuation_prompt = self
                 .build_visible_thread_continuation_prompt(
@@ -1124,13 +1204,26 @@ impl AgentEngine {
                     content,
                 )
                 .await;
-            self.continue_visible_thread_as_agent(
+            self.enqueue_visible_thread_continuation(
                 thread_id,
-                &resolved_target_id,
-                preferred_session_hint,
-                &continuation_prompt,
-                false,
+                DeferredVisibleThreadContinuation {
+                    agent_id: resolved_target_id.clone(),
+                    preferred_session_hint: preferred_session_hint.map(str::to_string),
+                    llm_user_content: continuation_prompt,
+                    force_compaction: false,
+                    internal_delegate_sender: Some(sender.clone()),
+                    internal_delegate_message: Some(payload),
+                },
             )
+            .await;
+            Box::pin(self.flush_deferred_visible_thread_continuations(thread_id)).await?;
+        } else {
+            Box::pin(self.send_internal_agent_message(
+                &sender,
+                &resolved_target_id,
+                &payload,
+                preferred_session_hint,
+            ))
             .await?;
         }
 
@@ -1214,6 +1307,7 @@ impl AgentEngine {
                     .find(|participant| participant.agent_id.eq_ignore_ascii_case(&agent_id))
                 {
                     participant.last_contribution_at = Some(now);
+                    participant.last_observed_visible_message_at = Some(now);
                     participant.updated_at = now;
                     participant.status = ThreadParticipantStatus::Active;
                 }

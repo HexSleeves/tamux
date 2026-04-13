@@ -15,7 +15,7 @@ mod tab_layout;
 
 use tab_layout::{tab_cells, tab_hint_line, tab_hit_test, tab_label};
 
-const TAB_LABELS: [&str; 2] = ["Files", "Todos"];
+const TAB_LABELS: [&str; 2] = ["Todos", "Files"];
 
 #[derive(Debug, Clone)]
 struct SidebarRow {
@@ -383,8 +383,8 @@ pub fn render(
     // Agent status line at the very top
 
     for (tab, cell) in [
-        (SidebarTab::Files, tab_cells(chunks[0])[0]),
-        (SidebarTab::Todos, tab_cells(chunks[0])[1]),
+        (SidebarTab::Todos, tab_cells(chunks[0])[0]),
+        (SidebarTab::Files, tab_cells(chunks[0])[1]),
     ] {
         let style = if sidebar.active_tab() == tab {
             theme.fg_active.bg(Color::Indexed(236))

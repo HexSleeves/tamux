@@ -493,22 +493,22 @@ impl TuiModel {
             }
             KeyCode::Left if self.focus == FocusArea::Sidebar => {
                 self.sidebar.reduce(sidebar::SidebarAction::SwitchTab(
-                    sidebar::SidebarTab::Files,
+                    sidebar::SidebarTab::Todos,
                 ));
             }
             KeyCode::Right if self.focus == FocusArea::Sidebar => {
                 self.sidebar.reduce(sidebar::SidebarAction::SwitchTab(
-                    sidebar::SidebarTab::Todos,
+                    sidebar::SidebarTab::Files,
                 ));
             }
             KeyCode::Char('[') if self.sidebar_visible() && self.focus != FocusArea::Input => {
                 self.sidebar.reduce(sidebar::SidebarAction::SwitchTab(
-                    sidebar::SidebarTab::Files,
+                    sidebar::SidebarTab::Todos,
                 ));
             }
             KeyCode::Char(']') if self.sidebar_visible() && self.focus != FocusArea::Input => {
                 self.sidebar.reduce(sidebar::SidebarAction::SwitchTab(
-                    sidebar::SidebarTab::Todos,
+                    sidebar::SidebarTab::Files,
                 ));
             }
             // Dismiss selected audit entry with 'd' key (BEAT-07)

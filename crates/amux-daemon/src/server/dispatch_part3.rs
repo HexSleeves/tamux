@@ -526,13 +526,13 @@ if matches!(
                     agent.mark_operator_present("internal_delegate").await;
                     let agent = agent.clone();
                     tokio::spawn(async move {
-                        if let Err(error) = agent
+                        if let Err(error) = Box::pin(agent
                             .send_internal_delegate_message(
                                 thread_id.as_deref(),
                                 &target_agent_id,
                                 session_id.as_deref(),
                                 &content,
-                            )
+                            ))
                             .await
                         {
                             tracing::warn!(error = %error, "agent internal delegation failed");

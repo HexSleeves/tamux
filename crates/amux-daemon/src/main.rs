@@ -46,8 +46,9 @@ fn init_logging() -> Result<tracing_appender::non_blocking::WorkerGuard> {
     Ok(guard)
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+const DAEMON_TOKIO_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+async fn daemon_main() -> Result<()> {
     if std::env::args().nth(1).as_deref()
         == Some(agent::skill_preflight::SKILL_DISCOVERY_WORKER_ARG)
     {
@@ -80,4 +81,12 @@ async fn main() -> Result<()> {
     server::run().await?;
 
     Ok(())
+}
+
+fn main() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(DAEMON_TOKIO_WORKER_STACK_BYTES)
+        .build()?
+        .block_on(daemon_main())
 }

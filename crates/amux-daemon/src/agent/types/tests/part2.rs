@@ -259,6 +259,14 @@ use amux_shared::providers::{
     }
 
     #[test]
+    fn critique_config_defaults() {
+        let cfg = CritiqueConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.mode, CritiqueMode::Disabled);
+        assert!(cfg.guard_suspicious_tool_calls_only);
+    }
+
+    #[test]
     fn agent_config_deserializes_debate_without_disturbing_other_defaults() {
         let json = serde_json::json!({
             "debate": {
@@ -280,6 +288,24 @@ use amux_shared::providers::{
             cfg.debate.verdict_required_sections,
             vec!["consensus_points".to_string(), "recommended_action".to_string()]
         );
+        assert!(cfg.skill_recommendation.enabled);
+    }
+
+    #[test]
+    fn agent_config_deserializes_critique_without_disturbing_other_defaults() {
+        let json = serde_json::json!({
+            "critique": {
+                "enabled": true,
+                "mode": "deterministic",
+                "guard_suspicious_tool_calls_only": false
+            }
+        })
+        .to_string();
+
+        let cfg: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert!(cfg.critique.enabled);
+        assert_eq!(cfg.critique.mode, CritiqueMode::Deterministic);
+        assert!(!cfg.critique.guard_suspicious_tool_calls_only);
         assert!(cfg.skill_recommendation.enabled);
     }
 

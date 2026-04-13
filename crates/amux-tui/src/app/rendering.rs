@@ -1001,7 +1001,7 @@ impl TuiModel {
                     render_helpers::render_status_modal(
                         frame,
                         overlay_area,
-                        "PROMPT",
+                        self.prompt_modal_title(),
                         &self.prompt_modal_body(),
                         self.prompt_modal_scroll,
                         true,

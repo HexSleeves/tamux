@@ -189,6 +189,102 @@ struct ParticipantObserverResponderConfig {
 }
 
 impl AgentEngine {
+    pub(crate) async fn restore_participant_observer_state_after_hydrate(&self) {
+        let thread_ids = {
+            let participants = self.thread_participants.read().await;
+            participants.keys().cloned().collect::<Vec<_>>()
+        };
+
+        for thread_id in thread_ids {
+            if crate::agent::agent_identity::is_participant_playground_thread(&thread_id) {
+                continue;
+            }
+            if let Err(error) = self.run_participant_observers(&thread_id).await {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    %error,
+                    "failed to restore participant observer state during hydrate"
+                );
+            }
+        }
+    }
+
+    pub(crate) async fn clear_persisted_participant_playground_threads_on_hydrate(&self) -> usize {
+        let cleared_thread_ids = {
+            let mut threads = self.threads.write().await;
+            let updated_at = now_millis();
+            let mut cleared = Vec::new();
+
+            for (thread_id, thread) in threads.iter_mut() {
+                if !crate::agent::agent_identity::is_participant_playground_thread(thread_id) {
+                    continue;
+                }
+                if thread.messages.is_empty()
+                    && thread.total_input_tokens == 0
+                    && thread.total_output_tokens == 0
+                {
+                    continue;
+                }
+
+                thread.messages.clear();
+                thread.total_input_tokens = 0;
+                thread.total_output_tokens = 0;
+                thread.updated_at = updated_at;
+                cleared.push(thread_id.clone());
+            }
+
+            cleared
+        };
+
+        for thread_id in &cleared_thread_ids {
+            self.persist_thread_by_id(thread_id).await;
+        }
+
+        cleared_thread_ids.len()
+    }
+
+    pub(crate) async fn reset_participant_playground_threads_for_visible_thread(
+        &self,
+        visible_thread_id: &str,
+    ) {
+        let suffix = format!(":{visible_thread_id}");
+        let playground_thread_ids = {
+            let threads = self.threads.read().await;
+            threads
+                .keys()
+                .filter(|thread_id| {
+                    crate::agent::agent_identity::is_participant_playground_thread(thread_id)
+                        && thread_id.ends_with(&suffix)
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+
+        if playground_thread_ids.is_empty() {
+            return;
+        }
+
+        let updated_at = now_millis();
+        {
+            let mut threads = self.threads.write().await;
+            for thread_id in &playground_thread_ids {
+                if let Some(thread) = threads.get_mut(thread_id) {
+                    thread.messages.clear();
+                    thread.total_input_tokens = 0;
+                    thread.total_output_tokens = 0;
+                    thread.updated_at = updated_at;
+                }
+            }
+        }
+
+        for thread_id in playground_thread_ids {
+            self.persist_thread_by_id(&thread_id).await;
+            let _ = self
+                .event_tx
+                .send(AgentEvent::ThreadReloadRequired { thread_id });
+        }
+    }
+
     async fn prepare_participant_playground_thread(
         &self,
         visible_thread_id: &str,
@@ -362,22 +458,6 @@ impl AgentEngine {
         let playground_thread_id = self
             .prepare_participant_playground_thread(visible_thread_id, &target_agent_id, &prompt)
             .await;
-        let prior_assistant_message_id = self
-            .threads
-            .read()
-            .await
-            .get(&playground_thread_id)
-            .and_then(|thread| {
-                thread
-                    .messages
-                    .iter()
-                    .rev()
-                    .find(|message| {
-                        message.role == MessageRole::Assistant
-                            && message.tool_calls.as_ref().is_none_or(Vec::is_empty)
-                    })
-                    .map(|message| message.id.clone())
-            });
         Box::pin(run_with_agent_scope(target_agent_id.clone(), async move {
             let outcome = self
                 .run_internal_send_loop(
@@ -404,8 +484,6 @@ impl AgentEngine {
                         .find(|message| {
                             message.role == MessageRole::Assistant
                                 && message.tool_calls.as_ref().is_none_or(Vec::is_empty)
-                                && Some(message.id.as_str())
-                                    != prior_assistant_message_id.as_deref()
                         })
                         .and_then(|message| {
                             if !message.content.trim().is_empty() {
@@ -557,11 +635,31 @@ impl AgentEngine {
             );
             return Ok(());
         }
+        let latest_visible_message_timestamp = visible_messages
+            .last()
+            .map(|message| message.timestamp)
+            .unwrap_or(0);
+        let queued_suggestions = self.list_thread_participant_suggestions(thread_id).await;
+        let mut participant_state_changed = false;
 
         for participant in participants.into_iter().filter(|participant| {
             participant.status == ThreadParticipantStatus::Active
                 && active_responder_agent_id.as_deref() != Some(participant.agent_id.as_str())
         }) {
+            if participant
+                .last_observed_visible_message_at
+                .is_some_and(|timestamp| timestamp >= latest_visible_message_timestamp)
+            {
+                continue;
+            }
+            if queued_suggestions.iter().any(|suggestion| {
+                suggestion
+                    .target_agent_id
+                    .eq_ignore_ascii_case(&participant.agent_id)
+                    && suggestion.status == ThreadParticipantSuggestionStatus::Queued
+            }) {
+                continue;
+            }
             let compacted_messages = self
                 .compact_participant_prompt_messages(&participant.agent_id, &visible_messages)
                 .await?;
@@ -585,6 +683,13 @@ impl AgentEngine {
                     participant = %participant.agent_id,
                     "participant observer returned no suggestion"
                 );
+                participant_state_changed |= self
+                    .mark_thread_participant_observed_visible_message(
+                        thread_id,
+                        &participant.agent_id,
+                        latest_visible_message_timestamp,
+                    )
+                    .await;
                 continue;
             };
             tracing::info!(
@@ -600,6 +705,13 @@ impl AgentEngine {
                     &message,
                 )
                 .await?;
+                participant_state_changed |= self
+                    .mark_thread_participant_observed_visible_message(
+                        thread_id,
+                        &participant.agent_id,
+                        latest_visible_message_timestamp,
+                    )
+                    .await;
                 self.continue_thread_after_participant_post_or_notice(thread_id)
                     .await;
             } else {
@@ -610,7 +722,18 @@ impl AgentEngine {
                     false,
                 )
                 .await?;
+                participant_state_changed |= self
+                    .mark_thread_participant_observed_visible_message(
+                        thread_id,
+                        &participant.agent_id,
+                        latest_visible_message_timestamp,
+                    )
+                    .await;
             }
+        }
+
+        if participant_state_changed {
+            self.persist_thread_by_id(thread_id).await;
         }
 
         Ok(())

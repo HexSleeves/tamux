@@ -624,6 +624,8 @@ impl TuiModel {
                         match target {
                             widgets::queued_prompts::QueuedPromptsHitTarget::Row(index) => {
                                 self.modal_navigate_to(index);
+                                self.queued_prompt_action = QueuedPromptAction::Expand;
+                                self.execute_selected_queued_prompt_action();
                             }
                             widgets::queued_prompts::QueuedPromptsHitTarget::Action {
                                 message_index,

@@ -57,6 +57,14 @@ fn sample_thread(messages: Vec<AgentMessage>) -> AgentThread {
     }
 }
 
+fn compaction_artifact_message(thread: &AgentThread) -> &AgentMessage {
+    thread
+        .messages
+        .iter()
+        .find(|message| message.message_kind == AgentMessageKind::CompactionArtifact)
+        .expect("thread should contain a compaction artifact")
+}
+
 fn assert_markdown_section_order(payload: &str, sections: &[&str]) {
     let mut search_start = 0usize;
     for section in sections {
@@ -1090,8 +1098,8 @@ async fn heuristic_compaction_artifact_persists_and_request_uses_hidden_payload(
             .cloned()
             .expect("thread should exist after compaction")
     };
-    assert_eq!(thread.messages.len(), 4);
-    let artifact = &thread.messages[2];
+    assert_eq!(thread.messages.len(), 2);
+    let artifact = compaction_artifact_message(&thread);
     assert_eq!(artifact.message_kind, AgentMessageKind::CompactionArtifact);
     assert_eq!(
         artifact.compaction_strategy,
@@ -1151,7 +1159,8 @@ async fn heuristic_compaction_artifact_persists_and_request_uses_hidden_payload(
             .cloned()
             .expect("rehydrated thread should exist")
     };
-    let restored_artifact = &rehydrated_thread.messages[2];
+    assert_eq!(rehydrated_thread.messages.len(), 2);
+    let restored_artifact = compaction_artifact_message(&rehydrated_thread);
     assert_eq!(
         restored_artifact.message_kind,
         AgentMessageKind::CompactionArtifact
@@ -1387,7 +1396,7 @@ async fn coding_compaction_payload_prefers_structural_digest_and_offload_refs() 
             .cloned()
             .expect("thread should exist after compaction")
     };
-    let artifact = &thread.messages[2];
+    let artifact = compaction_artifact_message(&thread);
     let payload = artifact
         .compaction_payload
         .as_deref()
@@ -1528,7 +1537,7 @@ async fn coding_compaction_payload_renders_offload_refs_from_metadata_fields() {
             .cloned()
             .expect("thread should exist after compaction")
     };
-    let artifact = &thread.messages[2];
+    let artifact = compaction_artifact_message(&thread);
     let payload = artifact
         .compaction_payload
         .as_deref()
@@ -1711,7 +1720,8 @@ async fn conversational_compaction_still_uses_checkpoint_summary_path() {
             .cloned()
             .expect("thread should exist after compaction")
     };
-    let artifact = &thread.messages[2];
+    assert_eq!(thread.messages.len(), 2);
+    let artifact = compaction_artifact_message(&thread);
     let payload = artifact
         .compaction_payload
         .as_deref()
@@ -1818,7 +1828,8 @@ async fn internal_dm_thread_uses_checkpoint_compaction_even_with_structural_stat
             .cloned()
             .expect("thread should exist after compaction")
     };
-    let artifact = &thread.messages[2];
+    assert_eq!(thread.messages.len(), 2);
+    let artifact = compaction_artifact_message(&thread);
     let payload = artifact
         .compaction_payload
         .as_deref()
@@ -1923,7 +1934,7 @@ async fn coding_compaction_falls_back_to_checkpoint_summary_when_structured_asse
             .cloned()
             .expect("thread should exist after compaction")
     };
-    let artifact = &thread.messages[2];
+    let artifact = compaction_artifact_message(&thread);
     let payload = artifact
         .compaction_payload
         .as_deref()

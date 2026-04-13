@@ -82,6 +82,8 @@ impl TuiModel {
             prompt_modal_loading: false,
             prompt_modal_error: None,
             prompt_modal_scroll: 0,
+            prompt_modal_title_override: None,
+            prompt_modal_body_override: None,
             thread_participants_modal_scroll: 0,
             help_modal_scroll: 0,
             chat_drag_anchor: None,
@@ -118,6 +120,8 @@ impl TuiModel {
         self.prompt_modal_snapshot = None;
         self.prompt_modal_error = None;
         self.prompt_modal_scroll = 0;
+        self.prompt_modal_title_override = None;
+        self.prompt_modal_body_override = None;
         if self.modal.top() != Some(modal::ModalKind::PromptViewer) {
             self.modal
                 .reduce(modal::ModalAction::Push(modal::ModalKind::PromptViewer));
@@ -165,6 +169,9 @@ impl TuiModel {
     }
 
     pub(crate) fn prompt_modal_body(&self) -> String {
+        if let Some(body) = &self.prompt_modal_body_override {
+            return body.clone();
+        }
         if self.prompt_modal_loading {
             return "Loading agent prompt...".to_string();
         }
@@ -175,6 +182,12 @@ impl TuiModel {
             return render_helpers::format_prompt_modal_text(prompt);
         }
         "No prompt available.".to_string()
+    }
+
+    pub(crate) fn prompt_modal_title(&self) -> &str {
+        self.prompt_modal_title_override
+            .as_deref()
+            .unwrap_or("PROMPT")
     }
 
     pub(crate) fn thread_participants_modal_body(&self) -> String {
@@ -909,6 +922,11 @@ impl TuiModel {
         if self.modal.top() == Some(modal::ModalKind::OpenAIAuth) {
             self.openai_auth_url = None;
             self.openai_auth_status_text = None;
+        }
+        if self.modal.top() == Some(modal::ModalKind::PromptViewer) {
+            self.prompt_modal_title_override = None;
+            self.prompt_modal_body_override = None;
+            self.prompt_modal_scroll = 0;
         }
         if self.modal.top() == Some(modal::ModalKind::WhatsAppLink) {
             if self.modal.whatsapp_link().phase() != modal::WhatsAppLinkPhase::Connected {

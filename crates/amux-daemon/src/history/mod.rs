@@ -113,6 +113,33 @@ pub struct DebateVerdictRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct CritiqueSessionRow {
+    pub session_id: String,
+    pub session_json: String,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CritiqueArgumentRow {
+    pub session_id: String,
+    pub role: String,
+    pub claim: String,
+    pub weight: f64,
+    pub evidence_json: String,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CritiqueResolutionRow {
+    pub session_id: String,
+    pub decision: String,
+    pub resolution_json: String,
+    pub risk_score: f64,
+    pub confidence: f64,
+    pub resolved_at: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct OperatorProfileSessionRow {
     pub session_id: String,
     pub kind: String,
@@ -580,6 +607,7 @@ mod command_log;
 mod consolidation;
 mod context_archive;
 mod core;
+mod critique;
 mod debate;
 mod gateway_state;
 mod goal_runs;

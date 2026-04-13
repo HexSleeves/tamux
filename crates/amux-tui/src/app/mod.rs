@@ -220,13 +220,15 @@ impl QueuedPrompt {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum QueuedPromptAction {
+    Expand,
     SendNow,
     Copy,
     Delete,
 }
 
 impl QueuedPromptAction {
-    const ALL: [QueuedPromptAction; 3] = [
+    const ALL: [QueuedPromptAction; 4] = [
+        QueuedPromptAction::Expand,
         QueuedPromptAction::SendNow,
         QueuedPromptAction::Copy,
         QueuedPromptAction::Delete,
@@ -391,6 +393,8 @@ pub struct TuiModel {
     prompt_modal_loading: bool,
     prompt_modal_error: Option<String>,
     prompt_modal_scroll: usize,
+    prompt_modal_title_override: Option<String>,
+    prompt_modal_body_override: Option<String>,
     thread_participants_modal_scroll: usize,
     help_modal_scroll: usize,
 

@@ -16,6 +16,7 @@ fn daemon_boxes_large_gateway_hot_path_futures() {
         "Box::pin(handle_connection(stream, manager, agent, plugin_manager)).await",
         "if let Err(e) = Box::pin(agent.send_message_with_session_surface_and_target(",
         "match Box::pin(agent.send_direct_message(",
+        "if let Err(error) = Box::pin(agent\n                            .send_internal_delegate_message(",
     ] {
         assert!(
             source.contains(required),

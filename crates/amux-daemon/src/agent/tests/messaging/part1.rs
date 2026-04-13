@@ -35,6 +35,14 @@ fn direct_message_entrypoints_box_large_send_message_futures() {
             .contains("Box::pin(run_with_agent_scope(agent_scope_id, async move {"),
         "send_message_inner should box the oversized agent loop future"
     );
+    assert!(
+        send_message_production.contains("Box::pin(self.run_internal_send_loop("),
+        "send_message_inner should box the oversized internal send-loop future"
+    );
+    assert!(
+        send_message_production.contains("let outcome = Box::pin(runner.run()).await?;"),
+        "run_internal_send_loop should box the oversized SendMessageRunner future"
+    );
 
     assert!(
         messaging_production.contains(
@@ -119,6 +127,13 @@ fn tool_execution_hot_path_boxes_large_futures() {
         .split("\n#[cfg(test)]")
         .next()
         .unwrap_or(subagents_source.as_str());
+    let thread_participants_source =
+        fs::read_to_string(repo_root().join("crates/amux-daemon/src/agent/thread_participants.rs"))
+            .expect("read thread_participants.rs");
+    let thread_participants_production = thread_participants_source
+        .split("\n#[cfg(test)]")
+        .next()
+        .unwrap_or(thread_participants_source.as_str());
 
     assert!(
         finalize_production.contains("Box::pin(self.handle_tool_calls_chunk("),
@@ -135,6 +150,14 @@ fn tool_execution_hot_path_boxes_large_futures() {
         "done-chunk finalization should box gateway auto-send futures"
     );
     assert!(
+        finalize_production.contains(
+            "Box::pin(self.engine.flush_deferred_visible_thread_continuations(&outcome.thread_id))"
+        ) || finalize_production.contains(
+            "Box::pin(\n            self.engine\n                .flush_deferred_visible_thread_continuations(&outcome.thread_id)"
+        ),
+        "done-chunk finalization should box visible-thread continuation flush futures"
+    );
+    assert!(
         tool_calls_production.contains("Box::pin(execute_tool("),
         "tool execution callsites should box execute_tool futures"
     );
@@ -149,14 +172,36 @@ fn tool_execution_hot_path_boxes_large_futures() {
         "tool-call chunk handling should box gateway auto-send futures"
     );
     assert!(
-        subagents_production.contains(
-            "Box::pin(agent.send_internal_agent_message(&sender, target, message, preferred_session_hint.as_deref()))"
-        ) || subagents_production.contains(
-            "Box::pin(agent\n        .send_internal_agent_message(&sender, target, message, preferred_session_hint.as_deref()))"
-        ) || subagents_production.contains(
-            "let result = Box::pin(agent.send_internal_agent_message(\n        &sender,\n        target,\n        message,\n        preferred_session_hint.as_deref(),\n    ))"
-        ),
+        subagents_production.contains("Box::pin(agent.send_internal_agent_message("),
         "message_agent should box the oversized internal-agent send future"
+    );
+    assert!(
+        thread_participants_production.contains("Box::pin(self.send_internal_agent_message("),
+        "internal delegate path should box the oversized internal-agent send future"
+    );
+    assert!(
+        thread_participants_production.contains(
+            "Box::pin(self.flush_deferred_visible_thread_continuations(thread_id))"
+        ) || thread_participants_production.contains(
+            "Box::pin(\n                self.flush_deferred_visible_thread_continuations(thread_id)"
+        ),
+        "internal delegate path should use the guarded visible-thread continuation flush path"
+    );
+    assert!(
+        thread_participants_production.contains("run_deferred_visible_thread_continuation("),
+        "visible-thread continuation flush should route continuation work through the deferred helper"
+    );
+    assert!(
+        thread_participants_production.contains(
+            "Box::pin(\n                        self.run_deferred_visible_thread_continuation(thread_id, continuation),"
+        ) || thread_participants_production.contains(
+            "Box::pin(self.run_deferred_visible_thread_continuation(thread_id, continuation))"
+        ),
+        "visible-thread continuation flush should box the deferred continuation helper"
+    );
+    assert!(
+        thread_participants_production.contains("Box::pin(self.continue_visible_thread_as_agent("),
+        "deferred continuation helper should box the oversized continuation future"
     );
     assert!(
         execute_tool_production.contains("pub fn execute_tool<'a>("),

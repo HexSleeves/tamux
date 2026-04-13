@@ -365,4 +365,11 @@ fn add_available_tools_part_c(
         },
         "required": ["session_id"]
     })));
+    tools.push(tool_def("get_critique_session", "Fetch an auto-generated critique preflight session, including advocate/critic arguments and the arbiter resolution.", serde_json::json!({
+        "type": "object",
+        "properties": {
+            "session_id": { "type": "string", "description": "Critique session ID returned in critique preflight notices or blocking messages" }
+        },
+        "required": ["session_id"]
+    })));
 }

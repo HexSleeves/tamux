@@ -1167,6 +1167,25 @@ async fn execute_get_debate_session(
     }
 }
 
+async fn execute_get_critique_session(
+    args: &serde_json::Value,
+    agent: &AgentEngine,
+) -> Result<String> {
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'session_id' argument"))?;
+
+    match agent.get_critique_session_payload(session_id).await {
+        Ok(payload) => {
+            Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()))
+        }
+        Err(error) => Ok(format!("Failed to fetch critique session: {error}")),
+    }
+}
+
 async fn execute_append_debate_argument(
     args: &serde_json::Value,
     agent: &AgentEngine,
@@ -1392,6 +1411,75 @@ async fn execute_handoff_thread_agent(
     ))
 }
 
+async fn execute_message_agent_visible_thread_continuation(
+    agent: &AgentEngine,
+    thread_id: &str,
+    sender: &str,
+    resolved_target_id: &str,
+    resolved_target_name: &str,
+    message: &str,
+    preferred_session_hint: Option<String>,
+) -> Result<serde_json::Value> {
+    let payload = agent
+        .build_internal_delegate_payload(Some(thread_id), message, true)
+        .await;
+    let continuation_prompt = agent
+        .build_visible_thread_continuation_prompt(
+            thread_id,
+            sender,
+            resolved_target_id,
+            message,
+        )
+        .await;
+    agent
+        .enqueue_visible_thread_continuation(
+            thread_id,
+            crate::agent::DeferredVisibleThreadContinuation {
+                agent_id: resolved_target_id.to_string(),
+                preferred_session_hint: preferred_session_hint.clone(),
+                llm_user_content: continuation_prompt,
+                force_compaction: false,
+                internal_delegate_sender: Some(sender.to_string()),
+                internal_delegate_message: Some(payload),
+            },
+        )
+        .await;
+    Ok(serde_json::json!({
+        "target": resolved_target_name,
+        "thread_id": crate::agent::agent_identity::internal_dm_thread_id(
+            sender,
+            resolved_target_id,
+        ),
+        "response": "Visible-thread continuation queued; internal discussion will run after the current turn finishes.",
+        "upstream_message": serde_json::Value::Null,
+        "visible_thread_continuation_requested": true,
+    }))
+}
+
+async fn execute_message_agent_internal_dm(
+    agent: &AgentEngine,
+    sender: &str,
+    resolved_target_id: &str,
+    resolved_target_name: &str,
+    message: &str,
+    preferred_session_hint: Option<&str>,
+) -> Result<serde_json::Value> {
+    let result = Box::pin(agent.send_internal_agent_message(
+        sender,
+        resolved_target_id,
+        message,
+        preferred_session_hint,
+    ))
+    .await?;
+    Ok(serde_json::json!({
+        "target": resolved_target_name,
+        "thread_id": result.thread_id,
+        "response": result.response,
+        "upstream_message": result.upstream_message,
+        "visible_thread_continuation_requested": false,
+    }))
+}
+
 async fn execute_message_agent(
     args: &serde_json::Value,
     agent: &AgentEngine,
@@ -1441,51 +1529,26 @@ async fn execute_message_agent(
 
     let preferred_session_hint = preferred_session_id.as_ref().map(|value| value.to_string());
     let result = if request_visible_thread_continuation {
-        let payload = agent
-            .build_internal_delegate_payload(Some(thread_id), message, true)
-            .await;
-        let result = Box::pin(agent.send_internal_agent_message(
+        Box::pin(execute_message_agent_visible_thread_continuation(
+            agent,
+            thread_id,
             &sender,
             &resolved_target_id,
-            &payload,
-            preferred_session_hint.as_deref(),
+            &resolved_target_name,
+            message,
+            preferred_session_hint.clone(),
         ))
-        .await?;
-        let continuation_prompt = agent
-            .build_visible_thread_continuation_prompt(
-                thread_id,
-                &sender,
-                &resolved_target_id,
-                message,
-            )
-            .await;
-        agent
-            .enqueue_visible_thread_continuation(
-                thread_id,
-                crate::agent::DeferredVisibleThreadContinuation {
-                    agent_id: resolved_target_id.clone(),
-                    preferred_session_hint: preferred_session_hint.clone(),
-                    llm_user_content: continuation_prompt,
-                    force_compaction: false,
-                },
-            )
-            .await;
-        result
+        .await?
     } else {
-        Box::pin(agent.send_internal_agent_message(
+        Box::pin(execute_message_agent_internal_dm(
+            agent,
             &sender,
             &resolved_target_id,
+            &resolved_target_name,
             message,
             preferred_session_hint.as_deref(),
         ))
         .await?
     };
-    Ok(serde_json::to_string_pretty(&serde_json::json!({
-        "target": resolved_target_name,
-        "thread_id": result.thread_id,
-        "response": result.response,
-        "upstream_message": result.upstream_message,
-        "visible_thread_continuation_requested": request_visible_thread_continuation,
-    }))
-    .unwrap_or_else(|_| "{}".to_string()))
+    Ok(serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()))
 }

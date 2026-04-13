@@ -24,6 +24,22 @@ impl Drop for CurrentDirGuard {
 }
 
 #[test]
+fn sidebar_arrow_keys_follow_todos_first_tab_order() {
+    let mut model = build_model();
+    model.focus = FocusArea::Sidebar;
+
+    assert_eq!(model.sidebar.active_tab(), SidebarTab::Todos);
+
+    let handled = model.handle_key(KeyCode::Left, KeyModifiers::NONE);
+    assert!(!handled);
+    assert_eq!(model.sidebar.active_tab(), SidebarTab::Todos);
+
+    let handled = model.handle_key(KeyCode::Right, KeyModifiers::NONE);
+    assert!(!handled);
+    assert_eq!(model.sidebar.active_tab(), SidebarTab::Files);
+}
+
+#[test]
 fn submit_operator_profile_answer_allows_empty_input_when_question_is_optional() {
     let (_daemon_tx, daemon_rx) = mpsc::channel();
     let (cmd_tx, mut cmd_rx) = unbounded_channel();

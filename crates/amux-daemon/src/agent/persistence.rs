@@ -307,6 +307,16 @@ impl AgentEngine {
                 *self.thread_memory_injection_state_map().write().await =
                     thread_memory_injection_states;
                 *self.thread_structural_memories.write().await = thread_structural_memories;
+                let cleared_playground_threads = self
+                    .clear_persisted_participant_playground_threads_on_hydrate()
+                    .await;
+                if cleared_playground_threads > 0 {
+                    tracing::info!(
+                        cleared_playground_threads,
+                        "cleared persisted participant playground threads during hydrate"
+                    );
+                }
+                self.schedule_participant_observer_restore_after_hydrate();
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("failed to load agent threads from sqlite: {e}"),
@@ -907,6 +917,15 @@ impl AgentEngine {
                     "background built-in skill catalog sync failed after hydrate"
                 );
             }
+        });
+    }
+
+    fn schedule_participant_observer_restore_after_hydrate(self: &Arc<Self>) {
+        let engine = Arc::clone(self);
+        tokio::spawn(async move {
+            engine
+                .restore_participant_observer_state_after_hydrate()
+                .await;
         });
     }
 

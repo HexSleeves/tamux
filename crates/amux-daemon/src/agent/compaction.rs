@@ -1861,7 +1861,7 @@ impl AgentEngine {
             artifact.compaction_payload.as_deref().unwrap_or(""),
         );
 
-        let current_split_at = {
+        let (current_split_at, total_message_count) = {
             let mut threads = self.threads.write().await;
             let Some(thread) = threads.get_mut(thread_id) else {
                 return Ok(false);
@@ -1879,12 +1879,23 @@ impl AgentEngine {
             };
             let current_split_at = window_start + current_candidate.split_at;
             thread.messages.insert(current_split_at, artifact);
+            thread.messages.drain(..current_split_at);
             thread.updated_at = now_millis();
-            current_split_at
+            thread.total_input_tokens = thread
+                .messages
+                .iter()
+                .map(|message| message.input_tokens)
+                .sum();
+            thread.total_output_tokens = thread
+                .messages
+                .iter()
+                .map(|message| message.output_tokens)
+                .sum();
+            (current_split_at, thread.messages.len())
         };
         let compaction_notice_details = serde_json::json!({
             "split_at": current_split_at,
-            "total_message_count": message_count.saturating_add(1),
+            "total_message_count": total_message_count,
             "pre_compaction_total_tokens": pre_compaction_total_tokens,
             "effective_context_window_tokens": effective_context_window_tokens,
             "target_tokens": candidate.target_tokens,
@@ -1894,6 +1905,8 @@ impl AgentEngine {
         .to_string();
 
         self.persist_thread_by_id(thread_id).await;
+        self.reset_participant_playground_threads_for_visible_thread(thread_id)
+            .await;
         self.record_provenance_event(
             "context_compressed",
             match mode {
@@ -1989,6 +2002,8 @@ impl AgentEngine {
             preferred_session_hint: None,
             llm_user_content: latest_user_content,
             force_compaction: true,
+            internal_delegate_sender: None,
+            internal_delegate_message: None,
         };
 
         let was_streaming = {
