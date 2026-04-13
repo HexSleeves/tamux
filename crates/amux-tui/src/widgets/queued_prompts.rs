@@ -19,7 +19,7 @@ pub enum QueuedPromptsHitTarget {
 struct RowLayout {
     index: usize,
     y: u16,
-    actions: [(QueuedPromptAction, Rect); 3],
+    actions: [(QueuedPromptAction, Rect); 4],
 }
 
 pub fn render(
@@ -111,6 +111,8 @@ pub fn render(
         Span::styled(" message  ", theme.fg_dim),
         Span::styled("←→", theme.fg_active),
         Span::styled(" action  ", theme.fg_dim),
+        Span::styled("E", theme.fg_active),
+        Span::styled(" expand  ", theme.fg_dim),
         Span::styled("Enter", theme.fg_active),
         Span::styled(" run  ", theme.fg_dim),
         Span::styled("Esc", theme.fg_active),
@@ -195,11 +197,12 @@ fn action_rects(
     index: usize,
     current_tick: u64,
     y: u16,
-) -> [(QueuedPromptAction, Rect); 3] {
+) -> [(QueuedPromptAction, Rect); 4] {
     let mut actions = [
         (QueuedPromptAction::Delete, Rect::default()),
         (QueuedPromptAction::Copy, Rect::default()),
         (QueuedPromptAction::SendNow, Rect::default()),
+        (QueuedPromptAction::Expand, Rect::default()),
     ];
     let prompt = &prompts[index];
     let mut x = area.x.saturating_add(area.width);
@@ -212,6 +215,7 @@ fn action_rects(
     }
 
     [
+        (QueuedPromptAction::Expand, actions[3].1),
         (QueuedPromptAction::SendNow, actions[2].1),
         (QueuedPromptAction::Copy, actions[1].1),
         (QueuedPromptAction::Delete, actions[0].1),
@@ -224,6 +228,7 @@ fn action_label(
     current_tick: u64,
 ) -> &'static str {
     match action {
+        QueuedPromptAction::Expand => "expand",
         QueuedPromptAction::SendNow if prompt.force_send => "send now!",
         QueuedPromptAction::SendNow => "send now",
         QueuedPromptAction::Copy if prompt.is_copied(current_tick) => "copied",

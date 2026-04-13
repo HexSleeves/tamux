@@ -1830,6 +1830,100 @@ fn queued_prompts_modal_delete_action_removes_clicked_item() {
 }
 
 #[test]
+fn queued_prompts_modal_clicking_row_opens_prompt_viewer_with_full_message() {
+    let (mut model, _daemon_rx) = make_model();
+    model
+        .queued_prompts
+        .push(QueuedPrompt::new("preview line\nfull queued message body"));
+    model.open_queued_prompts_modal();
+    let (_, overlay_area) = model
+        .current_modal_area()
+        .expect("queued prompts modal should be visible");
+
+    let row_pos = (overlay_area.y..overlay_area.y.saturating_add(overlay_area.height))
+        .find_map(|row| {
+            (overlay_area.x..overlay_area.x.saturating_add(overlay_area.width)).find_map(|column| {
+                let pos = Position::new(column, row);
+                if widgets::queued_prompts::hit_test(
+                    overlay_area,
+                    &model.queued_prompts,
+                    model.modal.picker_cursor(),
+                    model.tick_counter,
+                    pos,
+                ) == Some(widgets::queued_prompts::QueuedPromptsHitTarget::Row(0))
+                {
+                    Some(pos)
+                } else {
+                    None
+                }
+            })
+        })
+        .expect("queued prompt row should be clickable");
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: row_pos.x,
+        row: row_pos.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::PromptViewer));
+    assert!(
+        model
+            .prompt_modal_body()
+            .contains("full queued message body"),
+        "prompt viewer should show the full queued message body"
+    );
+}
+
+#[test]
+fn queued_prompts_modal_expand_action_opens_prompt_viewer_with_full_message() {
+    let (mut model, _daemon_rx) = make_model();
+    model
+        .queued_prompts
+        .push(QueuedPrompt::new("preview line\nexpanded via action"));
+    model.open_queued_prompts_modal();
+    let (_, overlay_area) = model
+        .current_modal_area()
+        .expect("queued prompts modal should be visible");
+
+    let expand_pos = (overlay_area.y..overlay_area.y.saturating_add(overlay_area.height))
+        .find_map(|row| {
+            (overlay_area.x..overlay_area.x.saturating_add(overlay_area.width)).find_map(|column| {
+                let pos = Position::new(column, row);
+                if widgets::queued_prompts::hit_test(
+                    overlay_area,
+                    &model.queued_prompts,
+                    model.modal.picker_cursor(),
+                    model.tick_counter,
+                    pos,
+                ) == Some(widgets::queued_prompts::QueuedPromptsHitTarget::Action {
+                    message_index: 0,
+                    action: QueuedPromptAction::Expand,
+                }) {
+                    Some(pos)
+                } else {
+                    None
+                }
+            })
+        })
+        .expect("expand action should be clickable");
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: expand_pos.x,
+        row: expand_pos.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::PromptViewer));
+    assert!(
+        model.prompt_modal_body().contains("expanded via action"),
+        "expand action should open the full queued message"
+    );
+}
+
+#[test]
 fn clicking_footer_queue_indicator_opens_queued_prompts_modal() {
     let (mut model, _daemon_rx) = make_model();
     model.queued_prompts.push(QueuedPrompt::new("preview me"));

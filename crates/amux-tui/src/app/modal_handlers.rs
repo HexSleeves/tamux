@@ -690,6 +690,10 @@ impl TuiModel {
                 KeyCode::Right | KeyCode::Char('l') => {
                     self.queued_prompt_action = self.queued_prompt_action.step(1);
                 }
+                KeyCode::Char('e') | KeyCode::Char('E') => {
+                    self.queued_prompt_action = QueuedPromptAction::Expand;
+                    self.execute_selected_queued_prompt_action();
+                }
                 KeyCode::Enter | KeyCode::Char(' ') => {
                     self.execute_selected_queued_prompt_action();
                 }

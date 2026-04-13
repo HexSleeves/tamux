@@ -393,7 +393,6 @@ impl AgentEngine {
             debate_sessions: RwLock::new(HashMap::new()),
             cost_trackers: Mutex::new(HashMap::new()),
         });
-
         super::skill_preflight::spawn_skill_discovery_result_applier(
             engine.clone(),
             skill_discovery_result_rx,

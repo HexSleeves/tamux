@@ -352,10 +352,11 @@ impl<'a> SendMessageRunner<'a> {
             fresh_runner_retry: self.fresh_runner_retry,
             handoff_restart: self.handoff_restart,
         };
-        if let Err(error) = self
-            .engine
-            .flush_deferred_visible_thread_continuations(&outcome.thread_id)
-            .await
+        if let Err(error) = Box::pin(
+            self.engine
+                .flush_deferred_visible_thread_continuations(&outcome.thread_id),
+        )
+        .await
         {
             tracing::warn!(
                 thread_id = %outcome.thread_id,

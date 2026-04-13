@@ -323,6 +323,24 @@ impl TuiModel {
         self.queued_prompt_action = QueuedPromptAction::SendNow;
     }
 
+    fn open_queued_prompt_viewer(&mut self, index: usize) {
+        let Some(prompt) = self.queued_prompts.get(index) else {
+            return;
+        };
+        let body = format_queued_prompt_viewer_body(prompt);
+
+        self.prompt_modal_loading = false;
+        self.prompt_modal_error = None;
+        self.prompt_modal_scroll = 0;
+        self.prompt_modal_title_override = Some("QUEUED MESSAGE".to_string());
+        self.prompt_modal_body_override = Some(body);
+
+        if self.modal.top() != Some(modal::ModalKind::PromptViewer) {
+            self.modal
+                .reduce(modal::ModalAction::Push(modal::ModalKind::PromptViewer));
+        }
+    }
+
     fn queue_prompt(&mut self, prompt: String) {
         self.queued_prompts.push(QueuedPrompt::new(prompt));
         self.status_line = format!("QUEUED ({})", self.queued_prompts.len());
@@ -432,11 +450,14 @@ impl TuiModel {
         let index = self.modal.picker_cursor();
         let action = self.queued_prompt_action;
         match action {
+            QueuedPromptAction::Expand => self.open_queued_prompt_viewer(index),
             QueuedPromptAction::SendNow => {
                 let Some(prompt) = self.remove_queued_prompt_at(index) else {
                     return;
                 };
-                if self.assistant_busy() && prompt.force_send {
+                let should_interrupt =
+                    self.assistant_busy() && (prompt.suggestion_id.is_none() || prompt.force_send);
+                if should_interrupt {
                     self.interrupt_current_stream();
                 }
                 if let (Some(thread_id), Some(suggestion_id)) =
@@ -1173,4 +1194,27 @@ impl TuiModel {
             self.submit_prompt(prompt);
         }
     }
+}
+
+fn format_queued_prompt_viewer_body(prompt: &QueuedPrompt) -> String {
+    let mut body = String::new();
+
+    if let Some(agent_name) = prompt.participant_agent_name.as_deref() {
+        body.push_str(&format!("Participant: {agent_name}\n"));
+    }
+    if let Some(agent_id) = prompt.participant_agent_id.as_deref() {
+        body.push_str(&format!("Agent ID: {agent_id}\n"));
+    }
+    if let Some(thread_id) = prompt.thread_id.as_deref() {
+        body.push_str(&format!("Thread ID: {thread_id}\n"));
+    }
+    if prompt.force_send {
+        body.push_str("Dispatch: forced after interrupting the current stream\n");
+    }
+    if !body.is_empty() {
+        body.push_str("\n--------------------\n\n");
+    }
+
+    body.push_str(prompt.text.trim_end());
+    body
 }

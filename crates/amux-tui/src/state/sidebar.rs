@@ -43,7 +43,7 @@ pub struct SidebarState {
 impl SidebarState {
     pub fn new() -> Self {
         Self {
-            active_tab: SidebarTab::Files,
+            active_tab: SidebarTab::Todos,
             selected_item: 0,
             scroll_offset: 0,
             expanded_nodes: HashSet::new(),
@@ -202,8 +202,8 @@ mod tests {
     }
 
     #[test]
-    fn default_tab_is_tasks() {
+    fn default_tab_is_todos() {
         let state = SidebarState::new();
-        assert_eq!(state.active_tab(), SidebarTab::Files);
+        assert_eq!(state.active_tab(), SidebarTab::Todos);
     }
 }

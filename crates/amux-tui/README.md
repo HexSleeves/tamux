@@ -49,7 +49,7 @@ Requires a running amux daemon (connects via Unix socket or TCP).
 |-----|--------|
 | Esc | Show stop prompt |
 | Esc Esc | Force stop (within 2s) |
-| Queue modal | ↑ / ↓ select message, ← / → choose action, Enter executes |
+| Queue modal | ↑ / ↓ select message, ← / → choose action, E expands, Enter executes |
 
 ### Error
 | Key | Action |

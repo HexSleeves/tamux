@@ -108,7 +108,7 @@ impl AgentEngine {
                     _ => {}
                 }
 
-                self.run_internal_send_loop(
+                Box::pin(self.run_internal_send_loop(
                     thread_for_turn.as_deref(),
                     stored_user_content,
                     &llm_user_content_for_turn,
@@ -118,7 +118,7 @@ impl AgentEngine {
                     client_surface,
                     record_operator_for_turn,
                     reuse_existing_for_turn,
-                )
+                ))
                 .await
             }))
             .await?;
@@ -211,7 +211,7 @@ impl AgentEngine {
                 scheduled_retry_cycles,
             )
             .await?;
-            let outcome = runner.run().await?;
+            let outcome = Box::pin(runner.run()).await?;
             if let Some(retry) = outcome.fresh_runner_retry {
                 thread_id = Some(outcome.thread_id);
                 record_operator = false;

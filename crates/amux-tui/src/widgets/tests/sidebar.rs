@@ -9,7 +9,7 @@ fn sidebar_handles_empty_state() {
     let _theme = ThemeTokens::default();
     assert_eq!(
         sidebar.active_tab(),
-        crate::state::sidebar::SidebarTab::Files
+        crate::state::sidebar::SidebarTab::Todos
     );
     assert_eq!(body_item_count(&tasks, &sidebar, None), 1);
 }
@@ -18,16 +18,16 @@ fn sidebar_handles_empty_state() {
 fn tab_hit_test_uses_rendered_label_positions() {
     let area = Rect::new(10, 1, 30, 1);
     let cells = tab_cells(area);
-    assert_eq!(tab_hit_test(area, cells[0].x + 1), Some(SidebarTab::Files));
-    assert_eq!(tab_hit_test(area, cells[1].x + 1), Some(SidebarTab::Todos));
+    assert_eq!(tab_hit_test(area, cells[0].x + 1), Some(SidebarTab::Todos));
+    assert_eq!(tab_hit_test(area, cells[1].x + 1), Some(SidebarTab::Files));
     let boundary = cells[0].x.saturating_add(cells[0].width);
     assert_eq!(
         tab_hit_test(area, boundary.saturating_sub(1)),
-        Some(SidebarTab::Files)
+        Some(SidebarTab::Todos)
     );
     assert_eq!(
         tab_hit_test(area, boundary.saturating_add(1)),
-        Some(SidebarTab::Todos)
+        Some(SidebarTab::Files)
     );
 }
 

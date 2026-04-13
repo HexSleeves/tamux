@@ -96,6 +96,34 @@ fn is_participant_remove_action(action: &str) -> bool {
 }
 
 impl AgentEngine {
+    async fn run_deferred_visible_thread_continuation(
+        &self,
+        thread_id: &str,
+        continuation: DeferredVisibleThreadContinuation,
+    ) -> Result<()> {
+        if let (Some(sender), Some(message)) = (
+            continuation.internal_delegate_sender.as_deref(),
+            continuation.internal_delegate_message.as_deref(),
+        ) {
+            Box::pin(self.send_internal_agent_message(
+                sender,
+                &continuation.agent_id,
+                message,
+                continuation.preferred_session_hint.as_deref(),
+            ))
+            .await?;
+        }
+        Box::pin(self.continue_visible_thread_as_agent(
+            thread_id,
+            &continuation.agent_id,
+            continuation.preferred_session_hint.as_deref(),
+            &continuation.llm_user_content,
+            continuation.force_compaction,
+        ))
+        .await?;
+        Ok(())
+    }
+
     async fn clear_thread_participant_suggestions_for_agent(
         &self,
         thread_id: &str,
@@ -341,12 +369,8 @@ impl AgentEngine {
                     break;
                 }
                 for continuation in continuations {
-                    self.continue_visible_thread_as_agent(
-                        thread_id,
-                        &continuation.agent_id,
-                        continuation.preferred_session_hint.as_deref(),
-                        &continuation.llm_user_content,
-                        continuation.force_compaction,
+                    Box::pin(
+                        self.run_deferred_visible_thread_continuation(thread_id, continuation),
                     )
                     .await?;
                 }
@@ -408,7 +432,7 @@ impl AgentEngine {
             let outcome = Box::pin(run_with_agent_scope(
                 current_agent_scope_id.clone(),
                 async move {
-                    self.run_internal_send_loop(
+                    Box::pin(self.run_internal_send_loop(
                         Some(thread_for_turn.as_str()),
                         &stored_user_content_for_turn,
                         &llm_user_content_for_turn,
@@ -418,7 +442,7 @@ impl AgentEngine {
                         client_surface_for_turn,
                         false,
                         true,
-                    )
+                    ))
                     .await
                 },
             ))
@@ -808,6 +832,8 @@ impl AgentEngine {
                 preferred_session_hint: None,
                 llm_user_content: continuation_prompt,
                 force_compaction: false,
+                internal_delegate_sender: None,
+                internal_delegate_message: None,
             },
         )
         .await;
@@ -1138,14 +1164,6 @@ impl AgentEngine {
             .build_internal_delegate_payload(thread_id, content, thread_id.is_some())
             .await;
 
-        self.send_internal_agent_message(
-            &sender,
-            &resolved_target_id,
-            &payload,
-            preferred_session_hint,
-        )
-        .await?;
-
         if let Some(thread_id) = thread_id {
             let continuation_prompt = self
                 .build_visible_thread_continuation_prompt(
@@ -1155,13 +1173,26 @@ impl AgentEngine {
                     content,
                 )
                 .await;
-            self.continue_visible_thread_as_agent(
+            self.enqueue_visible_thread_continuation(
                 thread_id,
-                &resolved_target_id,
-                preferred_session_hint,
-                &continuation_prompt,
-                false,
+                DeferredVisibleThreadContinuation {
+                    agent_id: resolved_target_id.clone(),
+                    preferred_session_hint: preferred_session_hint.map(str::to_string),
+                    llm_user_content: continuation_prompt,
+                    force_compaction: false,
+                    internal_delegate_sender: Some(sender.clone()),
+                    internal_delegate_message: Some(payload),
+                },
             )
+            .await;
+            Box::pin(self.flush_deferred_visible_thread_continuations(thread_id)).await?;
+        } else {
+            Box::pin(self.send_internal_agent_message(
+                &sender,
+                &resolved_target_id,
+                &payload,
+                preferred_session_hint,
+            ))
             .await?;
         }
 
