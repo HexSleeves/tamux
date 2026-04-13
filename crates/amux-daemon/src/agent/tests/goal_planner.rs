@@ -320,14 +320,20 @@ fn sample_goal_run_with_kind(
 async fn enqueue_goal_run_step_starts_debate_session_for_debate_kind() {
     let root = tempdir().expect("temp dir");
     let manager = SessionManager::new_test(root.path()).await;
-    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let mut config = AgentConfig::default();
+    config.debate.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
     let goal_run_id = "goal-debate";
 
-    engine.goal_runs.lock().await.push_back(sample_goal_run_with_kind(
-        goal_run_id,
-        GoalRunStepKind::Debate,
-        "Debate the rollout tradeoffs for the migration",
-    ));
+    engine
+        .goal_runs
+        .lock()
+        .await
+        .push_back(sample_goal_run_with_kind(
+            goal_run_id,
+            GoalRunStepKind::Debate,
+            "Debate the rollout tradeoffs for the migration",
+        ));
 
     engine
         .enqueue_goal_run_step(goal_run_id)

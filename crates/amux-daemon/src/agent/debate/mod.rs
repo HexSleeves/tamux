@@ -60,6 +60,44 @@ impl AgentEngine {
             .await
     }
 
+    pub(crate) async fn persist_seeded_debate_session(
+        &self,
+        mut session: DebateSession,
+        seed_arguments: Vec<Argument>,
+    ) -> Result<DebateSession> {
+        let cfg = self.config.read().await.debate.clone();
+        if !cfg.enabled {
+            anyhow::bail!("debate capability is disabled in agent config");
+        }
+
+        self.persist_debate_session(&session).await?;
+
+        let mut known_argument_ids = Vec::new();
+        for argument in seed_arguments {
+            validate_argument(
+                &argument,
+                cfg.min_evidence_refs as usize,
+                &known_argument_ids,
+            )?;
+            known_argument_ids.push(argument.id.clone());
+            self.history
+                .insert_debate_argument(
+                    &session.id,
+                    &serde_json::to_string(&argument)?,
+                    argument.timestamp_ms,
+                )
+                .await?;
+            session.arguments.push(argument);
+        }
+
+        if session.arguments.len() >= 2 && session.current_round < session.max_rounds {
+            advance_round(&mut session, cfg.role_rotation)?;
+        }
+
+        self.persist_debate_session(&session).await?;
+        Ok(session)
+    }
+
     pub(crate) async fn append_debate_argument(
         &self,
         session_id: &str,

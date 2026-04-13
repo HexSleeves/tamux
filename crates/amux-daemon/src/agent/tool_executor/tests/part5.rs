@@ -114,6 +114,46 @@
     }
 
     #[test]
+    fn resolve_skill_path_maps_builtin_variant_record_to_seeded_superpowers_path() {
+        let root = std::env::temp_dir().join(format!("tamux-skill-test-{}", uuid::Uuid::new_v4()));
+        let canonical = root
+            .join("development")
+            .join("superpowers")
+            .join("subagent-driven-development")
+            .join("SKILL.md");
+        fs::create_dir_all(canonical.parent().expect("skill parent"))
+            .expect("skill test directory should be created");
+        fs::write(&canonical, "# Subagent-Driven Development\n")
+            .expect("canonical skill file should be written");
+
+        let resolved = resolve_skill_path(
+            &root,
+            "subagent-driven-development",
+            Some(&SkillVariantRecord {
+                variant_id: "variant-1".to_string(),
+                skill_name: "subagent-driven-development".to_string(),
+                variant_name: "canonical".to_string(),
+                relative_path: "builtin/superpowers/subagent-driven-development/SKILL.md"
+                    .to_string(),
+                parent_variant_id: None,
+                version: "v1.0".to_string(),
+                context_tags: vec!["rust".to_string()],
+                use_count: 0,
+                success_count: 0,
+                failure_count: 0,
+                status: "active".to_string(),
+                last_used_at: None,
+                created_at: 0,
+                updated_at: 0,
+            }),
+        )
+        .expect("seeded superpowers skill should resolve from builtin variant path");
+        assert_eq!(resolved, canonical);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn list_sessions_tool_requires_workspace_topology() {
         let config = AgentConfig::default();
         let temp_dir = std::env::temp_dir();

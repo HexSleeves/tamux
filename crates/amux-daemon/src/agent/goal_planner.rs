@@ -331,12 +331,7 @@ impl AgentEngine {
             // The step instructions become the debate topic.
             let thread_id = snapshot.thread_id.clone().unwrap_or_default();
             match self
-                .start_debate_session(
-                    &step.instructions,
-                    None,
-                    &thread_id,
-                    Some(&snapshot.id),
-                )
+                .start_debate_session(&step.instructions, None, &thread_id, Some(&snapshot.id))
                 .await
             {
                 Ok(session_id) => {

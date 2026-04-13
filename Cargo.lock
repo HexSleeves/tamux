@@ -6998,6 +6998,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "base64",
+ "chrono",
  "crossterm 0.28.1",
  "futures",
  "ratatui",

@@ -695,7 +695,7 @@ impl TuiModel {
                 message.clone()
             };
         }
-        if kind == "auto-compaction" {
+        if kind == "auto-compaction" || kind == "manual-compaction" {
             if let (Some(thread_id), Some(active_thread_id), Some(message_offset)) = (
                 thread_id.as_deref(),
                 self.chat.active_thread_id(),

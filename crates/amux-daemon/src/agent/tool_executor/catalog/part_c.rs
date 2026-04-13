@@ -235,11 +235,21 @@ fn add_available_tools_part_c(
             "command": { "type": "string", "description": "Optional preferred entrypoint or command" },
             "session": { "type": "string", "description": "Optional explicit session ID or unique substring. If omitted, tamux allocates a fresh lane in the same workspace when possible." },
             "cwd": { "type": "string", "description": "Optional working directory hint for any newly allocated lane" },
-            "dependencies": { "type": "array", "items": { "type": "string" }, "description": "Optional additional task dependencies" }
+            "dependencies": { "type": "array", "items": { "type": "string" }, "description": "Optional additional task dependencies" },
+            "max_depth": { "type": "integer", "description": "Optional maximum recursive delegation depth for this child subtree. Default: 1 (flat delegation). Hard cap: 3." },
+            "budget": {
+                "type": "object",
+                "properties": {
+                    "max_tokens": { "type": "integer", "description": "Optional explicit context token budget for the spawned child" },
+                    "max_wall_time_secs": { "type": "integer", "description": "Optional explicit wall-clock time budget in seconds" },
+                    "max_tool_calls": { "type": "integer", "description": "Optional explicit tool-call budget; enforced via termination conditions" }
+                },
+                "description": "Optional explicit child budget. When omitted, tamux derives a stricter budget from delegation depth."
+            }
         },
         "required": ["title", "description"]
     })));
-    tools.push(tool_def("list_subagents", "List child tasks spawned under the current parent task or thread, including runtime, status, thread, and session metadata.", serde_json::json!({
+    tools.push(tool_def("list_subagents", "List child tasks spawned under the current parent task or thread, including runtime, status, thread/session metadata, delegation depth, and remaining budget info when available.", serde_json::json!({
         "type": "object",
         "properties": {
             "status": { "type": "string", "enum": ["queued", "in_progress", "awaiting_approval", "blocked", "failed_analyzing", "completed", "failed", "cancelled"], "description": "Optional status filter" },
