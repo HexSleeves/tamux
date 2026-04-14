@@ -233,6 +233,28 @@ fn edit_tool_row_renders_clickable_path_chip() {
 }
 
 #[test]
+fn read_skill_tool_row_renders_skill_name_chip() {
+    let chat = chat_with_messages(vec![AgentMessage {
+        role: MessageRole::Tool,
+        tool_name: Some("read_skill".into()),
+        tool_arguments: Some(r#"{"skill":"systematic-debugging"}"#.into()),
+        tool_status: Some("done".into()),
+        content: "skill contents".into(),
+        ..Default::default()
+    }]);
+
+    let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 80, 0, false);
+    let tool_line = lines
+        .iter()
+        .find(|line| line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ToolToggle))
+        .expect("tool row should be rendered");
+    let text = rendered_line_plain_text(tool_line);
+
+    assert!(text.contains("read_skill"));
+    assert!(text.contains("[systematic-debugging]"));
+}
+
+#[test]
 fn all_file_mutation_tool_rows_use_filename_chip() {
     let cases = [
         (

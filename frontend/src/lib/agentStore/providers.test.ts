@@ -41,3 +41,25 @@ describe("frontend Xiaomi MiMo token plan provider catalog", () => {
     expect(getDefaultModelForProvider("xiaomi-mimo-token-plan" as any)).toBe("mimo-v2-pro");
   });
 });
+
+describe("frontend Nous Portal provider catalog", () => {
+  it("registers Nous Portal with fetchable defaults", () => {
+    const nous = getProviderDefinition("nous-portal" as any);
+
+    expect(nous).toBeDefined();
+    expect(nous?.defaultBaseUrl).toBe("https://inference-api.nousresearch.com/v1");
+    expect(nous?.defaultModel).toBe("nousresearch/hermes-4-70b");
+    expect(nous?.supportsModelFetch).toBe(true);
+    expect(nous?.models.map((model) => [model.id, model.contextWindow])).toEqual([
+      ["nousresearch/hermes-4-70b", 131_072],
+      ["nousresearch/hermes-4-405b", 131_072],
+      ["nousresearch/hermes-3-llama-3.1-70b", 131_072],
+      ["nousresearch/hermes-3-llama-3.1-405b", 131_072],
+    ]);
+  });
+
+  it("recognizes Nous Portal as a valid provider id", () => {
+    expect(normalizeAgentProviderId("nous-portal")).toBe("nous-portal");
+    expect(getDefaultModelForProvider("nous-portal" as any)).toBe("nousresearch/hermes-4-70b");
+  });
+});

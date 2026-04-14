@@ -63,6 +63,7 @@ export type AgentProviderId =
   | "z.ai-coding-plan"
   | "arcee"
   | "nvidia"
+  | "nous-portal"
   | "openrouter"
   | "cerebras"
   | "together"
@@ -89,6 +90,7 @@ export const AGENT_PROVIDER_IDS: AgentProviderId[] = [
   "z.ai-coding-plan",
   "arcee",
   "nvidia",
+  "nous-portal",
   "openrouter",
   "cerebras",
   "together",

@@ -47,9 +47,13 @@ fn critique_fallback_argument_points(
     let mut points = Vec::new();
     for target in preferred_fallback_targets {
         match (tool_name, target.as_str()) {
-            ("bash_command" | "run_terminal_command" | "execute_managed_command", "apply_patch") => {
+            (
+                "bash_command" | "run_terminal_command" | "execute_managed_command",
+                "apply_patch",
+            ) => {
                 points.push(ArgumentPoint {
-                    claim: "Prefer apply_patch over brittle shell rewrites for this change.".to_string(),
+                    claim: "Prefer apply_patch over brittle shell rewrites for this change."
+                        .to_string(),
                     weight: 0.78,
                     evidence: vec![
                         "tool_specific:apply_patch:fallback_preference".to_string(),
@@ -57,7 +61,10 @@ fn critique_fallback_argument_points(
                     ],
                 });
             }
-            ("bash_command" | "run_terminal_command" | "execute_managed_command", "replace_in_file") => {
+            (
+                "bash_command" | "run_terminal_command" | "execute_managed_command",
+                "replace_in_file",
+            ) => {
                 points.push(ArgumentPoint {
                     claim: "Prefer replace_in_file over ad-hoc shell rewrites when a narrow textual edit is enough.".to_string(),
                     weight: 0.74,
@@ -95,10 +102,11 @@ impl AgentEngine {
         let mut critic_points = Vec::new();
 
         for record in records {
-            let factors = serde_json::from_str::<Vec<crate::agent::learning::traces::CausalFactor>>(
-                &record.causal_factors_json,
-            )
-            .unwrap_or_default();
+            let factors =
+                serde_json::from_str::<Vec<crate::agent::learning::traces::CausalFactor>>(
+                    &record.causal_factors_json,
+                )
+                .unwrap_or_default();
             let factor_summary = summarize_causal_factor_descriptions(&factors);
             let factor_evidence = factors
                 .iter()
@@ -106,9 +114,10 @@ impl AgentEngine {
                 .map(|factor| format!("causal_factor:{}", factor.description))
                 .collect::<Vec<_>>();
 
-            let outcome = match serde_json::from_str::<crate::agent::learning::traces::CausalTraceOutcome>(
-                &record.outcome_json,
-            ) {
+            let outcome = match serde_json::from_str::<
+                crate::agent::learning::traces::CausalTraceOutcome,
+            >(&record.outcome_json)
+            {
                 Ok(outcome) => outcome,
                 Err(_) => continue,
             };
@@ -157,9 +166,8 @@ impl AgentEngine {
                     how_recovered,
                 } => {
                     if critic_points.is_empty() {
-                        let mut evidence = vec![format!(
-                            "causal_trace:near_miss:{what_went_wrong}"
-                        )];
+                        let mut evidence =
+                            vec![format!("causal_trace:near_miss:{what_went_wrong}")];
                         evidence.extend(factor_evidence.clone());
                         evidence.push(format!("causal_trace:recovery:{how_recovered}"));
                         let claim = if factor_summary.is_empty() {
@@ -324,14 +332,10 @@ impl AgentEngine {
             .implicit_feedback
             .top_tool_fallbacks
             .clone();
-        let preferred_fallback_targets = preferred_tool_fallback_targets(
-            &preferred_fallback_targets,
-            3,
-        );
-        let fallback_points = critique_fallback_argument_points(
-            tool_name,
-            &preferred_fallback_targets,
-        );
+        let preferred_fallback_targets =
+            preferred_tool_fallback_targets(&preferred_fallback_targets, 3);
+        let fallback_points =
+            critique_fallback_argument_points(tool_name, &preferred_fallback_targets);
         let (grounded_advocate_points, grounded_critic_points) =
             self.critique_grounded_argument_points(tool_name).await;
         let (
@@ -350,7 +354,12 @@ impl AgentEngine {
             tool_name,
             action_summary,
             reasons,
-            [grounded_critic_points, learned_critic_points, fallback_points].concat(),
+            [
+                grounded_critic_points,
+                learned_critic_points,
+                fallback_points,
+            ]
+            .concat(),
         );
         let mut resolution = arbiter::resolve_with_satisfaction_label(
             &advocate_argument,
@@ -402,7 +411,8 @@ impl AgentEngine {
                         .push("Apply the critic's safer constraints before execution.".to_string());
                 }
                 resolution.modifications = critic_guidance;
-                resolution.directives = arbiter::directives_for_modifications(&resolution.modifications);
+                resolution.directives =
+                    arbiter::directives_for_modifications(&resolution.modifications);
                 resolution.synthesis = format!(
                     "Proceed with modifications. Keep the action, but incorporate: {}.",
                     resolution.modifications.join(" | ")
@@ -424,7 +434,8 @@ impl AgentEngine {
                 .collect::<Vec<_>>();
             if !forced_modifications.is_empty() {
                 resolution.modifications = forced_modifications;
-                resolution.directives = arbiter::directives_for_modifications(&resolution.modifications);
+                resolution.directives =
+                    arbiter::directives_for_modifications(&resolution.modifications);
                 if matches!(resolution.decision, Decision::ProceedWithModifications) {
                     resolution.synthesis = format!(
                         "Proceed with modifications. Keep the action, but incorporate: {}.",
@@ -444,7 +455,10 @@ impl AgentEngine {
             let forced_directives = forced_directives
                 .iter()
                 .filter_map(|value| value.as_str())
-                .filter_map(|value| serde_json::from_str::<self::types::CritiqueDirective>(&format!("\"{value}\"")).ok())
+                .filter_map(|value| {
+                    serde_json::from_str::<self::types::CritiqueDirective>(&format!("\"{value}\""))
+                        .ok()
+                })
                 .collect::<Vec<_>>();
             if !forced_directives.is_empty() {
                 resolution.directives = forced_directives;

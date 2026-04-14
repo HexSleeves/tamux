@@ -6,8 +6,8 @@ use amux_shared::providers::{
 };
 
 #[test]
-fn provider_count_is_24() {
-    assert_eq!(PROVIDERS.len(), 24);
+fn provider_count_is_25() {
+    assert_eq!(PROVIDERS.len(), 25);
 }
 
 #[test]
@@ -184,4 +184,36 @@ fn xiaomi_mimo_provider_uses_expected_defaults() {
     assert_eq!(models.len(), 2);
     assert!(models.iter().any(|model| model.id == "mimo-v2-pro"));
     assert!(models.iter().any(|model| model.id == "mimo-v2-omni"));
+}
+
+#[test]
+fn nous_portal_provider_uses_expected_defaults() {
+    let provider = find_by_id("nous-portal").unwrap();
+    assert_eq!(provider.name, "Nous Portal");
+    assert_eq!(
+        provider.default_base_url,
+        "https://inference-api.nousresearch.com/v1"
+    );
+    assert_eq!(provider.default_model, "nousresearch/hermes-4-70b");
+    assert_eq!(provider.default_auth_source, "api_key");
+    assert_eq!(provider.supported_auth_sources, API_KEY_ONLY_AUTH_SOURCES);
+    assert_eq!(provider.default_transport, "chat_completions");
+    assert_eq!(provider.supported_transports, CHAT_ONLY_TRANSPORTS);
+    assert_eq!(
+        known_context_window_for("nous-portal", "nousresearch/hermes-4-70b"),
+        Some(131_072)
+    );
+    assert_eq!(
+        known_context_window_for("nous-portal", "nousresearch/hermes-4-405b"),
+        Some(131_072)
+    );
+    assert!(supports_model_fetch_for("nous-portal"));
+    let models = known_models_for_provider("nous-portal");
+    assert_eq!(models.len(), 4);
+    assert!(models
+        .iter()
+        .any(|model| model.id == "nousresearch/hermes-4-70b"));
+    assert!(models
+        .iter()
+        .any(|model| model.id == "nousresearch/hermes-4-405b"));
 }

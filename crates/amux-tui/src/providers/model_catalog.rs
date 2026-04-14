@@ -172,6 +172,20 @@ pub(super) fn known_models_for_provider_auth(
             ("mimo-v2-pro", "MiMo V2 Pro", 1_000_000),
             ("mimo-v2-omni", "MiMo V2 Omni", 256_000),
         ],
+        PROVIDER_ID_NOUS_PORTAL => &[
+            ("nousresearch/hermes-4-70b", "Nous: Hermes 4 70B", 131_072),
+            ("nousresearch/hermes-4-405b", "Nous: Hermes 4 405B", 131_072),
+            (
+                "nousresearch/hermes-3-llama-3.1-70b",
+                "Nous: Hermes 3 70B Instruct",
+                131_072,
+            ),
+            (
+                "nousresearch/hermes-3-llama-3.1-405b",
+                "Nous: Hermes 3 405B Instruct",
+                131_072,
+            ),
+        ],
         PROVIDER_ID_HUGGINGFACE => &[(
             "meta-llama/Llama-3.3-70B-Instruct",
             "Llama 3.3 70B",

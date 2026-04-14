@@ -46,6 +46,17 @@ pub(crate) fn tool_file_chip(message: &AgentMessage) -> Option<ToolFileChip> {
     })
 }
 
+pub(crate) fn tool_skill_chip(message: &AgentMessage) -> Option<String> {
+    let tool_name = message.tool_name.as_deref()?;
+    if tool_name != "read_skill" {
+        return None;
+    }
+
+    let arguments = message.tool_arguments.as_deref()?;
+    let value: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    non_empty_string_field(&value, "skill")
+}
+
 fn direct_tool_path(value: &serde_json::Value) -> Option<String> {
     ["path", "filePath", "file_path"]
         .iter()
@@ -91,6 +102,22 @@ pub(crate) fn append_tool_file_chip(
     line.spans.push(Span::raw(" "));
     line.spans
         .push(Span::styled(format!("[{}]", chip.label), theme.accent_primary));
+}
+
+pub(crate) fn append_tool_skill_chip(
+    line: &mut Line<'static>,
+    message: &AgentMessage,
+    theme: &ThemeTokens,
+) {
+    let Some(skill_name) = tool_skill_chip(message) else {
+        return;
+    };
+
+    line.spans.push(Span::raw(" "));
+    line.spans.push(Span::styled(
+        format!("[{skill_name}]"),
+        theme.accent_primary,
+    ));
 }
 
 fn first_apply_patch_path(arguments: &str) -> Option<String> {

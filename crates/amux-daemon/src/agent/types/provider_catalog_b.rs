@@ -52,6 +52,33 @@ pub const XIAOMI_MIMO_TOKEN_PLAN_MODELS: &[ModelDefinition] = &[
     },
 ];
 
+pub const NOUS_PORTAL_MODELS: &[ModelDefinition] = &[
+    ModelDefinition {
+        id: "nousresearch/hermes-4-70b",
+        name: "Nous: Hermes 4 70B",
+        context_window: 131072,
+        modalities: TEXT_ONLY,
+    },
+    ModelDefinition {
+        id: "nousresearch/hermes-4-405b",
+        name: "Nous: Hermes 4 405B",
+        context_window: 131072,
+        modalities: TEXT_ONLY,
+    },
+    ModelDefinition {
+        id: "nousresearch/hermes-3-llama-3.1-70b",
+        name: "Nous: Hermes 3 70B Instruct",
+        context_window: 131072,
+        modalities: TEXT_ONLY,
+    },
+    ModelDefinition {
+        id: "nousresearch/hermes-3-llama-3.1-405b",
+        name: "Nous: Hermes 3 405B Instruct",
+        context_window: 131072,
+        modalities: TEXT_ONLY,
+    },
+];
+
 pub const OPENCODE_ZEN_MODELS: &[ModelDefinition] = &[
     ModelDefinition {
         id: "claude-opus-4-6",

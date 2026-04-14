@@ -38,7 +38,9 @@ pub(crate) fn recommended_modifications_with_fallback_targets(
                 .map(|tool| {
                     let normalized = tool.trim().to_ascii_lowercase();
                     normalized_targets.is_empty()
-                        || normalized_targets.iter().any(|target| target == &normalized)
+                        || normalized_targets
+                            .iter()
+                            .any(|target| target == &normalized)
                 })
                 .unwrap_or(false)
         });
@@ -48,7 +50,9 @@ pub(crate) fn recommended_modifications_with_fallback_targets(
                 .map(|tool| {
                     let normalized = tool.trim().to_ascii_lowercase();
                     normalized_targets.is_empty()
-                        || normalized_targets.iter().any(|target| target == &normalized)
+                        || normalized_targets
+                            .iter()
+                            .any(|target| target == &normalized)
                 })
                 .unwrap_or(false)
         });
@@ -62,10 +66,7 @@ pub(crate) fn recommended_modifications_with_fallback_targets(
             .any(|evidence| evidence.starts_with("tool_specific:"));
         b_fallback_match
             .cmp(&a_fallback_match)
-            .then_with(|| {
-                b_tool_specific
-            .cmp(&a_tool_specific)
-            })
+            .then_with(|| b_tool_specific.cmp(&a_tool_specific))
             .then_with(|| {
                 b.weight
                     .partial_cmp(&a.weight)
@@ -83,14 +84,12 @@ pub(crate) fn directives_for_modifications(modifications: &[String]) -> Vec<Crit
     let mut directives = Vec::new();
     for modification in modifications {
         let normalized = modification.trim().to_ascii_lowercase();
-        if (normalized.contains("disable network access")
-            || normalized.contains("disable network"))
+        if (normalized.contains("disable network access") || normalized.contains("disable network"))
             && !directives.contains(&CritiqueDirective::DisableNetwork)
         {
             directives.push(CritiqueDirective::DisableNetwork);
         }
-        if (normalized.contains("enable sandboxing")
-            || normalized.contains("enable sandbox"))
+        if (normalized.contains("enable sandboxing") || normalized.contains("enable sandbox"))
             && !directives.contains(&CritiqueDirective::EnableSandbox)
         {
             directives.push(CritiqueDirective::EnableSandbox);

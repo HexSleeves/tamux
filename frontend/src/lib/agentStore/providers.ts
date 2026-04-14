@@ -124,6 +124,13 @@ const XIAOMI_MIMO_TOKEN_PLAN_MODELS: ModelDefinition[] = [
   { id: "mimo-v2-omni", name: "MiMo V2 Omni", contextWindow: 256_000, modalities: M_MULTI },
 ];
 
+const NOUS_PORTAL_MODELS: ModelDefinition[] = [
+  { id: "nousresearch/hermes-4-70b", name: "Nous: Hermes 4 70B", contextWindow: 131_072 },
+  { id: "nousresearch/hermes-4-405b", name: "Nous: Hermes 4 405B", contextWindow: 131_072 },
+  { id: "nousresearch/hermes-3-llama-3.1-70b", name: "Nous: Hermes 3 70B Instruct", contextWindow: 131_072 },
+  { id: "nousresearch/hermes-3-llama-3.1-405b", name: "Nous: Hermes 3 405B Instruct", contextWindow: 131_072 },
+];
+
 const OPENCODE_ZEN_MODELS: ModelDefinition[] = [
   { id: "claude-opus-4-6", name: "Claude Opus 4.6", contextWindow: 200000, modalities: M_TI },
   { id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", contextWindow: 200000, modalities: M_TI },
@@ -250,6 +257,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
   { id: "z.ai-coding-plan", name: "Z.AI Coding Plan", defaultBaseUrl: "https://api.z.ai/api/coding/paas/v4", defaultModel: "glm-5", apiType: "openai", authMethod: "bearer", models: ZAI_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "arcee", name: "Arcee", defaultBaseUrl: "https://api.arcee.ai/api/v1", defaultModel: "trinity-large-thinking", apiType: "openai", authMethod: "bearer", models: ARCEE_MODELS, supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "nvidia", name: "NVIDIA", defaultBaseUrl: "https://integrate.api.nvidia.com/v1", defaultModel: "minimaxai/minimax-m2.7", apiType: "openai", authMethod: "bearer", models: NVIDIA_MODELS, supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
+  { id: "nous-portal", name: "Nous Portal", defaultBaseUrl: "https://inference-api.nousresearch.com/v1", defaultModel: "nousresearch/hermes-4-70b", apiType: "openai", authMethod: "bearer", models: NOUS_PORTAL_MODELS, supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "openrouter", name: "OpenRouter", defaultBaseUrl: "https://openrouter.ai/api/v1", defaultModel: "arcee-ai/trinity-large-thinking", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "cerebras", name: "Cerebras", defaultBaseUrl: "https://api.cerebras.ai/v1", defaultModel: "llama-3.3-70b", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "together", name: "Together", defaultBaseUrl: "https://api.together.xyz/v1", defaultModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
