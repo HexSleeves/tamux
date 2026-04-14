@@ -574,6 +574,59 @@ fn collect_thread_structural_candidates(
     language_hints_truncated || entries_truncated
 }
 
+async fn load_thread_memory_graph_neighbors(
+    agent: &AgentEngine,
+    structural_memory: &crate::agent::context::structural_memory::ThreadStructuralMemory,
+    limit: usize,
+) -> Result<Vec<crate::history::MemoryGraphNeighborRow>> {
+    let structural_refs = structural_memory
+        .concise_context_entries(&[], limit)
+        .into_iter()
+        .map(|entry| entry.node_id)
+        .collect::<Vec<_>>();
+    let mut neighbors = Vec::new();
+    for node_id in structural_refs.iter().take(limit) {
+        let remaining = limit.saturating_sub(neighbors.len());
+        if remaining == 0 {
+            break;
+        }
+        let rows = agent
+            .history
+            .list_memory_graph_neighbors(node_id, remaining)
+            .await?;
+        for row in rows {
+            if neighbors.iter().any(|existing: &crate::history::MemoryGraphNeighborRow| {
+                existing.node.id == row.node.id
+                    && existing.via_edge.source_node_id == row.via_edge.source_node_id
+                    && existing.via_edge.target_node_id == row.via_edge.target_node_id
+                    && existing.via_edge.relation_type == row.via_edge.relation_type
+            }) {
+                continue;
+            }
+            neighbors.push(row);
+            if neighbors.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(neighbors)
+}
+
+fn memory_graph_neighbor_snippet(row: &crate::history::MemoryGraphNeighborRow) -> String {
+    let relation = row.via_edge.relation_type.replace('_', " ");
+    let summary = row
+        .node
+        .summary_text
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!(" — {}", value))
+        .unwrap_or_default();
+    format!(
+        "Graph neighbor: {} ({}) via {}{}",
+        row.node.label, row.node.node_type, relation, summary
+    )
+}
+
 fn rank_memory_search_matches(
     request: &MemorySearchRequest,
     candidates: Vec<MemorySearchCandidate>,
@@ -756,9 +809,16 @@ async fn execute_memory_read_tool(
             let total_language_hints = structural_memory.language_hints.len();
             let language_hints = structural_memory
                 .language_hints
-                .into_iter()
+                .iter()
                 .take(request.limit_per_layer)
+                .cloned()
                 .collect::<Vec<_>>();
+            let graph_neighbors = load_thread_memory_graph_neighbors(
+                agent,
+                &structural_memory,
+                request.limit_per_layer,
+            )
+            .await?;
             truncated |= entries.len() < total_structural_entries
                 || language_hints.len() < total_language_hints;
             results.insert(
@@ -770,6 +830,16 @@ async fn execute_memory_read_tool(
                         .map(|entry| serde_json::json!({
                             "node_id": entry.node_id,
                             "summary": entry.summary,
+                        }))
+                        .collect::<Vec<_>>(),
+                    "graph_neighbors": graph_neighbors
+                        .into_iter()
+                        .map(|row| serde_json::json!({
+                            "node_id": row.node.id,
+                            "label": row.node.label,
+                            "node_type": row.node.node_type,
+                            "relation_type": row.via_edge.relation_type,
+                            "summary": memory_graph_neighbor_snippet(&row),
                         }))
                         .collect::<Vec<_>>(),
                 }),
@@ -979,7 +1049,30 @@ async fn execute_memory_search_tool(
         } {
             let mut structural_candidates = Vec::new();
             collection_truncated |=
-                collect_thread_structural_candidates(&mut structural_candidates, structural_memory);
+                collect_thread_structural_candidates(&mut structural_candidates, structural_memory.clone());
+            let graph_neighbors = load_thread_memory_graph_neighbors(
+                agent,
+                &structural_memory,
+                MEMORY_SEARCH_MAX_CANDIDATES_PER_LAYER,
+            )
+            .await?;
+            for row in graph_neighbors.into_iter().take(MEMORY_SEARCH_MAX_CANDIDATES_PER_LAYER) {
+                structural_candidates.push(MemorySearchCandidate {
+                    layer: "thread_structural_memory",
+                    source: row.node.id.clone(),
+                    snippet: memory_graph_neighbor_snippet(&row),
+                    haystack: format!(
+                        "{} {} {} {}",
+                        row.node.label,
+                        row.node.node_type,
+                        row.via_edge.relation_type,
+                        row.node.summary_text.unwrap_or_default()
+                    ),
+                    updated_at_ms: Some(row.node.last_accessed_ms),
+                    injected_updated_at_ms: None,
+                    freshness_status: "current",
+                });
+            }
             candidates.extend(structural_candidates);
             layers_consulted.push("thread_structural_memory".to_string());
         } else {
