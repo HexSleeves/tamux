@@ -168,6 +168,24 @@ pub(super) fn known_models_for_provider_auth(
             ("kimi-k2.5", "Kimi K2.5", 262_144),
             ("MiniMax-M2.5", "MiniMax M2.5", 205_000),
         ],
+        PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN => &[
+            ("mimo-v2-pro", "MiMo V2 Pro", 1_000_000),
+            ("mimo-v2-omni", "MiMo V2 Omni", 256_000),
+        ],
+        PROVIDER_ID_NOUS_PORTAL => &[
+            ("nousresearch/hermes-4-70b", "Nous: Hermes 4 70B", 131_072),
+            ("nousresearch/hermes-4-405b", "Nous: Hermes 4 405B", 131_072),
+            (
+                "nousresearch/hermes-3-llama-3.1-70b",
+                "Nous: Hermes 3 70B Instruct",
+                131_072,
+            ),
+            (
+                "nousresearch/hermes-3-llama-3.1-405b",
+                "Nous: Hermes 3 405B Instruct",
+                131_072,
+            ),
+        ],
         PROVIDER_ID_HUGGINGFACE => &[(
             "meta-llama/Llama-3.3-70B-Instruct",
             "Llama 3.3 70B",
@@ -184,11 +202,4 @@ pub(super) fn known_models_for_provider_auth(
             context_window: Some(*ctx),
         })
         .collect()
-}
-
-pub fn known_context_window_for(provider: &str, model: &str) -> Option<u32> {
-    known_models_for_provider_auth(provider, "api_key")
-        .into_iter()
-        .find(|entry| entry.id == model)
-        .and_then(|entry| entry.context_window)
 }

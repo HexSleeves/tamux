@@ -281,6 +281,10 @@ impl AgentEngine {
     pub(in crate::agent) async fn persist_learning_stores(&self) {
         self.persist_heuristic_store().await;
         self.persist_pattern_store().await;
+        let model = self.meta_cognitive_self_model.read().await.clone();
+        if let Err(error) = self.persist_meta_cognitive_self_model(&model).await {
+            tracing::warn!(%error, "failed to persist meta-cognitive self-model");
+        }
     }
 
     pub(in crate::agent) async fn take_continuity_acknowledgment(

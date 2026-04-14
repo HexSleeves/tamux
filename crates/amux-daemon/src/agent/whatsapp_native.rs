@@ -1,8 +1,6 @@
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use amux_protocol::parse_whatsapp_allowed_contacts;
 use anyhow::{Context, Result};
 use wa_rs::bot::Bot;
 use wa_rs::proto_helpers::MessageExt;
@@ -26,16 +24,18 @@ use super::{
 
 mod helpers;
 
-pub(crate) use helpers::whatsapp_native_store_path;
-use helpers::{
-    build_whatsapp_cursor, classify_whatsapp_enqueue_decision, format_outbound_whatsapp_text,
-    is_whatsapp_cursor_newer, log_whatsapp_allowlist_suppression,
-    mark_whatsapp_replay_active_if_cursors, parse_tamux_device_version, parse_whatsapp_cursor,
-    should_enqueue_from_me_whatsapp_message, tamux_device_props, tamux_self_chat_prefix,
+pub(crate) use helpers::{
+    build_whatsapp_cursor, classify_whatsapp_enqueue_decision, parse_whatsapp_cursor,
+    should_enqueue_from_me_whatsapp_message, tamux_self_chat_prefix, whatsapp_native_store_path,
     WhatsAppEnqueueDecision,
 };
 pub(super) use helpers::{clear_logged_out_whatsapp_session, now_millis_local};
+use helpers::{
+    format_outbound_whatsapp_text, is_whatsapp_cursor_newer, log_whatsapp_allowlist_suppression,
+    mark_whatsapp_replay_active_if_cursors, tamux_device_props,
+};
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) async fn start_whatsapp_link_native(agent: Arc<AgentEngine>) -> Result<()> {
     let store_path = whatsapp_native_store_path(&agent.data_dir);
     if let Some(parent) = store_path.parent() {
@@ -108,6 +108,7 @@ pub(crate) async fn start_whatsapp_link_native(agent: Arc<AgentEngine>) -> Resul
     Ok(())
 }
 
+#[cfg_attr(test, allow(dead_code))]
 async fn handle_native_event(
     agent: Arc<AgentEngine>,
     client: Arc<wa_rs::Client>,

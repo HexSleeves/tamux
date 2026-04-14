@@ -19,6 +19,7 @@ pub const PROVIDER_ID_LMSTUDIO: &str = "lmstudio";
 pub const PROVIDER_ID_MINIMAX: &str = "minimax";
 pub const PROVIDER_ID_MINIMAX_CODING_PLAN: &str = "minimax-coding-plan";
 pub const PROVIDER_ID_NVIDIA: &str = "nvidia";
+pub const PROVIDER_ID_NOUS_PORTAL: &str = "nous-portal";
 pub const PROVIDER_ID_OLLAMA: &str = "ollama";
 pub const PROVIDER_ID_OPENAI: &str = "openai";
 pub const PROVIDER_ID_CHATGPT_SUBSCRIPTION: &str = "chatgpt_subscription";
@@ -27,6 +28,7 @@ pub const PROVIDER_ID_OPENROUTER: &str = "openrouter";
 pub const PROVIDER_ID_QWEN: &str = "qwen";
 pub const PROVIDER_ID_QWEN_DEEPINFRA: &str = "qwen-deepinfra";
 pub const PROVIDER_ID_TOGETHER: &str = "together";
+pub const PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN: &str = "xiaomi-mimo-token-plan";
 pub const PROVIDER_ID_Z_AI: &str = "z.ai";
 pub const PROVIDER_ID_Z_AI_CODING_PLAN: &str = "z.ai-coding-plan";
 
@@ -48,6 +50,9 @@ pub const MINIMAX_CODING_PLAN_PROVIDER: ProviderRef = ProviderRef {
 pub const NVIDIA_PROVIDER: ProviderRef = ProviderRef {
     id: PROVIDER_ID_NVIDIA,
 };
+pub const NOUS_PORTAL_PROVIDER: ProviderRef = ProviderRef {
+    id: PROVIDER_ID_NOUS_PORTAL,
+};
 pub const OPENAI_PROVIDER: ProviderRef = ProviderRef {
     id: PROVIDER_ID_OPENAI,
 };
@@ -59,4 +64,7 @@ pub const OPENROUTER_PROVIDER: ProviderRef = ProviderRef {
 };
 pub const QWEN_PROVIDER: ProviderRef = ProviderRef {
     id: PROVIDER_ID_QWEN,
+};
+pub const XIAOMI_MIMO_TOKEN_PLAN_PROVIDER: ProviderRef = ProviderRef {
+    id: PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN,
 };

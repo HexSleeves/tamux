@@ -280,7 +280,10 @@ impl TuiModel {
         {
             return;
         }
-        self.request_latest_thread_page(thread_id.clone(), true);
+        if self.chat.active_thread_id() != Some(thread_id.as_str()) {
+            return;
+        }
+        self.request_authoritative_thread_refresh(thread_id.clone(), true);
         self.send_daemon_command(DaemonCommand::RequestThreadTodos(thread_id.clone()));
         self.send_daemon_command(DaemonCommand::RequestThreadWorkContext(thread_id));
         self.status_line = "Thread reloaded from daemon".to_string();

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::*;
 
 fn normalize_no_suggestion_candidate(value: &str) -> String {
@@ -181,6 +183,31 @@ fn build_visible_participant_message_prompt(
     prompt
 }
 
+fn trim_participant_playground_thread_messages(
+    thread: &mut AgentThread,
+    max_messages: usize,
+    updated_at: u64,
+) -> bool {
+    if thread.messages.len() <= max_messages {
+        return false;
+    }
+
+    let drop_count = thread.messages.len().saturating_sub(max_messages);
+    thread.messages.drain(0..drop_count);
+    thread.total_input_tokens = thread
+        .messages
+        .iter()
+        .map(|message| message.input_tokens)
+        .sum();
+    thread.total_output_tokens = thread
+        .messages
+        .iter()
+        .map(|message| message.output_tokens)
+        .sum();
+    thread.updated_at = updated_at;
+    true
+}
+
 #[derive(Clone)]
 struct ParticipantObserverResponderConfig {
     provider_id: String,
@@ -189,6 +216,35 @@ struct ParticipantObserverResponderConfig {
 }
 
 impl AgentEngine {
+    async fn participant_playground_message_limit(&self) -> usize {
+        let config = self.config.read().await;
+        config
+            .max_context_messages
+            .max(config.keep_recent_on_compact)
+            .max(1) as usize
+    }
+
+    async fn trim_participant_playground_thread_by_id(&self, thread_id: &str) -> bool {
+        if !crate::agent::agent_identity::is_participant_playground_thread(thread_id) {
+            return false;
+        }
+
+        let max_messages = self.participant_playground_message_limit().await;
+        let trimmed = {
+            let mut threads = self.threads.write().await;
+            let Some(thread) = threads.get_mut(thread_id) else {
+                return false;
+            };
+            trim_participant_playground_thread_messages(thread, max_messages, now_millis())
+        };
+
+        if trimmed {
+            self.persist_thread_by_id(thread_id).await;
+        }
+
+        trimmed
+    }
+
     pub(crate) async fn restore_participant_observer_state_after_hydrate(&self) {
         let thread_ids = {
             let participants = self.thread_participants.read().await;
@@ -209,41 +265,33 @@ impl AgentEngine {
         }
     }
 
-    pub(crate) async fn clear_persisted_participant_playground_threads_on_hydrate(&self) -> usize {
-        let cleared_thread_ids = {
+    pub(crate) async fn trim_persisted_participant_playground_threads_on_hydrate(&self) -> usize {
+        let max_messages = self.participant_playground_message_limit().await;
+        let trimmed_thread_ids = {
             let mut threads = self.threads.write().await;
             let updated_at = now_millis();
-            let mut cleared = Vec::new();
+            let mut trimmed = Vec::new();
 
             for (thread_id, thread) in threads.iter_mut() {
                 if !crate::agent::agent_identity::is_participant_playground_thread(thread_id) {
                     continue;
                 }
-                if thread.messages.is_empty()
-                    && thread.total_input_tokens == 0
-                    && thread.total_output_tokens == 0
-                {
-                    continue;
+                if trim_participant_playground_thread_messages(thread, max_messages, updated_at) {
+                    trimmed.push(thread_id.clone());
                 }
-
-                thread.messages.clear();
-                thread.total_input_tokens = 0;
-                thread.total_output_tokens = 0;
-                thread.updated_at = updated_at;
-                cleared.push(thread_id.clone());
             }
 
-            cleared
+            trimmed
         };
 
-        for thread_id in &cleared_thread_ids {
+        for thread_id in &trimmed_thread_ids {
             self.persist_thread_by_id(thread_id).await;
         }
 
-        cleared_thread_ids.len()
+        trimmed_thread_ids.len()
     }
 
-    pub(crate) async fn reset_participant_playground_threads_for_visible_thread(
+    pub(crate) async fn trim_participant_playground_threads_for_visible_thread(
         &self,
         visible_thread_id: &str,
     ) {
@@ -264,20 +312,22 @@ impl AgentEngine {
             return;
         }
 
+        let max_messages = self.participant_playground_message_limit().await;
         let updated_at = now_millis();
+        let mut trimmed_thread_ids = Vec::new();
         {
             let mut threads = self.threads.write().await;
             for thread_id in &playground_thread_ids {
                 if let Some(thread) = threads.get_mut(thread_id) {
-                    thread.messages.clear();
-                    thread.total_input_tokens = 0;
-                    thread.total_output_tokens = 0;
-                    thread.updated_at = updated_at;
+                    if trim_participant_playground_thread_messages(thread, max_messages, updated_at)
+                    {
+                        trimmed_thread_ids.push(thread_id.clone());
+                    }
                 }
             }
         }
 
-        for thread_id in playground_thread_ids {
+        for thread_id in trimmed_thread_ids {
             self.persist_thread_by_id(&thread_id).await;
             let _ = self
                 .event_tx
@@ -458,10 +508,11 @@ impl AgentEngine {
         let playground_thread_id = self
             .prepare_participant_playground_thread(visible_thread_id, &target_agent_id, &prompt)
             .await;
-        Box::pin(run_with_agent_scope(target_agent_id.clone(), async move {
+        let playground_thread_id_for_run = playground_thread_id.clone();
+        let output = Box::pin(run_with_agent_scope(target_agent_id.clone(), async move {
             let outcome = self
                 .run_internal_send_loop(
-                    Some(&playground_thread_id),
+                    Some(&playground_thread_id_for_run),
                     &prompt,
                     &prompt,
                     None,
@@ -500,7 +551,11 @@ impl AgentEngine {
                 })
                 .ok_or_else(|| anyhow::anyhow!("participant playground returned empty output"))
         }))
-        .await
+        .await?;
+        let _ = self
+            .trim_participant_playground_thread_by_id(&playground_thread_id)
+            .await;
+        Ok(output)
     }
 
     pub async fn generate_visible_thread_participant_message(

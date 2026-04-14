@@ -1,4 +1,9 @@
 use super::*;
+use crate::agent::metacognitive::introspector::{
+    introspect, IntrospectionInput, RecentToolOutcome,
+};
+use crate::agent::metacognitive::pattern_regulator::{regulate, InterventionAction};
+use crate::agent::metacognitive::self_assessment::SelfAssessor;
 
 pub(super) fn inter_tool_call_delay(
     index: usize,
@@ -16,6 +21,159 @@ fn skill_gate_exempt_tool(name: &str) -> bool {
 }
 
 impl<'a> SendMessageRunner<'a> {
+    async fn handle_metacognitive_intervention(
+        &mut self,
+        tc: &ToolCall,
+    ) -> Option<LoopDisposition> {
+        let decision_reasoning = {
+            let threads = self.engine.threads.read().await;
+            threads
+                .get(&self.tid)
+                .and_then(|thread| {
+                    thread
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|message| message.role == MessageRole::Assistant)
+                })
+                .and_then(|message| message.reasoning.clone())
+                .or_else(|| {
+                    threads
+                        .get(&self.tid)
+                        .and_then(|thread| {
+                            thread
+                                .messages
+                                .iter()
+                                .rev()
+                                .find(|message| message.role == MessageRole::Assistant)
+                        })
+                        .map(|message| message.content.clone())
+                })
+        };
+        let current_tool_signature = normalized_tool_signature(tc);
+        let predicted_repeat_count = if self
+            .previous_tool_signature
+            .as_deref()
+            .is_some_and(|value| value == current_tool_signature.as_str())
+        {
+            self.consecutive_same_tool_calls.saturating_add(1)
+        } else {
+            1
+        };
+        let recent_tool_outcomes = self
+            .recent_policy_tool_outcomes
+            .iter()
+            .cloned()
+            .map(|summary| RecentToolOutcome {
+                tool_name: summary.tool_name,
+                outcome: summary.outcome,
+                summary: summary.summary,
+            })
+            .collect::<Vec<_>>();
+        let task_retry_count = self
+            .current_task_snapshot
+            .as_ref()
+            .map(|task| task.retry_count)
+            .unwrap_or(0);
+        let input = IntrospectionInput {
+            proposed_tool_name: tc.function.name.clone(),
+            proposed_tool_arguments: tc.function.arguments.clone(),
+            normalized_tool_signature: current_tool_signature.clone(),
+            predicted_repeat_count,
+            recent_tool_outcomes,
+            task_retry_count,
+            decision_reasoning,
+        };
+        let self_model = self.engine.meta_cognitive_self_model.read().await.clone();
+        let outcome = introspect(&self_model, &input);
+        if outcome.signals.is_empty() {
+            return None;
+        }
+
+        let decision = regulate(&outcome, tc);
+        self.engine.emit_workflow_notice(
+            &self.tid,
+            "metacognitive-check",
+            decision.summary.clone(),
+            serde_json::to_string(&outcome).ok(),
+        );
+        if let Some(adjustment) = decision.confidence_adjustment {
+            let recent_success_rate = if input.recent_tool_outcomes.is_empty() {
+                1.0
+            } else {
+                input
+                    .recent_tool_outcomes
+                    .iter()
+                    .filter(|outcome| outcome.outcome.eq_ignore_ascii_case("success"))
+                    .count() as f64
+                    / input.recent_tool_outcomes.len() as f64
+            };
+            let assessment = SelfAssessor::default().assess(
+                &crate::agent::metacognitive::self_assessment::AssessmentInput {
+                    progress: crate::agent::metacognitive::self_assessment::ProgressMetrics {
+                        goal_distance_pct: 0.0,
+                        steps_completed: 0,
+                        steps_total: 0,
+                        estimated_remaining: 0,
+                        momentum: if recent_success_rate >= 0.5 {
+                            0.1
+                        } else {
+                            -0.2
+                        },
+                    },
+                    efficiency: crate::agent::metacognitive::self_assessment::EfficiencyMetrics {
+                        token_efficiency: 0.5,
+                        tool_success_rate: recent_success_rate,
+                        time_efficiency: 0.0,
+                        tokens_consumed: 0,
+                        elapsed_secs: input.task_retry_count as u64,
+                    },
+                    quality: crate::agent::metacognitive::self_assessment::QualityMetrics {
+                        error_rate: 1.0 - recent_success_rate,
+                        revision_count: input.task_retry_count,
+                        user_feedback_score: None,
+                    },
+                },
+            );
+            let predicted_band = metacognitive_calibrated_band(&assessment, 0.0);
+            self.engine
+                .apply_meta_cognitive_calibration_adjustment(adjustment, predicted_band)
+                .await;
+        }
+        for signal in &outcome.signals {
+            self.engine
+                .reinforce_meta_cognitive_bias_occurrence(&signal.bias_name)
+                .await;
+        }
+
+        match decision.action {
+            InterventionAction::Allow => None,
+            InterventionAction::Warn => {
+                if let Some(system_message) = decision.system_message.as_deref() {
+                    self.engine
+                        .append_metacognitive_system_message(&self.tid, system_message)
+                        .await;
+                }
+                self.engine.persist_thread_by_id(&self.tid).await;
+                Some(LoopDisposition::Continue)
+            }
+            InterventionAction::Block => {
+                if let Some(system_message) = decision.system_message.as_deref() {
+                    self.engine
+                        .append_metacognitive_system_message(&self.tid, system_message)
+                        .await;
+                }
+                let denied_content = format!(
+                    "Tool call blocked by meta-cognitive regulator before execution. {}",
+                    decision.summary
+                );
+                self.persist_denied_tool_result(tc, denied_content).await;
+                self.engine.persist_thread_by_id(&self.tid).await;
+                Some(LoopDisposition::Continue)
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_tool_calls_chunk(
         &mut self,
@@ -135,6 +293,9 @@ impl<'a> SendMessageRunner<'a> {
             }
             if self.handle_skill_gate_denial(tc).await {
                 continue;
+            }
+            if let Some(disposition) = self.handle_metacognitive_intervention(tc).await {
+                return Ok(disposition);
             }
 
             let result = self.execute_tool_call(tc).await;

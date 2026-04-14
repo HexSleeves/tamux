@@ -11,7 +11,6 @@ mod model_catalog;
 
 mod context;
 
-pub use context::is_known_default_url;
 pub use context::known_context_window_for;
 
 pub struct ProviderDef {
@@ -23,6 +22,7 @@ pub struct ProviderDef {
     pub default_transport: &'static str,
     pub supported_auth_sources: &'static [&'static str],
     pub default_auth_source: &'static str,
+    #[allow(dead_code)]
     pub native_base_url: Option<&'static str>,
 }
 
@@ -283,6 +283,28 @@ pub const PROVIDERS: &[ProviderDef] = &[
         native_base_url: None,
     },
     ProviderDef {
+        id: PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN,
+        name: "Xiaomi MiMo Token Plan",
+        default_base_url: "https://api.xiaomimimo.com/v1",
+        default_model: "mimo-v2-pro",
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: "chat_completions",
+        supported_auth_sources: API_KEY_ONLY_AUTH_SOURCES,
+        default_auth_source: "api_key",
+        native_base_url: None,
+    },
+    ProviderDef {
+        id: PROVIDER_ID_NOUS_PORTAL,
+        name: "Nous Portal",
+        default_base_url: "https://inference-api.nousresearch.com/v1",
+        default_model: "nousresearch/hermes-4-70b",
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: "chat_completions",
+        supported_auth_sources: API_KEY_ONLY_AUTH_SOURCES,
+        default_auth_source: "api_key",
+        native_base_url: None,
+    },
+    ProviderDef {
         id: PROVIDER_ID_QWEN_DEEPINFRA,
         name: "Qwen (DeepInfra)",
         default_base_url: "https://api.deepinfra.com/v1/openai",
@@ -405,6 +427,7 @@ pub fn supports_model_fetch_for(provider: &str) -> bool {
             | PROVIDER_ID_MINIMAX
             | PROVIDER_ID_MINIMAX_CODING_PLAN
             | PROVIDER_ID_ALIBABA_CODING_PLAN
+            | PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN
     )
 }
 
@@ -421,6 +444,7 @@ pub fn default_model_for_provider_auth(provider: &str, auth_source: &str) -> Str
 
 /// Return a hardcoded list of known models for the given provider so the model
 /// picker works without a live daemon fetch.
+#[cfg(test)]
 pub fn known_models_for_provider(provider: &str) -> Vec<FetchedModel> {
     known_models_for_provider_auth(provider, "api_key")
 }

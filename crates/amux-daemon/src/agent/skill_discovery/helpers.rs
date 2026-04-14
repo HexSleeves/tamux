@@ -16,7 +16,7 @@ pub(super) fn meets_complexity_threshold(
     tool_gate && (replan_gate || quality_gate)
 }
 
-pub(super) fn jaccard_similarity(a: &[String], b: &[String]) -> f64 {
+pub(crate) fn jaccard_similarity(a: &[String], b: &[String]) -> f64 {
     if a.is_empty() && b.is_empty() {
         return 1.0;
     }

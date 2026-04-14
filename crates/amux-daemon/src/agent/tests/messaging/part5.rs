@@ -1,6 +1,7 @@
 use super::*;
 use amux_shared::providers::PROVIDER_ID_OPENAI;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::Notify;
 use tokio::time::{timeout, Duration};
 
 #[tokio::test]
@@ -965,6 +966,21 @@ async fn participant_suggestions_fifo_order() {
         .upsert_thread_participant(thread_id, "weles", "verify claims")
         .await
         .expect("participant should register");
+    {
+        let mut streams = engine.stream_cancellations.lock().await;
+        streams.insert(
+            thread_id.to_string(),
+            StreamCancellationEntry {
+                generation: 1,
+                token: CancellationToken::new(),
+                retry_now: Arc::new(Notify::new()),
+                started_at: 1,
+                last_progress_at: 1,
+                last_progress_kind: StreamProgressKind::Started,
+                last_progress_excerpt: String::new(),
+            },
+        );
+    }
 
     let first = engine
         .queue_thread_participant_suggestion(thread_id, "weles", "A", false)
@@ -1259,6 +1275,6 @@ async fn upserting_builtin_alias_stores_canonical_agent_name() {
         .await
         .expect("builtin alias should resolve");
 
-    assert_eq!(participant.agent_id, "svarog");
+    assert_eq!(participant.agent_id, "swarog");
     assert_eq!(participant.agent_name, "Svarog");
 }

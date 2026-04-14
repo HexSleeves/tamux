@@ -1,9 +1,38 @@
 use super::types::{Argument, ArgumentPoint, Role};
 
+fn tool_specific_caution_claim(tool_name: &str, action_summary: &str) -> Option<String> {
+    match tool_name {
+        "bash_command" | "run_terminal_command" | "execute_managed_command" => Some(format!(
+            "Disable network access, enable sandboxing, and downgrade any yolo security level before running {}.",
+            crate::agent::summarize_text(action_summary, 96)
+        )),
+        "send_slack_message" | "send_discord_message" | "send_telegram_message"
+        | "send_whatsapp_message" => Some(format!(
+            "Strip explicit messaging targets and broadcast mentions before sending {}.",
+            crate::agent::summarize_text(action_summary, 96)
+        )),
+        "write_file" | "create_file" | "append_to_file" | "replace_in_file"
+        | "apply_file_patch" => Some(format!(
+            "Narrow the sensitive file path to the minimal basename before applying {}.",
+            crate::agent::summarize_text(action_summary, 96)
+        )),
+        "enqueue_task" => Some(format!(
+            "Schedule this background task for the operator's typical working window instead of dispatching it immediately: {}.",
+            crate::agent::summarize_text(action_summary, 96)
+        )),
+        "spawn_subagent" => Some(format!(
+            "Reduce permissions by constraining the child to a smaller tool-call budget and wall-clock window before delegating {}.",
+            crate::agent::summarize_text(action_summary, 96)
+        )),
+        _ => None,
+    }
+}
+
 pub(crate) fn build_argument(
     tool_name: &str,
     action_summary: &str,
     reasons: &[String],
+    grounded_points: Vec<ArgumentPoint>,
 ) -> Argument {
     let mut points = Vec::new();
 
@@ -38,6 +67,16 @@ pub(crate) fn build_argument(
         weight: if reasons.is_empty() { 0.32 } else { 0.63 },
         evidence: vec!["heuristic:prefer_narrower_scope".to_string()],
     });
+
+    if let Some(claim) = tool_specific_caution_claim(tool_name, action_summary) {
+        points.push(ArgumentPoint {
+            claim,
+            weight: if reasons.is_empty() { 0.57 } else { 0.74 },
+            evidence: vec![format!("tool_specific:{tool_name}:narrower_execution")],
+        });
+    }
+
+    points.extend(grounded_points);
 
     Argument {
         role: Role::Critic,

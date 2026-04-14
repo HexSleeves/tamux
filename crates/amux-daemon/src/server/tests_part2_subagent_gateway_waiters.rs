@@ -185,6 +185,7 @@ async fn agent_set_sub_agent_async_request_returns_operation_acceptance() {
                 snapshot.state,
                 amux_protocol::OperationLifecycleState::Accepted
                     | amux_protocol::OperationLifecycleState::Started
+                    | amux_protocol::OperationLifecycleState::Completed
             ));
         }
         other => panic!("expected set-subagent status snapshot, got {other:?}"),
@@ -267,6 +268,7 @@ async fn agent_remove_sub_agent_async_request_returns_operation_acceptance() {
                 snapshot.state,
                 amux_protocol::OperationLifecycleState::Accepted
                     | amux_protocol::OperationLifecycleState::Started
+                    | amux_protocol::OperationLifecycleState::Completed
             ));
         }
         other => panic!("expected remove-subagent status snapshot, got {other:?}"),

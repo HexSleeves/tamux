@@ -138,6 +138,19 @@ impl AgentEngine {
 
     /// Load persisted state (threads, tasks, heartbeat, memory, config).
     pub async fn hydrate(self: &Arc<Self>) -> Result<()> {
+        self.hydrate_with_participant_observer_restore(true).await
+    }
+
+    pub(crate) async fn hydrate_without_participant_observer_restore(
+        self: &Arc<Self>,
+    ) -> Result<()> {
+        self.hydrate_with_participant_observer_restore(false).await
+    }
+
+    async fn hydrate_with_participant_observer_restore(
+        self: &Arc<Self>,
+        schedule_participant_observer_restore: bool,
+    ) -> Result<()> {
         // Load config from SQLite-backed config items.
         match self.history.list_agent_config_items().await {
             Ok(items) if !items.is_empty() => {
@@ -307,16 +320,18 @@ impl AgentEngine {
                 *self.thread_memory_injection_state_map().write().await =
                     thread_memory_injection_states;
                 *self.thread_structural_memories.write().await = thread_structural_memories;
-                let cleared_playground_threads = self
-                    .clear_persisted_participant_playground_threads_on_hydrate()
+                let trimmed_playground_threads = self
+                    .trim_persisted_participant_playground_threads_on_hydrate()
                     .await;
-                if cleared_playground_threads > 0 {
+                if trimmed_playground_threads > 0 {
                     tracing::info!(
-                        cleared_playground_threads,
-                        "cleared persisted participant playground threads during hydrate"
+                        trimmed_playground_threads,
+                        "trimmed persisted participant playground threads during hydrate"
                     );
                 }
-                self.schedule_participant_observer_restore_after_hydrate();
+                if schedule_participant_observer_restore {
+                    self.schedule_participant_observer_restore_after_hydrate();
+                }
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("failed to load agent threads from sqlite: {e}"),
@@ -612,6 +627,14 @@ impl AgentEngine {
         ensure_memory_files(&self.data_dir).await?;
         self.refresh_memory_cache().await;
         self.refresh_operator_model().await?;
+        match self.load_meta_cognitive_self_model().await {
+            Ok(model) => {
+                *self.meta_cognitive_self_model.write().await = model;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to hydrate meta-cognitive self-model");
+            }
+        }
         match self.history.list_collaboration_sessions().await {
             Ok(rows) if !rows.is_empty() => {
                 let mut collaboration = HashMap::new();
@@ -920,7 +943,7 @@ impl AgentEngine {
         });
     }
 
-    fn schedule_participant_observer_restore_after_hydrate(self: &Arc<Self>) {
+    pub(crate) fn schedule_participant_observer_restore_after_hydrate(self: &Arc<Self>) {
         let engine = Arc::clone(self);
         tokio::spawn(async move {
             engine

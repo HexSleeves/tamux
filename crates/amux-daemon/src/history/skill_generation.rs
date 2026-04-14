@@ -78,7 +78,7 @@ impl HistoryStore {
         let skill_name = metadata.skill_name.clone();
         let variant_name = metadata.variant_name.clone();
 
-        let path = path.clone();
+        let _path = path;
         let variant_id = self.conn.call(move |conn| {
             let existing: Option<SkillVariantRecord> = conn
                 .query_row(
@@ -237,7 +237,7 @@ impl HistoryStore {
         let context_tags = context_tags.to_vec();
         let skills_root = self.skills_root();
 
-        let skill = skill.to_string();
+        let _skill = skill.to_string();
         self.conn.call(move |conn| {
             let mut stmt = conn.prepare(
                 "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
@@ -260,7 +260,14 @@ impl HistoryStore {
             if !live_candidates.is_empty() {
                 candidates = live_candidates;
             }
-            candidates.sort_by(|left, right| compare_skill_variants(left, right, &context_tags));
+            candidates.sort_by(|left, right| {
+                let left_current_path = skill_variant_matches_current_relative_path(&skills_root, left);
+                let right_current_path =
+                    skill_variant_matches_current_relative_path(&skills_root, right);
+                right_current_path
+                    .cmp(&left_current_path)
+                    .then_with(|| compare_skill_variants(left, right, &context_tags))
+            });
             Ok(candidates.into_iter().next())
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
@@ -317,7 +324,7 @@ impl HistoryStore {
         let goal_run_id = record.goal_run_id.map(str::to_string);
         let context_tags_owned: Vec<String> = record.context_tags.to_vec();
 
-        let record = record.clone();
+        let record = record;
         self.conn.call(move |conn| {
             conn.execute(
                 "INSERT OR REPLACE INTO skill_variant_usage \
@@ -366,6 +373,27 @@ fn skill_variant_document_exists(skills_root: &Path, record: &SkillVariantRecord
         return false;
     };
     canonical.starts_with(root_canonical)
+}
+
+fn skill_variant_matches_current_relative_path(
+    skills_root: &Path,
+    record: &SkillVariantRecord,
+) -> bool {
+    let root_canonical =
+        std::fs::canonicalize(skills_root).unwrap_or_else(|_| skills_root.to_path_buf());
+    let candidate = resolve_skill_variant_document_path(skills_root, &record.relative_path);
+    let Ok(canonical) = std::fs::canonicalize(candidate) else {
+        return false;
+    };
+    let Ok(relative) = canonical.strip_prefix(root_canonical) else {
+        return false;
+    };
+    normalize_relative_path(&record.relative_path)
+        == normalize_relative_path(&relative.to_string_lossy())
+}
+
+fn normalize_relative_path(path: &str) -> String {
+    path.replace('\\', "/").trim_matches('/').to_string()
 }
 
 fn resolve_skill_variant_document_path(skills_root: &Path, relative_path: &str) -> PathBuf {

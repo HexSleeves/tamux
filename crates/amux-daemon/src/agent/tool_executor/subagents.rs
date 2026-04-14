@@ -344,6 +344,7 @@ async fn execute_spawn_subagent(
         .and_then(|value| value.as_u64())
         .map(|value| value.min(u8::MAX as u64) as u8);
     let requested_budget = parse_requested_subagent_budget(args)?;
+    let scheduled_at = parse_scheduled_at(args)?;
     let default_context_window_tokens = agent.config.read().await.context_window_tokens;
     let derived_limits = derive_subagent_limits(
         task_snapshot.as_ref(),
@@ -360,7 +361,7 @@ async fn execute_spawn_subagent(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
     let mut allocated_lane_summary = None;
-    if chosen_session.is_none() {
+    if chosen_session.is_none() && scheduled_at.is_none() {
         let default_source_session = task_snapshot
             .as_ref()
             .and_then(|task| task.session_id.as_deref())
@@ -395,7 +396,7 @@ async fn execute_spawn_subagent(
             command,
             chosen_session,
             dependencies,
-            None,
+            scheduled_at,
             "subagent",
             task_snapshot
                 .as_ref()
@@ -1184,6 +1185,112 @@ async fn execute_get_critique_session(
         }
         Err(error) => Ok(format!("Failed to fetch critique session: {error}")),
     }
+}
+
+async fn execute_lookup_emergent_protocol(
+    args: &serde_json::Value,
+    agent: &AgentEngine,
+    thread_id: &str,
+) -> Result<String> {
+    let token = args
+        .get("token")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'token' argument"))?;
+
+    let record_usage = args
+        .get("record_usage")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let payload = if record_usage {
+        let success = args.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
+        let fallback_reason = args
+            .get("fallback_reason")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned);
+        let execution_time_ms = args.get("execution_time_ms").and_then(|v| v.as_u64());
+        agent
+            .record_protocol_registry_usage(
+                thread_id,
+                token,
+                success,
+                fallback_reason,
+                execution_time_ms,
+            )
+            .await?
+            .map(serde_json::to_value)
+            .transpose()?
+    } else {
+        agent
+            .lookup_thread_protocol_registry_entry(thread_id, token)
+            .await?
+            .map(serde_json::to_value)
+            .transpose()?
+    };
+
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "thread_id": thread_id,
+        "token": token,
+        "entry": payload,
+    }))
+    .unwrap_or_else(|_| "{}".to_string()))
+}
+
+async fn execute_reload_emergent_protocol_registry(
+    _args: &serde_json::Value,
+    agent: &AgentEngine,
+    thread_id: &str,
+) -> Result<String> {
+    let payload = agent.reload_thread_protocol_registry(thread_id).await?;
+    Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()))
+}
+
+async fn execute_decode_emergent_protocol(
+    args: &serde_json::Value,
+    agent: &AgentEngine,
+    thread_id: &str,
+) -> Result<String> {
+    let token = args
+        .get("token")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'token' argument"))?;
+    let current_role = args.get("current_role").and_then(|v| v.as_str());
+    let target_role = args.get("target_role").and_then(|v| v.as_str());
+    let normalized_pattern = args.get("normalized_pattern").and_then(|v| v.as_str());
+
+    let payload = agent
+        .decode_thread_protocol_token(thread_id, token, current_role, target_role, normalized_pattern)
+        .await?
+        .map(serde_json::to_value)
+        .transpose()?;
+
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "thread_id": thread_id,
+        "token": token,
+        "decode": payload,
+    }))
+    .unwrap_or_else(|_| "{}".to_string()))
+}
+
+async fn execute_get_emergent_protocol_usage_log(
+    args: &serde_json::Value,
+    agent: &AgentEngine,
+) -> Result<String> {
+    let protocol_id = args
+        .get("protocol_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'protocol_id' argument"))?;
+
+    let payload = agent.get_protocol_usage_log_payload(protocol_id).await?;
+    Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()))
 }
 
 async fn execute_append_debate_argument(

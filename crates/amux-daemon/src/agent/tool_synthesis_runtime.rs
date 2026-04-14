@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::*;
 
 #[cfg(test)]
@@ -254,7 +256,7 @@ pub(super) async fn run_openapi_generated_tool(
     cap_output(body, sandbox.max_output_kb)
 }
 
-pub(super) fn parse_cli_help_parameters(help: &str) -> Vec<GeneratedToolParameter> {
+pub(crate) fn parse_cli_help_parameters(help: &str) -> Vec<GeneratedToolParameter> {
     let regex = Regex::new(
         r"^\s*(?:-[A-Za-z],\s*)?(--[A-Za-z0-9][A-Za-z0-9-]*)(?:[ =]<?([A-Za-z0-9_-]+)>?)?\s{2,}(.*)$",
     )

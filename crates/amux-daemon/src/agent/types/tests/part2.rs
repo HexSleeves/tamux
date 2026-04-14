@@ -550,3 +550,55 @@ use amux_shared::providers::{
             ApiType::OpenAI
         );
     }
+
+    #[test]
+    fn xiaomi_mimo_token_plan_exposes_static_openai_defaults() {
+        let provider =
+            get_provider_definition("xiaomi-mimo-token-plan").expect("xiaomi mimo provider");
+        assert_eq!(provider.default_base_url, "https://api.xiaomimimo.com/v1");
+        assert_eq!(provider.default_model, "mimo-v2-pro");
+        assert_eq!(provider.api_type, ApiType::OpenAI);
+        assert_eq!(provider.auth_method, AuthMethod::Bearer);
+        assert!(!provider.supports_model_fetch);
+        assert_eq!(provider.default_transport, ApiTransport::ChatCompletions);
+        assert_eq!(provider.models.len(), 2);
+        assert_eq!(provider.models[0].id, "mimo-v2-pro");
+        assert_eq!(provider.models[0].context_window, 1_000_000);
+        assert_eq!(provider.models[1].id, "mimo-v2-omni");
+        assert_eq!(provider.models[1].context_window, 256_000);
+        assert_eq!(
+            get_provider_api_type(
+                "xiaomi-mimo-token-plan",
+                "mimo-v2-pro",
+                "https://api.xiaomimimo.com/v1"
+            ),
+            ApiType::OpenAI
+        );
+    }
+
+    #[test]
+    fn nous_portal_exposes_fetchable_openai_defaults() {
+        let provider = get_provider_definition("nous-portal").expect("nous portal provider");
+        assert_eq!(
+            provider.default_base_url,
+            "https://inference-api.nousresearch.com/v1"
+        );
+        assert_eq!(provider.default_model, "nousresearch/hermes-4-70b");
+        assert_eq!(provider.api_type, ApiType::OpenAI);
+        assert_eq!(provider.auth_method, AuthMethod::Bearer);
+        assert!(provider.supports_model_fetch);
+        assert_eq!(provider.default_transport, ApiTransport::ChatCompletions);
+        assert_eq!(provider.models.len(), 4);
+        assert_eq!(provider.models[0].id, "nousresearch/hermes-4-70b");
+        assert_eq!(provider.models[0].context_window, 131_072);
+        assert_eq!(provider.models[1].id, "nousresearch/hermes-4-405b");
+        assert_eq!(provider.models[1].context_window, 131_072);
+        assert_eq!(
+            get_provider_api_type(
+                "nous-portal",
+                "nousresearch/hermes-4-70b",
+                "https://inference-api.nousresearch.com/v1"
+            ),
+            ApiType::OpenAI
+        );
+    }

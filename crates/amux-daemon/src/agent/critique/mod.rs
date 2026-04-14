@@ -8,9 +8,9 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::agent::engine::AgentEngine;
-use crate::agent::operator_model::RiskTolerance;
+use crate::agent::operator_model::{preferred_tool_fallback_targets, RiskTolerance};
 
-use self::types::{CritiqueSession, Decision, Resolution, SessionStatus};
+use self::types::{ArgumentPoint, CritiqueSession, Decision, Resolution, SessionStatus};
 
 fn now_millis() -> u64 {
     std::time::SystemTime::now()
@@ -19,7 +19,290 @@ fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
+fn summarize_causal_factor_descriptions(
+    factors: &[crate::agent::learning::traces::CausalFactor],
+) -> String {
+    factors
+        .iter()
+        .take(2)
+        .map(|factor| factor.description.clone())
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn dedupe_argument_points(mut points: Vec<ArgumentPoint>) -> Vec<ArgumentPoint> {
+    let mut seen = std::collections::BTreeSet::new();
+    points.retain(|point| seen.insert(point.claim.clone()));
+    points
+}
+
+fn critique_fallback_argument_points(
+    tool_name: &str,
+    preferred_fallback_targets: &[String],
+) -> Vec<ArgumentPoint> {
+    if preferred_fallback_targets.is_empty() {
+        return Vec::new();
+    }
+
+    let mut points = Vec::new();
+    for target in preferred_fallback_targets {
+        match (tool_name, target.as_str()) {
+            (
+                "bash_command" | "run_terminal_command" | "execute_managed_command",
+                "apply_patch",
+            ) => {
+                points.push(ArgumentPoint {
+                    claim: "Prefer apply_patch over brittle shell rewrites for this change."
+                        .to_string(),
+                    weight: 0.78,
+                    evidence: vec![
+                        "tool_specific:apply_patch:fallback_preference".to_string(),
+                        "fallback_match:apply_patch".to_string(),
+                    ],
+                });
+            }
+            (
+                "bash_command" | "run_terminal_command" | "execute_managed_command",
+                "replace_in_file",
+            ) => {
+                points.push(ArgumentPoint {
+                    claim: "Prefer replace_in_file over ad-hoc shell rewrites when a narrow textual edit is enough.".to_string(),
+                    weight: 0.74,
+                    evidence: vec![
+                        "tool_specific:replace_in_file:fallback_preference".to_string(),
+                        "fallback_match:replace_in_file".to_string(),
+                    ],
+                });
+            }
+            _ => {}
+        }
+    }
+
+    dedupe_argument_points(points)
+}
+
 impl AgentEngine {
+    async fn critique_grounded_argument_points(
+        &self,
+        tool_name: &str,
+    ) -> (Vec<ArgumentPoint>, Vec<ArgumentPoint>) {
+        let records = match self
+            .history
+            .list_recent_causal_trace_records(tool_name, 6)
+            .await
+        {
+            Ok(records) => records,
+            Err(error) => {
+                tracing::warn!(tool = %tool_name, "failed to load recent causal traces for critique grounding: {error}");
+                return (Vec::new(), Vec::new());
+            }
+        };
+
+        let mut advocate_points = Vec::new();
+        let mut critic_points = Vec::new();
+
+        for record in records {
+            let factors =
+                serde_json::from_str::<Vec<crate::agent::learning::traces::CausalFactor>>(
+                    &record.causal_factors_json,
+                )
+                .unwrap_or_default();
+            let factor_summary = summarize_causal_factor_descriptions(&factors);
+            let factor_evidence = factors
+                .iter()
+                .take(2)
+                .map(|factor| format!("causal_factor:{}", factor.description))
+                .collect::<Vec<_>>();
+
+            let outcome = match serde_json::from_str::<
+                crate::agent::learning::traces::CausalTraceOutcome,
+            >(&record.outcome_json)
+            {
+                Ok(outcome) => outcome,
+                Err(_) => continue,
+            };
+
+            match outcome {
+                crate::agent::learning::traces::CausalTraceOutcome::Success => {
+                    if advocate_points.is_empty() {
+                        let summary = if factor_summary.is_empty() {
+                            format!("recent `{tool_name}` executions succeeded")
+                        } else {
+                            factor_summary.clone()
+                        };
+                        let mut evidence = vec![format!("causal_trace:success:{summary}")];
+                        evidence.extend(factor_evidence.clone());
+                        advocate_points.push(ArgumentPoint {
+                            claim: format!(
+                                "Recent causal history supports `{tool_name}`: {summary}."
+                            ),
+                            weight: 0.58,
+                            evidence,
+                        });
+                    }
+                }
+                crate::agent::learning::traces::CausalTraceOutcome::Failure { reason } => {
+                    if critic_points.is_empty() {
+                        let mut evidence = vec![format!("causal_trace:failure:{reason}")];
+                        evidence.extend(factor_evidence.clone());
+                        let claim = if factor_summary.is_empty() {
+                            format!(
+                                "Recent causal history warns against `{tool_name}` without extra caution: {reason}."
+                            )
+                        } else {
+                            format!(
+                                "Recent causal history warns against `{tool_name}`: {reason}. Context: {factor_summary}."
+                            )
+                        };
+                        critic_points.push(ArgumentPoint {
+                            claim,
+                            weight: 0.79,
+                            evidence,
+                        });
+                    }
+                }
+                crate::agent::learning::traces::CausalTraceOutcome::NearMiss {
+                    what_went_wrong,
+                    how_recovered,
+                } => {
+                    if critic_points.is_empty() {
+                        let mut evidence =
+                            vec![format!("causal_trace:near_miss:{what_went_wrong}")];
+                        evidence.extend(factor_evidence.clone());
+                        evidence.push(format!("causal_trace:recovery:{how_recovered}"));
+                        let claim = if factor_summary.is_empty() {
+                            format!(
+                                "Recent causal history shows a near miss for `{tool_name}`: {what_went_wrong}."
+                            )
+                        } else {
+                            format!(
+                                "Recent causal history shows a near miss for `{tool_name}`: {what_went_wrong}. Context: {factor_summary}."
+                            )
+                        };
+                        critic_points.push(ArgumentPoint {
+                            claim,
+                            weight: 0.71,
+                            evidence,
+                        });
+                    }
+                    if advocate_points.is_empty() {
+                        advocate_points.push(ArgumentPoint {
+                            claim: format!(
+                                "Recent causal history also shows `{tool_name}` can recover from trouble: {how_recovered}."
+                            ),
+                            weight: 0.46,
+                            evidence: vec![format!("causal_trace:recovery:{how_recovered}")],
+                        });
+                    }
+                }
+                crate::agent::learning::traces::CausalTraceOutcome::Unresolved => {}
+            }
+
+            if !advocate_points.is_empty() && !critic_points.is_empty() {
+                break;
+            }
+        }
+
+        (advocate_points, critic_points)
+    }
+
+    async fn critique_learned_argument_points(
+        &self,
+        tool_name: &str,
+    ) -> (
+        Vec<ArgumentPoint>,
+        Vec<ArgumentPoint>,
+        Vec<String>,
+        Vec<self::types::CritiqueDirective>,
+    ) {
+        let rows = match self
+            .history
+            .list_recent_critique_sessions_for_tool(tool_name, 6)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(tool = %tool_name, "failed to load recent critique history for learning: {error}");
+                return (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            }
+        };
+
+        let mut advocate_points = Vec::new();
+        let mut critic_points = Vec::new();
+        let mut learned_modifications = Vec::new();
+        let mut learned_directives = Vec::new();
+
+        for row in rows {
+            let Ok(session) = serde_json::from_str::<CritiqueSession>(&row.session_json) else {
+                continue;
+            };
+            let Some(resolution) = session.resolution else {
+                continue;
+            };
+
+            match resolution.decision {
+                Decision::ProceedWithModifications => {
+                    for modification in resolution.modifications {
+                        let normalized = modification.trim().to_ascii_lowercase();
+                        if !normalized.is_empty()
+                            && !learned_modifications.iter().any(|existing: &String| {
+                                existing.eq_ignore_ascii_case(&modification)
+                            })
+                        {
+                            learned_modifications.push(modification.clone());
+                            critic_points.push(ArgumentPoint {
+                                claim: format!(
+                                    "Learned from previous critique sessions for `{tool_name}`: {modification}"
+                                ),
+                                weight: 0.61,
+                                evidence: vec![format!(
+                                    "critique_history:modification:{normalized}"
+                                )],
+                            });
+                        }
+                    }
+                    for directive in resolution.directives {
+                        if !learned_directives.contains(&directive) {
+                            learned_directives.push(directive);
+                        }
+                    }
+                }
+                Decision::Proceed => {
+                    if advocate_points.is_empty() {
+                        advocate_points.push(ArgumentPoint {
+                            claim: format!(
+                                "Previous critique sessions for `{tool_name}` resolved cleanly without extra blocking."
+                            ),
+                            weight: 0.41,
+                            evidence: vec!["critique_history:proceed".to_string()],
+                        });
+                    }
+                }
+                Decision::Defer | Decision::Reject => {
+                    if critic_points.is_empty() {
+                        critic_points.push(ArgumentPoint {
+                            claim: format!(
+                                "Previous critique sessions for `{tool_name}` escalated to defer/reject outcomes, so extra caution is warranted."
+                            ),
+                            weight: 0.66,
+                            evidence: vec![format!(
+                                "critique_history:{}",
+                                resolution.decision.as_str()
+                            )],
+                        });
+                    }
+                }
+            }
+        }
+
+        (
+            dedupe_argument_points(advocate_points),
+            dedupe_argument_points(critic_points),
+            learned_modifications,
+            learned_directives,
+        )
+    }
+
     pub(crate) async fn run_critique_preflight(
         &self,
         action_id: &str,
@@ -35,9 +318,152 @@ impl AgentEngine {
             .await
             .risk_fingerprint
             .risk_tolerance;
-        let advocate_argument = advocate::build_argument(tool_name, action_summary, reasons);
-        let critic_argument = critic::build_argument(tool_name, action_summary, reasons);
-        let resolution = arbiter::resolve(&advocate_argument, &critic_argument, risk_tolerance);
+        let satisfaction_label = self
+            .operator_model
+            .read()
+            .await
+            .operator_satisfaction
+            .label
+            .clone();
+        let preferred_fallback_targets = self
+            .operator_model
+            .read()
+            .await
+            .implicit_feedback
+            .top_tool_fallbacks
+            .clone();
+        let preferred_fallback_targets =
+            preferred_tool_fallback_targets(&preferred_fallback_targets, 3);
+        let fallback_points =
+            critique_fallback_argument_points(tool_name, &preferred_fallback_targets);
+        let (grounded_advocate_points, grounded_critic_points) =
+            self.critique_grounded_argument_points(tool_name).await;
+        let (
+            learned_advocate_points,
+            learned_critic_points,
+            learned_modifications,
+            learned_directives,
+        ) = self.critique_learned_argument_points(tool_name).await;
+        let advocate_argument = advocate::build_argument(
+            tool_name,
+            action_summary,
+            reasons,
+            [grounded_advocate_points, learned_advocate_points].concat(),
+        );
+        let critic_argument = critic::build_argument(
+            tool_name,
+            action_summary,
+            reasons,
+            [
+                grounded_critic_points,
+                learned_critic_points,
+                fallback_points,
+            ]
+            .concat(),
+        );
+        let mut resolution = arbiter::resolve_with_satisfaction_label(
+            &advocate_argument,
+            &critic_argument,
+            risk_tolerance,
+            Some(&satisfaction_label),
+        );
+        if matches!(resolution.decision, Decision::ProceedWithModifications) {
+            for modification in learned_modifications {
+                if !resolution
+                    .modifications
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(&modification))
+                {
+                    resolution.modifications.push(modification);
+                }
+            }
+            for directive in learned_directives {
+                if !resolution.directives.contains(&directive) {
+                    resolution.directives.push(directive);
+                }
+            }
+        }
+        if let Some(forced_decision) = self
+            .config
+            .read()
+            .await
+            .extra
+            .get("test_force_critique_decision")
+            .and_then(|value| value.as_str())
+        {
+            resolution.decision = match forced_decision {
+                "proceed" => Decision::Proceed,
+                "proceed_with_modifications" => Decision::ProceedWithModifications,
+                "defer" => Decision::Defer,
+                "reject" => Decision::Reject,
+                _ => resolution.decision,
+            };
+            if matches!(resolution.decision, Decision::ProceedWithModifications)
+                && resolution.modifications.is_empty()
+            {
+                let mut critic_guidance = arbiter::recommended_modifications_with_fallback_targets(
+                    &critic_argument,
+                    &preferred_fallback_targets,
+                    2,
+                );
+                if critic_guidance.is_empty() {
+                    critic_guidance
+                        .push("Apply the critic's safer constraints before execution.".to_string());
+                }
+                resolution.modifications = critic_guidance;
+                resolution.directives =
+                    arbiter::directives_for_modifications(&resolution.modifications);
+                resolution.synthesis = format!(
+                    "Proceed with modifications. Keep the action, but incorporate: {}.",
+                    resolution.modifications.join(" | ")
+                );
+            }
+        }
+        if let Some(forced_modifications) = self
+            .config
+            .read()
+            .await
+            .extra
+            .get("test_force_critique_modifications")
+            .and_then(|value| value.as_array())
+        {
+            let forced_modifications = forced_modifications
+                .iter()
+                .filter_map(|value| value.as_str())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            if !forced_modifications.is_empty() {
+                resolution.modifications = forced_modifications;
+                resolution.directives =
+                    arbiter::directives_for_modifications(&resolution.modifications);
+                if matches!(resolution.decision, Decision::ProceedWithModifications) {
+                    resolution.synthesis = format!(
+                        "Proceed with modifications. Keep the action, but incorporate: {}.",
+                        resolution.modifications.join(" | ")
+                    );
+                }
+            }
+        }
+        if let Some(forced_directives) = self
+            .config
+            .read()
+            .await
+            .extra
+            .get("test_force_critique_directives")
+            .and_then(|value| value.as_array())
+        {
+            let forced_directives = forced_directives
+                .iter()
+                .filter_map(|value| value.as_str())
+                .filter_map(|value| {
+                    serde_json::from_str::<self::types::CritiqueDirective>(&format!("\"{value}\""))
+                        .ok()
+                })
+                .collect::<Vec<_>>();
+            if !forced_directives.is_empty() {
+                resolution.directives = forced_directives;
+            }
+        }
         let created_at_ms = now_millis();
         let resolved_at_ms = Some(created_at_ms);
         let status = if matches!(resolution.decision, Decision::Defer) {
@@ -168,7 +594,7 @@ impl AgentEngine {
         {
             return false;
         }
-        matches!(
+        let explicitly_supported = matches!(
             tool_name,
             "bash_command"
                 | "execute_managed_command"
@@ -185,7 +611,18 @@ impl AgentEngine {
                 | "send_whatsapp_message"
                 | "spawn_subagent"
                 | "enqueue_task"
-        )
+        );
+        explicitly_supported
+            || matches!(
+                classification.class,
+                crate::agent::weles_governance::WelesGovernanceClass::GuardAlways
+                    | crate::agent::weles_governance::WelesGovernanceClass::RejectBypass
+            )
+            || (!classification.reasons.is_empty()
+                && !matches!(
+                    classification.class,
+                    crate::agent::weles_governance::WelesGovernanceClass::AllowDirect
+                ))
     }
 
     pub(crate) fn critique_requires_blocking_review(
@@ -193,11 +630,22 @@ impl AgentEngine {
         resolution: &Resolution,
         risk_tolerance: RiskTolerance,
     ) -> bool {
+        let satisfaction_label = self
+            .operator_model
+            .try_read()
+            .map(|model| model.operator_satisfaction.label.clone())
+            .unwrap_or_default();
         match resolution.decision {
             Decision::Reject => true,
             Decision::Defer => true,
             Decision::ProceedWithModifications => {
-                !matches!(risk_tolerance, RiskTolerance::Aggressive)
+                if satisfaction_label == "strained" {
+                    false
+                } else if satisfaction_label == "fragile" {
+                    matches!(risk_tolerance, RiskTolerance::Conservative)
+                } else {
+                    !matches!(risk_tolerance, RiskTolerance::Aggressive)
+                }
             }
             Decision::Proceed => false,
         }

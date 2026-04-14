@@ -63,6 +63,7 @@ export type AgentProviderId =
   | "z.ai-coding-plan"
   | "arcee"
   | "nvidia"
+  | "nous-portal"
   | "openrouter"
   | "cerebras"
   | "together"
@@ -73,6 +74,7 @@ export type AgentProviderId =
   | "minimax"
   | "minimax-coding-plan"
   | "alibaba-coding-plan"
+  | "xiaomi-mimo-token-plan"
   | "opencode-zen"
   | "custom";
 
@@ -88,6 +90,7 @@ export const AGENT_PROVIDER_IDS: AgentProviderId[] = [
   "z.ai-coding-plan",
   "arcee",
   "nvidia",
+  "nous-portal",
   "openrouter",
   "cerebras",
   "together",
@@ -98,6 +101,7 @@ export const AGENT_PROVIDER_IDS: AgentProviderId[] = [
   "minimax",
   "minimax-coding-plan",
   "alibaba-coding-plan",
+  "xiaomi-mimo-token-plan",
   "opencode-zen",
   "custom",
 ];

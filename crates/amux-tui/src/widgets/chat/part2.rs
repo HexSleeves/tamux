@@ -35,6 +35,7 @@ fn build_rendered_lines(
             }
             if let Some(first_line) = msg_lines.first_mut() {
                 append_tool_file_chip(first_line, msg, theme);
+                append_tool_skill_chip(first_line, msg, theme);
             }
             let mut kinds =
                 classify_message_lines(msg, idx, mode, inner_width, &expanded, &expanded_tools);

@@ -37,6 +37,48 @@ pub const ALIBABA_CODING_MODELS: &[ModelDefinition] = &[
     },
 ];
 
+pub const XIAOMI_MIMO_TOKEN_PLAN_MODELS: &[ModelDefinition] = &[
+    ModelDefinition {
+        id: "mimo-v2-pro",
+        name: "MiMo V2 Pro",
+        context_window: 1_000_000,
+        modalities: TEXT_ONLY,
+    },
+    ModelDefinition {
+        id: "mimo-v2-omni",
+        name: "MiMo V2 Omni",
+        context_window: 256_000,
+        modalities: MULTIMODAL,
+    },
+];
+
+pub const NOUS_PORTAL_MODELS: &[ModelDefinition] = &[
+    ModelDefinition {
+        id: "nousresearch/hermes-4-70b",
+        name: "Nous: Hermes 4 70B",
+        context_window: 131072,
+        modalities: TEXT_ONLY,
+    },
+    ModelDefinition {
+        id: "nousresearch/hermes-4-405b",
+        name: "Nous: Hermes 4 405B",
+        context_window: 131072,
+        modalities: TEXT_ONLY,
+    },
+    ModelDefinition {
+        id: "nousresearch/hermes-3-llama-3.1-70b",
+        name: "Nous: Hermes 3 70B Instruct",
+        context_window: 131072,
+        modalities: TEXT_ONLY,
+    },
+    ModelDefinition {
+        id: "nousresearch/hermes-3-llama-3.1-405b",
+        name: "Nous: Hermes 3 405B Instruct",
+        context_window: 131072,
+        modalities: TEXT_ONLY,
+    },
+];
+
 pub const OPENCODE_ZEN_MODELS: &[ModelDefinition] = &[
     ModelDefinition {
         id: "claude-opus-4-6",

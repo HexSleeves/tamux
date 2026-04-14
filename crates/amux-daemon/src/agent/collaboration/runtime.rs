@@ -29,18 +29,24 @@ fn build_pending_debate_seed(
             continue;
         }
 
-        let mut latest_by_task: HashMap<&str, &Contribution> = HashMap::new();
-        for contribution in session.contributions.iter().rev() {
+        let mut latest_by_task: HashMap<&str, (&Contribution, usize)> = HashMap::new();
+        for (source_index, contribution) in session.contributions.iter().enumerate() {
             if contribution.topic != disagreement.topic {
                 continue;
             }
-            latest_by_task
-                .entry(contribution.task_id.as_str())
-                .or_insert(contribution);
+            latest_by_task.insert(contribution.task_id.as_str(), (contribution, source_index));
         }
 
         let mut latest = latest_by_task.into_values().collect::<Vec<_>>();
-        latest.sort_by_key(|contribution| contribution.created_at);
+        latest.sort_by(|(left, left_index), (right, right_index)| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then(left_index.cmp(right_index))
+        });
+        let latest = latest
+            .into_iter()
+            .map(|(contribution, _)| contribution)
+            .collect::<Vec<_>>();
 
         let distinct_positions = latest
             .iter()

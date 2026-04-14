@@ -1,7 +1,10 @@
+#![allow(dead_code)]
+
 use super::*;
 use crate::agent::types::SkillRecommendationConfig;
 use amux_protocol::SessionId;
 use serde::{Deserialize, Serialize};
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::Stdio;
 #[cfg(test)]
@@ -16,6 +19,7 @@ const SKILL_DISCOVERY_SEMANTIC_SHORTLIST_MARKER: &str = "[[skill_discovery_seman
 const MAX_NORMALIZED_SKILL_QUERY_CHARS: usize = 160;
 const LOCAL_SKILL_DISCOVERY_NORMALIZER_ID: &str = "local-skill-discovery-heuristic";
 pub(crate) const SKILL_DISCOVERY_WORKER_ARG: &str = "__tamux-skill-discovery-worker";
+const TAMUX_DAEMON_BIN_ENV: &str = "TAMUX_DAEMON_BIN";
 
 #[cfg(test)]
 static FORCE_MESH_DISCOVERY_DEGRADED_FOR_TESTS: AtomicBool = AtomicBool::new(false);
@@ -140,6 +144,76 @@ pub(crate) fn sample_test_skill_discovery_completion(
     }
 }
 
+pub(super) fn preserve_noncompliant_mesh_state(
+    previous_state: &LatestSkillDiscoveryState,
+    next_state: &mut LatestSkillDiscoveryState,
+) -> bool {
+    if previous_state.compliant {
+        return false;
+    }
+
+    let previous_mesh_next_step = previous_state
+        .mesh_next_step
+        .unwrap_or_else(|| previous_state.effective_mesh_next_step());
+    let has_preservable_mesh_guidance = previous_state.mesh_requires_approval
+        || (matches!(
+            previous_mesh_next_step,
+            crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill
+                | crate::agent::skill_mesh::types::SkillMeshNextStep::ChooseOrBypass
+        ) && (previous_state.recommended_skill.is_some()
+            || previous_state.read_skill_identifier.is_some()));
+    if !has_preservable_mesh_guidance {
+        return false;
+    }
+
+    let preserved_skill = next_state
+        .recommended_skill
+        .clone()
+        .or_else(|| previous_state.recommended_skill.clone());
+    next_state.recommended_skill = preserved_skill.clone();
+    next_state.mesh_requires_approval = previous_state.mesh_requires_approval;
+    next_state.mesh_approval_id = if previous_state.mesh_requires_approval {
+        previous_state.mesh_approval_id.clone()
+    } else {
+        None
+    };
+    next_state.mesh_next_step = previous_state
+        .mesh_next_step
+        .or(Some(previous_mesh_next_step));
+    next_state.read_skill_identifier = next_state
+        .read_skill_identifier
+        .clone()
+        .or_else(|| preserved_skill.clone())
+        .or_else(|| previous_state.read_skill_identifier.clone())
+        .or_else(|| previous_state.recommended_skill.clone());
+    next_state.skill_read_completed = previous_state.skill_read_completed;
+    if next_state.is_discovery_pending() {
+        next_state.confidence_tier = previous_state.confidence_tier.clone();
+    }
+    next_state.compliant = false;
+    next_state.recommended_action = if next_state.mesh_requires_approval {
+        preserved_skill
+            .as_deref()
+            .map(|skill| format!("request_approval {skill}"))
+            .unwrap_or_else(|| previous_state.recommended_action.clone())
+    } else {
+        match next_state
+            .mesh_next_step
+            .unwrap_or(crate::agent::skill_mesh::types::SkillMeshNextStep::JustifySkillSkip)
+        {
+            crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill
+            | crate::agent::skill_mesh::types::SkillMeshNextStep::ChooseOrBypass => preserved_skill
+                .as_deref()
+                .map(|skill| format!("read_skill {skill}"))
+                .unwrap_or_else(|| previous_state.recommended_action.clone()),
+            crate::agent::skill_mesh::types::SkillMeshNextStep::JustifySkillSkip => {
+                "justify_skill_skip".to_string()
+            }
+        }
+    };
+    true
+}
+
 pub(super) fn spawn_skill_discovery_result_applier(
     engine: Arc<AgentEngine>,
     mut result_rx: tokio::sync::mpsc::UnboundedReceiver<AsyncSkillDiscoveryCompletion>,
@@ -184,9 +258,12 @@ impl AgentEngine {
             return Ok(None);
         }
 
-        if let Some(state) = self.get_thread_skill_discovery_state(thread_id).await {
+        let previous_state = self.get_thread_skill_discovery_state(thread_id).await;
+        if let Some(state) = previous_state.as_ref() {
             if state.is_discovery_pending() && state.query == content {
-                return Ok(Some(build_skill_preflight_context_from_state(state)));
+                return Ok(Some(build_skill_preflight_context_from_state(
+                    state.clone(),
+                )));
             }
         }
 
@@ -197,7 +274,10 @@ impl AgentEngine {
         )
         .await;
         let cfg = self.config.read().await.skill_recommendation.clone();
-        let pending_state = build_pending_skill_discovery_state(content);
+        let mut pending_state = build_pending_skill_discovery_state(content);
+        if let Some(previous_state) = previous_state.as_ref() {
+            preserve_noncompliant_mesh_state(previous_state, &mut pending_state);
+        }
 
         self.set_thread_skill_discovery_state(thread_id, pending_state.clone())
             .await;
@@ -320,7 +400,9 @@ impl AgentEngine {
             return;
         }
 
+        #[cfg(not(test))]
         let result_tx = self.skill_discovery_result_tx.clone();
+        #[cfg(not(test))]
         tokio::spawn(async move {
             let completion = match run_skill_discovery_subprocess(request.clone()).await {
                 Ok(completion) => completion,
@@ -758,7 +840,7 @@ async fn execute_skill_discovery_backend(
 async fn run_skill_discovery_subprocess(
     request: AsyncSkillDiscoveryRequest,
 ) -> Result<AsyncSkillDiscoveryCompletion> {
-    let executable = std::env::current_exe().context("resolve tamux-daemon executable")?;
+    let executable = resolve_daemon_worker_executable()?;
     let mut child = tokio::process::Command::new(executable)
         .arg(SKILL_DISCOVERY_WORKER_ARG)
         .stdin(Stdio::piped())
@@ -792,6 +874,60 @@ async fn run_skill_discovery_subprocess(
 
     serde_json::from_slice::<AsyncSkillDiscoveryCompletion>(&output.stdout)
         .context("parse async skill discovery subprocess output")
+}
+
+fn platform_daemon_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "tamux-daemon.exe"
+    } else {
+        "tamux-daemon"
+    }
+}
+
+fn resolve_daemon_worker_executable_candidate(
+    current_exe: Option<&std::path::Path>,
+    env_override: Option<&OsStr>,
+) -> Option<PathBuf> {
+    let override_path = env_override
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    if override_path.is_some() {
+        return override_path;
+    }
+
+    let current_exe = current_exe?;
+    let daemon_name = OsStr::new(platform_daemon_binary_name());
+    if current_exe
+        .file_name()
+        .is_some_and(|name| name == daemon_name)
+    {
+        return Some(current_exe.to_path_buf());
+    }
+
+    current_exe
+        .parent()
+        .map(|dir| dir.join(platform_daemon_binary_name()))
+        .filter(|candidate| candidate.exists())
+}
+
+pub(crate) fn resolve_daemon_worker_executable() -> Result<PathBuf> {
+    let current_exe = std::env::current_exe().context("resolve current executable")?;
+    if let Some(candidate) = resolve_daemon_worker_executable_candidate(
+        Some(current_exe.as_path()),
+        std::env::var_os(TAMUX_DAEMON_BIN_ENV).as_deref(),
+    ) {
+        return Ok(candidate);
+    }
+
+    if let Ok(path) = which::which(platform_daemon_binary_name()) {
+        return Ok(path);
+    }
+
+    anyhow::bail!(
+        "resolve tamux-daemon executable: set {TAMUX_DAEMON_BIN_ENV} or place {} next to {}",
+        platform_daemon_binary_name(),
+        current_exe.display()
+    );
 }
 
 pub(crate) async fn run_skill_discovery_worker_from_stdio() -> Result<()> {
@@ -873,7 +1009,8 @@ async fn apply_async_skill_discovery_completion(
         return;
     }
 
-    let state = completion.state.clone();
+    let mut state = completion.state.clone();
+    preserve_noncompliant_mesh_state(&current_state, &mut state);
     engine
         .set_thread_skill_discovery_state(&completion.thread_id, state.clone())
         .await;
@@ -1765,6 +1902,52 @@ mod tests {
             ),
             Some("audit git worktree diff rust orchestration safety governance".to_string())
         );
+    }
+
+    #[test]
+    fn resolve_daemon_worker_executable_candidate_prefers_env_override() {
+        let _lock = current_dir_test_lock().lock().expect("cwd lock");
+        let root = tempdir().expect("tempdir");
+        let override_path = root.path().join("custom-daemon");
+        let current_exe = root.path().join("host-process");
+
+        let resolved = resolve_daemon_worker_executable_candidate(
+            Some(current_exe.as_path()),
+            Some(override_path.as_os_str()),
+        )
+        .expect("env override should resolve");
+
+        assert_eq!(resolved, override_path);
+    }
+
+    #[test]
+    fn resolve_daemon_worker_executable_candidate_prefers_sibling_daemon_binary() {
+        let _lock = current_dir_test_lock().lock().expect("cwd lock");
+        let root = tempdir().expect("tempdir");
+        let current_exe = root.path().join("host-process");
+        let sibling = root.path().join(platform_daemon_binary_name());
+        fs::write(&current_exe, []).expect("write host executable");
+        fs::write(&sibling, []).expect("write daemon sibling");
+
+        let resolved =
+            resolve_daemon_worker_executable_candidate(Some(current_exe.as_path()), None)
+                .expect("sibling daemon should resolve");
+
+        assert_eq!(resolved, sibling);
+    }
+
+    #[test]
+    fn resolve_daemon_worker_executable_candidate_accepts_current_daemon_binary() {
+        let _lock = current_dir_test_lock().lock().expect("cwd lock");
+        let root = tempdir().expect("tempdir");
+        let current_exe = root.path().join(platform_daemon_binary_name());
+        fs::write(&current_exe, []).expect("write daemon executable");
+
+        let resolved =
+            resolve_daemon_worker_executable_candidate(Some(current_exe.as_path()), None)
+                .expect("daemon executable should resolve");
+
+        assert_eq!(resolved, current_exe);
     }
 
     #[cfg(test)]

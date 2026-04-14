@@ -1,12 +1,13 @@
 use super::*;
+use crate::providers::context::is_known_default_url;
 use amux_shared::providers::{
     MINIMAX_PROVIDER, PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_ARCEE,
     PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_NVIDIA, PROVIDER_ID_OPENAI, QWEN_PROVIDER,
 };
 
 #[test]
-fn provider_count_is_23() {
-    assert_eq!(PROVIDERS.len(), 23);
+fn provider_count_is_25() {
+    assert_eq!(PROVIDERS.len(), 25);
 }
 
 #[test]
@@ -158,4 +159,61 @@ fn nvidia_provider_uses_expected_defaults() {
         Some(205_000)
     );
     assert!(supports_model_fetch_for(PROVIDER_ID_NVIDIA));
+}
+
+#[test]
+fn xiaomi_mimo_provider_uses_expected_defaults() {
+    let provider = find_by_id("xiaomi-mimo-token-plan").unwrap();
+    assert_eq!(provider.name, "Xiaomi MiMo Token Plan");
+    assert_eq!(provider.default_base_url, "https://api.xiaomimimo.com/v1");
+    assert_eq!(provider.default_model, "mimo-v2-pro");
+    assert_eq!(provider.default_auth_source, "api_key");
+    assert_eq!(provider.supported_auth_sources, API_KEY_ONLY_AUTH_SOURCES);
+    assert_eq!(provider.default_transport, "chat_completions");
+    assert_eq!(provider.supported_transports, CHAT_ONLY_TRANSPORTS);
+    assert_eq!(
+        known_context_window_for("xiaomi-mimo-token-plan", "mimo-v2-pro"),
+        Some(1_000_000)
+    );
+    assert_eq!(
+        known_context_window_for("xiaomi-mimo-token-plan", "mimo-v2-omni"),
+        Some(256_000)
+    );
+    assert!(!supports_model_fetch_for("xiaomi-mimo-token-plan"));
+    let models = known_models_for_provider("xiaomi-mimo-token-plan");
+    assert_eq!(models.len(), 2);
+    assert!(models.iter().any(|model| model.id == "mimo-v2-pro"));
+    assert!(models.iter().any(|model| model.id == "mimo-v2-omni"));
+}
+
+#[test]
+fn nous_portal_provider_uses_expected_defaults() {
+    let provider = find_by_id("nous-portal").unwrap();
+    assert_eq!(provider.name, "Nous Portal");
+    assert_eq!(
+        provider.default_base_url,
+        "https://inference-api.nousresearch.com/v1"
+    );
+    assert_eq!(provider.default_model, "nousresearch/hermes-4-70b");
+    assert_eq!(provider.default_auth_source, "api_key");
+    assert_eq!(provider.supported_auth_sources, API_KEY_ONLY_AUTH_SOURCES);
+    assert_eq!(provider.default_transport, "chat_completions");
+    assert_eq!(provider.supported_transports, CHAT_ONLY_TRANSPORTS);
+    assert_eq!(
+        known_context_window_for("nous-portal", "nousresearch/hermes-4-70b"),
+        Some(131_072)
+    );
+    assert_eq!(
+        known_context_window_for("nous-portal", "nousresearch/hermes-4-405b"),
+        Some(131_072)
+    );
+    assert!(supports_model_fetch_for("nous-portal"));
+    let models = known_models_for_provider("nous-portal");
+    assert_eq!(models.len(), 4);
+    assert!(models
+        .iter()
+        .any(|model| model.id == "nousresearch/hermes-4-70b"));
+    assert!(models
+        .iter()
+        .any(|model| model.id == "nousresearch/hermes-4-405b"));
 }

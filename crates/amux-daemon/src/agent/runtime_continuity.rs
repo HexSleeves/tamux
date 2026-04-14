@@ -1,8 +1,5 @@
 use super::*;
-use crate::agent::episodic::{
-    ConstraintState, ConstraintType, CorrectionPattern, CounterWhoState, EpisodeOutcome,
-    NegativeConstraint, TriedApproach,
-};
+use crate::agent::episodic::{CounterWhoState, NegativeConstraint};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RuntimeContinuityContext {
@@ -208,6 +205,9 @@ fn counter_who_state_is_empty(state: &CounterWhoState) -> bool {
 mod tests {
     use super::*;
     use crate::agent::agent_identity::{MAIN_AGENT_ID, MAIN_AGENT_NAME};
+    use crate::agent::episodic::{
+        ConstraintState, ConstraintType, CorrectionPattern, EpisodeOutcome, TriedApproach,
+    };
     use crate::agent::{types::AgentConfig, SessionManager};
     use tempfile::tempdir;
 

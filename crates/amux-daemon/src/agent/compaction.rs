@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Context compaction — token-aware message compression for LLM requests.
 
 use super::llm_client::{messages_to_api_format, ApiToolCall, ApiToolCallFunction};
@@ -1905,7 +1907,7 @@ impl AgentEngine {
         .to_string();
 
         self.persist_thread_by_id(thread_id).await;
-        self.reset_participant_playground_threads_for_visible_thread(thread_id)
+        self.trim_participant_playground_threads_for_visible_thread(thread_id)
             .await;
         self.record_provenance_event(
             "context_compressed",

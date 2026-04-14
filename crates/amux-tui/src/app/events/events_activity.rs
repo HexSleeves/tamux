@@ -126,6 +126,113 @@ fn normalized_skill_workflow_notice(
 }
 
 impl TuiModel {
+    fn participant_playground_target(thread_id: &str) -> Option<(&str, &str)> {
+        let remainder = thread_id.strip_prefix("playground:")?;
+        let (participant_agent_id, visible_thread_id) = remainder.split_once(':')?;
+        if participant_agent_id.is_empty() || visible_thread_id.is_empty() {
+            return None;
+        }
+        Some((participant_agent_id, visible_thread_id))
+    }
+
+    fn fallback_participant_agent_name(agent_id: &str) -> String {
+        let mut chars = agent_id.chars();
+        match chars.next() {
+            Some(first) => {
+                let mut name = first.to_uppercase().collect::<String>();
+                name.push_str(chars.as_str());
+                name
+            }
+            None => "Participant".to_string(),
+        }
+    }
+
+    fn resolve_participant_agent_name(
+        &self,
+        visible_thread_id: &str,
+        participant_agent_id: &str,
+    ) -> String {
+        self.chat
+            .threads()
+            .iter()
+            .find(|thread| thread.id == visible_thread_id)
+            .and_then(|thread| {
+                thread
+                    .thread_participants
+                    .iter()
+                    .find(|participant| {
+                        participant
+                            .agent_id
+                            .eq_ignore_ascii_case(participant_agent_id)
+                    })
+                    .map(|participant| participant.agent_name.clone())
+            })
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| Self::fallback_participant_agent_name(participant_agent_id))
+    }
+
+    fn mark_participant_playground_active(&mut self, playground_thread_id: &str) -> bool {
+        let Some((participant_agent_id, visible_thread_id)) =
+            Self::participant_playground_target(playground_thread_id)
+        else {
+            return false;
+        };
+
+        let participant_agent_name =
+            self.resolve_participant_agent_name(visible_thread_id, participant_agent_id);
+        self.participant_playground_activity.insert(
+            playground_thread_id.to_string(),
+            super::ParticipantPlaygroundActivity {
+                visible_thread_id: visible_thread_id.to_string(),
+                participant_agent_id: participant_agent_id.to_string(),
+                participant_agent_name,
+            },
+        );
+        true
+    }
+
+    fn clear_participant_playground_activity(
+        &mut self,
+        playground_thread_id: &str,
+    ) -> Option<String> {
+        self.participant_playground_activity
+            .remove(playground_thread_id)
+            .map(|activity| activity.visible_thread_id)
+    }
+
+    pub(crate) fn participant_footer_activity(&self) -> Option<String> {
+        let active_thread_id = self.chat.active_thread_id()?;
+        let mut participants = self
+            .participant_playground_activity
+            .values()
+            .filter(|activity| activity.visible_thread_id == active_thread_id)
+            .map(|activity| {
+                (
+                    activity.participant_agent_id.to_ascii_lowercase(),
+                    activity.participant_agent_name.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        participants.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        participants.dedup_by(|left, right| left.0 == right.0);
+
+        let first = participants.first()?.1.clone();
+        if participants.len() == 1 {
+            Some(format!("{first} crafting response"))
+        } else {
+            Some(format!(
+                "{first} +{} crafting responses",
+                participants.len() - 1
+            ))
+        }
+    }
+
+    pub(crate) fn footer_activity_text(&self) -> Option<String> {
+        self.agent_activity
+            .clone()
+            .or_else(|| self.participant_footer_activity())
+    }
+
     fn should_surface_thread_activity(&self, thread_id: &str) -> bool {
         match self.chat.active_thread_id() {
             None => true,
@@ -171,6 +278,9 @@ impl TuiModel {
     }
 
     pub(in crate::app) fn handle_delta_event(&mut self, thread_id: String, content: String) {
+        if self.mark_participant_playground_active(&thread_id) {
+            return;
+        }
         if Self::is_hidden_agent_thread(&thread_id, None)
             || self.should_ignore_internal_thread_activity(&thread_id)
         {
@@ -186,6 +296,9 @@ impl TuiModel {
     }
 
     pub(in crate::app) fn handle_reasoning_event(&mut self, thread_id: String, content: String) {
+        if self.mark_participant_playground_active(&thread_id) {
+            return;
+        }
         if Self::is_hidden_agent_thread(&thread_id, None)
             || self.should_ignore_internal_thread_activity(&thread_id)
         {
@@ -208,6 +321,9 @@ impl TuiModel {
         arguments: String,
         weles_review: Option<crate::client::WelesReviewMetaVm>,
     ) {
+        if self.mark_participant_playground_active(&thread_id) {
+            return;
+        }
         if Self::is_hidden_agent_thread(&thread_id, None)
             || self.should_ignore_internal_thread_activity(&thread_id)
         {
@@ -236,6 +352,9 @@ impl TuiModel {
         is_error: bool,
         weles_review: Option<crate::client::WelesReviewMetaVm>,
     ) {
+        if self.mark_participant_playground_active(&thread_id) {
+            return;
+        }
         if Self::is_hidden_agent_thread(&thread_id, None)
             || self.should_ignore_internal_thread_activity(&thread_id)
         {
@@ -271,6 +390,12 @@ impl TuiModel {
         reasoning: Option<String>,
         provider_final_result_json: Option<String>,
     ) {
+        if let Some(visible_thread_id) = self.clear_participant_playground_activity(&thread_id) {
+            if self.chat.active_thread_id() == Some(visible_thread_id.as_str()) {
+                self.request_authoritative_thread_refresh(visible_thread_id, false);
+            }
+            return;
+        }
         if Self::is_hidden_agent_thread(&thread_id, None)
             || self.should_ignore_internal_thread_activity(&thread_id)
         {
@@ -302,7 +427,7 @@ impl TuiModel {
             provider_final_result_json,
         });
         if self.thread_needs_authoritative_refresh_after_done(&thread_id) {
-            self.request_latest_thread_page(thread_id, false);
+            self.request_authoritative_thread_refresh(thread_id, false);
         }
 
         self.dispatch_next_queued_prompt_if_ready();

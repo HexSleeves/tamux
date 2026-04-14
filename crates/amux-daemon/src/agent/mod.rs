@@ -32,6 +32,7 @@ pub(crate) mod copilot_auth;
 mod critique;
 mod debate;
 mod dispatcher;
+mod emergent_protocol;
 mod engine;
 mod engine_runtime;
 mod explainability;
@@ -108,32 +109,19 @@ pub mod uncertainty;
 // Re-exports from extracted modules — keeps everything accessible across
 // sibling submodules via `use super::*;`.
 use agent_identity::*;
-use aline_startup::{
-    parse_session_list_json, parse_watcher_status, repo_root_basename,
-    repo_root_matches_project_name, select_import_candidates, AlineDiscoveredSession,
-    AlineStartupShortCircuitReason, AlineStartupSummary, SessionListJson, StartupCommandOutput,
-    StartupCommandRunner, StartupCommandSpec, StartupSelectionPolicy, TokioStartupCommandRunner,
-    WatcherState, WatcherStatus, IMPORT_TIMEOUT, RECONCILIATION_BUDGET, TRACKED_POLL_INTERVAL,
-    TRACKED_POLL_MAX_ATTEMPTS, WATCHER_COMMAND_TIMEOUT,
-};
-pub(crate) use aline_startup::{run_aline_startup_worker_from_stdio, ALINE_STARTUP_WORKER_ARG};
 use anticipatory::*;
 use anticipatory_support::*;
 pub(crate) use authorship::AuthorshipTag;
 pub(crate) use autonomy::AutonomyLevel;
 use behavioral_events::*;
-use capability_tier::*;
 use compaction::*;
-pub(crate) use config::{
-    ConfigEffectiveRuntimeState, ConfigReconcileState, ConfigRuntimeProjection,
-};
+pub(crate) use config::ConfigRuntimeProjection;
 pub(crate) use explanation::*;
 pub(crate) use gateway_health::GatewayConnectionStatus as RuntimeGatewayConnectionStatus;
 use goal_parsing::*;
 use honcho::*;
 use memory::*;
 use metadata::*;
-use notifications::*;
 use operator_model::*;
 use operator_questions::*;
 use provider_resolution::*;
@@ -166,16 +154,22 @@ use self::tool_executor::{execute_tool, get_available_tools};
 use self::types::*;
 
 // Public re-exports consumed by sibling modules in this bin crate.
-pub(crate) use config::canonicalize_weles_client_update;
+pub(crate) use aline_startup::{
+    run_aline_startup_worker_from_stdio, AlineStartupShortCircuitReason, WatcherState,
+    ALINE_STARTUP_WORKER_ARG,
+};
+pub(crate) use config::{
+    canonicalize_weles_client_update, ConfigEffectiveRuntimeState, ConfigReconcileState,
+};
 #[allow(unused_imports)]
 pub use engine::*;
 #[cfg(test)]
 pub(crate) use provider_auth_store::provider_auth_test_env_lock;
 pub use task_prompt::load_config_from_history;
+pub(crate) use whatsapp_link::transport::PersistedState as WhatsAppPersistedState;
 pub(crate) use whatsapp_link::{
-    clear_persisted_provider_state, load_persisted_provider_state, merge_persisted_state_update,
-    persist_transport_session_update, save_persisted_provider_state,
-    transport::PersistedState as WhatsAppPersistedState, WHATSAPP_LINK_PROVIDER_ID,
+    clear_persisted_provider_state, load_persisted_provider_state,
+    persist_transport_session_update, save_persisted_provider_state, WHATSAPP_LINK_PROVIDER_ID,
 };
 #[allow(unused_imports)]
 pub(crate) use whatsapp_native::{

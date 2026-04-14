@@ -10,7 +10,7 @@ use super::{
     WHATSAPP_LINK_PROVIDER_ID,
 };
 
-pub(super) fn tamux_self_chat_prefix() -> String {
+pub(crate) fn tamux_self_chat_prefix() -> String {
     format!(
         "🦅 {} - {}'s concierge ⚒️\n",
         CONCIERGE_AGENT_NAME, MAIN_AGENT_NAME
@@ -54,11 +54,11 @@ pub(super) fn format_outbound_whatsapp_text(text: &str, prefix_self_chat: bool) 
     format!("{prefix}{text}")
 }
 
-pub(super) fn build_whatsapp_cursor(ts_secs: u64, msg_id: &str) -> String {
+pub(crate) fn build_whatsapp_cursor(ts_secs: u64, msg_id: &str) -> String {
     format!("{ts_secs}:{msg_id}")
 }
 
-pub(super) fn parse_whatsapp_cursor(cursor: &str) -> Option<(u64, &str)> {
+pub(crate) fn parse_whatsapp_cursor(cursor: &str) -> Option<(u64, &str)> {
     let (ts_secs, msg_id) = cursor.split_once(':')?;
     let ts_secs = ts_secs.parse::<u64>().ok()?;
     let msg_id = msg_id.trim();
@@ -74,6 +74,7 @@ pub(super) fn mark_whatsapp_replay_active_if_cursors(gw: &mut super::gateway::Ga
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) fn is_whatsapp_cursor_newer(
     stored_cursor: &str,
     ts_secs: u64,
@@ -106,7 +107,7 @@ fn is_whatsapp_self_chat(
             .any(|jid| jid == chat_exact || jid == sender_exact)
 }
 
-pub(super) fn should_enqueue_from_me_whatsapp_message(
+pub(crate) fn should_enqueue_from_me_whatsapp_message(
     text: &str,
     chat: &str,
     sender: &str,
@@ -142,6 +143,7 @@ fn whatsapp_sender_matches_allowlist(raw_allowlist: &str, sender: &str, chat: &s
         .any(|candidate| allowlist.iter().any(|allowed| allowed == candidate))
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) fn log_whatsapp_allowlist_suppression(sender: &str, chat: &str) {
     tracing::info!(
         sender = %sender,
@@ -152,13 +154,13 @@ pub(super) fn log_whatsapp_allowlist_suppression(sender: &str, chat: &str) {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum WhatsAppEnqueueDecision {
+pub(crate) enum WhatsAppEnqueueDecision {
     Enqueue,
     SuppressAllowlist,
     SuppressSelfEcho,
 }
 
-pub(super) fn classify_whatsapp_enqueue_decision(
+pub(crate) fn classify_whatsapp_enqueue_decision(
     text: &str,
     chat: &str,
     sender: &str,
@@ -188,6 +190,7 @@ pub(super) fn classify_whatsapp_enqueue_decision(
     WhatsAppEnqueueDecision::Enqueue
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(in crate::agent) fn now_millis_local() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()

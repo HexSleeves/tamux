@@ -24,6 +24,10 @@ fn set_user_sync_state_for_test(state: UserProfileSyncState) {
         .expect("user profile sync state mutex poisoned") = state;
 }
 
+fn test_agent_data_dir(root: &std::path::Path) -> std::path::PathBuf {
+    root.join("agent")
+}
+
 #[tokio::test]
 async fn stage_legacy_append_marks_dirty() -> Result<()> {
     let _guard = acquire_user_sync_test_guard();
@@ -47,7 +51,9 @@ async fn reconcile_renders_deterministic_user_md() -> Result<()> {
     let _guard = acquire_user_sync_test_guard();
     let root = std::env::temp_dir().join(format!("tamux-user-sync-test-{}", uuid::Uuid::new_v4()));
     let history = crate::history::HistoryStore::new_test_store(&root).await?;
-    let memory_dir = super::active_memory_dir(&root);
+    let agent_data_dir = test_agent_data_dir(&root);
+    tokio::fs::create_dir_all(&agent_data_dir).await?;
+    let memory_dir = super::active_memory_dir(&agent_data_dir);
     tokio::fs::create_dir_all(&memory_dir).await?;
     tokio::fs::write(memory_dir.join("USER.md"), "# User\nlegacy").await?;
     history
@@ -55,7 +61,7 @@ async fn reconcile_renders_deterministic_user_md() -> Result<()> {
         .await?;
     set_user_sync_state_for_test(UserProfileSyncState::Dirty);
 
-    reconcile_user_profile_from_db(&root, &history).await?;
+    reconcile_user_profile_from_db(&agent_data_dir, &history).await?;
     let rendered = tokio::fs::read_to_string(memory_dir.join("USER.md")).await?;
     assert!(rendered.contains("- preferred_name: \"Milan\""));
     assert_eq!(current_user_sync_state(), UserProfileSyncState::Clean);
@@ -67,12 +73,14 @@ async fn reconcile_sets_dirty_on_write_error() -> Result<()> {
     let _guard = acquire_user_sync_test_guard();
     let root = std::env::temp_dir().join(format!("tamux-user-sync-test-{}", uuid::Uuid::new_v4()));
     let history = crate::history::HistoryStore::new_test_store(&root).await?;
-    let memory_dir = super::active_memory_dir(&root);
+    let agent_data_dir = test_agent_data_dir(&root);
+    tokio::fs::create_dir_all(&agent_data_dir).await?;
+    let memory_dir = super::active_memory_dir(&agent_data_dir);
     tokio::fs::create_dir_all(&memory_dir).await?;
     tokio::fs::create_dir_all(memory_dir.join("USER.md")).await?;
     set_user_sync_state_for_test(UserProfileSyncState::Clean);
 
-    let result = reconcile_user_profile_from_db(&root, &history).await;
+    let result = reconcile_user_profile_from_db(&agent_data_dir, &history).await;
     assert!(
         result.is_err(),
         "expected error because USER.md is a directory"
@@ -90,15 +98,17 @@ async fn concurrent_user_appends_both_stage_and_no_stuck_reconciling() -> Result
     let _guard = acquire_user_sync_test_guard();
     let root = std::env::temp_dir().join(format!("tamux-user-sync-test-{}", uuid::Uuid::new_v4()));
     let history = crate::history::HistoryStore::new_test_store(&root).await?;
-    let memory_dir = super::active_memory_dir(&root);
+    let agent_data_dir = test_agent_data_dir(&root);
+    tokio::fs::create_dir_all(&agent_data_dir).await?;
+    let memory_dir = super::active_memory_dir(&agent_data_dir);
     tokio::fs::create_dir_all(&memory_dir).await?;
     tokio::fs::write(memory_dir.join("USER.md"), "").await?;
     set_user_sync_state_for_test(UserProfileSyncState::Clean);
 
     let h1 = history.clone();
     let h2 = history.clone();
-    let r1 = root.clone();
-    let r2 = root.clone();
+    let r1 = agent_data_dir.clone();
+    let r2 = agent_data_dir.clone();
 
     let (res1, res2) = tokio::join!(
         handle_user_memory_append_with_reconcile(&r1, &h1, "prefers dark mode"),
@@ -129,7 +139,9 @@ async fn staging_failure_after_acquire_resets_state_to_dirty() -> Result<()> {
     let _guard = acquire_user_sync_test_guard();
     let root = std::env::temp_dir().join(format!("tamux-user-sync-test-{}", uuid::Uuid::new_v4()));
     let history = crate::history::HistoryStore::new_test_store(&root).await?;
-    let memory_dir = super::active_memory_dir(&root);
+    let agent_data_dir = test_agent_data_dir(&root);
+    tokio::fs::create_dir_all(&agent_data_dir).await?;
+    let memory_dir = super::active_memory_dir(&agent_data_dir);
     tokio::fs::create_dir_all(&memory_dir).await?;
     tokio::fs::write(memory_dir.join("USER.md"), "").await?;
     set_user_sync_state_for_test(UserProfileSyncState::Clean);
@@ -142,7 +154,8 @@ async fn staging_failure_after_acquire_resets_state_to_dirty() -> Result<()> {
         })
         .await?;
 
-    let result = handle_user_memory_append_with_reconcile(&root, &history, "should fail").await;
+    let result =
+        handle_user_memory_append_with_reconcile(&agent_data_dir, &history, "should fail").await;
     assert!(
         result.is_err(),
         "expected staging to fail with no such table"
@@ -160,12 +173,14 @@ async fn direct_reconcile_is_noop_when_already_reconciling() -> Result<()> {
     let _guard = acquire_user_sync_test_guard();
     let root = std::env::temp_dir().join(format!("tamux-user-sync-test-{}", uuid::Uuid::new_v4()));
     let history = crate::history::HistoryStore::new_test_store(&root).await?;
-    let memory_dir = super::active_memory_dir(&root);
+    let agent_data_dir = test_agent_data_dir(&root);
+    tokio::fs::create_dir_all(&agent_data_dir).await?;
+    let memory_dir = super::active_memory_dir(&agent_data_dir);
     tokio::fs::create_dir_all(&memory_dir).await?;
     tokio::fs::write(memory_dir.join("USER.md"), "SENTINEL").await?;
     set_user_sync_state_for_test(UserProfileSyncState::Reconciling);
 
-    reconcile_user_profile_from_db(&root, &history).await?;
+    reconcile_user_profile_from_db(&agent_data_dir, &history).await?;
 
     let contents = tokio::fs::read_to_string(memory_dir.join("USER.md")).await?;
     assert_eq!(contents, "SENTINEL");
@@ -182,12 +197,15 @@ async fn append_reconcile_write_error_keeps_db_updates_and_marks_dirty() -> Resu
     let _guard = acquire_user_sync_test_guard();
     let root = std::env::temp_dir().join(format!("tamux-user-sync-test-{}", uuid::Uuid::new_v4()));
     let history = crate::history::HistoryStore::new_test_store(&root).await?;
-    let memory_dir = super::active_memory_dir(&root);
+    let agent_data_dir = test_agent_data_dir(&root);
+    tokio::fs::create_dir_all(&agent_data_dir).await?;
+    let memory_dir = super::active_memory_dir(&agent_data_dir);
     tokio::fs::create_dir_all(&memory_dir).await?;
     tokio::fs::create_dir_all(memory_dir.join("USER.md")).await?;
 
     set_user_sync_state_for_test(UserProfileSyncState::Clean);
-    let result = handle_user_memory_append_with_reconcile(&root, &history, "uses neovim").await;
+    let result =
+        handle_user_memory_append_with_reconcile(&agent_data_dir, &history, "uses neovim").await;
     assert!(
         result.is_err(),
         "expected reconcile to fail when USER.md is a directory"

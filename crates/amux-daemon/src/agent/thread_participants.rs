@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::*;
 use serde::{Deserialize, Serialize};
 
@@ -73,7 +75,11 @@ pub(super) fn normalize_thread_participants(
 fn is_known_main_agent_alias(alias: &str) -> bool {
     matches!(
         alias.trim().to_ascii_lowercase().as_str(),
-        MAIN_AGENT_ID | MAIN_AGENT_ALIAS | MAIN_AGENT_LEGACY_ALIAS | MAIN_AGENT_FALLBACK_ALIAS
+        MAIN_AGENT_ID
+            | crate::agent::agent_identity::MAIN_AGENT_PUBLIC_ALIAS
+            | MAIN_AGENT_ALIAS
+            | MAIN_AGENT_LEGACY_ALIAS
+            | MAIN_AGENT_FALLBACK_ALIAS
     )
 }
 
@@ -492,6 +498,16 @@ impl AgentEngine {
                     self.maybe_auto_send_next_thread_participant_suggestion(&outcome.thread_id),
                 )
                 .await?;
+                if let Err(error) =
+                    Box::pin(self.run_participant_observers(&outcome.thread_id)).await
+                {
+                    let _ = self.event_tx.send(AgentEvent::WorkflowNotice {
+                        thread_id: outcome.thread_id.clone(),
+                        kind: "participant_observer_error".to_string(),
+                        message: "participant observers failed".to_string(),
+                        details: Some(error.to_string()),
+                    });
+                }
             }
             return Ok(outcome);
         }
@@ -724,7 +740,7 @@ impl AgentEngine {
         &self,
         thread_id: &str,
         suggestion_id: &str,
-        preferred_session_hint: Option<&str>,
+        _preferred_session_hint: Option<&str>,
     ) -> Result<bool> {
         if !self.threads.read().await.contains_key(thread_id) {
             anyhow::bail!("thread not found: {thread_id}");
@@ -1338,7 +1354,7 @@ impl AgentEngine {
             anyhow::bail!("participant message content cannot be empty");
         }
 
-        let (agent_id, agent_name) = self
+        let (agent_id, _agent_name) = self
             .resolve_thread_participant_target(target_agent_id)
             .await?;
 

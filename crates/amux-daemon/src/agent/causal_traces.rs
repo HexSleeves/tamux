@@ -9,7 +9,7 @@ mod helpers;
 mod persistence;
 #[path = "causal_traces/reporting.rs"]
 mod reporting;
-use helpers::{
+pub(crate) use helpers::{
     command_family, estimate_plan_success, estimated_success_probability, summarize_outcome,
     FamilyOutcomeSummary, OutcomeSummary,
 };

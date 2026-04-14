@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use crate::providers;
-use amux_shared::providers::{PROVIDER_ID_MINIMAX_CODING_PLAN, PROVIDER_ID_OPENAI};
+use amux_shared::providers::PROVIDER_ID_OPENAI;
 
 #[derive(Debug, Clone, Default)]
 pub struct FetchedModel {
@@ -361,6 +361,7 @@ impl Default for ConfigState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use amux_shared::providers::PROVIDER_ID_MINIMAX_CODING_PLAN;
 
     fn make_snapshot(provider: &str, model: &str) -> AgentConfigSnapshot {
         AgentConfigSnapshot {

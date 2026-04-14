@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! AgentEngine struct definition and constructor.
 
 use super::circuit_breaker::CircuitBreakerRegistry;
@@ -83,6 +85,7 @@ pub(super) struct SubagentRuntimeStats {
 
 pub(super) const ONECONTEXT_BOOTSTRAP_QUERY_MAX_CHARS: usize = 180;
 pub(super) const ONECONTEXT_BOOTSTRAP_OUTPUT_MAX_CHARS: usize = 5000;
+pub(super) const ONECONTEXT_BOOTSTRAP_TIMEOUT_MS: u64 = 100;
 pub(super) const MIN_CONTEXT_TARGET_TOKENS: usize = 1024;
 pub(in crate::agent) const APPROX_CHARS_PER_TOKEN: usize = 4;
 pub(super) const FILE_WATCH_DEBOUNCE_MS: u64 = 700;
@@ -127,6 +130,7 @@ pub struct AgentEngine {
         RwLock<super::orchestrator_policy::ShortLivedRecentPolicyDecisions>,
     pub(super) retry_guards: RwLock<super::orchestrator_policy::ShortLivedRetryGuards>,
     pub(super) operator_model: RwLock<OperatorModel>,
+    pub(super) meta_cognitive_self_model: RwLock<super::metacognitive::types::SelfModel>,
     pub(super) anticipatory: RwLock<AnticipatoryRuntime>,
     pub(super) collaboration: RwLock<HashMap<String, collaboration::CollaborationSession>>,
     pub data_dir: PathBuf,
@@ -324,6 +328,9 @@ impl AgentEngine {
             recent_policy_decisions: RwLock::new(HashMap::new()),
             retry_guards: RwLock::new(HashMap::new()),
             operator_model: RwLock::new(OperatorModel::default()),
+            meta_cognitive_self_model: RwLock::new(
+                super::metacognitive::types::SelfModel::default(),
+            ),
             anticipatory: RwLock::new(AnticipatoryRuntime::default()),
             collaboration: RwLock::new(HashMap::new()),
             data_dir,

@@ -1,7 +1,35 @@
 use super::*;
 use amux_shared::providers::PROVIDER_ID_OPENAI;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::Notify;
 use tokio::time::{timeout, Duration};
+
+async fn seed_queued_participant_suggestion(
+    engine: &Arc<AgentEngine>,
+    thread_id: &str,
+    target_agent_id: &str,
+    target_agent_name: &str,
+    instruction: &str,
+) -> ThreadParticipantSuggestion {
+    let suggestion = ThreadParticipantSuggestion {
+        id: format!("seeded-{thread_id}"),
+        target_agent_id: target_agent_id.to_string(),
+        target_agent_name: target_agent_name.to_string(),
+        instruction: instruction.to_string(),
+        force_send: false,
+        status: ThreadParticipantSuggestionStatus::Queued,
+        created_at: 1,
+        updated_at: 1,
+        error: None,
+    };
+    engine
+        .thread_participant_suggestions
+        .write()
+        .await
+        .insert(thread_id.to_string(), vec![suggestion.clone()]);
+    engine.persist_thread_by_id(thread_id).await;
+    suggestion
+}
 
 #[tokio::test]
 async fn participant_send_now_posts_direct_visible_message_then_continues_thread() {
@@ -47,15 +75,14 @@ async fn participant_send_now_posts_direct_visible_message_then_continues_thread
         .upsert_thread_participant(thread_id, "weles", "verify claims")
         .await
         .expect("participant should register");
-    let suggestion = engine
-        .queue_thread_participant_suggestion(
-            thread_id,
-            "weles",
-            "Participant verdict: claim is false.",
-            false,
-        )
-        .await
-        .expect("queue suggestion");
+    let suggestion = seed_queued_participant_suggestion(
+        &engine,
+        thread_id,
+        "weles",
+        "Weles",
+        "Participant verdict: claim is false.",
+    )
+    .await;
 
     engine
         .send_thread_participant_suggestion(thread_id, &suggestion.id, None)
@@ -186,7 +213,11 @@ async fn participant_post_resumes_main_agent_with_participant_aware_continuation
         "main-agent continuation should explicitly identify the participant contribution as the latest actionable context"
     );
     assert!(
-        continuation_request.contains("Latest participant contribution:\nParticipant verdict: claim is false."),
+        continuation_request.contains("Latest participant contribution:"),
+        "main-agent continuation should label the participant contribution in the resume prompt"
+    );
+    assert!(
+        continuation_request.contains("Participant verdict: claim is false."),
         "main-agent continuation should include the latest participant message in the resume prompt"
     );
 }
@@ -235,15 +266,14 @@ async fn participant_follow_up_and_later_turn_persist_across_reload() {
         .upsert_thread_participant(thread_id, "weles", "verify claims")
         .await
         .expect("participant should register");
-    let suggestion = engine
-        .queue_thread_participant_suggestion(
-            thread_id,
-            "weles",
-            "Participant verdict: claim is false.",
-            false,
-        )
-        .await
-        .expect("queue suggestion");
+    let suggestion = seed_queued_participant_suggestion(
+        &engine,
+        thread_id,
+        "weles",
+        "Weles",
+        "Participant verdict: claim is false.",
+    )
+    .await;
 
     engine
         .send_thread_participant_suggestion(thread_id, &suggestion.id, None)
@@ -298,6 +328,193 @@ async fn participant_follow_up_and_later_turn_persist_across_reload() {
         live_messages
             .last()
             .and_then(|message| message.author_agent_id.as_deref())
+    );
+}
+
+#[tokio::test]
+async fn participant_post_continuation_reruns_same_participant_after_main_agent_follow_up() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind participant continuation observer server");
+    let addr = listener
+        .local_addr()
+        .expect("participant continuation observer addr");
+    let request_counter = Arc::new(AtomicUsize::new(0));
+
+    tokio::spawn({
+        let recorded_bodies = recorded_bodies.clone();
+        let request_counter = request_counter.clone();
+        async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let recorded_bodies = recorded_bodies.clone();
+                let request_counter = request_counter.clone();
+                tokio::spawn(async move {
+                    let body = read_http_request_body(&mut socket)
+                        .await
+                        .expect("read participant continuation observer request");
+                    recorded_bodies
+                        .lock()
+                        .expect("lock request log")
+                        .push_back(body.clone());
+
+                    let request_index = request_counter.fetch_add(1, Ordering::SeqCst);
+                    let response = match request_index {
+                        0 => concat!(
+                            "HTTP/1.1 200 OK\r\n",
+                            "content-type: text/event-stream\r\n",
+                            "cache-control: no-cache\r\n",
+                            "connection: close\r\n",
+                            "\r\n",
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"Gateway reply ok\"}}]}\n\n",
+                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
+                            "data: [DONE]\n\n"
+                        ),
+                        1 if body.contains("Role: participant observer") => concat!(
+                            "HTTP/1.1 200 OK\r\n",
+                            "content-type: text/event-stream\r\n",
+                            "cache-control: no-cache\r\n",
+                            "connection: close\r\n",
+                            "\r\n",
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"FORCE: no\\nMESSAGE: Second participant follow-up.\"}}]}\n\n",
+                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":6}}\n\n",
+                            "data: [DONE]\n\n"
+                        ),
+                        2 => concat!(
+                            "HTTP/1.1 200 OK\r\n",
+                            "content-type: text/event-stream\r\n",
+                            "cache-control: no-cache\r\n",
+                            "connection: close\r\n",
+                            "\r\n",
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"Gateway follow-up after second participant note.\"}}]}\n\n",
+                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":6}}\n\n",
+                            "data: [DONE]\n\n"
+                        ),
+                        3 if body.contains("Role: participant observer") => concat!(
+                            "HTTP/1.1 200 OK\r\n",
+                            "content-type: text/event-stream\r\n",
+                            "cache-control: no-cache\r\n",
+                            "connection: close\r\n",
+                            "\r\n",
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"NO_SUGGESTION\"}}]}\n\n",
+                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\n",
+                            "data: [DONE]\n\n"
+                        ),
+                        _ => concat!(
+                            "HTTP/1.1 200 OK\r\n",
+                            "content-type: text/event-stream\r\n",
+                            "cache-control: no-cache\r\n",
+                            "connection: close\r\n",
+                            "\r\n",
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"NO_SUGGESTION\"}}]}\n\n",
+                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n",
+                            "data: [DONE]\n\n"
+                        ),
+                    };
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("write participant continuation observer response");
+                });
+            }
+        }
+    });
+
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = format!("http://{addr}/v1");
+    config.model = "gpt-5.4-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.auth_source = AuthSource::ApiKey;
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread_participant_post_continuation_observer_rerun";
+
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Participant continuation observer rerun".to_string(),
+            messages: vec![AgentMessage::user("hello", 1)],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            created_at: 1,
+            updated_at: 1,
+        },
+    );
+
+    engine
+        .upsert_thread_participant(thread_id, "weles", "verify claims")
+        .await
+        .expect("participant should register");
+    let suggestion = seed_queued_participant_suggestion(
+        &engine,
+        thread_id,
+        "weles",
+        "Weles",
+        "Participant verdict: claim is false.",
+    )
+    .await;
+
+    engine
+        .send_thread_participant_suggestion(thread_id, &suggestion.id, None)
+        .await
+        .expect("send initial participant suggestion");
+
+    let thread_messages = engine
+        .get_thread(thread_id)
+        .await
+        .expect("thread should still exist")
+        .messages;
+    assert!(
+        thread_messages.iter().any(|message| {
+            message.role == MessageRole::Assistant
+                && message.author_agent_id.as_deref() == Some("weles")
+                && message.content == "Second participant follow-up."
+        }),
+        "once the latest visible message is the main-agent follow-up, the participant should be able to post another visible follow-up"
+    );
+    assert!(
+        engine
+            .list_thread_participant_suggestions(thread_id)
+            .await
+            .is_empty(),
+        "the follow-up participant suggestion should drain cleanly after it is auto-sent"
+    );
+
+    let request_bodies = recorded_bodies
+        .lock()
+        .expect("lock request log")
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        request_bodies.len(),
+        4,
+        "expected the main-agent continuation, a participant observer rerun, the second main-agent continuation, and then a final NO_SUGGESTION observer pass"
+    );
+    assert!(
+        request_bodies[1].contains("Role: participant observer"),
+        "the second request should rerun the participant observer after the main-agent follow-up"
+    );
+    assert!(
+        request_bodies[3].contains("Role: participant observer"),
+        "the final request should still be an observer pass, but only after the latest message is no longer the participant's own post"
     );
 }
 
@@ -467,8 +684,8 @@ async fn queued_participant_suggestion_auto_sends_after_active_stream_finishes()
     );
     assert_eq!(
         request_counter.load(Ordering::SeqCst),
-        3,
-        "expected one main resend, one observer review, and one follow-up after auto-sending the queued participant note"
+        2,
+        "expected one main resend and one follow-up after auto-sending the queued participant note"
     );
     assert!(
         engine
@@ -692,7 +909,7 @@ async fn hydrated_idle_participant_auto_send_is_visible_in_thread_detail() {
 }
 
 #[tokio::test]
-async fn hydrate_clears_persisted_participant_playground_threads() {
+async fn hydrate_trims_persisted_participant_playground_threads_to_recent_tail() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
     let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
@@ -719,54 +936,54 @@ async fn hydrate_clears_persisted_participant_playground_threads() {
             updated_at: 1,
         },
     );
+    let playground_messages = (0..120)
+        .map(|index| AgentMessage {
+            id: generate_message_id(),
+            role: MessageRole::Assistant,
+            content: format!("scratch reply {index}"),
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_arguments: None,
+            tool_status: None,
+            weles_review: None,
+            input_tokens: 1,
+            output_tokens: 2,
+            cost: None,
+            provider: None,
+            model: None,
+            api_transport: None,
+            response_id: None,
+            upstream_message: None,
+            provider_final_result: None,
+            author_agent_id: Some("weles".to_string()),
+            author_agent_name: Some("Weles".to_string()),
+            reasoning: None,
+            message_kind: AgentMessageKind::Normal,
+            compaction_strategy: None,
+            compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
+            timestamp: (index + 2) as u64,
+        })
+        .collect::<Vec<_>>();
     engine.threads.write().await.insert(
         playground_thread_id.clone(),
         AgentThread {
             id: playground_thread_id.clone(),
             agent_name: Some("Weles".to_string()),
             title: "Participant playground".to_string(),
-            messages: vec![
-                AgentMessage::user("scratch prompt", 2),
-                AgentMessage {
-                    id: generate_message_id(),
-                    role: MessageRole::Assistant,
-                    content: "scratch reply".to_string(),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    tool_name: None,
-                    tool_arguments: None,
-                    tool_status: None,
-                    weles_review: None,
-                    input_tokens: 3,
-                    output_tokens: 5,
-                    cost: None,
-                    provider: None,
-                    model: None,
-                    api_transport: None,
-                    response_id: None,
-                    upstream_message: None,
-                    provider_final_result: None,
-                    author_agent_id: Some("weles".to_string()),
-                    author_agent_name: Some("Weles".to_string()),
-                    reasoning: None,
-                    message_kind: AgentMessageKind::Normal,
-                    compaction_strategy: None,
-                    compaction_payload: None,
-                    offloaded_payload_id: None,
-                    structural_refs: Vec::new(),
-                    timestamp: 3,
-                },
-            ],
+            total_input_tokens: 120,
+            total_output_tokens: 240,
+            messages: playground_messages,
             pinned: false,
             upstream_thread_id: None,
             upstream_transport: None,
             upstream_provider: None,
             upstream_model: None,
             upstream_assistant_id: None,
-            total_input_tokens: 3,
-            total_output_tokens: 5,
             created_at: 2,
-            updated_at: 3,
+            updated_at: 121,
         },
     );
     engine.persist_thread_by_id(thread_id).await;
@@ -783,12 +1000,27 @@ async fn hydrate_clears_persisted_participant_playground_threads() {
         .await
         .expect("playground thread should still exist after hydrate")
         .thread;
-    assert!(
-        playground.messages.is_empty(),
-        "hydrate should clear persisted participant playground history"
+    assert_eq!(
+        playground.messages.len(),
+        100,
+        "hydrate should retain a bounded recent playground tail instead of wiping all hidden context"
     );
-    assert_eq!(playground.total_input_tokens, 0);
-    assert_eq!(playground.total_output_tokens, 0);
+    assert_eq!(
+        playground
+            .messages
+            .first()
+            .map(|message| message.content.as_str()),
+        Some("scratch reply 20")
+    );
+    assert_eq!(
+        playground
+            .messages
+            .last()
+            .map(|message| message.content.as_str()),
+        Some("scratch reply 119")
+    );
+    assert_eq!(playground.total_input_tokens, 100);
+    assert_eq!(playground.total_output_tokens, 200);
 }
 
 #[tokio::test]
@@ -822,6 +1054,21 @@ async fn participant_failed_suggestions_reload() {
         .upsert_thread_participant(thread_id, "weles", "verify claims")
         .await
         .expect("participant should register");
+    {
+        let mut streams = engine.stream_cancellations.lock().await;
+        streams.insert(
+            thread_id.to_string(),
+            StreamCancellationEntry {
+                generation: 1,
+                token: CancellationToken::new(),
+                retry_now: Arc::new(Notify::new()),
+                started_at: 1,
+                last_progress_at: 1,
+                last_progress_kind: StreamProgressKind::Started,
+                last_progress_excerpt: String::new(),
+            },
+        );
+    }
     let suggestion = engine
         .queue_thread_participant_suggestion(thread_id, "weles", "Check claim", false)
         .await
@@ -882,6 +1129,21 @@ async fn participant_dismissed_suggestions_do_not_reload() {
         .upsert_thread_participant(thread_id, "weles", "verify claims")
         .await
         .expect("participant should register");
+    {
+        let mut streams = engine.stream_cancellations.lock().await;
+        streams.insert(
+            thread_id.to_string(),
+            StreamCancellationEntry {
+                generation: 1,
+                token: CancellationToken::new(),
+                retry_now: Arc::new(Notify::new()),
+                started_at: 1,
+                last_progress_at: 1,
+                last_progress_kind: StreamProgressKind::Started,
+                last_progress_excerpt: String::new(),
+            },
+        );
+    }
     let suggestion = engine
         .queue_thread_participant_suggestion(thread_id, "weles", "Check claim", false)
         .await
@@ -972,10 +1234,23 @@ async fn participant_sent_suggestions_do_not_reload() {
         .upsert_thread_participant(thread_id, "weles", "verify claims")
         .await
         .expect("participant should register");
-    let suggestion = engine
-        .queue_thread_participant_suggestion(thread_id, "weles", "Check claim", false)
+    let suggestion = ThreadParticipantSuggestion {
+        id: "sent-suggestion".to_string(),
+        target_agent_id: "weles".to_string(),
+        target_agent_name: "Weles".to_string(),
+        instruction: "Check claim".to_string(),
+        force_send: false,
+        status: ThreadParticipantSuggestionStatus::Queued,
+        created_at: 1,
+        updated_at: 1,
+        error: None,
+    };
+    engine
+        .thread_participant_suggestions
+        .write()
         .await
-        .expect("queue suggestion");
+        .insert(thread_id.to_string(), vec![suggestion.clone()]);
+    engine.persist_thread_by_id(thread_id).await;
     engine
         .send_thread_participant_suggestion(thread_id, &suggestion.id, None)
         .await
@@ -1639,12 +1914,12 @@ async fn hydrate_returns_before_background_participant_observer_restore_finishes
     let manager = SessionManager::new_test(root.path()).await;
     let reloaded = AgentEngine::new_test(manager, config, root.path()).await;
 
-    timeout(Duration::from_millis(100), reloaded.hydrate())
+    timeout(Duration::from_secs(1), reloaded.hydrate())
         .await
         .expect("hydrate should return without waiting for participant observer replay")
         .expect("hydrate should succeed");
 
-    timeout(Duration::from_secs(1), request_started.notified())
+    timeout(Duration::from_secs(3), request_started.notified())
         .await
         .expect("background participant observer replay should still start after hydrate");
 

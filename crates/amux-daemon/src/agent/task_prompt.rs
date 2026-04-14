@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Task prompt building and session resolution.
 
 use std::sync::Arc;
@@ -387,15 +389,17 @@ mod tests {
 
         let builtin_root = skills_dir(&agent_data_dir);
         assert!(
-            builtin_root.join("README.md").exists(),
-            "expected built-in skills seed to copy the repo skills README"
+            builtin_root
+                .join("development")
+                .join("superpowers")
+                .join("systematic-debugging")
+                .join("SKILL.md")
+                .exists(),
+            "expected built-in skills seed to copy nested skill entrypoints"
         );
         assert!(
-            builtin_root
-                .join("operating")
-                .join("thread-compaction.md")
-                .exists(),
-            "expected built-in skills seed to copy nested skill docs"
+            builtin_root.join("tamux-mcp").join("README.md").exists(),
+            "expected built-in skills seed to copy nested markdown docs"
         );
     }
 
@@ -404,7 +408,12 @@ mod tests {
         let expected = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills");
         assert_eq!(builtin_skills_source_dir(), expected);
         assert!(
-            builtin_skills_source_dir().join("README.md").exists(),
+            builtin_skills_source_dir()
+                .join("development")
+                .join("superpowers")
+                .join("systematic-debugging")
+                .join("SKILL.md")
+                .exists(),
             "expected built-in skills source dir to resolve to the repo skills tree"
         );
     }

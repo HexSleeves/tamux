@@ -68,6 +68,7 @@ async fn watcher_rename_and_delete_invalidate_compiled_documents() -> AnyResult<
 
     assert!(mesh
         .pending_recompile_jobs()
+        .await
         .iter()
         .any(|job| job.kind.is_invalidation()));
 
@@ -108,10 +109,10 @@ async fn compile_version_or_trust_changes_trigger_recompile() -> AnyResult<()> {
     let mesh = sample_persistent_mesh_store_named("compile-version-trust").await;
     mesh.upsert_document(sample_skill_mesh_document()).await?;
 
-    mesh.bump_compile_version_for_tests();
-    mesh.update_trust_inputs_for_tests();
+    mesh.bump_compile_version_for_tests().await;
+    mesh.update_trust_inputs_for_tests().await;
 
-    assert!(!mesh.pending_recompile_jobs().is_empty());
+    assert!(!mesh.pending_recompile_jobs().await.is_empty());
 
     Ok(())
 }

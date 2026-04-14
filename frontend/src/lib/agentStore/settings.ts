@@ -70,6 +70,7 @@ export interface AgentSettings {
   "z.ai-coding-plan": AgentProviderConfig;
   arcee: AgentProviderConfig;
   nvidia: AgentProviderConfig;
+  "nous-portal": AgentProviderConfig;
   openrouter: AgentProviderConfig;
   cerebras: AgentProviderConfig;
   together: AgentProviderConfig;
@@ -80,6 +81,7 @@ export interface AgentSettings {
   minimax: AgentProviderConfig;
   "minimax-coding-plan": AgentProviderConfig;
   "alibaba-coding-plan": AgentProviderConfig;
+  "xiaomi-mimo-token-plan": AgentProviderConfig;
   "opencode-zen": AgentProviderConfig;
   custom: AgentProviderConfig;
   enable_bash_tool: boolean;
@@ -169,6 +171,7 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   "z.ai-coding-plan": { base_url: "https://api.z.ai/api/coding/paas/v4", model: "glm-5", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   arcee: { base_url: "https://api.arcee.ai/api/v1", model: "trinity-large-thinking", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: 256_000 },
   nvidia: { base_url: "https://integrate.api.nvidia.com/v1", model: "minimaxai/minimax-m2.7", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  "nous-portal": { base_url: "https://inference-api.nousresearch.com/v1", model: "nousresearch/hermes-4-70b", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   openrouter: { base_url: "https://openrouter.ai/api/v1", model: "arcee-ai/trinity-large-thinking", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   cerebras: { base_url: "https://api.cerebras.ai/v1", model: "llama-3.3-70b", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   together: { base_url: "https://api.together.xyz/v1", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
@@ -179,6 +182,7 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   minimax: { base_url: "https://api.minimax.io/anthropic", model: "MiniMax-M1-80k", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   "minimax-coding-plan": { base_url: "https://api.minimax.io/anthropic", model: "MiniMax-M2.7", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   "alibaba-coding-plan": { base_url: "https://coding-intl.dashscope.aliyuncs.com/v1", model: "qwen3.6-plus", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  "xiaomi-mimo-token-plan": { base_url: "https://api.xiaomimimo.com/v1", model: "mimo-v2-pro", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   "opencode-zen": { base_url: "https://opencode.ai/zen/v1", model: "claude-sonnet-4-5", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   custom: { base_url: "", model: "", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "responses", auth_source: "api_key", context_window_tokens: 128_000 },
   enable_bash_tool: true,
@@ -428,7 +432,9 @@ export function normalizeAgentSettingsFromSource(source: DiskAgentSettings): Age
     "kimi-coding-plan": providerConfigFromRaw("kimi-coding-plan", source),
     "z.ai": providerConfigFromRaw("z.ai", source),
     "z.ai-coding-plan": providerConfigFromRaw("z.ai-coding-plan", source),
+    arcee: providerConfigFromRaw("arcee", source),
     nvidia: providerConfigFromRaw("nvidia", source),
+    "nous-portal": providerConfigFromRaw("nous-portal", source),
     openrouter: providerConfigFromRaw("openrouter", source),
     cerebras: providerConfigFromRaw("cerebras", source),
     together: providerConfigFromRaw("together", source),
@@ -439,6 +445,7 @@ export function normalizeAgentSettingsFromSource(source: DiskAgentSettings): Age
     minimax: providerConfigFromRaw("minimax", source),
     "minimax-coding-plan": providerConfigFromRaw("minimax-coding-plan", source),
     "alibaba-coding-plan": providerConfigFromRaw("alibaba-coding-plan", source),
+    "xiaomi-mimo-token-plan": providerConfigFromRaw("xiaomi-mimo-token-plan", source),
     "opencode-zen": providerConfigFromRaw("opencode-zen", source),
     custom: providerConfigFromRaw("custom", source),
     system_prompt: source.system_prompt ?? DEFAULT_AGENT_SETTINGS.system_prompt,
