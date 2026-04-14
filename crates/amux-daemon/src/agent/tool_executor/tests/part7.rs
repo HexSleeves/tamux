@@ -7462,3 +7462,302 @@ async fn search_memory_deduplicates_deeper_graph_neighbors_reached_from_multiple
         "shared deeper node should surface only once in search results even when reachable from multiple structural seeds"
     );
 }
+
+#[tokio::test]
+async fn read_memory_prefers_stronger_edge_when_shared_neighbor_is_reached_multiple_times() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+    let thread_id = "thread-read-memory-prefers-stronger-edge-shared-neighbor";
+    let agent_data_dir = root.path().join("agent");
+
+    let paths = write_scope_memory_files(
+        &agent_data_dir,
+        crate::agent::agent_identity::MAIN_AGENT_ID,
+        "# Soul\n\n- Stable soul fact\n",
+        "# Memory\n\n- Stable memory fact\n",
+        "# User\n\n- Stable user fact\n",
+    );
+    let memory = current_scope_memory(&agent_data_dir).await;
+    engine
+        .set_thread_memory_injection_state(thread_id, build_matching_injection_state(&memory, &paths))
+        .await;
+    engine.thread_structural_memories.write().await.insert(
+        thread_id.to_string(),
+        crate::agent::context::structural_memory::ThreadStructuralMemory {
+            observed_files: vec![
+                crate::agent::context::structural_memory::ObservedFileNode {
+                    node_id: "node:file:src/lib.rs".to_string(),
+                    relative_path: "src/lib.rs".to_string(),
+                },
+                crate::agent::context::structural_memory::ObservedFileNode {
+                    node_id: "node:file:src/main.rs".to_string(),
+                    relative_path: "src/main.rs".to_string(),
+                },
+            ],
+            ..Default::default()
+        },
+    );
+    engine
+        .history
+        .upsert_memory_node(
+            "node:file:src/lib.rs",
+            "src/lib.rs",
+            "file",
+            Some("observed file one"),
+            1_717_181_301,
+        )
+        .await
+        .expect("persist first file node");
+    engine
+        .history
+        .upsert_memory_node(
+            "node:file:src/main.rs",
+            "src/main.rs",
+            "file",
+            Some("observed file two"),
+            1_717_181_302,
+        )
+        .await
+        .expect("persist second file node");
+    engine
+        .history
+        .upsert_memory_node(
+            "node:task:weighted-shared-neighbor",
+            "weighted-shared-neighbor",
+            "task",
+            Some("shared neighbor for edge weight preference"),
+            1_717_181_303,
+        )
+        .await
+        .expect("persist shared neighbor node");
+    engine
+        .history
+        .upsert_memory_edge(
+            "node:file:src/lib.rs",
+            "node:task:weighted-shared-neighbor",
+            "weak_file_supports_task",
+            1.0,
+            1_717_181_304,
+        )
+        .await
+        .expect("persist weaker edge first");
+    engine
+        .history
+        .upsert_memory_edge(
+            "node:file:src/main.rs",
+            "node:task:weighted-shared-neighbor",
+            "strong_file_supports_task",
+            5.0,
+            1_717_181_305,
+        )
+        .await
+        .expect("persist stronger edge second");
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-read-memory-prefers-stronger-edge-shared-neighbor".to_string(),
+        ToolFunction {
+            name: "read_memory".to_string(),
+            arguments: serde_json::json!({
+                "limit_per_layer": 8,
+                "include_thread_structural_memory": true
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        thread_id,
+        None,
+        &manager,
+        None,
+        &event_tx,
+        &agent_data_dir,
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(!result.is_error, "read_memory should succeed: {}", result.content);
+    let payload: serde_json::Value =
+        serde_json::from_str(&result.content).expect("read_memory should return JSON");
+    let neighbors = payload
+        .get("results")
+        .and_then(|value| value.get("thread_structural_memory"))
+        .and_then(|value| value.get("graph_neighbors"))
+        .and_then(|value| value.as_array())
+        .expect("graph neighbors should be present");
+    let retained = neighbors
+        .iter()
+        .find(|item| {
+            item.get("node_id").and_then(|value| value.as_str())
+                == Some("node:task:weighted-shared-neighbor")
+        })
+        .expect("shared neighbor should be present once");
+    assert_eq!(
+        retained
+            .get("relation_type")
+            .and_then(|value| value.as_str()),
+        Some("strong_file_supports_task"),
+        "when a shared neighbor is reachable multiple times, the stronger edge should determine the retained relation"
+    );
+}
+
+#[tokio::test]
+async fn search_memory_prefers_stronger_edge_when_shared_neighbor_is_reached_multiple_times() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+    let thread_id = "thread-search-memory-prefers-stronger-edge-shared-neighbor";
+    let agent_data_dir = root.path().join("agent");
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        make_thread(
+            thread_id,
+            Some(crate::agent::agent_identity::MAIN_AGENT_NAME),
+            "Search memory prefers stronger edge shared neighbor",
+            false,
+            1,
+            1,
+            vec![crate::agent::types::AgentMessage::user("search stronger edge shared neighbor", 1)],
+        ),
+    );
+
+    write_scope_memory_files(
+        &agent_data_dir,
+        crate::agent::agent_identity::MAIN_AGENT_ID,
+        "# Soul\n\n- Stable soul fact\n",
+        "# Memory\n\n- Stable memory fact\n",
+        "# User\n\n- Stable user fact\n",
+    );
+    engine.thread_structural_memories.write().await.insert(
+        thread_id.to_string(),
+        crate::agent::context::structural_memory::ThreadStructuralMemory {
+            observed_files: vec![
+                crate::agent::context::structural_memory::ObservedFileNode {
+                    node_id: "node:file:src/lib.rs".to_string(),
+                    relative_path: "src/lib.rs".to_string(),
+                },
+                crate::agent::context::structural_memory::ObservedFileNode {
+                    node_id: "node:file:src/main.rs".to_string(),
+                    relative_path: "src/main.rs".to_string(),
+                },
+            ],
+            ..Default::default()
+        },
+    );
+    engine
+        .history
+        .upsert_memory_node(
+            "node:file:src/lib.rs",
+            "src/lib.rs",
+            "file",
+            Some("observed file one"),
+            1_717_181_401,
+        )
+        .await
+        .expect("persist first file node");
+    engine
+        .history
+        .upsert_memory_node(
+            "node:file:src/main.rs",
+            "src/main.rs",
+            "file",
+            Some("observed file two"),
+            1_717_181_402,
+        )
+        .await
+        .expect("persist second file node");
+    engine
+        .history
+        .upsert_memory_node(
+            "node:task:weighted-search-shared-neighbor",
+            "weighted-search-shared-neighbor",
+            "task",
+            Some("shared search neighbor unique-weighted-edge-needle"),
+            1_717_181_403,
+        )
+        .await
+        .expect("persist shared neighbor node");
+    engine
+        .history
+        .upsert_memory_edge(
+            "node:file:src/lib.rs",
+            "node:task:weighted-search-shared-neighbor",
+            "weak_file_supports_task",
+            1.0,
+            1_717_181_404,
+        )
+        .await
+        .expect("persist weaker edge first");
+    engine
+        .history
+        .upsert_memory_edge(
+            "node:file:src/main.rs",
+            "node:task:weighted-search-shared-neighbor",
+            "strong_file_supports_task",
+            5.0,
+            1_717_181_405,
+        )
+        .await
+        .expect("persist stronger edge second");
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-search-memory-prefers-stronger-edge-shared-neighbor".to_string(),
+        ToolFunction {
+            name: "search_memory".to_string(),
+            arguments: serde_json::json!({
+                "query": "unique-weighted-edge-needle",
+                "limit": 5,
+                "include_base_markdown": false,
+                "include_operator_profile_json": false,
+                "include_operator_model_summary": false,
+                "include_thread_structural_memory": true
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        thread_id,
+        None,
+        &manager,
+        None,
+        &event_tx,
+        &agent_data_dir,
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(!result.is_error, "search_memory should succeed: {}", result.content);
+    let payload: serde_json::Value =
+        serde_json::from_str(&result.content).expect("search_memory should return JSON");
+    let matches = payload
+        .get("matches")
+        .and_then(|value| value.as_array())
+        .expect("search_memory should return matches");
+    let retained = matches
+        .iter()
+        .find(|item| {
+            item.get("layer").and_then(|value| value.as_str()) == Some("thread_structural_memory")
+                && item
+                    .get("source")
+                    .and_then(|value| value.as_str())
+                    == Some("node:task:weighted-search-shared-neighbor")
+        })
+        .expect("shared search neighbor should be present once");
+    assert!(
+        retained
+            .get("snippet")
+            .and_then(|value| value.as_str())
+            .is_some_and(|snippet| snippet.contains("via strong file supports task")),
+        "search result snippet should reflect the stronger retained edge"
+    );
+}

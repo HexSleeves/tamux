@@ -603,10 +603,15 @@ async fn load_thread_memory_graph_neighbors(
                 if structural_refs.iter().any(|existing| existing == &row.node.id) {
                     continue;
                 }
-                let duplicate = neighbors
-                    .iter()
-                    .any(|existing: &crate::history::MemoryGraphNeighborRow| existing.node.id == row.node.id);
-                if duplicate {
+                if let Some(existing) = neighbors
+                    .iter_mut()
+                    .find(|existing: &&mut crate::history::MemoryGraphNeighborRow| {
+                        existing.node.id == row.node.id
+                    })
+                {
+                    if row.via_edge.weight > existing.via_edge.weight {
+                        *existing = row;
+                    }
                     continue;
                 }
                 if !frontier.iter().any(|existing| existing == &row.node.id) {
