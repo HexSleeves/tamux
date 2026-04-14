@@ -230,6 +230,53 @@ async fn skill_variant_consultation_settlement_updates_outcomes_once() -> Result
 }
 
 #[tokio::test]
+async fn cancelled_skill_variant_consultation_does_not_increment_failure_count() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    store.init_schema().await?;
+    let skill = root.join("skills/generated/build-pipeline.md");
+    fs::write(&skill, "# Build pipeline\nRun cargo build.\n")?;
+
+    let record = store.register_skill_document(&skill).await?;
+    let tags = vec!["frontend".to_string()];
+    store
+        .record_skill_variant_consultation(&SkillVariantConsultationRecord {
+            usage_id: "usage-cancelled-1",
+            variant_id: &record.variant_id,
+            thread_id: Some("thread-1"),
+            task_id: Some("task-1"),
+            goal_run_id: Some("goal-1"),
+            context_tags: &tags,
+            consulted_at: 100,
+        })
+        .await?;
+
+    let settled = store
+        .settle_skill_variant_usage(
+            Some("thread-1"),
+            Some("task-1"),
+            Some("goal-1"),
+            "cancelled",
+        )
+        .await?;
+    assert_eq!(settled.0, 1);
+    assert_eq!(settled.1, vec!["build-pipeline".to_string()]);
+
+    let refreshed = store
+        .resolve_skill_variant("build-pipeline", &["frontend".to_string()])
+        .await?
+        .expect("variant should resolve");
+    assert_eq!(refreshed.use_count, 1);
+    assert_eq!(refreshed.success_count, 0);
+    assert_eq!(
+        refreshed.failure_count, 0,
+        "cancelled consultations should resolve usage without counting as failures"
+    );
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn rebalance_skill_variants_archives_weak_variant() -> Result<()> {
     let (store, root) = make_test_store().await?;
     store.init_schema().await?;

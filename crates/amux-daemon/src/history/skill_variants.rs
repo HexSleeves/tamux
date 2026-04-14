@@ -90,7 +90,7 @@ impl HistoryStore {
                 )?;
                 if outcome_clone == "success" {
                     *success_counts.entry(variant_id.clone()).or_default() += 1;
-                } else {
+                } else if outcome_clone == "failure" {
                     *failure_counts.entry(variant_id.clone()).or_default() += 1;
                 }
             }
