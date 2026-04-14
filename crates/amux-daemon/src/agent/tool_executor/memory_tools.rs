@@ -600,6 +600,9 @@ async fn load_thread_memory_graph_neighbors(
                 .list_memory_graph_neighbors(&node_id, remaining)
                 .await?;
             for row in rows {
+                if structural_refs.iter().any(|existing| existing == &row.node.id) {
+                    continue;
+                }
                 let duplicate = neighbors.iter().any(|existing: &crate::history::MemoryGraphNeighborRow| {
                     existing.node.id == row.node.id
                         && existing.via_edge.source_node_id == row.via_edge.source_node_id
@@ -609,9 +612,7 @@ async fn load_thread_memory_graph_neighbors(
                 if duplicate {
                     continue;
                 }
-                if !structural_refs.iter().any(|existing| existing == &row.node.id)
-                    && !frontier.iter().any(|existing| existing == &row.node.id)
-                {
+                if !frontier.iter().any(|existing| existing == &row.node.id) {
                     frontier.push(row.node.id.clone());
                 }
                 neighbors.push(row);
