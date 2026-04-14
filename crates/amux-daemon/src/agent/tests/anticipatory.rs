@@ -445,7 +445,10 @@ async fn anticipatory_tick_surfaces_intent_prediction_for_repo_change_context() 
         .expect("expected an intent prediction item");
     assert_eq!(item.thread_id.as_deref(), Some("thread-repo-intent"));
     assert!(item.summary.contains("inspect or test recent repo changes"));
-    assert!(item.bullets.iter().any(|bullet| bullet.contains("repo-linked")));
+    assert!(item
+        .bullets
+        .iter()
+        .any(|bullet| bullet.contains("repo-linked")));
 }
 
 #[tokio::test]
@@ -476,4 +479,112 @@ async fn strained_satisfaction_suppresses_intent_prediction() {
         .items
         .iter()
         .all(|item| item.kind != "intent_prediction"));
+}
+
+#[tokio::test]
+async fn predictive_hydration_populates_prewarm_cache_for_hydrated_thread() {
+    let root = tempdir().unwrap();
+    let repo_root = root.path().join("repo-predictive-cache");
+    std::fs::create_dir_all(&repo_root).unwrap();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("git init");
+    std::fs::write(
+        repo_root.join("Cargo.toml"),
+        "[package]\nname='demo'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    config.anticipatory.predictive_hydration = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let mut goal = sample_goal_run("goal-cache", Some("thread-cache"));
+    goal.status = GoalRunStatus::Running;
+    goal.updated_at = now_millis();
+    engine.goal_runs.lock().await.push_back(goal);
+    engine.thread_work_contexts.write().await.insert(
+        "thread-cache".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-cache".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "Cargo.toml".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some(repo_root.to_string_lossy().to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+
+    engine.run_anticipatory_tick().await;
+
+    let runtime = engine.anticipatory.read().await;
+    let snapshot = runtime
+        .prewarm_cache_by_thread
+        .get("thread-cache")
+        .expect("prewarm cache snapshot for hydrated thread");
+    assert!(snapshot.summary.contains("branch"));
+    assert!(snapshot.summary.contains("context entries 1"));
+}
+
+#[tokio::test]
+async fn intent_prediction_includes_cached_prewarm_summary_when_available() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-cache-bullets"), None)
+        .await
+        .unwrap();
+    engine.thread_work_contexts.write().await.insert(
+        "thread-cache-bullets".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-cache-bullets".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "src/main.rs".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some("/tmp/repo".to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+    engine.anticipatory.write().await.prewarm_cache_by_thread.insert(
+        "thread-cache-bullets".to_string(),
+        AnticipatoryPrewarmSnapshot {
+            summary: "branch main; dirty=true; modified 1; staged 0; untracked 0; ahead 0; behind 0; context entries 1".to_string(),
+        },
+    );
+
+    engine.run_anticipatory_tick().await;
+
+    let items = engine.anticipatory.read().await.items.clone();
+    let item = items
+        .into_iter()
+        .find(|candidate| candidate.kind == "intent_prediction")
+        .expect("expected an intent prediction item");
+    assert!(item
+        .bullets
+        .iter()
+        .any(|bullet| bullet.contains("Cached prewarm:")));
 }

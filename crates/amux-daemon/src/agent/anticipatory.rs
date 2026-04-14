@@ -11,6 +11,11 @@ const RECENT_HEALTH_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 
 type AnticipatoryAdaptationMode = SatisfactionAdaptationMode;
 
+#[derive(Debug, Clone)]
+pub(super) struct AnticipatoryPrewarmSnapshot {
+    pub summary: String,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct AnticipatoryRuntime {
     pub items: Vec<AnticipatoryItem>,
@@ -23,6 +28,7 @@ pub(super) struct AnticipatoryRuntime {
     pub active_attention_goal_run_id: Option<String>,
     pub active_attention_updated_at: Option<u64>,
     pub hydration_by_thread: HashMap<String, u64>,
+    pub prewarm_cache_by_thread: HashMap<String, AnticipatoryPrewarmSnapshot>,
 }
 
 impl AgentEngine {
@@ -117,6 +123,7 @@ impl AgentEngine {
         let now = now_millis();
         for thread_id in threads {
             self.refresh_thread_repo_context(&thread_id).await;
+            self.refresh_anticipatory_prewarm_cache(&thread_id).await;
             self.anticipatory
                 .write()
                 .await
@@ -190,6 +197,7 @@ impl AgentEngine {
 
         for (thread_id, _) in due_threads {
             self.refresh_thread_repo_context(&thread_id).await;
+            self.refresh_anticipatory_prewarm_cache(&thread_id).await;
             self.anticipatory
                 .write()
                 .await
@@ -618,6 +626,12 @@ impl AgentEngine {
         let now = now_millis();
         let attention_thread_id = self.current_attention_target().await;
         let active_surface = self.current_attention_surface().await;
+        let cached_prewarm = {
+            let runtime = self.anticipatory.read().await;
+            attention_thread_id
+                .as_ref()
+                .and_then(|thread_id| runtime.prewarm_cache_by_thread.get(thread_id).cloned())
+        };
         let thread_context = {
             let contexts = self.thread_work_contexts.read().await;
             attention_thread_id
@@ -655,14 +669,18 @@ impl AgentEngine {
                     .iter()
                     .any(|entry| entry.kind == WorkContextEntryKind::RepoChange);
                 if has_repo_change {
-                    predicted_action = Some((
-                        "inspect or test recent repo changes",
-                        0.74,
-                        vec![
-                            format!("{} repo-linked work context item(s) are active.", context.entries.len()),
-                            "Recent repo changes usually lead to verification or inspection next.".to_string(),
-                        ],
-                    ));
+                    let mut bullets = vec![
+                        format!(
+                            "{} repo-linked work context item(s) are active.",
+                            context.entries.len()
+                        ),
+                        "Recent repo changes usually lead to verification or inspection next."
+                            .to_string(),
+                    ];
+                    if let Some(cache) = cached_prewarm.as_ref() {
+                        bullets.push(format!("Cached prewarm: {}", cache.summary));
+                    }
+                    predicted_action = Some(("inspect or test recent repo changes", 0.74, bullets));
                 }
             }
         }
@@ -675,7 +693,8 @@ impl AgentEngine {
                         0.68,
                         vec![
                             "Operator attention is on the conversation surface.".to_string(),
-                            "Continuing the active thread is the most likely immediate next step.".to_string(),
+                            "Continuing the active thread is the most likely immediate next step."
+                                .to_string(),
                         ],
                     ));
                 }
@@ -691,7 +710,12 @@ impl AgentEngine {
             .resolve_anticipatory_route("intent_prediction", None, attention_thread_id.as_deref())
             .await;
         Some(AnticipatoryItem {
-            id: format!("intent_prediction_{}", attention_thread_id.clone().unwrap_or_else(|| "global".to_string())),
+            id: format!(
+                "intent_prediction_{}",
+                attention_thread_id
+                    .clone()
+                    .unwrap_or_else(|| "global".to_string())
+            ),
             kind: "intent_prediction".to_string(),
             title: "Likely Next Action".to_string(),
             summary: format!("Predicted next step: {action}"),
@@ -704,6 +728,52 @@ impl AgentEngine {
             created_at: now,
             updated_at: now,
         })
+    }
+
+    async fn refresh_anticipatory_prewarm_cache(&self, thread_id: &str) {
+        let Some((repo_root, _, _, _)) = self.resolve_thread_repo_root(thread_id).await else {
+            self.anticipatory
+                .write()
+                .await
+                .prewarm_cache_by_thread
+                .remove(thread_id);
+            return;
+        };
+
+        let git = crate::git::get_git_status(&repo_root);
+        let changed_entries = {
+            let contexts = self.thread_work_contexts.read().await;
+            contexts
+                .get(thread_id)
+                .map(|context| {
+                    context
+                        .entries
+                        .iter()
+                        .filter(|entry| entry.kind == WorkContextEntryKind::RepoChange)
+                        .count()
+                })
+                .unwrap_or(0)
+        };
+        let branch = git.branch.unwrap_or_else(|| "unknown".to_string());
+        let summary = format!(
+            "branch {branch}; dirty={}; modified {}; staged {}; untracked {}; ahead {}; behind {}; context entries {}",
+            git.is_dirty,
+            git.modified,
+            git.staged,
+            git.untracked,
+            git.ahead,
+            git.behind,
+            changed_entries,
+        );
+
+        self.anticipatory
+            .write()
+            .await
+            .prewarm_cache_by_thread
+            .insert(
+                thread_id.to_string(),
+                AnticipatoryPrewarmSnapshot { summary },
+            );
     }
 }
 

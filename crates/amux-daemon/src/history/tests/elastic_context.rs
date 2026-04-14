@@ -1,4 +1,5 @@
 use super::*;
+use crate::history::schema_helpers::table_has_column;
 
 #[tokio::test]
 async fn init_schema_adds_elastic_context_tables_to_legacy_db() -> Result<()> {

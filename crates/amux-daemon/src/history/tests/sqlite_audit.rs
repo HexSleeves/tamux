@@ -1,4 +1,5 @@
 use super::*;
+use crate::history::schema_helpers::table_has_column;
 
 /// FOUN-01: WAL journal mode is active after HistoryStore construction.
 #[tokio::test]

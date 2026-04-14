@@ -3623,10 +3623,11 @@ fn critique_arbiter_can_return_proceed_with_modifications_for_aggressive_operato
         overall_confidence: 0.58,
     };
 
-    let resolution = crate::agent::critique::arbiter::resolve(
+    let resolution = crate::agent::critique::arbiter::resolve_with_satisfaction_label(
         &advocate,
         &critic,
         crate::agent::operator_model::RiskTolerance::Aggressive,
+        None,
     );
 
     assert_eq!(
@@ -4203,10 +4204,11 @@ async fn strained_satisfaction_biases_close_critique_toward_proceed_with_modific
         overall_confidence: 0.62,
     };
 
-    let baseline = crate::agent::critique::arbiter::resolve(
+    let baseline = crate::agent::critique::arbiter::resolve_with_satisfaction_label(
         &advocate,
         &critic,
         crate::agent::operator_model::RiskTolerance::Moderate,
+        None,
     );
     assert_eq!(baseline.decision, crate::agent::critique::types::Decision::Defer);
 

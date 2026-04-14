@@ -1,4 +1,5 @@
 use super::*;
+use crate::history::schema_helpers::table_has_column;
 
 #[tokio::test]
 async fn init_schema_migrates_legacy_agent_tasks_before_goal_run_index() -> Result<()> {

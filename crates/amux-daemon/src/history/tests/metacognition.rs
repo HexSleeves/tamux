@@ -1,4 +1,5 @@
 use super::*;
+use crate::history::schema_helpers::table_has_column;
 
 #[tokio::test]
 async fn init_schema_adds_meta_cognition_tables() -> Result<()> {
@@ -193,7 +194,10 @@ async fn init_schema_adds_implicit_feedback_tables() -> Result<()> {
     assert_eq!(status.2.as_deref(), Some("idx_implicit_signals_session_ts"));
     assert!(status.3);
     assert!(status.4);
-    assert_eq!(status.5.as_deref(), Some("idx_satisfaction_scores_session_ts"));
+    assert_eq!(
+        status.5.as_deref(),
+        Some("idx_satisfaction_scores_session_ts")
+    );
 
     std::fs::remove_dir_all(root)?;
     Ok(())
@@ -236,7 +240,9 @@ async fn implicit_feedback_rows_round_trip() -> Result<()> {
     assert_eq!(signals[0].signal_type, "tool_fallback");
     assert!((signals[0].weight + 0.12).abs() < f64::EPSILON);
 
-    let scores = store.list_satisfaction_scores("thread-implicit", 10).await?;
+    let scores = store
+        .list_satisfaction_scores("thread-implicit", 10)
+        .await?;
     assert_eq!(scores.len(), 1);
     assert_eq!(scores[0].label, "healthy");
     assert_eq!(scores[0].signal_count, 2);
