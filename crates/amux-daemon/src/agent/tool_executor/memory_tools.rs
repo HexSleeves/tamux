@@ -603,12 +603,9 @@ async fn load_thread_memory_graph_neighbors(
                 if structural_refs.iter().any(|existing| existing == &row.node.id) {
                     continue;
                 }
-                let duplicate = neighbors.iter().any(|existing: &crate::history::MemoryGraphNeighborRow| {
-                    existing.node.id == row.node.id
-                        && existing.via_edge.source_node_id == row.via_edge.source_node_id
-                        && existing.via_edge.target_node_id == row.via_edge.target_node_id
-                        && existing.via_edge.relation_type == row.via_edge.relation_type
-                });
+                let duplicate = neighbors
+                    .iter()
+                    .any(|existing: &crate::history::MemoryGraphNeighborRow| existing.node.id == row.node.id);
                 if duplicate {
                     continue;
                 }
