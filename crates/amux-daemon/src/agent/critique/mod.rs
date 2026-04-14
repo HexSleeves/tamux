@@ -272,6 +272,13 @@ impl AgentEngine {
             .await
             .risk_fingerprint
             .risk_tolerance;
+        let satisfaction_label = self
+            .operator_model
+            .read()
+            .await
+            .operator_satisfaction
+            .label
+            .clone();
         let (grounded_advocate_points, grounded_critic_points) =
             self.critique_grounded_argument_points(tool_name).await;
         let (
@@ -292,7 +299,12 @@ impl AgentEngine {
             reasons,
             [grounded_critic_points, learned_critic_points].concat(),
         );
-        let mut resolution = arbiter::resolve(&advocate_argument, &critic_argument, risk_tolerance);
+        let mut resolution = arbiter::resolve_with_satisfaction_label(
+            &advocate_argument,
+            &critic_argument,
+            risk_tolerance,
+            Some(&satisfaction_label),
+        );
         if matches!(resolution.decision, Decision::ProceedWithModifications) {
             for modification in learned_modifications {
                 if !resolution
@@ -547,11 +559,22 @@ impl AgentEngine {
         resolution: &Resolution,
         risk_tolerance: RiskTolerance,
     ) -> bool {
+        let satisfaction_label = self
+            .operator_model
+            .try_read()
+            .map(|model| model.operator_satisfaction.label.clone())
+            .unwrap_or_default();
         match resolution.decision {
             Decision::Reject => true,
             Decision::Defer => true,
             Decision::ProceedWithModifications => {
-                !matches!(risk_tolerance, RiskTolerance::Aggressive)
+                if satisfaction_label == "strained" {
+                    false
+                } else if satisfaction_label == "fragile" {
+                    matches!(risk_tolerance, RiskTolerance::Conservative)
+                } else {
+                    !matches!(risk_tolerance, RiskTolerance::Aggressive)
+                }
             }
             Decision::Proceed => false,
         }

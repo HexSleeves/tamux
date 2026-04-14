@@ -112,21 +112,44 @@ pub(crate) fn resolve(
     critic: &Argument,
     risk_tolerance: RiskTolerance,
 ) -> Resolution {
+    resolve_with_satisfaction_label(advocate, critic, risk_tolerance, None)
+}
+
+pub(crate) fn resolve_with_satisfaction_label(
+    advocate: &Argument,
+    critic: &Argument,
+    risk_tolerance: RiskTolerance,
+    satisfaction_label: Option<&str>,
+) -> Resolution {
     let advocate_weight: f64 = advocate.points.iter().map(|point| point.weight).sum();
     let critic_weight: f64 = critic.points.iter().map(|point| point.weight).sum();
     let net = advocate_weight - critic_weight;
-    let proceed_threshold = match risk_tolerance {
+    let mut proceed_threshold: f64 = match risk_tolerance {
         RiskTolerance::Aggressive => 0.20,
         RiskTolerance::Moderate => 0.45,
         RiskTolerance::Conservative => 0.70,
     };
-    let defer_band = match risk_tolerance {
+    let mut defer_band: f64 = match risk_tolerance {
         RiskTolerance::Aggressive => 0.18,
         RiskTolerance::Moderate => 0.25,
         RiskTolerance::Conservative => 0.32,
     };
 
-    let decision = if net >= proceed_threshold {
+    match satisfaction_label.unwrap_or_default() {
+        "strained" => {
+            proceed_threshold -= 0.10;
+            defer_band -= 0.08;
+        }
+        "fragile" => {
+            proceed_threshold -= 0.05;
+            defer_band -= 0.04;
+        }
+        _ => {}
+    }
+    proceed_threshold = proceed_threshold.max(0.05);
+    defer_band = defer_band.max(0.08);
+
+    let mut decision = if net >= proceed_threshold {
         Decision::Proceed
     } else if net.abs() <= defer_band {
         Decision::Defer
@@ -136,11 +159,28 @@ pub(crate) fn resolve(
         Decision::Reject
     };
 
-    let modifications = if matches!(decision, Decision::ProceedWithModifications) {
+    let mut modifications = if matches!(decision, Decision::ProceedWithModifications) {
         recommended_modifications(critic, 2)
     } else {
         Vec::new()
     };
+    match satisfaction_label.unwrap_or_default() {
+        "strained" if matches!(decision, Decision::Defer | Decision::Reject) => {
+            let candidate_modifications = recommended_modifications(critic, 2);
+            if !candidate_modifications.is_empty() {
+                decision = Decision::ProceedWithModifications;
+                modifications = candidate_modifications;
+            }
+        }
+        "fragile" if matches!(decision, Decision::Defer) => {
+            let candidate_modifications = recommended_modifications(critic, 2);
+            if !candidate_modifications.is_empty() {
+                decision = Decision::ProceedWithModifications;
+                modifications = candidate_modifications;
+            }
+        }
+        _ => {}
+    }
     let directives = directives_for_modifications(&modifications);
 
     let synthesis = match decision {

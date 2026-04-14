@@ -4130,6 +4130,117 @@ async fn critique_preflight_learns_recent_same_tool_directives_into_resolution()
 }
 
 #[test]
+fn critique_requires_blocking_review_relaxes_proceed_with_modifications_when_satisfaction_is_strained() {
+    let engine = tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(async {
+            let root = tempdir().expect("tempdir should succeed");
+            let manager = SessionManager::new_test(root.path()).await;
+            AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await
+        });
+
+    let resolution = crate::agent::critique::types::Resolution {
+        decision: crate::agent::critique::types::Decision::ProceedWithModifications,
+        synthesis: "Proceed with modifications".to_string(),
+        risk_score: 0.52,
+        confidence: 0.61,
+        modifications: vec!["Use a safer narrower path".to_string()],
+        directives: vec![],
+    };
+
+    let mut runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let blocked = runtime.block_on(async {
+        {
+            let mut model = engine.operator_model.write().await;
+            model.risk_fingerprint.risk_tolerance = crate::agent::operator_model::RiskTolerance::Moderate;
+            model.operator_satisfaction.label = "strained".to_string();
+            model.operator_satisfaction.score = 0.21;
+        }
+        engine.critique_requires_blocking_review(
+            &resolution,
+            crate::agent::operator_model::RiskTolerance::Moderate,
+        )
+    });
+
+    assert!(
+        !blocked,
+        "strained satisfaction should reduce critique friction for proceed_with_modifications"
+    );
+}
+
+#[tokio::test]
+async fn strained_satisfaction_biases_close_critique_toward_proceed_with_modifications() {
+    let advocate = crate::agent::critique::types::Argument {
+        role: crate::agent::critique::types::Role::Advocate,
+        points: vec![
+            crate::agent::critique::types::ArgumentPoint {
+                claim: "Workflow value is real".to_string(),
+                weight: 0.58,
+                evidence: vec!["test:value".to_string()],
+            },
+            crate::agent::critique::types::ArgumentPoint {
+                claim: "Scope remains somewhat bounded".to_string(),
+                weight: 0.16,
+                evidence: vec!["test:bounded".to_string()],
+            },
+        ],
+        overall_confidence: 0.6,
+    };
+    let critic = crate::agent::critique::types::Argument {
+        role: crate::agent::critique::types::Role::Critic,
+        points: vec![
+            crate::agent::critique::types::ArgumentPoint {
+                claim: "Safer constraints are still warranted".to_string(),
+                weight: 0.64,
+                evidence: vec!["test:constraints".to_string()],
+            },
+            crate::agent::critique::types::ArgumentPoint {
+                claim: "Extra caution would help".to_string(),
+                weight: 0.14,
+                evidence: vec!["test:caution".to_string()],
+            },
+        ],
+        overall_confidence: 0.62,
+    };
+
+    let baseline = crate::agent::critique::arbiter::resolve(
+        &advocate,
+        &critic,
+        crate::agent::operator_model::RiskTolerance::Moderate,
+    );
+    assert_eq!(baseline.decision, crate::agent::critique::types::Decision::Defer);
+
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    {
+        let mut model = engine.operator_model.write().await;
+        model.risk_fingerprint.risk_tolerance = crate::agent::operator_model::RiskTolerance::Moderate;
+        model.operator_satisfaction.label = "strained".to_string();
+        model.operator_satisfaction.score = 0.19;
+    }
+
+    let session = engine
+        .run_critique_preflight(
+            "action-strained-satisfaction-bias",
+            "bash_command",
+            "Run a medium-risk shell command with mitigations available.",
+            &["shell command requests network access".to_string()],
+            Some("thread-strained-satisfaction-bias"),
+            None,
+        )
+        .await
+        .expect("critique preflight should succeed");
+
+    let resolution = session.resolution.expect("resolution should exist");
+    assert_eq!(
+        resolution.decision,
+        crate::agent::critique::types::Decision::ProceedWithModifications,
+        "strained satisfaction should prefer a narrower modification path over extra blocking friction"
+    );
+}
+
+#[test]
 fn annotate_review_with_critique_records_applied_adjustments() {
     let mut review = crate::agent::types::WelesReviewMeta {
         weles_reviewed: false,
