@@ -16,10 +16,76 @@ fn top_claims(argument: &Argument, limit: usize) -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn recommended_modifications(argument: &Argument, limit: usize) -> Vec<String> {
+    let mut points = argument.points.clone();
+    points.sort_by(|a, b| {
+        let a_tool_specific = a
+            .evidence
+            .iter()
+            .any(|evidence| evidence.starts_with("tool_specific:"));
+        let b_tool_specific = b
+            .evidence
+            .iter()
+            .any(|evidence| evidence.starts_with("tool_specific:"));
+        b_tool_specific
+            .cmp(&a_tool_specific)
+            .then_with(|| {
+                b.weight
+                    .partial_cmp(&a.weight)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    points
+        .into_iter()
+        .take(limit)
+        .map(|point| point.claim)
+        .collect()
+}
+
 pub(crate) fn directives_for_modifications(modifications: &[String]) -> Vec<CritiqueDirective> {
     let mut directives = Vec::new();
     for modification in modifications {
         let normalized = modification.trim().to_ascii_lowercase();
+        if (normalized.contains("disable network access")
+            || normalized.contains("disable network"))
+            && !directives.contains(&CritiqueDirective::DisableNetwork)
+        {
+            directives.push(CritiqueDirective::DisableNetwork);
+        }
+        if (normalized.contains("enable sandboxing")
+            || normalized.contains("enable sandbox"))
+            && !directives.contains(&CritiqueDirective::EnableSandbox)
+        {
+            directives.push(CritiqueDirective::EnableSandbox);
+        }
+        if (normalized.contains("downgrade any yolo security level")
+            || normalized.contains("downgrade security level"))
+            && !directives.contains(&CritiqueDirective::DowngradeSecurityLevel)
+        {
+            directives.push(CritiqueDirective::DowngradeSecurityLevel);
+        }
+        if (normalized.contains("strip explicit messaging targets")
+            || normalized.contains("strip explicit message targets")
+            || normalized.contains("strip explicit messaging target"))
+            && !directives.contains(&CritiqueDirective::StripExplicitMessagingTargets)
+        {
+            directives.push(CritiqueDirective::StripExplicitMessagingTargets);
+        }
+        if (normalized.contains("broadcast mentions")
+            || normalized.contains("broadcast mention")
+            || normalized.contains("@everyone")
+            || normalized.contains("@here"))
+            && !directives.contains(&CritiqueDirective::StripBroadcastMentions)
+        {
+            directives.push(CritiqueDirective::StripBroadcastMentions);
+        }
+        if (normalized.contains("narrow the sensitive file path")
+            || normalized.contains("narrow any sensitive file path")
+            || normalized.contains("minimal basename"))
+            && !directives.contains(&CritiqueDirective::NarrowSensitiveFilePath)
+        {
+            directives.push(CritiqueDirective::NarrowSensitiveFilePath);
+        }
         if (normalized.contains("typical working window")
             || normalized.contains("schedule this background task")
             || normalized.contains("schedule this delegated work"))
@@ -71,7 +137,7 @@ pub(crate) fn resolve(
     };
 
     let modifications = if matches!(decision, Decision::ProceedWithModifications) {
-        top_claims(critic, 2)
+        recommended_modifications(critic, 2)
     } else {
         Vec::new()
     };

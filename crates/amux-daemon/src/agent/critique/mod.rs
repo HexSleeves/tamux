@@ -19,20 +19,6 @@ fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
-fn top_claims(argument: &self::types::Argument, limit: usize) -> Vec<String> {
-    let mut points = argument.points.clone();
-    points.sort_by(|a, b| {
-        b.weight
-            .partial_cmp(&a.weight)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    points
-        .into_iter()
-        .take(limit)
-        .map(|point| point.claim)
-        .collect()
-}
-
 impl AgentEngine {
     pub(crate) async fn run_critique_preflight(
         &self,
@@ -70,7 +56,7 @@ impl AgentEngine {
             if matches!(resolution.decision, Decision::ProceedWithModifications)
                 && resolution.modifications.is_empty()
             {
-                let mut critic_guidance = top_claims(&critic_argument, 2);
+                let mut critic_guidance = arbiter::recommended_modifications(&critic_argument, 2);
                 if critic_guidance.is_empty() {
                     critic_guidance
                         .push("Apply the critic's safer constraints before execution.".to_string());
