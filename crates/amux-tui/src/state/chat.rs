@@ -152,6 +152,10 @@ fn merge_thread_window(
     )
 }
 
+fn should_replace_thread_window(existing: &AgentThread, incoming: &AgentThread) -> bool {
+    incoming.total_message_count < existing.total_message_count
+}
+
 fn trim_thread_to_latest_page(thread: &mut AgentThread, page_size: usize) -> usize {
     normalize_thread_window(thread);
     if thread.messages.len() <= page_size {
@@ -922,8 +926,9 @@ impl ChatState {
                 normalize_thread_window(&mut incoming);
                 if let Some(existing) = self.threads.iter_mut().find(|t| t.id == incoming.id) {
                     normalize_thread_window(existing);
+                    let replace_existing_window = should_replace_thread_window(existing, &incoming);
                     let (merged, merged_start, merged_end, disjoint) =
-                        if existing.messages.is_empty() {
+                        if replace_existing_window || existing.messages.is_empty() {
                             (
                                 incoming.messages.clone(),
                                 incoming.loaded_message_start,
@@ -934,9 +939,13 @@ impl ChatState {
                             merge_thread_window(existing, &incoming)
                         };
                     existing.messages = merged;
-                    existing.total_message_count = incoming
-                        .total_message_count
-                        .max(existing.total_message_count);
+                    existing.total_message_count = if replace_existing_window {
+                        incoming.total_message_count
+                    } else {
+                        incoming
+                            .total_message_count
+                            .max(existing.total_message_count)
+                    };
                     existing.loaded_message_start = merged_start;
                     existing.loaded_message_end = merged_end.max(existing.total_message_count);
                     existing.older_page_pending = false;
