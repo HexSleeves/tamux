@@ -242,10 +242,16 @@ impl AgentEngine {
             .map(crate::agent::emergent_protocol::compressor::compress_pattern_key)
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| entry.context_signature.normalized_pattern.clone());
+        let observed_signal_kind = crate::agent::emergent_protocol::decoder::classify_pattern_key(
+            &normalized_pattern,
+        );
 
         let role_matches = current_role == entry.context_signature.source_role;
         let pattern_matches = normalized_pattern == entry.context_signature.normalized_pattern;
-        let context_match = role_matches && pattern_matches;
+        let signal_kind_matches = observed_signal_kind
+            .map(|kind| kind == entry.context_signature.signal_kind)
+            .unwrap_or(false);
+        let context_match = role_matches && pattern_matches && signal_kind_matches;
 
         if !context_match {
             let mut mismatches = Vec::new();
@@ -259,6 +265,13 @@ impl AgentEngine {
                 mismatches.push(format!(
                     "pattern_mismatch:{}!= {}",
                     normalized_pattern, entry.context_signature.normalized_pattern
+                ));
+            }
+            if !signal_kind_matches {
+                mismatches.push(format!(
+                    "signal_kind_mismatch:{:?}!={:?}",
+                    observed_signal_kind,
+                    entry.context_signature.signal_kind
                 ));
             }
             let fallback_reason = mismatches.join(";");
@@ -874,5 +887,118 @@ mod tests {
             .expect("usage entries should be an array");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["success"].as_bool(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn decode_returns_fallback_on_signal_kind_mismatch_even_when_pattern_is_present() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread-emergent-decode-signal-kind-fallback";
+
+        let entry = ProtocolRegistryEntry {
+            protocol_id: "proto_manual_signal_kind".to_string(),
+            token: "@proto_signalkind".to_string(),
+            description: "Manual protocol for signal-kind validation".to_string(),
+            agent_a: "user".to_string(),
+            agent_b: "assistant".to_string(),
+            thread_id: thread_id.to_string(),
+            normalized_pattern: "continue".to_string(),
+            trigger_phrase: "continue".to_string(),
+            signal_kind: types::ProtocolSignalKind::RepeatedContinuationCue,
+            context_signature: types::ContextSignature {
+                thread_id: thread_id.to_string(),
+                normalized_pattern: "continue".to_string(),
+                trigger_phrase: "continue".to_string(),
+                signal_kind: types::ProtocolSignalKind::RepeatedContinuationCue,
+                source_role: "user".to_string(),
+                target_role: "assistant".to_string(),
+            },
+            steps: vec![types::ProtocolStep {
+                step_index: 0,
+                intent: "expand continue cue".to_string(),
+                tool: None,
+                args_template: serde_json::json!({}),
+            }],
+            created_at_ms: 1,
+            activated_at_ms: 1,
+            last_used_ms: None,
+            usage_count: 0,
+            success_rate: 1.0,
+            source_candidate_id: None,
+        };
+
+        engine
+            .persist_protocol_registry_entry(&entry)
+            .await
+            .expect("entry should persist");
+
+        let decoded = engine
+            .decode_thread_protocol_token(thread_id, "@proto_signalkind", Some("user"), Some("ok"))
+            .await
+            .expect("decode should succeed")
+            .expect("entry should decode");
+
+        assert!(!decoded.context_match);
+        assert_eq!(decoded.outcome, types::ProtocolDecodeOutcomeKind::Fallback);
+        assert!(decoded
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("signal_kind_mismatch")));
+    }
+
+    #[tokio::test]
+    async fn decode_matches_when_signal_kind_and_pattern_both_match() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread-emergent-decode-signal-kind-match";
+
+        let entry = ProtocolRegistryEntry {
+            protocol_id: "proto_manual_signal_kind_match".to_string(),
+            token: "@proto_signalkind_match".to_string(),
+            description: "Manual protocol for signal-kind match validation".to_string(),
+            agent_a: "user".to_string(),
+            agent_b: "assistant".to_string(),
+            thread_id: thread_id.to_string(),
+            normalized_pattern: "ok".to_string(),
+            trigger_phrase: "ok".to_string(),
+            signal_kind: types::ProtocolSignalKind::RepeatedAffirmation,
+            context_signature: types::ContextSignature {
+                thread_id: thread_id.to_string(),
+                normalized_pattern: "ok".to_string(),
+                trigger_phrase: "ok".to_string(),
+                signal_kind: types::ProtocolSignalKind::RepeatedAffirmation,
+                source_role: "user".to_string(),
+                target_role: "assistant".to_string(),
+            },
+            steps: vec![types::ProtocolStep {
+                step_index: 0,
+                intent: "expand ok affirmation".to_string(),
+                tool: None,
+                args_template: serde_json::json!({}),
+            }],
+            created_at_ms: 1,
+            activated_at_ms: 1,
+            last_used_ms: None,
+            usage_count: 0,
+            success_rate: 1.0,
+            source_candidate_id: None,
+        };
+
+        engine
+            .persist_protocol_registry_entry(&entry)
+            .await
+            .expect("entry should persist");
+
+        let decoded = engine
+            .decode_thread_protocol_token(thread_id, "@proto_signalkind_match", Some("user"), Some("ok"))
+            .await
+            .expect("decode should succeed")
+            .expect("entry should decode");
+
+        assert!(decoded.context_match);
+        assert_eq!(decoded.outcome, types::ProtocolDecodeOutcomeKind::Match);
+        assert_eq!(decoded.expanded_steps.len(), 1);
     }
 }
