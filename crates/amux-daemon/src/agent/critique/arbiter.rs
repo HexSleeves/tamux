@@ -1,6 +1,6 @@
 use crate::agent::operator_model::RiskTolerance;
 
-use super::types::{Argument, Decision, Resolution};
+use super::types::{Argument, CritiqueDirective, Decision, Resolution};
 
 fn top_claims(argument: &Argument, limit: usize) -> Vec<String> {
     let mut points = argument.points.clone();
@@ -14,6 +14,31 @@ fn top_claims(argument: &Argument, limit: usize) -> Vec<String> {
         .take(limit)
         .map(|point| point.claim)
         .collect()
+}
+
+pub(crate) fn directives_for_modifications(modifications: &[String]) -> Vec<CritiqueDirective> {
+    let mut directives = Vec::new();
+    for modification in modifications {
+        let normalized = modification.trim().to_ascii_lowercase();
+        if (normalized.contains("typical working window")
+            || normalized.contains("schedule this background task")
+            || normalized.contains("schedule this delegated work"))
+            && !directives.contains(&CritiqueDirective::ScheduleForOperatorWindow)
+        {
+            directives.push(CritiqueDirective::ScheduleForOperatorWindow);
+        }
+        if normalized.contains("smaller tool-call budget")
+            && !directives.contains(&CritiqueDirective::LimitSubagentToolCalls)
+        {
+            directives.push(CritiqueDirective::LimitSubagentToolCalls);
+        }
+        if normalized.contains("wall-clock window")
+            && !directives.contains(&CritiqueDirective::LimitSubagentWallTime)
+        {
+            directives.push(CritiqueDirective::LimitSubagentWallTime);
+        }
+    }
+    directives
 }
 
 pub(crate) fn resolve(
@@ -50,6 +75,7 @@ pub(crate) fn resolve(
     } else {
         Vec::new()
     };
+    let directives = directives_for_modifications(&modifications);
 
     let synthesis = match decision {
         Decision::Proceed => format!(
@@ -82,5 +108,6 @@ pub(crate) fn resolve(
         risk_score,
         confidence,
         modifications,
+        directives,
     }
 }

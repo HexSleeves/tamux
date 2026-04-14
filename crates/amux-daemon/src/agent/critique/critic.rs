@@ -1,5 +1,19 @@
 use super::types::{Argument, ArgumentPoint, Role};
 
+fn tool_specific_caution_claim(tool_name: &str, action_summary: &str) -> Option<String> {
+    match tool_name {
+        "enqueue_task" => Some(format!(
+            "Schedule this background task for the operator's typical working window instead of dispatching it immediately: {}.",
+            crate::agent::summarize_text(action_summary, 96)
+        )),
+        "spawn_subagent" => Some(format!(
+            "Reduce permissions by constraining the child to a smaller tool-call budget and wall-clock window before delegating {}.",
+            crate::agent::summarize_text(action_summary, 96)
+        )),
+        _ => None,
+    }
+}
+
 pub(crate) fn build_argument(
     tool_name: &str,
     action_summary: &str,
@@ -38,6 +52,14 @@ pub(crate) fn build_argument(
         weight: if reasons.is_empty() { 0.32 } else { 0.63 },
         evidence: vec!["heuristic:prefer_narrower_scope".to_string()],
     });
+
+    if let Some(claim) = tool_specific_caution_claim(tool_name, action_summary) {
+        points.push(ArgumentPoint {
+            claim,
+            weight: if reasons.is_empty() { 0.57 } else { 0.74 },
+            evidence: vec![format!("tool_specific:{tool_name}:narrower_execution")],
+        });
+    }
 
     Argument {
         role: Role::Critic,

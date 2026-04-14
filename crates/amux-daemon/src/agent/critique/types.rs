@@ -35,6 +35,20 @@ impl Decision {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CritiqueDirective {
+    ScheduleForOperatorWindow,
+    LimitSubagentToolCalls,
+    LimitSubagentWallTime,
+    DisableNetwork,
+    EnableSandbox,
+    DowngradeSecurityLevel,
+    StripExplicitMessagingTargets,
+    StripBroadcastMentions,
+    NarrowSensitiveFilePath,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ArgumentPoint {
     pub claim: String,
@@ -59,6 +73,8 @@ pub struct Resolution {
     pub confidence: f64,
     #[serde(default)]
     pub modifications: Vec<String>,
+    #[serde(default)]
+    pub directives: Vec<CritiqueDirective>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

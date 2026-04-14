@@ -19,6 +19,20 @@ fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
+fn top_claims(argument: &self::types::Argument, limit: usize) -> Vec<String> {
+    let mut points = argument.points.clone();
+    points.sort_by(|a, b| {
+        b.weight
+            .partial_cmp(&a.weight)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    points
+        .into_iter()
+        .take(limit)
+        .map(|point| point.claim)
+        .collect()
+}
+
 impl AgentEngine {
     pub(crate) async fn run_critique_preflight(
         &self,
@@ -37,7 +51,79 @@ impl AgentEngine {
             .risk_tolerance;
         let advocate_argument = advocate::build_argument(tool_name, action_summary, reasons);
         let critic_argument = critic::build_argument(tool_name, action_summary, reasons);
-        let resolution = arbiter::resolve(&advocate_argument, &critic_argument, risk_tolerance);
+        let mut resolution = arbiter::resolve(&advocate_argument, &critic_argument, risk_tolerance);
+        if let Some(forced_decision) = self
+            .config
+            .read()
+            .await
+            .extra
+            .get("test_force_critique_decision")
+            .and_then(|value| value.as_str())
+        {
+            resolution.decision = match forced_decision {
+                "proceed" => Decision::Proceed,
+                "proceed_with_modifications" => Decision::ProceedWithModifications,
+                "defer" => Decision::Defer,
+                "reject" => Decision::Reject,
+                _ => resolution.decision,
+            };
+            if matches!(resolution.decision, Decision::ProceedWithModifications)
+                && resolution.modifications.is_empty()
+            {
+                let mut critic_guidance = top_claims(&critic_argument, 2);
+                if critic_guidance.is_empty() {
+                    critic_guidance
+                        .push("Apply the critic's safer constraints before execution.".to_string());
+                }
+                resolution.modifications = critic_guidance;
+                resolution.directives = arbiter::directives_for_modifications(&resolution.modifications);
+                resolution.synthesis = format!(
+                    "Proceed with modifications. Keep the action, but incorporate: {}.",
+                    resolution.modifications.join(" | ")
+                );
+            }
+        }
+        if let Some(forced_modifications) = self
+            .config
+            .read()
+            .await
+            .extra
+            .get("test_force_critique_modifications")
+            .and_then(|value| value.as_array())
+        {
+            let forced_modifications = forced_modifications
+                .iter()
+                .filter_map(|value| value.as_str())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            if !forced_modifications.is_empty() {
+                resolution.modifications = forced_modifications;
+                resolution.directives = arbiter::directives_for_modifications(&resolution.modifications);
+                if matches!(resolution.decision, Decision::ProceedWithModifications) {
+                    resolution.synthesis = format!(
+                        "Proceed with modifications. Keep the action, but incorporate: {}.",
+                        resolution.modifications.join(" | ")
+                    );
+                }
+            }
+        }
+        if let Some(forced_directives) = self
+            .config
+            .read()
+            .await
+            .extra
+            .get("test_force_critique_directives")
+            .and_then(|value| value.as_array())
+        {
+            let forced_directives = forced_directives
+                .iter()
+                .filter_map(|value| value.as_str())
+                .filter_map(|value| serde_json::from_str::<self::types::CritiqueDirective>(&format!("\"{value}\"")).ok())
+                .collect::<Vec<_>>();
+            if !forced_directives.is_empty() {
+                resolution.directives = forced_directives;
+            }
+        }
         let created_at_ms = now_millis();
         let resolved_at_ms = Some(created_at_ms);
         let status = if matches!(resolution.decision, Decision::Defer) {

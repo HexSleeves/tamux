@@ -65,6 +65,298 @@ fn should_scrub_successful_tool_result(tool_name: &str) -> bool {
     !matches!(tool_name, "read_offloaded_payload")
 }
 
+fn sanitize_broadcast_mentions(message: &str) -> Option<String> {
+    let sanitized = message.replace("@everyone", "everyone").replace("@here", "here");
+    if sanitized == message {
+        None
+    } else {
+        Some(sanitized)
+    }
+}
+
+fn critique_requests_operator_window(critique_modifications: &[String]) -> bool {
+    critique_modifications.iter().any(|modification| {
+        let normalized = modification.trim().to_ascii_lowercase();
+        normalized.contains("typical working window")
+            || normalized.contains("typical active window")
+            || normalized.contains("schedule this background task")
+            || normalized.contains("schedule this task")
+    })
+}
+
+fn next_operator_window_timestamp_ms(now_ms: u64, preferred_hour_utc: u8) -> u64 {
+    const HOUR_MS: u64 = 3_600_000;
+    const DAY_MS: u64 = 24 * HOUR_MS;
+
+    let day_start = now_ms - (now_ms % DAY_MS);
+    let candidate = day_start + u64::from(preferred_hour_utc.min(23)) * HOUR_MS;
+    if candidate > now_ms {
+        candidate
+    } else {
+        candidate + DAY_MS
+    }
+}
+
+fn critique_requests_narrower_subagent_scope(critique_modifications: &[String]) -> bool {
+    critique_modifications.iter().any(|modification| {
+        let normalized = modification.trim().to_ascii_lowercase();
+        normalized.contains("smaller tool-call budget")
+            || normalized.contains("tool-call budget")
+            || normalized.contains("wall-clock window")
+            || normalized.contains("reduce permissions")
+            || normalized.contains("narrow delegated scope")
+    })
+}
+
+fn upsert_budget_limit(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    limit: u64,
+) -> bool {
+    let budget = map
+        .entry("budget".to_string())
+        .or_insert_with(|| serde_json::Value::Object(Default::default()));
+    let Some(budget_map) = budget.as_object_mut() else {
+        return false;
+    };
+
+    let should_write = budget_map
+        .get(key)
+        .and_then(|value| value.as_u64())
+        .map(|current| current > limit)
+        .unwrap_or(true);
+    if should_write {
+        budget_map.insert(
+            key.to_string(),
+            serde_json::Value::Number(serde_json::Number::from(limit)),
+        );
+    }
+    should_write
+}
+
+fn has_directive(
+    directives: &[crate::agent::critique::types::CritiqueDirective],
+    needle: crate::agent::critique::types::CritiqueDirective,
+) -> bool {
+    directives.iter().any(|directive| *directive == needle)
+}
+
+fn apply_critique_modifications(
+    tool_name: &str,
+    args: &serde_json::Value,
+    critique_decision: Option<&str>,
+    critique_reasons: &[String],
+    critique_modifications: &[String],
+    critique_directives: &[crate::agent::critique::types::CritiqueDirective],
+    preferred_start_hour_utc: Option<u8>,
+) -> (serde_json::Value, Vec<String>) {
+    if critique_decision != Some("proceed_with_modifications") {
+        return (args.clone(), Vec::new());
+    }
+
+    let mut adjusted = args.clone();
+    let Some(map) = adjusted.as_object_mut() else {
+        return (adjusted, Vec::new());
+    };
+    let mut adjustments = Vec::new();
+
+    match tool_name {
+        "bash_command" | "run_terminal_command" | "execute_managed_command" => {
+            if map
+                .get("allow_network")
+                .and_then(|value| value.as_bool())
+                != Some(false)
+            {
+                map.insert("allow_network".to_string(), serde_json::Value::Bool(false));
+                adjustments.push("shell:disable_network".to_string());
+            }
+            if map
+                .get("sandbox_enabled")
+                .and_then(|value| value.as_bool())
+                != Some(true)
+            {
+                map.insert("sandbox_enabled".to_string(), serde_json::Value::Bool(true));
+                adjustments.push("shell:enable_sandbox".to_string());
+            }
+            if map
+                .get("security_level")
+                .and_then(|value| value.as_str())
+                == Some("yolo")
+            {
+                map.insert(
+                    "security_level".to_string(),
+                    serde_json::Value::String("moderate".to_string()),
+                );
+                adjustments.push("shell:downgrade_security_level".to_string());
+            }
+        }
+        "send_slack_message" => {
+            if map.remove("channel").is_some() {
+                adjustments.push("messaging:strip_explicit_channel".to_string());
+            }
+            if map.remove("thread_ts").is_some() {
+                adjustments.push("messaging:strip_explicit_thread".to_string());
+            }
+        }
+        "send_discord_message" => {
+            if map.remove("channel_id").is_some() {
+                adjustments.push("messaging:strip_explicit_channel".to_string());
+            }
+            if map.remove("user_id").is_some() {
+                adjustments.push("messaging:strip_explicit_user".to_string());
+            }
+            if map.remove("reply_to_message_id").is_some() {
+                adjustments.push("messaging:strip_explicit_reply".to_string());
+            }
+        }
+        "send_telegram_message" => {
+            if map.remove("chat_id").is_some() {
+                adjustments.push("messaging:strip_explicit_chat".to_string());
+            }
+            if map.remove("reply_to_message_id").is_some() {
+                adjustments.push("messaging:strip_explicit_reply".to_string());
+            }
+        }
+        "send_whatsapp_message" => {
+            if map.remove("phone").is_some() {
+                adjustments.push("messaging:strip_explicit_phone".to_string());
+            }
+            if map.remove("to").is_some() {
+                adjustments.push("messaging:strip_explicit_phone".to_string());
+            }
+        }
+        "write_file" | "create_file" | "append_to_file" | "replace_in_file"
+        | "apply_file_patch" => {
+            let sensitive_path = has_directive(
+                critique_directives,
+                crate::agent::critique::types::CritiqueDirective::NarrowSensitiveFilePath,
+            ) || critique_reasons
+                .iter()
+                .any(|reason| reason.contains("sensitive path"));
+            if sensitive_path {
+                for key in ["path", "file_path", "filepath", "filename", "file"] {
+                    let Some(current) = map.get(key).and_then(|value| value.as_str()) else {
+                        continue;
+                    };
+                    let narrowed = std::path::Path::new(current)
+                        .file_name()
+                        .map(|value| value.to_string_lossy().to_string())
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| current.to_string());
+                    if narrowed != current {
+                        map.insert(key.to_string(), serde_json::Value::String(narrowed));
+                        adjustments.push(format!("file:narrow_path:{key}"));
+                    }
+                    break;
+                }
+            }
+        }
+        "enqueue_task" => {
+            let has_explicit_schedule = map.get("scheduled_at").is_some()
+                || map.get("schedule_at").is_some()
+                || map.get("delay_seconds").is_some();
+            if !has_explicit_schedule
+                && (has_directive(
+                    critique_directives,
+                    crate::agent::critique::types::CritiqueDirective::ScheduleForOperatorWindow,
+                ) || critique_requests_operator_window(critique_modifications))
+                && preferred_start_hour_utc.is_some()
+            {
+                let scheduled_at = next_operator_window_timestamp_ms(
+                    super::now_millis(),
+                    preferred_start_hour_utc.unwrap_or_default(),
+                );
+                map.insert(
+                    "scheduled_at".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(scheduled_at)),
+                );
+                adjustments.push("temporal:schedule_for_operator_window".to_string());
+            }
+        }
+        "spawn_subagent" => {
+            let has_explicit_schedule = map.get("scheduled_at").is_some()
+                || map.get("schedule_at").is_some()
+                || map.get("delay_seconds").is_some();
+            if !has_explicit_schedule
+                && (has_directive(
+                    critique_directives,
+                    crate::agent::critique::types::CritiqueDirective::ScheduleForOperatorWindow,
+                ) || critique_requests_operator_window(critique_modifications))
+                && preferred_start_hour_utc.is_some()
+            {
+                let scheduled_at = next_operator_window_timestamp_ms(
+                    super::now_millis(),
+                    preferred_start_hour_utc.unwrap_or_default(),
+                );
+                map.insert(
+                    "scheduled_at".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(scheduled_at)),
+                );
+                adjustments.push("temporal:schedule_for_operator_window".to_string());
+            }
+            let tighten_tool_calls = has_directive(
+                critique_directives,
+                crate::agent::critique::types::CritiqueDirective::LimitSubagentToolCalls,
+            ) || critique_requests_narrower_subagent_scope(critique_modifications);
+            let tighten_wall_time = has_directive(
+                critique_directives,
+                crate::agent::critique::types::CritiqueDirective::LimitSubagentWallTime,
+            ) || critique_requests_narrower_subagent_scope(critique_modifications);
+            if tighten_tool_calls {
+                if upsert_budget_limit(map, "max_tool_calls", 8) {
+                    adjustments.push("subagent:limit_tool_calls".to_string());
+                }
+            }
+            if tighten_wall_time {
+                if upsert_budget_limit(map, "max_wall_time_secs", 120) {
+                    adjustments.push("subagent:limit_wall_time".to_string());
+                }
+            }
+        }
+        _ => {}
+    }
+
+    if let Some(message) = map.get("message").and_then(|value| value.as_str()) {
+        if let Some(sanitized) = sanitize_broadcast_mentions(message) {
+            map.insert("message".to_string(), serde_json::Value::String(sanitized));
+            adjustments.push("messaging:strip_broadcast_mentions".to_string());
+        }
+    }
+
+    (adjusted, adjustments)
+}
+
+fn annotate_review_with_critique(
+    review: &mut crate::agent::types::WelesReviewMeta,
+    critique_session_id: Option<&str>,
+    critique_decision: Option<&str>,
+    critique_adjustments: &[String],
+) {
+    let Some(session_id) = critique_session_id else {
+        return;
+    };
+    review.weles_reviewed = true;
+    let critique_decision = critique_decision.unwrap_or("proceed");
+    if !review
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("critique_preflight:"))
+    {
+        review
+            .reasons
+            .push(format!("critique_preflight:{}:{}", session_id, critique_decision));
+    }
+    for adjustment in critique_adjustments {
+        let reason = format!("critique_applied:{adjustment}");
+        if !review.reasons.iter().any(|existing| existing == &reason) {
+            review.reasons.push(reason);
+        }
+    }
+    if review.audit_id.is_none() {
+        review.audit_id = Some(session_id.to_string());
+    }
+}
+
 struct PreparedToolExecution {
     tool_name: String,
     args: serde_json::Value,
@@ -72,6 +364,8 @@ struct PreparedToolExecution {
     dispatch_args: serde_json::Value,
     governance_decision: crate::agent::weles_governance::WelesExecutionDecision,
     critique_session_id: Option<String>,
+    critique_decision: Option<String>,
+    critique_adjustments: Vec<String>,
 }
 
 async fn prepare_tool_execution(
@@ -101,15 +395,8 @@ async fn prepare_tool_execution(
             });
         }
     };
-    let security_level = {
-        let config = agent.config.read().await;
-        crate::agent::weles_governance::security_level_for_tool_call(
-            &config,
-            tool_call.function.name.as_str(),
-            &args,
-        )
-    };
-    let active_scope_id = crate::agent::agent_identity::current_agent_scope_id();
+    let critique_classification =
+        crate::agent::weles_governance::classify_tool_call(tool_call.function.name.as_str(), &args);
     let current_task = if let Some(task_id) = task_id {
         agent.list_tasks().await.into_iter().find(|task| task.id == task_id)
     } else {
@@ -122,10 +409,11 @@ async fn prepare_tool_execution(
     } else {
         false
     };
-    let classification =
-        crate::agent::weles_governance::classify_tool_call(tool_call.function.name.as_str(), &args);
-    let critique_session_id = if agent
-        .should_run_critique_preflight(tool_call.function.name.as_str(), &classification)
+    let critique_result = if agent
+        .should_run_critique_preflight(
+            tool_call.function.name.as_str(),
+            &critique_classification,
+        )
         .await
     {
         let action_summary = crate::agent::summarize_text(&tool_call.function.arguments, 240);
@@ -134,13 +422,17 @@ async fn prepare_tool_execution(
                 &tool_call.id,
                 tool_call.function.name.as_str(),
                 &action_summary,
-                &classification.reasons,
+                &critique_classification.reasons,
                 Some(thread_id),
                 task_id,
             )
             .await
         {
             Ok(session) => {
+                let decision = session
+                    .resolution
+                    .as_ref()
+                    .map(|resolution| resolution.decision.as_str().to_string());
                 let risk_tolerance = agent
                     .operator_model
                     .read()
@@ -172,7 +464,17 @@ async fn prepare_tool_execution(
                         });
                     }
                 }
-                Some(session.id)
+                let modifications = session
+                    .resolution
+                    .as_ref()
+                    .map(|resolution| resolution.modifications.clone())
+                    .unwrap_or_default();
+                let directives = session
+                    .resolution
+                    .as_ref()
+                    .map(|resolution| resolution.directives.clone())
+                    .unwrap_or_default();
+                Some((session.id, decision, modifications, directives))
             }
             Err(error) => {
                 tracing::warn!(tool = %tool_call.function.name, error = %error, "critique preflight failed; continuing without critique enforcement");
@@ -182,19 +484,58 @@ async fn prepare_tool_execution(
     } else {
         None
     };
+    let (critique_session_id, critique_decision, critique_modifications, critique_directives) = critique_result
+        .map(|(session_id, decision, modifications, directives)| {
+            (Some(session_id), decision, modifications, directives)
+        })
+        .unwrap_or((None, None, Vec::new(), Vec::new()));
+    let preferred_start_hour_utc = agent
+        .operator_model
+        .read()
+        .await
+        .session_rhythm
+        .typical_start_hour_utc;
+    let (mut runtime_args, critique_adjustments) = apply_critique_modifications(
+        tool_call.function.name.as_str(),
+        &args,
+        critique_decision.as_deref(),
+        &critique_classification.reasons,
+        &critique_modifications,
+        &critique_directives,
+        preferred_start_hour_utc,
+    );
+    let security_level = {
+        let config = agent.config.read().await;
+        crate::agent::weles_governance::security_level_for_tool_call(
+            &config,
+            tool_call.function.name.as_str(),
+            &runtime_args,
+        )
+    };
+    let active_scope_id = crate::agent::agent_identity::current_agent_scope_id();
+    let governance_classification = crate::agent::weles_governance::classify_tool_call(
+        tool_call.function.name.as_str(),
+        &runtime_args,
+    );
     let governance_decision = if !crate::agent::weles_governance::should_guard_classification(
-        &classification,
+        &governance_classification,
     ) {
-        crate::agent::weles_governance::direct_allow_decision(classification.class)
+        crate::agent::weles_governance::direct_allow_decision(governance_classification.class)
     } else if crate::agent::agent_identity::is_weles_agent_scope(&active_scope_id) {
-        crate::agent::weles_governance::internal_runtime_decision(&classification, security_level)
+        crate::agent::weles_governance::internal_runtime_decision(
+            &governance_classification,
+            security_level,
+        )
     } else if trusted_weles_internal_task {
-        crate::agent::weles_governance::internal_runtime_decision(&classification, security_level)
+        crate::agent::weles_governance::internal_runtime_decision(
+            &governance_classification,
+            security_level,
+        )
     } else {
         let config = agent.config.read().await;
         if !crate::agent::weles_governance::review_available(&config) {
             crate::agent::weles_governance::guarded_fallback_decision(
-                &classification,
+                &governance_classification,
                 security_level,
             )
         } else {
@@ -205,9 +546,9 @@ async fn prepare_tool_execution(
                 task_id,
                 crate::agent::agent_identity::WELES_GOVERNANCE_SCOPE,
                 tool_call.function.name.as_str(),
-                &args,
+                &runtime_args,
                 security_level,
-                &classification.reasons,
+                &governance_classification.reasons,
             )
             .await
             {
@@ -219,7 +560,7 @@ async fn prepare_tool_execution(
                         None,
                         Some("daemon"),
                         &crate::agent::weles_governance::build_weles_runtime_review_message(
-                            &classification,
+                            &governance_classification,
                             security_level,
                         ),
                     )
@@ -236,29 +577,29 @@ async fn prepare_tool_execution(
                             )
                         {
                             let runtime_review = crate::agent::weles_governance::normalize_runtime_verdict_for_classification(
-                                &classification,
+                                &governance_classification,
                                 security_level,
                                 runtime_review,
                             );
                             crate::agent::weles_governance::reviewed_runtime_decision(
-                                &classification,
+                                &governance_classification,
                                 security_level,
                                 runtime_review,
                             )
                         } else {
                             crate::agent::weles_governance::guarded_fallback_decision(
-                                &classification,
+                                &governance_classification,
                                 security_level,
                             )
                         }
                     }
                     Err(_) => crate::agent::weles_governance::guarded_fallback_decision(
-                        &classification,
+                        &governance_classification,
                         security_level,
                     ),
                 },
                 Err(_) => crate::agent::weles_governance::guarded_fallback_decision(
-                    &classification,
+                    &governance_classification,
                     security_level,
                 ),
             }
@@ -276,7 +617,6 @@ async fn prepare_tool_execution(
             pending_approval: None,
         });
     }
-    let mut runtime_args = args.clone();
     if matches!(
         governance_decision.class,
         crate::agent::weles_governance::WelesGovernanceClass::RejectBypass
@@ -327,11 +667,13 @@ async fn prepare_tool_execution(
 
     Ok(PreparedToolExecution {
         tool_name: tool_call.function.name.clone(),
-        args,
+        args: runtime_args.clone(),
         dispatch_tool_name,
         dispatch_args,
         governance_decision,
         critique_session_id,
+        critique_decision,
+        critique_adjustments,
     })
 }
 
@@ -809,21 +1151,12 @@ pub fn execute_tool<'a>(
                     content
                 };
                 let mut review = prepared.governance_decision.review.clone();
-                if let Some(session_id) = prepared.critique_session_id.as_ref() {
-                    review.weles_reviewed = true;
-                    if !review
-                        .reasons
-                        .iter()
-                        .any(|reason| reason.contains("critique_preflight:"))
-                    {
-                        review
-                            .reasons
-                            .push(format!("critique_preflight:{}:proceed", session_id));
-                    }
-                    if review.audit_id.is_none() {
-                        review.audit_id = Some(session_id.clone());
-                    }
-                }
+                annotate_review_with_critique(
+                    &mut review,
+                    prepared.critique_session_id.as_deref(),
+                    prepared.critique_decision.as_deref(),
+                    &prepared.critique_adjustments,
+                );
                 emit_workflow_notice_for_tool(
                     event_tx,
                     thread_id,
