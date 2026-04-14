@@ -13,7 +13,6 @@ use amux_protocol::{
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
-use schema_helpers::table_has_column;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_rusqlite;
@@ -704,6 +703,7 @@ mod goal_runs;
 mod governance;
 mod implicit_feedback;
 mod integrity_helpers;
+mod memory_graph;
 mod metacognition;
 mod offloaded_payloads;
 mod operator_profile;

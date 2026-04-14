@@ -42,9 +42,28 @@ async fn init_schema_adds_elastic_context_tables_to_legacy_db() -> Result<()> {
                 table_has_column(conn, "thread_structural_memory", "state_json")?;
             let has_structural_updated =
                 table_has_column(conn, "thread_structural_memory", "updated_at")?;
+            let has_memory_nodes_label = table_has_column(conn, "memory_nodes", "label")?;
+            let has_memory_nodes_type = table_has_column(conn, "memory_nodes", "node_type")?;
+            let has_memory_edges_relation =
+                table_has_column(conn, "memory_edges", "relation_type")?;
+            let has_memory_edges_weight = table_has_column(conn, "memory_edges", "weight")?;
             let structural_index: Option<String> = conn
                 .query_row(
                     "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_thread_structural_memory_updated'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let memory_node_index: Option<String> = conn
+                .query_row(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_nodes_type_accessed'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let memory_edge_unique_index: Option<String> = conn
+                .query_row(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_edges_unique'",
                     [],
                     |row| row.get(0),
                 )
@@ -57,6 +76,12 @@ async fn init_schema_adds_elastic_context_tables_to_legacy_db() -> Result<()> {
                 has_structural_state,
                 has_structural_updated,
                 structural_index,
+                has_memory_nodes_label,
+                has_memory_nodes_type,
+                has_memory_edges_relation,
+                has_memory_edges_weight,
+                memory_node_index,
+                memory_edge_unique_index,
             ))
         })
         .await
@@ -75,6 +100,12 @@ async fn init_schema_adds_elastic_context_tables_to_legacy_db() -> Result<()> {
         status.6.as_deref(),
         Some("idx_thread_structural_memory_updated")
     );
+    assert!(status.7);
+    assert!(status.8);
+    assert!(status.9);
+    assert!(status.10);
+    assert_eq!(status.11.as_deref(), Some("idx_memory_nodes_type_accessed"));
+    assert_eq!(status.12.as_deref(), Some("idx_memory_edges_unique"));
 
     fs::remove_dir_all(root)?;
     Ok(())
@@ -837,4 +868,67 @@ mod structural_memory {
         fs::remove_dir_all(root)?;
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn memory_graph_round_trips_nodes_and_edges() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+
+    store
+        .upsert_memory_node(
+            "node:file:src/lib.rs",
+            "src/lib.rs",
+            "file",
+            Some("observed file"),
+            1_717_180_001,
+        )
+        .await?;
+    store
+        .upsert_memory_node(
+            "node:task:task-123",
+            "Investigate parser",
+            "task",
+            Some("task status: queued"),
+            1_717_180_002,
+        )
+        .await?;
+    store
+        .upsert_memory_edge(
+            "node:task:task-123",
+            "node:file:src/lib.rs",
+            "task_touches_file",
+            1.0,
+            1_717_180_003,
+        )
+        .await?;
+    store
+        .upsert_memory_edge(
+            "node:task:task-123",
+            "node:file:src/lib.rs",
+            "task_touches_file",
+            1.0,
+            1_717_180_004,
+        )
+        .await?;
+
+    let node = store
+        .get_memory_node("node:file:src/lib.rs")
+        .await?
+        .expect("memory node should exist");
+    assert_eq!(node.label, "src/lib.rs");
+    assert_eq!(node.node_type, "file");
+
+    let edges = store
+        .list_memory_edges_for_node("node:task:task-123")
+        .await?;
+    let edge = edges
+        .iter()
+        .find(|edge| edge.relation_type == "task_touches_file")
+        .expect("task_touches_file edge should exist");
+    assert_eq!(edge.source_node_id, "node:task:task-123");
+    assert_eq!(edge.target_node_id, "node:file:src/lib.rs");
+    assert_eq!(edge.weight, 2.0);
+
+    fs::remove_dir_all(root)?;
+    Ok(())
 }

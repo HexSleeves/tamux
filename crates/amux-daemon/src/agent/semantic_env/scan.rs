@@ -111,6 +111,9 @@ pub(super) fn scan_workspace_semantics(root: &Path) -> Result<SemanticGraph> {
 }
 
 fn should_visit_semantic_entry(entry: &DirEntry) -> bool {
+    if entry.depth() == 0 {
+        return true;
+    }
     let name = entry.file_name().to_string_lossy();
     if name.starts_with('.') {
         return false;

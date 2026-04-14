@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::agent::AgentEngine;
+use crate::agent::semantic_env::scan_workspace_package_summaries_for_memory_graph;
+use crate::agent::types::{AgentTask, TaskStatus};
 
 const SUPPORTED_TOOL_NAMES: &[&str] = &[
     "read_file",
@@ -71,6 +73,48 @@ pub struct StructuralEdge {
 pub struct StructuralContextEntry {
     pub node_id: String,
     pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemoryGraphNodeUpsert {
+    pub id: String,
+    pub label: String,
+    pub node_type: String,
+    pub summary_text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemoryGraphEdgeUpsert {
+    pub source_node_id: String,
+    pub target_node_id: String,
+    pub relation_type: String,
+    pub weight: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MemoryGraphUpdateBatch {
+    pub nodes: Vec<MemoryGraphNodeUpsert>,
+    pub edges: Vec<MemoryGraphEdgeUpsert>,
+}
+
+impl MemoryGraphUpdateBatch {
+    fn push_node(&mut self, node: MemoryGraphNodeUpsert) {
+        if !self.nodes.iter().any(|existing| existing.id == node.id) {
+            self.nodes.push(node);
+        }
+    }
+
+    fn push_edge(&mut self, edge: MemoryGraphEdgeUpsert) {
+        if let Some(existing) = self.edges.iter_mut().find(|candidate| {
+            candidate.source_node_id == edge.source_node_id
+                && candidate.target_node_id == edge.target_node_id
+                && candidate.relation_type == edge.relation_type
+        }) {
+            existing.weight += edge.weight;
+            return;
+        }
+        self.edges.push(edge);
+    }
 }
 
 impl ThreadStructuralMemory {
@@ -366,7 +410,240 @@ pub fn observe_successful_file_tool_result(
     Ok(structural_refs)
 }
 
+pub fn build_memory_graph_updates_for_file_tool(
+    repo_root: impl AsRef<Path>,
+    tool_name: &str,
+    tool_arguments: &str,
+    tool_content: Option<&str>,
+) -> Result<MemoryGraphUpdateBatch> {
+    if !SUPPORTED_TOOL_NAMES
+        .iter()
+        .any(|candidate| *candidate == tool_name)
+    {
+        return Ok(MemoryGraphUpdateBatch::default());
+    }
+
+    let repo_root = repo_root.as_ref();
+    let mut batch = MemoryGraphUpdateBatch::default();
+    let candidate_paths: Vec<(PathBuf, String)> = extract_tool_file_paths(tool_name, tool_arguments)
+        .into_iter()
+        .filter_map(|raw_path| {
+            let absolute_path = absolutize_tool_path(repo_root, &raw_path)?;
+            let relative_path = normalized_relative_path(repo_root, &absolute_path)?;
+            Some((absolute_path, relative_path))
+        })
+        .collect();
+
+    if candidate_paths.is_empty() {
+        return Ok(batch);
+    }
+
+    let package_summaries =
+        scan_workspace_package_summaries_for_memory_graph(repo_root).unwrap_or_default();
+    for (absolute_path, relative_path) in candidate_paths {
+        let file_node_id = node_id_for_relative_path(&relative_path);
+        batch.push_node(MemoryGraphNodeUpsert {
+            id: file_node_id.clone(),
+            label: relative_path.clone(),
+            node_type: "file".to_string(),
+            summary_text: Some(format!("file observed via {tool_name}")),
+        });
+
+        let file_content = if tool_name == "read_file" {
+            tool_content.map(ToOwned::to_owned)
+        } else {
+            std::fs::read_to_string(&absolute_path)
+                .ok()
+                .or_else(|| tool_content.map(ToOwned::to_owned))
+        };
+        if let Some(file_content) = file_content.as_deref() {
+            for imported_path in detect_imported_files(repo_root, &absolute_path, file_content) {
+                let Some(imported_relative) = normalized_relative_path(repo_root, &imported_path)
+                else {
+                    continue;
+                };
+                let imported_node_id = node_id_for_relative_path(&imported_relative);
+                batch.push_node(MemoryGraphNodeUpsert {
+                    id: imported_node_id.clone(),
+                    label: imported_relative.clone(),
+                    node_type: "file".to_string(),
+                    summary_text: Some("file discovered through import relationship".to_string()),
+                });
+                batch.push_edge(MemoryGraphEdgeUpsert {
+                    source_node_id: file_node_id.clone(),
+                    target_node_id: imported_node_id,
+                    relation_type: "imports_file".to_string(),
+                    weight: 1.0,
+                });
+            }
+        }
+
+        for package in package_summaries.iter().filter(|package| {
+            let manifest_path = Path::new(&package.manifest_path);
+            let package_root = manifest_path.parent().unwrap_or(repo_root);
+            absolute_path.starts_with(package_root)
+        }) {
+            let package_node_id = node_id_for_package(&package.ecosystem, &package.name);
+            batch.push_node(MemoryGraphNodeUpsert {
+                id: package_node_id.clone(),
+                label: package.name.clone(),
+                node_type: "package".to_string(),
+                summary_text: Some(format!("{} package from {}", package.ecosystem, package.manifest_path)),
+            });
+            batch.push_edge(MemoryGraphEdgeUpsert {
+                source_node_id: file_node_id.clone(),
+                target_node_id: package_node_id,
+                relation_type: "file_in_package".to_string(),
+                weight: 1.0,
+            });
+        }
+    }
+
+    Ok(batch)
+}
+
+pub fn build_memory_graph_updates_for_tool_failure(
+    thread_id: &str,
+    tool_name: &str,
+    tool_arguments: &str,
+    failure_description: &str,
+) -> MemoryGraphUpdateBatch {
+    let mut batch = MemoryGraphUpdateBatch::default();
+    let error_label = failure_description.trim().chars().take(160).collect::<String>();
+    let error_node_id = node_id_for_error(tool_name, &error_label);
+    batch.push_node(MemoryGraphNodeUpsert {
+        id: error_node_id.clone(),
+        label: if error_label.is_empty() {
+            format!("{tool_name} failure")
+        } else {
+            error_label.clone()
+        },
+        node_type: "error".to_string(),
+        summary_text: Some(format!("tool `{tool_name}` failed in thread `{thread_id}`")),
+    });
+
+    if let Ok(arguments) = crate::agent::tool_executor::parse_tool_args(tool_name, tool_arguments) {
+        if let Some(path) = crate::agent::tool_executor::get_file_path_arg(&arguments)
+            .or_else(|| crate::agent::tool_executor::get_string_arg(&arguments, &["filePath"]))
+        {
+            let file_node_id = if Path::new(path).is_absolute() {
+                format!("node:file:{}", path)
+            } else {
+                node_id_for_relative_path(path)
+            };
+            batch.push_node(MemoryGraphNodeUpsert {
+                id: file_node_id.clone(),
+                label: path.to_string(),
+                node_type: "file".to_string(),
+                summary_text: Some("file referenced by failing tool invocation".to_string()),
+            });
+            batch.push_edge(MemoryGraphEdgeUpsert {
+                source_node_id: file_node_id,
+                target_node_id: error_node_id,
+                relation_type: "file_hit_error".to_string(),
+                weight: 1.0,
+            });
+        }
+    }
+
+    batch
+}
+
+pub fn build_memory_graph_updates_for_task(task: &AgentTask) -> MemoryGraphUpdateBatch {
+    let mut batch = MemoryGraphUpdateBatch::default();
+    let task_node_id = node_id_for_task(&task.id);
+    batch.push_node(MemoryGraphNodeUpsert {
+        id: task_node_id.clone(),
+        label: task.title.clone(),
+        node_type: "task".to_string(),
+        summary_text: Some(format!("task status: {}", task_status_label(task.status))),
+    });
+
+    let haystack = format!("{} {}", task.title, task.description);
+    for path_token in extract_file_like_tokens(&haystack) {
+        let file_node_id = node_id_for_relative_path(&path_token);
+        batch.push_node(MemoryGraphNodeUpsert {
+            id: file_node_id.clone(),
+            label: path_token.clone(),
+            node_type: "file".to_string(),
+            summary_text: Some("file inferred from task text".to_string()),
+        });
+        batch.push_edge(MemoryGraphEdgeUpsert {
+            source_node_id: task_node_id.clone(),
+            target_node_id: file_node_id,
+            relation_type: "task_touches_file".to_string(),
+            weight: 1.0,
+        });
+    }
+
+    batch
+}
+
+pub fn build_memory_graph_updates_for_task_error(task: &AgentTask, failure_description: &str) -> MemoryGraphUpdateBatch {
+    let mut batch = build_memory_graph_updates_for_task(task);
+    let error_label = failure_description.trim().chars().take(160).collect::<String>();
+    if error_label.is_empty() {
+        return batch;
+    }
+    let error_node_id = node_id_for_error(&task.id, &error_label);
+    let task_node_id = node_id_for_task(&task.id);
+    batch.push_node(MemoryGraphNodeUpsert {
+        id: error_node_id.clone(),
+        label: error_label,
+        node_type: "error".to_string(),
+        summary_text: Some(format!("error linked to task `{}`", task.title)),
+    });
+    batch.push_edge(MemoryGraphEdgeUpsert {
+        source_node_id: task_node_id,
+        target_node_id: error_node_id,
+        relation_type: "task_hit_error".to_string(),
+        weight: 1.0,
+    });
+    batch
+}
+
 impl AgentEngine {
+    pub(crate) async fn apply_memory_graph_updates(
+        &self,
+        batch: MemoryGraphUpdateBatch,
+    ) {
+        if batch.nodes.is_empty() && batch.edges.is_empty() {
+            return;
+        }
+
+        let now = crate::agent::now_millis();
+        for node in batch.nodes {
+            if let Err(error) = self
+                .history
+                .upsert_memory_node(
+                    &node.id,
+                    &node.label,
+                    &node.node_type,
+                    node.summary_text.as_deref(),
+                    now,
+                )
+                .await
+            {
+                tracing::warn!(node_id = %node.id, %error, "failed to persist memory graph node");
+            }
+        }
+        for edge in batch.edges {
+            if let Err(error) = self
+                .history
+                .upsert_memory_edge(
+                    &edge.source_node_id,
+                    &edge.target_node_id,
+                    &edge.relation_type,
+                    edge.weight,
+                    now,
+                )
+                .await
+            {
+                tracing::warn!(source = %edge.source_node_id, target = %edge.target_node_id, %error, "failed to persist memory graph edge");
+            }
+        }
+    }
+
     pub(crate) async fn get_thread_structural_memory(
         &self,
         thread_id: &str,
@@ -428,6 +705,19 @@ impl AgentEngine {
         };
         let repo_root_path = PathBuf::from(repo_root);
 
+        let graph_updates = match build_memory_graph_updates_for_file_tool(
+            &repo_root_path,
+            tool_name,
+            tool_arguments,
+            tool_content,
+        ) {
+            Ok(batch) => batch,
+            Err(error) => {
+                tracing::warn!(thread_id = %thread_id, tool_name = %tool_name, %error, "failed to build memory graph updates from tool result");
+                MemoryGraphUpdateBatch::default()
+            }
+        };
+
         let mut state = self
             .get_thread_structural_memory(thread_id)
             .await
@@ -453,7 +743,33 @@ impl AgentEngine {
             memories.insert(thread_id.to_string(), state);
         }
         drop(memories);
+        self.apply_memory_graph_updates(graph_updates).await;
         structural_refs
+    }
+
+    pub(crate) async fn record_memory_graph_from_tool_failure(
+        &self,
+        thread_id: &str,
+        tool_name: &str,
+        tool_arguments: &str,
+        failure_description: &str,
+    ) {
+        self.apply_memory_graph_updates(build_memory_graph_updates_for_tool_failure(
+            thread_id,
+            tool_name,
+            tool_arguments,
+            failure_description,
+        ))
+        .await;
+    }
+
+    pub(crate) async fn record_memory_graph_from_task(&self, task: &AgentTask) {
+        self.apply_memory_graph_updates(build_memory_graph_updates_for_task(task))
+            .await;
+        if let Some(error) = task.error.as_deref().or(task.last_error.as_deref()) {
+            self.apply_memory_graph_updates(build_memory_graph_updates_for_task_error(task, error))
+                .await;
+        }
     }
 }
 
@@ -777,6 +1093,63 @@ fn normalize_relative_path_components(path: &Path) -> String {
 
 fn node_id_for_relative_path(relative_path: &str) -> String {
     format!("node:file:{relative_path}")
+}
+
+fn node_id_for_package(ecosystem: &str, package_name: &str) -> String {
+    format!("node:package:{ecosystem}:{package_name}")
+}
+
+fn node_id_for_task(task_id: &str) -> String {
+    format!("node:task:{task_id}")
+}
+
+fn node_id_for_error(scope: &str, label: &str) -> String {
+    let mut normalized = String::new();
+    for ch in label.chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+        } else if !normalized.ends_with('-') {
+            normalized.push('-');
+        }
+        if normalized.len() >= 72 {
+            break;
+        }
+    }
+    let normalized = normalized.trim_matches('-');
+    format!("node:error:{scope}:{}", if normalized.is_empty() { "failure" } else { normalized })
+}
+
+fn extract_file_like_tokens(text: &str) -> Vec<String> {
+    let Ok(regex) = Regex::new(r"(?P<path>[A-Za-z0-9_./-]+\.(rs|toml|json|ts|tsx|js|jsx|py|md|sh))") else {
+        return Vec::new();
+    };
+    let mut results = Vec::new();
+    for capture in regex.captures_iter(text) {
+        let Some(path) = capture.name("path") else {
+            continue;
+        };
+        let normalized = path.as_str().trim_matches(|ch: char| ch == '.' || ch == ',' || ch == ':' || ch == ';' || ch == ')' || ch == '(');
+        if normalized.is_empty() {
+            continue;
+        }
+        if !results.iter().any(|existing| existing == normalized) {
+            results.push(normalized.to_string());
+        }
+    }
+    results
+}
+
+fn task_status_label(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Queued => "queued",
+        TaskStatus::InProgress => "in_progress",
+        TaskStatus::AwaitingApproval => "awaiting_approval",
+        TaskStatus::Blocked => "blocked",
+        TaskStatus::FailedAnalyzing => "failed_analyzing",
+        TaskStatus::Completed => "completed",
+        TaskStatus::Failed => "failed",
+        TaskStatus::Cancelled => "cancelled",
+    }
 }
 
 fn detect_imported_files(repo_root: &Path, source_path: &Path, content: &str) -> Vec<PathBuf> {
