@@ -210,6 +210,26 @@ pub struct WorkflowProfileRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct ImplicitSignalRow {
+    pub id: String,
+    pub session_id: String,
+    pub signal_type: String,
+    pub weight: f64,
+    pub timestamp_ms: u64,
+    pub context_snapshot_json: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SatisfactionScoreRow {
+    pub id: String,
+    pub session_id: String,
+    pub score: f64,
+    pub computed_at_ms: u64,
+    pub label: String,
+    pub signal_count: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct OperatorProfileSessionRow {
     pub session_id: String,
     pub kind: String,
@@ -682,6 +702,7 @@ mod debate;
 mod gateway_state;
 mod goal_runs;
 mod governance;
+mod implicit_feedback;
 mod integrity_helpers;
 mod metacognition;
 mod offloaded_payloads;

@@ -132,3 +132,116 @@ async fn meta_cognition_rows_round_trip() -> Result<()> {
     std::fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn init_schema_adds_implicit_feedback_tables() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+
+    store
+        .conn
+        .call(|conn| {
+            conn.execute_batch(
+                "
+                DROP TABLE IF EXISTS satisfaction_scores;
+                DROP TABLE IF EXISTS implicit_signals;
+                ",
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    store.init_schema().await?;
+
+    let status = store
+        .conn
+        .call(|conn| {
+            let signals_has_type = table_has_column(conn, "implicit_signals", "signal_type")?;
+            let signals_has_context =
+                table_has_column(conn, "implicit_signals", "context_snapshot_json")?;
+            let signals_index: Option<String> = conn
+                .query_row(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_implicit_signals_session_ts'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let scores_has_label = table_has_column(conn, "satisfaction_scores", "label")?;
+            let scores_has_signal_count =
+                table_has_column(conn, "satisfaction_scores", "signal_count")?;
+            let scores_index: Option<String> = conn
+                .query_row(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_satisfaction_scores_session_ts'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok((
+                signals_has_type,
+                signals_has_context,
+                signals_index,
+                scores_has_label,
+                scores_has_signal_count,
+                scores_index,
+            ))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    assert!(status.0);
+    assert!(status.1);
+    assert_eq!(status.2.as_deref(), Some("idx_implicit_signals_session_ts"));
+    assert!(status.3);
+    assert!(status.4);
+    assert_eq!(status.5.as_deref(), Some("idx_satisfaction_scores_session_ts"));
+
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn implicit_feedback_rows_round_trip() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+
+    store
+        .insert_implicit_signal(&ImplicitSignalRow {
+            id: "implicit-1".to_string(),
+            session_id: "thread-implicit".to_string(),
+            signal_type: "tool_fallback".to_string(),
+            weight: -0.12,
+            timestamp_ms: 1_717_300_001,
+            context_snapshot_json: Some(
+                serde_json::json!({
+                    "from_tool": "read_file",
+                    "to_tool": "search_files"
+                })
+                .to_string(),
+            ),
+        })
+        .await?;
+
+    store
+        .insert_satisfaction_score(&SatisfactionScoreRow {
+            id: "score-1".to_string(),
+            session_id: "thread-implicit".to_string(),
+            score: 0.68,
+            computed_at_ms: 1_717_300_002,
+            label: "healthy".to_string(),
+            signal_count: 2,
+        })
+        .await?;
+
+    let signals = store.list_implicit_signals("thread-implicit", 10).await?;
+    assert_eq!(signals.len(), 1);
+    assert_eq!(signals[0].signal_type, "tool_fallback");
+    assert!((signals[0].weight + 0.12).abs() < f64::EPSILON);
+
+    let scores = store.list_satisfaction_scores("thread-implicit", 10).await?;
+    assert_eq!(scores.len(), 1);
+    assert_eq!(scores[0].label, "healthy");
+    assert_eq!(scores[0].signal_count, 2);
+    assert!((scores[0].score - 0.68).abs() < f64::EPSILON);
+
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}

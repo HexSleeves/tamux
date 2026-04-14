@@ -309,6 +309,26 @@ pub(super) fn extended_schema_sql() -> &'static str {
             );
             CREATE INDEX IF NOT EXISTS idx_thread_structural_memory_updated ON thread_structural_memory(updated_at DESC);
 
+            CREATE TABLE IF NOT EXISTS implicit_signals (
+                id                    TEXT PRIMARY KEY,
+                session_id            TEXT NOT NULL,
+                signal_type           TEXT NOT NULL,
+                weight                REAL NOT NULL,
+                timestamp_ms          INTEGER NOT NULL,
+                context_snapshot_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_implicit_signals_session_ts ON implicit_signals(session_id, timestamp_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS satisfaction_scores (
+                id             TEXT PRIMARY KEY,
+                session_id     TEXT NOT NULL,
+                score          REAL NOT NULL,
+                computed_at_ms INTEGER NOT NULL,
+                label          TEXT NOT NULL,
+                signal_count   INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_satisfaction_scores_session_ts ON satisfaction_scores(session_id, computed_at_ms DESC);
+
             CREATE TABLE IF NOT EXISTS thread_protocol_candidates (
                 thread_id   TEXT PRIMARY KEY,
                 state_json  TEXT NOT NULL,

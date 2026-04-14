@@ -545,3 +545,81 @@ fn preferred_tool_fallback_targets_deduplicates_and_skips_invalid_pairs() {
         vec!["search_files".to_string(), "read_file".to_string()]
     );
 }
+
+#[tokio::test]
+async fn implicit_feedback_persistence_records_signal_rows_and_score_history() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    config.operator_model.allow_implicit_feedback = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_message("thread-persisted-satisfaction", "Please run tests.", true)
+        .await
+        .expect("record operator message");
+    engine
+        .record_tool_hesitation("read_file", "search_files", true, false)
+        .await
+        .expect("record tool hesitation");
+
+    let signals = engine
+        .history
+        .list_implicit_signals("global", 10)
+        .await
+        .expect("load implicit signals");
+    assert_eq!(signals.len(), 1);
+    assert_eq!(signals[0].signal_type, "tool_fallback");
+    assert!((signals[0].weight + 0.12).abs() < f64::EPSILON);
+    assert!(signals[0]
+        .context_snapshot_json
+        .as_deref()
+        .is_some_and(|json| json.contains("search_files")));
+
+    let scores = engine
+        .history
+        .list_satisfaction_scores("global", 10)
+        .await
+        .expect("load satisfaction scores");
+    assert_eq!(scores.len(), 1);
+    assert_eq!(scores[0].label, "healthy");
+    assert_eq!(scores[0].signal_count, 1);
+    assert!((scores[0].score - 0.68).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn operator_correction_persists_thread_scoped_signal_and_score_snapshot() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    config.operator_model.allow_implicit_feedback = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_message("thread-correction-persist", "Actually, use ripgrep instead.", true)
+        .await
+        .expect("record correction message");
+
+    let signals = engine
+        .history
+        .list_implicit_signals("thread-correction-persist", 10)
+        .await
+        .expect("load correction signals");
+    assert_eq!(signals.len(), 1);
+    assert_eq!(signals[0].signal_type, "operator_correction");
+    assert!((signals[0].weight + 0.16).abs() < f64::EPSILON);
+
+    let scores = engine
+        .history
+        .list_satisfaction_scores("thread-correction-persist", 10)
+        .await
+        .expect("load correction satisfaction scores");
+    assert_eq!(scores.len(), 1);
+    assert_eq!(scores[0].label, "fragile");
+    assert_eq!(scores[0].signal_count, 2);
+    assert!((scores[0].score - 0.54).abs() < 1e-9);
+}
