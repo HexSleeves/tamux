@@ -1261,10 +1261,11 @@ async fn execute_decode_emergent_protocol(
         .filter(|v| !v.is_empty())
         .ok_or_else(|| anyhow::anyhow!("missing 'token' argument"))?;
     let current_role = args.get("current_role").and_then(|v| v.as_str());
+    let target_role = args.get("target_role").and_then(|v| v.as_str());
     let normalized_pattern = args.get("normalized_pattern").and_then(|v| v.as_str());
 
     let payload = agent
-        .decode_thread_protocol_token(thread_id, token, current_role, normalized_pattern)
+        .decode_thread_protocol_token(thread_id, token, current_role, target_role, normalized_pattern)
         .await?
         .map(serde_json::to_value)
         .transpose()?;

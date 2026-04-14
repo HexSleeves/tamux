@@ -400,6 +400,7 @@ fn add_available_tools_part_c(
         "properties": {
             "token": { "type": "string", "description": "Protocol token to decode, such as @proto_deadbeef" },
             "current_role": { "type": "string", "description": "Current sender role for context validation (for example: user or assistant)" },
+            "target_role": { "type": "string", "description": "Expected receiver role for context validation (for example: assistant or user)" },
             "normalized_pattern": { "type": "string", "description": "Observed normalized pattern in the current context to validate against the stored signature" }
         },
         "required": ["token"]

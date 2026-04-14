@@ -225,6 +225,7 @@ impl AgentEngine {
         thread_id: &str,
         token: &str,
         current_role: Option<&str>,
+        expected_target_role: Option<&str>,
         normalized_pattern: Option<&str>,
     ) -> anyhow::Result<Option<ProtocolDecodeOutcome>> {
         let Some(entry) = self
@@ -238,20 +239,26 @@ impl AgentEngine {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or("user");
+        let target_role = expected_target_role
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| infer_counterparty_role(current_role));
         let normalized_pattern = normalized_pattern
             .map(crate::agent::emergent_protocol::compressor::compress_pattern_key)
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| entry.context_signature.normalized_pattern.clone());
-        let observed_signal_kind = crate::agent::emergent_protocol::decoder::classify_pattern_key(
-            &normalized_pattern,
-        );
+        let observed_signal_kind =
+            crate::agent::emergent_protocol::decoder::classify_pattern_key(&normalized_pattern);
 
         let role_matches = current_role == entry.context_signature.source_role;
+        let target_role_matches = target_role == entry.context_signature.target_role;
         let pattern_matches = normalized_pattern == entry.context_signature.normalized_pattern;
         let signal_kind_matches = observed_signal_kind
             .map(|kind| kind == entry.context_signature.signal_kind)
             .unwrap_or(false);
-        let context_match = role_matches && pattern_matches && signal_kind_matches;
+        let context_match =
+            role_matches && target_role_matches && pattern_matches && signal_kind_matches;
 
         if !context_match {
             let mut mismatches = Vec::new();
@@ -259,6 +266,12 @@ impl AgentEngine {
                 mismatches.push(format!(
                     "role_mismatch:{}!= {}",
                     current_role, entry.context_signature.source_role
+                ));
+            }
+            if !target_role_matches {
+                mismatches.push(format!(
+                    "target_role_mismatch:{}!= {}",
+                    target_role, entry.context_signature.target_role
                 ));
             }
             if !pattern_matches {
@@ -270,8 +283,7 @@ impl AgentEngine {
             if !signal_kind_matches {
                 mismatches.push(format!(
                     "signal_kind_mismatch:{:?}!={:?}",
-                    observed_signal_kind,
-                    entry.context_signature.signal_kind
+                    observed_signal_kind, entry.context_signature.signal_kind
                 ));
             }
             let fallback_reason = mismatches.join(";");
@@ -510,11 +522,7 @@ fn build_context_signature(thread_id: &str, candidate: &ProtocolCandidate) -> Co
         .last()
         .map(|observation| observation.role.clone())
         .unwrap_or_else(|| "user".to_string());
-    let target_role = if source_role == "assistant" {
-        "user".to_string()
-    } else {
-        "assistant".to_string()
-    };
+    let target_role = infer_counterparty_role(&source_role);
     ContextSignature {
         thread_id: thread_id.to_string(),
         normalized_pattern: candidate.normalized_pattern.clone(),
@@ -522,6 +530,14 @@ fn build_context_signature(thread_id: &str, candidate: &ProtocolCandidate) -> Co
         signal_kind: candidate.kind,
         source_role,
         target_role,
+    }
+}
+
+fn infer_counterparty_role(source_role: &str) -> String {
+    if source_role == "assistant" {
+        "user".to_string()
+    } else {
+        "assistant".to_string()
     }
 }
 
@@ -827,7 +843,7 @@ mod tests {
         let token = registry[0].token.clone();
 
         let decoded = engine
-            .decode_thread_protocol_token(thread_id, &token, Some("user"), Some("continue"))
+            .decode_thread_protocol_token(thread_id, &token, Some("user"), None, Some("continue"))
             .await
             .expect("decode should succeed")
             .expect("entry should decode");
@@ -866,7 +882,7 @@ mod tests {
         let protocol_id = registry[0].protocol_id.clone();
 
         let decoded = engine
-            .decode_thread_protocol_token(thread_id, &token, Some("assistant"), Some("different"))
+            .decode_thread_protocol_token(thread_id, &token, Some("assistant"), None, Some("different"))
             .await
             .expect("decode should succeed")
             .expect("entry should decode");
@@ -934,7 +950,7 @@ mod tests {
             .expect("entry should persist");
 
         let decoded = engine
-            .decode_thread_protocol_token(thread_id, "@proto_signalkind", Some("user"), Some("ok"))
+            .decode_thread_protocol_token(thread_id, "@proto_signalkind", Some("user"), None, Some("ok"))
             .await
             .expect("decode should succeed")
             .expect("entry should decode");
@@ -992,7 +1008,138 @@ mod tests {
             .expect("entry should persist");
 
         let decoded = engine
-            .decode_thread_protocol_token(thread_id, "@proto_signalkind_match", Some("user"), Some("ok"))
+            .decode_thread_protocol_token(
+                thread_id,
+                "@proto_signalkind_match",
+                Some("user"),
+                None,
+                Some("ok"),
+            )
+            .await
+            .expect("decode should succeed")
+            .expect("entry should decode");
+
+        assert!(decoded.context_match);
+        assert_eq!(decoded.outcome, types::ProtocolDecodeOutcomeKind::Match);
+        assert_eq!(decoded.expanded_steps.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn decode_returns_fallback_on_target_role_mismatch_even_when_other_context_matches() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread-emergent-decode-target-role-fallback";
+
+        let entry = ProtocolRegistryEntry {
+            protocol_id: "proto_manual_target_role".to_string(),
+            token: "@proto_targetrole".to_string(),
+            description: "Manual protocol for target-role validation".to_string(),
+            agent_a: "user".to_string(),
+            agent_b: "assistant".to_string(),
+            thread_id: thread_id.to_string(),
+            normalized_pattern: "continue".to_string(),
+            trigger_phrase: "continue".to_string(),
+            signal_kind: types::ProtocolSignalKind::RepeatedContinuationCue,
+            context_signature: types::ContextSignature {
+                thread_id: thread_id.to_string(),
+                normalized_pattern: "continue".to_string(),
+                trigger_phrase: "continue".to_string(),
+                signal_kind: types::ProtocolSignalKind::RepeatedContinuationCue,
+                source_role: "user".to_string(),
+                target_role: "assistant".to_string(),
+            },
+            steps: vec![types::ProtocolStep {
+                step_index: 0,
+                intent: "expand continue cue".to_string(),
+                tool: None,
+                args_template: serde_json::json!({}),
+            }],
+            created_at_ms: 1,
+            activated_at_ms: 1,
+            last_used_ms: None,
+            usage_count: 0,
+            success_rate: 1.0,
+            source_candidate_id: None,
+        };
+
+        engine
+            .persist_protocol_registry_entry(&entry)
+            .await
+            .expect("entry should persist");
+
+        let decoded = engine
+            .decode_thread_protocol_token(
+                thread_id,
+                "@proto_targetrole",
+                Some("user"),
+                Some("user"),
+                Some("continue"),
+            )
+            .await
+            .expect("decode should succeed")
+            .expect("entry should decode");
+
+        assert!(!decoded.context_match);
+        assert_eq!(decoded.outcome, types::ProtocolDecodeOutcomeKind::Fallback);
+        assert!(decoded
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("target_role_mismatch")));
+    }
+
+    #[tokio::test]
+    async fn decode_matches_when_target_role_matches_context_signature() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread-emergent-decode-target-role-match";
+
+        let entry = ProtocolRegistryEntry {
+            protocol_id: "proto_manual_target_role_match".to_string(),
+            token: "@proto_targetrole_match".to_string(),
+            description: "Manual protocol for target-role match validation".to_string(),
+            agent_a: "user".to_string(),
+            agent_b: "assistant".to_string(),
+            thread_id: thread_id.to_string(),
+            normalized_pattern: "continue".to_string(),
+            trigger_phrase: "continue".to_string(),
+            signal_kind: types::ProtocolSignalKind::RepeatedContinuationCue,
+            context_signature: types::ContextSignature {
+                thread_id: thread_id.to_string(),
+                normalized_pattern: "continue".to_string(),
+                trigger_phrase: "continue".to_string(),
+                signal_kind: types::ProtocolSignalKind::RepeatedContinuationCue,
+                source_role: "user".to_string(),
+                target_role: "assistant".to_string(),
+            },
+            steps: vec![types::ProtocolStep {
+                step_index: 0,
+                intent: "expand continue cue".to_string(),
+                tool: None,
+                args_template: serde_json::json!({}),
+            }],
+            created_at_ms: 1,
+            activated_at_ms: 1,
+            last_used_ms: None,
+            usage_count: 0,
+            success_rate: 1.0,
+            source_candidate_id: None,
+        };
+
+        engine
+            .persist_protocol_registry_entry(&entry)
+            .await
+            .expect("entry should persist");
+
+        let decoded = engine
+            .decode_thread_protocol_token(
+                thread_id,
+                "@proto_targetrole_match",
+                Some("user"),
+                Some("assistant"),
+                Some("continue"),
+            )
             .await
             .expect("decode should succeed")
             .expect("entry should decode");
