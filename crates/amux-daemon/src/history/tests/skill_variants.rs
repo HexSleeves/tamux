@@ -265,7 +265,7 @@ async fn cancelled_skill_variant_consultation_does_not_increment_failure_count()
         .resolve_skill_variant("build-pipeline", &["frontend".to_string()])
         .await?
         .expect("variant should resolve");
-    assert_eq!(refreshed.use_count, 1);
+    assert_eq!(refreshed.use_count, 0);
     assert_eq!(refreshed.success_count, 0);
     assert_eq!(
         refreshed.failure_count, 0,

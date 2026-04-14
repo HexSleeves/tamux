@@ -340,12 +340,6 @@ impl HistoryStore {
                     now,
                 ],
             )?;
-            conn.execute(
-                "UPDATE skill_variants \
-                 SET use_count = use_count + 1, last_used_at = ?2, updated_at = ?2 \
-                 WHERE variant_id = ?1",
-                params![variant_id, now],
-            )?;
             Ok(())
         }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
         self.append_telemetry(

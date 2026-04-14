@@ -82,6 +82,9 @@ fn accumulate_graph_skill_scores(
         if row.node.node_type != "skill_variant" {
             continue;
         }
+        if row.via_edge.relation_type != "intent_prefers_skill" {
+            continue;
+        }
         let Some(variant_id) = row.node.id.strip_prefix("skill:") else {
             continue;
         };

@@ -98,7 +98,7 @@ impl HistoryStore {
             for (variant_id, count) in success_counts {
                 conn.execute(
                     "UPDATE skill_variants \
-                     SET success_count = success_count + ?2, updated_at = ?3 \
+                     SET use_count = use_count + ?2, success_count = success_count + ?2, last_used_at = ?3, updated_at = ?3 \
                      WHERE variant_id = ?1",
                     params![variant_id, count as i64, resolved_at],
                 )?;

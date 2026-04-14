@@ -3,7 +3,9 @@ use super::{
     SkillRecommendationAction, SkillRecommendationConfidence,
 };
 use crate::agent::types::SkillRecommendationConfig;
+use crate::agent::{AgentConfig, AgentEngine};
 use crate::history::HistoryStore;
+use crate::session_manager::SessionManager;
 use anyhow::Result;
 use std::fs;
 use tempfile::tempdir;
@@ -27,6 +29,62 @@ fn write_skill(
     content: &str,
 ) -> Result<std::path::PathBuf> {
     write_markdown(root, &format!("{skill_dir}/SKILL.md"), content)
+}
+
+fn sample_task(id: &str, thread_id: &str) -> crate::agent::types::AgentTask {
+    crate::agent::types::AgentTask {
+        id: id.to_string(),
+        title: id.to_string(),
+        description: String::new(),
+        status: crate::agent::types::TaskStatus::Queued,
+        priority: crate::agent::types::TaskPriority::Normal,
+        progress: 0,
+        created_at: 0,
+        started_at: None,
+        completed_at: None,
+        error: None,
+        result: None,
+        thread_id: Some(thread_id.to_string()),
+        source: "user".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: None,
+        goal_run_id: None,
+        goal_run_title: None,
+        goal_step_id: None,
+        goal_step_title: None,
+        parent_task_id: None,
+        parent_thread_id: None,
+        runtime: "daemon".to_string(),
+        retry_count: 0,
+        max_retries: 3,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: None,
+        awaiting_approval_id: None,
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        lane_id: None,
+        last_error: None,
+        logs: Vec::new(),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        override_provider: None,
+        override_model: None,
+        override_system_prompt: None,
+        sub_agent_def_id: None,
+    }
 }
 
 #[test]
@@ -458,6 +516,483 @@ triggers: [backend failure]
             .map(|item| item.record.skill_name.as_str()),
         Some("zeta-debug-playbook"),
         "graph-linked skill with the stronger intent edge should outrank the weaker-linked skill when heuristics otherwise tie"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn successful_settled_consultation_biases_graph_backed_recommendation_ordering() -> Result<()>
+{
+    let root = tempdir()?;
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let skills_root = root.path().join("skills");
+    let generated = skills_root.join("generated");
+
+    let alpha = write_skill(
+        &generated,
+        "alpha-debug-playbook",
+        r#"---
+description: Debug backend failures.
+keywords: [debug, backend]
+triggers: [backend failure]
+---
+
+# Alpha Debug Playbook
+"#,
+    )?;
+    let zeta = write_skill(
+        &generated,
+        "zeta-debug-playbook",
+        r#"---
+description: Debug backend failures.
+keywords: [debug, backend]
+triggers: [backend failure]
+---
+
+# Zeta Debug Playbook
+"#,
+    )?;
+
+    let alpha_record = engine.history.register_skill_document(&alpha).await?;
+    let zeta_record = engine.history.register_skill_document(&zeta).await?;
+
+    engine
+        .history
+        .upsert_memory_node(
+            "intent:debug backend failure",
+            "debug backend failure",
+            "intent",
+            Some("normalized skill discovery intent"),
+            1_717_181_701,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_node(
+            &format!("skill:{}", alpha_record.variant_id),
+            &alpha_record.skill_name,
+            "skill_variant",
+            Some("alpha skill graph node"),
+            1_717_181_702,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_node(
+            &format!("skill:{}", zeta_record.variant_id),
+            &zeta_record.skill_name,
+            "skill_variant",
+            Some("zeta skill graph node"),
+            1_717_181_703,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_edge(
+            "intent:debug backend failure",
+            &format!("skill:{}", zeta_record.variant_id),
+            "intent_prefers_skill",
+            5.0,
+            1_717_181_704,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_edge(
+            "intent:debug backend failure",
+            &format!("skill:{}", alpha_record.variant_id),
+            "intent_prefers_skill",
+            1.0,
+            1_717_181_705,
+        )
+        .await?;
+
+    let alpha_variant_id = alpha_record.variant_id.clone();
+    let zeta_variant_id = zeta_record.variant_id.clone();
+    engine
+        .history
+        .conn
+        .call(move |conn| {
+            conn.execute(
+                "UPDATE skill_variants SET use_count = 10, success_count = 10, failure_count = 0, last_used_at = ?2, updated_at = ?2 WHERE variant_id = ?1",
+                rusqlite::params![alpha_variant_id, 1_717_181_706i64],
+            )?;
+            conn.execute(
+                "UPDATE skill_variants SET use_count = 10, success_count = 10, failure_count = 0, last_used_at = ?2, updated_at = ?2 WHERE variant_id = ?1",
+                rusqlite::params![zeta_variant_id, 1_717_181_706i64],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let thread_id = "thread-ranking-success";
+    let task_id = "task-ranking-success";
+    engine
+        .record_skill_consultation(
+            thread_id,
+            Some(task_id),
+            &alpha_record,
+            &["debug backend failure".to_string()],
+        )
+        .await;
+    let task = sample_task(task_id, thread_id);
+    assert_eq!(
+        engine
+            .settle_task_skill_consultations(&task, "success")
+            .await,
+        1
+    );
+
+    let result = discover_local_skills(
+        &engine.history,
+        &skills_root,
+        "debug backend failure",
+        &[],
+        5,
+        &SkillRecommendationConfig {
+            weak_match_threshold: 0.0,
+            strong_match_threshold: 0.9,
+            ..SkillRecommendationConfig::default()
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        result
+            .recommendations
+            .first()
+            .map(|item| item.record.skill_name.as_str()),
+        Some("alpha-debug-playbook"),
+        "a successfully settled consultation should strengthen the consulted skill enough to outrank the previously stronger graph-linked peer for the same intent"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_settled_consultation_does_not_bias_graph_backed_recommendation_ordering(
+) -> Result<()> {
+    let root = tempdir()?;
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let skills_root = root.path().join("skills");
+    let generated = skills_root.join("generated");
+
+    let alpha = write_skill(
+        &generated,
+        "alpha-debug-playbook",
+        r#"---
+description: Debug backend failures.
+keywords: [debug, backend]
+triggers: [backend failure]
+---
+
+# Alpha Debug Playbook
+"#,
+    )?;
+    let zeta = write_skill(
+        &generated,
+        "zeta-debug-playbook",
+        r#"---
+description: Debug backend failures.
+keywords: [debug, backend]
+triggers: [backend failure]
+---
+
+# Zeta Debug Playbook
+"#,
+    )?;
+
+    let alpha_record = engine.history.register_skill_document(&alpha).await?;
+    let zeta_record = engine.history.register_skill_document(&zeta).await?;
+
+    engine
+        .history
+        .upsert_memory_node(
+            "intent:debug backend failure",
+            "debug backend failure",
+            "intent",
+            Some("normalized skill discovery intent"),
+            1_717_181_701,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_node(
+            &format!("skill:{}", alpha_record.variant_id),
+            &alpha_record.skill_name,
+            "skill_variant",
+            Some("alpha skill graph node"),
+            1_717_181_702,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_node(
+            &format!("skill:{}", zeta_record.variant_id),
+            &zeta_record.skill_name,
+            "skill_variant",
+            Some("zeta skill graph node"),
+            1_717_181_703,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_edge(
+            "intent:debug backend failure",
+            &format!("skill:{}", zeta_record.variant_id),
+            "intent_prefers_skill",
+            5.0,
+            1_717_181_704,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_edge(
+            "intent:debug backend failure",
+            &format!("skill:{}", alpha_record.variant_id),
+            "intent_prefers_skill",
+            1.0,
+            1_717_181_705,
+        )
+        .await?;
+
+    let alpha_variant_id = alpha_record.variant_id.clone();
+    let zeta_variant_id = zeta_record.variant_id.clone();
+    engine
+        .history
+        .conn
+        .call(move |conn| {
+            conn.execute(
+                "UPDATE skill_variants SET use_count = 10, success_count = 10, failure_count = 0, last_used_at = ?2, updated_at = ?2 WHERE variant_id = ?1",
+                rusqlite::params![alpha_variant_id, 1_717_181_706i64],
+            )?;
+            conn.execute(
+                "UPDATE skill_variants SET use_count = 10, success_count = 10, failure_count = 0, last_used_at = ?2, updated_at = ?2 WHERE variant_id = ?1",
+                rusqlite::params![zeta_variant_id, 1_717_181_706i64],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let thread_id = "thread-ranking-failure";
+    let task_id = "task-ranking-failure";
+    engine
+        .record_skill_consultation(
+            thread_id,
+            Some(task_id),
+            &alpha_record,
+            &["debug backend failure".to_string()],
+        )
+        .await;
+    let task = sample_task(task_id, thread_id);
+    assert_eq!(
+        engine
+            .settle_task_skill_consultations(&task, "failure")
+            .await,
+        1
+    );
+
+    let result = discover_local_skills(
+        &engine.history,
+        &skills_root,
+        "debug backend failure",
+        &[],
+        5,
+        &SkillRecommendationConfig {
+            weak_match_threshold: 0.0,
+            strong_match_threshold: 0.9,
+            ..SkillRecommendationConfig::default()
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        result
+            .recommendations
+            .first()
+            .map(|item| item.record.skill_name.as_str()),
+        Some("zeta-debug-playbook"),
+        "a failed settled consultation should not dislodge the previously stronger graph-linked peer for the same intent: {:?}",
+        result
+            .recommendations
+            .iter()
+            .map(|item| (
+                item.record.skill_name.clone(),
+                item.score,
+                item.reason.clone(),
+                item.record.success_count,
+                item.record.failure_count,
+                item.record.use_count,
+            ))
+            .collect::<Vec<_>>()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelled_settled_consultation_does_not_bias_graph_backed_recommendation_ordering(
+) -> Result<()> {
+    let root = tempdir()?;
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let skills_root = root.path().join("skills");
+    let generated = skills_root.join("generated");
+
+    let alpha = write_skill(
+        &generated,
+        "alpha-debug-playbook",
+        r#"---
+description: Debug backend failures.
+keywords: [debug, backend]
+triggers: [backend failure]
+---
+
+# Alpha Debug Playbook
+"#,
+    )?;
+    let zeta = write_skill(
+        &generated,
+        "zeta-debug-playbook",
+        r#"---
+description: Debug backend failures.
+keywords: [debug, backend]
+triggers: [backend failure]
+---
+
+# Zeta Debug Playbook
+"#,
+    )?;
+
+    let alpha_record = engine.history.register_skill_document(&alpha).await?;
+    let zeta_record = engine.history.register_skill_document(&zeta).await?;
+
+    engine
+        .history
+        .upsert_memory_node(
+            "intent:debug backend failure",
+            "debug backend failure",
+            "intent",
+            Some("normalized skill discovery intent"),
+            1_717_181_701,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_node(
+            &format!("skill:{}", alpha_record.variant_id),
+            &alpha_record.skill_name,
+            "skill_variant",
+            Some("alpha skill graph node"),
+            1_717_181_702,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_node(
+            &format!("skill:{}", zeta_record.variant_id),
+            &zeta_record.skill_name,
+            "skill_variant",
+            Some("zeta skill graph node"),
+            1_717_181_703,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_edge(
+            "intent:debug backend failure",
+            &format!("skill:{}", zeta_record.variant_id),
+            "intent_prefers_skill",
+            5.0,
+            1_717_181_704,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_edge(
+            "intent:debug backend failure",
+            &format!("skill:{}", alpha_record.variant_id),
+            "intent_prefers_skill",
+            1.0,
+            1_717_181_705,
+        )
+        .await?;
+
+    let alpha_variant_id = alpha_record.variant_id.clone();
+    let zeta_variant_id = zeta_record.variant_id.clone();
+    engine
+        .history
+        .conn
+        .call(move |conn| {
+            conn.execute(
+                "UPDATE skill_variants SET use_count = 10, success_count = 10, failure_count = 0, last_used_at = ?2, updated_at = ?2 WHERE variant_id = ?1",
+                rusqlite::params![alpha_variant_id, 1_717_181_706i64],
+            )?;
+            conn.execute(
+                "UPDATE skill_variants SET use_count = 10, success_count = 10, failure_count = 0, last_used_at = ?2, updated_at = ?2 WHERE variant_id = ?1",
+                rusqlite::params![zeta_variant_id, 1_717_181_706i64],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let thread_id = "thread-ranking-cancelled";
+    let task_id = "task-ranking-cancelled";
+    engine
+        .record_skill_consultation(
+            thread_id,
+            Some(task_id),
+            &alpha_record,
+            &["debug backend failure".to_string()],
+        )
+        .await;
+    let task = sample_task(task_id, thread_id);
+    assert_eq!(
+        engine
+            .settle_task_skill_consultations(&task, "cancelled")
+            .await,
+        1
+    );
+
+    let result = discover_local_skills(
+        &engine.history,
+        &skills_root,
+        "debug backend failure",
+        &[],
+        5,
+        &SkillRecommendationConfig {
+            weak_match_threshold: 0.0,
+            strong_match_threshold: 0.9,
+            ..SkillRecommendationConfig::default()
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        result
+            .recommendations
+            .first()
+            .map(|item| item.record.skill_name.as_str()),
+        Some("zeta-debug-playbook"),
+        "a cancelled settled consultation should not dislodge the previously stronger graph-linked peer for the same intent: {:?}",
+        result
+            .recommendations
+            .iter()
+            .map(|item| (
+                item.record.skill_name.clone(),
+                item.score,
+                item.reason.clone(),
+                item.record.success_count,
+                item.record.failure_count,
+                item.record.use_count,
+            ))
+            .collect::<Vec<_>>()
     );
 
     Ok(())

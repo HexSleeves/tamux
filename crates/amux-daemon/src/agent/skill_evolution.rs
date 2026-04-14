@@ -252,6 +252,36 @@ impl AgentEngine {
                     );
                 }
             }
+
+            for node_id in consultation
+                .context_tags
+                .iter()
+                .map(|tag| format!("intent:{}", tag.to_ascii_lowercase()))
+                .chain(std::iter::once(format!(
+                    "intent:{}",
+                    variant.skill_name.to_ascii_lowercase()
+                )))
+            {
+                if let Err(error) = self
+                    .history
+                    .upsert_memory_edge(
+                        &node_id,
+                        &skill_node_id,
+                        "intent_prefers_skill",
+                        1.0,
+                        now_millis(),
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        variant_id = %variant.variant_id,
+                        %node_id,
+                        %skill_node_id,
+                        error = %error,
+                        "failed to reinforce recommendation preference edge"
+                    );
+                }
+            }
         }
     }
 
