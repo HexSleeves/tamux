@@ -1,8 +1,8 @@
-# npm Package Publish Notes
+# Publishing tamux to npm
 
-This package publishes the `tamux` npm wrapper and expects GitHub release assets to already exist for the matching version.
+## Prerequisites (one-time setup)
 
-## Pre-publish checklist
+### Pre-publish checklist
 
 1. Build release artifacts for every supported platform.
 2. Confirm each platform zip includes:
@@ -15,9 +15,49 @@ This package publishes the `tamux` npm wrapper and expects GitHub release assets
 3. Confirm each release has matching `SHA256SUMS-<platform>.txt` manifests.
 4. Update `npm-package/package.json` to the release version.
 
-## Release build commands
+### 1. npm account
 
-Unix or macOS:
+```bash
+# If you don't have one yet
+npm adduser
+# If you already have an account
+npm login
+```
+
+This stores an auth token in `~/.npmrc`.
+
+### 2. Check the package name is available
+
+```bash
+npm view tamux
+```
+
+If it returns 404, the name `tamux` is free. If taken, scope it as `@mkurman/tamux` and update the `name` field in `package.json`.
+
+### 3. Create the GitHub repo
+
+Create `mkurman/tamux` on GitHub (must be **public** so release assets are downloadable without auth tokens).
+
+---
+
+## Before each publish
+
+### 4. Build release binaries for every platform
+
+`install.js` expects platform zip bundles and matching checksum manifests on GitHub Releases:
+
+```
+tamux-linux-x86_64.zip
+SHA256SUMS-linux-x86_64.txt
+tamux-darwin-x86_64.zip
+SHA256SUMS-darwin-x86_64.txt
+tamux-windows-x64.zip
+SHA256SUMS-windows-x64.txt
+```
+
+Each zip bundle should contain at least `tamux`, `tamux-daemon`, `tamux-tui`, `tamux-gateway`, and `tamux-mcp`. The published `SHA256SUMS-{platform}.txt` file can contain either the bundle hash or per-binary hashes; the current GitHub release workflow publishes the bundle hash.
+
+Build with:
 
 ```bash
 ./scripts/build-release.sh
