@@ -126,6 +126,9 @@ async fn maybe_emit_unknown_tool_synthesis_proposal_notice(
     let Some(proposal) = detect_cli_wrapper_synthesis_proposal(missing_tool) else {
         return;
     };
+    if has_equivalent_generated_cli_tool(&agent.data_dir, &proposal).unwrap_or(false) {
+        return;
+    }
     let synthesize_args = serde_json::json!({
         "kind": "cli",
         "target": proposal.target,
@@ -165,6 +168,9 @@ async fn maybe_emit_successful_shell_synthesis_proposal_notice(
     let Some(proposal) = detect_cli_wrapper_synthesis_proposal_from_command(command) else {
         return;
     };
+    if has_equivalent_generated_cli_tool(&agent.data_dir, &proposal).unwrap_or(false) {
+        return;
+    }
     let synthesize_args = serde_json::json!({
         "kind": "cli",
         "target": proposal.target,

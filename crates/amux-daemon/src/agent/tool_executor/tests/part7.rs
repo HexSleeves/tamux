@@ -5646,3 +5646,129 @@ async fn repeated_shell_fallback_pattern_upgrades_tool_synthesis_proposal_notice
         other => panic!("expected workflow notice, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn unknown_cli_like_tool_does_not_emit_proposal_when_equivalent_generated_tool_exists() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.tool_synthesis.enabled = true;
+    let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+    let (event_tx, mut event_rx) = broadcast::channel(8);
+
+    let synth = engine
+        .synthesize_tool_json(
+            &serde_json::json!({
+                "kind": "cli",
+                "target": "cargo check",
+                "name": "cargo_check",
+                "activate": false,
+            })
+            .to_string(),
+        )
+        .await
+        .expect("synthesize generated tool record");
+    let record: serde_json::Value = serde_json::from_str(&synth).expect("parse synth record");
+    let tool_name = record
+        .get("id")
+        .and_then(|value| value.as_str())
+        .expect("generated tool id");
+    engine
+        .activate_generated_tool_json(tool_name)
+        .await
+        .expect("activate generated tool");
+
+    let result = execute_tool(
+        &ToolCall {
+            id: "call-tool-gap-existing-cargo-check".to_string(),
+            function: ToolFunction {
+                name: "cargo_check".to_string(),
+                arguments: serde_json::json!({}).to_string(),
+            },
+            weles_review: None,
+        },
+        &engine,
+        "thread-tool-gap-existing",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(result.is_error, "unknown tool should still error");
+    assert!(result.content.contains("Unknown tool: cargo_check"));
+    assert!(
+        timeout(Duration::from_millis(150), event_rx.recv())
+            .await
+            .is_err(),
+        "existing generated tool should suppress fresh synthesis proposal notices"
+    );
+}
+
+#[tokio::test]
+async fn successful_safe_shell_command_does_not_emit_proposal_when_equivalent_generated_tool_exists() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.tool_synthesis.enabled = true;
+    let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+    let (event_tx, mut event_rx) = broadcast::channel(8);
+
+    engine
+        .synthesize_tool_json(
+            &serde_json::json!({
+                "kind": "cli",
+                "target": "git status",
+                "name": "git_status",
+                "activate": false,
+            })
+            .to_string(),
+        )
+        .await
+        .expect("synthesize generated tool record");
+
+    let repo_root = root.path().join("repo-shell-gap-existing");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("git init should succeed");
+
+    let result = execute_tool(
+        &ToolCall {
+            id: "call-shell-gap-existing-git-status".to_string(),
+            function: ToolFunction {
+                name: "bash_command".to_string(),
+                arguments: serde_json::json!({
+                    "command": "git status --short",
+                    "cwd": repo_root,
+                })
+                .to_string(),
+            },
+            weles_review: None,
+        },
+        &engine,
+        "thread-shell-gap-existing",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(!result.is_error, "shell command should succeed: {}", result.content);
+    assert!(
+        timeout(Duration::from_millis(150), event_rx.recv())
+            .await
+            .is_err(),
+        "existing equivalent generated tool should suppress shell fallback synthesis proposal notices"
+    );
+}

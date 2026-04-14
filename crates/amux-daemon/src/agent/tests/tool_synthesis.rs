@@ -47,6 +47,77 @@ fn detect_cli_wrapper_synthesis_proposal_from_command_rejects_complex_or_mutatin
 }
 
 #[test]
+fn equivalent_generated_cli_tool_matches_target_and_ignores_archived_records() -> Result<()> {
+    let agent_data_dir = std::env::temp_dir().join(format!(
+        "amux-generated-tools-existing-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&agent_data_dir)?;
+
+    let proposal = super::detect_cli_wrapper_synthesis_proposal_from_command("git status --short")
+        .expect("proposal should parse");
+
+    save_generated_tool(
+        &agent_data_dir,
+        &GeneratedToolRecord {
+            id: "git_status_existing".to_string(),
+            name: "git_status_existing".to_string(),
+            description: "existing tool".to_string(),
+            kind: GeneratedToolKind::Cli,
+            parameters: Vec::new(),
+            status: "active".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            last_used_at: None,
+            calls_total: 0,
+            calls_success: 0,
+            calls_failure: 0,
+            calls_timeout: 0,
+            sessions_used: 0,
+            last_session_key: None,
+            promoted_skill_path: None,
+            cli: Some(GeneratedCliSpec {
+                invocation: vec!["git".to_string(), "status".to_string()],
+                help_source: "git status".to_string(),
+            }),
+            openapi: None,
+        },
+    )?;
+
+    assert!(super::has_equivalent_generated_cli_tool(&agent_data_dir, &proposal)?);
+
+    save_generated_tool(
+        &agent_data_dir,
+        &GeneratedToolRecord {
+            id: "git_status_archived".to_string(),
+            name: "git_status_archived".to_string(),
+            description: "archived tool".to_string(),
+            kind: GeneratedToolKind::Cli,
+            parameters: Vec::new(),
+            status: "archived".to_string(),
+            created_at: 2,
+            updated_at: 2,
+            last_used_at: None,
+            calls_total: 0,
+            calls_success: 0,
+            calls_failure: 0,
+            calls_timeout: 0,
+            sessions_used: 0,
+            last_session_key: None,
+            promoted_skill_path: None,
+            cli: Some(GeneratedCliSpec {
+                invocation: vec!["git".to_string(), "status".to_string()],
+                help_source: "git status".to_string(),
+            }),
+            openapi: None,
+        },
+    )?;
+
+    let _ = std::fs::remove_dir_all(&agent_data_dir);
+    Ok(())
+}
+
+#[test]
 fn prune_generated_tools_keeps_active_and_promoted_records() -> Result<()> {
     let agent_data_dir = std::env::temp_dir().join(format!(
         "amux-generated-tools-test-{}",
