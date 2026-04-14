@@ -32,6 +32,7 @@ pub(super) fn rank_skill_candidates(
     candidates: Vec<SkillCandidateInput>,
     query: &str,
     workspace_tags: &[String],
+    graph_scores: &std::collections::HashMap<String, f64>,
     limit: usize,
     cfg: &SkillRecommendationConfig,
 ) -> SkillDiscoveryResult {
@@ -46,7 +47,7 @@ pub(super) fn rank_skill_candidates(
 
     let mut ranked = candidates
         .into_iter()
-        .map(|candidate| score_candidate(candidate, &query_tokens, workspace_tags))
+        .map(|candidate| score_candidate(candidate, &query_tokens, workspace_tags, graph_scores))
         .collect::<Vec<_>>();
 
     ranked.sort_by(|left, right| compare_candidates(left, right));
@@ -89,6 +90,12 @@ fn compare_candidates(left: &CandidateScore, right: &CandidateScore) -> std::cmp
         .unwrap_or(std::cmp::Ordering::Equal)
         .then_with(|| {
             right
+                .graph_score
+                .partial_cmp(&left.graph_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then_with(|| {
+            right
                 .recommendation
                 .record
                 .success_count
@@ -113,6 +120,7 @@ fn score_candidate(
     candidate: SkillCandidateInput,
     query_tokens: &BTreeSet<String>,
     workspace_tags: &[String],
+    graph_scores: &std::collections::HashMap<String, f64>,
 ) -> CandidateScore {
     let search_tokens = tokenize(&candidate.metadata.search_text);
     let matched_terms = query_tokens
@@ -150,10 +158,17 @@ fn score_candidate(
     } else {
         0.0
     };
+    let graph_score = graph_scores
+        .get(&candidate.record.variant_id)
+        .copied()
+        .unwrap_or(0.0)
+        .clamp(0.0, 10.0)
+        / 10.0;
     let score = (lexical_overlap * 0.62)
         + (workspace_overlap * 0.16)
         + (history_score * 0.20)
         + (recency_score * 0.06)
+        + (graph_score * 0.04)
         + lifecycle_bonus
         + process_bonus
         + built_in_bonus;
@@ -166,12 +181,14 @@ fn score_candidate(
                 &matched_workspace_tags,
                 lexical_overlap,
                 workspace_overlap,
+                graph_score,
             ),
             score: score.clamp(0.0, 1.0),
             excerpt: candidate.excerpt,
             metadata: candidate.metadata,
             record: candidate.record,
         },
+        graph_score,
     }
 }
 
@@ -216,6 +233,7 @@ fn build_reason(
     matched_workspace_tags: &[String],
     lexical_overlap: f64,
     workspace_overlap: f64,
+    graph_score: f64,
 ) -> String {
     let mut reasons = Vec::new();
     if !matched_terms.is_empty() {
@@ -241,6 +259,9 @@ fn build_reason(
         record.success_rate() * 100.0,
         record.use_count
     ));
+    if graph_score > 0.0 {
+        reasons.push(format!("graph affinity {:.0}%", graph_score * 100.0));
+    }
     reasons.join("; ")
 }
 

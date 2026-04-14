@@ -4,7 +4,9 @@ mod types;
 
 use crate::agent::skill_registry::{to_community_entry, RegistryClient};
 use crate::agent::types::SkillRecommendationConfig;
-use crate::history::{derive_skill_metadata, HistoryStore, SkillVariantRecord};
+use crate::history::{
+    derive_skill_metadata, HistoryStore, MemoryGraphNeighborRow, SkillVariantRecord,
+};
 use anyhow::{Context, Result};
 use base64::Engine;
 use ranking::rank_skill_candidates;
@@ -44,13 +46,49 @@ pub(crate) async fn discover_local_skills(
         }
     };
 
+    let graph_scores = load_graph_backed_skill_scores(history, query).await?;
+
     Ok(rank_skill_candidates(
         candidates,
         query,
         workspace_tags,
+        &graph_scores,
         limit,
         cfg,
     ))
+}
+
+async fn load_graph_backed_skill_scores(
+    history: &HistoryStore,
+    query: &str,
+) -> Result<std::collections::HashMap<String, f64>> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let intent_node_id = format!("intent:{}", trimmed.to_ascii_lowercase());
+    let neighbors = history.list_memory_graph_neighbors(&intent_node_id, 64).await?;
+    Ok(accumulate_graph_skill_scores(neighbors))
+}
+
+fn accumulate_graph_skill_scores(
+    neighbors: Vec<MemoryGraphNeighborRow>,
+) -> std::collections::HashMap<String, f64> {
+    let mut scores = std::collections::HashMap::new();
+    for row in neighbors {
+        if row.node.node_type != "skill_variant" {
+            continue;
+        }
+        let Some(variant_id) = row.node.id.strip_prefix("skill:") else {
+            continue;
+        };
+        let entry = scores.entry(variant_id.to_string()).or_insert(0.0);
+        if row.via_edge.weight > *entry {
+            *entry = row.via_edge.weight;
+        }
+    }
+    scores
 }
 
 fn schedule_background_skill_catalog_sync(history: HistoryStore, skills_root: PathBuf) {

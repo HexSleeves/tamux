@@ -357,6 +357,113 @@ triggers: [runtime failure]
 }
 
 #[tokio::test]
+async fn discover_local_skills_prefers_graph_linked_skill_when_heuristics_tie() -> Result<()> {
+    let root = tempdir()?;
+    let store = HistoryStore::new_test_store(root.path()).await?;
+    let skills_root = root.path().join("skills");
+    let generated = skills_root.join("generated");
+
+    let alpha = write_skill(
+        &generated,
+        "alpha-debug-playbook",
+        r#"---
+description: Debug backend failures.
+keywords: [debug, backend]
+triggers: [backend failure]
+---
+
+# Alpha Debug Playbook
+"#,
+    )?;
+    let zeta = write_skill(
+        &generated,
+        "zeta-debug-playbook",
+        r#"---
+description: Debug backend failures.
+keywords: [debug, backend]
+triggers: [backend failure]
+---
+
+# Zeta Debug Playbook
+"#,
+    )?;
+
+    let alpha_record = store.register_skill_document(&alpha).await?;
+    let zeta_record = store.register_skill_document(&zeta).await?;
+
+    store
+        .upsert_memory_node(
+            "intent:debug backend failure",
+            "debug backend failure",
+            "intent",
+            Some("normalized skill discovery intent"),
+            1_717_181_701,
+        )
+        .await?;
+    store
+        .upsert_memory_node(
+            &format!("skill:{}", alpha_record.variant_id),
+            &alpha_record.skill_name,
+            "skill_variant",
+            Some("alpha skill graph node"),
+            1_717_181_702,
+        )
+        .await?;
+    store
+        .upsert_memory_node(
+            &format!("skill:{}", zeta_record.variant_id),
+            &zeta_record.skill_name,
+            "skill_variant",
+            Some("zeta skill graph node"),
+            1_717_181_703,
+        )
+        .await?;
+    store
+        .upsert_memory_edge(
+            "intent:debug backend failure",
+            &format!("skill:{}", zeta_record.variant_id),
+            "intent_prefers_skill",
+            5.0,
+            1_717_181_704,
+        )
+        .await?;
+    store
+        .upsert_memory_edge(
+            "intent:debug backend failure",
+            &format!("skill:{}", alpha_record.variant_id),
+            "intent_prefers_skill",
+            1.0,
+            1_717_181_705,
+        )
+        .await?;
+
+    let result = discover_local_skills(
+        &store,
+        &skills_root,
+        "debug backend failure",
+        &[],
+        5,
+        &SkillRecommendationConfig {
+            weak_match_threshold: 0.0,
+            strong_match_threshold: 0.9,
+            ..SkillRecommendationConfig::default()
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        result
+            .recommendations
+            .first()
+            .map(|item| item.record.skill_name.as_str()),
+        Some("zeta-debug-playbook"),
+        "graph-linked skill with the stronger intent edge should outrank the weaker-linked skill when heuristics otherwise tie"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn planning_skill_is_recommended_for_architecture_synthesis_requests() -> Result<()> {
     let root = tempdir()?;
     let store = HistoryStore::new_test_store(root.path()).await?;
