@@ -1248,6 +1248,34 @@ async fn execute_reload_emergent_protocol_registry(
     Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()))
 }
 
+async fn execute_decode_emergent_protocol(
+    args: &serde_json::Value,
+    agent: &AgentEngine,
+    thread_id: &str,
+) -> Result<String> {
+    let token = args
+        .get("token")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'token' argument"))?;
+    let current_role = args.get("current_role").and_then(|v| v.as_str());
+    let normalized_pattern = args.get("normalized_pattern").and_then(|v| v.as_str());
+
+    let payload = agent
+        .decode_thread_protocol_token(thread_id, token, current_role, normalized_pattern)
+        .await?
+        .map(serde_json::to_value)
+        .transpose()?;
+
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "thread_id": thread_id,
+        "token": token,
+        "decode": payload,
+    }))
+    .unwrap_or_else(|_| "{}".to_string()))
+}
+
 async fn execute_get_emergent_protocol_usage_log(
     args: &serde_json::Value,
     agent: &AgentEngine,

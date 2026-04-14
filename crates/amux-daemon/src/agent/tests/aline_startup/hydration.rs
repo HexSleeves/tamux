@@ -565,7 +565,7 @@ async fn successful_noop_reconciliation_clears_stale_dedupe_state() {
     tokio::fs::write(
         harness.engine.data_dir.join("aline-startup-state.json"),
         serde_json::json!({
-            "updated_at": "2026-04-07T12:00:00Z",
+            "updated_at": recent_timestamp(5),
             "recently_imported_session_ids": ["stale-session"],
         })
         .to_string(),

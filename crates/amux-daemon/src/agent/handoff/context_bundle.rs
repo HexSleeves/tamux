@@ -118,6 +118,7 @@ impl Default for ContextBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::handoff::{EpisodeRef, PartialOutput};
 
     fn make_bundle_small() -> ContextBundle {
         ContextBundle::new("Write a function".to_string(), "Must compile".to_string())

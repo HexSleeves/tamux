@@ -695,7 +695,14 @@ impl AgentEngine {
             .stderr(std::process::Stdio::null())
             .stdin(std::process::Stdio::null());
 
-        let output = match tokio::time::timeout(Duration::from_secs(4), cmd.output()).await {
+        // Bootstrap recall is opportunistic. It should never add noticeable latency
+        // to the first visible turn on a new thread.
+        let output = match tokio::time::timeout(
+            Duration::from_millis(ONECONTEXT_BOOTSTRAP_TIMEOUT_MS),
+            cmd.output(),
+        )
+        .await
+        {
             Ok(Ok(output)) if output.status.success() => output,
             _ => return None,
         };

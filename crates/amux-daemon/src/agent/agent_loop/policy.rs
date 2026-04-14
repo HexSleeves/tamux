@@ -2,6 +2,15 @@ use super::*;
 
 pub(super) const POLICY_TOOL_OUTCOME_HISTORY_LIMIT: usize = 6;
 
+pub(super) fn metacognitive_calibrated_band(
+    assessment: &super::metacognitive::self_assessment::Assessment,
+    calibration_offset: f64,
+) -> crate::agent::explanation::ConfidenceBand {
+    crate::agent::explanation::confidence_band(
+        (assessment.confidence + calibration_offset).clamp(0.0, 1.0),
+    )
+}
+
 pub(super) fn summarize_tool_result_for_policy(
     tool_name: &str,
     result: &ToolResult,
@@ -26,6 +35,23 @@ fn summarize_policy_self_assessment(
     } else {
         Some(reasoning.to_string())
     }
+}
+
+fn summarize_policy_self_assessment_with_metacognition(
+    assessment: &super::metacognitive::self_assessment::Assessment,
+    calibration_offset: f64,
+) -> Option<String> {
+    let mut summary = summarize_policy_self_assessment(assessment).unwrap_or_default();
+    let calibrated_band = metacognitive_calibrated_band(assessment, calibration_offset);
+    let calibrated_label = crate::agent::uncertainty::confidence::confidence_label(calibrated_band);
+    if !summary.is_empty() {
+        summary.push_str("; ");
+    }
+    summary.push_str(&format!(
+        "metacognitive calibrated confidence={} (offset {:+.2})",
+        calibrated_label, calibration_offset
+    ));
+    Some(summary)
 }
 
 pub(super) fn policy_scope_for_task(
@@ -173,6 +199,11 @@ async fn build_policy_context_for_tool_result(
         awareness_stuck,
         repeated_approach,
     );
+    let calibration_offset = engine
+        .meta_cognitive_self_model
+        .read()
+        .await
+        .calibration_offset;
     let trigger_input = super::orchestrator_policy::PolicyTriggerInput {
         thread_id: thread_id.to_string(),
         goal_run_id: task.goal_run_id.clone(),
@@ -238,7 +269,10 @@ async fn build_policy_context_for_tool_result(
             continuity_summary: runtime_continuity.continuity_summary,
             counter_who_context,
             negative_constraints_context: runtime_continuity.negative_constraints_context,
-            self_assessment_summary: summarize_policy_self_assessment(&assessment),
+            self_assessment_summary: summarize_policy_self_assessment_with_metacognition(
+                &assessment,
+                calibration_offset,
+            ),
             thread_context,
             recent_decision_summary: None,
         },

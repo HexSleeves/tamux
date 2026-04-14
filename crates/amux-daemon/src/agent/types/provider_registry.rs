@@ -344,6 +344,22 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         supports_response_continuity: false,
     },
     ProviderDefinition {
+        id: PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN,
+        name: "Xiaomi MiMo Token Plan",
+        default_base_url: "https://api.xiaomimimo.com/v1",
+        default_model: "mimo-v2-pro",
+        api_type: ApiType::OpenAI,
+        auth_method: AuthMethod::Bearer,
+        models: XIAOMI_MIMO_TOKEN_PLAN_MODELS,
+        supports_model_fetch: false,
+        anthropic_base_url: None,
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: ApiTransport::ChatCompletions,
+        native_transport_kind: None,
+        native_base_url: None,
+        supports_response_continuity: false,
+    },
+    ProviderDefinition {
         id: PROVIDER_ID_OPENCODE_ZEN,
         name: "OpenCode Zen",
         default_base_url: "https://opencode.ai/zen/v1",
@@ -466,4 +482,3 @@ pub fn get_provider_base_url(provider_id: &str, model: &str, configured_url: &st
         None => configured_url.to_string(),
     }
 }
-

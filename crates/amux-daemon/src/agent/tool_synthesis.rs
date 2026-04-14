@@ -13,9 +13,11 @@ use super::*;
 mod runtime;
 
 use runtime::{
-    default_parameter_location, default_parameter_type, generated_tools_dir, run_cli_generated_tool,
-    run_openapi_generated_tool, synthesize_cli_tool, synthesize_openapi_tool,
+    default_parameter_location, default_parameter_type, generated_tools_dir,
+    run_cli_generated_tool, run_openapi_generated_tool, synthesize_cli_tool,
+    synthesize_openapi_tool,
 };
+pub(crate) use runtime::parse_cli_help_parameters;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

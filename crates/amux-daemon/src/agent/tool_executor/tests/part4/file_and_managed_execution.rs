@@ -204,9 +204,7 @@ fn apply_patch_reports_expected_change_marker_format() {
         })))
         .expect_err("apply_patch should reject context-only update hunks");
 
-    assert!(error
-        .to_string()
-        .contains("expected at least one '+' or '-' line"));
+    assert!(error.to_string().contains("did not contain any hunks"));
 }
 
 #[test]

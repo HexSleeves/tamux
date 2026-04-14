@@ -73,6 +73,7 @@ export type AgentProviderId =
   | "minimax"
   | "minimax-coding-plan"
   | "alibaba-coding-plan"
+  | "xiaomi-mimo-token-plan"
   | "opencode-zen"
   | "custom";
 
@@ -98,6 +99,7 @@ export const AGENT_PROVIDER_IDS: AgentProviderId[] = [
   "minimax",
   "minimax-coding-plan",
   "alibaba-coding-plan",
+  "xiaomi-mimo-token-plan",
   "opencode-zen",
   "custom",
 ];

@@ -764,7 +764,9 @@ fn apply_patch_tool_uses_top_level_object_schema() {
     async fn debate_tool_run_and_get_session_round_trip() {
         let root = tempdir().expect("tempdir");
         let manager = SessionManager::new_test(root.path()).await;
-        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let mut config = AgentConfig::default();
+        config.debate.enabled = true;
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
 
         let response = execute_run_debate(
             &serde_json::json!({ "topic": "choose rollout strategy" }),

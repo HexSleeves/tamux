@@ -193,10 +193,19 @@ fn resolve_thread_handoff_agent(alias: &str) -> Option<(String, String)> {
             CONCIERGE_AGENT_ID.to_string(),
             CONCIERGE_AGENT_NAME.to_string(),
         )),
-        SWAROZYC_AGENT_ID => Some((SWAROZYC_AGENT_ID.to_string(), SWAROZYC_AGENT_NAME.to_string())),
-        RADOGOST_AGENT_ID => Some((RADOGOST_AGENT_ID.to_string(), RADOGOST_AGENT_NAME.to_string())),
+        SWAROZYC_AGENT_ID => Some((
+            SWAROZYC_AGENT_ID.to_string(),
+            SWAROZYC_AGENT_NAME.to_string(),
+        )),
+        RADOGOST_AGENT_ID => Some((
+            RADOGOST_AGENT_ID.to_string(),
+            RADOGOST_AGENT_NAME.to_string(),
+        )),
         DOMOWOJ_AGENT_ID => Some((DOMOWOJ_AGENT_ID.to_string(), DOMOWOJ_AGENT_NAME.to_string())),
-        SWIETOWIT_AGENT_ID => Some((SWIETOWIT_AGENT_ID.to_string(), SWIETOWIT_AGENT_NAME.to_string())),
+        SWIETOWIT_AGENT_ID => Some((
+            SWIETOWIT_AGENT_ID.to_string(),
+            SWIETOWIT_AGENT_NAME.to_string(),
+        )),
         ROD_AGENT_ID => Some((ROD_AGENT_ID.to_string(), ROD_AGENT_NAME.to_string())),
         WELES_AGENT_ID => Some((WELES_AGENT_ID.to_string(), WELES_AGENT_NAME.to_string())),
         _ => None,

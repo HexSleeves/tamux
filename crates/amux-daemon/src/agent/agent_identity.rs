@@ -7,7 +7,9 @@ use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 
-use amux_protocol::{AGENT_ID_RAROG, AGENT_ID_SWAROG, AGENT_NAME_RAROG, AGENT_NAME_SWAROG};
+use amux_protocol::{
+    AGENT_HANDLE_SVAROG, AGENT_ID_RAROG, AGENT_ID_SWAROG, AGENT_NAME_RAROG, AGENT_NAME_SWAROG,
+};
 
 use super::types::{AgentConfig, AgentTask, BuiltinPersonaOverrides};
 
@@ -19,6 +21,7 @@ pub(super) const INTERNAL_DM_THREAD_PREFIX: &str = "dm:";
 pub(super) const PARTICIPANT_PLAYGROUND_THREAD_PREFIX: &str = "playground:";
 pub(super) const PERSONA_MARKER: &str = "Agent persona:";
 pub(super) const PERSONA_ID_MARKER: &str = "Agent persona id:";
+pub(super) const MAIN_AGENT_PUBLIC_ALIAS: &str = AGENT_HANDLE_SVAROG;
 pub(super) const MAIN_AGENT_ALIAS: &str = "main";
 pub(super) const MAIN_AGENT_LEGACY_ALIAS: &str = "main-agent";
 pub(super) const MAIN_AGENT_FALLBACK_ALIAS: &str = "assistant";
@@ -101,7 +104,11 @@ fn persona_by_alias(alias: &str) -> Option<&'static PersonaSeed> {
 pub(super) fn canonical_agent_id(alias: &str) -> &'static str {
     let normalized = alias.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        MAIN_AGENT_ID | MAIN_AGENT_ALIAS | MAIN_AGENT_LEGACY_ALIAS | MAIN_AGENT_FALLBACK_ALIAS => {
+        MAIN_AGENT_ID
+        | MAIN_AGENT_PUBLIC_ALIAS
+        | MAIN_AGENT_ALIAS
+        | MAIN_AGENT_LEGACY_ALIAS
+        | MAIN_AGENT_FALLBACK_ALIAS => {
             MAIN_AGENT_ID
         }
         CONCIERGE_AGENT_ID | CONCIERGE_AGENT_ALIAS | CONCIERGE_AGENT_LEGACY_ALIAS => {
@@ -129,7 +136,11 @@ pub(super) fn canonical_agent_name(alias: &str) -> &'static str {
 pub(super) fn canonical_agent_guidance(alias: &str) -> Option<&'static str> {
     let normalized = alias.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        MAIN_AGENT_ID | MAIN_AGENT_ALIAS | MAIN_AGENT_LEGACY_ALIAS | MAIN_AGENT_FALLBACK_ALIAS => {
+        MAIN_AGENT_ID
+        | MAIN_AGENT_PUBLIC_ALIAS
+        | MAIN_AGENT_ALIAS
+        | MAIN_AGENT_LEGACY_ALIAS
+        | MAIN_AGENT_FALLBACK_ALIAS => {
             None
         }
         CONCIERGE_AGENT_ID | CONCIERGE_AGENT_ALIAS | CONCIERGE_AGENT_LEGACY_ALIAS => None,

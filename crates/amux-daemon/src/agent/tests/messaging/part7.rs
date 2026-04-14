@@ -1071,11 +1071,25 @@ async fn apply_participant_command_runs_initial_observer_review() {
         .await
         .expect("participant command should succeed");
 
-    let suggestions = engine.list_thread_participant_suggestions(thread_id).await;
-    assert_eq!(suggestions.len(), 1);
-    assert_eq!(
-        suggestions[0].instruction,
-        "Initial review from current thread."
+    let thread_messages = {
+        let threads = engine.threads.read().await;
+        threads
+            .get(thread_id)
+            .expect("thread should still exist after participant command")
+            .messages
+            .clone()
+    };
+    assert!(thread_messages.iter().any(|message| {
+        message.role == MessageRole::Assistant
+            && message.author_agent_id.as_deref() == Some("weles")
+            && message.content == "Initial review from current thread."
+    }));
+    assert!(
+        engine
+            .list_thread_participant_suggestions(thread_id)
+            .await
+            .is_empty(),
+        "initial observer suggestion should be released instead of staying queued"
     );
 }
 
@@ -1107,6 +1121,21 @@ async fn participant_suggestions_not_visible_to_participants() {
         .upsert_thread_participant(thread_id, "weles", "verify claims")
         .await
         .expect("participant should register");
+    {
+        let mut streams = engine.stream_cancellations.lock().await;
+        streams.insert(
+            thread_id.to_string(),
+            StreamCancellationEntry {
+                generation: 1,
+                token: CancellationToken::new(),
+                retry_now: Arc::new(Notify::new()),
+                started_at: 1,
+                last_progress_at: 1,
+                last_progress_kind: StreamProgressKind::Started,
+                last_progress_excerpt: String::new(),
+            },
+        );
+    }
     engine
         .queue_thread_participant_suggestion(thread_id, "weles", "Hidden", false)
         .await

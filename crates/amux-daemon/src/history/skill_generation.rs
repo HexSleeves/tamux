@@ -260,7 +260,14 @@ impl HistoryStore {
             if !live_candidates.is_empty() {
                 candidates = live_candidates;
             }
-            candidates.sort_by(|left, right| compare_skill_variants(left, right, &context_tags));
+            candidates.sort_by(|left, right| {
+                let left_current_path = skill_variant_matches_current_relative_path(&skills_root, left);
+                let right_current_path =
+                    skill_variant_matches_current_relative_path(&skills_root, right);
+                right_current_path
+                    .cmp(&left_current_path)
+                    .then_with(|| compare_skill_variants(left, right, &context_tags))
+            });
             Ok(candidates.into_iter().next())
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
@@ -366,6 +373,26 @@ fn skill_variant_document_exists(skills_root: &Path, record: &SkillVariantRecord
         return false;
     };
     canonical.starts_with(root_canonical)
+}
+
+fn skill_variant_matches_current_relative_path(
+    skills_root: &Path,
+    record: &SkillVariantRecord,
+) -> bool {
+    let root_canonical =
+        std::fs::canonicalize(skills_root).unwrap_or_else(|_| skills_root.to_path_buf());
+    let candidate = resolve_skill_variant_document_path(skills_root, &record.relative_path);
+    let Ok(canonical) = std::fs::canonicalize(candidate) else {
+        return false;
+    };
+    let Ok(relative) = canonical.strip_prefix(root_canonical) else {
+        return false;
+    };
+    normalize_relative_path(&record.relative_path) == normalize_relative_path(&relative.to_string_lossy())
+}
+
+fn normalize_relative_path(path: &str) -> String {
+    path.replace('\\', "/").trim_matches('/').to_string()
 }
 
 fn resolve_skill_variant_document_path(skills_root: &Path, relative_path: &str) -> PathBuf {

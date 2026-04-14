@@ -33,6 +33,7 @@ impl TuiModel {
             default_session_id: None,
             tick_counter: 0,
             agent_activity: None,
+            participant_playground_activity: std::collections::HashMap::new(),
             last_error: None,
             error_active: false,
             error_tick: 0,

@@ -138,6 +138,13 @@ struct PendingBuiltinPersonaSetup {
 }
 
 #[derive(Clone, Debug)]
+struct ParticipantPlaygroundActivity {
+    visible_thread_id: String,
+    participant_agent_id: String,
+    participant_agent_name: String,
+}
+
+#[derive(Clone, Debug)]
 struct PendingChatActionConfirm {
     message_index: usize,
     action: PendingChatActionKind,
@@ -306,6 +313,8 @@ pub struct TuiModel {
 
     // Agent activity state (from daemon events, not local buffers)
     agent_activity: Option<String>,
+    participant_playground_activity:
+        std::collections::HashMap<String, ParticipantPlaygroundActivity>,
 
     // Error state
     last_error: Option<String>,

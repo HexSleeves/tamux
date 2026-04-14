@@ -6,7 +6,7 @@ use crate::agent::{
 use crate::session_manager::SessionManager;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -217,7 +217,14 @@ pub(super) fn session_show_missing_output() -> Result<StartupCommandOutput> {
     })
 }
 
+pub(super) fn recent_timestamp(minutes_ago: i64) -> String {
+    (Utc::now() - ChronoDuration::minutes(minutes_ago))
+        .to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
 pub(super) fn single_session_list_output(status: &str) -> Result<StartupCommandOutput> {
+    let created_at = recent_timestamp(180);
+    let last_activity = recent_timestamp(1);
     session_list_output(&format!(
         r#"{{
     "page": 1,
@@ -229,8 +236,8 @@ pub(super) fn single_session_list_output(status: &str) -> Result<StartupCommandO
             "source": "codex",
             "project_name": "cmux-next",
             "session_id": "{FULL_SESSION_ID}",
-            "created_at": "2026-04-07T09:00:00.000000",
-            "last_activity": "2026-04-07T11:59:00.000000",
+            "created_at": "{created_at}",
+            "last_activity": "{last_activity}",
             "session_file": "/tmp/aline/cmux-next/{FULL_SESSION_ID}.json"
         }}
     ]

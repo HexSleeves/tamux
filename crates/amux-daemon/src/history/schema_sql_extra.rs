@@ -221,6 +221,36 @@ pub(super) fn extended_schema_sql() -> &'static str {
             CREATE INDEX IF NOT EXISTS idx_heartbeat_history_ts ON heartbeat_history(cycle_timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_heartbeat_history_actionable ON heartbeat_history(actionable, cycle_timestamp DESC);
 
+            CREATE TABLE IF NOT EXISTS meta_cognition_model (
+                id                  INTEGER PRIMARY KEY CHECK (id = 1),
+                agent_id            TEXT NOT NULL,
+                calibration_offset  REAL NOT NULL DEFAULT 0.0,
+                last_updated_at     INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS cognitive_biases (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_id              INTEGER NOT NULL,
+                name                  TEXT NOT NULL,
+                trigger_pattern_json  TEXT NOT NULL,
+                mitigation_prompt     TEXT NOT NULL,
+                severity              REAL NOT NULL,
+                occurrence_count      INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (model_id) REFERENCES meta_cognition_model(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_cognitive_biases_model ON cognitive_biases(model_id, severity DESC);
+
+            CREATE TABLE IF NOT EXISTS workflow_profiles (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_id           INTEGER NOT NULL,
+                name               TEXT NOT NULL,
+                avg_success_rate   REAL NOT NULL,
+                avg_steps          INTEGER NOT NULL,
+                typical_tools_json TEXT NOT NULL,
+                FOREIGN KEY (model_id) REFERENCES meta_cognition_model(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_workflow_profiles_model ON workflow_profiles(model_id, avg_success_rate DESC);
+
             CREATE TABLE IF NOT EXISTS action_audit (
                 id                TEXT PRIMARY KEY,
                 timestamp         INTEGER NOT NULL,

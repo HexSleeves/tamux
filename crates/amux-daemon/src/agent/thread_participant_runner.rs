@@ -113,6 +113,42 @@ fn latest_visible_message_allows_participant_observers(
     }
 }
 
+fn immediate_follow_up_participant_author_id<'a>(
+    visible_messages: &'a [AgentMessage],
+    participants: &[ThreadParticipantState],
+) -> Option<&'a str> {
+    let latest_message = visible_messages.last()?;
+    if latest_message.role != MessageRole::Assistant {
+        return None;
+    }
+    if latest_message
+        .author_agent_id
+        .as_ref()
+        .is_some_and(|author_id| {
+            participants
+                .iter()
+                .any(|participant| participant.agent_id.eq_ignore_ascii_case(author_id))
+        })
+    {
+        return None;
+    }
+
+    let previous_visible_message = visible_messages.iter().rev().nth(1)?;
+    if previous_visible_message.role != MessageRole::Assistant {
+        return None;
+    }
+
+    let previous_author_id = previous_visible_message.author_agent_id.as_deref()?;
+    participants
+        .iter()
+        .any(|participant| {
+            participant
+                .agent_id
+                .eq_ignore_ascii_case(previous_author_id)
+        })
+        .then_some(previous_author_id)
+}
+
 fn build_participant_prompt_from_snapshot(
     participant: &ThreadParticipantState,
     visible_messages: &[AgentMessage],
@@ -641,6 +677,9 @@ impl AgentEngine {
             .last()
             .map(|message| message.timestamp)
             .unwrap_or(0);
+        let immediate_follow_up_participant_author_id =
+            immediate_follow_up_participant_author_id(&visible_messages, &participants)
+                .map(str::to_string);
         let queued_suggestions = self.list_thread_participant_suggestions(thread_id).await;
         let mut participant_state_changed = false;
 
@@ -648,6 +687,24 @@ impl AgentEngine {
             participant.status == ThreadParticipantStatus::Active
                 && active_responder_agent_id.as_deref() != Some(participant.agent_id.as_str())
         }) {
+            if immediate_follow_up_participant_author_id
+                .as_deref()
+                .is_some_and(|author_id| participant.agent_id.eq_ignore_ascii_case(author_id))
+            {
+                tracing::info!(
+                    thread_id = %thread_id,
+                    participant = %participant.agent_id,
+                    "skipping immediate participant observer rerun for the participant that authored the preceding visible post"
+                );
+                participant_state_changed |= self
+                    .mark_thread_participant_observed_visible_message(
+                        thread_id,
+                        &participant.agent_id,
+                        latest_visible_message_timestamp,
+                    )
+                    .await;
+                continue;
+            }
             if participant
                 .last_observed_visible_message_at
                 .is_some_and(|timestamp| timestamp >= latest_visible_message_timestamp)

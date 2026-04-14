@@ -784,6 +784,7 @@ impl TuiModel {
             );
         }
 
+        let footer_activity = self.footer_activity_text();
         widgets::footer::render_input(
             frame,
             chunks[4],
@@ -793,7 +794,7 @@ impl TuiModel {
             self.modal.top().is_some(),
             &self.attachments,
             self.tick_counter,
-            self.agent_activity.as_deref(),
+            footer_activity.as_deref(),
             self.input_notice_style(),
         );
         widgets::footer::render_status_bar(

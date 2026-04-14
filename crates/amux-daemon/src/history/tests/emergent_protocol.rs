@@ -68,11 +68,17 @@ async fn init_schema_adds_emergent_protocol_registry_tables() -> Result<()> {
     assert!(status.0);
     assert!(status.1);
     assert!(status.2);
-    assert_eq!(status.3.as_deref(), Some("idx_emergent_protocols_thread_activated"));
+    assert_eq!(
+        status.3.as_deref(),
+        Some("idx_emergent_protocols_thread_activated")
+    );
     assert!(status.4);
     assert_eq!(status.5.as_deref(), Some("idx_protocol_steps_protocol"));
     assert!(status.6);
-    assert_eq!(status.7.as_deref(), Some("idx_protocol_usage_log_protocol_used"));
+    assert_eq!(
+        status.7.as_deref(),
+        Some("idx_protocol_usage_log_protocol_used")
+    );
 
     fs::remove_dir_all(root)?;
     Ok(())

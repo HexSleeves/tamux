@@ -12,6 +12,7 @@ mod elastic_context;
 mod emergent_protocol;
 mod goal_runs;
 mod governance;
+mod metacognition;
 mod misc;
 mod notifications;
 mod provider_auth;

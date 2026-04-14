@@ -144,6 +144,76 @@ pub(crate) fn sample_test_skill_discovery_completion(
     }
 }
 
+pub(super) fn preserve_noncompliant_mesh_state(
+    previous_state: &LatestSkillDiscoveryState,
+    next_state: &mut LatestSkillDiscoveryState,
+) -> bool {
+    if previous_state.compliant {
+        return false;
+    }
+
+    let previous_mesh_next_step = previous_state
+        .mesh_next_step
+        .unwrap_or_else(|| previous_state.effective_mesh_next_step());
+    let has_preservable_mesh_guidance = previous_state.mesh_requires_approval
+        || (matches!(
+            previous_mesh_next_step,
+            crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill
+                | crate::agent::skill_mesh::types::SkillMeshNextStep::ChooseOrBypass
+        ) && (previous_state.recommended_skill.is_some()
+            || previous_state.read_skill_identifier.is_some()));
+    if !has_preservable_mesh_guidance {
+        return false;
+    }
+
+    let preserved_skill = next_state
+        .recommended_skill
+        .clone()
+        .or_else(|| previous_state.recommended_skill.clone());
+    next_state.recommended_skill = preserved_skill.clone();
+    next_state.mesh_requires_approval = previous_state.mesh_requires_approval;
+    next_state.mesh_approval_id = if previous_state.mesh_requires_approval {
+        previous_state.mesh_approval_id.clone()
+    } else {
+        None
+    };
+    next_state.mesh_next_step = previous_state
+        .mesh_next_step
+        .or(Some(previous_mesh_next_step));
+    next_state.read_skill_identifier = next_state
+        .read_skill_identifier
+        .clone()
+        .or_else(|| preserved_skill.clone())
+        .or_else(|| previous_state.read_skill_identifier.clone())
+        .or_else(|| previous_state.recommended_skill.clone());
+    next_state.skill_read_completed = previous_state.skill_read_completed;
+    if next_state.is_discovery_pending() {
+        next_state.confidence_tier = previous_state.confidence_tier.clone();
+    }
+    next_state.compliant = false;
+    next_state.recommended_action = if next_state.mesh_requires_approval {
+        preserved_skill
+            .as_deref()
+            .map(|skill| format!("request_approval {skill}"))
+            .unwrap_or_else(|| previous_state.recommended_action.clone())
+    } else {
+        match next_state
+            .mesh_next_step
+            .unwrap_or(crate::agent::skill_mesh::types::SkillMeshNextStep::JustifySkillSkip)
+        {
+            crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill
+            | crate::agent::skill_mesh::types::SkillMeshNextStep::ChooseOrBypass => preserved_skill
+                .as_deref()
+                .map(|skill| format!("read_skill {skill}"))
+                .unwrap_or_else(|| previous_state.recommended_action.clone()),
+            crate::agent::skill_mesh::types::SkillMeshNextStep::JustifySkillSkip => {
+                "justify_skill_skip".to_string()
+            }
+        }
+    };
+    true
+}
+
 pub(super) fn spawn_skill_discovery_result_applier(
     engine: Arc<AgentEngine>,
     mut result_rx: tokio::sync::mpsc::UnboundedReceiver<AsyncSkillDiscoveryCompletion>,
@@ -188,9 +258,10 @@ impl AgentEngine {
             return Ok(None);
         }
 
-        if let Some(state) = self.get_thread_skill_discovery_state(thread_id).await {
+        let previous_state = self.get_thread_skill_discovery_state(thread_id).await;
+        if let Some(state) = previous_state.as_ref() {
             if state.is_discovery_pending() && state.query == content {
-                return Ok(Some(build_skill_preflight_context_from_state(state)));
+                return Ok(Some(build_skill_preflight_context_from_state(state.clone())));
             }
         }
 
@@ -201,7 +272,10 @@ impl AgentEngine {
         )
         .await;
         let cfg = self.config.read().await.skill_recommendation.clone();
-        let pending_state = build_pending_skill_discovery_state(content);
+        let mut pending_state = build_pending_skill_discovery_state(content);
+        if let Some(previous_state) = previous_state.as_ref() {
+            preserve_noncompliant_mesh_state(previous_state, &mut pending_state);
+        }
 
         self.set_thread_skill_discovery_state(thread_id, pending_state.clone())
             .await;
@@ -819,7 +893,10 @@ fn resolve_daemon_worker_executable_candidate(
 
     let current_exe = current_exe?;
     let daemon_name = OsStr::new(platform_daemon_binary_name());
-    if current_exe.file_name().is_some_and(|name| name == daemon_name) {
+    if current_exe
+        .file_name()
+        .is_some_and(|name| name == daemon_name)
+    {
         return Some(current_exe.to_path_buf());
     }
 
@@ -928,7 +1005,8 @@ async fn apply_async_skill_discovery_completion(
         return;
     }
 
-    let state = completion.state.clone();
+    let mut state = completion.state.clone();
+    preserve_noncompliant_mesh_state(&current_state, &mut state);
     engine
         .set_thread_skill_discovery_state(&completion.thread_id, state.clone())
         .await;

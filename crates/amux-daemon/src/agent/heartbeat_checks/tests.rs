@@ -132,6 +132,7 @@ async fn make_test_engine(
         recent_policy_decisions: RwLock::new(HashMap::new()),
         retry_guards: RwLock::new(HashMap::new()),
         operator_model: RwLock::new(OperatorModel::default()),
+        meta_cognitive_self_model: RwLock::new(super::metacognitive::types::SelfModel::default()),
         anticipatory: RwLock::new(AnticipatoryRuntime::default()),
         collaboration: RwLock::new(HashMap::new()),
         data_dir,

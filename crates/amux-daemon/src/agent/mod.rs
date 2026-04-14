@@ -109,20 +109,22 @@ pub mod uncertainty;
 // Re-exports from extracted modules — keeps everything accessible across
 // sibling submodules via `use super::*;`.
 use agent_identity::*;
-use aline_startup::{
-    WatcherState,
-};
-pub(crate) use aline_startup::{run_aline_startup_worker_from_stdio, ALINE_STARTUP_WORKER_ARG};
 use anticipatory::*;
 use anticipatory_support::*;
 pub(crate) use authorship::AuthorshipTag;
 pub(crate) use autonomy::AutonomyLevel;
 use behavioral_events::*;
+use causal_traces::{
+    command_family, estimated_success_probability, summarize_outcome, FamilyOutcomeSummary,
+    OutcomeSummary,
+};
 use compaction::*;
+use consolidation::{DEFAULT_HALF_LIFE_HOURS, DEFAULT_IDLE_THRESHOLD_MS};
 pub(crate) use config::ConfigRuntimeProjection;
 pub(crate) use explanation::*;
 pub(crate) use gateway_health::GatewayConnectionStatus as RuntimeGatewayConnectionStatus;
 use goal_parsing::*;
+use heartbeat::{compute_check_priority, enabled_checks};
 use honcho::*;
 use memory::*;
 use metadata::*;
@@ -130,11 +132,24 @@ use operator_model::*;
 use operator_questions::*;
 use provider_resolution::*;
 use runtime_continuity::*;
+use skill_discovery::jaccard_similarity;
 use system_prompt::*;
 use task_prompt::*;
 use task_scheduler::*;
 use thread_handoffs::*;
 pub(crate) use thread_participants::*;
+use tool_synthesis::parse_cli_help_parameters;
+use whatsapp_link::{
+    apply_transport_event, build_sidecar_launch_spec, collect_exact_jid_candidates,
+    collect_normalized_identifiers, merge_persisted_state_update, normalize_identifier,
+    normalize_jid_user, normalize_sidecar_stderr, resolve_send_target_candidates,
+    spawn_transport_event_bridge, start_transport_bridge, transport, WhatsAppLinkEvent,
+    WhatsAppLinkRuntime,
+};
+use whatsapp_native::{
+    build_whatsapp_cursor, classify_whatsapp_enqueue_decision, parse_whatsapp_cursor,
+    should_enqueue_from_me_whatsapp_message, tamux_self_chat_prefix, WhatsAppEnqueueDecision,
+};
 
 // Imports needed by child modules via `use super::*;`.
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -158,16 +173,23 @@ use self::tool_executor::{execute_tool, get_available_tools};
 use self::types::*;
 
 // Public re-exports consumed by sibling modules in this bin crate.
-pub(crate) use config::canonicalize_weles_client_update;
+pub(crate) use aline_startup::{
+    run_aline_startup_worker_from_stdio, AlineStartupShortCircuitReason, WatcherState,
+    ALINE_STARTUP_WORKER_ARG,
+};
+pub(crate) use config::{
+    canonicalize_weles_client_update, ConfigEffectiveRuntimeState, ConfigReconcileState,
+};
 #[allow(unused_imports)]
 pub use engine::*;
 #[cfg(test)]
 pub(crate) use provider_auth_store::provider_auth_test_env_lock;
 pub use task_prompt::load_config_from_history;
 pub(crate) use whatsapp_link::{
-    clear_persisted_provider_state,
-    persist_transport_session_update, WHATSAPP_LINK_PROVIDER_ID,
+    clear_persisted_provider_state, load_persisted_provider_state,
+    persist_transport_session_update, save_persisted_provider_state, WHATSAPP_LINK_PROVIDER_ID,
 };
+pub(crate) use whatsapp_link::transport::PersistedState as WhatsAppPersistedState;
 #[allow(unused_imports)]
 pub(crate) use whatsapp_native::{
     disconnect_native_whatsapp_client, send_native_whatsapp_message, start_whatsapp_link_native,

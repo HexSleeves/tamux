@@ -70,6 +70,7 @@ export function AgentTab({
         { id: "minimax", label: "MiniMax" },
         { id: "minimax-coding-plan", label: "MiniMax Coding Plan" },
         { id: "alibaba-coding-plan", label: "Alibaba Coding Plan" },
+        { id: "xiaomi-mimo-token-plan", label: "Xiaomi MiMo Token Plan" },
         { id: "opencode-zen", label: "OpenCode Zen" },
         { id: "custom", label: "Custom" },
     ];

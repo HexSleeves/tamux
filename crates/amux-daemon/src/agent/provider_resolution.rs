@@ -1,8 +1,5 @@
 use super::types::*;
-use amux_shared::providers::{
-    PROVIDER_ID_CUSTOM, PROVIDER_ID_GITHUB_COPILOT,
-    PROVIDER_ID_OPENAI,
-};
+use amux_shared::providers::{PROVIDER_ID_CUSTOM, PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
 use anyhow::{bail, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

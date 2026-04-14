@@ -23,7 +23,7 @@ pub(crate) const ALINE_STARTUP_WORKER_ARG: &str = "__tamux-aline-startup-worker"
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum WatcherState {
+pub(crate) enum WatcherState {
     Running,
     Stopped,
     Unknown,
@@ -70,7 +70,7 @@ pub(super) struct StartupSelectionPolicy {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum AlineStartupShortCircuitReason {
+pub(crate) enum AlineStartupShortCircuitReason {
     AlineUnavailable,
     NoRepoRoots,
     MultipleRepoRoots,

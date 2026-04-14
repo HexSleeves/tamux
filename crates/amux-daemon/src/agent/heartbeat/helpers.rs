@@ -111,7 +111,7 @@ pub(super) fn check_type_to_action_type(check_type: &HeartbeatCheckType) -> &'st
     }
 }
 
-pub(super) fn enabled_checks(config: &HeartbeatChecksConfig) -> Vec<HeartbeatCheckType> {
+pub(crate) fn enabled_checks(config: &HeartbeatChecksConfig) -> Vec<HeartbeatCheckType> {
     let mut checks = Vec::new();
     if config.stale_todos_enabled {
         checks.push(HeartbeatCheckType::StaleTodos);
@@ -158,7 +158,7 @@ pub(super) fn should_run_check(weight: f64, cycle_count: u64) -> bool {
     cycle_count % skip_factor == 0
 }
 
-pub(super) fn compute_check_priority(
+pub(crate) fn compute_check_priority(
     dismiss_count: u64,
     inaction_count: u64,
     total_shown: u64,

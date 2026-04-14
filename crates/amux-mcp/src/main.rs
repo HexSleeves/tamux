@@ -18,8 +18,7 @@
 use std::path::PathBuf;
 
 use amux_protocol::{
-    ClientMessage, DaemonMessage, ManagedCommandRequest, ManagedCommandSource,
-    SecurityLevel,
+    ClientMessage, DaemonMessage, ManagedCommandRequest, ManagedCommandSource, SecurityLevel,
 };
 use anyhow::{Context, Result};
 use base64::Engine;

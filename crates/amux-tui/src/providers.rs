@@ -283,6 +283,17 @@ pub const PROVIDERS: &[ProviderDef] = &[
         native_base_url: None,
     },
     ProviderDef {
+        id: PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN,
+        name: "Xiaomi MiMo Token Plan",
+        default_base_url: "https://api.xiaomimimo.com/v1",
+        default_model: "mimo-v2-pro",
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: "chat_completions",
+        supported_auth_sources: API_KEY_ONLY_AUTH_SOURCES,
+        default_auth_source: "api_key",
+        native_base_url: None,
+    },
+    ProviderDef {
         id: PROVIDER_ID_QWEN_DEEPINFRA,
         name: "Qwen (DeepInfra)",
         default_base_url: "https://api.deepinfra.com/v1/openai",
@@ -405,6 +416,7 @@ pub fn supports_model_fetch_for(provider: &str) -> bool {
             | PROVIDER_ID_MINIMAX
             | PROVIDER_ID_MINIMAX_CODING_PLAN
             | PROVIDER_ID_ALIBABA_CODING_PLAN
+            | PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN
     )
 }
 

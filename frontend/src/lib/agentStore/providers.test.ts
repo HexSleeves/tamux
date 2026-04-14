@@ -21,3 +21,23 @@ describe("frontend NVIDIA provider catalog", () => {
     expect(getDefaultModelForProvider("nvidia")).toBe("minimaxai/minimax-m2.7");
   });
 });
+
+describe("frontend Xiaomi MiMo token plan provider catalog", () => {
+  it("registers Xiaomi MiMo token plan with static defaults", () => {
+    const mimo = getProviderDefinition("xiaomi-mimo-token-plan" as any);
+
+    expect(mimo).toBeDefined();
+    expect(mimo?.defaultBaseUrl).toBe("https://api.xiaomimimo.com/v1");
+    expect(mimo?.defaultModel).toBe("mimo-v2-pro");
+    expect(mimo?.supportsModelFetch).toBe(false);
+    expect(mimo?.models.map((model) => [model.id, model.contextWindow])).toEqual([
+      ["mimo-v2-pro", 1_000_000],
+      ["mimo-v2-omni", 256_000],
+    ]);
+  });
+
+  it("recognizes Xiaomi MiMo token plan as a valid provider id", () => {
+    expect(normalizeAgentProviderId("xiaomi-mimo-token-plan")).toBe("xiaomi-mimo-token-plan");
+    expect(getDefaultModelForProvider("xiaomi-mimo-token-plan" as any)).toBe("mimo-v2-pro");
+  });
+});

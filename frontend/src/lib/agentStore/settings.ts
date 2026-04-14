@@ -80,6 +80,7 @@ export interface AgentSettings {
   minimax: AgentProviderConfig;
   "minimax-coding-plan": AgentProviderConfig;
   "alibaba-coding-plan": AgentProviderConfig;
+  "xiaomi-mimo-token-plan": AgentProviderConfig;
   "opencode-zen": AgentProviderConfig;
   custom: AgentProviderConfig;
   enable_bash_tool: boolean;
@@ -179,6 +180,7 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   minimax: { base_url: "https://api.minimax.io/anthropic", model: "MiniMax-M1-80k", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   "minimax-coding-plan": { base_url: "https://api.minimax.io/anthropic", model: "MiniMax-M2.7", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   "alibaba-coding-plan": { base_url: "https://coding-intl.dashscope.aliyuncs.com/v1", model: "qwen3.6-plus", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  "xiaomi-mimo-token-plan": { base_url: "https://api.xiaomimimo.com/v1", model: "mimo-v2-pro", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   "opencode-zen": { base_url: "https://opencode.ai/zen/v1", model: "claude-sonnet-4-5", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   custom: { base_url: "", model: "", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "responses", auth_source: "api_key", context_window_tokens: 128_000 },
   enable_bash_tool: true,

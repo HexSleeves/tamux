@@ -186,6 +186,53 @@
     }
 
     #[test]
+    fn full_render_does_not_panic_when_terminal_collapses_to_single_cell() {
+        let mut model = build_model();
+        model.width = 1;
+        model.height = 1;
+        model.focus = FocusArea::Input;
+
+        let backend = TestBackend::new(1, 1);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("render should tolerate a single-cell terminal");
+    }
+
+    #[test]
+    fn conversation_render_with_sidebar_does_not_panic_on_tiny_frame() {
+        let mut model = build_model();
+        model.width = 8;
+        model.height = 6;
+        model.focus = FocusArea::Chat;
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: "thread-1".to_string(),
+            title: "Thread".to_string(),
+        });
+        model
+            .chat
+            .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+        model.tasks.reduce(task::TaskAction::ThreadTodosReceived {
+            thread_id: "thread-1".to_string(),
+            items: vec![task::TodoItem {
+                id: "todo-1".to_string(),
+                content: "Investigate crash".to_string(),
+                status: Some(task::TodoStatus::Pending),
+                position: 0,
+                step_index: None,
+                created_at: 0,
+                updated_at: 0,
+            }],
+        });
+
+        let backend = TestBackend::new(model.width, model.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("conversation render should tolerate a tiny frame with sidebar");
+    }
+
+    #[test]
     fn render_uses_frame_area_even_when_model_size_is_stale() {
         let mut model = build_model();
         model.width = 120;
@@ -493,4 +540,3 @@
             "cancel click must not send a delete command"
         );
     }
-

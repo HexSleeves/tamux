@@ -128,3 +128,24 @@ pub struct ProtocolUsageRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_reason: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtocolDecodeOutcomeKind {
+    Match,
+    Fallback,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProtocolDecodeOutcome {
+    pub outcome: ProtocolDecodeOutcomeKind,
+    pub token: String,
+    pub protocol_id: String,
+    pub thread_id: String,
+    pub context_match: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+    pub entry: ProtocolRegistryEntry,
+    #[serde(default)]
+    pub expanded_steps: Vec<ProtocolStep>,
+}

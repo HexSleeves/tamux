@@ -1,10 +1,7 @@
 use super::*;
 
 impl HistoryStore {
-    pub async fn upsert_emergent_protocol(
-        &self,
-        row: &EmergentProtocolRow,
-    ) -> Result<()> {
+    pub async fn upsert_emergent_protocol(&self, row: &EmergentProtocolRow) -> Result<()> {
         let row = row.clone();
         self.conn
             .call(move |conn| {

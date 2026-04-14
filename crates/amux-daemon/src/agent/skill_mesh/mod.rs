@@ -5,3 +5,8 @@ pub mod store;
 pub mod types;
 pub mod watcher;
 
+pub use index::{InMemorySkillMeshIndex, LanceDbSkillMeshIndex, SkillMeshIndex};
+pub use types::{
+    SkillMeshDocument, SkillMeshDocumentKey, SkillMeshEmbeddingRecord, SkillMeshFeedbackState,
+    SkillMeshIntent, SkillMeshOutcome, SkillMeshResult,
+};

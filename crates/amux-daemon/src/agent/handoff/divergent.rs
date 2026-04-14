@@ -8,7 +8,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-
 #[path = "divergent_helpers.rs"]
 mod helpers;
 

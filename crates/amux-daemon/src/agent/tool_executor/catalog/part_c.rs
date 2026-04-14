@@ -395,6 +395,15 @@ fn add_available_tools_part_c(
         "type": "object",
         "properties": {}
     })));
+    tools.push(tool_def("decode_emergent_protocol", "Resolve an accepted emergent protocol token in the current thread, validate the stored context signature, and return either a structured fallback or expanded intent payload. This does not execute the decoded steps automatically.", serde_json::json!({
+        "type": "object",
+        "properties": {
+            "token": { "type": "string", "description": "Protocol token to decode, such as @proto_deadbeef" },
+            "current_role": { "type": "string", "description": "Current sender role for context validation (for example: user or assistant)" },
+            "normalized_pattern": { "type": "string", "description": "Observed normalized pattern in the current context to validate against the stored signature" }
+        },
+        "required": ["token"]
+    })));
     tools.push(tool_def("get_emergent_protocol_usage_log", "Fetch recorded usage/fallback entries for an accepted emergent protocol.", serde_json::json!({
         "type": "object",
         "properties": {

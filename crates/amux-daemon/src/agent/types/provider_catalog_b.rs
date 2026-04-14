@@ -37,6 +37,21 @@ pub const ALIBABA_CODING_MODELS: &[ModelDefinition] = &[
     },
 ];
 
+pub const XIAOMI_MIMO_TOKEN_PLAN_MODELS: &[ModelDefinition] = &[
+    ModelDefinition {
+        id: "mimo-v2-pro",
+        name: "MiMo V2 Pro",
+        context_window: 1_000_000,
+        modalities: TEXT_ONLY,
+    },
+    ModelDefinition {
+        id: "mimo-v2-omni",
+        name: "MiMo V2 Omni",
+        context_window: 256_000,
+        modalities: MULTIMODAL,
+    },
+];
+
 pub const OPENCODE_ZEN_MODELS: &[ModelDefinition] = &[
     ModelDefinition {
         id: "claude-opus-4-6",

@@ -27,6 +27,7 @@ pub const PROVIDER_ID_OPENROUTER: &str = "openrouter";
 pub const PROVIDER_ID_QWEN: &str = "qwen";
 pub const PROVIDER_ID_QWEN_DEEPINFRA: &str = "qwen-deepinfra";
 pub const PROVIDER_ID_TOGETHER: &str = "together";
+pub const PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN: &str = "xiaomi-mimo-token-plan";
 pub const PROVIDER_ID_Z_AI: &str = "z.ai";
 pub const PROVIDER_ID_Z_AI_CODING_PLAN: &str = "z.ai-coding-plan";
 
@@ -59,4 +60,7 @@ pub const OPENROUTER_PROVIDER: ProviderRef = ProviderRef {
 };
 pub const QWEN_PROVIDER: ProviderRef = ProviderRef {
     id: PROVIDER_ID_QWEN,
+};
+pub const XIAOMI_MIMO_TOKEN_PLAN_PROVIDER: ProviderRef = ProviderRef {
+    id: PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN,
 };

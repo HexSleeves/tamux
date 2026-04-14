@@ -9,7 +9,6 @@
 //! - Broadcasts HeartbeatDigest only when actionable (BEAT-03/D-14)
 //! - Persists every cycle to SQLite regardless of LLM outcome (D-12/Pitfall 4)
 
-
 use super::*;
 use chrono::Timelike;
 
@@ -17,10 +16,10 @@ mod helpers;
 mod legacy;
 mod postprocess;
 use helpers::{
-    check_quiet_window, check_type_to_action_type,
-    heartbeat_persistence_status, is_custom_item_due, parse_digest_items, should_broadcast,
-    should_run_check,
+    check_quiet_window, check_type_to_action_type, heartbeat_persistence_status,
+    is_custom_item_due, parse_digest_items, should_broadcast, should_run_check,
 };
+pub(crate) use helpers::{compute_check_priority, enabled_checks};
 pub(in crate::agent) use helpers::{is_peak_activity_hour, resolve_cron_from_config};
 
 impl AgentEngine {

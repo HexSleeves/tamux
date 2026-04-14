@@ -15,6 +15,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use schema_helpers::table_has_column;
 use tokio_rusqlite;
 
 /// Helper trait to convert any error into `tokio_rusqlite::Error` inside `.call()` closures.
@@ -177,6 +178,35 @@ pub struct ProtocolUsageLogRow {
     pub execution_time_ms: Option<u64>,
     pub success: bool,
     pub fallback_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MetaCognitionModelRow {
+    pub id: i64,
+    pub agent_id: String,
+    pub calibration_offset: f64,
+    pub last_updated_at: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CognitiveBiasRow {
+    pub id: i64,
+    pub model_id: i64,
+    pub name: String,
+    pub trigger_pattern_json: String,
+    pub mitigation_prompt: String,
+    pub severity: f64,
+    pub occurrence_count: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkflowProfileRow {
+    pub id: i64,
+    pub model_id: i64,
+    pub name: String,
+    pub avg_success_rate: f64,
+    pub avg_steps: u64,
+    pub typical_tools_json: String,
 }
 
 #[derive(Debug, Clone)]
@@ -653,10 +683,11 @@ mod gateway_state;
 mod goal_runs;
 mod governance;
 mod integrity_helpers;
+mod metacognition;
 mod offloaded_payloads;
 mod operator_profile;
-mod protocol_registry;
 mod protocol_candidates;
+mod protocol_registry;
 mod provenance;
 mod row_mapping;
 mod schema;

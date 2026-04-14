@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
+#[cfg(test)]
+use amux_protocol::GatewayRouteMode;
 use amux_protocol::{
     GatewayBootstrapPayload, GatewayCursorState, GatewayHealthState, GatewayRouteModeState,
     GatewayThreadBindingState,
 };
-#[cfg(test)]
-use amux_protocol::GatewayRouteMode;
 
 #[derive(Debug, Clone, Default)]
 pub struct GatewayRuntimeState {

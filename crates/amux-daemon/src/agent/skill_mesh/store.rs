@@ -42,22 +42,24 @@ impl SkillMeshStore {
         dedupe_jobs(&mut pending);
     }
 
-    pub fn pending_recompile_jobs(&self) -> Vec<SkillMeshRecompileJob> {
-        self.pending_jobs.blocking_lock().iter().cloned().collect()
+    pub async fn pending_recompile_jobs(&self) -> Vec<SkillMeshRecompileJob> {
+        self.pending_jobs.lock().await.iter().cloned().collect()
     }
 
-    pub fn bump_compile_version_for_tests(&self) {
+    pub async fn bump_compile_version_for_tests(&self) {
         self.pending_jobs
-            .blocking_lock()
+            .lock()
+            .await
             .push(SkillMeshRecompileJob {
                 path: PathBuf::from("compile-version-change"),
                 kind: super::watcher::SkillMeshRecompileJobKind::Invalidate,
             });
     }
 
-    pub fn update_trust_inputs_for_tests(&self) {
+    pub async fn update_trust_inputs_for_tests(&self) {
         self.pending_jobs
-            .blocking_lock()
+            .lock()
+            .await
             .push(SkillMeshRecompileJob {
                 path: PathBuf::from("trust-input-change"),
                 kind: super::watcher::SkillMeshRecompileJobKind::Invalidate,

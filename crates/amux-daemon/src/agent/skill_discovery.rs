@@ -11,9 +11,10 @@ use super::types::SkillDiscoveryConfig;
 
 mod helpers;
 use helpers::{
-    extract_tool_sequence_from_json, is_novel_sequence,
-    meets_complexity_threshold, parse_mental_test_results,
+    extract_tool_sequence_from_json, is_novel_sequence, meets_complexity_threshold,
+    parse_mental_test_results,
 };
+pub(crate) use helpers::jaccard_similarity;
 
 // ---------------------------------------------------------------------------
 // Complexity threshold

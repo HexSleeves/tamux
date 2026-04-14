@@ -12,7 +12,7 @@ fn daemon_boxes_large_gateway_hot_path_futures() {
     .join("\n");
 
     for required in [
-        "Box::pin(loop_agent.run_loop(shutdown_rx)).await;",
+        "Box::pin(startup_agent.run_loop(shutdown_rx)).await;",
         "Box::pin(handle_connection(",
         "if let Err(e) = Box::pin(agent.send_message_with_session_surface_and_target(",
         "match Box::pin(agent.send_direct_message(",
@@ -35,12 +35,31 @@ fn daemon_binds_ipc_listener_before_hydrate_starts() {
         .find("let listener = bind_unix_listener(&path)?;")
         .expect("startup should bind Unix listener");
     let hydrate_idx = source
-        .find("if let Err(e) = startup_agent.hydrate().await {")
+        .find("hydrate_without_participant_observer_restore()")
         .expect("startup should hydrate agent state");
 
     assert!(
         bind_idx < hydrate_idx,
         "daemon must bind its IPC listener before hydrate work starts"
+    );
+}
+
+#[test]
+fn daemon_marks_startup_ready_before_scheduling_participant_observer_restore() {
+    let root = repo_root();
+    let source = fs::read_to_string(root.join("crates/amux-daemon/src/server/post_tests.rs"))
+        .expect("read server startup source");
+
+    let ready_idx = source
+        .find("startup_readiness_for_task.mark_ready();")
+        .expect("startup should mark readiness");
+    let restore_idx = source
+        .find("startup_agent.schedule_participant_observer_restore_after_hydrate();")
+        .expect("startup should defer participant observer restore");
+
+    assert!(
+        ready_idx < restore_idx,
+        "daemon should defer participant observer restore until after startup readiness"
     );
 }
 

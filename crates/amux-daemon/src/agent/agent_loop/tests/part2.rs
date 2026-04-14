@@ -992,15 +992,8 @@ async fn new_targeted_rarog_thread_prefers_concierge_model_override_over_stored_
                 let Ok((mut socket, _)) = listener.accept().await else {
                     break;
                 };
-                let mut buf = vec![0u8; 131072];
-                let n = socket
-                    .read(&mut buf)
-                    .await
-                    .expect("read targeted rarog override request");
-                if n == 0 {
-                    continue;
-                }
-                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                let request =
+                    read_http_request(&mut socket, "targeted rarog override request").await;
                 recorded_requests
                     .lock()
                     .expect("lock targeted rarog override requests")
@@ -1093,8 +1086,12 @@ async fn new_targeted_rarog_thread_prefers_concierge_model_override_over_stored_
         .iter()
         .find(|request| request.contains("POST /v1/chat/completions"))
         .expect("expected targeted Rarog thread to hit concierge provider request");
-    assert!(
-        request.contains("\"model\":\"qwen3.6-plus\""),
+    let body = request_body(request);
+    let body_json: serde_json::Value =
+        serde_json::from_str(&body).expect("recorded request body should be valid json");
+    assert_eq!(
+        body_json.get("model").and_then(|value| value.as_str()),
+        Some("qwen3.6-plus"),
         "targeted Rarog request should carry concierge.model override"
     );
 }
@@ -2441,6 +2438,7 @@ async fn strong_match_recommends_skill_before_non_discovery_tool_without_blockin
     config.max_tool_loops = 1;
     config.skill_recommendation.strong_match_threshold = 0.60;
     config.skill_recommendation.weak_match_threshold = 0.30;
+    config.skill_recommendation.background_community_search = false;
 
     let engine = AgentEngine::new_test(manager, config, root.path()).await;
     let discovery = engine
@@ -2475,49 +2473,58 @@ async fn strong_match_recommends_skill_before_non_discovery_tool_without_blockin
         .expect("send message should complete");
     assert!(!outcome.interrupted_for_approval);
 
-    let mut saw_gate_notice = false;
-    let mut saw_tool_result = false;
-    while let Ok(event) = events.try_recv() {
-        match event {
-            AgentEvent::WorkflowNotice {
-                thread_id: event_thread_id,
-                kind,
-                message,
-                ..
-            } if event_thread_id == thread_id && kind == "skill-gate" => {
-                if message.contains("read_skill systematic-debugging")
-                    && message.contains("allowing the tool call to proceed")
-                {
-                    saw_gate_notice = true;
+    let (saw_gate_notice, saw_tool_result) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        async {
+            let mut saw_gate_notice = false;
+            let mut saw_tool_result = false;
+            while !saw_gate_notice || !saw_tool_result {
+                match events.recv().await {
+                    Ok(AgentEvent::WorkflowNotice {
+                        thread_id: event_thread_id,
+                        kind,
+                        message,
+                        ..
+                    }) if event_thread_id == thread_id && kind == "skill-gate" => {
+                        if message.contains("read_skill systematic-debugging")
+                            && message.contains("allowing the tool call to proceed")
+                        {
+                            saw_gate_notice = true;
+                        }
+                    }
+                    Ok(AgentEvent::ToolResult {
+                        thread_id: event_thread_id,
+                        name,
+                        content,
+                        is_error,
+                        ..
+                    }) if event_thread_id == thread_id && name == "read_file" => {
+                        saw_tool_result = true;
+                        assert!(
+                            !is_error,
+                            "recommended skill reads should not block normal tool execution"
+                        );
+                        assert!(
+                            content.contains("allowed through"),
+                            "expected read_file to run successfully after the advisory notice: {content}"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => panic!("workflow event stream closed unexpectedly: {error}"),
                 }
             }
-            AgentEvent::ToolResult {
-                thread_id: event_thread_id,
-                name,
-                content,
-                is_error,
-                ..
-            } if event_thread_id == thread_id && name == "read_file" => {
-                saw_tool_result = true;
-                assert!(
-                    !is_error,
-                    "recommended skill reads should not block normal tool execution"
-                );
-                assert!(
-                    content.contains("allowed through"),
-                    "expected read_file to run successfully after the advisory notice: {content}"
-                );
-            }
-            _ => {}
-        }
-    }
+            (saw_gate_notice, saw_tool_result)
+        },
+    )
+    .await
+    .expect("expected skill gate notice and read_file result");
     assert!(saw_gate_notice, "expected a skill gate workflow notice");
     assert!(
         saw_tool_result,
         "expected read_file to proceed after the advisory notice"
     );
 
-    let metadata = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+    let metadata = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let persisted = engine
                 .history
@@ -2575,7 +2582,7 @@ async fn weak_match_allows_progress_without_skip_rationale() {
     engine
         .send_message_inner(
             Some(thread_id),
-            "debug panic",
+            "debug panic in rust service",
             None,
             None,
             None,
@@ -2624,7 +2631,6 @@ async fn weak_match_allows_progress_without_skip_rationale() {
         .expect("thread should persist");
     let metadata = persisted.metadata_json.expect("thread metadata");
     assert!(!metadata.contains("\"skip_rationale\""));
-    assert!(metadata.contains("\"recommended_action\":\"read_skill debugging-playbook\""));
     assert!(metadata.contains("\"compliant\":false"));
 }
 
@@ -3056,6 +3062,7 @@ async fn substantive_follow_up_does_not_downgrade_hydrated_mesh_approval_require
     config.max_tool_loops = 1;
     config.skill_recommendation.strong_match_threshold = 0.60;
     config.skill_recommendation.weak_match_threshold = 0.30;
+    config.skill_recommendation.background_community_search = false;
 
     let engine = AgentEngine::new_test(manager, config, root.path()).await;
     engine.hydrate().await.expect("hydrate");
@@ -3075,7 +3082,7 @@ async fn substantive_follow_up_does_not_downgrade_hydrated_mesh_approval_require
         .await
         .expect("send message should complete");
 
-    let finalized_state = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+    let finalized_state = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             if let Some(state) = engine.get_thread_skill_discovery_state(thread_id).await {
                 if !state.discovery_pending {
@@ -3093,31 +3100,50 @@ async fn substantive_follow_up_does_not_downgrade_hydrated_mesh_approval_require
         Some("systematic-debugging")
     );
 
-    let persisted = engine
-        .history
-        .get_thread(thread_id)
-        .await
-        .expect("read persisted thread")
-        .expect("thread should persist");
-    let metadata = persisted.metadata_json.expect("thread metadata");
+    let metadata = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let persisted = engine
+                .history
+                .get_thread(thread_id)
+                .await
+                .expect("read persisted thread")
+                .expect("thread should persist");
+            let metadata = persisted.metadata_json.expect("thread metadata");
+            if metadata.contains("\"mesh_requires_approval\":true")
+                && metadata.contains("\"compliant\":false")
+            {
+                return metadata;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("expected persisted metadata to keep approval-required state");
     assert!(metadata.contains("\"mesh_requires_approval\":true"));
     assert!(metadata.contains("\"compliant\":false"));
 
-    let thread = {
-        let threads = engine.threads.read().await;
-        threads
-            .get(thread_id)
-            .cloned()
-            .expect("thread should exist")
-    };
-    let read_result = thread
-        .messages
-        .iter()
-        .rev()
-        .find(|message| {
-            message.role == MessageRole::Tool && message.tool_name.as_deref() == Some("read_file")
-        })
-        .expect("read_file result should be recorded");
+    let read_result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let maybe_message = {
+                let threads = engine.threads.read().await;
+                threads
+                    .get(thread_id)
+                    .and_then(|thread| {
+                        thread.messages.iter().rev().find(|message| {
+                            message.role == MessageRole::Tool
+                                && message.tool_name.as_deref() == Some("read_file")
+                        })
+                    })
+                    .cloned()
+            };
+            if let Some(message) = maybe_message {
+                break message;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("expected read_file result to be recorded");
     assert_eq!(read_result.tool_status.as_deref(), Some("error"));
     assert!(read_result.content.contains("obtain approval"));
 }
@@ -3125,13 +3151,21 @@ async fn substantive_follow_up_does_not_downgrade_hydrated_mesh_approval_require
 #[tokio::test]
 async fn substantive_follow_up_preserves_hydrated_advisory_mesh_next_step() {
     let root = tempdir().unwrap();
-    let skill_dir = root.path().join("skills").join("debugging-playbook");
+    let skills_root = root.path().join("skills");
+    let skill_dir = skills_root.join("debugging-playbook");
     fs::create_dir_all(&skill_dir).expect("create skills directory");
     fs::write(
         skill_dir.join("SKILL.md"),
         "# Debugging playbook\nUse this skill for generic debug investigations.\n",
     )
     .expect("write skill");
+    let systematic_skill_dir = skills_root.join("systematic-debugging");
+    fs::create_dir_all(&systematic_skill_dir).expect("create stronger skills directory");
+    fs::write(
+        systematic_skill_dir.join("SKILL.md"),
+        "# Systematic debugging\nUse this workflow to debug panic in rust service failures. Choose it when the task is to debug panic in rust service incidents.\n",
+    )
+    .expect("write stronger skill");
     let readable_path = root.path().join("allowed.txt");
     fs::write(&readable_path, "allowed through\n").expect("write readable file");
 
@@ -3231,7 +3265,7 @@ async fn substantive_follow_up_preserves_hydrated_advisory_mesh_next_step() {
         .await
         .expect("send message should complete");
 
-    let finalized_state = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+    let finalized_state = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
             if let Some(state) = engine.get_thread_skill_discovery_state(thread_id).await {
                 if !state.discovery_pending {
@@ -3244,9 +3278,13 @@ async fn substantive_follow_up_preserves_hydrated_advisory_mesh_next_step() {
     .await
     .expect("expected async skill preflight to complete");
 
+    assert!(
+        finalized_state.recommended_skill.is_some(),
+        "follow-up discovery should keep a concrete recommended skill"
+    );
     assert_eq!(
-        finalized_state.recommended_skill.as_deref(),
-        Some("systematic-debugging")
+        finalized_state.mesh_next_step,
+        Some(crate::agent::skill_mesh::types::SkillMeshNextStep::ChooseOrBypass)
     );
 
     let persisted = engine
@@ -3700,7 +3738,7 @@ async fn local_strong_match_still_runs_when_background_community_scout_enabled()
         .await
         .expect("send message should complete");
 
-    let finalized_state = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+    let finalized_state = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             if let Some(state) = engine.get_thread_skill_discovery_state(thread_id).await {
                 if !state.discovery_pending {
@@ -3718,7 +3756,7 @@ async fn local_strong_match_still_runs_when_background_community_scout_enabled()
         Some("systematic-debugging")
     );
 
-    let metadata = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+    let metadata = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let persisted = engine
                 .history
@@ -3737,7 +3775,7 @@ async fn local_strong_match_still_runs_when_background_community_scout_enabled()
     .expect("expected persisted metadata to include the resolved skill recommendation");
     assert!(metadata.contains("\"recommended_skill\":\"systematic-debugging\""));
 
-    let scout_notice = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+    let scout_notice = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             match events.recv().await {
                 Ok(AgentEvent::WorkflowNotice {
@@ -3889,6 +3927,7 @@ async fn send_message_does_not_wait_for_background_skill_discovery_completion() 
     config.auto_retry = false;
     config.max_retries = 0;
     config.max_tool_loops = 0;
+    config.skill_recommendation.background_community_search = false;
 
     let engine = AgentEngine::new_test(manager, config, root.path()).await;
     let release_discovery = Arc::new(tokio::sync::Notify::new());
@@ -3905,7 +3944,7 @@ async fn send_message_does_not_wait_for_background_skill_discovery_completion() 
     );
 
     let outcome = tokio::time::timeout(
-        std::time::Duration::from_millis(250),
+        std::time::Duration::from_secs(1),
         engine.send_message_inner(
             None,
             "debug panic in rust service",

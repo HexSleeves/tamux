@@ -132,9 +132,9 @@ fn sample_task_with_scope(id: &str, thread_id: Option<&str>, scope_id: &str) -> 
         supervisor_config: None,
         override_provider: None,
         override_model: None,
-        override_system_prompt: Some(
-            crate::agent::agent_identity::build_spawned_persona_prompt(scope_id),
-        ),
+        override_system_prompt: Some(format!(
+            "Agent persona: Test Persona\nAgent persona id: {scope_id}\nYou are Test Persona ({scope_id}) operating as a spawned tamux agent."
+        )),
         sub_agent_def_id: None,
     }
 }
@@ -1298,6 +1298,18 @@ async fn search_user_honors_layer_toggles() {
     let (event_tx, _) = broadcast::channel(8);
     let thread_id = "thread-search-user-layer-toggles";
     let agent_data_dir = root.path().join("agent");
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        make_thread(
+            thread_id,
+            Some(crate::agent::agent_identity::MAIN_AGENT_NAME),
+            "Search user layer toggles",
+            false,
+            1,
+            1,
+            vec![crate::agent::types::AgentMessage::user("search user layers", 1)],
+        ),
+    );
 
     write_scope_memory_files(
         &agent_data_dir,
@@ -1690,7 +1702,20 @@ async fn search_soul_results_are_bounded_by_limit() {
     let manager = SessionManager::new_test(root.path()).await;
     let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
     let (event_tx, _) = broadcast::channel(8);
+    let thread_id = "thread-search-soul-limit";
     let agent_data_dir = root.path().join("agent");
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        make_thread(
+            thread_id,
+            Some(crate::agent::agent_identity::MAIN_AGENT_NAME),
+            "Search soul limit",
+            false,
+            1,
+            1,
+            vec![crate::agent::types::AgentMessage::user("search soul", 1)],
+        ),
+    );
 
     write_scope_memory_files(
         &agent_data_dir,
@@ -1718,7 +1743,7 @@ async fn search_soul_results_are_bounded_by_limit() {
     let result = execute_tool(
         &tool_call,
         &engine,
-        "thread-search-soul-limit",
+        thread_id,
         None,
         &manager,
         None,
@@ -1833,6 +1858,18 @@ async fn search_memory_later_enabled_layers_still_contribute_when_earlier_layers
     let (event_tx, _) = broadcast::channel(8);
     let thread_id = "thread-search-memory-layer-starvation";
     let agent_data_dir = root.path().join("agent");
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        make_thread(
+            thread_id,
+            Some(crate::agent::agent_identity::MAIN_AGENT_NAME),
+            "Search memory layer starvation",
+            false,
+            1,
+            1,
+            vec![crate::agent::types::AgentMessage::user("search memory", 1)],
+        ),
+    );
 
     let memory_lines = (0..MEMORY_SEARCH_MAX_CANDIDATES_PER_LAYER)
         .map(|index| format!("- filler memory line {index}"))
@@ -1910,7 +1947,20 @@ async fn search_soul_marks_truncated_when_base_markdown_collection_hits_cap() {
     let manager = SessionManager::new_test(root.path()).await;
     let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
     let (event_tx, _) = broadcast::channel(8);
+    let thread_id = "thread-search-soul-truncated-collection";
     let agent_data_dir = root.path().join("agent");
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        make_thread(
+            thread_id,
+            Some(crate::agent::agent_identity::MAIN_AGENT_NAME),
+            "Search soul truncation",
+            false,
+            1,
+            1,
+            vec![crate::agent::types::AgentMessage::user("search soul truncation", 1)],
+        ),
+    );
 
     let filler_lines = (0..MEMORY_SEARCH_MAX_CANDIDATES_PER_LAYER)
         .map(|index| format!("- filler soul line {index}"))
@@ -1942,7 +1992,7 @@ async fn search_soul_marks_truncated_when_base_markdown_collection_hits_cap() {
     let result = execute_tool(
         &tool_call,
         &engine,
-        "thread-search-soul-truncated-collection",
+        thread_id,
         None,
         &manager,
         None,
@@ -1979,6 +2029,18 @@ async fn search_memory_thread_structural_entries_are_not_starved_by_language_hin
     let (event_tx, _) = broadcast::channel(8);
     let thread_id = "thread-search-memory-structural-language-hints";
     let agent_data_dir = root.path().join("agent");
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        make_thread(
+            thread_id,
+            Some(crate::agent::agent_identity::MAIN_AGENT_NAME),
+            "Search memory structural hints",
+            false,
+            1,
+            1,
+            vec![crate::agent::types::AgentMessage::user("search structural memory", 1)],
+        ),
+    );
 
     write_scope_memory_files(
         &agent_data_dir,
@@ -2055,7 +2117,7 @@ async fn ask_questions_tool_waits_for_operator_choice() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
     let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
-    let (event_tx, _) = broadcast::channel(8);
+    let event_tx = engine.event_tx.clone();
     let mut operator_events = engine.event_tx.subscribe();
 
     let tool_call = ToolCall::with_default_weles_review(
@@ -2071,7 +2133,6 @@ async fn ask_questions_tool_waits_for_operator_choice() {
     );
     let engine_for_task = engine.clone();
     let manager_for_task = manager.clone();
-    let mut operator_events = event_tx.subscribe();
     let task = tokio::spawn(async move {
         execute_tool(
             &tool_call,

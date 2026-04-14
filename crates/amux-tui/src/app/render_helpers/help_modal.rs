@@ -246,7 +246,6 @@ pub(super) fn help_modal_text() -> String {
 }
 
 pub(super) fn render_help_modal(frame: &mut Frame, area: Rect, scroll: usize, theme: &ThemeTokens) {
-    
     use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
     let block = Block::default()

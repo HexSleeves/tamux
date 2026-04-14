@@ -9,7 +9,10 @@ mod helpers;
 mod persistence;
 #[path = "causal_traces/reporting.rs"]
 mod reporting;
-use helpers::estimate_plan_success;
+pub(crate) use helpers::{
+    command_family, estimated_success_probability, estimate_plan_success, summarize_outcome,
+    FamilyOutcomeSummary, OutcomeSummary,
+};
 
 impl AgentEngine {
     pub(super) async fn persist_skill_selection_causal_trace(

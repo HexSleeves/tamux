@@ -35,6 +35,7 @@ impl TuiModel {
         self.last_attention_surface = None;
         self.default_session_id = None;
         self.agent_activity = None;
+        self.participant_playground_activity.clear();
         self.thread_loading_id = None;
         self.operator_profile.visible = false;
         self.operator_profile.loading = false;
@@ -51,6 +52,7 @@ impl TuiModel {
         self.last_attention_surface = None;
         self.default_session_id = None;
         self.agent_activity = None;
+        self.participant_playground_activity.clear();
         self.thread_loading_id = None;
         self.operator_profile.visible = false;
         self.operator_profile.loading = false;

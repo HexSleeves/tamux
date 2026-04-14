@@ -403,53 +403,10 @@ impl<'a> SendMessageRunner<'a> {
         if let Some(skill_preflight) = skill_preflight.as_mut() {
             let mut next_state = skill_preflight.state.clone();
             if let Some(previous_state) = engine.get_thread_skill_discovery_state(&tid).await {
-                let should_preserve_prior_state = if next_state.is_discovery_pending() {
-                    false
-                } else if previous_state.mesh_requires_approval {
-                    !previous_state.compliant
-                } else {
-                    !previous_state.compliant
-                        && previous_state.recommended_skill == next_state.recommended_skill
-                        && (previous_state.mesh_next_step != next_state.mesh_next_step
-                            || previous_state.mesh_requires_approval
-                                != next_state.mesh_requires_approval
-                            || previous_state.recommended_action != next_state.recommended_action)
-                };
-
-                if should_preserve_prior_state {
-                    if previous_state.mesh_requires_approval {
-                        next_state.recommended_skill = previous_state.recommended_skill.clone();
-                    }
-                    next_state.confidence_tier = previous_state.confidence_tier.clone();
-                    next_state.mesh_requires_approval = previous_state.mesh_requires_approval;
-                    next_state.mesh_approval_id = previous_state.mesh_approval_id.clone();
-                    next_state.mesh_next_step = previous_state.mesh_next_step;
-                    next_state.read_skill_identifier = previous_state
-                        .read_skill_identifier
-                        .clone()
-                        .or(next_state.read_skill_identifier);
-                    next_state.skill_read_completed = previous_state.skill_read_completed;
-                    next_state.recommended_action = if next_state.mesh_requires_approval {
-                        previous_state.recommended_action.clone()
-                    } else {
-                        match next_state
-                            .mesh_next_step
-                            .unwrap_or(crate::agent::skill_mesh::types::SkillMeshNextStep::JustifySkillSkip)
-                        {
-                            crate::agent::skill_mesh::types::SkillMeshNextStep::ReadSkill
-                            | crate::agent::skill_mesh::types::SkillMeshNextStep::ChooseOrBypass => {
-                                next_state
-                                    .recommended_skill
-                                    .as_deref()
-                                    .map(|skill| format!("read_skill {skill}"))
-                                    .unwrap_or_else(|| "justify_skill_skip".to_string())
-                            }
-                            crate::agent::skill_mesh::types::SkillMeshNextStep::JustifySkillSkip => {
-                                "justify_skill_skip".to_string()
-                            }
-                        }
-                    };
-                    next_state.compliant = false;
+                if super::skill_preflight::preserve_noncompliant_mesh_state(
+                    &previous_state,
+                    &mut next_state,
+                ) {
                     skill_preflight.workflow_message =
                         super::skill_preflight::skill_preflight_workflow_message(&next_state);
                     skill_preflight.workflow_details = serde_json::to_string(&next_state).ok();

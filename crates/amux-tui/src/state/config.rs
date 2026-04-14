@@ -361,6 +361,7 @@ impl Default for ConfigState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use amux_shared::providers::PROVIDER_ID_MINIMAX_CODING_PLAN;
 
     fn make_snapshot(provider: &str, model: &str) -> AgentConfigSnapshot {
         AgentConfigSnapshot {

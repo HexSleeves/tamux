@@ -11,7 +11,8 @@ use crate::history::{EmergentProtocolRow, ProtocolStepRow};
 
 use self::types::{
     ContextSignature, EmergentProtocolStore, ProtocolCandidate, ProtocolCandidateState,
-    ProtocolCandidateStore, ProtocolRegistryEntry, ProtocolStep, ProtocolUsageRecord,
+    ProtocolCandidateStore, ProtocolDecodeOutcome, ProtocolDecodeOutcomeKind,
+    ProtocolRegistryEntry, ProtocolStep, ProtocolUsageRecord,
 };
 
 const ACCEPTANCE_OBSERVATION_THRESHOLD: u32 = 3;
@@ -96,7 +97,10 @@ impl AgentEngine {
         &self,
         thread_id: &str,
     ) -> anyhow::Result<Vec<ProtocolRegistryEntry>> {
-        let rows = self.history.list_emergent_protocols_for_thread(thread_id).await?;
+        let rows = self
+            .history
+            .list_emergent_protocols_for_thread(thread_id)
+            .await?;
         let mut entries = Vec::with_capacity(rows.len());
         for row in rows {
             entries.push(self.protocol_registry_entry_from_row(row).await?);
@@ -122,7 +126,9 @@ impl AgentEngine {
         &self,
         thread_id: &str,
     ) -> anyhow::Result<serde_json::Value> {
-        let entries = self.list_thread_protocol_registry_entries(thread_id).await?;
+        let entries = self
+            .list_thread_protocol_registry_entries(thread_id)
+            .await?;
         Ok(json!({
             "thread_id": thread_id,
             "protocol_count": entries.len(),
@@ -138,7 +144,10 @@ impl AgentEngine {
         fallback_reason: Option<String>,
         execution_time_ms: Option<u64>,
     ) -> anyhow::Result<Option<ProtocolRegistryEntry>> {
-        let Some(mut entry) = self.lookup_thread_protocol_registry_entry(thread_id, token).await? else {
+        let Some(mut entry) = self
+            .lookup_thread_protocol_registry_entry(thread_id, token)
+            .await?
+        else {
             return Ok(None);
         };
         let used_at_ms = crate::agent::task_prompt::now_millis();
@@ -211,6 +220,86 @@ impl AgentEngine {
         Ok(Some(entry))
     }
 
+    pub(crate) async fn decode_thread_protocol_token(
+        &self,
+        thread_id: &str,
+        token: &str,
+        current_role: Option<&str>,
+        normalized_pattern: Option<&str>,
+    ) -> anyhow::Result<Option<ProtocolDecodeOutcome>> {
+        let Some(entry) = self
+            .lookup_thread_protocol_registry_entry(thread_id, token)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let current_role = current_role
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("user");
+        let normalized_pattern = normalized_pattern
+            .map(crate::agent::emergent_protocol::compressor::compress_pattern_key)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| entry.context_signature.normalized_pattern.clone());
+
+        let role_matches = current_role == entry.context_signature.source_role;
+        let pattern_matches = normalized_pattern == entry.context_signature.normalized_pattern;
+        let context_match = role_matches && pattern_matches;
+
+        if !context_match {
+            let mut mismatches = Vec::new();
+            if !role_matches {
+                mismatches.push(format!(
+                    "role_mismatch:{}!= {}",
+                    current_role, entry.context_signature.source_role
+                ));
+            }
+            if !pattern_matches {
+                mismatches.push(format!(
+                    "pattern_mismatch:{}!= {}",
+                    normalized_pattern, entry.context_signature.normalized_pattern
+                ));
+            }
+            let fallback_reason = mismatches.join(";");
+            let updated = self
+                .record_protocol_registry_usage(
+                    thread_id,
+                    token,
+                    false,
+                    Some(fallback_reason.clone()),
+                    None,
+                )
+                .await?
+                .unwrap_or(entry.clone());
+            return Ok(Some(ProtocolDecodeOutcome {
+                outcome: ProtocolDecodeOutcomeKind::Fallback,
+                token: token.to_string(),
+                protocol_id: updated.protocol_id.clone(),
+                thread_id: thread_id.to_string(),
+                context_match: false,
+                fallback_reason: Some(fallback_reason),
+                entry: updated,
+                expanded_steps: Vec::new(),
+            }));
+        }
+
+        let updated = self
+            .record_protocol_registry_usage(thread_id, token, true, None, None)
+            .await?
+            .unwrap_or(entry.clone());
+        Ok(Some(ProtocolDecodeOutcome {
+            outcome: ProtocolDecodeOutcomeKind::Match,
+            token: token.to_string(),
+            protocol_id: updated.protocol_id.clone(),
+            thread_id: thread_id.to_string(),
+            context_match: true,
+            fallback_reason: None,
+            expanded_steps: updated.steps.clone(),
+            entry: updated,
+        }))
+    }
+
     async fn protocol_registry_entry_from_row(
         &self,
         row: EmergentProtocolRow,
@@ -242,7 +331,9 @@ impl AgentEngine {
             signal_kind: crate::agent::emergent_protocol::types::ProtocolSignalKind::from_str(
                 &row.signal_kind,
             )
-            .unwrap_or(crate::agent::emergent_protocol::types::ProtocolSignalKind::RepeatedShorthand),
+            .unwrap_or(
+                crate::agent::emergent_protocol::types::ProtocolSignalKind::RepeatedShorthand,
+            ),
             context_signature,
             steps,
             created_at_ms: row.created_at,
@@ -694,5 +785,94 @@ mod tests {
             .await
             .expect("reload should succeed");
         assert_eq!(reloaded["protocol_count"].as_u64(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn decode_returns_expanded_steps_on_context_match() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread-emergent-decode-match";
+
+        let messages = vec![
+            msg("m1", thread_id, 1, "user", "continue"),
+            msg("m2", thread_id, 2, "assistant", "working"),
+            msg("m3", thread_id, 3, "user", "continue"),
+            msg("m4", thread_id, 4, "assistant", "still working"),
+            msg("m5", thread_id, 5, "user", "continue"),
+        ];
+
+        engine
+            .analyze_emergent_protocol_from_messages(thread_id, &messages)
+            .await
+            .expect("analysis should succeed");
+
+        let registry = engine
+            .list_thread_protocol_registry_entries(thread_id)
+            .await
+            .expect("registry should load");
+        let token = registry[0].token.clone();
+
+        let decoded = engine
+            .decode_thread_protocol_token(thread_id, &token, Some("user"), Some("continue"))
+            .await
+            .expect("decode should succeed")
+            .expect("entry should decode");
+
+        assert!(decoded.context_match);
+        assert_eq!(decoded.outcome, types::ProtocolDecodeOutcomeKind::Match);
+        assert_eq!(decoded.expanded_steps.len(), 1);
+        assert!(decoded.expanded_steps[0].intent.contains("expand"));
+    }
+
+    #[tokio::test]
+    async fn decode_returns_structured_fallback_on_context_mismatch() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread-emergent-decode-fallback";
+
+        let messages = vec![
+            msg("m1", thread_id, 1, "user", "continue"),
+            msg("m2", thread_id, 2, "assistant", "working"),
+            msg("m3", thread_id, 3, "user", "continue"),
+            msg("m4", thread_id, 4, "assistant", "still working"),
+            msg("m5", thread_id, 5, "user", "continue"),
+        ];
+
+        engine
+            .analyze_emergent_protocol_from_messages(thread_id, &messages)
+            .await
+            .expect("analysis should succeed");
+
+        let registry = engine
+            .list_thread_protocol_registry_entries(thread_id)
+            .await
+            .expect("registry should load");
+        let token = registry[0].token.clone();
+        let protocol_id = registry[0].protocol_id.clone();
+
+        let decoded = engine
+            .decode_thread_protocol_token(thread_id, &token, Some("assistant"), Some("different"))
+            .await
+            .expect("decode should succeed")
+            .expect("entry should decode");
+
+        assert!(!decoded.context_match);
+        assert_eq!(decoded.outcome, types::ProtocolDecodeOutcomeKind::Fallback);
+        assert!(decoded
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("mismatch")));
+
+        let usage_payload = engine
+            .get_protocol_usage_log_payload(&protocol_id)
+            .await
+            .expect("usage payload should load");
+        let entries = usage_payload["entries"]
+            .as_array()
+            .expect("usage entries should be an array");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["success"].as_bool(), Some(false));
     }
 }

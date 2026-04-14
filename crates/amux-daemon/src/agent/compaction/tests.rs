@@ -1182,8 +1182,9 @@ async fn auto_compaction_notice_includes_artifact_location_details() {
     let manager = SessionManager::new_test(root.path()).await;
     let mut config = AgentConfig::default();
     config.auto_compact_context = true;
-    config.max_context_messages = 2;
+    config.max_context_messages = 500;
     config.keep_recent_on_compact = 1;
+    config.context_window_tokens = 50_000;
     config.compaction.strategy = CompactionStrategy::Heuristic;
     let engine = AgentEngine::new_test(manager, config.clone(), root.path()).await;
     let thread_id = "thread-compaction-notice-details";
@@ -1208,7 +1209,8 @@ async fn auto_compaction_notice_includes_artifact_location_details() {
         .await
         .insert(thread_id.to_string(), thread);
 
-    let provider = sample_provider_config();
+    let mut provider = sample_provider_config();
+    provider.context_window_tokens = 50_000;
     let persisted = engine
         .maybe_persist_compaction_artifact(thread_id, None, &config, &provider)
         .await

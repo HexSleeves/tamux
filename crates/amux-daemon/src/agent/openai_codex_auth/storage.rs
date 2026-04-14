@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use super::{
-    now_millis, tombstone_auth_mode, CodexCliAuthFile,
-    OpenAICodexAuthTombstone, StoredOpenAICodexAuth, OPENAI_AUTH_MODE, OPENAI_CODEX_AUTH_PROVIDER,
-    OPENAI_PROVIDER_ID,
+    auth_runtime, now_millis, tombstone_auth_mode, CodexCliAuthFile, OpenAICodexAuthRuntime,
+    OpenAICodexAuthTombstone, StoredOpenAICodexAuth, OPENAI_AUTH_MODE,
+    OPENAI_CODEX_AUTH_PROVIDER, OPENAI_PROVIDER_ID,
 };
 use crate::agent::provider_auth_store;
 

@@ -107,7 +107,10 @@ pub async fn run() -> Result<()> {
         tokio::spawn(async move {
             // Hydrate persisted state (threads, tasks, heartbeat, memory) without
             // delaying socket availability.
-            if let Err(e) = startup_agent.hydrate().await {
+            if let Err(e) = startup_agent
+                .hydrate_without_participant_observer_restore()
+                .await
+            {
                 tracing::warn!("failed to hydrate agent engine: {e}");
             }
 
@@ -118,6 +121,7 @@ pub async fn run() -> Result<()> {
                 .await;
 
             startup_readiness_for_task.mark_ready();
+            startup_agent.schedule_participant_observer_restore_after_hydrate();
 
             #[cfg(not(test))]
             maybe_autostart_whatsapp_link(startup_agent.clone()).await;
@@ -157,7 +161,10 @@ pub async fn run() -> Result<()> {
         tokio::spawn(async move {
             // Hydrate persisted state (threads, tasks, heartbeat, memory) without
             // delaying socket availability.
-            if let Err(e) = startup_agent.hydrate().await {
+            if let Err(e) = startup_agent
+                .hydrate_without_participant_observer_restore()
+                .await
+            {
                 tracing::warn!("failed to hydrate agent engine: {e}");
             }
 
@@ -168,6 +175,7 @@ pub async fn run() -> Result<()> {
                 .await;
 
             startup_readiness_for_task.mark_ready();
+            startup_agent.schedule_participant_observer_restore_after_hydrate();
 
             #[cfg(not(test))]
             maybe_autostart_whatsapp_link(startup_agent.clone()).await;

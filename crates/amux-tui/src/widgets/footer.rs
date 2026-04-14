@@ -508,6 +508,7 @@ pub fn status_bar_hit_test(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::InputMode;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 

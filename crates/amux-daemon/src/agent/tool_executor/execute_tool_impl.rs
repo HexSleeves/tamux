@@ -442,6 +442,9 @@ async fn dispatch_tool_execution(
         "reload_emergent_protocol_registry" => {
             execute_reload_emergent_protocol_registry(args, agent, thread_id).await
         }
+        "decode_emergent_protocol" => {
+            execute_decode_emergent_protocol(args, agent, thread_id).await
+        }
         "get_emergent_protocol_usage_log" => {
             execute_get_emergent_protocol_usage_log(args, agent).await
         }
