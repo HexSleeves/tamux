@@ -5772,3 +5772,288 @@ async fn successful_safe_shell_command_does_not_emit_proposal_when_equivalent_ge
         "existing equivalent generated tool should suppress shell fallback synthesis proposal notices"
     );
 }
+
+#[tokio::test]
+async fn unknown_cli_like_tool_emits_activate_notice_when_equivalent_generated_tool_is_new() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.tool_synthesis.enabled = true;
+    let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+    let (event_tx, mut event_rx) = broadcast::channel(8);
+
+    engine
+        .synthesize_tool_json(
+            &serde_json::json!({
+                "kind": "cli",
+                "target": "cargo check",
+                "name": "cargo_check",
+                "activate": false,
+            })
+            .to_string(),
+        )
+        .await
+        .expect("synthesize generated tool record");
+
+    let result = execute_tool(
+        &ToolCall {
+            id: "call-tool-gap-existing-new".to_string(),
+            function: ToolFunction {
+                name: "cargo_check".to_string(),
+                arguments: serde_json::json!({}).to_string(),
+            },
+            weles_review: None,
+        },
+        &engine,
+        "thread-tool-gap-existing-new",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(result.is_error, "unknown tool should still error");
+
+    let notice = timeout(Duration::from_millis(250), event_rx.recv())
+        .await
+        .expect("expected existing-tool status notice")
+        .expect("workflow notice should be received");
+    match notice {
+        AgentEvent::WorkflowNotice {
+            kind,
+            message,
+            details: Some(details),
+            ..
+        } => {
+            assert_eq!(kind, "tool-synthesis-proposal");
+            assert!(message.contains("Activate it"));
+            let details: serde_json::Value =
+                serde_json::from_str(&details).expect("notice details should be json");
+            assert_eq!(
+                details.get("reason").and_then(|value| value.as_str()),
+                Some("existing_equivalent_generated_tool")
+            );
+            assert_eq!(
+                details
+                    .get("recommended_action")
+                    .and_then(|value| value.as_str()),
+                Some("activate_generated_tool")
+            );
+            assert_eq!(
+                details
+                    .get("existing_tool")
+                    .and_then(|value| value.get("status"))
+                    .and_then(|value| value.as_str()),
+                Some("new")
+            );
+        }
+        other => panic!("expected workflow notice, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn successful_safe_shell_command_emits_reuse_notice_when_equivalent_generated_tool_is_active() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.tool_synthesis.enabled = true;
+    let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+    let (event_tx, mut event_rx) = broadcast::channel(8);
+
+    let synth = engine
+        .synthesize_tool_json(
+            &serde_json::json!({
+                "kind": "cli",
+                "target": "git status",
+                "name": "git_status",
+                "activate": false,
+            })
+            .to_string(),
+        )
+        .await
+        .expect("synthesize generated tool record");
+    let record: serde_json::Value = serde_json::from_str(&synth).expect("parse synth record");
+    let tool_name = record
+        .get("id")
+        .and_then(|value| value.as_str())
+        .expect("generated tool id");
+    engine
+        .activate_generated_tool_json(tool_name)
+        .await
+        .expect("activate generated tool");
+
+    let repo_root = root.path().join("repo-shell-gap-existing-active");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("git init should succeed");
+
+    let result = execute_tool(
+        &ToolCall {
+            id: "call-shell-gap-existing-active".to_string(),
+            function: ToolFunction {
+                name: "bash_command".to_string(),
+                arguments: serde_json::json!({
+                    "command": "git status --short",
+                    "cwd": repo_root,
+                })
+                .to_string(),
+            },
+            weles_review: None,
+        },
+        &engine,
+        "thread-shell-gap-existing-active",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(!result.is_error, "shell command should succeed: {}", result.content);
+
+    let notice = timeout(Duration::from_millis(250), event_rx.recv())
+        .await
+        .expect("expected existing-tool status notice")
+        .expect("workflow notice should be received");
+    match notice {
+        AgentEvent::WorkflowNotice {
+            message,
+            details: Some(details),
+            ..
+        } => {
+            assert!(message.contains("already active"));
+            let details: serde_json::Value =
+                serde_json::from_str(&details).expect("notice details should be json");
+            assert_eq!(
+                details
+                    .get("recommended_action")
+                    .and_then(|value| value.as_str()),
+                Some("use_existing_generated_tool")
+            );
+            assert_eq!(
+                details
+                    .get("existing_tool")
+                    .and_then(|value| value.get("status"))
+                    .and_then(|value| value.as_str()),
+                Some("active")
+            );
+        }
+        other => panic!("expected workflow notice, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn successful_safe_shell_command_emits_promote_notice_when_equivalent_generated_tool_is_promotable() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.tool_synthesis.enabled = true;
+    config.tool_synthesis.sandbox.allow_filesystem = true;
+    let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+    let (event_tx, mut event_rx) = broadcast::channel(8);
+
+    let synth = engine
+        .synthesize_tool_json(
+            &serde_json::json!({
+                "kind": "cli",
+                "target": "git status",
+                "name": "git_status",
+                "activate": false,
+            })
+            .to_string(),
+        )
+        .await
+        .expect("synthesize generated tool record");
+    let record: serde_json::Value = serde_json::from_str(&synth).expect("parse synth record");
+    let tool_name = record
+        .get("id")
+        .and_then(|value| value.as_str())
+        .expect("generated tool id");
+    engine
+        .activate_generated_tool_json(tool_name)
+        .await
+        .expect("activate generated tool");
+
+    let generated_tool_args = serde_json::json!({});
+    for _ in 0..3 {
+        engine
+            .run_generated_tool_json(tool_name, &generated_tool_args.to_string(), Some("thread-a"))
+            .await
+            .expect("run generated tool to reach promotable status");
+    }
+
+    let repo_root = root.path().join("repo-shell-gap-existing-promotable");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("git init should succeed");
+
+    let result = execute_tool(
+        &ToolCall {
+            id: "call-shell-gap-existing-promotable".to_string(),
+            function: ToolFunction {
+                name: "bash_command".to_string(),
+                arguments: serde_json::json!({
+                    "command": "git status --short",
+                    "cwd": repo_root,
+                })
+                .to_string(),
+            },
+            weles_review: None,
+        },
+        &engine,
+        "thread-shell-gap-existing-promotable",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(!result.is_error, "shell command should succeed: {}", result.content);
+
+    let notice = timeout(Duration::from_millis(250), event_rx.recv())
+        .await
+        .expect("expected existing-tool status notice")
+        .expect("workflow notice should be received");
+    match notice {
+        AgentEvent::WorkflowNotice {
+            message,
+            details: Some(details),
+            ..
+        } => {
+            assert!(message.contains("already promotable"));
+            let details: serde_json::Value =
+                serde_json::from_str(&details).expect("notice details should be json");
+            assert_eq!(
+                details
+                    .get("recommended_action")
+                    .and_then(|value| value.as_str()),
+                Some("promote_generated_tool")
+            );
+            assert_eq!(
+                details
+                    .get("existing_tool")
+                    .and_then(|value| value.get("status"))
+                    .and_then(|value| value.as_str()),
+                Some("promotable")
+            );
+        }
+        other => panic!("expected workflow notice, got {other:?}"),
+    }
+}

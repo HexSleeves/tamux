@@ -94,6 +94,69 @@ async fn maybe_emit_cli_wrapper_synthesis_proposal_notice(
     });
 }
 
+async fn maybe_emit_existing_tool_status_notice(
+    agent: &AgentEngine,
+    event_tx: &broadcast::Sender<AgentEvent>,
+    thread_id: &str,
+    dedupe_hint: &str,
+    proposal_tool_name: &str,
+    proposal_target: &str,
+    existing: &serde_json::Value,
+    source_reason: &str,
+) {
+    let status = existing
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or("active");
+    let id = existing
+        .get("id")
+        .and_then(|value| value.as_str())
+        .unwrap_or(proposal_tool_name);
+    let (message, recommended_action) = match status {
+        "new" => (
+            format!(
+                "Equivalent generated tool `{id}` already exists for this CLI gap. Activate it instead of synthesizing a duplicate."
+            ),
+            "activate_generated_tool",
+        ),
+        "promotable" => (
+            format!(
+                "Equivalent generated tool `{id}` is already promotable. Prefer using or promoting it instead of synthesizing a duplicate."
+            ),
+            "promote_generated_tool",
+        ),
+        "promoted" => (
+            format!(
+                "Equivalent generated tool `{id}` is already promoted. Reuse it instead of synthesizing a duplicate."
+            ),
+            "use_existing_generated_tool",
+        ),
+        _ => (
+            format!(
+                "Equivalent generated tool `{id}` is already active. Reuse it instead of synthesizing a duplicate."
+            ),
+            "use_existing_generated_tool",
+        ),
+    };
+    let details = serde_json::json!({
+        "reason": "existing_equivalent_generated_tool",
+        "source_reason": source_reason,
+        "recommended_action": recommended_action,
+        "existing_tool": existing,
+        "proposal_kind": "cli",
+        "target": proposal_target,
+    });
+    maybe_emit_cli_wrapper_synthesis_proposal_notice(
+        agent,
+        event_tx,
+        thread_id,
+        dedupe_hint,
+        message,
+        details,
+    )
+    .await;
+}
+
 async fn strongest_repeated_shell_fallback_evidence(
     agent: &AgentEngine,
     tool_name: &str,
@@ -126,7 +189,20 @@ async fn maybe_emit_unknown_tool_synthesis_proposal_notice(
     let Some(proposal) = detect_cli_wrapper_synthesis_proposal(missing_tool) else {
         return;
     };
-    if has_equivalent_generated_cli_tool(&agent.data_dir, &proposal).unwrap_or(false) {
+    if let Some(existing) =
+        find_equivalent_generated_cli_tool(&agent.data_dir, &proposal).unwrap_or(None)
+    {
+        maybe_emit_existing_tool_status_notice(
+            agent,
+            event_tx,
+            thread_id,
+            &format!("existing-unknown::{missing_tool}"),
+            &proposal.tool_name,
+            &proposal.target,
+            &existing,
+            "unknown_tool_safe_cli_gap",
+        )
+        .await;
         return;
     }
     let synthesize_args = serde_json::json!({
@@ -168,7 +244,20 @@ async fn maybe_emit_successful_shell_synthesis_proposal_notice(
     let Some(proposal) = detect_cli_wrapper_synthesis_proposal_from_command(command) else {
         return;
     };
-    if has_equivalent_generated_cli_tool(&agent.data_dir, &proposal).unwrap_or(false) {
+    if let Some(existing) =
+        find_equivalent_generated_cli_tool(&agent.data_dir, &proposal).unwrap_or(None)
+    {
+        maybe_emit_existing_tool_status_notice(
+            agent,
+            event_tx,
+            thread_id,
+            &format!("existing-shell::{command}"),
+            &proposal.tool_name,
+            &proposal.target,
+            &existing,
+            "successful_safe_shell_cli_gap",
+        )
+        .await;
         return;
     }
     let synthesize_args = serde_json::json!({
