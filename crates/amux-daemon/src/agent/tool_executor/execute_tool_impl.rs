@@ -1116,6 +1116,7 @@ async fn dispatch_tool_execution(
         "vote_on_disagreement" => {
             execute_vote_on_disagreement(args, agent, thread_id, task_id).await
         }
+        "dispatch_via_bid_protocol" => execute_dispatch_via_bid_protocol(args, agent).await,
         "list_collaboration_sessions" => {
             execute_list_collaboration_sessions(args, agent, task_id).await
         }

@@ -315,6 +315,59 @@ async fn execute_vote_on_disagreement(
     Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
 }
 
+async fn execute_dispatch_via_bid_protocol(
+    args: &serde_json::Value,
+    agent: &AgentEngine,
+) -> Result<String> {
+    if !agent.config.read().await.collaboration.enabled {
+        anyhow::bail!("collaboration capability is disabled in agent config");
+    }
+    let parent_task_id = args
+        .get("parent_task_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'parent_task_id' argument"))?;
+    let bids = args
+        .get("bids")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| anyhow::anyhow!("missing 'bids' argument"))?
+        .iter()
+        .map(|bid| {
+            let task_id = bid
+                .get("task_id")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("each bid requires 'task_id'"))?
+                .to_string();
+            let confidence = bid
+                .get("confidence")
+                .and_then(|value| value.as_f64())
+                .ok_or_else(|| anyhow::anyhow!("each bid requires numeric 'confidence'"))?;
+            let availability = match bid
+                .get("availability")
+                .and_then(|value| value.as_str())
+                .map(|value| value.trim().to_ascii_lowercase())
+                .as_deref()
+            {
+                Some("available") => crate::agent::collaboration::BidAvailability::Available,
+                Some("busy") => crate::agent::collaboration::BidAvailability::Busy,
+                Some("unavailable") => crate::agent::collaboration::BidAvailability::Unavailable,
+                _ => anyhow::bail!("each bid requires availability in [available, busy, unavailable]"),
+            };
+            Ok(crate::agent::collaboration::DispatchBidRequest {
+                task_id,
+                confidence,
+                availability,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let report = agent.dispatch_via_bid_protocol(parent_task_id, &bids).await?;
+    Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
+}
+
 async fn execute_list_collaboration_sessions(
     args: &serde_json::Value,
     agent: &AgentEngine,

@@ -31,6 +31,26 @@ fn add_available_tools_part_d(
             },
             "required": ["disagreement_id", "position"]
         })));
+        tools.push(tool_def("dispatch_via_bid_protocol", "Dispatch a collaboration task through the minimal bid protocol and return the resolved primary/reviewer assignment.", serde_json::json!({
+            "type": "object",
+            "properties": {
+                "parent_task_id": { "type": "string", "description": "Parent collaboration task scope" },
+                "bids": {
+                    "type": "array",
+                    "description": "Typed bid submissions to resolve",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": { "type": "string", "description": "Collaborative task submitting the bid" },
+                            "confidence": { "type": "number", "description": "Bid confidence in the range 0.0-1.0" },
+                            "availability": { "type": "string", "enum": ["available", "busy", "unavailable"], "description": "Availability state for ranking" }
+                        },
+                        "required": ["task_id", "confidence", "availability"]
+                    }
+                }
+            },
+            "required": ["parent_task_id", "bids"]
+        })));
         tools.push(tool_def("list_collaboration_sessions", "Inspect live collaboration sessions, contributions, disagreements, and consensus built from subagent work.", serde_json::json!({
             "type": "object",
             "properties": {
