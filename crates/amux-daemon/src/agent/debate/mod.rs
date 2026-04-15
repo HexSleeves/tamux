@@ -178,11 +178,10 @@ impl AgentEngine {
         }
 
         for request in requests {
-            let already_recorded = session.arguments.iter().any(|argument| {
-                argument.round == request.round
-                    && argument.role == request.role
-                    && argument.agent_id == request.agent_id
-            });
+            let already_recorded = session
+                .arguments
+                .iter()
+                .any(|argument| argument.round == request.round && argument.role == request.role);
             if already_recorded {
                 continue;
             }

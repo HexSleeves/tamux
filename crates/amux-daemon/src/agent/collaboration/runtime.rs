@@ -941,8 +941,15 @@ impl AgentEngine {
         )
         .await?;
 
-        self.advance_debate_round(&debate_session_id).await?;
-        let completion = self.complete_debate_session(&debate_session_id).await?;
+        let mut completion_ready_session = self
+            .get_persisted_debate_session(&debate_session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("unknown debate session: {debate_session_id}"))?;
+        completion_ready_session.max_rounds = completion_ready_session.current_round;
+        self.persist_debate_session(&completion_ready_session)
+            .await?;
+
+        let completion = self.run_debate_to_completion(&debate_session_id).await?;
         let rationale = completion["verdict"]["recommended_action"]
             .as_str()
             .map(ToOwned::to_owned)
