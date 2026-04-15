@@ -13,6 +13,14 @@ fn bid_sort_key(availability: &BidAvailability) -> u8 {
     }
 }
 
+fn bid_availability_label(availability: &BidAvailability) -> &'static str {
+    match availability {
+        BidAvailability::Available => "available",
+        BidAvailability::Busy => "busy",
+        BidAvailability::Unavailable => "unavailable",
+    }
+}
+
 #[derive(Clone)]
 struct PendingDebateSeed {
     disagreement_id: String,
@@ -774,6 +782,218 @@ impl AgentEngine {
             "shared_context": session.contributions.iter().filter(|entry| entry.task_id != task_id).collect::<Vec<_>>(),
             "disagreements": session.disagreements,
             "consensus": session.consensus,
+        }))
+    }
+
+    pub(in crate::agent) async fn resolve_seeded_bid_debate(
+        &self,
+        parent_task_id: &str,
+    ) -> Result<serde_json::Value> {
+        let (
+            debate_session_id,
+            disagreement_id,
+            mission,
+            winner_task_id,
+            reviewer_task_id,
+            winner_bid,
+            reviewer_bid,
+        ) = {
+            if !self.config.read().await.collaboration.enabled {
+                anyhow::bail!("collaboration capability is disabled in agent config");
+            }
+            let collaboration = self.collaboration.read().await;
+            let Some(session) = collaboration.get(parent_task_id) else {
+                anyhow::bail!("no collaboration session found for parent task {parent_task_id}");
+            };
+            let assignment = session.role_assignment.clone().ok_or_else(|| {
+                anyhow::anyhow!("no bid role assignment found for parent task {parent_task_id}")
+            })?;
+            let disagreement = session
+                .disagreements
+                .iter()
+                .find(|item| {
+                    item.debate_session_id.is_some()
+                        && item.topic.starts_with("bid resolution for ")
+                        && item.resolution == "pending"
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no pending seeded bid debate found for parent task {parent_task_id}"
+                    )
+                })?;
+            let winner_bid = session
+                .bids
+                .iter()
+                .find(|bid| bid.task_id == assignment.primary_task_id)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing primary bid for seeded bid debate"))?;
+            let reviewer_bid = session
+                .bids
+                .iter()
+                .find(|bid| bid.task_id == assignment.reviewer_task_id)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing reviewer bid for seeded bid debate"))?;
+            (
+                disagreement
+                    .debate_session_id
+                    .clone()
+                    .expect("seeded bid debate session id should exist"),
+                disagreement.id.clone(),
+                session.mission.clone(),
+                assignment.primary_task_id,
+                assignment.reviewer_task_id,
+                winner_bid,
+                reviewer_bid,
+            )
+        };
+
+        let debate_session = self
+            .get_persisted_debate_session(&debate_session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("unknown debate session: {debate_session_id}"))?;
+
+        let shared_evidence = vec![
+            format!(
+                "seeded bid debate parent_task_id={} mission={}",
+                parent_task_id, mission
+            ),
+            format!(
+                "candidate={} confidence={:.2} availability={}",
+                winner_task_id,
+                winner_bid.confidence,
+                bid_availability_label(&winner_bid.availability)
+            ),
+            format!(
+                "candidate={} confidence={:.2} availability={}",
+                reviewer_task_id,
+                reviewer_bid.confidence,
+                bid_availability_label(&reviewer_bid.availability)
+            ),
+        ];
+
+        self.append_debate_argument(
+            &debate_session_id,
+            Argument {
+                id: format!("arg_{}", uuid::Uuid::new_v4()),
+                round: debate_session.current_round,
+                role: RoleKind::Proponent,
+                agent_id: winner_task_id.clone(),
+                content: format!(
+                    "Bid finalist argument: choose primary={} for {} because confidence={:.2} and availability={} remain strongest under the tie-break.",
+                    winner_task_id,
+                    mission,
+                    winner_bid.confidence,
+                    bid_availability_label(&winner_bid.availability)
+                ),
+                evidence_refs: shared_evidence.clone(),
+                responds_to: None,
+                timestamp_ms: now_millis(),
+            },
+        )
+        .await?;
+
+        self.append_debate_argument(
+            &debate_session_id,
+            Argument {
+                id: format!("arg_{}", uuid::Uuid::new_v4()),
+                round: debate_session.current_round,
+                role: RoleKind::Skeptic,
+                agent_id: reviewer_task_id.clone(),
+                content: format!(
+                    "Bid finalist counterargument: choose primary={} for {} because confidence={:.2} and availability={} keep the contest open.",
+                    reviewer_task_id,
+                    mission,
+                    reviewer_bid.confidence,
+                    bid_availability_label(&reviewer_bid.availability)
+                ),
+                evidence_refs: shared_evidence.clone(),
+                responds_to: None,
+                timestamp_ms: now_millis(),
+            },
+        )
+        .await?;
+
+        self.append_debate_argument(
+            &debate_session_id,
+            Argument {
+                id: format!("arg_{}", uuid::Uuid::new_v4()),
+                round: debate_session.current_round,
+                role: RoleKind::Synthesizer,
+                agent_id: "synthesis-lens".to_string(),
+                content: format!(
+                    "Winning assignment: primary={} reviewer={}. Preserve the deterministic ranking because both bids stayed tied at confidence={:.2} with availability {} vs {}.",
+                    winner_task_id,
+                    reviewer_task_id,
+                    winner_bid.confidence,
+                    bid_availability_label(&winner_bid.availability),
+                    bid_availability_label(&reviewer_bid.availability)
+                ),
+                evidence_refs: shared_evidence,
+                responds_to: None,
+                timestamp_ms: now_millis(),
+            },
+        )
+        .await?;
+
+        self.advance_debate_round(&debate_session_id).await?;
+        let completion = self.complete_debate_session(&debate_session_id).await?;
+        let rationale = completion["verdict"]["recommended_action"]
+            .as_str()
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| {
+                format!(
+                    "Winning assignment: primary={} reviewer={}",
+                    winner_task_id, reviewer_task_id
+                )
+            });
+
+        let snapshot = {
+            let mut collaboration = self.collaboration.write().await;
+            let Some(session) = collaboration.get_mut(parent_task_id) else {
+                anyhow::bail!("no collaboration session found for parent task {parent_task_id}");
+            };
+
+            session.role_assignment = Some(ConsensusRoleAssignment {
+                primary_task_id: winner_task_id.clone(),
+                primary_role: "primary".to_string(),
+                reviewer_task_id: reviewer_task_id.clone(),
+                reviewer_role: "reviewer".to_string(),
+                assigned_at: now_millis(),
+            });
+            session.consensus = Some(Consensus {
+                topic: format!("bid resolution for {}", normalize_topic(&mission)),
+                winner: winner_task_id.clone(),
+                rationale: rationale.clone(),
+                votes: Vec::new(),
+            });
+            for agent in session.agents.iter_mut() {
+                if agent.task_id == winner_task_id {
+                    agent.role = "primary".to_string();
+                    agent.confidence = winner_bid.confidence;
+                } else if agent.task_id == reviewer_task_id {
+                    agent.role = "reviewer".to_string();
+                    agent.confidence = reviewer_bid.confidence;
+                }
+            }
+            if let Some(disagreement) = session
+                .disagreements
+                .iter_mut()
+                .find(|item| item.id == disagreement_id)
+            {
+                disagreement.resolution = "resolved".to_string();
+            }
+            session.updated_at = now_millis();
+            session.clone()
+        };
+        self.persist_collaboration_session(&snapshot).await?;
+
+        Ok(serde_json::json!({
+            "debate_session_id": debate_session_id,
+            "winner_task_id": winner_task_id,
+            "reviewer_task_id": reviewer_task_id,
+            "verdict": completion["verdict"],
+            "current_round": completion["current_round"],
+            "status": completion["status"],
         }))
     }
 
