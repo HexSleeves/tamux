@@ -934,6 +934,126 @@ keywords: [debug]
 }
 
 #[tokio::test]
+async fn successful_skill_settlement_reinforces_memory_node_relevance_signal() -> Result<()> {
+    let root = tempdir()?;
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let skill_path = write_skill(
+        &root.path().join("skills").join("generated"),
+        "zeta-general-playbook",
+        r#"---
+description: General debugging guidance.
+keywords: [debug]
+---
+
+# Zeta General Playbook
+"#,
+    )?;
+
+    let variant = engine.history.register_skill_document(&skill_path).await?;
+
+    engine
+        .history
+        .upsert_memory_node(
+            "node:memory:incident-42",
+            "incident bridge 42",
+            "memory_fact",
+            Some("operator mentioned incident bridge 42 while debugging backend failures"),
+            1_717_181_701,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_node(
+            "intent:incident bridge 42",
+            "incident bridge 42",
+            "intent",
+            Some("query-shaped intent seed"),
+            1_717_181_702,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_node(
+            "intent:backend-debugging",
+            "backend debugging",
+            "intent",
+            Some("normalized backend debugging intent"),
+            1_717_181_703,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_edge(
+            "node:memory:incident-42",
+            "intent:incident bridge 42",
+            "memory_supports_intent",
+            1.0,
+            1_717_181_704,
+        )
+        .await?;
+    engine
+        .history
+        .upsert_memory_edge(
+            "intent:incident bridge 42",
+            "intent:backend-debugging",
+            "intent_related_intent",
+            1.0,
+            1_717_181_705,
+        )
+        .await?;
+
+    let edge_before = engine
+        .history
+        .list_memory_edges_for_node("node:memory:incident-42")
+        .await?
+        .into_iter()
+        .find(|edge| {
+            edge.relation_type == "memory_supports_intent"
+                && (edge.target_node_id == "intent:incident bridge 42"
+                    || edge.source_node_id == "intent:incident bridge 42")
+        })
+        .expect("memory-to-intent relevance edge should exist before settle");
+
+    let thread_id = "thread-memory-feedback-success";
+    let task_id = "task-memory-feedback-success";
+    engine
+        .record_skill_consultation(
+            thread_id,
+            Some(task_id),
+            &variant,
+            &["backend-debugging".to_string()],
+        )
+        .await;
+    let task = sample_task(task_id, thread_id);
+    assert_eq!(
+        engine
+            .settle_task_skill_consultations(&task, "success")
+            .await,
+        1
+    );
+
+    let edge_after = engine
+        .history
+        .list_memory_edges_for_node("node:memory:incident-42")
+        .await?
+        .into_iter()
+        .find(|edge| {
+            edge.relation_type == "memory_supports_intent"
+                && (edge.target_node_id == "intent:incident bridge 42"
+                    || edge.source_node_id == "intent:incident bridge 42")
+        })
+        .expect("memory-to-intent relevance edge should still exist after settle");
+
+    assert!(
+        edge_after.weight > edge_before.weight,
+        "successful skill settlement should reinforce the memory-node relevance signal that seeded retrieval"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn successful_settled_consultation_biases_graph_backed_recommendation_ordering() -> Result<()>
 {
     let root = tempdir()?;

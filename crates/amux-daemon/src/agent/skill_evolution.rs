@@ -281,6 +281,68 @@ impl AgentEngine {
                         "failed to reinforce recommendation preference edge"
                     );
                 }
+
+                self.reinforce_memory_relevance_signals(&node_id).await;
+            }
+        }
+    }
+
+    async fn reinforce_memory_relevance_signals(&self, intent_node_id: &str) {
+        let mut frontier = std::collections::VecDeque::from([(intent_node_id.to_string(), 0u8)]);
+        let mut seen_intents = std::collections::HashSet::from([intent_node_id.to_string()]);
+
+        while let Some((current_intent, depth)) = frontier.pop_front() {
+            let Ok(neighbors) = self
+                .history
+                .list_memory_graph_neighbors(&current_intent, 64)
+                .await
+            else {
+                continue;
+            };
+
+            for row in neighbors {
+                let target_matches = row.via_edge.target_node_id == current_intent;
+                let source_matches = row.via_edge.source_node_id == current_intent;
+                if !target_matches && !source_matches {
+                    continue;
+                }
+
+                if row.node.node_type == "skill_variant" {
+                    continue;
+                }
+
+                if row.node.node_type == "intent" {
+                    if depth < 1 && seen_intents.insert(row.node.id.clone()) {
+                        frontier.push_back((row.node.id.clone(), depth + 1));
+                    }
+                    continue;
+                }
+
+                let (source_node_id, target_node_id) = if target_matches {
+                    (row.node.id.as_str(), current_intent.as_str())
+                } else {
+                    (current_intent.as_str(), row.node.id.as_str())
+                };
+
+                if let Err(error) = self
+                    .history
+                    .upsert_memory_edge(
+                        source_node_id,
+                        target_node_id,
+                        &row.via_edge.relation_type,
+                        1.0,
+                        now_millis(),
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        %source_node_id,
+                        %target_node_id,
+                        relation_type = %row.via_edge.relation_type,
+                        error = %error,
+                        "failed to reinforce memory-node relevance signal"
+                    );
+                }
             }
         }
     }
