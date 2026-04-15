@@ -130,12 +130,19 @@ pub(super) fn format_consolidation_forge_summary(result: &ConsolidationResult) -
         return None;
     }
 
+    let logged_only_suffix = if result.forge_hints_logged_only > 0 {
+        format!(", {} logged-only", result.forge_hints_logged_only)
+    } else {
+        String::new()
+    };
+
     Some(format!(
-        "forge learned from {} traces: {} pattern(s), {} hint(s) generated, {} auto-applied.",
+        "forge learned from {} traces: {} pattern(s), {} hint(s) generated, {} auto-applied{}.",
         result.forge_traces_analyzed,
         result.forge_patterns_detected,
         result.forge_hints_generated,
         result.forge_hints_auto_applied,
+        logged_only_suffix,
     ))
 }
 

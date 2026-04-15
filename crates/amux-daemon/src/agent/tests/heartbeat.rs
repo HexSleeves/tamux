@@ -358,6 +358,25 @@ fn format_consolidation_forge_summary_surfaces_strategy_learning() {
 }
 
 #[test]
+fn format_consolidation_forge_summary_surfaces_logged_only_hints() {
+    let output = super::helpers::format_consolidation_forge_summary(&ConsolidationResult {
+        forge_ran: true,
+        forge_traces_analyzed: 11,
+        forge_patterns_detected: 2,
+        forge_hints_generated: 3,
+        forge_hints_auto_applied: 1,
+        forge_hints_logged_only: 2,
+        ..Default::default()
+    })
+    .expect("forge summary should be present when forge ran");
+
+    assert!(
+        output.contains("2 logged-only"),
+        "unexpected forge summary: {output}"
+    );
+}
+
+#[test]
 fn format_consolidation_dream_summary_surfaces_what_the_system_considered_while_idle() {
     let output = super::helpers::format_consolidation_dream_summary(&ConsolidationResult {
         distillation_ran: true,
