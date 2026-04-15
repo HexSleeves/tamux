@@ -1697,6 +1697,37 @@ async fn critique_preflight_skips_non_guarded_read_file_even_when_enabled() {
 }
 
 #[tokio::test]
+async fn critique_preflight_runs_for_sensitive_apply_patch_calls() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.critique.enabled = true;
+    config.critique.mode = crate::agent::types::CritiqueMode::Deterministic;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let args = serde_json::json!({
+        "input": "*** Begin Patch\n*** Update File: /tmp/demo/.env\n@@\n-OLD=1\n+OLD=2\n*** End Patch\n"
+    });
+    let classification =
+        crate::agent::weles_governance::classify_tool_call("apply_patch", &args);
+
+    assert!(
+        classification
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("sensitive path")),
+        "expected sensitive-path suspicion for apply_patch classification: {:?}",
+        classification.reasons
+    );
+    assert!(
+        engine
+            .should_run_critique_preflight("apply_patch", &classification)
+            .await,
+        "sensitive apply_patch mutations should trigger critique preflight"
+    );
+}
+
+#[tokio::test]
 async fn critique_preflight_runs_for_suspicious_non_allowlisted_tool() {
     let root = tempdir().expect("tempdir should succeed");
     let manager = SessionManager::new_test(root.path()).await;
