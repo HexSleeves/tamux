@@ -10,7 +10,7 @@ use crate::agent::handoff::divergent::Framing;
 use self::protocol::{
     advance_round, create_debate_session, finalize_verdict, now_millis, validate_argument,
 };
-use self::types::{Argument, DebateSession, RoleKind};
+use self::types::{Argument, DebateRoundRequest, DebateSession, RoleKind};
 
 impl AgentEngine {
     pub(crate) async fn start_debate_session(
@@ -128,6 +128,34 @@ impl AgentEngine {
             .await?;
         self.persist_debate_session(&session).await?;
         Ok(())
+    }
+
+    pub(crate) async fn dispatch_debate_round_request(
+        &self,
+        request: &DebateRoundRequest,
+        content: &str,
+        evidence_refs: Vec<String>,
+        responds_to: Option<String>,
+    ) -> Result<serde_json::Value> {
+        let argument = Argument {
+            id: format!("arg_{}", uuid::Uuid::new_v4()),
+            round: request.round,
+            role: request.role,
+            agent_id: request.agent_id.clone(),
+            content: content.trim().to_string(),
+            evidence_refs,
+            responds_to,
+            timestamp_ms: now_millis(),
+        };
+        self.append_debate_argument(&request.session_id, argument)
+            .await?;
+        Ok(json!({
+            "status": "appended",
+            "session_id": request.session_id,
+            "round": request.round,
+            "role": request.role.as_str(),
+            "prompt": request.prompt,
+        }))
     }
 
     pub(crate) async fn advance_debate_round(&self, session_id: &str) -> Result<DebateSession> {
