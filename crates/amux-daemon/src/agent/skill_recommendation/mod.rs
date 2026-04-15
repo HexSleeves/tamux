@@ -425,6 +425,7 @@ fn synthetic_skill_variant_record(
         use_count: 0,
         success_count: 0,
         failure_count: 0,
+        fitness_score: 0.0,
         status: "active".to_string(),
         last_used_at: None,
         created_at: now,

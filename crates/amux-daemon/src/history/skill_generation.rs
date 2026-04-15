@@ -27,7 +27,7 @@ impl HistoryStore {
         self.conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                    "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at \
                      FROM skill_variants",
                 )?;
                 let rows = stmt.query_map([], map_skill_variant_row)?;
@@ -45,7 +45,7 @@ impl HistoryStore {
                         selection_summary: describe_skill_variant_selection(&record, &context_tags),
                         selected_for_context: selected_id.as_deref()
                             == Some(record.variant_id.as_str()),
-                        fitness_score: compute_skill_variant_fitness(&record),
+                        fitness_score: record.fitness_score,
                         record,
                     })
                     .collect::<Vec<_>>())
@@ -83,7 +83,7 @@ impl HistoryStore {
         let variant_id = self.conn.call(move |conn| {
             let existing: Option<SkillVariantRecord> = conn
                 .query_row(
-                    "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                    "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at \
                      FROM skill_variants WHERE relative_path = ?1",
                     params![relative_path],
                     map_skill_variant_row,
@@ -141,8 +141,8 @@ impl HistoryStore {
 
             conn.execute(
                 "INSERT OR REPLACE INTO skill_variants \
-                 (variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                 (variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     variant_id,
                     skill_name,
@@ -154,6 +154,7 @@ impl HistoryStore {
                     use_count as i64,
                     success_count as i64,
                     failure_count as i64,
+                    (f64::from(success_count) - f64::from(failure_count)),
                     status,
                     last_used_at.map(|value| value as i64),
                     created_at as i64,
@@ -169,7 +170,7 @@ impl HistoryStore {
         let vid = variant_id.clone();
         self.conn.call(move |conn| {
             conn.query_row(
-                "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at \
                  FROM skill_variants WHERE variant_id = ?1",
                 params![vid],
                 map_skill_variant_row,
@@ -214,7 +215,7 @@ impl HistoryStore {
         self.conn
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                    "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at \
                      FROM skill_variants WHERE variant_id = ?1",
                     params![variant_id],
                     map_skill_variant_row,
@@ -241,7 +242,7 @@ impl HistoryStore {
         let _skill = skill.to_string();
         self.conn.call(move |conn| {
             let mut stmt = conn.prepare(
-                "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at \
                  FROM skill_variants",
             )?;
             let rows = stmt.query_map([], map_skill_variant_row)?;
@@ -286,7 +287,7 @@ impl HistoryStore {
                 Some(true) => {
                     conn.execute(
                         "UPDATE skill_variants \
-                         SET use_count = use_count + 1, success_count = success_count + 1, last_used_at = ?2, updated_at = ?2 \
+                         SET use_count = use_count + 1, success_count = success_count + 1, fitness_score = fitness_score + 1.0, last_used_at = ?2, updated_at = ?2 \
                          WHERE variant_id = ?1",
                         params![variant_id, now],
                     )?;
@@ -294,7 +295,7 @@ impl HistoryStore {
                 Some(false) => {
                     conn.execute(
                         "UPDATE skill_variants \
-                         SET use_count = use_count + 1, failure_count = failure_count + 1, last_used_at = ?2, updated_at = ?2 \
+                         SET use_count = use_count + 1, failure_count = failure_count + 1, fitness_score = fitness_score - 1.0, last_used_at = ?2, updated_at = ?2 \
                          WHERE variant_id = ?1",
                         params![variant_id, now],
                     )?;
@@ -493,7 +494,7 @@ impl HistoryStore {
                 let mut variants = if let Some(query) = normalized_query.as_deref() {
                     let like = format!("%{query}%");
                     let mut stmt = conn.prepare(
-                        "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                        "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at \
                          FROM skill_variants \
                          WHERE lower(skill_name) LIKE ?1 OR lower(variant_name) LIKE ?1 OR lower(relative_path) LIKE ?1 OR lower(context_tags_json) LIKE ?1",
                     )?;
@@ -501,7 +502,7 @@ impl HistoryStore {
                     rows.filter_map(|row| row.ok()).collect::<Vec<_>>()
                 } else {
                     let mut stmt = conn.prepare(
-                        "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                        "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at \
                          FROM skill_variants",
                     )?;
                     let rows = stmt.query_map([], map_skill_variant_row)?;

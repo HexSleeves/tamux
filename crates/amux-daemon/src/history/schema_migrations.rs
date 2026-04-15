@@ -198,6 +198,11 @@ pub(super) fn apply_schema_migrations(
     )?;
     ensure_column(connection, "agent_tasks", "session_id", "TEXT")?;
     ensure_column(connection, "agent_threads", "metadata_json", "TEXT")?;
+    ensure_column(connection, "skill_variants", "fitness_score", "REAL NOT NULL DEFAULT 0")?;
+    connection.execute(
+        "UPDATE skill_variants SET fitness_score = CAST(success_count AS REAL) - CAST(failure_count AS REAL) WHERE fitness_score = 0",
+        [],
+    )?;
     ensure_column(connection, "agent_messages", "cost_usd", "REAL")?;
     ensure_column(connection, "agent_tasks", "scheduled_at", "INTEGER")?;
     ensure_column(connection, "agent_tasks", "goal_run_id", "TEXT")?;

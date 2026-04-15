@@ -110,8 +110,8 @@ async fn resolve_skill_variant_prefers_existing_document_over_stale_legacy_row()
         .call(move |conn| {
             conn.execute(
                 "INSERT INTO skill_variants \
-                 (variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, 99, 99, 0, 'active', NULL, 10, 20)",
+                 (variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, 99, 99, 0, 99.0, 'active', NULL, 10, 20)",
                 params![
                     stale_variant_id,
                     stale_skill_name,
@@ -224,6 +224,50 @@ async fn skill_variant_consultation_settlement_updates_outcomes_once() -> Result
     assert_eq!(refreshed.use_count, 1);
     assert_eq!(refreshed.success_count, 1);
     assert_eq!(refreshed.failure_count, 0);
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn successful_skill_variant_settlement_persists_fitness_score_for_next_inspection() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    store.init_schema().await?;
+    let frontend = root.join("skills/generated/build-pipeline--frontend.md");
+    fs::write(
+        &frontend,
+        "# Frontend build pipeline\nUse react build checks.\n",
+    )?;
+
+    let frontend_record = store.register_skill_document(&frontend).await?;
+    let tags = vec!["frontend".to_string()];
+    store
+        .record_skill_variant_consultation(&SkillVariantConsultationRecord {
+            usage_id: "usage-fitness-persist-1",
+            variant_id: &frontend_record.variant_id,
+            thread_id: Some("thread-1"),
+            task_id: Some("task-1"),
+            goal_run_id: Some("goal-1"),
+            context_tags: &tags,
+            consulted_at: 100,
+        })
+        .await?;
+
+    let settled = store
+        .settle_skill_variant_usage(Some("thread-1"), Some("task-1"), Some("goal-1"), "success")
+        .await?;
+    assert_eq!(settled.0, 1);
+
+    let inspection = store
+        .inspect_skill_variants("build-pipeline", &["frontend".to_string()])
+        .await?;
+    let item = inspection
+        .into_iter()
+        .find(|item| item.record.variant_id == frontend_record.variant_id)
+        .expect("settled variant should be inspectable");
+
+    assert_eq!(item.record.fitness_score, 1.0);
+    assert_eq!(item.fitness_score, 1.0);
 
     fs::remove_dir_all(root)?;
     Ok(())
@@ -680,6 +724,36 @@ async fn inspect_skill_variants_reports_named_fitness_score() -> Result<()> {
         "failed settlement should reduce fitness below neutral while cancelled stays neutral"
     );
     assert_eq!(cancelled_item.fitness_score, 0.0);
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn inspect_skill_variants_reads_persisted_fitness_score_from_record() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    store.init_schema().await?;
+    let canonical = root.join("skills/generated/build-pipeline.md");
+    fs::write(&canonical, "# Build pipeline\nRun cargo build.\n")?;
+
+    let record = store.register_skill_document(&canonical).await?;
+    let variant_id = record.variant_id.clone();
+    store.conn.call(move |conn| {
+        conn.execute(
+            "UPDATE skill_variants SET success_count = 0, failure_count = 0, fitness_score = 7.5 WHERE variant_id = ?1",
+            params![variant_id],
+        )?;
+        Ok(())
+    }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let inspection = store.inspect_skill_variants("build-pipeline", &[]).await?;
+    let item = inspection
+        .into_iter()
+        .find(|item| item.record.variant_id == record.variant_id)
+        .expect("variant should be inspectable");
+
+    assert_eq!(item.record.fitness_score, 7.5);
+    assert_eq!(item.fitness_score, 7.5);
 
     fs::remove_dir_all(root)?;
     Ok(())

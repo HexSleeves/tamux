@@ -496,7 +496,7 @@ pub struct ProvenanceEventRecord<'a> {
     pub created_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SkillVariantRecord {
     pub variant_id: String,
     pub skill_name: String,
@@ -508,6 +508,7 @@ pub struct SkillVariantRecord {
     pub use_count: u32,
     pub success_count: u32,
     pub failure_count: u32,
+    pub fitness_score: f64,
     pub status: String,
     pub last_used_at: Option<u64>,
     pub created_at: u64,
@@ -523,7 +524,7 @@ pub struct SkillVariantInspection {
     pub fitness_score: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SkillVariantPage {
     pub variants: Vec<SkillVariantRecord>,
     pub next_cursor: Option<String>,

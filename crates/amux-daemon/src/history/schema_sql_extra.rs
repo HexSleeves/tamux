@@ -56,6 +56,7 @@ pub(super) fn extended_schema_sql() -> &'static str {
                 use_count          INTEGER NOT NULL DEFAULT 0,
                 success_count      INTEGER NOT NULL DEFAULT 0,
                 failure_count      INTEGER NOT NULL DEFAULT 0,
+                fitness_score      REAL NOT NULL DEFAULT 0,
                 status             TEXT NOT NULL DEFAULT 'active',
                 last_used_at       INTEGER,
                 created_at         INTEGER NOT NULL,

@@ -472,9 +472,10 @@ pub(super) fn map_skill_variant_row(
         use_count: row.get::<_, i64>(7)? as u32,
         success_count: row.get::<_, i64>(8)? as u32,
         failure_count: row.get::<_, i64>(9)? as u32,
-        status: row.get(10)?,
-        last_used_at: row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
-        created_at: row.get::<_, i64>(12)? as u64,
-        updated_at: row.get::<_, i64>(13)? as u64,
+        fitness_score: row.get(10)?,
+        status: row.get(11)?,
+        last_used_at: row.get::<_, Option<i64>>(12)?.map(|value| value as u64),
+        created_at: row.get::<_, i64>(13)? as u64,
+        updated_at: row.get::<_, i64>(14)? as u64,
     })
 }

@@ -98,7 +98,7 @@ impl HistoryStore {
             for (variant_id, count) in success_counts {
                 conn.execute(
                     "UPDATE skill_variants \
-                     SET use_count = use_count + ?2, success_count = success_count + ?2, last_used_at = ?3, updated_at = ?3 \
+                     SET use_count = use_count + ?2, success_count = success_count + ?2, fitness_score = fitness_score + ?2, last_used_at = ?3, updated_at = ?3 \
                      WHERE variant_id = ?1",
                     params![variant_id, count as i64, resolved_at],
                 )?;
@@ -106,7 +106,7 @@ impl HistoryStore {
             for (variant_id, count) in failure_counts {
                 conn.execute(
                     "UPDATE skill_variants \
-                     SET failure_count = failure_count + ?2, updated_at = ?3 \
+                     SET failure_count = failure_count + ?2, fitness_score = fitness_score - ?2, updated_at = ?3 \
                      WHERE variant_id = ?1",
                     params![variant_id, count as i64, resolved_at],
                 )?;
@@ -165,7 +165,7 @@ impl HistoryStore {
         let skill_name = skill_name.to_string();
         self.conn.call(move |conn| {
             let mut stmt = conn.prepare(
-                "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at \
                  FROM skill_variants WHERE skill_name = ?1",
             )?;
             let rows = stmt.query_map(params![skill_name], map_skill_variant_row)?;
@@ -303,7 +303,7 @@ impl HistoryStore {
         let skill_name = skill_name.to_string();
         let variants = self.conn.call(move |conn| {
             let mut stmt = conn.prepare(
-                "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at \
                  FROM skill_variants WHERE skill_name = ?1",
             )?;
             let rows = stmt.query_map(params![skill_name_owned], map_skill_variant_row)?;

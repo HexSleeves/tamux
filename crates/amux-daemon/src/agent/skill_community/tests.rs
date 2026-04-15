@@ -85,6 +85,7 @@ fn prepare_publish_excludes_private_metadata_fields() {
         use_count: 3,
         success_count: 2,
         failure_count: 1,
+        fitness_score: 1.0,
         status: "proven".to_string(),
         last_used_at: None,
         created_at: 123,
