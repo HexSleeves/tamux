@@ -29,7 +29,60 @@ Each spec entry records:
 ## Spec 03 — Probabilistic Agent Routing
 ## Spec 04 — Multi-Round Debate Protocol
 ## Spec 05 — Recursive Subagent Depth
+- Wave: 2
+- Status: partial
+- Confidence: high
+
+### Evidence
+- `.planning/iteration-1/05-recursive-subagent-depth.md` defines Spec 05 as bounded recursive delegation with a hard global depth cap of 3, per-child `max_depth`, derived budget scaling across depth levels, and `list_subagents` visibility over the full delegation tree.
+- Repository evidence shows the recursive-depth substrate is materially shipped in `crates/amux-daemon/src/agent/tool_executor/subagents.rs`: `MAX_RECURSIVE_SUBAGENT_DEPTH` is set to `3`; `RECURSIVE_SUBAGENT_BUDGET_CURVE` is `[1.0, 0.6, 0.3]`; `derive_subagent_limits(...)` validates requested depth against parent allowance and the hard cap; and spawned tasks persist containment scope as `subagent-depth:{depth}/{max_depth}` plus derived context/time/tool-call budgets.
+- The live tool surface already exposes the core API promised by the spec. `crates/amux-daemon/src/agent/tool_executor/catalog/part_c.rs` advertises `spawn_subagent.max_depth` and `spawn_subagent.budget`, while `crates/amux-daemon/src/agent/tool_executor/tasks.rs` reports `depth`, `max_depth`, `budget_remaining`, `budget_exhausted`, and `exhausted_limits` from persisted task metadata plus `history.get_subagent_metrics(...)`.
+- Test coverage confirms the shipped recursive behavior: `crates/amux-daemon/src/agent/tool_executor/tests/part6.rs` verifies default flat rejection, allowed recursive spawn under parent scope, derived depth/budget reporting, and exhausted-budget reporting; the same test module now also covers the subtree-filter case where `list_subagents(parent_task_id=...)` must include descendants without leaking unrelated same-thread subagents.
+- The audit did **not** find a dedicated `subagent/depth_tracker.rs` module, a `TaskStatus::BudgetExceeded` variant, or a `subagent_budgets` table exactly matching the standalone spec text.
+
+### Current Implementation Surface
+- tamux already ships a real **bounded recursive subagent system**:
+  - hard delegation depth cap at 3,
+  - per-child `max_depth` allowance inheritance,
+  - decreasing default budgets by depth,
+  - persisted containment scope encoding current depth and subtree allowance,
+  - `list_subagents` reporting depth and remaining budget telemetry,
+  - history-backed subagent metrics for consumed tokens and tool calls.
+- This is not flat delegation anymore. Nested subagent spawning exists today when the parent subtree allowance permits it.
+- The just-fixed `list_subagents(parent_task_id=...)` behavior now better matches the spec’s “show full tree with depth labels” intent by returning the requested subtree rather than a same-thread superset.
+
+### Remaining Gaps
+- Budget enforcement is represented through existing termination conditions / metrics rather than a dedicated `BudgetExceeded` task status and explicit budget table from the standalone design.
+- The implementation encodes depth allowance in task containment scope strings instead of a dedicated `SubagentConfig` / `DepthTracker` type family.
+- There is no evidence of a standalone budget-curve validation surface or a separately persisted per-level budget ledger.
+- Parent-facing output includes remaining budget telemetry, but the broader audit / operator-facing documentation around recursive delegation is still lighter than the standalone spec envisioned.
+
+### Planning Implication
+- Treat Spec 05 as **partially implemented with strong shipped foundations**. Future work should deepen execution-status semantics and budget/audit ergonomics on top of the existing recursive-subagent runtime rather than classifying recursive delegation as absent.
 ## Spec 06 — Event-Driven Proactive Triggers
+- Wave: 1
+- Status: partial
+- Confidence: medium-high
+
+### Evidence
+- `.planning/iteration-1/06-event-driven-proactive-triggers.md` defines Spec 06 as a new `src/agent/events/` subsystem with file/process/system watchers, trigger registry, cooldown/risk gating, and runtime tools like `list_triggers` / `add_trigger`.
+- Repository evidence shows a shipped **adjacent proactive runtime**, but not the spec’s event-watcher architecture. `crates/amux-daemon/src/agent/anticipatory.rs` implements `run_anticipatory_tick()`, session-start prewarm, predictive hydration, stuck detection, morning briefs, and operator-attention-aware anticipatory items; `crates/amux-daemon/src/server/dispatch_part4.rs` calls `agent.run_anticipatory_tick().await` and `agent.emit_anticipatory_snapshot().await`; and `crates/amux-daemon/src/agent/tests/anticipatory.rs` exercises those behaviors extensively.
+- The proactive runtime is operationally grounded in real state changes: `anticipatory.rs` refreshes thread repo context and prewarm cache, reacts to pending approvals, stuck tasks, collaboration context, system-outcome foresight, and stale-context conditions, and adapts proactive surfacing based on implicit-feedback pressure such as tool hesitation and slow approval latency.
+- The audit did **not** find the standalone spec’s direct event-driven substrate: no `crates/amux-daemon/src/agent/events/` module, no inotify/notify watcher loop, no trigger registry / event-log tables matching `event_triggers` and `event_log`, and no runtime `list_triggers` / `add_trigger` tools in the live tool catalog.
+
+### Current Implementation Surface
+- tamux already has a meaningful **proactive execution layer**, but it is driven by periodic anticipatory evaluation over daemon state rather than low-level OS event subscriptions.
+- The shipped system can surface and act on latent conditions such as stuck work, pending approvals, stale context, collaboration pressure, and likely-needed hydration before the operator explicitly asks.
+- This means the product is no longer purely reactive in practice, even though it does not implement the specific event-watcher and trigger-registry design from the standalone spec.
+
+### Remaining Gaps
+- No general event bus for file changes, process exits, disk pressure, network changes, or git-state watchers as described in the spec.
+- No persisted trigger registry with per-trigger cooldown and risk-label management.
+- No operator/runtime tools for listing or adding triggers dynamically.
+- Proactivity is currently anticipatory and state-derived, not a generalized event-subscription framework.
+
+### Planning Implication
+- Treat Spec 06 as **partially implemented through the shipped anticipatory runtime, but not via the planned event-watcher architecture**. If the roadmap still wants true event-driven triggers, it should extend `anticipatory/*` and task dispatch from the existing proactive substrate rather than pretending the repository has no proactivity at all.
 ## Spec 07 — Dream State
 ## Spec 08 — Cognitive Resonance Engine
 - Wave: 4
