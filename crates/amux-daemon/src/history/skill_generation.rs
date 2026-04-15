@@ -45,6 +45,7 @@ impl HistoryStore {
                         selection_summary: describe_skill_variant_selection(&record, &context_tags),
                         selected_for_context: selected_id.as_deref()
                             == Some(record.variant_id.as_str()),
+                        fitness_score: compute_skill_variant_fitness(&record),
                         record,
                     })
                     .collect::<Vec<_>>())
@@ -567,4 +568,8 @@ fn decode_skill_list_cursor(cursor: Option<&str>) -> Result<Option<String>> {
     let value = String::from_utf8(bytes)
         .map_err(|error| anyhow::anyhow!("invalid skill list cursor: {error}"))?;
     Ok(Some(value))
+}
+
+fn compute_skill_variant_fitness(record: &SkillVariantRecord) -> f64 {
+    f64::from(record.success_count) - f64::from(record.failure_count)
 }

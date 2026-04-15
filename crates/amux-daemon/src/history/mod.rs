@@ -520,6 +520,7 @@ pub struct SkillVariantInspection {
     pub lifecycle_summary: String,
     pub selection_summary: String,
     pub selected_for_context: bool,
+    pub fitness_score: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

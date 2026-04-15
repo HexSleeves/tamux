@@ -578,6 +578,113 @@ async fn inspect_skill_variants_marks_context_best_match_as_selected() -> Result
     Ok(())
 }
 
+#[tokio::test]
+async fn inspect_skill_variants_reports_named_fitness_score() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    store.init_schema().await?;
+    let success = root.join("skills/generated/build-pipeline--success.md");
+    let failure = root.join("skills/generated/build-pipeline--failure.md");
+    let cancelled = root.join("skills/generated/build-pipeline--cancelled.md");
+    fs::write(&success, "# Success build pipeline\nRun cargo build.\n")?;
+    fs::write(&failure, "# Failure build pipeline\nRun cargo build.\n")?;
+    fs::write(&cancelled, "# Cancelled build pipeline\nRun cargo build.\n")?;
+
+    let success_record = store.register_skill_document(&success).await?;
+    let failure_record = store.register_skill_document(&failure).await?;
+    let cancelled_record = store.register_skill_document(&cancelled).await?;
+    let tags = vec!["frontend".to_string()];
+
+    store
+        .record_skill_variant_consultation(&SkillVariantConsultationRecord {
+            usage_id: "usage-success-fitness",
+            variant_id: &success_record.variant_id,
+            thread_id: Some("thread-success"),
+            task_id: Some("task-success"),
+            goal_run_id: Some("goal-success"),
+            context_tags: &tags,
+            consulted_at: 100,
+        })
+        .await?;
+    store
+        .settle_skill_variant_usage(
+            Some("thread-success"),
+            Some("task-success"),
+            Some("goal-success"),
+            "success",
+        )
+        .await?;
+
+    store
+        .record_skill_variant_consultation(&SkillVariantConsultationRecord {
+            usage_id: "usage-failure-fitness",
+            variant_id: &failure_record.variant_id,
+            thread_id: Some("thread-failure"),
+            task_id: Some("task-failure"),
+            goal_run_id: Some("goal-failure"),
+            context_tags: &tags,
+            consulted_at: 101,
+        })
+        .await?;
+    store
+        .settle_skill_variant_usage(
+            Some("thread-failure"),
+            Some("task-failure"),
+            Some("goal-failure"),
+            "failure",
+        )
+        .await?;
+
+    store
+        .record_skill_variant_consultation(&SkillVariantConsultationRecord {
+            usage_id: "usage-cancelled-fitness",
+            variant_id: &cancelled_record.variant_id,
+            thread_id: Some("thread-cancelled"),
+            task_id: Some("task-cancelled"),
+            goal_run_id: Some("goal-cancelled"),
+            context_tags: &tags,
+            consulted_at: 102,
+        })
+        .await?;
+    store
+        .settle_skill_variant_usage(
+            Some("thread-cancelled"),
+            Some("task-cancelled"),
+            Some("goal-cancelled"),
+            "cancelled",
+        )
+        .await?;
+
+    let inspection = store
+        .inspect_skill_variants("build-pipeline", &["frontend".to_string()])
+        .await?;
+
+    let success_item = inspection
+        .iter()
+        .find(|item| item.record.variant_id == success_record.variant_id)
+        .expect("success variant should be inspectable");
+    let failure_item = inspection
+        .iter()
+        .find(|item| item.record.variant_id == failure_record.variant_id)
+        .expect("failure variant should be inspectable");
+    let cancelled_item = inspection
+        .iter()
+        .find(|item| item.record.variant_id == cancelled_record.variant_id)
+        .expect("cancelled variant should be inspectable");
+
+    assert!(
+        success_item.fitness_score > cancelled_item.fitness_score,
+        "successful settlement should raise fitness above neutral"
+    );
+    assert!(
+        cancelled_item.fitness_score > failure_item.fitness_score,
+        "failed settlement should reduce fitness below neutral while cancelled stays neutral"
+    );
+    assert_eq!(cancelled_item.fitness_score, 0.0);
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
 #[test]
 fn skill_tag_excerpt_respects_utf8_boundaries() {
     let content = format!("{}\n{}", "a".repeat(3998), "│architecture");
