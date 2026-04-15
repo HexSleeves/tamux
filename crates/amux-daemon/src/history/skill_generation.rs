@@ -40,15 +40,34 @@ impl HistoryStore {
                 let now = now_ts();
                 Ok(variants
                     .into_iter()
-                    .map(|record| SkillVariantInspection {
-                        lifecycle_summary: describe_skill_variant_lifecycle(&record, now),
-                        selection_summary: describe_skill_variant_selection(&record, &context_tags),
-                        selected_for_context: selected_id.as_deref()
-                            == Some(record.variant_id.as_str()),
-                        fitness_score: record.fitness_score,
-                        record,
+                    .map(|record| {
+                        let mut history_stmt = conn.prepare(
+                            "SELECT id, variant_id, recorded_at, outcome, fitness_score \
+                             FROM skill_variant_history WHERE variant_id = ?1 \
+                             ORDER BY recorded_at ASC, rowid ASC",
+                        )?;
+                        let fitness_history = history_stmt
+                            .query_map(params![record.variant_id.as_str()], |row| {
+                                Ok(SkillVariantFitnessHistoryRow {
+                                    id: row.get(0)?,
+                                    variant_id: row.get(1)?,
+                                    recorded_at: row.get(2)?,
+                                    outcome: row.get(3)?,
+                                    fitness_score: row.get(4)?,
+                                })
+                            })?
+                            .collect::<std::result::Result<Vec<_>, _>>()?;
+                        Ok(SkillVariantInspection {
+                            lifecycle_summary: describe_skill_variant_lifecycle(&record, now),
+                            selection_summary: describe_skill_variant_selection(&record, &context_tags),
+                            selected_for_context: selected_id.as_deref()
+                                == Some(record.variant_id.as_str()),
+                            fitness_score: record.fitness_score,
+                            fitness_history,
+                            record,
+                        })
                     })
-                    .collect::<Vec<_>>())
+                    .collect::<rusqlite::Result<Vec<_>>>()?)
             })
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))

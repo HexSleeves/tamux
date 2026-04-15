@@ -643,6 +643,79 @@ async fn paged_skill_variant_listing_advances_with_cursor() -> Result<()> {
 }
 
 #[tokio::test]
+async fn inspect_skill_variants_returns_ordered_fitness_history_for_variant() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    store.init_schema().await?;
+    let skill = root.join("skills/generated/build-pipeline.md");
+    fs::write(&skill, "# Build pipeline\nRun cargo build.\n")?;
+
+    let record = store.register_skill_document(&skill).await?;
+    let empty_inspection = store.inspect_skill_variants("build-pipeline", &[]).await?;
+    let empty_item = empty_inspection
+        .iter()
+        .find(|item| item.record.variant_id == record.variant_id)
+        .expect("variant should be inspectable before settlements");
+    assert!(empty_item.fitness_history.is_empty());
+
+    let tags = vec!["frontend".to_string()];
+    store
+        .record_skill_variant_consultation(&SkillVariantConsultationRecord {
+            usage_id: "usage-inspect-history-1",
+            variant_id: &record.variant_id,
+            thread_id: Some("thread-inspect-history-1"),
+            task_id: Some("task-inspect-history-1"),
+            goal_run_id: Some("goal-inspect-history-1"),
+            context_tags: &tags,
+            consulted_at: 100,
+        })
+        .await?;
+    store
+        .settle_skill_variant_usage(
+            Some("thread-inspect-history-1"),
+            Some("task-inspect-history-1"),
+            Some("goal-inspect-history-1"),
+            "success",
+        )
+        .await?;
+
+    store
+        .record_skill_variant_consultation(&SkillVariantConsultationRecord {
+            usage_id: "usage-inspect-history-2",
+            variant_id: &record.variant_id,
+            thread_id: Some("thread-inspect-history-2"),
+            task_id: Some("task-inspect-history-2"),
+            goal_run_id: Some("goal-inspect-history-2"),
+            context_tags: &tags,
+            consulted_at: 101,
+        })
+        .await?;
+    store
+        .settle_skill_variant_usage(
+            Some("thread-inspect-history-2"),
+            Some("task-inspect-history-2"),
+            Some("goal-inspect-history-2"),
+            "failure",
+        )
+        .await?;
+
+    let inspection = store.inspect_skill_variants("build-pipeline", &[]).await?;
+    let item = inspection
+        .into_iter()
+        .find(|item| item.record.variant_id == record.variant_id)
+        .expect("variant should remain inspectable after settlements");
+
+    assert_eq!(item.fitness_history.len(), 2);
+    assert_eq!(item.fitness_history[0].outcome, "success");
+    assert_eq!(item.fitness_history[0].fitness_score, 1.0);
+    assert_eq!(item.fitness_history[1].outcome, "failure");
+    assert_eq!(item.fitness_history[1].fitness_score, 0.0);
+    assert!(item.fitness_history[0].recorded_at <= item.fitness_history[1].recorded_at);
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn inspect_skill_variants_explains_archived_lifecycle() -> Result<()> {
     let (store, root) = make_test_store().await?;
     store.init_schema().await?;

@@ -287,7 +287,7 @@ pub struct OperatorProfileCheckinRow {
     pub updated_at: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SkillVariantFitnessHistoryRow {
     pub id: String,
     pub variant_id: String,
@@ -531,6 +531,7 @@ pub struct SkillVariantInspection {
     pub selection_summary: String,
     pub selected_for_context: bool,
     pub fitness_score: f64,
+    pub fitness_history: Vec<SkillVariantFitnessHistoryRow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
