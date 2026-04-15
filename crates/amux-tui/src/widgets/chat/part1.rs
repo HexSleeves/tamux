@@ -163,6 +163,10 @@ pub(crate) fn append_tool_skill_chip(
     message: &AgentMessage,
     theme: &ThemeTokens,
 ) {
+    if tool_file_chip(message).is_some() {
+        return;
+    }
+
     let Some(skill_name) = tool_skill_chip(message) else {
         return;
     };

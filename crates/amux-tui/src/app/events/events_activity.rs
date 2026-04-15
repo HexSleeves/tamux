@@ -4,9 +4,11 @@ fn parse_workflow_notice_details(details: Option<&str>) -> Option<serde_json::Va
     serde_json::from_str::<serde_json::Value>(details?).ok()
 }
 
-fn auto_compaction_reload_total_message_count(details: Option<&str>) -> Option<usize> {
+fn auto_compaction_reload_window(details: Option<&str>) -> Option<(usize, usize)> {
     let parsed = parse_workflow_notice_details(details)?;
-    Some(parsed.get("total_message_count")?.as_u64()? as usize)
+    let split_at = parsed.get("split_at")?.as_u64()? as usize;
+    let total_message_count = parsed.get("total_message_count")?.as_u64()? as usize;
+    Some((total_message_count.saturating_sub(split_at).max(1), 0))
 }
 
 fn normalized_skill_workflow_notice(
@@ -809,16 +811,20 @@ impl TuiModel {
             };
         }
         if kind == "auto-compaction" || kind == "manual-compaction" {
-            if let (Some(thread_id), Some(active_thread_id), Some(total_message_count)) = (
+            if let (
+                Some(thread_id),
+                Some(active_thread_id),
+                Some((message_limit, message_offset)),
+            ) = (
                 thread_id.as_deref(),
                 self.chat.active_thread_id(),
-                auto_compaction_reload_total_message_count(details_ref),
+                auto_compaction_reload_window(details_ref),
             ) {
                 if thread_id == active_thread_id {
                     self.request_thread_page(
                         thread_id.to_string(),
-                        total_message_count.max(self.chat_history_page_size()),
-                        0,
+                        message_limit,
+                        message_offset,
                         false,
                     );
                 }

@@ -86,7 +86,8 @@ impl AgentEngine {
             return false;
         }
 
-        let category = classify_command_category(&pending_approval.command, &pending_approval.risk_level);
+        let category =
+            classify_command_category(&pending_approval.command, &pending_approval.risk_level);
         let is_low_value = matches!(category, "git" | "low_risk")
             && matches!(pending_approval.risk_level.as_str(), "lowest" | "yolo");
         if !is_low_value {
@@ -104,7 +105,9 @@ impl AgentEngine {
             return false;
         }
 
-        pending.values().any(|existing| existing.category == category)
+        pending
+            .values()
+            .any(|existing| existing.category == category)
     }
 
     pub(crate) async fn build_operator_model_prompt_summary(&self) -> Option<String> {

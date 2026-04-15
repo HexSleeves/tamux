@@ -364,9 +364,11 @@ async fn high_approval_latency_suppresses_duplicate_low_value_approval_bundles()
         session_id: None,
     };
 
-    assert!(engine
-        .should_suppress_duplicate_low_value_approval_bundle(&duplicate)
-        .await);
+    assert!(
+        engine
+            .should_suppress_duplicate_low_value_approval_bundle(&duplicate)
+            .await
+    );
 }
 
 #[tokio::test]
@@ -414,9 +416,11 @@ async fn high_approval_latency_keeps_high_value_approvals_visible() {
         session_id: None,
     };
 
-    assert!(!engine
-        .should_suppress_duplicate_low_value_approval_bundle(&high_value)
-        .await);
+    assert!(
+        !engine
+            .should_suppress_duplicate_low_value_approval_bundle(&high_value)
+            .await
+    );
 }
 
 #[tokio::test]

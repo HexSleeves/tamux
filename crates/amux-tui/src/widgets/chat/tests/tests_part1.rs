@@ -301,6 +301,10 @@ fn read_skill_tool_row_renders_clickable_file_chip_from_result_path() {
         text.contains("[SKILL.md]"),
         "expected file chip, got: {text}"
     );
+    assert!(
+        !text.contains("[systematic-debugging]"),
+        "read_skill row should not render a duplicate skill chip when the file chip is present: {text}"
+    );
 }
 
 #[test]
