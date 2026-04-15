@@ -1098,8 +1098,15 @@ async fn heuristic_compaction_artifact_persists_and_request_uses_hidden_payload(
             .cloned()
             .expect("thread should exist after compaction")
     };
-    assert_eq!(thread.messages.len(), 2);
+    assert_eq!(thread.messages.len(), 4);
+    assert_eq!(thread.messages[0].content, "older one");
+    assert_eq!(thread.messages[1].content, "older two");
     let artifact = compaction_artifact_message(&thread);
+    assert_eq!(
+        thread.messages[2].message_kind,
+        AgentMessageKind::CompactionArtifact
+    );
+    assert_eq!(thread.messages[3].content, "recent one");
     assert_eq!(artifact.message_kind, AgentMessageKind::CompactionArtifact);
     assert_eq!(
         artifact.compaction_strategy,
@@ -1159,7 +1166,7 @@ async fn heuristic_compaction_artifact_persists_and_request_uses_hidden_payload(
             .cloned()
             .expect("rehydrated thread should exist")
     };
-    assert_eq!(rehydrated_thread.messages.len(), 2);
+    assert_eq!(rehydrated_thread.messages.len(), 4);
     let restored_artifact = compaction_artifact_message(&rehydrated_thread);
     assert_eq!(
         restored_artifact.message_kind,

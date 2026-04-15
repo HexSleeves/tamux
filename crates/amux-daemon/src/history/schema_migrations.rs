@@ -219,7 +219,12 @@ pub(super) fn apply_schema_migrations(
         );
         CREATE INDEX IF NOT EXISTS idx_gene_pool_offspring ON gene_pool(offspring_id, created_at DESC);",
     )?;
-    ensure_column(connection, "skill_variants", "fitness_score", "REAL NOT NULL DEFAULT 0")?;
+    ensure_column(
+        connection,
+        "skill_variants",
+        "fitness_score",
+        "REAL NOT NULL DEFAULT 0",
+    )?;
     connection.execute(
         "UPDATE skill_variants SET fitness_score = CAST(success_count AS REAL) - CAST(failure_count AS REAL) WHERE fitness_score = 0",
         [],

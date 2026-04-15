@@ -77,6 +77,36 @@ impl AgentEngine {
         None
     }
 
+    pub(crate) async fn should_suppress_duplicate_low_value_approval_bundle(
+        &self,
+        pending_approval: &ToolPendingApproval,
+    ) -> bool {
+        let settings = self.config.read().await.operator_model.clone();
+        if !settings.enabled || !settings.allow_approval_learning {
+            return false;
+        }
+
+        let category = classify_command_category(&pending_approval.command, &pending_approval.risk_level);
+        let is_low_value = matches!(category, "git" | "low_risk")
+            && matches!(pending_approval.risk_level.as_str(), "lowest" | "yolo");
+        if !is_low_value {
+            return false;
+        }
+
+        let model = self.operator_model.read().await;
+        if model.risk_fingerprint.avg_response_time_secs < 30.0 {
+            return false;
+        }
+        drop(model);
+
+        let pending = self.pending_operator_approvals.read().await;
+        if pending.is_empty() {
+            return false;
+        }
+
+        pending.values().any(|existing| existing.category == category)
+    }
+
     pub(crate) async fn build_operator_model_prompt_summary(&self) -> Option<String> {
         let settings = self.config.read().await.operator_model.clone();
         if !settings.enabled {

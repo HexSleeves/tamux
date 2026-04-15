@@ -179,7 +179,7 @@ impl TuiModel {
         };
 
         let resolved_path = Self::resolve_preview_path(&chip.path);
-        let show_plain_preview = chip.tool_name == "read_file";
+        let show_plain_preview = matches!(chip.tool_name.as_str(), "read_file" | "read_skill");
         let repo_root = if show_plain_preview {
             None
         } else {

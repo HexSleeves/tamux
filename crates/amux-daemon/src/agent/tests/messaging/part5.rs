@@ -545,6 +545,150 @@ async fn visible_thread_participant_send_does_not_trigger_self_reply_for_active_
 }
 
 #[tokio::test]
+async fn visible_thread_participant_send_keeps_no_suggestion_visible_but_skips_main_follow_up() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind participant no-suggestion server");
+    let addr = listener
+        .local_addr()
+        .expect("participant no-suggestion addr");
+    let request_counter = Arc::new(AtomicUsize::new(0));
+    let request_counter_task = request_counter.clone();
+
+    tokio::spawn(async move {
+        for _ in 0..2 {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let body = read_http_request_body(&mut socket)
+                .await
+                .expect("read participant no-suggestion request");
+            let response_body = if body.contains("Role: participant observer") {
+                concat!(
+                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_participant_visible_observer\"}}\n\n",
+                    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"NO_SUGGESTION\"}\n\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_participant_visible_observer\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":1},\"error\":null}}\n\n"
+                )
+            } else {
+                match request_counter_task.fetch_add(1, Ordering::SeqCst) {
+                    0 => concat!(
+                        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_participant_visible_no_suggestion\"}}\n\n",
+                        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"NO_SUGGESTION\"}\n\n",
+                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_participant_visible_no_suggestion\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":1},\"error\":null}}\n\n"
+                    ),
+                    _ => concat!(
+                        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_participant_visible_tail\"}}\n\n",
+                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_participant_visible_tail\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0},\"error\":null}}\n\n"
+                    ),
+                }
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write participant no-suggestion response");
+        }
+    });
+
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = format!("http://{addr}/v1");
+    config.model = "gpt-5.4-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.auth_source = AuthSource::ApiKey;
+    config.api_transport = ApiTransport::Responses;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread_participant_visible_send_no_suggestion";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            AgentThread {
+                id: thread_id.to_string(),
+                agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+                title: "Participant visible send no suggestion".to_string(),
+                messages: vec![AgentMessage::user("Can someone verify this?", 1)],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+    }
+
+    engine
+        .upsert_thread_participant(thread_id, "weles", "verify claims and jump in when needed")
+        .await
+        .expect("participant should register");
+
+    engine
+        .send_visible_thread_participant_message(
+            thread_id,
+            "weles",
+            None,
+            "Reply only if you found something important.",
+        )
+        .await
+        .expect("participant visible send should succeed");
+
+    let thread_messages = {
+        let threads = engine.threads.read().await;
+        threads
+            .get(thread_id)
+            .expect("thread should still exist after participant send")
+            .messages
+            .clone()
+    };
+    let participant_messages = thread_messages
+        .iter()
+        .filter(|message| message.author_agent_id.as_deref() == Some("weles"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        participant_messages.len(),
+        1,
+        "visible participant send should still append the participant-authored no-suggestion turn"
+    );
+    assert_eq!(
+        participant_messages[0].content, "NO_SUGGESTION",
+        "literal NO_SUGGESTION may remain visible in the transcript"
+    );
+    assert!(
+        thread_messages.iter().all(|message| {
+            !(message.role == MessageRole::Assistant
+                && message.author_agent_id.as_deref() != Some("weles")
+                && message.content != "NO_SUGGESTION")
+        }),
+        "no-suggestion participant sends must not force a main-agent follow-up"
+    );
+    let participants = engine.list_thread_participants(thread_id).await;
+    let weles = participants
+        .iter()
+        .find(|participant| participant.agent_id == "weles")
+        .expect("weles participant should remain registered");
+    assert!(
+        weles.last_contribution_at.is_some(),
+        "visible no-suggestion turns still count as participant-authored visible output"
+    );
+}
+
+#[tokio::test]
 async fn visible_thread_participant_send_stays_hidden_until_final_message_is_ready() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;

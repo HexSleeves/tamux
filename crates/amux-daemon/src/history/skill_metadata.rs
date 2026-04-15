@@ -150,8 +150,14 @@ pub(super) fn compute_fitness_trend(history: &[SkillVariantFitnessHistoryRow]) -
         return 0;
     }
 
-    let start = history.first().map(|entry| entry.fitness_score).unwrap_or(0.0);
-    let end = history.last().map(|entry| entry.fitness_score).unwrap_or(0.0);
+    let start = history
+        .first()
+        .map(|entry| entry.fitness_score)
+        .unwrap_or(0.0);
+    let end = history
+        .last()
+        .map(|entry| entry.fitness_score)
+        .unwrap_or(0.0);
     match end.partial_cmp(&start).unwrap_or(std::cmp::Ordering::Equal) {
         std::cmp::Ordering::Greater => 1,
         std::cmp::Ordering::Less => -1,

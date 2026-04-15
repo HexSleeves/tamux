@@ -217,32 +217,35 @@ impl HistoryStore {
         parent_pair.sort();
         self.conn
             .call(move |conn| {
-                Ok(conn.query_row(
-                    "SELECT parent_a, parent_b, offspring_id, lifecycle_state, created_at \
+                Ok(conn
+                    .query_row(
+                        "SELECT parent_a, parent_b, offspring_id, lifecycle_state, created_at \
                      FROM gene_pool WHERE parent_a = ?1 AND parent_b = ?2",
-                    params![parent_pair[0], parent_pair[1]],
-                    |row| {
-                        Ok(GenePoolEntry {
-                            parent_a: row.get(0)?,
-                            parent_b: row.get(1)?,
-                            offspring_id: row.get(2)?,
-                            lifecycle_state: row.get(3)?,
-                            created_at: row.get(4)?,
-                        })
-                    },
-                )
-                .optional()?)
+                        params![parent_pair[0], parent_pair[1]],
+                        |row| {
+                            Ok(GenePoolEntry {
+                                parent_a: row.get(0)?,
+                                parent_b: row.get(1)?,
+                                offspring_id: row.get(2)?,
+                                lifecycle_state: row.get(3)?,
+                                created_at: row.get(4)?,
+                            })
+                        },
+                    )
+                    .optional()?)
             })
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn promote_skill_variant(&self, variant_id: &str) -> Result<()> {
-        self.transition_gene_pool_variant_lifecycle(variant_id, "active").await
+        self.transition_gene_pool_variant_lifecycle(variant_id, "active")
+            .await
     }
 
     pub async fn retire_skill_variant(&self, variant_id: &str) -> Result<()> {
-        self.transition_gene_pool_variant_lifecycle(variant_id, "archived").await
+        self.transition_gene_pool_variant_lifecycle(variant_id, "archived")
+            .await
     }
 
     async fn transition_gene_pool_variant_lifecycle(
@@ -544,8 +547,9 @@ impl HistoryStore {
 
         let left_content = std::fs::read_to_string(&left_path)
             .with_context(|| format!("failed to read left parent skill {}", left_path.display()))?;
-        let right_content = std::fs::read_to_string(&right_path)
-            .with_context(|| format!("failed to read right parent skill {}", right_path.display()))?;
+        let right_content = std::fs::read_to_string(&right_path).with_context(|| {
+            format!("failed to read right parent skill {}", right_path.display())
+        })?;
 
         let title = extract_markdown_title(&left_content)
             .or_else(|| extract_markdown_title(&right_content))
@@ -556,7 +560,9 @@ impl HistoryStore {
                     .map(|part| {
                         let mut chars = part.chars();
                         match chars.next() {
-                            Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                            Some(first) => {
+                                format!("{}{}", first.to_ascii_uppercase(), chars.as_str())
+                            }
                             None => String::new(),
                         }
                     })
@@ -595,7 +601,8 @@ impl HistoryStore {
             .join(format!("{}--{}.md", left_parent.skill_name, variant_slug));
         if offspring_path.exists() {
             let record = self.register_skill_document(&offspring_path).await?;
-            self.update_skill_variant_status(&record.variant_id, "draft").await?;
+            self.update_skill_variant_status(&record.variant_id, "draft")
+                .await?;
             let created_at = now_ts() as i64;
             let parent_a = parent_ids[0].clone();
             let parent_b = parent_ids[1].clone();
@@ -634,7 +641,8 @@ impl HistoryStore {
         })?;
 
         let record = self.register_skill_document(&offspring_path).await?;
-        self.update_skill_variant_status(&record.variant_id, "draft").await?;
+        self.update_skill_variant_status(&record.variant_id, "draft")
+            .await?;
         let created_at = now_ts() as i64;
         let parent_a = parent_ids[0].clone();
         let parent_b = parent_ids[1].clone();

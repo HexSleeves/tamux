@@ -320,6 +320,106 @@ async fn repeated_fast_denials_enable_learned_auto_deny() {
 }
 
 #[tokio::test]
+async fn high_approval_latency_suppresses_duplicate_low_value_approval_bundles() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_approval_learning = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.risk_fingerprint.approval_requests = 4;
+        model.risk_fingerprint.approvals = 2;
+        model.risk_fingerprint.denials = 2;
+        model.risk_fingerprint.avg_response_time_secs = 45.0;
+        refresh_risk_metrics(&mut model.risk_fingerprint);
+    }
+
+    let existing = ToolPendingApproval {
+        approval_id: "approval-existing".to_string(),
+        execution_id: "exec-existing".to_string(),
+        command: "git status".to_string(),
+        rationale: "Inspect repo status".to_string(),
+        risk_level: "lowest".to_string(),
+        blast_radius: "repo metadata".to_string(),
+        reasons: vec!["reads git metadata".to_string()],
+        session_id: None,
+    };
+    engine
+        .record_operator_approval_requested(&existing)
+        .await
+        .expect("record existing approval request");
+
+    let duplicate = ToolPendingApproval {
+        approval_id: "approval-duplicate".to_string(),
+        execution_id: "exec-duplicate".to_string(),
+        command: "git diff --stat".to_string(),
+        rationale: "Inspect repo delta".to_string(),
+        risk_level: "lowest".to_string(),
+        blast_radius: "repo metadata".to_string(),
+        reasons: vec!["reads git metadata".to_string()],
+        session_id: None,
+    };
+
+    assert!(engine
+        .should_suppress_duplicate_low_value_approval_bundle(&duplicate)
+        .await);
+}
+
+#[tokio::test]
+async fn high_approval_latency_keeps_high_value_approvals_visible() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_approval_learning = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.risk_fingerprint.approval_requests = 4;
+        model.risk_fingerprint.approvals = 2;
+        model.risk_fingerprint.denials = 2;
+        model.risk_fingerprint.avg_response_time_secs = 45.0;
+        refresh_risk_metrics(&mut model.risk_fingerprint);
+    }
+
+    let existing = ToolPendingApproval {
+        approval_id: "approval-existing".to_string(),
+        execution_id: "exec-existing".to_string(),
+        command: "git status".to_string(),
+        rationale: "Inspect repo status".to_string(),
+        risk_level: "lowest".to_string(),
+        blast_radius: "repo metadata".to_string(),
+        reasons: vec!["reads git metadata".to_string()],
+        session_id: None,
+    };
+    engine
+        .record_operator_approval_requested(&existing)
+        .await
+        .expect("record existing approval request");
+
+    let high_value = ToolPendingApproval {
+        approval_id: "approval-high-value".to_string(),
+        execution_id: "exec-high-value".to_string(),
+        command: "curl https://example.com/status".to_string(),
+        rationale: "Fetch service status".to_string(),
+        risk_level: "moderate".to_string(),
+        blast_radius: "single endpoint".to_string(),
+        reasons: vec!["network access".to_string()],
+        session_id: None,
+    };
+
+    assert!(!engine
+        .should_suppress_duplicate_low_value_approval_bundle(&high_value)
+        .await);
+}
+
+#[tokio::test]
 async fn high_confirmation_seeking_suppresses_learned_auto_approve_shortcuts() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
@@ -514,8 +614,12 @@ async fn fast_aggressive_approvals_add_proactive_approval_guidance() {
         .build_operator_model_prompt_summary()
         .await
         .expect("operator model prompt summary");
-    assert!(summary.contains("Risk tolerance: aggressive (4 approvals across 4 approval requests, avg response 3.0s)"));
-    assert!(summary.contains("Adaptive approval rule: approvals resolve quickly and usually favor proceeding"));
+    assert!(summary.contains(
+        "Risk tolerance: aggressive (4 approvals across 4 approval requests, avg response 3.0s)"
+    ));
+    assert!(summary.contains(
+        "Adaptive approval rule: approvals resolve quickly and usually favor proceeding"
+    ));
     assert!(summary.contains("avoid redundant confirmation loops for low-risk progress"));
 }
 
@@ -544,7 +648,9 @@ async fn slow_approval_latency_adds_deliberate_approval_guidance() {
         .build_operator_model_prompt_summary()
         .await
         .expect("operator model prompt summary");
-    assert!(summary.contains("Risk tolerance: moderate (2 approvals across 4 approval requests, avg response 45.0s)"));
+    assert!(summary.contains(
+        "Risk tolerance: moderate (2 approvals across 4 approval requests, avg response 45.0s)"
+    ));
     assert!(summary.contains("Adaptive approval rule: approval responses are deliberate"));
     assert!(summary.contains("keep only one pending approval live at a time"));
 }

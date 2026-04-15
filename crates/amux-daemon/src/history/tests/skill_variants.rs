@@ -22,7 +22,8 @@ async fn register_skill_document_infers_variant_metadata() -> Result<()> {
 }
 
 #[tokio::test]
-async fn register_skill_document_preserves_persisted_fitness_score_on_reregistration() -> Result<()> {
+async fn register_skill_document_preserves_persisted_fitness_score_on_reregistration() -> Result<()>
+{
     let (store, root) = make_test_store().await?;
     store.init_schema().await?;
     let skill_path = root.join("skills/generated/build-pipeline.md");
@@ -212,7 +213,8 @@ async fn resolve_skill_variant_prefers_context_overlap_and_tracks_usage() -> Res
 }
 
 #[tokio::test]
-async fn resolve_skill_variant_prefers_improving_fitness_trend_when_snapshot_is_equal() -> Result<()> {
+async fn resolve_skill_variant_prefers_improving_fitness_trend_when_snapshot_is_equal() -> Result<()>
+{
     let (store, root) = make_test_store().await?;
     store.init_schema().await?;
     let declining = root.join("skills/generated/build-pipeline--declining.md");
@@ -304,17 +306,21 @@ async fn resolve_skill_variant_prefers_improving_fitness_trend_when_snapshot_is_
 
     let declining_id = declining_record.variant_id.clone();
     let improving_id = improving_record.variant_id.clone();
-    store.conn.call(move |conn| {
-        conn.execute(
-            "UPDATE skill_variants SET updated_at = 500 WHERE variant_id = ?1",
-            params![declining_id],
-        )?;
-        conn.execute(
-            "UPDATE skill_variants SET updated_at = 500 WHERE variant_id = ?1",
-            params![improving_id],
-        )?;
-        Ok(())
-    }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    store
+        .conn
+        .call(move |conn| {
+            conn.execute(
+                "UPDATE skill_variants SET updated_at = 500 WHERE variant_id = ?1",
+                params![declining_id],
+            )?;
+            conn.execute(
+                "UPDATE skill_variants SET updated_at = 500 WHERE variant_id = ?1",
+                params![improving_id],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let resolved = store
         .resolve_skill_variant("build-pipeline", &[])
@@ -449,7 +455,8 @@ async fn skill_variant_consultation_settlement_updates_outcomes_once() -> Result
 }
 
 #[tokio::test]
-async fn successful_skill_variant_settlement_persists_fitness_score_for_next_inspection() -> Result<()> {
+async fn successful_skill_variant_settlement_persists_fitness_score_for_next_inspection(
+) -> Result<()> {
     let (store, root) = make_test_store().await?;
     store.init_schema().await?;
     let frontend = root.join("skills/generated/build-pipeline--frontend.md");
@@ -795,7 +802,9 @@ async fn cross_breed_skill_variants_reuses_existing_offspring_for_same_parent_pa
     assert_eq!(first.variant_id, second.variant_id);
     assert_eq!(first.relative_path, second.relative_path);
 
-    let variants = store.list_skill_variants(Some("build-pipeline"), 20).await?;
+    let variants = store
+        .list_skill_variants(Some("build-pipeline"), 20)
+        .await?;
     let offspring = variants
         .into_iter()
         .filter(|variant| {
@@ -837,8 +846,14 @@ async fn gene_pool_registry_returns_offspring_record_for_parent_pair() -> Result
         .await?
         .expect("gene pool should return a registry row for the parent pair");
 
-    let expected_parent_a = frontend_record.variant_id.clone().min(rust_record.variant_id.clone());
-    let expected_parent_b = frontend_record.variant_id.clone().max(rust_record.variant_id.clone());
+    let expected_parent_a = frontend_record
+        .variant_id
+        .clone()
+        .min(rust_record.variant_id.clone());
+    let expected_parent_b = frontend_record
+        .variant_id
+        .clone()
+        .max(rust_record.variant_id.clone());
     assert_eq!(registry.offspring_id, offspring.variant_id);
     assert_eq!(registry.lifecycle_state, "draft");
     assert_eq!(registry.parent_a, expected_parent_a);

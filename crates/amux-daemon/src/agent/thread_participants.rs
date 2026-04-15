@@ -1602,10 +1602,19 @@ impl AgentEngine {
         let generated_message = self
             .generate_visible_thread_participant_message(thread_id, &agent_id, trimmed_content)
             .await?;
+        let should_continue_main_agent =
+            !crate::agent::thread_participant_runner::participant_response_is_no_suggestion(
+                &generated_message,
+            ) && crate::agent::thread_participant_runner::parse_participant_suggestion_response(
+                &generated_message,
+            )
+            .is_some();
         self.append_visible_thread_participant_message(thread_id, &agent_id, &generated_message)
             .await?;
-        self.continue_thread_after_participant_post_or_notice(thread_id)
-            .await;
+        if should_continue_main_agent {
+            self.continue_thread_after_participant_post_or_notice(thread_id)
+                .await;
+        }
 
         Ok(())
     }

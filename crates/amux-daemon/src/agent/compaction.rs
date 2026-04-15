@@ -1959,7 +1959,6 @@ impl AgentEngine {
             };
             let current_split_at = window_start + current_candidate.split_at;
             thread.messages.insert(current_split_at, artifact);
-            thread.messages.drain(..current_split_at);
             thread.updated_at = now_millis();
             thread.total_input_tokens = thread
                 .messages

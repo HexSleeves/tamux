@@ -409,7 +409,7 @@ fn operator_profile_workflow_warning_surfaces_retry_notice() {
 }
 
 #[test]
-fn auto_compaction_workflow_notice_requests_latest_page_containing_artifact() {
+fn auto_compaction_workflow_notice_requests_full_visible_thread_after_compaction() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
 
     model.handle_client_event(ClientEvent::ThreadCreated {
@@ -431,8 +431,8 @@ fn auto_compaction_workflow_notice_requests_latest_page_containing_artifact() {
     let (thread_id, message_limit, message_offset) =
         next_thread_request(&mut daemon_rx).expect("expected targeted thread reload request");
     assert_eq!(thread_id, "thread-compaction");
-    assert_eq!(message_limit, Some(chat::CHAT_HISTORY_PAGE_SIZE));
-    assert_eq!(message_offset, Some(1));
+    assert_eq!(message_limit, Some(121));
+    assert_eq!(message_offset, Some(0));
 }
 
 #[test]

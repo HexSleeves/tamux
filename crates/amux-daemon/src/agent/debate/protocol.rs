@@ -28,7 +28,11 @@ pub(crate) fn assign_roles(
         0
     };
     let skeptic_idx = if framings.len() >= 2 {
-        if role_rotation && round >= 3 { 0 } else { 1 }
+        if role_rotation && round >= 3 {
+            0
+        } else {
+            1
+        }
     } else {
         0
     };

@@ -403,7 +403,8 @@ fn weles_classifier_only_flags_standalone_broadcast_mentions() {
 }
 
 #[test]
-fn weles_classifier_covers_switch_model_plugin_api_synthesize_tool_setup_web_and_snapshot_restore_actions() {
+fn weles_classifier_covers_switch_model_plugin_api_synthesize_tool_setup_web_and_snapshot_restore_actions(
+) {
     let switch_model = crate::agent::weles_governance::classify_tool_call(
         "switch_model",
         &serde_json::json!({
