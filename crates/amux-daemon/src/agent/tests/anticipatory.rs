@@ -679,3 +679,135 @@ async fn anticipatory_tick_surfaces_persisted_system_outcome_foresight_for_build
             .any(|bullet| bullet.contains("dirty repo state"))
     );
 }
+
+#[tokio::test]
+async fn anticipatory_tick_surfaces_stale_context_foresight_when_hydration_lags_session_rhythm() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-stale-context"), None)
+        .await
+        .unwrap();
+    engine.thread_work_contexts.write().await.insert(
+        "thread-stale-context".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-stale-context".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "src/lib.rs".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some("/tmp/repo".to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+    {
+        let mut runtime = engine.anticipatory.write().await;
+        runtime.hydration_by_thread.insert(
+            "thread-stale-context".to_string(),
+            now_millis() - 16 * 60 * 1000,
+        );
+    }
+    {
+        let mut model = engine.operator_model.write().await;
+        model.session_rhythm.session_count = 6;
+        model.session_rhythm.session_duration_avg_minutes = 10.0;
+        model.session_rhythm.typical_start_hour_utc = Some(9);
+    }
+
+    engine
+        .history
+        .create_thread(&amux_protocol::AgentDbThread {
+            id: "thread-stale-context".to_string(),
+            workspace_id: None,
+            surface_id: None,
+            pane_id: None,
+            agent_name: Some(MAIN_AGENT_NAME.to_string()),
+            title: "Stale context thread".to_string(),
+            created_at: 1,
+            updated_at: now_millis() as i64,
+            message_count: 2,
+            total_tokens: 0,
+            last_preview: "off-topic drift".to_string(),
+            metadata_json: None,
+        })
+        .await
+        .expect("seed thread row");
+    engine
+        .history
+        .add_message(&amux_protocol::AgentDbMessage {
+            id: "stale-user-1".to_string(),
+            thread_id: "thread-stale-context".to_string(),
+            created_at: (now_millis() - 2_000) as i64,
+            role: "user".to_string(),
+            content: "Let's switch topics completely and talk about vacation photos.".to_string(),
+            provider: None,
+            model: None,
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            total_tokens: Some(0),
+            cost_usd: None,
+            reasoning: None,
+            tool_calls_json: None,
+            metadata_json: None,
+        })
+        .await
+        .expect("seed user message");
+    engine
+        .history
+        .add_message(&amux_protocol::AgentDbMessage {
+            id: "stale-assistant-1".to_string(),
+            thread_id: "thread-stale-context".to_string(),
+            created_at: (now_millis() - 1_000) as i64,
+            role: "assistant".to_string(),
+            content: "The recent repo context may be stale relative to the current conversation."
+                .to_string(),
+            provider: None,
+            model: None,
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            total_tokens: Some(0),
+            cost_usd: None,
+            reasoning: None,
+            tool_calls_json: None,
+            metadata_json: None,
+        })
+        .await
+        .expect("seed assistant message");
+
+    engine.run_anticipatory_tick().await;
+
+    let items = engine.anticipatory.read().await.items.clone();
+    let item = items
+        .into_iter()
+        .find(|candidate| candidate.kind == "system_outcome_foresight")
+        .expect("expected a system-outcome foresight item");
+    assert_eq!(item.thread_id.as_deref(), Some("thread-stale-context"));
+    assert!(item.summary.contains("stale context"));
+    assert!(item.confidence >= 0.7);
+    assert!(
+        item.bullets
+            .iter()
+            .any(|bullet| bullet.contains("prediction_type=stale_context"))
+    );
+    assert!(
+        item.bullets
+            .iter()
+            .any(|bullet| bullet.contains("hydration age"))
+    );
+    assert!(
+        item.bullets
+            .iter()
+            .any(|bullet| bullet.contains("semantic alignment degraded"))
+    );
+}

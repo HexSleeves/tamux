@@ -665,6 +665,65 @@ impl AgentEngine {
                     .is_some_and(|text| text.contains("cargo test failed"))
         });
 
+        let hydration_age_ms = {
+            let runtime = self.anticipatory.read().await;
+            thread_id
+                .as_ref()
+                .and_then(|value| runtime.hydration_by_thread.get(value).copied())
+                .map(|last| now.saturating_sub(last))
+        };
+        let session_window_ms = {
+            let model = self.operator_model.read().await;
+            if model.session_rhythm.session_count >= 5
+                && model.session_rhythm.session_duration_avg_minutes > 0.0
+            {
+                Some((model.session_rhythm.session_duration_avg_minutes * 60_000.0) as u64)
+            } else {
+                None
+            }
+        };
+        let recent_messages = if let Some(thread_id) = thread_id.as_ref() {
+            self.history
+                .list_recent_messages(thread_id, 4)
+                .await
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let alignment_degraded = !recent_messages.is_empty()
+            && recent_messages.iter().all(|message| {
+                let lowered = message.content.to_ascii_lowercase();
+                lowered.contains("stale relative to the current conversation")
+                    || lowered.contains("switch topics completely")
+                    || !(lowered.contains("repo")
+                        || lowered.contains("code")
+                        || lowered.contains("build")
+                        || lowered.contains("test")
+                        || lowered.contains("context"))
+            });
+
+        if let (Some(hydration_age_ms), Some(session_window_ms)) =
+            (hydration_age_ms, session_window_ms)
+        {
+            if hydration_age_ms > session_window_ms && alignment_degraded {
+                return Some(SystemForesight {
+                    prediction_type: "stale_context",
+                    confidence: 0.76,
+                    rationale: "The active thread has outlived its recent hydration window and the latest messages are drifting away from the repo-grounded context, so a refresh is likely needed before the next action.".to_string(),
+                    bullets: vec![
+                        "prediction_type=stale_context".to_string(),
+                        format!(
+                            "hydration age={}m exceeded session rhythm window={}m",
+                            hydration_age_ms / 60_000,
+                            session_window_ms / 60_000
+                        ),
+                        "semantic alignment degraded across recent thread messages".to_string(),
+                    ],
+                    thread_id,
+                });
+            }
+        }
+
         if recent_cargo_failure.is_none() {
             return None;
         }
@@ -724,10 +783,14 @@ impl AgentEngine {
             ),
             kind: "system_outcome_foresight".to_string(),
             title: "System Outcome Foresight".to_string(),
-            summary: format!(
-                "Predicted {}: build/test failure risk is elevated",
-                foresight.prediction_type.replace('_', "/")
-            ),
+            summary: if foresight.prediction_type == "stale_context" {
+                "Predicted stale context: hydration-needed risk is elevated".to_string()
+            } else {
+                format!(
+                    "Predicted {}: build/test failure risk is elevated",
+                    foresight.prediction_type.replace('_', "/")
+                )
+            },
             bullets: std::iter::once(format!("rationale: {}", foresight.rationale))
                 .chain(foresight.bullets.into_iter())
                 .collect(),
