@@ -63,6 +63,9 @@ impl AgentEngine {
         {
             return Some(ApprovalDecision::Deny);
         }
+        if model.cognitive_style.confirmation_seeking >= 0.8 {
+            return None;
+        }
         if model
             .risk_fingerprint
             .auto_approve_categories

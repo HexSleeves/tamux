@@ -320,6 +320,31 @@ async fn repeated_fast_denials_enable_learned_auto_deny() {
 }
 
 #[tokio::test]
+async fn high_confirmation_seeking_suppresses_learned_auto_approve_shortcuts() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_approval_learning = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.cognitive_style.confirmation_seeking = 0.92;
+        model.risk_fingerprint.auto_approve_categories = vec!["git".to_string()];
+    }
+
+    assert!(
+        engine
+            .learned_approval_decision("git status", "lowest")
+            .await
+            .is_none(),
+        "high confirmation-seeking should suppress learned auto-approval and require explicit approval"
+    );
+}
+
+#[tokio::test]
 async fn operator_messages_learn_summary_first_reasoning_on_demand_preferences() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
