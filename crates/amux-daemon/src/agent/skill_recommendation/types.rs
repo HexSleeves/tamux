@@ -54,7 +54,6 @@ pub(super) struct SkillCandidateInput {
 pub(super) struct CandidateScore {
     pub recommendation: SkillRecommendation,
     pub graph_score: f64,
-    pub novelty_distance: u8,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
