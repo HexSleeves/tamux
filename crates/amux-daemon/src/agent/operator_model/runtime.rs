@@ -60,7 +60,9 @@ impl AgentEngine {
             session_id,
             item.kind,
             payload.primary_action,
-            item.preferred_attention_surface.as_deref().unwrap_or_default()
+            item.preferred_attention_surface
+                .as_deref()
+                .unwrap_or_default()
         ));
         let _ = self
             .history
@@ -1115,6 +1117,7 @@ fn fallback_skill_gate_family(recommended_skill: Option<&str>) -> Vec<String> {
 
 fn operator_adaptation_lines(model: &OperatorModel) -> Vec<String> {
     let mut lines = Vec::new();
+    let adaptation = BehaviorAdaptationProfile::from_model(model);
 
     let response_mode = match model.operator_satisfaction.label.as_str() {
         "strained" => {
@@ -1139,12 +1142,22 @@ fn operator_adaptation_lines(model: &OperatorModel) -> Vec<String> {
         || model.cognitive_style.skips_reasoning
     {
         "- Adaptive delivery rule: default to summary-first and keep reasoning on demand unless the operator explicitly asks for detail.".to_string()
-    } else if matches!(model.cognitive_style.reading_depth, ReadingDepth::Deep) {
+    } else if matches!(model.cognitive_style.reading_depth, ReadingDepth::Deep)
+        && !adaptation.compact_response
+    {
         "- Adaptive delivery rule: include fuller reasoning and step-by-step traces when they materially improve confidence or debugging speed.".to_string()
+    } else if adaptation.compact_response {
+        "- Adaptive delivery rule: keep the answer compact, front-load the conclusion, and add only the detail needed for the next action.".to_string()
     } else {
         "- Adaptive delivery rule: start with the conclusion, then add only the detail needed to support the next action.".to_string()
     };
     lines.push(delivery_mode);
+
+    if adaptation.prompt_for_clarification {
+        lines.push(
+            "- Adaptive clarification rule: when intent is underspecified, ask one targeted question before guessing broadly.".to_string(),
+        );
+    }
 
     if model.risk_fingerprint.approval_requests > 0 {
         let avg_response_time_secs = model.risk_fingerprint.avg_response_time_secs;

@@ -207,6 +207,7 @@ pub(crate) struct ImplicitFeedback {
 pub(crate) struct BehaviorAdaptationProfile {
     pub mode: SatisfactionAdaptationMode,
     pub prompt_for_clarification: bool,
+    pub compact_response: bool,
     pub preferred_tool_fallbacks: Vec<String>,
 }
 
@@ -216,10 +217,17 @@ impl BehaviorAdaptationProfile {
         let prompt_for_clarification = matches!(mode, SatisfactionAdaptationMode::Minimal)
             && (model.implicit_feedback.rapid_revert_count > 0
                 || model.implicit_feedback.session_abandon_count > 0
-                || model.implicit_feedback.correction_message_count > 0);
+                || model.implicit_feedback.correction_message_count > 0)
+            || matches!(mode, SatisfactionAdaptationMode::Tightened)
+                && (model.implicit_feedback.correction_message_count > 0
+                    || model.implicit_feedback.fast_denial_count > 0);
+        let compact_response = !matches!(mode, SatisfactionAdaptationMode::Normal)
+            || model.implicit_feedback.correction_message_count > 0
+            || model.implicit_feedback.fast_denial_count > 0;
         Self {
             mode,
             prompt_for_clarification,
+            compact_response,
             preferred_tool_fallbacks: preferred_tool_fallback_targets(
                 &model.implicit_feedback.top_tool_fallbacks,
                 3,

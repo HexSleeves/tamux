@@ -694,7 +694,37 @@ async fn strained_operator_satisfaction_adds_recovery_guidance() {
         .expect("operator model prompt summary");
     assert!(summary.contains("Satisfaction signal: strained (0.18); friction markers revisions 1, corrections 1, tool fallbacks 1, fast denials 1"));
     assert!(summary.contains("Adaptive response mode: reduce friction aggressively"));
+    assert!(summary.contains("Adaptive delivery rule: keep the answer compact"));
+    assert!(summary.contains("Adaptive clarification rule: when intent is underspecified, ask one targeted question before guessing broadly"));
     assert!(summary.contains("prefer the later successful fallback earlier"));
+}
+
+#[tokio::test]
+async fn fragile_operator_satisfaction_adds_compact_delivery_and_clarification_guidance() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    config.operator_model.allow_implicit_feedback = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.operator_satisfaction.label = "fragile".to_string();
+        model.operator_satisfaction.score = 0.54;
+        model.implicit_feedback.correction_message_count = 1;
+    }
+
+    let summary = engine
+        .build_operator_model_prompt_summary()
+        .await
+        .expect("operator model prompt summary");
+    assert!(summary.contains("Satisfaction signal: fragile (0.54); friction markers revisions 0, corrections 1, tool fallbacks 0, fast denials 0"));
+    assert!(summary.contains("Adaptive response mode: tighten the loop"));
+    assert!(summary.contains("Adaptive delivery rule: keep the answer compact"));
+    assert!(summary.contains("Adaptive clarification rule: when intent is underspecified, ask one targeted question before guessing broadly"));
 }
 
 #[tokio::test]

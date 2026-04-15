@@ -123,6 +123,11 @@ impl AgentEngine {
                 "- Recent implicit feedback indicates low confidence in guessed intent. When scope is ambiguous, prefer a targeted clarification checkpoint over guessing broadly.\n",
             );
         }
+        if adaptation.compact_response {
+            prompt.push_str(
+                "- Keep the plan summary and step instructions compact: front-load the conclusion and include only the detail needed to execute the next action.\n",
+            );
+        }
         if !preferred_fallback_tools.is_empty() {
             prompt.push_str(&format!(
                 "- Repeated fallback patterns show these tools recovered better than the earlier failing path: {}. Prefer them earlier when they fit, and justify the switch explicitly.\n",
@@ -447,6 +452,11 @@ impl AgentEngine {
         if adaptation.prompt_for_clarification {
             prompt.push_str(
                 "When the failure suggests the operator intent may be underspecified, add a brief clarification checkpoint before broader recovery work.\n",
+            );
+        }
+        if adaptation.compact_response {
+            prompt.push_str(
+                "Keep the revised recovery summary and step instructions compact: front-load the conclusion and only include the detail needed for the next recovery action.\n",
             );
         }
         if !preferred_fallback_tools.is_empty() {
