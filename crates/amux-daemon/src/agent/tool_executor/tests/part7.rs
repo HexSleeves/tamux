@@ -4940,6 +4940,37 @@ fn apply_critique_modifications_strips_explicit_messaging_targets_and_broadcasts
 }
 
 #[test]
+fn apply_critique_modifications_requires_confirmation_for_plugin_api_call() {
+    let args = serde_json::json!({
+        "plugin_name": "ops_plugin",
+        "endpoint_name": "reconfigure_runtime"
+    });
+
+    let (adjusted, changes) = super::apply_critique_modifications(
+        "plugin_api_call",
+        &args,
+        Some("proceed_with_modifications"),
+        &["plugin API invocation can mutate plugin execution policy or external side effects"
+            .to_string()],
+        &["Require explicit operator confirmation before invoking plugin endpoint reconfigure_runtime because plugin API calls can rewrite plugin execution policy or trigger external side effects.".to_string()],
+        &[],
+        None,
+    );
+
+    assert_eq!(
+        adjusted["__critique_requires_operator_confirmation"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        adjusted["__critique_confirmation_reason"].as_str(),
+        Some("plugin_api_call")
+    );
+    assert!(changes
+        .iter()
+        .any(|item| item == "plugin_api_call:require_operator_confirmation"));
+}
+
+#[test]
 fn apply_critique_modifications_narrows_sensitive_file_paths() {
     let args = serde_json::json!({
         "path": "/tmp/demo/.env",
