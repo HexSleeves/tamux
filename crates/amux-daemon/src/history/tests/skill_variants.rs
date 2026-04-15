@@ -766,6 +766,51 @@ async fn cross_breed_skill_variants_creates_candidate_offspring_variant() -> Res
 }
 
 #[tokio::test]
+async fn cross_breed_skill_variants_reuses_existing_offspring_for_same_parent_pair() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    store.init_schema().await?;
+    let frontend = root.join("skills/generated/build-pipeline--frontend.md");
+    let rust = root.join("skills/generated/build-pipeline--rust.md");
+    fs::write(
+        &frontend,
+        "# Build pipeline (frontend)\n\n## When To Use\nUse this variant for frontend build pipelines.\n\n## How\nRun react build checks first.\n",
+    )?;
+    fs::write(
+        &rust,
+        "# Build pipeline (rust)\n\n## When To Use\nUse this variant for rust build pipelines.\n\n## How\nRun cargo build --workspace.\n",
+    )?;
+
+    let frontend_record = store.register_skill_document(&frontend).await?;
+    let rust_record = store.register_skill_document(&rust).await?;
+
+    let first = store
+        .cross_breed_skill_variants(&frontend_record, &rust_record)
+        .await?
+        .expect("first cross-breed should create a candidate offspring");
+    let second = store
+        .cross_breed_skill_variants(&rust_record, &frontend_record)
+        .await?
+        .expect("second cross-breed should reuse the same candidate offspring");
+
+    assert_eq!(first.variant_id, second.variant_id);
+    assert_eq!(first.relative_path, second.relative_path);
+
+    let variants = store.list_skill_variants(Some("build-pipeline"), 20).await?;
+    let offspring = variants
+        .into_iter()
+        .filter(|variant| {
+            variant.status == "draft"
+                && variant.variant_id != frontend_record.variant_id
+                && variant.variant_id != rust_record.variant_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(offspring.len(), 1);
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stable_variant_merges_back_into_canonical() -> Result<()> {
     let (store, root) = make_test_store().await?;
     store.init_schema().await?;

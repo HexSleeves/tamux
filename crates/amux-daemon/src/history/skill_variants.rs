@@ -515,7 +515,9 @@ impl HistoryStore {
 
         let left_slug = left_parent.variant_name.to_ascii_lowercase();
         let right_slug = right_parent.variant_name.to_ascii_lowercase();
-        let variant_slug = format!("cross-{}-{}", left_slug, right_slug)
+        let mut parent_slugs = [left_slug, right_slug];
+        parent_slugs.sort();
+        let variant_slug = format!("cross-{}-{}", parent_slugs[0], parent_slugs[1])
             .replace("canonical", "base")
             .replace("--", "-");
         let offspring_path = self
