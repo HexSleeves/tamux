@@ -849,6 +849,88 @@ async fn gene_pool_registry_returns_offspring_record_for_parent_pair() -> Result
 }
 
 #[tokio::test]
+async fn promote_skill_variant_marks_offspring_active_in_variant_and_gene_pool() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    store.init_schema().await?;
+    let frontend = root.join("skills/generated/build-pipeline--frontend.md");
+    let rust = root.join("skills/generated/build-pipeline--rust.md");
+    fs::write(
+        &frontend,
+        "# Build pipeline (frontend)\n\n## When To Use\nUse this variant for frontend build pipelines.\n\n## How\nRun react build checks first.\n",
+    )?;
+    fs::write(
+        &rust,
+        "# Build pipeline (rust)\n\n## When To Use\nUse this variant for rust build pipelines.\n\n## How\nRun cargo build --workspace.\n",
+    )?;
+
+    let frontend_record = store.register_skill_document(&frontend).await?;
+    let rust_record = store.register_skill_document(&rust).await?;
+    let offspring = store
+        .cross_breed_skill_variants(&frontend_record, &rust_record)
+        .await?
+        .expect("cross-breeding should create a candidate offspring variant");
+
+    store.promote_skill_variant(&offspring.variant_id).await?;
+
+    let promoted = store
+        .get_skill_variant(&offspring.variant_id)
+        .await?
+        .expect("promoted offspring should still exist");
+    assert_eq!(promoted.status, "active");
+
+    let registry = store
+        .get_gene_pool_entry(&frontend_record.variant_id, &rust_record.variant_id)
+        .await?
+        .expect("gene pool row should exist for the offspring");
+    assert_eq!(registry.offspring_id, offspring.variant_id);
+    assert_eq!(registry.lifecycle_state, "active");
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn retire_skill_variant_marks_offspring_archived_in_variant_and_gene_pool() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    store.init_schema().await?;
+    let frontend = root.join("skills/generated/build-pipeline--frontend.md");
+    let rust = root.join("skills/generated/build-pipeline--rust.md");
+    fs::write(
+        &frontend,
+        "# Build pipeline (frontend)\n\n## When To Use\nUse this variant for frontend build pipelines.\n\n## How\nRun react build checks first.\n",
+    )?;
+    fs::write(
+        &rust,
+        "# Build pipeline (rust)\n\n## When To Use\nUse this variant for rust build pipelines.\n\n## How\nRun cargo build --workspace.\n",
+    )?;
+
+    let frontend_record = store.register_skill_document(&frontend).await?;
+    let rust_record = store.register_skill_document(&rust).await?;
+    let offspring = store
+        .cross_breed_skill_variants(&frontend_record, &rust_record)
+        .await?
+        .expect("cross-breeding should create a candidate offspring variant");
+
+    store.retire_skill_variant(&offspring.variant_id).await?;
+
+    let retired = store
+        .get_skill_variant(&offspring.variant_id)
+        .await?
+        .expect("retired offspring should still exist");
+    assert_eq!(retired.status, "archived");
+
+    let registry = store
+        .get_gene_pool_entry(&frontend_record.variant_id, &rust_record.variant_id)
+        .await?
+        .expect("gene pool row should exist for the offspring");
+    assert_eq!(registry.offspring_id, offspring.variant_id);
+    assert_eq!(registry.lifecycle_state, "archived");
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stable_variant_merges_back_into_canonical() -> Result<()> {
     let (store, root) = make_test_store().await?;
     store.init_schema().await?;

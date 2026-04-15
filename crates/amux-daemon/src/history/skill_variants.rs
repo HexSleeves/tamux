@@ -237,6 +237,38 @@ impl HistoryStore {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
+    pub async fn promote_skill_variant(&self, variant_id: &str) -> Result<()> {
+        self.transition_gene_pool_variant_lifecycle(variant_id, "active").await
+    }
+
+    pub async fn retire_skill_variant(&self, variant_id: &str) -> Result<()> {
+        self.transition_gene_pool_variant_lifecycle(variant_id, "archived").await
+    }
+
+    async fn transition_gene_pool_variant_lifecycle(
+        &self,
+        variant_id: &str,
+        next_status: &str,
+    ) -> Result<()> {
+        let variant_id = variant_id.to_string();
+        let next_status = next_status.to_string();
+        self.conn
+            .call(move |conn| {
+                let now = now_ts() as i64;
+                conn.execute(
+                    "UPDATE skill_variants SET status = ?2, updated_at = ?3 WHERE variant_id = ?1",
+                    params![variant_id, next_status, now],
+                )?;
+                conn.execute(
+                    "UPDATE gene_pool SET lifecycle_state = ?2 WHERE offspring_id = ?1",
+                    params![variant_id, next_status],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     pub async fn rebalance_skill_variants(
         &self,
         skill_name: &str,
