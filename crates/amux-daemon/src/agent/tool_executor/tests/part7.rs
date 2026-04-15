@@ -1750,6 +1750,70 @@ async fn critique_preflight_runs_for_suspicious_non_allowlisted_tool() {
 }
 
 #[tokio::test]
+async fn critique_preflight_runs_for_guard_always_switch_model_calls() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.critique.enabled = true;
+    config.critique.mode = crate::agent::types::CritiqueMode::Deterministic;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let classification = crate::agent::weles_governance::classify_tool_call(
+        "switch_model",
+        &serde_json::json!({
+            "agent": "svarog",
+            "provider": "openai",
+            "model": "gpt-5.4"
+        }),
+    );
+
+    assert_eq!(
+        classification.class,
+        crate::agent::weles_governance::WelesGovernanceClass::GuardAlways
+    );
+    assert!(
+        engine
+            .should_run_critique_preflight("switch_model", &classification)
+            .await,
+        "guard-always switch_model calls should trigger critique preflight"
+    );
+}
+
+#[tokio::test]
+async fn critique_preflight_surfaces_switch_model_specific_guidance() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.critique.enabled = true;
+    config.critique.mode = crate::agent::types::CritiqueMode::Deterministic;
+    config.extra.insert(
+        "test_force_critique_decision".to_string(),
+        serde_json::Value::String("proceed_with_modifications".to_string()),
+    );
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let resolution = engine
+        .run_critique_preflight(
+            "action-switch-model-guidance",
+            "switch_model",
+            "Switch Svarog to a different provider and model.",
+            &["provider or model reconfiguration mutates persisted agent execution policy"
+                .to_string()],
+            Some("thread-switch-model-guidance"),
+            None,
+        )
+        .await
+        .expect("critique preflight should succeed")
+        .resolution
+        .expect("resolution should exist");
+
+    assert!(resolution.modifications.iter().any(|item| {
+        item.contains("Require explicit operator confirmation")
+            || item.contains("persisted agent execution policy")
+    }), "expected switch_model-specific critic guidance, got: {:?}", resolution.modifications);
+}
+
+#[tokio::test]
 async fn critique_preflight_runs_for_guard_always_non_allowlisted_tool() {
     let root = tempdir().expect("tempdir should succeed");
     let manager = SessionManager::new_test(root.path()).await;

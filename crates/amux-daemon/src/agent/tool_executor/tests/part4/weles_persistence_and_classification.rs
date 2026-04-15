@@ -403,7 +403,24 @@ fn weles_classifier_only_flags_standalone_broadcast_mentions() {
 }
 
 #[test]
-fn weles_classifier_covers_setup_web_and_snapshot_restore_actions() {
+fn weles_classifier_covers_switch_model_setup_web_and_snapshot_restore_actions() {
+    let switch_model = crate::agent::weles_governance::classify_tool_call(
+        "switch_model",
+        &serde_json::json!({
+            "agent": "svarog",
+            "provider": "openai",
+            "model": "gpt-5.4"
+        }),
+    );
+    assert_eq!(
+        switch_model.class,
+        crate::agent::weles_governance::WelesGovernanceClass::GuardAlways
+    );
+    assert!(switch_model
+        .reasons
+        .iter()
+        .any(|reason: &String| reason.contains("persisted agent execution policy")));
+
     let install = crate::agent::weles_governance::classify_tool_call(
         "setup_web_browsing",
         &serde_json::json!({ "action": "install" }),
