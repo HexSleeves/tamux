@@ -1618,6 +1618,13 @@ async fn critique_preflight_blocks_risky_bash_command_when_enabled() {
         "resolved"
     };
     assert_eq!(payload["status"].as_str(), Some(expected_status));
+    let report_summary = payload["report_summary"]
+        .as_str()
+        .expect("critique payload should surface operator-facing report summary");
+    assert!(review
+        .reasons
+        .iter()
+        .any(|reason| reason == &format!("critique_report:{report_summary}")));
 }
 
 #[tokio::test]
@@ -4234,11 +4241,15 @@ fn annotate_review_with_critique_preserves_non_proceed_decisions() {
         Some("critique_session_123"),
         Some("proceed_with_modifications"),
         &[],
+        Some("Critiqued bash_command -> proceed_with_modifications: keep the action, but harden it."),
     );
 
     assert!(review.weles_reviewed);
     assert!(review.reasons.iter().any(|reason| {
         reason == "critique_preflight:critique_session_123:proceed_with_modifications"
+    }));
+    assert!(review.reasons.iter().any(|reason| {
+        reason == "critique_report:Critiqued bash_command -> proceed_with_modifications: keep the action, but harden it."
     }));
     assert_eq!(review.audit_id.as_deref(), Some("critique_session_123"));
 }
@@ -5144,6 +5155,7 @@ fn annotate_review_with_critique_records_applied_adjustments() {
         Some("critique_session_456"),
         Some("proceed_with_modifications"),
         &["shell:enable_sandbox".to_string(), "shell:disable_network".to_string()],
+        Some("Critiqued bash_command -> proceed_with_modifications: disable network and enable sandbox."),
     );
 
     assert!(review.reasons.iter().any(|reason| {
@@ -5151,6 +5163,9 @@ fn annotate_review_with_critique_records_applied_adjustments() {
     }));
     assert!(review.reasons.iter().any(|reason| {
         reason == "critique_applied:shell:disable_network"
+    }));
+    assert!(review.reasons.iter().any(|reason| {
+        reason == "critique_report:Critiqued bash_command -> proceed_with_modifications: disable network and enable sandbox."
     }));
 }
 
@@ -6080,6 +6095,26 @@ async fn critique_modifications_schedule_enqueue_task_for_operator_window_end_to
         .reasons
         .iter()
         .any(|reason| reason == "critique_applied:temporal:schedule_for_operator_window"));
+    let critique_reason = review
+        .reasons
+        .iter()
+        .find(|reason| reason.starts_with("critique_preflight:"))
+        .cloned()
+        .expect("successful critique rewrite should expose critique session id");
+    let mut parts = critique_reason.split(':');
+    let _prefix = parts.next();
+    let session_id = parts.next().expect("critique reason should include session id");
+    let payload = engine
+        .get_critique_session_payload(session_id)
+        .await
+        .expect("critique session should persist for rewritten success path");
+    let report_summary = payload["report_summary"]
+        .as_str()
+        .expect("persisted critique payload should include report summary");
+    assert!(review
+        .reasons
+        .iter()
+        .any(|reason| reason == &format!("critique_report:{report_summary}")));
 }
 
 #[tokio::test]

@@ -932,6 +932,7 @@ fn annotate_review_with_critique(
     critique_session_id: Option<&str>,
     critique_decision: Option<&str>,
     critique_adjustments: &[String],
+    critique_report_summary: Option<&str>,
 ) {
     let Some(session_id) = critique_session_id else {
         return;
@@ -953,6 +954,12 @@ fn annotate_review_with_critique(
             review.reasons.push(reason);
         }
     }
+    if let Some(summary) = critique_report_summary {
+        let reason = format!("critique_report:{summary}");
+        if !review.reasons.iter().any(|existing| existing == &reason) {
+            review.reasons.push(reason);
+        }
+    }
     if review.audit_id.is_none() {
         review.audit_id = Some(session_id.to_string());
     }
@@ -967,6 +974,7 @@ struct PreparedToolExecution {
     critique_session_id: Option<String>,
     critique_decision: Option<String>,
     critique_adjustments: Vec<String>,
+    critique_report_summary: Option<String>,
 }
 
 async fn prepare_tool_execution(
@@ -1048,6 +1056,7 @@ async fn prepare_tool_execution(
             .await
         {
             Ok(session) => {
+                let report_summary = crate::agent::critique::operator_report_summary(&session);
                 let decision = session
                     .resolution
                     .as_ref()
@@ -1061,6 +1070,20 @@ async fn prepare_tool_execution(
                 if let Some(resolution) = session.resolution.as_ref() {
                     if agent.critique_requires_blocking_review(resolution, risk_tolerance) {
                         let decision = resolution.decision.as_str();
+                        let mut review = crate::agent::types::WelesReviewMeta {
+                            weles_reviewed: true,
+                            verdict: crate::agent::types::WelesVerdict::Block,
+                            reasons: Vec::new(),
+                            audit_id: None,
+                            security_override_mode: None,
+                        };
+                        annotate_review_with_critique(
+                            &mut review,
+                            Some(session.id.as_str()),
+                            Some(decision),
+                            &[],
+                            Some(report_summary.as_str()),
+                        );
                         return Err(ToolResult {
                             tool_call_id: tool_call.id.clone(),
                             name: tool_call.function.name.clone(),
@@ -1069,16 +1092,7 @@ async fn prepare_tool_execution(
                                 session.id, resolution.synthesis
                             ),
                             is_error: true,
-                            weles_review: Some(crate::agent::types::WelesReviewMeta {
-                                weles_reviewed: true,
-                                verdict: crate::agent::types::WelesVerdict::Block,
-                                reasons: vec![format!(
-                                    "critique_preflight:{}:{}",
-                                    session.id, decision
-                                )],
-                                audit_id: Some(session.id.clone()),
-                                security_override_mode: None,
-                            }),
+                            weles_review: Some(review),
                             pending_approval: None,
                         });
                     }
@@ -1093,7 +1107,7 @@ async fn prepare_tool_execution(
                     .as_ref()
                     .map(|resolution| resolution.directives.clone())
                     .unwrap_or_default();
-                Some((session.id, decision, modifications, directives))
+                Some((session.id, decision, modifications, directives, report_summary))
             }
             Err(error) => {
                 tracing::warn!(tool = %tool_call.function.name, error = %error, "critique preflight failed; continuing without critique enforcement");
@@ -1103,11 +1117,11 @@ async fn prepare_tool_execution(
     } else {
         None
     };
-    let (critique_session_id, critique_decision, critique_modifications, critique_directives) = critique_result
-        .map(|(session_id, decision, modifications, directives)| {
-            (Some(session_id), decision, modifications, directives)
+    let (critique_session_id, critique_decision, critique_modifications, critique_directives, critique_report_summary) = critique_result
+        .map(|(session_id, decision, modifications, directives, report_summary)| {
+            (Some(session_id), decision, modifications, directives, Some(report_summary))
         })
-        .unwrap_or((None, None, Vec::new(), Vec::new()));
+        .unwrap_or((None, None, Vec::new(), Vec::new(), None));
     let preferred_start_hour_utc = agent
         .operator_model
         .read()
@@ -1142,6 +1156,7 @@ async fn prepare_tool_execution(
                 critique_session_id.as_deref(),
                 critique_decision.as_deref(),
                 &critique_adjustments,
+                critique_report_summary.as_deref(),
             );
             let confirmation_reason = map
                 .get("__critique_confirmation_reason")
@@ -1404,6 +1419,7 @@ async fn prepare_tool_execution(
         critique_session_id,
         critique_decision,
         critique_adjustments,
+        critique_report_summary,
     })
 }
 
@@ -1891,6 +1907,7 @@ pub fn execute_tool<'a>(
                     prepared.critique_session_id.as_deref(),
                     prepared.critique_decision.as_deref(),
                     &prepared.critique_adjustments,
+                    prepared.critique_report_summary.as_deref(),
                 );
                 emit_workflow_notice_for_tool(
                     event_tx,
@@ -1934,12 +1951,20 @@ pub fn execute_tool<'a>(
             Err(e) => {
                 let content = scrub_sensitive(&format!("Error: {e}"));
                 tracing::warn!(tool = %prepared.tool_name, error = %content, "agent tool result: error");
+                let mut review = prepared.governance_decision.review.clone();
+                annotate_review_with_critique(
+                    &mut review,
+                    prepared.critique_session_id.as_deref(),
+                    prepared.critique_decision.as_deref(),
+                    &prepared.critique_adjustments,
+                    prepared.critique_report_summary.as_deref(),
+                );
                 ToolResult {
                     tool_call_id: tool_call.id.clone(),
                     name: tool_call.function.name.clone(),
                     content,
                     is_error: true,
-                    weles_review: Some(prepared.governance_decision.review),
+                    weles_review: Some(review),
                     pending_approval: None,
                 }
             }
