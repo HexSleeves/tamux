@@ -437,6 +437,17 @@ fn apply_critique_modifications(
                     serde_json::Value::String("moderate".to_string()),
                 );
                 adjustments.push("shell:downgrade_security_level".to_string());
+            } else if !map.contains_key("security_level")
+                && has_directive(
+                    critique_directives,
+                    crate::agent::critique::types::CritiqueDirective::DowngradeSecurityLevel,
+                )
+            {
+                map.insert(
+                    "security_level".to_string(),
+                    serde_json::Value::String("moderate".to_string()),
+                );
+                adjustments.push("shell:inject_security_level".to_string());
             }
         }
         "send_slack_message" => {

@@ -5549,6 +5549,38 @@ async fn critique_modifications_narrow_sensitive_write_file_path_end_to_end() {
 }
 
 #[test]
+fn apply_critique_modifications_injects_missing_shell_security_level() {
+    let args = serde_json::json!({
+        "command": "echo safe",
+        "allow_network": true,
+        "sandbox_enabled": false
+    });
+
+    let (adjusted, changes) = super::apply_critique_modifications(
+        "bash_command",
+        &args,
+        Some("proceed_with_modifications"),
+        &[],
+        &["Disable network access, enable sandboxing, and downgrade any yolo security level before running similar shell commands.".to_string()],
+        &[
+            crate::agent::critique::types::CritiqueDirective::DisableNetwork,
+            crate::agent::critique::types::CritiqueDirective::EnableSandbox,
+            crate::agent::critique::types::CritiqueDirective::DowngradeSecurityLevel,
+        ],
+        None,
+    );
+
+    assert_eq!(adjusted["allow_network"].as_bool(), Some(false));
+    assert_eq!(adjusted["sandbox_enabled"].as_bool(), Some(true));
+    assert_eq!(adjusted["security_level"].as_str(), Some("moderate"));
+    assert!(changes.iter().any(|item| item == "shell:disable_network"));
+    assert!(changes.iter().any(|item| item == "shell:enable_sandbox"));
+    assert!(changes
+        .iter()
+        .any(|item| item == "shell:inject_security_level"));
+}
+
+#[test]
 fn apply_critique_modifications_uses_typed_directives_for_shell_hardening() {
     let args = serde_json::json!({
         "command": "echo safe",
