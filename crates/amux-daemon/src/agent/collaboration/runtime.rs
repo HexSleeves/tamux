@@ -5,6 +5,14 @@ use crate::agent::debate::types::{Argument, DebateSession, RoleKind};
 use crate::agent::handoff::divergent::Framing;
 use std::collections::{BTreeSet, HashMap};
 
+fn bid_sort_key(availability: &BidAvailability) -> u8 {
+    match availability {
+        BidAvailability::Available => 0,
+        BidAvailability::Busy => 1,
+        BidAvailability::Unavailable => 2,
+    }
+}
+
 #[derive(Clone)]
 struct PendingDebateSeed {
     disagreement_id: String,
@@ -167,6 +175,8 @@ impl AgentEngine {
                     goal_run_id: task.goal_run_id.clone(),
                     mission: task.description.clone(),
                     agents: Vec::new(),
+                    bids: Vec::new(),
+                    role_assignment: None,
                     contributions: Vec::new(),
                     disagreements: Vec::new(),
                     consensus: None,
@@ -270,6 +280,8 @@ impl AgentEngine {
                 goal_run_id: parent.goal_run_id.clone(),
                 mission: parent.description.clone(),
                 agents: Vec::new(),
+                bids: Vec::new(),
+                role_assignment: None,
                 contributions: Vec::new(),
                 disagreements: Vec::new(),
                 consensus: None,
@@ -299,6 +311,140 @@ impl AgentEngine {
                 "failed to persist collaboration session: {error}"
             );
         }
+    }
+
+    pub(in crate::agent) async fn call_for_bids(
+        &self,
+        parent_task_id: &str,
+        eligible_agents: &[String],
+    ) -> Result<serde_json::Value> {
+        if !self.config.read().await.collaboration.enabled {
+            anyhow::bail!("collaboration capability is disabled in agent config");
+        }
+        let mut collaboration = self.collaboration.write().await;
+        let Some(session) = collaboration.get_mut(parent_task_id) else {
+            anyhow::bail!("no collaboration session found for parent task {parent_task_id}");
+        };
+        session.bids.retain(|bid| {
+            eligible_agents
+                .iter()
+                .any(|task_id| task_id == &bid.task_id)
+        });
+        session.role_assignment = None;
+        session.updated_at = now_millis();
+        let snapshot = session.clone();
+        let report = serde_json::json!({
+            "session_id": session.id,
+            "eligible_agents": eligible_agents,
+            "bid_count": session.bids.len(),
+        });
+        drop(collaboration);
+        self.persist_collaboration_session(&snapshot).await?;
+        Ok(report)
+    }
+
+    pub(in crate::agent) async fn submit_bid(
+        &self,
+        parent_task_id: &str,
+        task_id: &str,
+        confidence: f64,
+        availability: BidAvailability,
+    ) -> Result<serde_json::Value> {
+        if !self.config.read().await.collaboration.enabled {
+            anyhow::bail!("collaboration capability is disabled in agent config");
+        }
+        let mut collaboration = self.collaboration.write().await;
+        let Some(session) = collaboration.get_mut(parent_task_id) else {
+            anyhow::bail!("no collaboration session found for parent task {parent_task_id}");
+        };
+        if !session.agents.iter().any(|agent| agent.task_id == task_id) {
+            anyhow::bail!("unknown collaborative agent {task_id}");
+        }
+        let bid = ConsensusBid {
+            task_id: task_id.to_string(),
+            confidence: confidence.clamp(0.0, 1.0),
+            availability,
+            created_at: now_millis(),
+        };
+        if let Some(existing) = session.bids.iter_mut().find(|item| item.task_id == task_id) {
+            *existing = bid.clone();
+        } else {
+            session.bids.push(bid.clone());
+        }
+        session.updated_at = now_millis();
+        let snapshot = session.clone();
+        let report = serde_json::json!({
+            "session_id": session.id,
+            "bid": bid,
+        });
+        drop(collaboration);
+        self.persist_collaboration_session(&snapshot).await?;
+        Ok(report)
+    }
+
+    pub(in crate::agent) async fn resolve_bids(
+        &self,
+        parent_task_id: &str,
+    ) -> Result<serde_json::Value> {
+        if !self.config.read().await.collaboration.enabled {
+            anyhow::bail!("collaboration capability is disabled in agent config");
+        }
+        let mut collaboration = self.collaboration.write().await;
+        let Some(session) = collaboration.get_mut(parent_task_id) else {
+            anyhow::bail!("no collaboration session found for parent task {parent_task_id}");
+        };
+        if session.bids.len() < 2 {
+            anyhow::bail!("at least two bids are required to assign primary and reviewer roles");
+        }
+        let mut ranked = session.bids.clone();
+        ranked.sort_by(|left, right| {
+            bid_sort_key(&left.availability)
+                .cmp(&bid_sort_key(&right.availability))
+                .then_with(|| {
+                    right
+                        .confidence
+                        .partial_cmp(&left.confidence)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| left.created_at.cmp(&right.created_at))
+        });
+        let primary = ranked
+            .iter()
+            .find(|bid| !matches!(bid.availability, BidAvailability::Unavailable))
+            .cloned()
+            .unwrap_or_else(|| ranked[0].clone());
+        let reviewer = ranked
+            .iter()
+            .find(|bid| bid.task_id != primary.task_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("a distinct reviewer bid is required"))?;
+
+        let assignment = ConsensusRoleAssignment {
+            primary_task_id: primary.task_id.clone(),
+            reviewer_task_id: reviewer.task_id.clone(),
+            assigned_at: now_millis(),
+        };
+        session.role_assignment = Some(assignment.clone());
+        for agent in session.agents.iter_mut() {
+            if agent.task_id == assignment.primary_task_id {
+                agent.role = "primary".to_string();
+                agent.confidence = primary.confidence;
+            } else if agent.task_id == assignment.reviewer_task_id {
+                agent.role = "reviewer".to_string();
+                agent.confidence = reviewer.confidence;
+            }
+        }
+        session.updated_at = now_millis();
+        let snapshot = session.clone();
+        let report = serde_json::json!({
+            "session_id": session.id,
+            "primary_task_id": assignment.primary_task_id,
+            "reviewer_task_id": assignment.reviewer_task_id,
+            "bids": ranked,
+        });
+        drop(collaboration);
+        self.persist_collaboration_session(&snapshot).await?;
+        Ok(report)
     }
 
     pub(in crate::agent) async fn record_collaboration_contribution(
