@@ -221,6 +221,24 @@ impl AgentEngine {
         self.get_debate_session_payload(session_id).await
     }
 
+    pub(crate) async fn run_debate_to_completion(
+        &self,
+        session_id: &str,
+    ) -> Result<serde_json::Value> {
+        loop {
+            let session = self
+                .get_persisted_debate_session(session_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("unknown debate session: {session_id}"))?;
+
+            if session.status == DebateStatus::Completed {
+                return self.get_debate_session_payload(session_id).await;
+            }
+
+            self.run_debate_round_cycle(session_id).await?;
+        }
+    }
+
     pub(crate) async fn advance_debate_round(&self, session_id: &str) -> Result<DebateSession> {
         let role_rotation = self.config.read().await.debate.role_rotation;
         let mut session = self
