@@ -203,6 +203,31 @@ pub(crate) struct ImplicitFeedback {
     pub top_tool_fallbacks: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BehaviorAdaptationProfile {
+    pub mode: SatisfactionAdaptationMode,
+    pub prompt_for_clarification: bool,
+    pub preferred_tool_fallbacks: Vec<String>,
+}
+
+impl BehaviorAdaptationProfile {
+    pub(crate) fn from_model(model: &OperatorModel) -> Self {
+        let mode = SatisfactionAdaptationMode::from_label(&model.operator_satisfaction.label);
+        let prompt_for_clarification = matches!(mode, SatisfactionAdaptationMode::Minimal)
+            && (model.implicit_feedback.rapid_revert_count > 0
+                || model.implicit_feedback.session_abandon_count > 0
+                || model.implicit_feedback.correction_message_count > 0);
+        Self {
+            mode,
+            prompt_for_clarification,
+            preferred_tool_fallbacks: preferred_tool_fallback_targets(
+                &model.implicit_feedback.top_tool_fallbacks,
+                3,
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SatisfactionAdaptationMode {
     Normal,
