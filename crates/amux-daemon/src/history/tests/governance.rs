@@ -1,4 +1,5 @@
 use super::*;
+use crate::history::schema_helpers::table_has_column;
 use serde_json::json;
 
 #[tokio::test]

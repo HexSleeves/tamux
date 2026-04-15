@@ -222,6 +222,14 @@ impl<'a> SendMessageRunner<'a> {
             .await;
 
         if result.is_error {
+            self.engine
+                .record_memory_graph_from_tool_failure(
+                    &self.tid,
+                    &tc.function.name,
+                    &tc.function.arguments,
+                    &result.content,
+                )
+                .await;
             let scope_hint = self
                 .current_task_snapshot
                 .as_ref()

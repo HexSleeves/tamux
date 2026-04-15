@@ -49,6 +49,7 @@ pub(super) fn should_surface_anticipatory_kind(
     match kind {
         "morning_brief" => !(in_settings || in_provider_setup || in_help || in_auth),
         "stuck_hint" => !(in_settings || in_provider_setup || in_help || in_auth || in_approval),
+        "intent_prediction" => !(in_settings || in_provider_setup || in_help || in_auth),
         _ => true,
     }
 }
@@ -255,6 +256,27 @@ impl AgentEngine {
     }
 
     pub(super) fn emit_anticipatory_update(&self, items: Vec<AnticipatoryItem>) {
+        if let Some(item) = items
+            .iter()
+            .filter(|item| {
+                item.thread_id
+                    .as_deref()
+                    .is_some_and(|thread_id| !thread_id.trim().is_empty())
+            })
+            .max_by(|left, right| {
+                left.confidence
+                    .partial_cmp(&right.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        {
+            let details = (!item.bullets.is_empty()).then(|| item.bullets.join(" | "));
+            let _ = self.event_tx.send(AgentEvent::WorkflowNotice {
+                thread_id: item.thread_id.clone().unwrap_or_default(),
+                kind: "anticipatory".to_string(),
+                message: item.title.clone(),
+                details,
+            });
+        }
         let _ = self.event_tx.send(AgentEvent::AnticipatoryUpdate { items });
     }
 

@@ -1,8 +1,27 @@
 use super::*;
 use amux_shared::providers::PROVIDER_ID_OPENAI;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tempfile::TempDir;
 use tokio::sync::Notify;
 use tokio::time::{timeout, Duration};
+
+async fn make_runner_test_engine(config: AgentConfig) -> (Arc<AgentEngine>, TempDir) {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let session_manager = SessionManager::new_test(temp_dir.path()).await;
+    let history = HistoryStore::new_test_store(temp_dir.path())
+        .await
+        .expect("history store");
+    let data_dir = temp_dir.path().join("agent");
+    std::fs::create_dir_all(&data_dir).expect("create agent data dir");
+    let engine = AgentEngine::new_with_storage_and_http_client(
+        session_manager,
+        config,
+        history,
+        data_dir,
+        reqwest::Client::new(),
+    );
+    (engine, temp_dir)
+}
 
 async fn seed_queued_participant_suggestion(
     engine: &Arc<AgentEngine>,
@@ -16,10 +35,13 @@ async fn seed_queued_participant_suggestion(
         target_agent_id: target_agent_id.to_string(),
         target_agent_name: target_agent_name.to_string(),
         instruction: instruction.to_string(),
+        suggestion_kind: ThreadParticipantSuggestionKind::PreparedMessage,
         force_send: false,
         status: ThreadParticipantSuggestionStatus::Queued,
         created_at: 1,
         updated_at: 1,
+        auto_send_at: None,
+        source_message_timestamp: None,
         error: None,
     };
     engine
@@ -29,6 +51,129 @@ async fn seed_queued_participant_suggestion(
         .insert(thread_id.to_string(), vec![suggestion.clone()]);
     engine.persist_thread_by_id(thread_id).await;
     suggestion
+}
+
+#[tokio::test]
+async fn request_thread_auto_response_suggestion_queues_for_requested_participant() {
+    let (engine, _temp_dir) = make_runner_test_engine(AgentConfig::default()).await;
+    let thread_id = "thread_auto_response_requested_for_main_reply";
+
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Auto response queue".to_string(),
+            messages: vec![
+                AgentMessage::user("keep going", 1),
+                AgentMessage {
+                    id: generate_message_id(),
+                    role: MessageRole::Assistant,
+                    content: "I finished the current slice and the next likely step is validating the migration.".to_string(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    tool_status: None,
+                    weles_review: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cost: None,
+                    provider: None,
+                    model: None,
+                    api_transport: None,
+                    response_id: None,
+                    upstream_message: None,
+                    provider_final_result: None,
+                    author_agent_id: None,
+                    author_agent_name: None,
+                    reasoning: None,
+                    message_kind: AgentMessageKind::Normal,
+                    compaction_strategy: None,
+                    compaction_payload: None,
+                    offloaded_payload_id: None,
+                    structural_refs: Vec::new(),
+                    timestamp: 30,
+                },
+            ],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            created_at: 1,
+            updated_at: 30,
+        },
+    );
+
+    engine
+        .upsert_thread_participant(thread_id, "weles", "verify claims")
+        .await
+        .expect("weles participant should register");
+    engine
+        .upsert_thread_participant(thread_id, "domowoj", "push the work forward")
+        .await
+        .expect("domowoj participant should register");
+
+    {
+        let mut participants = engine.thread_participants.write().await;
+        let entry = participants
+            .get_mut(thread_id)
+            .expect("thread participants should exist");
+        entry
+            .iter_mut()
+            .find(|participant| participant.agent_id == "weles")
+            .expect("weles should exist")
+            .last_contribution_at = Some(10);
+        entry
+            .iter_mut()
+            .find(|participant| participant.agent_id == "domowoj")
+            .expect("domowoj should exist")
+            .last_contribution_at = Some(20);
+    }
+    engine.persist_thread_by_id(thread_id).await;
+
+    let queued = engine
+        .request_thread_auto_response_suggestion(thread_id, "domowoj")
+        .await
+        .expect("explicit auto-response request should succeed");
+    assert!(
+        queued,
+        "request should queue a new auto-response suggestion"
+    );
+
+    let suggestions = engine.list_thread_participant_suggestions(thread_id).await;
+    assert_eq!(
+        suggestions.len(),
+        1,
+        "exactly one auto response should be queued"
+    );
+    let suggestion = &suggestions[0];
+    assert_eq!(
+        suggestion.suggestion_kind,
+        ThreadParticipantSuggestionKind::AutoResponse
+    );
+    assert_eq!(suggestion.target_agent_id, "domowoj");
+    assert_eq!(suggestion.target_agent_name, "Domowoj");
+    assert_eq!(suggestion.source_message_timestamp, Some(30));
+    assert!(
+        suggestion.auto_send_at.is_some(),
+        "auto response should carry a countdown deadline"
+    );
+    assert!(
+        suggestion.instruction.contains("latest main agent message"),
+        "auto response request should explicitly target the latest main-agent message"
+    );
+
+    let participants = engine.list_thread_participants(thread_id).await;
+    let domowoj = participants
+        .iter()
+        .find(|participant| participant.agent_id == "domowoj")
+        .expect("domowoj should still be registered");
+    assert_eq!(domowoj.last_observed_visible_message_at, Some(30));
 }
 
 #[tokio::test]
@@ -332,7 +477,8 @@ async fn participant_follow_up_and_later_turn_persist_across_reload() {
 }
 
 #[tokio::test]
-async fn participant_post_continuation_reruns_same_participant_after_main_agent_follow_up() {
+async fn participant_post_continuation_does_not_rerun_same_participant_after_main_agent_follow_up()
+{
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
     let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
@@ -373,36 +519,6 @@ async fn participant_post_continuation_reruns_same_participant_after_main_agent_
                             "\r\n",
                             "data: {\"choices\":[{\"delta\":{\"content\":\"Gateway reply ok\"}}]}\n\n",
                             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n",
-                            "data: [DONE]\n\n"
-                        ),
-                        1 if body.contains("Role: participant observer") => concat!(
-                            "HTTP/1.1 200 OK\r\n",
-                            "content-type: text/event-stream\r\n",
-                            "cache-control: no-cache\r\n",
-                            "connection: close\r\n",
-                            "\r\n",
-                            "data: {\"choices\":[{\"delta\":{\"content\":\"FORCE: no\\nMESSAGE: Second participant follow-up.\"}}]}\n\n",
-                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":6}}\n\n",
-                            "data: [DONE]\n\n"
-                        ),
-                        2 => concat!(
-                            "HTTP/1.1 200 OK\r\n",
-                            "content-type: text/event-stream\r\n",
-                            "cache-control: no-cache\r\n",
-                            "connection: close\r\n",
-                            "\r\n",
-                            "data: {\"choices\":[{\"delta\":{\"content\":\"Gateway follow-up after second participant note.\"}}]}\n\n",
-                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":6}}\n\n",
-                            "data: [DONE]\n\n"
-                        ),
-                        3 if body.contains("Role: participant observer") => concat!(
-                            "HTTP/1.1 200 OK\r\n",
-                            "content-type: text/event-stream\r\n",
-                            "cache-control: no-cache\r\n",
-                            "connection: close\r\n",
-                            "\r\n",
-                            "data: {\"choices\":[{\"delta\":{\"content\":\"NO_SUGGESTION\"}}]}\n\n",
-                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\n",
                             "data: [DONE]\n\n"
                         ),
                         _ => concat!(
@@ -482,19 +598,18 @@ async fn participant_post_continuation_reruns_same_participant_after_main_agent_
         .expect("thread should still exist")
         .messages;
     assert!(
-        thread_messages.iter().any(|message| {
-            message.role == MessageRole::Assistant
-                && message.author_agent_id.as_deref() == Some("weles")
-                && message.content == "Second participant follow-up."
+        thread_messages.iter().all(|message| {
+            message.author_agent_id.as_deref() != Some("weles")
+                || message.content != "Second participant follow-up."
         }),
-        "once the latest visible message is the main-agent follow-up, the participant should be able to post another visible follow-up"
+        "participant-triggered main-agent continuations should not recursively rerun the same participant observer without new visible input"
     );
     assert!(
         engine
             .list_thread_participant_suggestions(thread_id)
             .await
             .is_empty(),
-        "the follow-up participant suggestion should drain cleanly after it is auto-sent"
+        "participant-triggered continuation should not leave behind queued observer work"
     );
 
     let request_bodies = recorded_bodies
@@ -505,16 +620,8 @@ async fn participant_post_continuation_reruns_same_participant_after_main_agent_
         .collect::<Vec<_>>();
     assert_eq!(
         request_bodies.len(),
-        4,
-        "expected the main-agent continuation, a participant observer rerun, the second main-agent continuation, and then a final NO_SUGGESTION observer pass"
-    );
-    assert!(
-        request_bodies[1].contains("Role: participant observer"),
-        "the second request should rerun the participant observer after the main-agent follow-up"
-    );
-    assert!(
-        request_bodies[3].contains("Role: participant observer"),
-        "the final request should still be an observer pass, but only after the latest message is no longer the participant's own post"
+        1,
+        "participant-triggered continuation should stop after the single main-agent follow-up instead of re-entering participant observer loops"
     );
 }
 
@@ -909,6 +1016,247 @@ async fn hydrated_idle_participant_auto_send_is_visible_in_thread_detail() {
 }
 
 #[tokio::test]
+async fn due_auto_response_is_not_sent_implicitly_after_restart() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let base_url = spawn_recording_openai_server(recorded_bodies.clone()).await;
+
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = base_url.clone();
+    config.model = "gpt-5.4-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.auth_source = AuthSource::ApiKey;
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+
+    let engine = AgentEngine::new_test(manager, config.clone(), root.path()).await;
+    let thread_id = "thread_hydrate_restores_due_auto_response";
+
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Hydrate due auto response".to_string(),
+            messages: vec![
+                AgentMessage::user("keep momentum", 1),
+                AgentMessage {
+                    id: generate_message_id(),
+                    role: MessageRole::Assistant,
+                    content: "I finished the patch and the next step is verifying the diff."
+                        .to_string(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    tool_status: None,
+                    weles_review: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cost: None,
+                    provider: None,
+                    model: None,
+                    api_transport: None,
+                    response_id: None,
+                    upstream_message: None,
+                    provider_final_result: None,
+                    author_agent_id: None,
+                    author_agent_name: None,
+                    reasoning: None,
+                    message_kind: AgentMessageKind::Normal,
+                    compaction_strategy: None,
+                    compaction_payload: None,
+                    offloaded_payload_id: None,
+                    structural_refs: Vec::new(),
+                    timestamp: 2,
+                },
+            ],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            created_at: 1,
+            updated_at: 2,
+        },
+    );
+    engine
+        .upsert_thread_participant(thread_id, "weles", "verify claims")
+        .await
+        .expect("participant should register before restart");
+    engine
+        .thread_participant_suggestions
+        .write()
+        .await
+        .insert(
+            thread_id.to_string(),
+            vec![ThreadParticipantSuggestion {
+                id: "auto-response-1".to_string(),
+                target_agent_id: "weles".to_string(),
+                target_agent_name: "Weles".to_string(),
+                instruction:
+                    "Respond to the latest main agent message on this thread and continue the same workstream."
+                        .to_string(),
+                suggestion_kind: ThreadParticipantSuggestionKind::AutoResponse,
+                force_send: false,
+                status: ThreadParticipantSuggestionStatus::Queued,
+                created_at: 2,
+                updated_at: 2,
+                auto_send_at: Some(1),
+                source_message_timestamp: Some(2),
+                error: None,
+            }],
+        );
+    engine.persist_thread_by_id(thread_id).await;
+
+    drop(engine);
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let reloaded = AgentEngine::new_test(manager, config, root.path()).await;
+    reloaded.hydrate().await.expect("hydrate should succeed");
+    let suggestions = reloaded
+        .list_thread_participant_suggestions(thread_id)
+        .await;
+    assert_eq!(
+        suggestions.len(),
+        1,
+        "hydrate should keep the queued suggestion"
+    );
+    assert_eq!(
+        suggestions[0].id, "auto-response-1",
+        "hydrate should preserve the due auto-response instead of sending it in the background"
+    );
+
+    let thread_messages = {
+        let threads = reloaded.threads.read().await;
+        threads
+            .get(thread_id)
+            .expect("thread should still exist after hydrate")
+            .messages
+            .clone()
+    };
+    assert!(
+        !thread_messages.iter().any(|message| {
+            message.role == MessageRole::Assistant
+                && message.author_agent_id.as_deref() == Some("weles")
+        }),
+        "hydrate should not send the participant reply before a TUI-opened thread accepts it"
+    );
+}
+
+#[tokio::test]
+async fn due_auto_response_does_not_background_send_when_thread_becomes_idle() {
+    let (engine, _temp_dir) = make_runner_test_engine(AgentConfig::default()).await;
+    let thread_id = "thread_due_auto_response_stays_queued";
+
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Due auto response".to_string(),
+            messages: vec![
+                AgentMessage::user("keep momentum", 1),
+                AgentMessage {
+                    id: generate_message_id(),
+                    role: MessageRole::Assistant,
+                    content: "I finished the patch and the next step is verifying the diff."
+                        .to_string(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    tool_status: None,
+                    weles_review: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cost: None,
+                    provider: None,
+                    model: None,
+                    api_transport: None,
+                    response_id: None,
+                    upstream_message: None,
+                    provider_final_result: None,
+                    author_agent_id: None,
+                    author_agent_name: None,
+                    reasoning: None,
+                    message_kind: AgentMessageKind::Normal,
+                    compaction_strategy: None,
+                    compaction_payload: None,
+                    offloaded_payload_id: None,
+                    structural_refs: Vec::new(),
+                    timestamp: 2,
+                },
+            ],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            created_at: 1,
+            updated_at: 2,
+        },
+    );
+    engine
+        .upsert_thread_participant(thread_id, "weles", "verify claims")
+        .await
+        .expect("participant should register");
+    engine
+        .thread_participant_suggestions
+        .write()
+        .await
+        .insert(
+            thread_id.to_string(),
+            vec![ThreadParticipantSuggestion {
+                id: "auto-response-1".to_string(),
+                target_agent_id: "weles".to_string(),
+                target_agent_name: "Weles".to_string(),
+                instruction:
+                    "Respond to the latest main agent message on this thread and continue the same workstream."
+                        .to_string(),
+                suggestion_kind: ThreadParticipantSuggestionKind::AutoResponse,
+                force_send: false,
+                status: ThreadParticipantSuggestionStatus::Queued,
+                created_at: 2,
+                updated_at: 2,
+                auto_send_at: Some(0),
+                source_message_timestamp: Some(2),
+                error: None,
+            }],
+        );
+
+    let sent = engine
+        .maybe_auto_send_next_thread_participant_suggestion(thread_id)
+        .await
+        .expect("idle drain should succeed");
+
+    assert!(
+        !sent,
+        "due auto-response suggestions should stay queued until the open thread accepts them"
+    );
+    let suggestions = engine.list_thread_participant_suggestions(thread_id).await;
+    assert_eq!(
+        suggestions.len(),
+        1,
+        "due auto-response should remain queued"
+    );
+    assert_eq!(
+        suggestions[0].id, "auto-response-1",
+        "idle drain should not consume queued auto-response suggestions"
+    );
+}
+
+#[tokio::test]
 async fn hydrate_trims_persisted_participant_playground_threads_to_recent_tail() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
@@ -1239,10 +1587,13 @@ async fn participant_sent_suggestions_do_not_reload() {
         target_agent_id: "weles".to_string(),
         target_agent_name: "Weles".to_string(),
         instruction: "Check claim".to_string(),
+        suggestion_kind: ThreadParticipantSuggestionKind::PreparedMessage,
         force_send: false,
         status: ThreadParticipantSuggestionStatus::Queued,
         created_at: 1,
         updated_at: 1,
+        auto_send_at: None,
+        source_message_timestamp: None,
         error: None,
     };
     engine

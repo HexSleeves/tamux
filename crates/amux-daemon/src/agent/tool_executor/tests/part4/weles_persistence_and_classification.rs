@@ -403,7 +403,58 @@ fn weles_classifier_only_flags_standalone_broadcast_mentions() {
 }
 
 #[test]
-fn weles_classifier_covers_setup_web_and_snapshot_restore_actions() {
+fn weles_classifier_covers_switch_model_plugin_api_synthesize_tool_setup_web_and_snapshot_restore_actions(
+) {
+    let switch_model = crate::agent::weles_governance::classify_tool_call(
+        "switch_model",
+        &serde_json::json!({
+            "agent": "svarog",
+            "provider": "openai",
+            "model": "gpt-5.4"
+        }),
+    );
+    assert_eq!(
+        switch_model.class,
+        crate::agent::weles_governance::WelesGovernanceClass::GuardAlways
+    );
+    assert!(switch_model
+        .reasons
+        .iter()
+        .any(|reason: &String| reason.contains("persisted agent execution policy")));
+
+    let plugin_api_call = crate::agent::weles_governance::classify_tool_call(
+        "plugin_api_call",
+        &serde_json::json!({
+            "plugin_name": "ops_plugin",
+            "endpoint_name": "reconfigure_runtime"
+        }),
+    );
+    assert_eq!(
+        plugin_api_call.class,
+        crate::agent::weles_governance::WelesGovernanceClass::GuardAlways
+    );
+    assert!(plugin_api_call
+        .reasons
+        .iter()
+        .any(|reason: &String| reason.contains("plugin execution policy")));
+
+    let synthesize_tool = crate::agent::weles_governance::classify_tool_call(
+        "synthesize_tool",
+        &serde_json::json!({
+            "kind": "cli",
+            "target": "gh --help",
+            "activate": true
+        }),
+    );
+    assert_eq!(
+        synthesize_tool.class,
+        crate::agent::weles_governance::WelesGovernanceClass::GuardAlways
+    );
+    assert!(synthesize_tool
+        .reasons
+        .iter()
+        .any(|reason: &String| reason.contains("runtime tool capability policy")));
+
     let install = crate::agent::weles_governance::classify_tool_call(
         "setup_web_browsing",
         &serde_json::json!({ "action": "install" }),

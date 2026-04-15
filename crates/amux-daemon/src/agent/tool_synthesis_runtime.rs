@@ -7,6 +7,12 @@ static TEST_SYNTHESIZE_TOOL_DELAY: std::sync::OnceLock<
     tokio::sync::Mutex<std::collections::HashMap<usize, Duration>>,
 > = std::sync::OnceLock::new();
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CliWrapperSynthesisProposal {
+    pub tool_name: String,
+    pub target: String,
+}
+
 pub(super) async fn synthesize_cli_tool(
     target: &str,
     requested_name: Option<&str>,
@@ -280,6 +286,87 @@ pub(crate) fn parse_cli_help_parameters(help: &str) -> Vec<GeneratedToolParamete
             })
         })
         .collect()
+}
+
+fn build_cli_wrapper_synthesis_proposal(
+    invocation: Vec<String>,
+) -> Option<CliWrapperSynthesisProposal> {
+    validate_safe_cli_invocation(&invocation).ok()?;
+    let base = invocation.first()?;
+    which::which(base).ok()?;
+    Some(CliWrapperSynthesisProposal {
+        tool_name: sanitize_tool_name(&invocation.join("_")),
+        target: invocation.join(" "),
+    })
+}
+
+fn infer_cli_wrapper_invocation(tool_name: &str) -> Option<Vec<String>> {
+    let normalized = tool_name.trim().to_ascii_lowercase();
+    if normalized.is_empty()
+        || normalized.len() > 64
+        || !normalized
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+    {
+        return None;
+    }
+
+    let tokens = normalized
+        .split('_')
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    if tokens.is_empty() || tokens.len() > 2 {
+        return None;
+    }
+
+    let invocation = tokens
+        .iter()
+        .map(|token| (*token).to_string())
+        .collect::<Vec<_>>();
+    validate_safe_cli_invocation(&invocation).ok()?;
+    Some(invocation)
+}
+
+pub(crate) fn detect_cli_wrapper_synthesis_proposal(
+    tool_name: &str,
+) -> Option<CliWrapperSynthesisProposal> {
+    let invocation = infer_cli_wrapper_invocation(tool_name)?;
+    build_cli_wrapper_synthesis_proposal(invocation)
+}
+
+pub(crate) fn detect_cli_wrapper_synthesis_proposal_from_command(
+    command: &str,
+) -> Option<CliWrapperSynthesisProposal> {
+    let trimmed = command.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 160
+        || trimmed.contains(['|', '&', ';', '>', '<', '$', '`', '"', '\'', '(', ')', '\n'])
+    {
+        return None;
+    }
+
+    let tokens = trimmed.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 2 {
+        return None;
+    }
+    let base = tokens[0];
+    if base.starts_with('-') {
+        return None;
+    }
+    let subcommand = tokens[1];
+    if subcommand.starts_with('-')
+        || !subcommand
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return None;
+    }
+
+    if tokens.iter().skip(2).any(|token| !token.starts_with('-')) {
+        return None;
+    }
+
+    build_cli_wrapper_synthesis_proposal(vec![base.to_string(), subcommand.to_string()])
 }
 
 fn select_openapi_operation<'a>(

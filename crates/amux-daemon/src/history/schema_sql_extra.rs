@@ -56,6 +56,7 @@ pub(super) fn extended_schema_sql() -> &'static str {
                 use_count          INTEGER NOT NULL DEFAULT 0,
                 success_count      INTEGER NOT NULL DEFAULT 0,
                 failure_count      INTEGER NOT NULL DEFAULT 0,
+                fitness_score      REAL NOT NULL DEFAULT 0,
                 status             TEXT NOT NULL DEFAULT 'active',
                 last_used_at       INTEGER,
                 created_at         INTEGER NOT NULL,
@@ -77,6 +78,25 @@ pub(super) fn extended_schema_sql() -> &'static str {
             );
             CREATE INDEX IF NOT EXISTS idx_skill_variant_usage_variant ON skill_variant_usage(variant_id, consulted_at DESC);
             CREATE INDEX IF NOT EXISTS idx_skill_variant_usage_resolution ON skill_variant_usage(task_id, goal_run_id, thread_id, resolved_at);
+
+            CREATE TABLE IF NOT EXISTS skill_variant_history (
+                id                 TEXT PRIMARY KEY,
+                variant_id         TEXT NOT NULL,
+                recorded_at        INTEGER NOT NULL,
+                outcome            TEXT NOT NULL,
+                fitness_score      REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_skill_variant_history_variant_ts ON skill_variant_history(variant_id, recorded_at DESC);
+
+            CREATE TABLE IF NOT EXISTS gene_pool (
+                parent_a        TEXT NOT NULL,
+                parent_b        TEXT NOT NULL,
+                offspring_id    TEXT NOT NULL,
+                lifecycle_state TEXT NOT NULL,
+                created_at      INTEGER NOT NULL,
+                PRIMARY KEY (parent_a, parent_b)
+            );
+            CREATE INDEX IF NOT EXISTS idx_gene_pool_offspring ON gene_pool(offspring_id, created_at DESC);
 
             CREATE TABLE IF NOT EXISTS collaboration_sessions (
                 parent_task_id TEXT PRIMARY KEY,
@@ -308,6 +328,26 @@ pub(super) fn extended_schema_sql() -> &'static str {
                 updated_at  INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_thread_structural_memory_updated ON thread_structural_memory(updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS implicit_signals (
+                id                    TEXT PRIMARY KEY,
+                session_id            TEXT NOT NULL,
+                signal_type           TEXT NOT NULL,
+                weight                REAL NOT NULL,
+                timestamp_ms          INTEGER NOT NULL,
+                context_snapshot_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_implicit_signals_session_ts ON implicit_signals(session_id, timestamp_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS satisfaction_scores (
+                id             TEXT PRIMARY KEY,
+                session_id     TEXT NOT NULL,
+                score          REAL NOT NULL,
+                computed_at_ms INTEGER NOT NULL,
+                label          TEXT NOT NULL,
+                signal_count   INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_satisfaction_scores_session_ts ON satisfaction_scores(session_id, computed_at_ms DESC);
 
             CREATE TABLE IF NOT EXISTS thread_protocol_candidates (
                 thread_id   TEXT PRIMARY KEY,

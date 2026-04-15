@@ -1,6 +1,7 @@
 use super::*;
 use crate::session_manager::SessionManager;
 use tempfile::tempdir;
+use tokio::time::{timeout, Duration};
 
 fn sample_task(id: &str, thread_id: Option<&str>, goal_run_id: Option<&str>) -> AgentTask {
     AgentTask {
@@ -229,6 +230,7 @@ async fn anticipatory_tick_routes_stuck_hint_to_thread_surface_with_idle_signal(
     config.anticipatory.stuck_detection = true;
     config.anticipatory.stuck_detection_delay_seconds = 1;
     let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let mut events = engine.subscribe();
 
     let now = now_millis();
     let mut stale_task = sample_task("task-stale", Some("thread-surface"), None);
@@ -269,6 +271,33 @@ async fn anticipatory_tick_routes_stuck_hint_to_thread_surface_with_idle_signal(
             .any(|bullet| bullet.contains("Operator attention has been idle")),
         "idle-aware heuristics should be surfaced in the stuck hint bullets"
     );
+
+    let notice = timeout(Duration::from_millis(250), async {
+        loop {
+            match events.recv().await {
+                Ok(AgentEvent::WorkflowNotice {
+                    kind,
+                    thread_id,
+                    message,
+                    details,
+                }) => {
+                    break (kind, thread_id, message, details);
+                }
+                Ok(_) => continue,
+                Err(error) => panic!("expected workflow notice, got event error: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("thread-targeted anticipatory notice should arrive");
+
+    assert_eq!(notice.0, "anticipatory");
+    assert_eq!(notice.1, "thread-surface");
+    assert!(notice.2.contains("Task May Be Stuck"));
+    assert!(notice
+        .3
+        .as_deref()
+        .is_some_and(|details| details.contains("Operator attention has been idle")));
 }
 
 #[tokio::test]
@@ -372,4 +401,526 @@ async fn strained_satisfaction_skips_predictive_hydration() {
             .contains_key("thread-hydration"),
         "strained satisfaction should skip predictive hydration so the daemon reduces background churn"
     );
+}
+
+#[tokio::test]
+async fn anticipatory_tick_surfaces_intent_prediction_for_pending_approval() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    config.anticipatory.stuck_detection = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let mut task = sample_task("task-approval", Some("thread-intent"), None);
+    task.title = "Need approval".to_string();
+    task.status = TaskStatus::AwaitingApproval;
+    engine.tasks.lock().await.push_back(task);
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-intent"), None)
+        .await
+        .unwrap();
+
+    engine.run_anticipatory_tick().await;
+
+    let items = engine.anticipatory.read().await.items.clone();
+    let item = items
+        .into_iter()
+        .find(|candidate| candidate.kind == "intent_prediction")
+        .expect("expected an intent prediction item");
+    assert_eq!(item.thread_id.as_deref(), Some("thread-intent"));
+    assert!(item.summary.contains("review pending approval"));
+    assert!(item.confidence >= 0.86);
+}
+
+#[tokio::test]
+async fn anticipatory_tick_surfaces_intent_prediction_for_repo_change_context() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-repo-intent"), None)
+        .await
+        .unwrap();
+    engine.thread_work_contexts.write().await.insert(
+        "thread-repo-intent".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-repo-intent".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "src/main.rs".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some("/tmp/repo".to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+
+    engine.run_anticipatory_tick().await;
+
+    let items = engine.anticipatory.read().await.items.clone();
+    let item = items
+        .into_iter()
+        .find(|candidate| candidate.kind == "intent_prediction")
+        .expect("expected an intent prediction item");
+    assert_eq!(item.thread_id.as_deref(), Some("thread-repo-intent"));
+    assert!(item.summary.contains("inspect or test recent repo changes"));
+    assert!(item
+        .bullets
+        .iter()
+        .any(|bullet| bullet.contains("repo-linked")));
+}
+
+#[tokio::test]
+async fn strained_satisfaction_suppresses_intent_prediction() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-strained-intent"), None)
+        .await
+        .unwrap();
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.operator_satisfaction.score = 0.20;
+        model.operator_satisfaction.label = "strained".to_string();
+    }
+
+    engine.run_anticipatory_tick().await;
+
+    assert!(engine
+        .anticipatory
+        .read()
+        .await
+        .items
+        .iter()
+        .all(|item| item.kind != "intent_prediction"));
+}
+
+#[tokio::test]
+async fn predictive_hydration_populates_prewarm_cache_for_hydrated_thread() {
+    let root = tempdir().unwrap();
+    let repo_root = root.path().join("repo-predictive-cache");
+    std::fs::create_dir_all(&repo_root).unwrap();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("git init");
+    std::fs::write(
+        repo_root.join("Cargo.toml"),
+        "[package]\nname='demo'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    config.anticipatory.predictive_hydration = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let mut goal = sample_goal_run("goal-cache", Some("thread-cache"));
+    goal.status = GoalRunStatus::Running;
+    goal.updated_at = now_millis();
+    engine.goal_runs.lock().await.push_back(goal);
+    engine.thread_work_contexts.write().await.insert(
+        "thread-cache".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-cache".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "Cargo.toml".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some(repo_root.to_string_lossy().to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+
+    engine.run_anticipatory_tick().await;
+
+    let runtime = engine.anticipatory.read().await;
+    let snapshot = runtime
+        .prewarm_cache_by_thread
+        .get("thread-cache")
+        .expect("prewarm cache snapshot for hydrated thread");
+    assert!(snapshot.summary.contains("branch"));
+    assert!(snapshot.summary.contains("context entries 1"));
+}
+
+#[tokio::test]
+async fn intent_prediction_includes_cached_prewarm_summary_when_available() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-cache-bullets"), None)
+        .await
+        .unwrap();
+    engine.thread_work_contexts.write().await.insert(
+        "thread-cache-bullets".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-cache-bullets".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "src/main.rs".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some("/tmp/repo".to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+    engine.anticipatory.write().await.prewarm_cache_by_thread.insert(
+        "thread-cache-bullets".to_string(),
+        AnticipatoryPrewarmSnapshot {
+            summary: "branch main; dirty=true; modified 1; staged 0; untracked 0; ahead 0; behind 0; context entries 1".to_string(),
+        },
+    );
+
+    engine.run_anticipatory_tick().await;
+
+    let items = engine.anticipatory.read().await.items.clone();
+    let item = items
+        .into_iter()
+        .find(|candidate| candidate.kind == "intent_prediction")
+        .expect("expected an intent prediction item");
+    assert!(item
+        .bullets
+        .iter()
+        .any(|bullet| bullet.contains("Cached prewarm:")));
+}
+
+#[tokio::test]
+async fn anticipatory_tick_surfaces_persisted_system_outcome_foresight_for_build_risk() {
+    let root = tempdir().unwrap();
+    let repo_root = root.path().join("repo-build-risk");
+    std::fs::create_dir_all(&repo_root).unwrap();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("git init");
+    std::fs::write(
+        repo_root.join("Cargo.toml"),
+        "[package]\nname='demo'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(repo_root.join("src")).unwrap();
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-build-risk"), None)
+        .await
+        .unwrap();
+    engine.thread_work_contexts.write().await.insert(
+        "thread-build-risk".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-build-risk".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "src/lib.rs".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some(repo_root.to_string_lossy().to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+    std::fs::write(repo_root.join("src/lib.rs"), "pub fn broken() {}\n").unwrap();
+    engine
+        .history
+        .insert_health_log(
+            "health-build-risk",
+            "task",
+            "cargo-test",
+            "degraded",
+            Some("{\"tool\":\"cargo test\",\"error\":\"Command failed\"}"),
+            Some("recent cargo test failed in this repo"),
+            now_millis(),
+        )
+        .await
+        .expect("save health log");
+
+    engine.run_anticipatory_tick().await;
+
+    let items = engine.anticipatory.read().await.items.clone();
+    let item = items
+        .into_iter()
+        .find(|candidate| candidate.kind == "system_outcome_foresight")
+        .expect("expected a system-outcome foresight item");
+    assert_eq!(item.thread_id.as_deref(), Some("thread-build-risk"));
+    assert!(item.summary.contains("build/test failure risk"));
+    assert!(item.confidence >= 0.7);
+    assert!(item
+        .bullets
+        .iter()
+        .any(|bullet| bullet.contains("prediction_type=build_test_risk")));
+    assert!(item
+        .bullets
+        .iter()
+        .any(|bullet| bullet.contains("recent cargo test failed")));
+    assert!(item
+        .bullets
+        .iter()
+        .any(|bullet| bullet.contains("dirty repo state")));
+}
+
+#[tokio::test]
+async fn build_test_risk_confidence_increases_with_repeated_degraded_health_entries() {
+    let root = tempdir().unwrap();
+    let repo_root = root.path().join("repo-build-confidence");
+    std::fs::create_dir_all(&repo_root).unwrap();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("git init");
+    std::fs::write(
+        repo_root.join("Cargo.toml"),
+        "[package]\nname='demo'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(repo_root.join("src")).unwrap();
+    std::fs::write(repo_root.join("src/lib.rs"), "pub fn broken() {}\n").unwrap();
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-build-confidence"), None)
+        .await
+        .unwrap();
+    engine.thread_work_contexts.write().await.insert(
+        "thread-build-confidence".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-build-confidence".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "src/lib.rs".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some(repo_root.to_string_lossy().to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+
+    engine
+        .history
+        .insert_health_log(
+            "health-build-confidence-1",
+            "task",
+            "cargo-test",
+            "degraded",
+            Some("{\"tool\":\"cargo test\",\"error\":\"Command failed\"}"),
+            Some("recent cargo test failed in this repo"),
+            now_millis() - 2_000,
+        )
+        .await
+        .expect("save first health log");
+    let settings = engine.config.read().await.anticipatory.clone();
+    let single_confidence = engine
+        .compute_system_outcome_foresight(&settings)
+        .await
+        .map(|item| item.confidence)
+        .expect("expected foresight item after one degraded health entry");
+
+    engine
+        .history
+        .insert_health_log(
+            "health-build-confidence-2",
+            "task",
+            "cargo-test",
+            "degraded",
+            Some("{\"tool\":\"cargo test\",\"error\":\"Command failed\"}"),
+            Some("recent cargo test failed in this repo"),
+            now_millis() - 1_000,
+        )
+        .await
+        .expect("save second health log");
+    let repeated_confidence = engine
+        .compute_system_outcome_foresight(&settings)
+        .await
+        .map(|item| item.confidence)
+        .expect("expected foresight item after repeated degraded health entries");
+
+    assert!((0.0..=1.0).contains(&single_confidence));
+    assert!((0.0..=1.0).contains(&repeated_confidence));
+    assert!(
+        repeated_confidence > single_confidence,
+        "expected repeated degraded build/test health evidence to raise foresight confidence"
+    );
+}
+
+#[tokio::test]
+async fn anticipatory_tick_surfaces_stale_context_foresight_when_hydration_lags_session_rhythm() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-stale-context"), None)
+        .await
+        .unwrap();
+    engine.thread_work_contexts.write().await.insert(
+        "thread-stale-context".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-stale-context".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "src/lib.rs".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some("/tmp/repo".to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+    {
+        let mut runtime = engine.anticipatory.write().await;
+        runtime.hydration_by_thread.insert(
+            "thread-stale-context".to_string(),
+            now_millis() - 16 * 60 * 1000,
+        );
+    }
+    {
+        let mut model = engine.operator_model.write().await;
+        model.session_rhythm.session_count = 6;
+        model.session_rhythm.session_duration_avg_minutes = 10.0;
+        model.session_rhythm.typical_start_hour_utc = Some(9);
+    }
+
+    engine
+        .history
+        .create_thread(&amux_protocol::AgentDbThread {
+            id: "thread-stale-context".to_string(),
+            workspace_id: None,
+            surface_id: None,
+            pane_id: None,
+            agent_name: Some(MAIN_AGENT_NAME.to_string()),
+            title: "Stale context thread".to_string(),
+            created_at: 1,
+            updated_at: now_millis() as i64,
+            message_count: 2,
+            total_tokens: 0,
+            last_preview: "off-topic drift".to_string(),
+            metadata_json: None,
+        })
+        .await
+        .expect("seed thread row");
+    engine
+        .history
+        .add_message(&amux_protocol::AgentDbMessage {
+            id: "stale-user-1".to_string(),
+            thread_id: "thread-stale-context".to_string(),
+            created_at: (now_millis() - 2_000) as i64,
+            role: "user".to_string(),
+            content: "Let's switch topics completely and talk about vacation photos.".to_string(),
+            provider: None,
+            model: None,
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            total_tokens: Some(0),
+            cost_usd: None,
+            reasoning: None,
+            tool_calls_json: None,
+            metadata_json: None,
+        })
+        .await
+        .expect("seed user message");
+    engine
+        .history
+        .add_message(&amux_protocol::AgentDbMessage {
+            id: "stale-assistant-1".to_string(),
+            thread_id: "thread-stale-context".to_string(),
+            created_at: (now_millis() - 1_000) as i64,
+            role: "assistant".to_string(),
+            content: "The recent repo context may be stale relative to the current conversation."
+                .to_string(),
+            provider: None,
+            model: None,
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            total_tokens: Some(0),
+            cost_usd: None,
+            reasoning: None,
+            tool_calls_json: None,
+            metadata_json: None,
+        })
+        .await
+        .expect("seed assistant message");
+
+    engine.run_anticipatory_tick().await;
+
+    let items = engine.anticipatory.read().await.items.clone();
+    let item = items
+        .into_iter()
+        .find(|candidate| candidate.kind == "system_outcome_foresight")
+        .expect("expected a system-outcome foresight item");
+    assert_eq!(item.thread_id.as_deref(), Some("thread-stale-context"));
+    assert!(item.summary.contains("stale context"));
+    assert!(item.confidence >= 0.7);
+    assert!(item
+        .bullets
+        .iter()
+        .any(|bullet| bullet.contains("prediction_type=stale_context")));
+    assert!(item
+        .bullets
+        .iter()
+        .any(|bullet| bullet.contains("hydration age")));
+    assert!(item
+        .bullets
+        .iter()
+        .any(|bullet| bullet.contains("semantic alignment degraded")));
 }

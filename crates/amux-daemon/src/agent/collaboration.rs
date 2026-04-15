@@ -8,9 +8,48 @@ mod participants;
 mod runtime;
 
 pub(in crate::agent) use participants::detect_disagreements;
-use participants::{infer_collaboration_role, normalize_topic};
+use participants::infer_collaboration_role;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(in crate::agent) enum BidAvailability {
+    Available,
+    Busy,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(in crate::agent) struct ConsensusBid {
+    pub task_id: String,
+    pub confidence: f64,
+    pub availability: BidAvailability,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(in crate::agent) struct ConsensusRoleAssignment {
+    pub primary_task_id: String,
+    pub primary_role: String,
+    pub reviewer_task_id: String,
+    pub reviewer_role: String,
+    pub assigned_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(in crate::agent) struct DispatchBidRequest {
+    pub task_id: String,
+    pub confidence: f64,
+    pub availability: BidAvailability,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(in crate::agent) struct BidCallMetadata {
+    pub caller_task_id: String,
+    pub eligible_agents: Vec<String>,
+    pub called_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::agent) struct CollaborationSession {
     pub id: String,
     pub parent_task_id: String,
@@ -18,6 +57,12 @@ pub(in crate::agent) struct CollaborationSession {
     pub goal_run_id: Option<String>,
     pub mission: String,
     pub agents: Vec<CollaborativeAgent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_metadata: Option<BidCallMetadata>,
+    #[serde(default)]
+    pub bids: Vec<ConsensusBid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_assignment: Option<ConsensusRoleAssignment>,
     pub contributions: Vec<Contribution>,
     pub disagreements: Vec<Disagreement>,
     pub consensus: Option<Consensus>,

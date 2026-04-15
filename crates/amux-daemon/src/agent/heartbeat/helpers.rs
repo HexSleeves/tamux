@@ -100,6 +100,64 @@ pub(super) fn parse_digest_items(response: &str) -> Vec<HeartbeatDigestItem> {
         .collect()
 }
 
+pub(super) fn format_anticipatory_items_for_heartbeat(items: &[AnticipatoryItem]) -> String {
+    items
+        .iter()
+        .map(|item| {
+            let priority_hint = if item.kind == "hydration" {
+                "LOW-PRIORITY INFORMATIONAL"
+            } else if item.kind == "system_outcome_foresight" {
+                "OPERATOR-VISIBLE FORESIGHT"
+            } else {
+                "ACTIONABLE"
+            };
+            let bullets_text = if !item.bullets.is_empty() {
+                format!("\n    Bullets: {}", item.bullets.join(", "))
+            } else {
+                String::new()
+            };
+            format!(
+                "- [{}] ({}) {} (confidence: {:.2}): {}{}",
+                item.kind, priority_hint, item.title, item.confidence, item.summary, bullets_text
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(super) fn format_consolidation_forge_summary(result: &ConsolidationResult) -> Option<String> {
+    if !result.forge_ran {
+        return None;
+    }
+
+    Some(format!(
+        "forge learned from {} traces: {} pattern(s), {} hint(s) generated, {} auto-applied.",
+        result.forge_traces_analyzed,
+        result.forge_patterns_detected,
+        result.forge_hints_generated,
+        result.forge_hints_auto_applied,
+    ))
+}
+
+pub(super) fn format_consolidation_dream_summary(result: &ConsolidationResult) -> Option<String> {
+    let learned_something = result.distillation_ran
+        || result.forge_ran
+        || result.facts_refined > 0
+        || result.skills_promoted > 0;
+    if !learned_something {
+        return None;
+    }
+
+    Some(format!(
+        "Dream state: what the system considered while idle — {} thread(s), {} memory update(s), {} recurring pattern(s), {} refined fact(s), {} promoted skill(s).",
+        result.distillation_threads_analyzed,
+        result.distillation_auto_applied,
+        result.forge_patterns_detected,
+        result.facts_refined,
+        result.skills_promoted,
+    ))
+}
+
 pub(super) fn check_type_to_action_type(check_type: &HeartbeatCheckType) -> &'static str {
     match check_type {
         HeartbeatCheckType::StaleTodos => "stale_todo",

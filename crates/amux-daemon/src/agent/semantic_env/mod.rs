@@ -42,6 +42,13 @@ struct SemanticPackage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SemanticPackageSummary {
+    pub ecosystem: String,
+    pub name: String,
+    pub manifest_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SemanticService {
     name: String,
     compose_path: String,
@@ -71,6 +78,20 @@ struct SemanticGraph {
     services: Vec<SemanticService>,
     infra_resources: Vec<SemanticInfraResource>,
     import_files: Vec<SemanticImportFile>,
+}
+
+pub(super) fn scan_workspace_package_summaries_for_memory_graph(
+    root: &Path,
+) -> Result<Vec<SemanticPackageSummary>> {
+    Ok(scan_workspace_semantics(root)?
+        .packages
+        .into_iter()
+        .map(|package| SemanticPackageSummary {
+            ecosystem: package.ecosystem.to_string(),
+            name: package.name,
+            manifest_path: package.manifest_path,
+        })
+        .collect())
 }
 
 pub(super) async fn execute_semantic_query(

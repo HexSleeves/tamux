@@ -1,6 +1,40 @@
 use super::*;
 
 impl HistoryStore {
+    pub async fn list_pending_skill_variant_consultations(
+        &self,
+        thread_id: Option<&str>,
+        task_id: Option<&str>,
+        goal_run_id: Option<&str>,
+    ) -> Result<Vec<PendingSkillVariantConsultation>> {
+        let thread_id = thread_id.map(str::to_string);
+        let task_id = task_id.map(str::to_string);
+        let goal_run_id = goal_run_id.map(str::to_string);
+
+        self.conn.call(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT variant_id, context_tags_json FROM skill_variant_usage \
+                 WHERE resolved_at IS NULL AND ( \
+                    (?1 IS NOT NULL AND task_id = ?1) OR \
+                    (?2 IS NOT NULL AND goal_run_id = ?2) OR \
+                    (?3 IS NOT NULL AND task_id IS NULL AND goal_run_id IS NULL AND thread_id = ?3) \
+                 )",
+            )?;
+            let rows = stmt.query_map(params![task_id, goal_run_id, thread_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let pending = rows
+                .filter_map(|row| row.ok())
+                .map(|(variant_id, context_tags_json)| PendingSkillVariantConsultation {
+                    variant_id,
+                    context_tags: serde_json::from_str::<Vec<String>>(&context_tags_json)
+                        .unwrap_or_default(),
+                })
+                .collect::<Vec<_>>();
+            Ok(pending)
+        }).await.map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     pub async fn settle_skill_variant_usage(
         &self,
         thread_id: Option<&str>,
@@ -56,7 +90,7 @@ impl HistoryStore {
                 )?;
                 if outcome_clone == "success" {
                     *success_counts.entry(variant_id.clone()).or_default() += 1;
-                } else {
+                } else if outcome_clone == "failure" {
                     *failure_counts.entry(variant_id.clone()).or_default() += 1;
                 }
             }
@@ -64,17 +98,35 @@ impl HistoryStore {
             for (variant_id, count) in success_counts {
                 conn.execute(
                     "UPDATE skill_variants \
-                     SET success_count = success_count + ?2, updated_at = ?3 \
+                     SET use_count = use_count + ?2, success_count = success_count + ?2, fitness_score = fitness_score + ?2, last_used_at = ?3, updated_at = ?3 \
                      WHERE variant_id = ?1",
                     params![variant_id, count as i64, resolved_at],
+                )?;
+                let fitness_score: f64 = conn.query_row(
+                    "SELECT fitness_score FROM skill_variants WHERE variant_id = ?1",
+                    params![variant_id.as_str()],
+                    |row| row.get(0),
+                )?;
+                conn.execute(
+                    "INSERT INTO skill_variant_history (id, variant_id, recorded_at, outcome, fitness_score) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![uuid::Uuid::new_v4().to_string(), variant_id, resolved_at, "success", fitness_score],
                 )?;
             }
             for (variant_id, count) in failure_counts {
                 conn.execute(
                     "UPDATE skill_variants \
-                     SET failure_count = failure_count + ?2, updated_at = ?3 \
+                     SET failure_count = failure_count + ?2, fitness_score = fitness_score - ?2, updated_at = ?3 \
                      WHERE variant_id = ?1",
                     params![variant_id, count as i64, resolved_at],
+                )?;
+                let fitness_score: f64 = conn.query_row(
+                    "SELECT fitness_score FROM skill_variants WHERE variant_id = ?1",
+                    params![variant_id.as_str()],
+                    |row| row.get(0),
+                )?;
+                conn.execute(
+                    "INSERT INTO skill_variant_history (id, variant_id, recorded_at, outcome, fitness_score) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![uuid::Uuid::new_v4().to_string(), variant_id, resolved_at, "failure", fitness_score],
                 )?;
             }
 
@@ -123,6 +175,103 @@ impl HistoryStore {
         Ok((pending_len, skill_names.into_iter().collect()))
     }
 
+    pub async fn list_skill_variant_fitness_history(
+        &self,
+        variant_id: &str,
+        limit: usize,
+    ) -> Result<Vec<SkillVariantFitnessHistoryRow>> {
+        let variant_id = variant_id.to_string();
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, variant_id, recorded_at, outcome, fitness_score \
+                     FROM skill_variant_history WHERE variant_id = ?1 \
+                     ORDER BY recorded_at ASC, rowid ASC LIMIT ?2",
+                )?;
+                let rows = stmt
+                    .query_map(params![variant_id, limit as i64], |row| {
+                        Ok(SkillVariantFitnessHistoryRow {
+                            id: row.get(0)?,
+                            variant_id: row.get(1)?,
+                            recorded_at: row.get(2)?,
+                            outcome: row.get(3)?,
+                            fitness_score: row.get(4)?,
+                        })
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn get_gene_pool_entry(
+        &self,
+        left_parent_variant_id: &str,
+        right_parent_variant_id: &str,
+    ) -> Result<Option<GenePoolEntry>> {
+        let mut parent_pair = [
+            left_parent_variant_id.to_string(),
+            right_parent_variant_id.to_string(),
+        ];
+        parent_pair.sort();
+        self.conn
+            .call(move |conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT parent_a, parent_b, offspring_id, lifecycle_state, created_at \
+                     FROM gene_pool WHERE parent_a = ?1 AND parent_b = ?2",
+                        params![parent_pair[0], parent_pair[1]],
+                        |row| {
+                            Ok(GenePoolEntry {
+                                parent_a: row.get(0)?,
+                                parent_b: row.get(1)?,
+                                offspring_id: row.get(2)?,
+                                lifecycle_state: row.get(3)?,
+                                created_at: row.get(4)?,
+                            })
+                        },
+                    )
+                    .optional()?)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn promote_skill_variant(&self, variant_id: &str) -> Result<()> {
+        self.transition_gene_pool_variant_lifecycle(variant_id, "active")
+            .await
+    }
+
+    pub async fn retire_skill_variant(&self, variant_id: &str) -> Result<()> {
+        self.transition_gene_pool_variant_lifecycle(variant_id, "archived")
+            .await
+    }
+
+    async fn transition_gene_pool_variant_lifecycle(
+        &self,
+        variant_id: &str,
+        next_status: &str,
+    ) -> Result<()> {
+        let variant_id = variant_id.to_string();
+        let next_status = next_status.to_string();
+        self.conn
+            .call(move |conn| {
+                let now = now_ts() as i64;
+                conn.execute(
+                    "UPDATE skill_variants SET status = ?2, updated_at = ?3 WHERE variant_id = ?1",
+                    params![variant_id, next_status, now],
+                )?;
+                conn.execute(
+                    "UPDATE gene_pool SET lifecycle_state = ?2 WHERE offspring_id = ?1",
+                    params![variant_id, next_status],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     pub async fn rebalance_skill_variants(
         &self,
         skill_name: &str,
@@ -131,7 +280,7 @@ impl HistoryStore {
         let skill_name = skill_name.to_string();
         self.conn.call(move |conn| {
             let mut stmt = conn.prepare(
-                "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at \
                  FROM skill_variants WHERE skill_name = ?1",
             )?;
             let rows = stmt.query_map(params![skill_name], map_skill_variant_row)?;
@@ -149,7 +298,9 @@ impl HistoryStore {
                 .as_ref()
                 .map(SkillVariantRecord::success_rate)
                 .unwrap_or(0.0);
-            let promoted_variant_id = variants
+            let promoted_variant_id = {
+                let trend_by_variant = load_skill_variant_trends(conn, &variants, 8)?;
+                variants
                 .iter()
                 .filter(|variant| !variant.is_canonical())
                 .filter(|variant| {
@@ -158,8 +309,9 @@ impl HistoryStore {
                         && variant.success_rate() >= SKILL_PROMOTION_SUCCESS_RATE_THRESHOLD
                         && variant.success_rate() > canonical_success_rate + SKILL_PROMOTION_MARGIN
                 })
-                .max_by(|left, right| compare_skill_variants(left, right, &[]))
-                .map(|variant| variant.variant_id.clone());
+                .max_by(|left, right| compare_skill_variants(left, right, &[], &trend_by_variant))
+                .map(|variant| variant.variant_id.clone())
+            };
 
             for variant in &mut variants {
                 let next_status =
@@ -174,7 +326,8 @@ impl HistoryStore {
                 }
             }
 
-            variants.sort_by(|left, right| compare_skill_variants(left, right, &[]));
+            let trend_by_variant = load_skill_variant_trends(conn, &variants, 8)?;
+            variants.sort_by(|left, right| compare_skill_variants(left, right, &[], &trend_by_variant));
             Ok(variants)
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
@@ -269,7 +422,7 @@ impl HistoryStore {
         let skill_name = skill_name.to_string();
         let variants = self.conn.call(move |conn| {
             let mut stmt = conn.prepare(
-                "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at \
                  FROM skill_variants WHERE skill_name = ?1",
             )?;
             let rows = stmt.query_map(params![skill_name_owned], map_skill_variant_row)?;
@@ -371,6 +524,137 @@ impl HistoryStore {
         .await?;
 
         self.list_skill_variants(Some(&skill_name), 200).await
+    }
+
+    pub async fn cross_breed_skill_variants(
+        &self,
+        left_parent: &SkillVariantRecord,
+        right_parent: &SkillVariantRecord,
+    ) -> Result<Option<SkillVariantRecord>> {
+        if left_parent.skill_name != right_parent.skill_name {
+            anyhow::bail!(
+                "cannot cross-breed variants from different skill families: '{}' vs '{}'",
+                left_parent.skill_name,
+                right_parent.skill_name
+            );
+        }
+
+        let left_path = self.skills_root().join(&left_parent.relative_path);
+        let right_path = self.skills_root().join(&right_parent.relative_path);
+        if !left_path.exists() || !right_path.exists() {
+            return Ok(None);
+        }
+
+        let left_content = std::fs::read_to_string(&left_path)
+            .with_context(|| format!("failed to read left parent skill {}", left_path.display()))?;
+        let right_content = std::fs::read_to_string(&right_path).with_context(|| {
+            format!("failed to read right parent skill {}", right_path.display())
+        })?;
+
+        let title = extract_markdown_title(&left_content)
+            .or_else(|| extract_markdown_title(&right_content))
+            .unwrap_or_else(|| {
+                left_parent
+                    .skill_name
+                    .split('-')
+                    .map(|part| {
+                        let mut chars = part.chars();
+                        match chars.next() {
+                            Some(first) => {
+                                format!("{}{}", first.to_ascii_uppercase(), chars.as_str())
+                            }
+                            None => String::new(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            });
+
+        let mut combined_tags = left_parent
+            .context_tags
+            .iter()
+            .chain(right_parent.context_tags.iter())
+            .map(|tag| tag.to_ascii_lowercase())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        combined_tags.sort();
+        if combined_tags.is_empty() {
+            combined_tags.push("hybrid".to_string());
+        }
+
+        let left_slug = left_parent.variant_name.to_ascii_lowercase();
+        let right_slug = right_parent.variant_name.to_ascii_lowercase();
+        let mut parent_slugs = [left_slug, right_slug];
+        parent_slugs.sort();
+        let mut parent_ids = [
+            left_parent.variant_id.clone(),
+            right_parent.variant_id.clone(),
+        ];
+        parent_ids.sort();
+        let variant_slug = format!("cross-{}-{}", parent_slugs[0], parent_slugs[1])
+            .replace("canonical", "base")
+            .replace("--", "-");
+        let offspring_path = self
+            .skills_root()
+            .join("generated")
+            .join(format!("{}--{}.md", left_parent.skill_name, variant_slug));
+        if offspring_path.exists() {
+            let record = self.register_skill_document(&offspring_path).await?;
+            self.update_skill_variant_status(&record.variant_id, "draft")
+                .await?;
+            let created_at = now_ts() as i64;
+            let parent_a = parent_ids[0].clone();
+            let parent_b = parent_ids[1].clone();
+            let offspring_id = record.variant_id.clone();
+            self.conn.call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO gene_pool (parent_a, parent_b, offspring_id, lifecycle_state, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![parent_a, parent_b, offspring_id, "draft", created_at],
+                )?;
+                Ok(())
+            }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            return self.get_skill_variant(&record.variant_id).await;
+        }
+
+        let offspring_content = format!(
+            "# {} ({})\n\n> Auto cross-bred from `{}` (`{}`) and `{}` (`{}`).\n\n## When To Use\nUse this candidate when the workspace context combines: {}.\n\n## Parent A Signals\n{}\n\n## Parent B Signals\n{}\n",
+            title,
+            combined_tags.join(", "),
+            left_parent.relative_path,
+            left_parent.variant_id,
+            right_parent.relative_path,
+            right_parent.variant_id,
+            combined_tags.join(", "),
+            extract_mergeable_variant_body(&left_content),
+            extract_mergeable_variant_body(&right_content),
+        );
+
+        if let Some(parent) = offspring_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&offspring_path, offspring_content).with_context(|| {
+            format!(
+                "failed to write cross-bred skill variant {}",
+                offspring_path.display()
+            )
+        })?;
+
+        let record = self.register_skill_document(&offspring_path).await?;
+        self.update_skill_variant_status(&record.variant_id, "draft")
+            .await?;
+        let created_at = now_ts() as i64;
+        let parent_a = parent_ids[0].clone();
+        let parent_b = parent_ids[1].clone();
+        let offspring_id = record.variant_id.clone();
+        self.conn.call(move |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO gene_pool (parent_a, parent_b, offspring_id, lifecycle_state, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![parent_a, parent_b, offspring_id, "draft", created_at],
+            )?;
+            Ok(())
+        }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.get_skill_variant(&record.variant_id).await
     }
 
     async fn create_branched_skill_variant(

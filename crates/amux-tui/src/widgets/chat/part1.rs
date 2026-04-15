@@ -13,6 +13,16 @@ pub(crate) struct ToolFileChip {
 
 pub(crate) fn tool_file_chip(message: &AgentMessage) -> Option<ToolFileChip> {
     let tool_name = message.tool_name.as_deref()?;
+    if tool_name == "read_skill" {
+        let path = read_skill_preview_path(message)?;
+        let label = file_name_label(&path);
+        return Some(ToolFileChip {
+            path,
+            label,
+            tool_name: tool_name.to_string(),
+        });
+    }
+
     if !matches!(
         tool_name,
         "read_file"
@@ -81,6 +91,48 @@ fn non_empty_string_field(value: &serde_json::Value, key: &str) -> Option<String
         .map(ToOwned::to_owned)
 }
 
+fn read_skill_preview_path(message: &AgentMessage) -> Option<String> {
+    skill_path_from_result_json(&message.content)
+        .or_else(|| skill_path_from_result_header(&message.content))
+}
+
+fn skill_path_from_result_json(content: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(content).ok()?;
+    let path = non_empty_string_field(&value, "path")?;
+    Some(resolve_skill_path_for_preview(
+        non_empty_string_field(&value, "skills_root"),
+        &path,
+    ))
+}
+
+fn skill_path_from_result_header(content: &str) -> Option<String> {
+    let first_line = content.lines().next()?.trim();
+    let raw_path = first_line.strip_prefix("Skill ")?;
+    let relative_path = if let Some((path, _)) = raw_path.split_once(" [") {
+        path.trim()
+    } else {
+        raw_path.strip_suffix(':').unwrap_or(raw_path).trim()
+    };
+    if relative_path.is_empty() {
+        return None;
+    }
+
+    Some(resolve_skill_path_for_preview(None, relative_path))
+}
+
+fn resolve_skill_path_for_preview(skills_root: Option<String>, path: &str) -> String {
+    if Path::new(path).is_absolute() {
+        return path.to_string();
+    }
+
+    skills_root
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(amux_protocol::tamux_skills_dir)
+        .join(path)
+        .display()
+        .to_string()
+}
+
 fn file_name_label(path: &str) -> String {
     Path::new(path)
         .file_name()
@@ -100,8 +152,10 @@ pub(crate) fn append_tool_file_chip(
     };
 
     line.spans.push(Span::raw(" "));
-    line.spans
-        .push(Span::styled(format!("[{}]", chip.label), theme.accent_primary));
+    line.spans.push(Span::styled(
+        format!("[{}]", chip.label),
+        theme.accent_primary,
+    ));
 }
 
 pub(crate) fn append_tool_skill_chip(
@@ -109,6 +163,10 @@ pub(crate) fn append_tool_skill_chip(
     message: &AgentMessage,
     theme: &ThemeTokens,
 ) {
+    if tool_file_chip(message).is_some() {
+        return;
+    }
+
     let Some(skill_name) = tool_skill_chip(message) else {
         return;
     };
@@ -336,7 +394,10 @@ pub(crate) fn message_action_targets(
         } else {
             "[Expand]"
         };
-        actions.push((toggle_label.to_string(), ChatHitTarget::ToolToggle(msg_index)));
+        actions.push((
+            toggle_label.to_string(),
+            ChatHitTarget::ToolToggle(msg_index),
+        ));
     }
 
     actions.push((copy_label, ChatHitTarget::CopyMessage(msg_index)));

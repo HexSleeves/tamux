@@ -930,6 +930,146 @@ fn older_thread_page_prepends_into_loaded_window() {
 }
 
 #[test]
+fn thread_detail_refresh_replaces_window_when_total_visible_messages_shrink() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Test".into(),
+        total_message_count: 5,
+        loaded_message_start: 0,
+        loaded_message_end: 5,
+        messages: (0..5)
+            .map(|index| AgentMessage {
+                id: Some(format!("msg-{index}")),
+                role: MessageRole::Assistant,
+                content: format!("before {index}"),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }));
+
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Test".into(),
+        total_message_count: 2,
+        loaded_message_start: 0,
+        loaded_message_end: 2,
+        messages: vec![
+            AgentMessage {
+                id: Some("msg-compaction".into()),
+                role: MessageRole::Assistant,
+                content: "Auto compaction applied".into(),
+                message_kind: "compaction_artifact".into(),
+                compaction_payload: Some("Older context compacted".into()),
+                ..Default::default()
+            },
+            AgentMessage {
+                id: Some("msg-latest".into()),
+                role: MessageRole::Assistant,
+                content: "Latest visible reply".into(),
+                author_agent_id: Some("domowoj".into()),
+                author_agent_name: Some("Domowoj".into()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }));
+
+    let thread = state
+        .threads()
+        .iter()
+        .find(|thread| thread.id == "t1")
+        .unwrap();
+    assert_eq!(thread.total_message_count, 2);
+    assert_eq!(thread.loaded_message_start, 0);
+    assert_eq!(thread.loaded_message_end, 2);
+    assert_eq!(thread.messages.len(), 2);
+    assert_eq!(
+        thread.messages[0].id.as_deref(),
+        Some("msg-compaction"),
+        "authoritative refresh should discard stale pre-compaction rows"
+    );
+    assert_eq!(
+        thread.messages[1].author_agent_name.as_deref(),
+        Some("Domowoj"),
+        "participant-authored metadata from the authoritative refresh should survive"
+    );
+}
+
+#[test]
+fn thread_detail_refresh_replaces_window_when_overlapping_message_ids_shift() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Test".into(),
+        total_message_count: 4,
+        loaded_message_start: 0,
+        loaded_message_end: 4,
+        messages: (0..4)
+            .map(|index| AgentMessage {
+                id: Some(format!("msg-{index}")),
+                role: MessageRole::Assistant,
+                content: format!("before {index}"),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }));
+
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Test".into(),
+        total_message_count: 4,
+        loaded_message_start: 0,
+        loaded_message_end: 4,
+        messages: vec![
+            AgentMessage {
+                id: Some("msg-1".into()),
+                role: MessageRole::Assistant,
+                content: "shifted 1".into(),
+                ..Default::default()
+            },
+            AgentMessage {
+                id: Some("msg-2".into()),
+                role: MessageRole::Assistant,
+                content: "shifted 2".into(),
+                ..Default::default()
+            },
+            AgentMessage {
+                id: Some("msg-3".into()),
+                role: MessageRole::Assistant,
+                content: "shifted 3".into(),
+                ..Default::default()
+            },
+            AgentMessage {
+                id: Some("msg-4".into()),
+                role: MessageRole::Assistant,
+                content: "shifted 4".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }));
+
+    let thread = state
+        .threads()
+        .iter()
+        .find(|thread| thread.id == "t1")
+        .unwrap();
+    let ids = thread
+        .messages
+        .iter()
+        .filter_map(|message| message.id.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        vec!["msg-1", "msg-2", "msg-3", "msg-4"],
+        "overlapping windows with shifted message IDs should prefer the fresh authoritative mapping"
+    );
+}
+
+#[test]
 fn collapse_history_keeps_latest_page_only() {
     let mut state = ChatState::new();
     state.set_history_page_size(50);

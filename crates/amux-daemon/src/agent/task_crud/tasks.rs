@@ -277,8 +277,6 @@ impl AgentEngine {
         };
 
         self.tasks.lock().await.push_back(task);
-        self.persist_tasks().await;
-
         let task = self
             .tasks
             .lock()
@@ -287,6 +285,9 @@ impl AgentEngine {
             .find(|task| task.id == id)
             .cloned()
             .expect("enqueued task missing from queue");
+        self.record_memory_graph_from_task(&task).await;
+        self.persist_tasks().await;
+
         self.emit_task_update(&task, Some(status_message(&task).into()));
 
         task

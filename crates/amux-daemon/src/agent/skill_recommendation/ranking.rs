@@ -1,6 +1,6 @@
 use crate::agent::skill_recommendation::types::{
-    CandidateScore, SkillCandidateInput, SkillDiscoveryResult, SkillRecommendation,
-    SkillRecommendationAction, SkillRecommendationConfidence,
+    CandidateScore, GraphSkillSignal, SkillCandidateInput, SkillDiscoveryResult,
+    SkillRecommendation, SkillRecommendationAction, SkillRecommendationConfidence,
 };
 use crate::agent::types::SkillRecommendationConfig;
 use crate::history::SkillVariantRecord;
@@ -32,6 +32,7 @@ pub(super) fn rank_skill_candidates(
     candidates: Vec<SkillCandidateInput>,
     query: &str,
     workspace_tags: &[String],
+    graph_signals: &std::collections::HashMap<String, GraphSkillSignal>,
     limit: usize,
     cfg: &SkillRecommendationConfig,
 ) -> SkillDiscoveryResult {
@@ -46,7 +47,9 @@ pub(super) fn rank_skill_candidates(
 
     let mut ranked = candidates
         .into_iter()
-        .map(|candidate| score_candidate(candidate, &query_tokens, workspace_tags))
+        .map(|candidate| {
+            score_candidate(candidate, &query_tokens, workspace_tags, graph_signals, cfg)
+        })
         .collect::<Vec<_>>();
 
     ranked.sort_by(|left, right| compare_candidates(left, right));
@@ -89,6 +92,12 @@ fn compare_candidates(left: &CandidateScore, right: &CandidateScore) -> std::cmp
         .unwrap_or(std::cmp::Ordering::Equal)
         .then_with(|| {
             right
+                .graph_score
+                .partial_cmp(&left.graph_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then_with(|| {
+            right
                 .recommendation
                 .record
                 .success_count
@@ -113,6 +122,8 @@ fn score_candidate(
     candidate: SkillCandidateInput,
     query_tokens: &BTreeSet<String>,
     workspace_tags: &[String],
+    graph_signals: &std::collections::HashMap<String, GraphSkillSignal>,
+    cfg: &SkillRecommendationConfig,
 ) -> CandidateScore {
     let search_tokens = tokenize(&candidate.metadata.search_text);
     let matched_terms = query_tokens
@@ -150,10 +161,22 @@ fn score_candidate(
     } else {
         0.0
     };
+    let graph_signal = graph_signals
+        .get(&candidate.record.variant_id)
+        .copied()
+        .unwrap_or_default();
+    let graph_score = graph_signal.score.clamp(0.0, 10.0) / 10.0;
+    let novelty_score = if graph_signal.distance > 1 {
+        (f64::from(graph_signal.distance.saturating_sub(1)) / 4.0).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let score = (lexical_overlap * 0.62)
         + (workspace_overlap * 0.16)
         + (history_score * 0.20)
         + (recency_score * 0.06)
+        + (graph_score * 0.04)
+        + (novelty_score * cfg.novelty_distance_weight)
         + lifecycle_bonus
         + process_bonus
         + built_in_bonus;
@@ -166,12 +189,15 @@ fn score_candidate(
                 &matched_workspace_tags,
                 lexical_overlap,
                 workspace_overlap,
+                graph_score,
+                graph_signal.distance,
             ),
             score: score.clamp(0.0, 1.0),
             excerpt: candidate.excerpt,
             metadata: candidate.metadata,
             record: candidate.record,
         },
+        graph_score,
     }
 }
 
@@ -216,6 +242,8 @@ fn build_reason(
     matched_workspace_tags: &[String],
     lexical_overlap: f64,
     workspace_overlap: f64,
+    graph_score: f64,
+    novelty_distance: u8,
 ) -> String {
     let mut reasons = Vec::new();
     if !matched_terms.is_empty() {
@@ -241,6 +269,12 @@ fn build_reason(
         record.success_rate() * 100.0,
         record.use_count
     ));
+    if graph_score > 0.0 {
+        reasons.push(format!("graph affinity {:.0}%", graph_score * 100.0));
+    }
+    if novelty_distance > 1 {
+        reasons.push(format!("novel graph path {} hops", novelty_distance));
+    }
     reasons.join("; ")
 }
 

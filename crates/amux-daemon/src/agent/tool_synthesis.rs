@@ -12,11 +12,15 @@ use super::*;
 #[path = "tool_synthesis_runtime.rs"]
 mod runtime;
 
+#[cfg(test)]
 pub(crate) use runtime::parse_cli_help_parameters;
 use runtime::{
     default_parameter_location, default_parameter_type, generated_tools_dir,
     run_cli_generated_tool, run_openapi_generated_tool, synthesize_cli_tool,
-    synthesize_openapi_tool,
+    synthesize_openapi_tool, CliWrapperSynthesisProposal,
+};
+pub(crate) use runtime::{
+    detect_cli_wrapper_synthesis_proposal, detect_cli_wrapper_synthesis_proposal_from_command,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +198,51 @@ pub(super) fn list_generated_tools(agent_data_dir: &Path) -> Result<String> {
     Ok(serde_json::to_string_pretty(&load_generated_tools(
         agent_data_dir,
     )?)?)
+}
+
+pub(crate) fn has_equivalent_generated_cli_tool(
+    agent_data_dir: &Path,
+    proposal: &CliWrapperSynthesisProposal,
+) -> Result<bool> {
+    Ok(find_equivalent_generated_cli_tool(agent_data_dir, proposal)?.is_some())
+}
+
+pub(crate) fn find_equivalent_generated_cli_tool(
+    agent_data_dir: &Path,
+    proposal: &CliWrapperSynthesisProposal,
+) -> Result<Option<serde_json::Value>> {
+    let normalized_target = proposal
+        .target
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for tool in load_generated_tools(agent_data_dir)? {
+        if tool.status == "archived" {
+            continue;
+        }
+        let Some(cli) = tool.cli.as_ref() else {
+            continue;
+        };
+        let invocation = cli.invocation.join(" ");
+        let normalized_invocation = invocation.split_whitespace().collect::<Vec<_>>().join(" ");
+        let normalized_help_source = cli
+            .help_source
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if normalized_invocation == normalized_target
+            || normalized_help_source == normalized_target
+            || tool.id == proposal.tool_name
+        {
+            return Ok(Some(serde_json::json!({
+                "id": tool.id,
+                "name": tool.name,
+                "status": tool.status,
+                "target": normalized_target,
+            })));
+        }
+    }
+    Ok(None)
 }
 
 pub(super) async fn execute_generated_tool(

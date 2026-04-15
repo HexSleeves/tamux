@@ -3,7 +3,9 @@
 //! Skill consultation tracking and outcome attribution.
 
 use super::*;
-use crate::history::{SkillVariantConsultationRecord, SkillVariantRecord};
+use crate::history::{
+    PendingSkillVariantConsultation, SkillVariantConsultationRecord, SkillVariantRecord,
+};
 
 impl AgentEngine {
     pub(super) async fn record_skill_consultation(
@@ -35,6 +37,76 @@ impl AgentEngine {
                 error = %error,
                 "failed to record skill consultation"
             );
+            return;
+        }
+
+        self.record_skill_consultation_graph_links(variant, context_tags)
+            .await;
+    }
+
+    async fn record_skill_consultation_graph_links(
+        &self,
+        variant: &SkillVariantRecord,
+        context_tags: &[String],
+    ) {
+        let skill_node_id = format!("skill:{}", variant.variant_id);
+        if let Err(error) = self
+            .history
+            .upsert_memory_node(
+                &skill_node_id,
+                &variant.skill_name,
+                "skill_variant",
+                Some(&format!("skill variant {}", variant.relative_path)),
+                now_millis(),
+            )
+            .await
+        {
+            tracing::warn!(
+                variant_id = %variant.variant_id,
+                error = %error,
+                "failed to upsert skill graph node"
+            );
+            return;
+        }
+
+        let mut graph_refs = context_tags
+            .iter()
+            .map(|tag| {
+                (
+                    format!("intent:{}", tag.to_ascii_lowercase()),
+                    tag.clone(),
+                    "intent_context_tag",
+                )
+            })
+            .collect::<Vec<_>>();
+        graph_refs.push((
+            format!("intent:{}", variant.skill_name.to_ascii_lowercase()),
+            variant.skill_name.clone(),
+            "intent_skill_lookup",
+        ));
+
+        for (node_id, label, relation_type) in graph_refs {
+            if let Err(error) = self
+                .history
+                .upsert_memory_node(
+                    &node_id,
+                    &label,
+                    "intent",
+                    Some("skill consultation intent"),
+                    now_millis(),
+                )
+                .await
+            {
+                tracing::warn!(%error, %node_id, "failed to upsert consultation intent node");
+                continue;
+            }
+            if let Err(error) = self
+                .history
+                .upsert_memory_edge(&node_id, &skill_node_id, relation_type, 1.0, now_millis())
+                .await
+            {
+                tracing::warn!(%error, %node_id, %skill_node_id, "failed to upsert consultation graph edge");
+            }
         }
     }
 
@@ -73,6 +145,15 @@ impl AgentEngine {
         goal_run_id: Option<&str>,
         outcome: &str,
     ) -> usize {
+        let pending_consultations = if outcome.eq_ignore_ascii_case("success") {
+            self.history
+                .list_pending_skill_variant_consultations(thread_id, task_id, goal_run_id)
+                .await
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
         match self
             .history
             .settle_skill_variant_usage(thread_id, task_id, goal_run_id, outcome)
@@ -82,6 +163,10 @@ impl AgentEngine {
                 let _ = self
                     .settle_skill_selection_causal_traces(thread_id, task_id, goal_run_id, outcome)
                     .await;
+                if count > 0 && outcome.eq_ignore_ascii_case("success") {
+                    self.reinforce_skill_consultation_graph_links(&pending_consultations)
+                        .await;
+                }
                 if count > 0 {
                     if let Some(thread_id) = thread_id {
                         let notice_message =
@@ -116,6 +201,148 @@ impl AgentEngine {
                     "failed to settle skill consultations"
                 );
                 0
+            }
+        }
+    }
+
+    async fn reinforce_skill_consultation_graph_links(
+        &self,
+        pending_consultations: &[PendingSkillVariantConsultation],
+    ) {
+        for consultation in pending_consultations {
+            let Some(variant) = self
+                .history
+                .get_skill_variant(&consultation.variant_id)
+                .await
+                .ok()
+                .flatten()
+            else {
+                continue;
+            };
+
+            let skill_node_id = format!("skill:{}", variant.variant_id);
+            let mut graph_refs = consultation
+                .context_tags
+                .iter()
+                .map(|tag| {
+                    (
+                        format!("intent:{}", tag.to_ascii_lowercase()),
+                        "intent_context_tag",
+                    )
+                })
+                .collect::<Vec<_>>();
+            graph_refs.push((
+                format!("intent:{}", variant.skill_name.to_ascii_lowercase()),
+                "intent_skill_lookup",
+            ));
+
+            for (node_id, relation_type) in graph_refs {
+                if let Err(error) = self
+                    .history
+                    .upsert_memory_edge(&node_id, &skill_node_id, relation_type, 1.0, now_millis())
+                    .await
+                {
+                    tracing::warn!(
+                        variant_id = %variant.variant_id,
+                        %node_id,
+                        %skill_node_id,
+                        %relation_type,
+                        error = %error,
+                        "failed to reinforce consultation graph edge"
+                    );
+                }
+            }
+
+            for node_id in consultation
+                .context_tags
+                .iter()
+                .map(|tag| format!("intent:{}", tag.to_ascii_lowercase()))
+                .chain(std::iter::once(format!(
+                    "intent:{}",
+                    variant.skill_name.to_ascii_lowercase()
+                )))
+            {
+                if let Err(error) = self
+                    .history
+                    .upsert_memory_edge(
+                        &node_id,
+                        &skill_node_id,
+                        "intent_prefers_skill",
+                        1.0,
+                        now_millis(),
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        variant_id = %variant.variant_id,
+                        %node_id,
+                        %skill_node_id,
+                        error = %error,
+                        "failed to reinforce recommendation preference edge"
+                    );
+                }
+
+                self.reinforce_memory_relevance_signals(&node_id).await;
+            }
+        }
+    }
+
+    async fn reinforce_memory_relevance_signals(&self, intent_node_id: &str) {
+        let mut frontier = std::collections::VecDeque::from([(intent_node_id.to_string(), 0u8)]);
+        let mut seen_intents = std::collections::HashSet::from([intent_node_id.to_string()]);
+
+        while let Some((current_intent, depth)) = frontier.pop_front() {
+            let Ok(neighbors) = self
+                .history
+                .list_memory_graph_neighbors(&current_intent, 64)
+                .await
+            else {
+                continue;
+            };
+
+            for row in neighbors {
+                let target_matches = row.via_edge.target_node_id == current_intent;
+                let source_matches = row.via_edge.source_node_id == current_intent;
+                if !target_matches && !source_matches {
+                    continue;
+                }
+
+                if row.node.node_type == "skill_variant" {
+                    continue;
+                }
+
+                if row.node.node_type == "intent" {
+                    if depth < 1 && seen_intents.insert(row.node.id.clone()) {
+                        frontier.push_back((row.node.id.clone(), depth + 1));
+                    }
+                    continue;
+                }
+
+                let (source_node_id, target_node_id) = if target_matches {
+                    (row.node.id.as_str(), current_intent.as_str())
+                } else {
+                    (current_intent.as_str(), row.node.id.as_str())
+                };
+
+                if let Err(error) = self
+                    .history
+                    .upsert_memory_edge(
+                        source_node_id,
+                        target_node_id,
+                        &row.via_edge.relation_type,
+                        1.0,
+                        now_millis(),
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        %source_node_id,
+                        %target_node_id,
+                        relation_type = %row.via_edge.relation_type,
+                        error = %error,
+                        "failed to reinforce memory-node relevance signal"
+                    );
+                }
             }
         }
     }

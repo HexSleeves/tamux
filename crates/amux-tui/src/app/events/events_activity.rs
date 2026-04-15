@@ -4,12 +4,11 @@ fn parse_workflow_notice_details(details: Option<&str>) -> Option<serde_json::Va
     serde_json::from_str::<serde_json::Value>(details?).ok()
 }
 
-fn auto_compaction_reload_offset(details: Option<&str>) -> Option<usize> {
+fn auto_compaction_reload_window(details: Option<&str>) -> Option<(usize, usize)> {
     let parsed = parse_workflow_notice_details(details)?;
     let split_at = parsed.get("split_at")?.as_u64()? as usize;
     let total_message_count = parsed.get("total_message_count")?.as_u64()? as usize;
-    let artifact_end = split_at.saturating_add(1).min(total_message_count);
-    Some(total_message_count.saturating_sub(artifact_end))
+    Some((total_message_count.saturating_sub(split_at).max(1), 0))
 }
 
 fn normalized_skill_workflow_notice(
@@ -240,14 +239,6 @@ impl TuiModel {
         }
     }
 
-    fn thread_needs_authoritative_refresh_after_done(&self, thread_id: &str) -> bool {
-        self.chat.threads().iter().any(|thread| {
-            thread.id == thread_id
-                && (!thread.thread_participants.is_empty()
-                    || !thread.queued_participant_suggestions.is_empty())
-        })
-    }
-
     fn should_accept_retry_status_event(&self, thread_id: &str) -> bool {
         if self.chat.is_streaming()
             || self.chat.retry_status().is_some()
@@ -426,10 +417,9 @@ impl TuiModel {
             reasoning,
             provider_final_result_json,
         });
-        if self.thread_needs_authoritative_refresh_after_done(&thread_id) {
-            self.request_authoritative_thread_refresh(thread_id, false);
-        }
 
+        let _ = self.maybe_request_auto_response_for_open_thread(&thread_id);
+        let _ = self.maybe_auto_send_always_auto_response();
         self.dispatch_next_queued_prompt_if_ready();
     }
 
@@ -821,15 +811,19 @@ impl TuiModel {
             };
         }
         if kind == "auto-compaction" || kind == "manual-compaction" {
-            if let (Some(thread_id), Some(active_thread_id), Some(message_offset)) = (
+            if let (
+                Some(thread_id),
+                Some(active_thread_id),
+                Some((message_limit, message_offset)),
+            ) = (
                 thread_id.as_deref(),
                 self.chat.active_thread_id(),
-                auto_compaction_reload_offset(details_ref),
+                auto_compaction_reload_window(details_ref),
             ) {
                 if thread_id == active_thread_id {
                     self.request_thread_page(
                         thread_id.to_string(),
-                        self.chat_history_page_size(),
+                        message_limit,
                         message_offset,
                         false,
                     );

@@ -103,6 +103,8 @@ struct MemorySearchMatch {
     source: String,
     snippet: String,
     score: u32,
+    #[serde(skip_serializing)]
+    rank_weight: Option<f64>,
     freshness: MemorySearchFreshness,
 }
 
@@ -119,6 +121,7 @@ struct MemorySearchCandidate {
     source: String,
     snippet: String,
     haystack: String,
+    rank_weight: Option<f64>,
     updated_at_ms: Option<u64>,
     injected_updated_at_ms: Option<u64>,
     freshness_status: &'static str,
@@ -407,6 +410,7 @@ fn collect_base_markdown_candidates(
             source: format!("{}:{}", scope.file_name(), index + 1),
             snippet: line.to_string(),
             haystack: line.to_string(),
+            rank_weight: None,
             updated_at_ms,
             injected_updated_at_ms,
             freshness_status: search_freshness_status(
@@ -443,6 +447,7 @@ fn collect_operator_model_candidates(
             source: format!("operator_model_summary:{}", index + 1),
             snippet: line.to_string(),
             haystack: line.to_string(),
+            rank_weight: None,
             updated_at_ms,
             injected_updated_at_ms: None,
             freshness_status: search_freshness_status(None, updated_at_ms, None, None),
@@ -496,6 +501,7 @@ fn collect_operator_profile_candidates(
                 source: path.to_string(),
                 snippet: format!("{path}: {trimmed}"),
                 haystack: format!("{path} {trimmed}"),
+                rank_weight: None,
                 updated_at_ms: None,
                 injected_updated_at_ms: None,
                 freshness_status: "unknown",
@@ -511,6 +517,7 @@ fn collect_operator_profile_candidates(
                 source: path.to_string(),
                 snippet: format!("{path}: {number}"),
                 haystack: format!("{path} {number}"),
+                rank_weight: None,
                 updated_at_ms: None,
                 injected_updated_at_ms: None,
                 freshness_status: "unknown",
@@ -526,6 +533,7 @@ fn collect_operator_profile_candidates(
                 source: path.to_string(),
                 snippet: format!("{path}: {boolean}"),
                 haystack: format!("{path} {boolean}"),
+                rank_weight: None,
                 updated_at_ms: None,
                 injected_updated_at_ms: None,
                 freshness_status: "unknown",
@@ -552,6 +560,7 @@ fn collect_thread_structural_candidates(
             source: format!("language_hint:{hint}"),
             snippet: format!("Language hint: {hint}"),
             haystack: hint.clone(),
+            rank_weight: None,
             updated_at_ms: None,
             injected_updated_at_ms: None,
             freshness_status: "unknown",
@@ -566,12 +575,93 @@ fn collect_thread_structural_candidates(
             source: entry.node_id,
             snippet: entry.summary.clone(),
             haystack: entry.summary,
+            rank_weight: None,
             updated_at_ms: None,
             injected_updated_at_ms: None,
             freshness_status: "unknown",
         });
     }
     language_hints_truncated || entries_truncated
+}
+
+async fn load_thread_memory_graph_neighbors(
+    agent: &AgentEngine,
+    structural_memory: &crate::agent::context::structural_memory::ThreadStructuralMemory,
+    limit: usize,
+) -> Result<Vec<crate::history::MemoryGraphNeighborRow>> {
+    let structural_refs = structural_memory
+        .concise_context_entries(&[], limit)
+        .into_iter()
+        .map(|entry| entry.node_id)
+        .collect::<Vec<_>>();
+    let mut neighbors = Vec::new();
+    let mut frontier = structural_refs.clone();
+
+    for _depth in 0..3 {
+        let current_frontier = frontier;
+        frontier = Vec::new();
+        for node_id in current_frontier.into_iter().take(limit) {
+            let remaining = limit.saturating_sub(neighbors.len());
+            if remaining == 0 {
+                break;
+            }
+            let rows = agent
+                .history
+                .list_memory_graph_neighbors(&node_id, remaining)
+                .await?;
+            for row in rows {
+                if structural_refs.iter().any(|existing| existing == &row.node.id) {
+                    continue;
+                }
+                if let Some(existing) = neighbors
+                    .iter_mut()
+                    .find(|existing: &&mut crate::history::MemoryGraphNeighborRow| {
+                        existing.node.id == row.node.id
+                    })
+                {
+                    if row.via_edge.weight > existing.via_edge.weight {
+                        *existing = row;
+                    }
+                    continue;
+                }
+                if !frontier.iter().any(|existing| existing == &row.node.id) {
+                    frontier.push(row.node.id.clone());
+                }
+                neighbors.push(row);
+                if neighbors.len() >= limit {
+                    break;
+                }
+            }
+        }
+        if neighbors.len() >= limit || frontier.is_empty() {
+            break;
+        }
+    }
+    neighbors.sort_by(|left, right| {
+        right
+            .via_edge
+            .weight
+            .partial_cmp(&left.via_edge.weight)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(right.via_edge.last_updated_ms.cmp(&left.via_edge.last_updated_ms))
+            .then(left.node.id.cmp(&right.node.id))
+    });
+    Ok(neighbors)
+}
+
+fn memory_graph_neighbor_snippet(row: &crate::history::MemoryGraphNeighborRow) -> String {
+    let relation = row.via_edge.relation_type.replace('_', " ");
+    let summary = row
+        .node
+        .summary_text
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!(" — {}", value))
+        .unwrap_or_default();
+    format!(
+        "Graph neighbor: {} ({}) via {}{}",
+        row.node.label, row.node.node_type, relation, summary
+    )
 }
 
 fn rank_memory_search_matches(
@@ -589,6 +679,7 @@ fn rank_memory_search_matches(
                     source: candidate.source,
                     snippet: candidate.snippet,
                     score,
+                    rank_weight: candidate.rank_weight,
                     freshness: MemorySearchFreshness {
                         status: candidate.freshness_status.to_string(),
                         updated_at_ms: candidate.updated_at_ms,
@@ -603,6 +694,13 @@ fn rank_memory_search_matches(
         right
             .score
             .cmp(&left.score)
+            .then_with(|| {
+                right
+                    .rank_weight
+                    .unwrap_or(0.0)
+                    .partial_cmp(&left.rank_weight.unwrap_or(0.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .then(left.layer.cmp(&right.layer))
             .then(left.source.cmp(&right.source))
             .then(left.snippet.cmp(&right.snippet))
@@ -756,9 +854,16 @@ async fn execute_memory_read_tool(
             let total_language_hints = structural_memory.language_hints.len();
             let language_hints = structural_memory
                 .language_hints
-                .into_iter()
+                .iter()
                 .take(request.limit_per_layer)
+                .cloned()
                 .collect::<Vec<_>>();
+            let graph_neighbors = load_thread_memory_graph_neighbors(
+                agent,
+                &structural_memory,
+                request.limit_per_layer,
+            )
+            .await?;
             truncated |= entries.len() < total_structural_entries
                 || language_hints.len() < total_language_hints;
             results.insert(
@@ -770,6 +875,16 @@ async fn execute_memory_read_tool(
                         .map(|entry| serde_json::json!({
                             "node_id": entry.node_id,
                             "summary": entry.summary,
+                        }))
+                        .collect::<Vec<_>>(),
+                    "graph_neighbors": graph_neighbors
+                        .into_iter()
+                        .map(|row| serde_json::json!({
+                            "node_id": row.node.id,
+                            "label": row.node.label,
+                            "node_type": row.node.node_type,
+                            "relation_type": row.via_edge.relation_type,
+                            "summary": memory_graph_neighbor_snippet(&row),
                         }))
                         .collect::<Vec<_>>(),
                 }),
@@ -979,7 +1094,31 @@ async fn execute_memory_search_tool(
         } {
             let mut structural_candidates = Vec::new();
             collection_truncated |=
-                collect_thread_structural_candidates(&mut structural_candidates, structural_memory);
+                collect_thread_structural_candidates(&mut structural_candidates, structural_memory.clone());
+            let graph_neighbors = load_thread_memory_graph_neighbors(
+                agent,
+                &structural_memory,
+                MEMORY_SEARCH_MAX_CANDIDATES_PER_LAYER,
+            )
+            .await?;
+            for row in graph_neighbors.into_iter().take(MEMORY_SEARCH_MAX_CANDIDATES_PER_LAYER) {
+                structural_candidates.push(MemorySearchCandidate {
+                    layer: "thread_structural_memory",
+                    source: row.node.id.clone(),
+                    snippet: memory_graph_neighbor_snippet(&row),
+                    haystack: format!(
+                        "{} {} {} {}",
+                        row.node.label,
+                        row.node.node_type,
+                        row.via_edge.relation_type,
+                        row.node.summary_text.unwrap_or_default()
+                    ),
+                    rank_weight: Some(row.via_edge.weight),
+                    updated_at_ms: Some(row.node.last_accessed_ms),
+                    injected_updated_at_ms: None,
+                    freshness_status: "current",
+                });
+            }
             candidates.extend(structural_candidates);
             layers_consulted.push("thread_structural_memory".to_string());
         } else {

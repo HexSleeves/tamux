@@ -243,6 +243,7 @@ fn slash_participants_opens_modal_with_thread_participant_sections() {
                 updated_at: 2,
                 deactivated_at: None,
                 last_contribution_at: Some(3),
+                always_auto_response: false,
             },
             crate::wire::ThreadParticipantState {
                 agent_id: "rarog".to_string(),
@@ -253,6 +254,7 @@ fn slash_participants_opens_modal_with_thread_participant_sections() {
                 updated_at: 2,
                 deactivated_at: Some(4),
                 last_contribution_at: None,
+                always_auto_response: false,
             },
         ],
         queued_participant_suggestions: vec![crate::wire::ThreadParticipantSuggestion {
@@ -260,10 +262,13 @@ fn slash_participants_opens_modal_with_thread_participant_sections() {
             target_agent_id: "weles".to_string(),
             target_agent_name: "Weles".to_string(),
             instruction: "check the final answer".to_string(),
+            suggestion_kind: "prepared_message".to_string(),
             force_send: false,
             status: "queued".to_string(),
             created_at: 5,
             updated_at: 5,
+            auto_send_at: None,
+            source_message_timestamp: None,
             error: None,
         }],
         ..Default::default()
@@ -1490,6 +1495,17 @@ fn thread_picker_left_right_cycles_all_sources() {
     assert!(!quit);
     assert_eq!(
         model.modal.thread_picker_tab(),
+        modal::ThreadPickerTab::Playgrounds
+    );
+
+    let quit = model.handle_key_modal(
+        KeyCode::Right,
+        KeyModifiers::NONE,
+        modal::ModalKind::ThreadPicker,
+    );
+    assert!(!quit);
+    assert_eq!(
+        model.modal.thread_picker_tab(),
         modal::ThreadPickerTab::Internal
     );
 
@@ -1501,7 +1517,7 @@ fn thread_picker_left_right_cycles_all_sources() {
     assert!(!quit);
     assert_eq!(
         model.modal.thread_picker_tab(),
-        modal::ThreadPickerTab::Weles
+        modal::ThreadPickerTab::Playgrounds
     );
 }
 
@@ -1590,6 +1606,36 @@ fn thread_picker_new_conversation_uses_selected_agent_for_first_prompt() {
             other => panic!("expected send-message command, got {:?}", other),
         }
     }
+}
+
+#[test]
+fn thread_picker_playgrounds_new_row_is_browse_only() {
+    let (mut model, _daemon_rx) = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadListReceived(vec![
+        chat::AgentThread {
+            id: "playground:domowoj:thread-user".into(),
+            title: "Participant Playground · Domowoj @ thread-user".into(),
+            ..Default::default()
+        },
+    ]));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ThreadPicker));
+    model
+        .modal
+        .set_thread_picker_tab(modal::ThreadPickerTab::Playgrounds);
+    model.sync_thread_picker_item_count();
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ThreadPicker,
+    );
+
+    assert!(!quit);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ThreadPicker));
+    assert_eq!(model.chat.active_thread_id(), None);
+    assert_eq!(model.status_line, "Playgrounds are created automatically");
 }
 
 #[test]
@@ -1976,6 +2022,7 @@ fn clicking_participant_summary_opens_thread_participants_modal() {
             updated_at: 2,
             deactivated_at: None,
             last_contribution_at: Some(3),
+            always_auto_response: false,
         }],
         ..Default::default()
     })));

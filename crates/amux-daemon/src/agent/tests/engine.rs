@@ -708,3 +708,98 @@ async fn ask_operator_question_rejects_non_compact_button_tokens() {
         "expected compact-token validation error, got: {error}"
     );
 }
+
+#[tokio::test]
+async fn task_and_file_tool_paths_populate_cross_thread_memory_graph() {
+    let (engine, temp_dir) = make_test_engine(AgentConfig::default()).await;
+
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("git init should succeed");
+
+    std::fs::create_dir_all(temp_dir.path().join("src")).expect("create src dir");
+    std::fs::write(
+        temp_dir.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write cargo manifest");
+    std::fs::write(temp_dir.path().join("src/lib.rs"), "pub fn demo() {}\n").expect("write lib.rs");
+
+    let task = engine
+        .enqueue_task(
+            "Inspect src/lib.rs".to_string(),
+            "Check src/lib.rs and Cargo.toml".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "user",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    let refs = engine
+        .enrich_thread_structural_memory_from_tool_result(
+            "thread-memory-graph",
+            "read_file",
+            &serde_json::json!({
+                "path": temp_dir.path().join("src/lib.rs").to_string_lossy().to_string(),
+            })
+            .to_string(),
+            Some("pub fn demo() {}\n"),
+        )
+        .await;
+
+    assert!(
+        refs.iter().any(|node_id| node_id == "node:file:src/lib.rs"),
+        "structural memory should still return the observed file ref"
+    );
+
+    let task_node = engine
+        .history
+        .get_memory_node(&format!("node:task:{}", task.id))
+        .await
+        .expect("load task node")
+        .expect("task node should be persisted");
+    assert_eq!(task_node.node_type, "task");
+
+    let file_node = engine
+        .history
+        .get_memory_node("node:file:src/lib.rs")
+        .await
+        .expect("load file node")
+        .expect("file node should be persisted");
+    assert_eq!(file_node.node_type, "file");
+
+    let package_node = engine
+        .history
+        .get_memory_node("node:package:cargo:demo")
+        .await
+        .expect("load package node")
+        .expect("package node should be persisted");
+    assert_eq!(package_node.node_type, "package");
+
+    let task_edges = engine
+        .history
+        .list_memory_edges_for_node(&format!("node:task:{}", task.id))
+        .await
+        .expect("load task edges");
+    assert!(task_edges.iter().any(|edge| {
+        edge.relation_type == "task_touches_file" && edge.target_node_id == "node:file:src/lib.rs"
+    }));
+
+    let file_edges = engine
+        .history
+        .list_memory_edges_for_node("node:file:src/lib.rs")
+        .await
+        .expect("load file edges");
+    assert!(file_edges.iter().any(|edge| {
+        edge.relation_type == "file_in_package" && edge.target_node_id == "node:package:cargo:demo"
+    }));
+}

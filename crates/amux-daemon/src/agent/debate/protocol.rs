@@ -1,6 +1,8 @@
 use anyhow::Result;
 
-use super::types::{Argument, DebateRole, DebateSession, DebateStatus, DebateVerdict, RoleKind};
+use super::types::{
+    Argument, DebateRole, DebateRoundRequest, DebateSession, DebateStatus, DebateVerdict, RoleKind,
+};
 use crate::agent::handoff::divergent::Framing;
 
 pub(crate) fn now_millis() -> u64 {
@@ -65,6 +67,47 @@ pub(crate) fn assign_roles(
         )),
     });
     roles
+}
+
+pub(crate) fn build_debate_round_requests(session: &DebateSession) -> Vec<DebateRoundRequest> {
+    let prior_argument_ids = session
+        .arguments
+        .iter()
+        .map(|argument| argument.id.clone())
+        .collect::<Vec<_>>();
+
+    session
+        .roles
+        .iter()
+        .map(|role| {
+            let framing = session
+                .framings
+                .iter()
+                .find(|framing| framing.label == role.agent_id);
+            let prompt = format!(
+                "Debate topic: {}\nRound: {}\nRole: {}\n{}\nPrior arguments in session: {}.",
+                session.topic,
+                session.current_round,
+                role.role.as_str(),
+                role.system_prompt_override
+                    .as_deref()
+                    .unwrap_or("Continue the debate with evidence-grounded reasoning."),
+                prior_argument_ids.len()
+            );
+
+            DebateRoundRequest {
+                session_id: session.id.clone(),
+                round: session.current_round,
+                role: role.role,
+                agent_id: role.agent_id.clone(),
+                topic: session.topic.clone(),
+                prompt,
+                framing_task_id: framing.and_then(|value| value.task_id.clone()),
+                framing_contribution_id: framing.and_then(|value| value.contribution_id.clone()),
+                prior_argument_ids: prior_argument_ids.clone(),
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn validate_argument(

@@ -13,7 +13,6 @@ use amux_protocol::{
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
-use schema_helpers::table_has_column;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_rusqlite;
@@ -210,6 +209,26 @@ pub struct WorkflowProfileRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct ImplicitSignalRow {
+    pub id: String,
+    pub session_id: String,
+    pub signal_type: String,
+    pub weight: f64,
+    pub timestamp_ms: u64,
+    pub context_snapshot_json: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SatisfactionScoreRow {
+    pub id: String,
+    pub session_id: String,
+    pub score: f64,
+    pub computed_at_ms: u64,
+    pub label: String,
+    pub signal_count: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct OperatorProfileSessionRow {
     pub session_id: String,
     pub kind: String,
@@ -266,6 +285,15 @@ pub struct OperatorProfileCheckinRow {
     pub response_json: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SkillVariantFitnessHistoryRow {
+    pub id: String,
+    pub variant_id: String,
+    pub recorded_at: i64,
+    pub outcome: String,
+    pub fitness_score: f64,
 }
 
 /// Row type for heartbeat_history table. Per D-12.
@@ -477,7 +505,7 @@ pub struct ProvenanceEventRecord<'a> {
     pub created_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SkillVariantRecord {
     pub variant_id: String,
     pub skill_name: String,
@@ -489,10 +517,20 @@ pub struct SkillVariantRecord {
     pub use_count: u32,
     pub success_count: u32,
     pub failure_count: u32,
+    pub fitness_score: f64,
     pub status: String,
     pub last_used_at: Option<u64>,
     pub created_at: u64,
     pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GenePoolEntry {
+    pub parent_a: String,
+    pub parent_b: String,
+    pub offspring_id: String,
+    pub lifecycle_state: String,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -501,9 +539,11 @@ pub struct SkillVariantInspection {
     pub lifecycle_summary: String,
     pub selection_summary: String,
     pub selected_for_context: bool,
+    pub fitness_score: f64,
+    pub fitness_history: Vec<SkillVariantFitnessHistoryRow>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SkillVariantPage {
     pub variants: Vec<SkillVariantRecord>,
     pub next_cursor: Option<String>,
@@ -543,6 +583,12 @@ pub struct SkillVariantConsultationRecord<'a> {
     pub goal_run_id: Option<&'a str>,
     pub context_tags: &'a [String],
     pub consulted_at: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingSkillVariantConsultation {
+    pub variant_id: String,
+    pub context_tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -682,7 +728,9 @@ mod debate;
 mod gateway_state;
 mod goal_runs;
 mod governance;
+mod implicit_feedback;
 mod integrity_helpers;
+mod memory_graph;
 mod metacognition;
 mod offloaded_payloads;
 mod operator_profile;
@@ -708,6 +756,7 @@ mod thread_structural_memory;
 mod threads;
 
 use integrity_helpers::*;
+pub use memory_graph::MemoryGraphNeighborRow;
 pub use offloaded_payloads::OffloadedPayloadMetadataRow;
 use row_mapping::*;
 use skill_metadata::*;

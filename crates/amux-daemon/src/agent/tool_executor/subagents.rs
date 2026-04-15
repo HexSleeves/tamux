@@ -996,6 +996,7 @@ async fn execute_route_to_specialist(
                 "routing_method": result.routing_method.as_str(),
                 "routing_score": result.routing_score,
                 "fallback_used": result.fallback_used,
+                "routing_rationale": result.routing_rationale,
             });
             Ok(serde_json::to_string_pretty(&response).unwrap_or_else(|_| "{}".to_string()))
         }
@@ -1546,6 +1547,7 @@ async fn execute_message_agent_visible_thread_continuation(
                 preferred_session_hint: preferred_session_hint.clone(),
                 llm_user_content: continuation_prompt,
                 force_compaction: false,
+                rerun_participant_observers_after_turn: true,
                 internal_delegate_sender: Some(sender.to_string()),
                 internal_delegate_message: Some(payload),
             },

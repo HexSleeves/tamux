@@ -170,8 +170,65 @@ pub(super) fn apply_schema_migrations(
         );
         CREATE INDEX IF NOT EXISTS idx_thread_structural_memory_updated ON thread_structural_memory(updated_at DESC);",
     )?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS memory_nodes (
+            id TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            node_type TEXT NOT NULL,
+            embedding_blob BLOB,
+            created_at_ms INTEGER NOT NULL,
+            last_accessed_ms INTEGER NOT NULL,
+            access_count INTEGER NOT NULL DEFAULT 0,
+            summary_text TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_nodes_type_accessed ON memory_nodes(node_type, last_accessed_ms DESC);
+        CREATE TABLE IF NOT EXISTS memory_edges (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_node_id TEXT NOT NULL,
+            target_node_id TEXT NOT NULL,
+            relation_type TEXT NOT NULL,
+            weight REAL NOT NULL DEFAULT 1.0,
+            last_updated_ms INTEGER NOT NULL,
+            FOREIGN KEY (source_node_id) REFERENCES memory_nodes(id),
+            FOREIGN KEY (target_node_id) REFERENCES memory_nodes(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_edges_unique ON memory_edges(source_node_id, target_node_id, relation_type);
+        CREATE INDEX IF NOT EXISTS idx_memory_edges_source_updated ON memory_edges(source_node_id, last_updated_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_edges_target_updated ON memory_edges(target_node_id, last_updated_ms DESC);"
+    )?;
     ensure_column(connection, "agent_tasks", "session_id", "TEXT")?;
     ensure_column(connection, "agent_threads", "metadata_json", "TEXT")?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS skill_variant_history (
+            id TEXT PRIMARY KEY,
+            variant_id TEXT NOT NULL,
+            recorded_at INTEGER NOT NULL,
+            outcome TEXT NOT NULL,
+            fitness_score REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_skill_variant_history_variant_ts ON skill_variant_history(variant_id, recorded_at DESC);",
+    )?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS gene_pool (
+            parent_a TEXT NOT NULL,
+            parent_b TEXT NOT NULL,
+            offspring_id TEXT NOT NULL,
+            lifecycle_state TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (parent_a, parent_b)
+        );
+        CREATE INDEX IF NOT EXISTS idx_gene_pool_offspring ON gene_pool(offspring_id, created_at DESC);",
+    )?;
+    ensure_column(
+        connection,
+        "skill_variants",
+        "fitness_score",
+        "REAL NOT NULL DEFAULT 0",
+    )?;
+    connection.execute(
+        "UPDATE skill_variants SET fitness_score = CAST(success_count AS REAL) - CAST(failure_count AS REAL) WHERE fitness_score = 0",
+        [],
+    )?;
     ensure_column(connection, "agent_messages", "cost_usd", "REAL")?;
     ensure_column(connection, "agent_tasks", "scheduled_at", "INTEGER")?;
     ensure_column(connection, "agent_tasks", "goal_run_id", "TEXT")?;

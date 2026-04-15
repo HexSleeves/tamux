@@ -1,6 +1,48 @@
 use super::*;
 
 impl AgentEngine {
+    async fn persist_implicit_feedback_signal(
+        &self,
+        session_id: &str,
+        signal_type: &str,
+        weight: f64,
+        timestamp_ms: u64,
+        context_snapshot: serde_json::Value,
+    ) -> Result<()> {
+        self.history
+            .insert_implicit_signal(&crate::history::ImplicitSignalRow {
+                id: format!("implicit_{}", uuid::Uuid::new_v4()),
+                session_id: session_id.to_string(),
+                signal_type: signal_type.to_string(),
+                weight,
+                timestamp_ms,
+                context_snapshot_json: Some(context_snapshot.to_string()),
+            })
+            .await
+    }
+
+    async fn persist_operator_satisfaction_snapshot(
+        &self,
+        session_id: &str,
+        computed_at_ms: u64,
+        model: &OperatorModel,
+    ) -> Result<()> {
+        let signal_count = model.implicit_feedback.tool_hesitation_count
+            + model.implicit_feedback.revision_message_count
+            + model.implicit_feedback.correction_message_count
+            + model.implicit_feedback.fast_denial_count;
+        self.history
+            .insert_satisfaction_score(&crate::history::SatisfactionScoreRow {
+                id: format!("satisfaction_{}", uuid::Uuid::new_v4()),
+                session_id: session_id.to_string(),
+                score: model.operator_satisfaction.score,
+                computed_at_ms,
+                label: model.operator_satisfaction.label.clone(),
+                signal_count,
+            })
+            .await
+    }
+
     pub(crate) async fn learned_approval_decision(
         &self,
         command: &str,
@@ -21,6 +63,9 @@ impl AgentEngine {
         {
             return Some(ApprovalDecision::Deny);
         }
+        if model.cognitive_style.confirmation_seeking >= 0.8 {
+            return None;
+        }
         if model
             .risk_fingerprint
             .auto_approve_categories
@@ -30,6 +75,39 @@ impl AgentEngine {
             return Some(ApprovalDecision::ApproveOnce);
         }
         None
+    }
+
+    pub(crate) async fn should_suppress_duplicate_low_value_approval_bundle(
+        &self,
+        pending_approval: &ToolPendingApproval,
+    ) -> bool {
+        let settings = self.config.read().await.operator_model.clone();
+        if !settings.enabled || !settings.allow_approval_learning {
+            return false;
+        }
+
+        let category =
+            classify_command_category(&pending_approval.command, &pending_approval.risk_level);
+        let is_low_value = matches!(category, "git" | "low_risk")
+            && matches!(pending_approval.risk_level.as_str(), "lowest" | "yolo");
+        if !is_low_value {
+            return false;
+        }
+
+        let model = self.operator_model.read().await;
+        if model.risk_fingerprint.avg_response_time_secs < 30.0 {
+            return false;
+        }
+        drop(model);
+
+        let pending = self.pending_operator_approvals.read().await;
+        if pending.is_empty() {
+            return false;
+        }
+
+        pending
+            .values()
+            .any(|existing| existing.category == category)
     }
 
     pub(crate) async fn build_operator_model_prompt_summary(&self) -> Option<String> {
@@ -283,6 +361,36 @@ impl AgentEngine {
         )
         .await?;
 
+        if settings.allow_implicit_feedback && revision_kind.is_revision() {
+            let signal_type = if revision_kind.is_correction() {
+                "operator_correction"
+            } else {
+                "high_revision_rate"
+            };
+            let weight = if revision_kind.is_correction() {
+                -0.16
+            } else {
+                -0.10
+            };
+            self.persist_implicit_feedback_signal(
+                thread_id,
+                signal_type,
+                weight,
+                now,
+                serde_json::json!({
+                    "thread_id": thread_id,
+                    "is_new_thread": is_new_thread,
+                    "revision_signal": format!("{revision_kind:?}").to_ascii_lowercase(),
+                    "word_count": count_words(content),
+                }),
+            )
+            .await?;
+
+            let model = self.operator_model.read().await;
+            self.persist_operator_satisfaction_snapshot(thread_id, now, &model)
+                .await?;
+        }
+
         if let Err(error) = self.analyze_emergent_protocol_for_thread(thread_id).await {
             tracing::debug!(thread_id = %thread_id, error = %error, "emergent protocol analysis failed after operator message");
         }
@@ -360,19 +468,22 @@ impl AgentEngine {
 
         ensure_operator_model_file(&self.data_dir).await?;
         let now = now_millis();
-        let mut model = self.operator_model.write().await;
-        model.last_updated = now;
-        model.implicit_feedback.tool_hesitation_count += 1;
-        let pair = format!("{from_tool} -> {to_tool}");
-        *model
-            .implicit_feedback
-            .fallback_histogram
-            .entry(pair)
-            .or_insert(0) += 1;
-        model.implicit_feedback.top_tool_fallbacks =
-            top_keys(&model.implicit_feedback.fallback_histogram, 3);
-        refresh_operator_satisfaction(&mut model);
-        persist_operator_model(&self.data_dir, &model)?;
+        let model_snapshot = {
+            let mut model = self.operator_model.write().await;
+            model.last_updated = now;
+            model.implicit_feedback.tool_hesitation_count += 1;
+            let pair = format!("{from_tool} -> {to_tool}");
+            *model
+                .implicit_feedback
+                .fallback_histogram
+                .entry(pair)
+                .or_insert(0) += 1;
+            model.implicit_feedback.top_tool_fallbacks =
+                top_keys(&model.implicit_feedback.fallback_histogram, 3);
+            refresh_operator_satisfaction(&mut model);
+            persist_operator_model(&self.data_dir, &model)?;
+            model.clone()
+        };
         self.record_behavioral_event(
             "tool_fallback",
             BehavioralEventContext {
@@ -389,6 +500,22 @@ impl AgentEngine {
             }),
         )
         .await?;
+
+        self.persist_implicit_feedback_signal(
+            "global",
+            "tool_fallback",
+            -0.12,
+            now,
+            serde_json::json!({
+                "from_tool": from_tool,
+                "to_tool": to_tool,
+                "from_error": from_error,
+                "to_error": to_error,
+            }),
+        )
+        .await?;
+        self.persist_operator_satisfaction_snapshot("global", now, &model_snapshot)
+            .await?;
         Ok(())
     }
 
@@ -404,11 +531,14 @@ impl AgentEngine {
 
         ensure_operator_model_file(&self.data_dir).await?;
         let now = now_millis();
-        let mut model = self.operator_model.write().await;
-        model.last_updated = now;
-        record_attention_event(&mut model, &normalized, now);
-        refresh_operator_satisfaction(&mut model);
-        persist_operator_model(&self.data_dir, &model)?;
+        let model_snapshot = {
+            let mut model = self.operator_model.write().await;
+            model.last_updated = now;
+            record_attention_event(&mut model, &normalized, now);
+            refresh_operator_satisfaction(&mut model);
+            persist_operator_model(&self.data_dir, &model)?;
+            model.clone()
+        };
         self.record_behavioral_event(
             "attention_surface",
             BehavioralEventContext {
@@ -422,6 +552,22 @@ impl AgentEngine {
             }),
         )
         .await?;
+
+        if model_snapshot.attention_topology.rapid_switch_count > 0 {
+            self.persist_implicit_feedback_signal(
+                "global",
+                "short_dwell",
+                -0.03,
+                now,
+                serde_json::json!({
+                    "surface": normalized,
+                    "rapid_switch_count": model_snapshot.attention_topology.rapid_switch_count,
+                }),
+            )
+            .await?;
+            self.persist_operator_satisfaction_snapshot("global", now, &model_snapshot)
+                .await?;
+        }
         Ok(())
     }
 
@@ -442,50 +588,53 @@ impl AgentEngine {
             .remove(approval_id);
         let now = now_millis();
 
-        let mut model = self.operator_model.write().await;
-        model.last_updated = now;
-        if matches!(
-            decision,
-            ApprovalDecision::ApproveOnce | ApprovalDecision::ApproveSession
-        ) {
-            model.risk_fingerprint.approvals += 1;
-        } else {
-            model.risk_fingerprint.denials += 1;
-        }
-        if let Some(pending) = pending {
-            let category = pending.category.clone();
+        let model_snapshot = {
+            let mut model = self.operator_model.write().await;
+            model.last_updated = now;
             if matches!(
                 decision,
                 ApprovalDecision::ApproveOnce | ApprovalDecision::ApproveSession
             ) {
-                *model
-                    .risk_fingerprint
-                    .category_approvals
-                    .entry(category.clone())
-                    .or_insert(0) += 1;
+                model.risk_fingerprint.approvals += 1;
+            } else {
+                model.risk_fingerprint.denials += 1;
             }
-            let response_secs = now.saturating_sub(pending.requested_at) as f64 / 1000.0;
-            let responses = model.risk_fingerprint.approvals + model.risk_fingerprint.denials;
-            model.risk_fingerprint.avg_response_time_secs = update_running_average(
-                model.risk_fingerprint.avg_response_time_secs,
-                responses.saturating_sub(1),
-                response_secs,
-            );
-            if settings.allow_implicit_feedback
-                && matches!(decision, ApprovalDecision::Deny)
-                && response_secs <= 8.0
-            {
-                model.implicit_feedback.fast_denial_count += 1;
-                *model
-                    .risk_fingerprint
-                    .fast_denials_by_category
-                    .entry(category)
-                    .or_insert(0) += 1;
+            if let Some(pending) = pending {
+                let category = pending.category.clone();
+                if matches!(
+                    decision,
+                    ApprovalDecision::ApproveOnce | ApprovalDecision::ApproveSession
+                ) {
+                    *model
+                        .risk_fingerprint
+                        .category_approvals
+                        .entry(category.clone())
+                        .or_insert(0) += 1;
+                }
+                let response_secs = now.saturating_sub(pending.requested_at) as f64 / 1000.0;
+                let responses = model.risk_fingerprint.approvals + model.risk_fingerprint.denials;
+                model.risk_fingerprint.avg_response_time_secs = update_running_average(
+                    model.risk_fingerprint.avg_response_time_secs,
+                    responses.saturating_sub(1),
+                    response_secs,
+                );
+                if settings.allow_implicit_feedback
+                    && matches!(decision, ApprovalDecision::Deny)
+                    && response_secs <= 8.0
+                {
+                    model.implicit_feedback.fast_denial_count += 1;
+                    *model
+                        .risk_fingerprint
+                        .fast_denials_by_category
+                        .entry(category)
+                        .or_insert(0) += 1;
+                }
             }
-        }
-        refresh_risk_metrics(&mut model.risk_fingerprint);
-        refresh_operator_satisfaction(&mut model);
-        persist_operator_model(&self.data_dir, &model)?;
+            refresh_risk_metrics(&mut model.risk_fingerprint);
+            refresh_operator_satisfaction(&mut model);
+            persist_operator_model(&self.data_dir, &model)?;
+            model.clone()
+        };
         self.record_behavioral_event(
             "approval_resolved",
             BehavioralEventContext {
@@ -499,6 +648,24 @@ impl AgentEngine {
             }),
         )
         .await?;
+
+        if settings.allow_implicit_feedback && matches!(decision, ApprovalDecision::Deny) {
+            if model_snapshot.implicit_feedback.fast_denial_count > 0 {
+                self.persist_implicit_feedback_signal(
+                    "global",
+                    "fast_denial",
+                    -0.18,
+                    now,
+                    serde_json::json!({
+                        "approval_id": approval_id,
+                        "decision": format!("{decision:?}").to_ascii_lowercase(),
+                    }),
+                )
+                .await?;
+                self.persist_operator_satisfaction_snapshot("global", now, &model_snapshot)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
@@ -585,6 +752,40 @@ impl AgentEngine {
             None
         };
         let operator_model = self.operator_model.read().await.clone();
+        let recent_implicit_signals = self
+            .history
+            .list_implicit_signals("global", 5)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id": row.id,
+                    "session_id": row.session_id,
+                    "signal_type": row.signal_type,
+                    "weight": row.weight,
+                    "timestamp_ms": row.timestamp_ms,
+                    "context_snapshot_json": row.context_snapshot_json,
+                })
+            })
+            .collect::<Vec<_>>();
+        let recent_satisfaction_scores = self
+            .history
+            .list_satisfaction_scores("global", 5)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id": row.id,
+                    "session_id": row.session_id,
+                    "score": row.score,
+                    "computed_at_ms": row.computed_at_ms,
+                    "label": row.label,
+                    "signal_count": row.signal_count,
+                })
+            })
+            .collect::<Vec<_>>();
 
         serde_json::json!({
             "operator_profile_sync_state": sync_state,
@@ -602,6 +803,8 @@ impl AgentEngine {
                 "correction_message_count": operator_model.implicit_feedback.correction_message_count,
                 "fast_denial_count": operator_model.implicit_feedback.fast_denial_count,
                 "rapid_switch_count": operator_model.attention_topology.rapid_switch_count,
+                "recent_implicit_signals": recent_implicit_signals,
+                "recent_satisfaction_scores": recent_satisfaction_scores,
             },
             "aline": {
                 "available": aline_available,
@@ -673,6 +876,22 @@ fn operator_adaptation_lines(model: &OperatorModel) -> Vec<String> {
         "- Adaptive delivery rule: start with the conclusion, then add only the detail needed to support the next action.".to_string()
     };
     lines.push(delivery_mode);
+
+    if model.risk_fingerprint.approval_requests > 0 {
+        let avg_response_time_secs = model.risk_fingerprint.avg_response_time_secs;
+        match model.risk_fingerprint.risk_tolerance {
+            RiskTolerance::Aggressive if avg_response_time_secs <= 8.0 => lines.push(
+                "- Adaptive approval rule: approvals resolve quickly and usually favor proceeding, so stay proactive within hard safety limits and avoid redundant confirmation loops for low-risk progress.".to_string(),
+            ),
+            RiskTolerance::Conservative => lines.push(
+                "- Adaptive approval rule: approval behavior is conservative, so ask explicitly before ambiguous or risky actions, front-load blast radius, and avoid stacking multiple pending approvals.".to_string(),
+            ),
+            _ if avg_response_time_secs >= 30.0 => lines.push(
+                "- Adaptive approval rule: approval responses are deliberate, so package rationale and blast radius up front when approval is needed and keep only one pending approval live at a time.".to_string(),
+            ),
+            _ => {}
+        }
+    }
 
     if model.implicit_feedback.tool_hesitation_count > 0 {
         lines.push(

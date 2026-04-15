@@ -196,6 +196,9 @@ impl AgentEngine {
                         status: "spawning".to_string(),
                     })
                     .collect(),
+                call_metadata: None,
+                bids: Vec::new(),
+                role_assignment: None,
                 contributions: Vec::new(),
                 disagreements: Vec::new(),
                 consensus: None,

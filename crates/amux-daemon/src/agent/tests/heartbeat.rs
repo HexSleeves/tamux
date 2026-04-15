@@ -289,6 +289,181 @@ fn parse_digest_items_handles_camelcase_types() {
     assert_eq!(items[0].check_type, HeartbeatCheckType::StuckGoalRuns);
 }
 
+#[test]
+fn format_anticipatory_items_highlights_system_outcome_foresight_for_operator() {
+    let output = super::helpers::format_anticipatory_items_for_heartbeat(&[
+        AnticipatoryItem {
+            id: "system_outcome_foresight_thread-1".to_string(),
+            kind: "system_outcome_foresight".to_string(),
+            title: "System Outcome Foresight".to_string(),
+            summary: "Predicted stale context: hydration-needed risk is elevated".to_string(),
+            bullets: vec![
+                "prediction_type=stale_context".to_string(),
+                "hydration age=16m exceeded session rhythm window=10m".to_string(),
+                "semantic alignment degraded across recent thread messages".to_string(),
+            ],
+            confidence: 0.76,
+            goal_run_id: None,
+            thread_id: Some("thread-1".to_string()),
+            preferred_client_surface: Some("conversation".to_string()),
+            preferred_attention_surface: Some("conversation:chat".to_string()),
+            created_at: 1,
+            updated_at: 1,
+        },
+        AnticipatoryItem {
+            id: "system_outcome_foresight_thread-2".to_string(),
+            kind: "system_outcome_foresight".to_string(),
+            title: "System Outcome Foresight".to_string(),
+            summary: "Predicted build/test/risk: build/test failure risk is elevated".to_string(),
+            bullets: vec![
+                "prediction_type=build_test_risk".to_string(),
+                "dirty repo state: modified=2 staged=0 untracked=0".to_string(),
+            ],
+            confidence: 0.78,
+            goal_run_id: None,
+            thread_id: Some("thread-2".to_string()),
+            preferred_client_surface: Some("conversation".to_string()),
+            preferred_attention_surface: Some("conversation:chat".to_string()),
+            created_at: 2,
+            updated_at: 2,
+        },
+    ]);
+
+    assert!(output.contains("system_outcome_foresight"));
+    assert!(output.contains("OPERATOR-VISIBLE FORESIGHT"));
+    assert!(output.contains("stale context"));
+    assert!(output.contains("build/test failure risk"));
+    assert!(output.contains("prediction_type=stale_context"));
+    assert!(output.contains("prediction_type=build_test_risk"));
+}
+
+#[test]
+fn format_consolidation_forge_summary_surfaces_strategy_learning() {
+    let output = super::helpers::format_consolidation_forge_summary(&ConsolidationResult {
+        forge_ran: true,
+        forge_traces_analyzed: 17,
+        forge_patterns_detected: 3,
+        forge_hints_generated: 2,
+        forge_hints_auto_applied: 1,
+        ..Default::default()
+    })
+    .expect("forge summary should be present when forge ran");
+
+    assert!(output.contains("forge learned from 17 traces"));
+    assert!(output.contains("3 pattern(s)"));
+    assert!(output.contains("2 hint(s) generated"));
+    assert!(output.contains("1 auto-applied"));
+}
+
+#[test]
+fn format_consolidation_dream_summary_surfaces_what_the_system_considered_while_idle() {
+    let output = super::helpers::format_consolidation_dream_summary(&ConsolidationResult {
+        distillation_ran: true,
+        distillation_threads_analyzed: 4,
+        distillation_auto_applied: 2,
+        forge_ran: true,
+        forge_patterns_detected: 3,
+        forge_hints_auto_applied: 1,
+        facts_refined: 2,
+        skills_promoted: 1,
+        ..Default::default()
+    })
+    .expect("dream summary should be present when consolidation learned something");
+
+    assert!(output.contains("what the system considered while idle"));
+    assert!(output.contains("4 thread(s)"));
+    assert!(output.contains("2 memory update(s)"));
+    assert!(output.contains("3 recurring pattern(s)"));
+}
+
+#[tokio::test]
+async fn heartbeat_consolidation_emits_workflow_notice_for_forge_learning_summary() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let mut events = engine.subscribe();
+
+    let summary = super::helpers::format_consolidation_forge_summary(&ConsolidationResult {
+        forge_ran: true,
+        forge_traces_analyzed: 9,
+        forge_patterns_detected: 2,
+        forge_hints_generated: 2,
+        forge_hints_auto_applied: 1,
+        ..Default::default()
+    })
+    .expect("forge summary should be present");
+
+    let _ = engine.event_tx.send(AgentEvent::WorkflowNotice {
+        thread_id: String::new(),
+        kind: "forge".to_string(),
+        message: "Consolidation strategy learning updated".to_string(),
+        details: Some(summary.clone()),
+    });
+
+    let event = timeout(Duration::from_millis(250), events.recv())
+        .await
+        .expect("forge notice should arrive")
+        .expect("forge notice should deserialize");
+    match event {
+        AgentEvent::WorkflowNotice {
+            kind,
+            message,
+            details,
+            ..
+        } => {
+            assert_eq!(kind, "forge");
+            assert_eq!(message, "Consolidation strategy learning updated");
+            assert_eq!(details.as_deref(), Some(summary.as_str()));
+        }
+        other => panic!("expected WorkflowNotice, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn heartbeat_consolidation_emits_workflow_notice_for_dream_summary() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let mut events = engine.subscribe();
+
+    let summary = super::helpers::format_consolidation_dream_summary(&ConsolidationResult {
+        distillation_ran: true,
+        distillation_threads_analyzed: 2,
+        distillation_auto_applied: 1,
+        forge_ran: true,
+        forge_patterns_detected: 2,
+        forge_hints_auto_applied: 1,
+        facts_refined: 1,
+        ..Default::default()
+    })
+    .expect("dream summary should be present");
+
+    let _ = engine.event_tx.send(AgentEvent::WorkflowNotice {
+        thread_id: String::new(),
+        kind: "dream".to_string(),
+        message: "Dream state updated".to_string(),
+        details: Some(summary.clone()),
+    });
+
+    let event = timeout(Duration::from_millis(250), events.recv())
+        .await
+        .expect("dream notice should arrive")
+        .expect("dream notice should deserialize");
+    match event {
+        AgentEvent::WorkflowNotice {
+            kind,
+            message,
+            details,
+            ..
+        } => {
+            assert_eq!(kind, "dream");
+            assert_eq!(message, "Dream state updated");
+            assert_eq!(details.as_deref(), Some(summary.as_str()));
+        }
+        other => panic!("expected WorkflowNotice, got {other:?}"),
+    }
+}
+
 // ── is_peak_activity_hour tests (BEAT-06/D-01) ──────────────────────
 
 #[test]

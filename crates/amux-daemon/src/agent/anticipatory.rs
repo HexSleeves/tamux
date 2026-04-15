@@ -11,6 +11,20 @@ const RECENT_HEALTH_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 
 type AnticipatoryAdaptationMode = SatisfactionAdaptationMode;
 
+#[derive(Debug, Clone)]
+pub(super) struct AnticipatoryPrewarmSnapshot {
+    pub summary: String,
+}
+
+#[derive(Debug, Clone)]
+struct SystemForesight {
+    prediction_type: &'static str,
+    confidence: f64,
+    rationale: String,
+    bullets: Vec<String>,
+    thread_id: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct AnticipatoryRuntime {
     pub items: Vec<AnticipatoryItem>,
@@ -23,6 +37,7 @@ pub(super) struct AnticipatoryRuntime {
     pub active_attention_goal_run_id: Option<String>,
     pub active_attention_updated_at: Option<u64>,
     pub hydration_by_thread: HashMap<String, u64>,
+    pub prewarm_cache_by_thread: HashMap<String, AnticipatoryPrewarmSnapshot>,
 }
 
 impl AgentEngine {
@@ -117,6 +132,7 @@ impl AgentEngine {
         let now = now_millis();
         for thread_id in threads {
             self.refresh_thread_repo_context(&thread_id).await;
+            self.refresh_anticipatory_prewarm_cache(&thread_id).await;
             self.anticipatory
                 .write()
                 .await
@@ -190,6 +206,7 @@ impl AgentEngine {
 
         for (thread_id, _) in due_threads {
             self.refresh_thread_repo_context(&thread_id).await;
+            self.refresh_anticipatory_prewarm_cache(&thread_id).await;
             self.anticipatory
                 .write()
                 .await
@@ -219,6 +236,23 @@ impl AgentEngine {
         if settings.stuck_detection {
             if should_surface_anticipatory_kind("stuck_hint", attention_surface.as_deref()) {
                 if let Some(item) = self.compute_stuck_hint(settings).await {
+                    items.push(item);
+                }
+            }
+        }
+        if adaptation_mode != AnticipatoryAdaptationMode::Minimal {
+            if should_surface_anticipatory_kind(
+                "system_outcome_foresight",
+                attention_surface.as_deref(),
+            ) {
+                if let Some(item) = self.compute_system_outcome_foresight(settings).await {
+                    items.push(item);
+                }
+            }
+        }
+        if adaptation_mode != AnticipatoryAdaptationMode::Minimal {
+            if should_surface_anticipatory_kind("intent_prediction", attention_surface.as_deref()) {
+                if let Some(item) = self.compute_intent_prediction(settings).await {
                     items.push(item);
                 }
             }
@@ -602,6 +636,339 @@ impl AgentEngine {
             created_at: now_millis(),
             updated_at: now_millis(),
         })
+    }
+
+    async fn predict_system_outcome(&self) -> Option<SystemForesight> {
+        let thread_id = self.current_attention_target().await;
+        let thread_context = {
+            let contexts = self.thread_work_contexts.read().await;
+            thread_id
+                .as_ref()
+                .and_then(|value| contexts.get(value).cloned())
+        }?;
+
+        let repo_root = thread_context
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == WorkContextEntryKind::RepoChange)
+            .filter_map(|entry| entry.repo_root.clone())
+            .next()?;
+        let git = crate::git::get_git_status(&repo_root);
+        let now = now_millis();
+        let recent_health = self.history.list_health_log(8).await.unwrap_or_default();
+        let degraded_cargo_entries = recent_health
+            .into_iter()
+            .filter(|entry| {
+                now.saturating_sub(entry.6) <= RECENT_HEALTH_WINDOW_MS
+                    && entry.3 != "healthy"
+                    && entry
+                        .5
+                        .as_deref()
+                        .is_some_and(|text| text.contains("cargo test failed"))
+            })
+            .collect::<Vec<_>>();
+        let recent_cargo_failure = degraded_cargo_entries.first().cloned();
+
+        let hydration_age_ms = {
+            let runtime = self.anticipatory.read().await;
+            thread_id
+                .as_ref()
+                .and_then(|value| runtime.hydration_by_thread.get(value).copied())
+                .map(|last| now.saturating_sub(last))
+        };
+        let session_window_ms = {
+            let model = self.operator_model.read().await;
+            if model.session_rhythm.session_count >= 5
+                && model.session_rhythm.session_duration_avg_minutes > 0.0
+            {
+                Some((model.session_rhythm.session_duration_avg_minutes * 60_000.0) as u64)
+            } else {
+                None
+            }
+        };
+        let recent_messages = if let Some(thread_id) = thread_id.as_ref() {
+            self.history
+                .list_recent_messages(thread_id, 4)
+                .await
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let alignment_degraded = !recent_messages.is_empty()
+            && recent_messages.iter().all(|message| {
+                let lowered = message.content.to_ascii_lowercase();
+                lowered.contains("stale relative to the current conversation")
+                    || lowered.contains("switch topics completely")
+                    || !(lowered.contains("repo")
+                        || lowered.contains("code")
+                        || lowered.contains("build")
+                        || lowered.contains("test")
+                        || lowered.contains("context"))
+            });
+
+        if let (Some(hydration_age_ms), Some(session_window_ms)) =
+            (hydration_age_ms, session_window_ms)
+        {
+            if hydration_age_ms > session_window_ms && alignment_degraded {
+                return Some(SystemForesight {
+                    prediction_type: "stale_context",
+                    confidence: 0.76,
+                    rationale: "The active thread has outlived its recent hydration window and the latest messages are drifting away from the repo-grounded context, so a refresh is likely needed before the next action.".to_string(),
+                    bullets: vec![
+                        "prediction_type=stale_context".to_string(),
+                        format!(
+                            "hydration age={}m exceeded session rhythm window={}m",
+                            hydration_age_ms / 60_000,
+                            session_window_ms / 60_000
+                        ),
+                        "semantic alignment degraded across recent thread messages".to_string(),
+                    ],
+                    thread_id,
+                });
+            }
+        }
+
+        if recent_cargo_failure.is_none() {
+            return None;
+        }
+
+        let (_, _, _, health_state, _, intervention, _) =
+            recent_cargo_failure.expect("checked is_some above");
+        let degraded_count = degraded_cargo_entries.len() as f64;
+        let confidence = (0.72 + (degraded_count - 1.0).max(0.0) * 0.08).clamp(0.0, 1.0);
+        let mut bullets = vec![
+            "prediction_type=build_test_risk".to_string(),
+            format!(
+                "dirty repo state: modified={} staged={} untracked={}",
+                git.modified, git.staged, git.untracked
+            ),
+            format!(
+                "degraded cargo health evidence count={} within rolling window",
+                degraded_cargo_entries.len()
+            ),
+        ];
+        if let Some(intervention) = intervention {
+            bullets.push(intervention);
+        }
+        bullets.push(format!(
+            "recent health state={} suggests the last cargo verification degraded",
+            health_state
+        ));
+
+        Some(SystemForesight {
+            prediction_type: "build_test_risk",
+            confidence,
+            rationale:
+                "Dirty repo context overlaps with a recent cargo failure, so another build/test failure is likely until the changes are verified."
+                    .to_string(),
+            bullets,
+            thread_id,
+        })
+    }
+
+    async fn compute_system_outcome_foresight(
+        &self,
+        settings: &AnticipatoryConfig,
+    ) -> Option<AnticipatoryItem> {
+        let now = now_millis();
+        let foresight = self.predict_system_outcome().await?;
+        if foresight.confidence < settings.surfacing_min_confidence {
+            return None;
+        }
+
+        let route = self
+            .resolve_anticipatory_route(
+                "system_outcome_foresight",
+                None,
+                foresight.thread_id.as_deref(),
+            )
+            .await;
+        Some(AnticipatoryItem {
+            id: format!(
+                "system_outcome_foresight_{}",
+                foresight
+                    .thread_id
+                    .clone()
+                    .unwrap_or_else(|| "global".to_string())
+            ),
+            kind: "system_outcome_foresight".to_string(),
+            title: "System Outcome Foresight".to_string(),
+            summary: if foresight.prediction_type == "stale_context" {
+                "Predicted stale context: hydration-needed risk is elevated".to_string()
+            } else {
+                format!(
+                    "Predicted {}: build/test failure risk is elevated",
+                    foresight.prediction_type.replace('_', "/")
+                )
+            },
+            bullets: std::iter::once(format!("rationale: {}", foresight.rationale))
+                .chain(foresight.bullets.into_iter())
+                .collect(),
+            confidence: foresight.confidence,
+            goal_run_id: None,
+            thread_id: foresight.thread_id,
+            preferred_client_surface: route.preferred_client_surface,
+            preferred_attention_surface: route.preferred_attention_surface,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    async fn compute_intent_prediction(
+        &self,
+        settings: &AnticipatoryConfig,
+    ) -> Option<AnticipatoryItem> {
+        let now = now_millis();
+        let attention_thread_id = self.current_attention_target().await;
+        let active_surface = self.current_attention_surface().await;
+        let cached_prewarm = {
+            let runtime = self.anticipatory.read().await;
+            attention_thread_id
+                .as_ref()
+                .and_then(|thread_id| runtime.prewarm_cache_by_thread.get(thread_id).cloned())
+        };
+        let thread_context = {
+            let contexts = self.thread_work_contexts.read().await;
+            attention_thread_id
+                .as_ref()
+                .and_then(|thread_id| contexts.get(thread_id).cloned())
+        };
+
+        let mut predicted_action = None::<(&str, f64, Vec<String>)>;
+
+        if let Some(thread_id) = attention_thread_id.as_deref() {
+            let pending_approval = {
+                let tasks = self.tasks.lock().await;
+                tasks.iter().any(|task| {
+                    matches!(task.status, TaskStatus::AwaitingApproval)
+                        && (task.thread_id.as_deref() == Some(thread_id)
+                            || task.parent_thread_id.as_deref() == Some(thread_id))
+                })
+            };
+            if pending_approval {
+                predicted_action = Some((
+                    "review pending approval",
+                    0.86,
+                    vec![
+                        "This thread has work paused behind approval.".to_string(),
+                        "Resolving approval is the highest-likelihood unblock step.".to_string(),
+                    ],
+                ));
+            }
+        }
+
+        if predicted_action.is_none() {
+            if let Some(context) = thread_context.as_ref() {
+                let has_repo_change = context
+                    .entries
+                    .iter()
+                    .any(|entry| entry.kind == WorkContextEntryKind::RepoChange);
+                if has_repo_change {
+                    let mut bullets = vec![
+                        format!(
+                            "{} repo-linked work context item(s) are active.",
+                            context.entries.len()
+                        ),
+                        "Recent repo changes usually lead to verification or inspection next."
+                            .to_string(),
+                    ];
+                    if let Some(cache) = cached_prewarm.as_ref() {
+                        bullets.push(format!("Cached prewarm: {}", cache.summary));
+                    }
+                    predicted_action = Some(("inspect or test recent repo changes", 0.74, bullets));
+                }
+            }
+        }
+
+        if predicted_action.is_none() {
+            if let Some(surface) = active_surface.as_deref() {
+                if surface == "conversation:chat" || surface == "conversation:input" {
+                    predicted_action = Some((
+                        "continue the active thread",
+                        0.68,
+                        vec![
+                            "Operator attention is on the conversation surface.".to_string(),
+                            "Continuing the active thread is the most likely immediate next step."
+                                .to_string(),
+                        ],
+                    ));
+                }
+            }
+        }
+
+        let (action, confidence, bullets) = predicted_action?;
+        if confidence < settings.surfacing_min_confidence {
+            return None;
+        }
+
+        let route = self
+            .resolve_anticipatory_route("intent_prediction", None, attention_thread_id.as_deref())
+            .await;
+        Some(AnticipatoryItem {
+            id: format!(
+                "intent_prediction_{}",
+                attention_thread_id
+                    .clone()
+                    .unwrap_or_else(|| "global".to_string())
+            ),
+            kind: "intent_prediction".to_string(),
+            title: "Likely Next Action".to_string(),
+            summary: format!("Predicted next step: {action}"),
+            bullets,
+            confidence,
+            goal_run_id: None,
+            thread_id: attention_thread_id,
+            preferred_client_surface: route.preferred_client_surface,
+            preferred_attention_surface: route.preferred_attention_surface,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    async fn refresh_anticipatory_prewarm_cache(&self, thread_id: &str) {
+        let Some((repo_root, _, _, _)) = self.resolve_thread_repo_root(thread_id).await else {
+            self.anticipatory
+                .write()
+                .await
+                .prewarm_cache_by_thread
+                .remove(thread_id);
+            return;
+        };
+
+        let git = crate::git::get_git_status(&repo_root);
+        let changed_entries = {
+            let contexts = self.thread_work_contexts.read().await;
+            contexts
+                .get(thread_id)
+                .map(|context| {
+                    context
+                        .entries
+                        .iter()
+                        .filter(|entry| entry.kind == WorkContextEntryKind::RepoChange)
+                        .count()
+                })
+                .unwrap_or(0)
+        };
+        let branch = git.branch.unwrap_or_else(|| "unknown".to_string());
+        let summary = format!(
+            "branch {branch}; dirty={}; modified {}; staged {}; untracked {}; ahead {}; behind {}; context entries {}",
+            git.is_dirty,
+            git.modified,
+            git.staged,
+            git.untracked,
+            git.ahead,
+            git.behind,
+            changed_entries,
+        );
+
+        self.anticipatory
+            .write()
+            .await
+            .prewarm_cache_by_thread
+            .insert(
+                thread_id.to_string(),
+                AnticipatoryPrewarmSnapshot { summary },
+            );
     }
 }
 

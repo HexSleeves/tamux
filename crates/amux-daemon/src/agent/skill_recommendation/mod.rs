@@ -8,9 +8,9 @@ use crate::history::{derive_skill_metadata, HistoryStore, SkillVariantRecord};
 use anyhow::{Context, Result};
 use base64::Engine;
 use ranking::rank_skill_candidates;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use types::SkillCandidateInput;
+use types::{GraphSkillSignal, SkillCandidateInput};
 
 pub(crate) use metadata::extract_skill_metadata;
 pub(crate) use types::{
@@ -44,13 +44,134 @@ pub(crate) async fn discover_local_skills(
         }
     };
 
+    let graph_signals = load_graph_backed_skill_signals(history, query).await?;
+
     Ok(rank_skill_candidates(
         candidates,
         query,
         workspace_tags,
+        &graph_signals,
         limit,
         cfg,
     ))
+}
+
+const MAX_GRAPH_SIGNAL_HOPS: u8 = 2;
+const MAX_GRAPH_SIGNAL_SEEDS: usize = 8;
+
+async fn load_graph_backed_skill_signals(
+    history: &HistoryStore,
+    query: &str,
+) -> Result<HashMap<String, GraphSkillSignal>> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let seed_nodes = load_graph_seed_nodes(history, trimmed).await?;
+    let mut signals = HashMap::new();
+    let mut queue = seed_nodes
+        .iter()
+        .cloned()
+        .map(|node_id| (node_id, 0u8, f64::INFINITY))
+        .collect::<VecDeque<_>>();
+    let mut best_depth = seed_nodes
+        .into_iter()
+        .map(|node_id| (node_id, 0u8))
+        .collect::<HashMap<_, _>>();
+
+    while let Some((node_id, depth, path_score)) = queue.pop_front() {
+        if depth >= MAX_GRAPH_SIGNAL_HOPS {
+            continue;
+        }
+
+        let neighbors = history.list_memory_graph_neighbors(&node_id, 64).await?;
+        for row in neighbors {
+            let next_depth = depth + 1;
+            let next_score = if path_score.is_infinite() {
+                row.via_edge.weight
+            } else {
+                path_score.min(row.via_edge.weight)
+            };
+
+            if row.node.node_type == "skill_variant"
+                && row.via_edge.relation_type == "intent_prefers_skill"
+            {
+                let Some(variant_id) = row.node.id.strip_prefix("skill:") else {
+                    continue;
+                };
+                let incoming = GraphSkillSignal {
+                    score: next_score,
+                    distance: next_depth,
+                };
+                let entry = signals.entry(variant_id.to_string()).or_insert(incoming);
+                if incoming.score > entry.score
+                    || (incoming.score == entry.score && incoming.distance > entry.distance)
+                {
+                    *entry = incoming;
+                }
+                continue;
+            }
+
+            if next_depth >= MAX_GRAPH_SIGNAL_HOPS || row.node.node_type != "intent" {
+                continue;
+            }
+
+            let node_id = row.node.id.clone();
+            let should_enqueue = match best_depth.get(&node_id) {
+                Some(existing) if *existing <= next_depth => false,
+                _ => true,
+            };
+            if should_enqueue {
+                best_depth.insert(node_id.clone(), next_depth);
+                queue.push_back((node_id, next_depth, next_score));
+            }
+        }
+    }
+
+    Ok(signals)
+}
+
+async fn load_graph_seed_nodes(history: &HistoryStore, query: &str) -> Result<Vec<String>> {
+    let intent_node_id = format!("intent:{}", query.to_ascii_lowercase());
+    let exact = query.to_ascii_lowercase();
+    let like = format!("%{}%", exact);
+    let matched = history
+        .conn
+        .call(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id FROM memory_nodes
+                 WHERE node_type != 'skill_variant'
+                   AND (
+                        lower(label) = ?1 OR
+                        lower(label) LIKE ?2 OR
+                        lower(COALESCE(summary_text, '')) LIKE ?2
+                   )
+                 ORDER BY
+                    CASE WHEN lower(label) = ?1 THEN 0 ELSE 1 END,
+                    access_count DESC,
+                    last_accessed_ms DESC,
+                    id ASC
+                 LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(
+                rusqlite::params![exact, like, MAX_GRAPH_SIGNAL_SEEDS as i64],
+                |row| row.get::<_, String>(0),
+            )?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Into::into)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let mut seeds = Vec::with_capacity(1 + matched.len());
+    seeds.push(intent_node_id);
+    for node_id in matched {
+        if !seeds.iter().any(|existing| existing == &node_id) {
+            seeds.push(node_id);
+        }
+    }
+    Ok(seeds)
 }
 
 fn schedule_background_skill_catalog_sync(history: HistoryStore, skills_root: PathBuf) {
@@ -304,6 +425,7 @@ fn synthetic_skill_variant_record(
         use_count: 0,
         success_count: 0,
         failure_count: 0,
+        fitness_score: 0.0,
         status: "active".to_string(),
         last_used_at: None,
         created_at: now,

@@ -193,7 +193,7 @@ impl HistoryStore {
             .conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, status, last_used_at, created_at, updated_at \
+                    "SELECT variant_id, skill_name, variant_name, relative_path, parent_variant_id, version, context_tags_json, use_count, success_count, failure_count, fitness_score, status, last_used_at, created_at, updated_at \
                      FROM skill_variants WHERE status = ?1 ORDER BY updated_at ASC",
                 )?;
                 let rows = stmt.query_map(params![status], map_skill_variant_row)?;

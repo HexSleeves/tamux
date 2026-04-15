@@ -61,6 +61,255 @@ async fn maybe_bootstrap_todo_plan_for_background_tool(
     true
 }
 
+async fn maybe_emit_cli_wrapper_synthesis_proposal_notice(
+    agent: &AgentEngine,
+    event_tx: &broadcast::Sender<AgentEvent>,
+    thread_id: &str,
+    dedupe_hint: &str,
+    message: String,
+    details: serde_json::Value,
+) {
+    if thread_id.trim().is_empty() {
+        return;
+    }
+
+    let tool_synthesis_enabled = agent.config.read().await.tool_synthesis.enabled;
+    if !tool_synthesis_enabled {
+        return;
+    }
+
+    let dedupe_key = format!("{thread_id}::{dedupe_hint}");
+    {
+        let mut notices = agent.tool_synthesis_gap_notices.write().await;
+        if !notices.insert(dedupe_key) {
+            return;
+        }
+    }
+
+    let _ = event_tx.send(AgentEvent::WorkflowNotice {
+        thread_id: thread_id.to_string(),
+        kind: "tool-synthesis-proposal".to_string(),
+        message,
+        details: Some(details.to_string()),
+    });
+}
+
+async fn maybe_emit_existing_tool_status_notice(
+    agent: &AgentEngine,
+    event_tx: &broadcast::Sender<AgentEvent>,
+    thread_id: &str,
+    dedupe_hint: &str,
+    proposal_tool_name: &str,
+    proposal_target: &str,
+    existing: &serde_json::Value,
+    source_reason: &str,
+) {
+    let status = existing
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or("active");
+    let id = existing
+        .get("id")
+        .and_then(|value| value.as_str())
+        .unwrap_or(proposal_tool_name);
+    let (message, recommended_action) = match status {
+        "new" => (
+            format!(
+                "Equivalent generated tool `{id}` already exists for this CLI gap. Activate it instead of synthesizing a duplicate."
+            ),
+            "activate_generated_tool",
+        ),
+        "promotable" => (
+            format!(
+                "Equivalent generated tool `{id}` is already promotable. Prefer using or promoting it instead of synthesizing a duplicate."
+            ),
+            "promote_generated_tool",
+        ),
+        "promoted" => (
+            format!(
+                "Equivalent generated tool `{id}` is already promoted. Reuse it instead of synthesizing a duplicate."
+            ),
+            "use_existing_generated_tool",
+        ),
+        _ => (
+            format!(
+                "Equivalent generated tool `{id}` is already active. Reuse it instead of synthesizing a duplicate."
+            ),
+            "use_existing_generated_tool",
+        ),
+    };
+    let details = serde_json::json!({
+        "reason": "existing_equivalent_generated_tool",
+        "source_reason": source_reason,
+        "recommended_action": recommended_action,
+        "existing_tool": existing,
+        "proposal_kind": "cli",
+        "target": proposal_target,
+    });
+    maybe_emit_cli_wrapper_synthesis_proposal_notice(
+        agent,
+        event_tx,
+        thread_id,
+        dedupe_hint,
+        message,
+        details,
+    )
+    .await;
+}
+
+async fn strongest_repeated_shell_fallback_evidence(
+    agent: &AgentEngine,
+    tool_name: &str,
+) -> Option<(String, u64)> {
+    let model = agent.operator_model.read().await;
+    model
+        .implicit_feedback
+        .fallback_histogram
+        .iter()
+        .filter_map(|(pair, count)| {
+            if *count < 2 {
+                return None;
+            }
+            let (_, to_tool) = pair.split_once("->")?;
+            if to_tool.trim().eq_ignore_ascii_case(tool_name) {
+                Some((pair.clone(), *count))
+            } else {
+                None
+            }
+        })
+        .max_by_key(|(_, count)| *count)
+}
+
+async fn maybe_emit_unknown_tool_synthesis_proposal_notice(
+    agent: &AgentEngine,
+    event_tx: &broadcast::Sender<AgentEvent>,
+    thread_id: &str,
+    missing_tool: &str,
+) {
+    let Some(proposal) = detect_cli_wrapper_synthesis_proposal(missing_tool) else {
+        return;
+    };
+    if let Some(existing) =
+        find_equivalent_generated_cli_tool(&agent.data_dir, &proposal).unwrap_or(None)
+    {
+        maybe_emit_existing_tool_status_notice(
+            agent,
+            event_tx,
+            thread_id,
+            &format!("existing-unknown::{missing_tool}"),
+            &proposal.tool_name,
+            &proposal.target,
+            &existing,
+            "unknown_tool_safe_cli_gap",
+        )
+        .await;
+        return;
+    }
+    let synthesize_args = serde_json::json!({
+        "kind": "cli",
+        "target": proposal.target,
+        "name": proposal.tool_name,
+        "activate": false,
+    });
+    let message = format!(
+        "Missing capability around `{missing_tool}` looks like a conservative CLI-wrapper gap. Proposal ready via synthesize_tool."
+    );
+    let details = serde_json::json!({
+        "reason": "unknown_tool_safe_cli_gap",
+        "missing_tool": missing_tool,
+        "proposal_kind": "cli",
+        "synthesize_tool_args": synthesize_args,
+    });
+    maybe_emit_cli_wrapper_synthesis_proposal_notice(
+        agent,
+        event_tx,
+        thread_id,
+        &format!("unknown::{missing_tool}"),
+        message,
+        details,
+    )
+    .await;
+}
+
+async fn maybe_emit_successful_shell_synthesis_proposal_notice(
+    agent: &AgentEngine,
+    event_tx: &broadcast::Sender<AgentEvent>,
+    thread_id: &str,
+    tool_name: &str,
+    args: &serde_json::Value,
+) {
+    let Some(command) = args.get("command").and_then(|value| value.as_str()) else {
+        return;
+    };
+    let Some(proposal) = detect_cli_wrapper_synthesis_proposal_from_command(command) else {
+        return;
+    };
+    if let Some(existing) =
+        find_equivalent_generated_cli_tool(&agent.data_dir, &proposal).unwrap_or(None)
+    {
+        maybe_emit_existing_tool_status_notice(
+            agent,
+            event_tx,
+            thread_id,
+            &format!("existing-shell::{command}"),
+            &proposal.tool_name,
+            &proposal.target,
+            &existing,
+            "successful_safe_shell_cli_gap",
+        )
+        .await;
+        return;
+    }
+    let synthesize_args = serde_json::json!({
+        "kind": "cli",
+        "target": proposal.target,
+        "name": proposal.tool_name,
+        "activate": false,
+    });
+    let repeated_fallback = strongest_repeated_shell_fallback_evidence(agent, tool_name).await;
+    let (reason, dedupe_hint, message, details) = if let Some((pair, count)) = repeated_fallback {
+        (
+            "repeated_safe_shell_fallback_cli_gap",
+            format!("repeated-shell::{command}"),
+            format!(
+                "Repeated successful fallback through `{tool_name}` suggests a conservative CLI-wrapper gap. Proposal ready via synthesize_tool."
+            ),
+            serde_json::json!({
+                "reason": "repeated_safe_shell_fallback_cli_gap",
+                "missing_tool": tool_name,
+                "proposal_kind": "cli",
+                "synthesize_tool_args": synthesize_args,
+                "matched_fallback": pair,
+                "fallback_count": count,
+            }),
+        )
+    } else {
+        (
+            "successful_safe_shell_cli_gap",
+            format!("shell::{command}"),
+            format!(
+                "Missing capability around `{tool_name}` looks like a conservative CLI-wrapper gap. Proposal ready via synthesize_tool."
+            ),
+            serde_json::json!({
+                "reason": "successful_safe_shell_cli_gap",
+                "missing_tool": tool_name,
+                "proposal_kind": "cli",
+                "synthesize_tool_args": synthesize_args,
+            }),
+        )
+    };
+    let _ = reason;
+    maybe_emit_cli_wrapper_synthesis_proposal_notice(
+        agent,
+        event_tx,
+        thread_id,
+        &dedupe_hint,
+        message,
+        details,
+    )
+    .await;
+}
+
 fn should_scrub_successful_tool_result(tool_name: &str) -> bool {
     !matches!(tool_name, "read_offloaded_payload")
 }
@@ -162,6 +411,21 @@ fn apply_critique_modifications(
 
     match tool_name {
         "bash_command" | "run_terminal_command" | "execute_managed_command" => {
+            if let Some(value) = map.remove("dangerous_flag") {
+                map.insert("safe_flag".to_string(), value);
+                adjustments.push("shell:rename_key:dangerous_flag->safe_flag".to_string());
+            }
+            if let Some(parsed) = map
+                .get("max_tool_calls")
+                .and_then(|value| value.as_str())
+                .and_then(|value| value.parse::<u64>().ok())
+            {
+                map.insert(
+                    "max_tool_calls".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(parsed.min(8))),
+                );
+                adjustments.push("shell:coerce_max_tool_calls".to_string());
+            }
             if map
                 .get("allow_network")
                 .and_then(|value| value.as_bool())
@@ -188,6 +452,17 @@ fn apply_critique_modifications(
                     serde_json::Value::String("moderate".to_string()),
                 );
                 adjustments.push("shell:downgrade_security_level".to_string());
+            } else if !map.contains_key("security_level")
+                && has_directive(
+                    critique_directives,
+                    crate::agent::critique::types::CritiqueDirective::DowngradeSecurityLevel,
+                )
+            {
+                map.insert(
+                    "security_level".to_string(),
+                    serde_json::Value::String("moderate".to_string()),
+                );
+                adjustments.push("shell:inject_security_level".to_string());
             }
         }
         "send_slack_message" => {
@@ -245,6 +520,47 @@ fn apply_critique_modifications(
                         .unwrap_or_else(|| current.to_string());
                     if narrowed != current {
                         map.insert(key.to_string(), serde_json::Value::String(narrowed));
+                        adjustments.push(format!("file:narrow_path:{key}"));
+                    }
+                    break;
+                }
+            }
+        }
+        "apply_patch" => {
+            let sensitive_path = has_directive(
+                critique_directives,
+                crate::agent::critique::types::CritiqueDirective::NarrowSensitiveFilePath,
+            ) || critique_reasons
+                .iter()
+                .any(|reason| reason.contains("sensitive path"));
+            if sensitive_path {
+                for key in ["input", "patch"] {
+                    let Some(current) = map.get(key).and_then(|value| value.as_str()) else {
+                        continue;
+                    };
+                    let rewritten = current
+                        .lines()
+                        .map(|line| {
+                            for prefix in [
+                                "*** Update File: ",
+                                "*** Add File: ",
+                                "*** Delete File: ",
+                            ] {
+                                if let Some(path) = line.strip_prefix(prefix) {
+                                    let narrowed = std::path::Path::new(path.trim())
+                                        .file_name()
+                                        .map(|value| value.to_string_lossy().to_string())
+                                        .filter(|value| !value.is_empty())
+                                        .unwrap_or_else(|| path.trim().to_string());
+                                    return format!("{prefix}{narrowed}");
+                                }
+                            }
+                            line.to_string()
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if rewritten != current {
+                        map.insert(key.to_string(), serde_json::Value::String(rewritten));
                         adjustments.push(format!("file:narrow_path:{key}"));
                     }
                     break;
@@ -800,6 +1116,7 @@ async fn dispatch_tool_execution(
         "vote_on_disagreement" => {
             execute_vote_on_disagreement(args, agent, thread_id, task_id).await
         }
+        "dispatch_via_bid_protocol" => execute_dispatch_via_bid_protocol(args, agent).await,
         "list_collaboration_sessions" => {
             execute_list_collaboration_sessions(args, agent, task_id).await
         }
@@ -1073,7 +1390,11 @@ async fn dispatch_tool_execution(
         .await
         {
             Ok(Some(content)) => Ok(content),
-            Ok(None) => Err(anyhow::anyhow!("Unknown tool: {other}")),
+            Ok(None) => {
+                maybe_emit_unknown_tool_synthesis_proposal_notice(agent, event_tx, thread_id, other)
+                    .await;
+                Err(anyhow::anyhow!("Unknown tool: {other}"))
+            }
             Err(error) => Err(error),
         },
     };
@@ -1163,6 +1484,19 @@ pub fn execute_tool<'a>(
                     prepared.dispatch_tool_name.as_str(),
                     &prepared.dispatch_args,
                 );
+                if matches!(
+                    prepared.dispatch_tool_name.as_str(),
+                    "bash_command" | "run_terminal_command" | "execute_managed_command"
+                ) {
+                    maybe_emit_successful_shell_synthesis_proposal_notice(
+                        agent,
+                        event_tx,
+                        thread_id,
+                        prepared.dispatch_tool_name.as_str(),
+                        &prepared.dispatch_args,
+                    )
+                    .await;
+                }
                 tracing::info!(tool = %prepared.tool_name, result_len = content.len(), "agent tool result: ok");
                 ToolResult {
                     tool_call_id: tool_call.id.clone(),

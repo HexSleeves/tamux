@@ -320,6 +320,135 @@ async fn repeated_fast_denials_enable_learned_auto_deny() {
 }
 
 #[tokio::test]
+async fn high_approval_latency_suppresses_duplicate_low_value_approval_bundles() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_approval_learning = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.risk_fingerprint.approval_requests = 4;
+        model.risk_fingerprint.approvals = 2;
+        model.risk_fingerprint.denials = 2;
+        model.risk_fingerprint.avg_response_time_secs = 45.0;
+        refresh_risk_metrics(&mut model.risk_fingerprint);
+    }
+
+    let existing = ToolPendingApproval {
+        approval_id: "approval-existing".to_string(),
+        execution_id: "exec-existing".to_string(),
+        command: "git status".to_string(),
+        rationale: "Inspect repo status".to_string(),
+        risk_level: "lowest".to_string(),
+        blast_radius: "repo metadata".to_string(),
+        reasons: vec!["reads git metadata".to_string()],
+        session_id: None,
+    };
+    engine
+        .record_operator_approval_requested(&existing)
+        .await
+        .expect("record existing approval request");
+
+    let duplicate = ToolPendingApproval {
+        approval_id: "approval-duplicate".to_string(),
+        execution_id: "exec-duplicate".to_string(),
+        command: "git diff --stat".to_string(),
+        rationale: "Inspect repo delta".to_string(),
+        risk_level: "lowest".to_string(),
+        blast_radius: "repo metadata".to_string(),
+        reasons: vec!["reads git metadata".to_string()],
+        session_id: None,
+    };
+
+    assert!(
+        engine
+            .should_suppress_duplicate_low_value_approval_bundle(&duplicate)
+            .await
+    );
+}
+
+#[tokio::test]
+async fn high_approval_latency_keeps_high_value_approvals_visible() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_approval_learning = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.risk_fingerprint.approval_requests = 4;
+        model.risk_fingerprint.approvals = 2;
+        model.risk_fingerprint.denials = 2;
+        model.risk_fingerprint.avg_response_time_secs = 45.0;
+        refresh_risk_metrics(&mut model.risk_fingerprint);
+    }
+
+    let existing = ToolPendingApproval {
+        approval_id: "approval-existing".to_string(),
+        execution_id: "exec-existing".to_string(),
+        command: "git status".to_string(),
+        rationale: "Inspect repo status".to_string(),
+        risk_level: "lowest".to_string(),
+        blast_radius: "repo metadata".to_string(),
+        reasons: vec!["reads git metadata".to_string()],
+        session_id: None,
+    };
+    engine
+        .record_operator_approval_requested(&existing)
+        .await
+        .expect("record existing approval request");
+
+    let high_value = ToolPendingApproval {
+        approval_id: "approval-high-value".to_string(),
+        execution_id: "exec-high-value".to_string(),
+        command: "curl https://example.com/status".to_string(),
+        rationale: "Fetch service status".to_string(),
+        risk_level: "moderate".to_string(),
+        blast_radius: "single endpoint".to_string(),
+        reasons: vec!["network access".to_string()],
+        session_id: None,
+    };
+
+    assert!(
+        !engine
+            .should_suppress_duplicate_low_value_approval_bundle(&high_value)
+            .await
+    );
+}
+
+#[tokio::test]
+async fn high_confirmation_seeking_suppresses_learned_auto_approve_shortcuts() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_approval_learning = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.cognitive_style.confirmation_seeking = 0.92;
+        model.risk_fingerprint.auto_approve_categories = vec!["git".to_string()];
+    }
+
+    assert!(
+        engine
+            .learned_approval_decision("git status", "lowest")
+            .await
+            .is_none(),
+        "high confirmation-seeking should suppress learned auto-approval and require explicit approval"
+    );
+}
+
+#[tokio::test]
 async fn operator_messages_learn_summary_first_reasoning_on_demand_preferences() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
@@ -465,6 +594,72 @@ async fn strong_operator_satisfaction_adds_proactive_guidance_without_friction()
 }
 
 #[tokio::test]
+async fn fast_aggressive_approvals_add_proactive_approval_guidance() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    config.operator_model.allow_approval_learning = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.risk_fingerprint.approval_requests = 4;
+        model.risk_fingerprint.approvals = 4;
+        model.risk_fingerprint.denials = 0;
+        model.risk_fingerprint.avg_response_time_secs = 3.0;
+        model.risk_fingerprint.risk_tolerance = RiskTolerance::Aggressive;
+        refresh_operator_satisfaction(&mut model);
+    }
+
+    let summary = engine
+        .build_operator_model_prompt_summary()
+        .await
+        .expect("operator model prompt summary");
+    assert!(summary.contains(
+        "Risk tolerance: aggressive (4 approvals across 4 approval requests, avg response 3.0s)"
+    ));
+    assert!(summary.contains(
+        "Adaptive approval rule: approvals resolve quickly and usually favor proceeding"
+    ));
+    assert!(summary.contains("avoid redundant confirmation loops for low-risk progress"));
+}
+
+#[tokio::test]
+async fn slow_approval_latency_adds_deliberate_approval_guidance() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    config.operator_model.allow_approval_learning = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.risk_fingerprint.approval_requests = 4;
+        model.risk_fingerprint.approvals = 2;
+        model.risk_fingerprint.denials = 2;
+        model.risk_fingerprint.avg_response_time_secs = 45.0;
+        model.risk_fingerprint.risk_tolerance = RiskTolerance::Moderate;
+        refresh_operator_satisfaction(&mut model);
+    }
+
+    let summary = engine
+        .build_operator_model_prompt_summary()
+        .await
+        .expect("operator model prompt summary");
+    assert!(summary.contains(
+        "Risk tolerance: moderate (2 approvals across 4 approval requests, avg response 45.0s)"
+    ));
+    assert!(summary.contains("Adaptive approval rule: approval responses are deliberate"));
+    assert!(summary.contains("keep only one pending approval live at a time"));
+}
+
+#[tokio::test]
 async fn strained_operator_satisfaction_adds_recovery_guidance() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
@@ -544,4 +739,177 @@ fn preferred_tool_fallback_targets_deduplicates_and_skips_invalid_pairs() {
         preferred,
         vec!["search_files".to_string(), "read_file".to_string()]
     );
+}
+
+#[tokio::test]
+async fn implicit_feedback_persistence_records_signal_rows_and_score_history() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    config.operator_model.allow_implicit_feedback = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_message("thread-persisted-satisfaction", "Please run tests.", true)
+        .await
+        .expect("record operator message");
+    engine
+        .record_tool_hesitation("read_file", "search_files", true, false)
+        .await
+        .expect("record tool hesitation");
+
+    let signals = engine
+        .history
+        .list_implicit_signals("global", 10)
+        .await
+        .expect("load implicit signals");
+    assert_eq!(signals.len(), 1);
+    assert_eq!(signals[0].signal_type, "tool_fallback");
+    assert!((signals[0].weight + 0.12).abs() < f64::EPSILON);
+    assert!(signals[0]
+        .context_snapshot_json
+        .as_deref()
+        .is_some_and(|json| json.contains("search_files")));
+
+    let scores = engine
+        .history
+        .list_satisfaction_scores("global", 10)
+        .await
+        .expect("load satisfaction scores");
+    assert_eq!(scores.len(), 1);
+    assert_eq!(scores[0].label, "healthy");
+    assert_eq!(scores[0].signal_count, 1);
+    assert!((scores[0].score - 0.68).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn operator_correction_persists_thread_scoped_signal_and_score_snapshot() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    config.operator_model.allow_implicit_feedback = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_message(
+            "thread-correction-persist",
+            "Actually, use ripgrep instead.",
+            true,
+        )
+        .await
+        .expect("record correction message");
+
+    let signals = engine
+        .history
+        .list_implicit_signals("thread-correction-persist", 10)
+        .await
+        .expect("load correction signals");
+    assert_eq!(signals.len(), 1);
+    assert_eq!(signals[0].signal_type, "operator_correction");
+    assert!((signals[0].weight + 0.16).abs() < f64::EPSILON);
+
+    let scores = engine
+        .history
+        .list_satisfaction_scores("thread-correction-persist", 10)
+        .await
+        .expect("load correction satisfaction scores");
+    assert_eq!(scores.len(), 1);
+    assert_eq!(scores[0].label, "fragile");
+    assert_eq!(scores[0].signal_count, 2);
+    assert!((scores[0].score - 0.54).abs() < 1e-9);
+}
+
+#[test]
+fn persisted_satisfaction_decay_uses_recent_signal_history() {
+    let mut model = OperatorModel::default();
+    model.cognitive_style.message_count = 1;
+
+    let now = 1_717_400_000_000u64;
+    let applied = apply_persisted_satisfaction_decay(
+        &mut model,
+        &[
+            PersistedSatisfactionSignalSample {
+                weight: -0.12,
+                timestamp_ms: now - 1_000,
+            },
+            PersistedSatisfactionSignalSample {
+                weight: -0.16,
+                timestamp_ms: now - 2_000,
+            },
+            PersistedSatisfactionSignalSample {
+                weight: -0.18,
+                timestamp_ms: now - 3_000,
+            },
+        ],
+        now,
+    );
+
+    assert!(applied);
+    assert_eq!(model.operator_satisfaction.label, "strained");
+    assert!((model.operator_satisfaction.score - 0.34).abs() < 0.02);
+}
+
+#[test]
+fn persisted_satisfaction_decay_requires_enough_history() {
+    let mut model = OperatorModel::default();
+    model.cognitive_style.message_count = 1;
+    model.operator_satisfaction.score = 0.8;
+    model.operator_satisfaction.label = "strong".to_string();
+
+    let applied = apply_persisted_satisfaction_decay(
+        &mut model,
+        &[
+            PersistedSatisfactionSignalSample {
+                weight: -0.12,
+                timestamp_ms: 10,
+            },
+            PersistedSatisfactionSignalSample {
+                weight: -0.10,
+                timestamp_ms: 20,
+            },
+        ],
+        1_000,
+    );
+
+    assert!(!applied);
+    assert_eq!(model.operator_satisfaction.label, "strong");
+    assert!((model.operator_satisfaction.score - 0.8).abs() < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_persisted_implicit_feedback_history() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_implicit_feedback = true;
+    config.operator_model.allow_message_statistics = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_message("thread-diagnostics-persisted", "Please run tests.", true)
+        .await
+        .expect("record operator message");
+    engine
+        .record_tool_hesitation("read_file", "search_files", true, false)
+        .await
+        .expect("record tool hesitation");
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let satisfaction = &snapshot["operator_satisfaction"];
+    let signals = satisfaction["recent_implicit_signals"]
+        .as_array()
+        .expect("recent implicit signals array");
+    let scores = satisfaction["recent_satisfaction_scores"]
+        .as_array()
+        .expect("recent satisfaction scores array");
+
+    assert_eq!(signals.len(), 1);
+    assert_eq!(signals[0]["signal_type"], "tool_fallback");
+    assert_eq!(scores.len(), 1);
+    assert_eq!(scores[0]["label"], "healthy");
 }

@@ -53,4 +53,11 @@ pub(super) struct SkillCandidateInput {
 #[derive(Debug, Clone)]
 pub(super) struct CandidateScore {
     pub recommendation: SkillRecommendation,
+    pub graph_score: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct GraphSkillSignal {
+    pub score: f64,
+    pub distance: u8,
 }

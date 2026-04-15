@@ -1636,6 +1636,126 @@
         assert_eq!(session["contributions"].as_array().unwrap_or(&Vec::new()).len(), 1);
     }
 
+    #[tokio::test]
+    async fn dispatch_via_bid_protocol_tool_routes_through_collaboration_runtime() {
+        let root = tempdir().expect("tempdir should succeed");
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.collaboration.enabled = true;
+        let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+        let (event_tx, _) = broadcast::channel(8);
+
+        let parent = engine
+            .enqueue_task(
+                "Parent coordinator".to_string(),
+                "Choose the best owner for the next workstream".to_string(),
+                "normal",
+                None,
+                None,
+                Vec::new(),
+                None,
+                "user",
+                None,
+                None,
+                Some("thread-parent".to_string()),
+                Some("daemon".to_string()),
+            )
+            .await;
+        let child_a = engine
+            .enqueue_task(
+                "Research child".to_string(),
+                "Prepare a bid for implementation ownership".to_string(),
+                "normal",
+                None,
+                None,
+                Vec::new(),
+                None,
+                "subagent",
+                None,
+                Some(parent.id.clone()),
+                Some("thread-parent".to_string()),
+                Some("daemon".to_string()),
+            )
+            .await;
+        let child_b = engine
+            .enqueue_task(
+                "Review child".to_string(),
+                "Prepare a bid for review ownership".to_string(),
+                "normal",
+                None,
+                None,
+                Vec::new(),
+                None,
+                "subagent",
+                None,
+                Some(parent.id.clone()),
+                Some("thread-parent".to_string()),
+                Some("daemon".to_string()),
+            )
+            .await;
+
+        engine
+            .register_subagent_collaboration(&parent.id, &child_a)
+            .await;
+        engine
+            .register_subagent_collaboration(&parent.id, &child_b)
+            .await;
+
+        let tool_call = ToolCall::with_default_weles_review(
+            "tool-dispatch-via-bid-protocol".to_string(),
+            ToolFunction {
+                name: "dispatch_via_bid_protocol".to_string(),
+                arguments: serde_json::json!({
+                    "parent_task_id": parent.id,
+                    "bids": [
+                        {
+                            "task_id": child_b.id,
+                            "confidence": 0.93,
+                            "availability": "busy"
+                        },
+                        {
+                            "task_id": child_a.id,
+                            "confidence": 0.74,
+                            "availability": "available"
+                        }
+                    ]
+                })
+                .to_string(),
+            },
+        );
+
+        let result = execute_tool(
+            &tool_call,
+            &engine,
+            "thread-parent",
+            None,
+            &manager,
+            None,
+            &event_tx,
+            root.path(),
+            &engine.http_client,
+            None,
+        )
+        .await;
+
+        assert!(
+            !result.is_error,
+            "dispatch_via_bid_protocol tool should succeed: {}",
+            result.content
+        );
+        let payload: serde_json::Value =
+            serde_json::from_str(&result.content).expect("tool result should be valid json");
+        assert_eq!(payload["primary_task_id"], child_a.id);
+        assert_eq!(payload["reviewer_task_id"], child_b.id);
+
+        let session = engine
+            .collaboration_sessions_json(Some(&parent.id))
+            .await
+            .expect("session lookup should succeed");
+        assert_eq!(session["role_assignment"]["primary_task_id"], child_a.id);
+        assert_eq!(session["role_assignment"]["reviewer_task_id"], child_b.id);
+    }
+
     async fn spawn_model_fetch_server(models_body: serde_json::Value) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
@@ -2711,6 +2831,106 @@
         assert!(items[0]["budget_remaining"]["tokens_pct"]
             .as_f64()
             .is_some_and(|value| value > 0.7));
+    }
+
+    #[tokio::test]
+    async fn list_subagents_reports_exhausted_budget_limits() {
+        let root = tempdir().expect("tempdir should succeed");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+
+        let parent = engine
+            .enqueue_task(
+                "Parent coordinator".to_string(),
+                "Coordinate the child work".to_string(),
+                "normal",
+                None,
+                None,
+                Vec::new(),
+                None,
+                "user",
+                None,
+                None,
+                Some("thread-parent".to_string()),
+                Some("daemon".to_string()),
+            )
+            .await;
+
+        let mut child = engine
+            .enqueue_task(
+                "Depth child".to_string(),
+                "Inspect deployment risks".to_string(),
+                "normal",
+                None,
+                None,
+                Vec::new(),
+                None,
+                "subagent",
+                None,
+                Some(parent.id.clone()),
+                Some("thread-parent".to_string()),
+                Some("daemon".to_string()),
+            )
+            .await;
+        child.containment_scope = Some("subagent-depth:1/2".to_string());
+        child.context_budget_tokens = Some(10_000);
+        child.max_duration_secs = Some(10);
+        child.termination_conditions = Some("tool_call_count(3)".to_string());
+        child.started_at = Some(crate::agent::now_millis().saturating_sub(30_000));
+        {
+            let mut tasks = engine.tasks.lock().await;
+            if let Some(existing) = tasks.iter_mut().find(|task| task.id == child.id) {
+                *existing = child.clone();
+            }
+        }
+
+        engine
+            .history
+            .upsert_subagent_metrics(
+                &child.id,
+                Some(&parent.id),
+                Some("thread-parent"),
+                3,
+                2,
+                1,
+                10_500,
+                Some(10_000),
+                0.0,
+                Some(crate::agent::now_millis().saturating_sub(20_000)),
+                0.9,
+                "stalled",
+                1,
+                crate::agent::now_millis(),
+            )
+            .await
+            .expect("subagent metrics should persist");
+
+        let result = super::execute_list_subagents(
+            &serde_json::json!({ "parent_task_id": parent.id }),
+            &engine,
+            "thread-parent",
+            None,
+        )
+        .await
+        .expect("list_subagents should succeed");
+
+        let payload: serde_json::Value = serde_json::from_str(&result).expect("valid JSON payload");
+        let items = payload.as_array().expect("list_subagents should return an array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["budget_remaining"]["tokens_pct"].as_f64(), Some(0.0));
+        assert_eq!(items[0]["budget_remaining"]["time_pct"].as_f64(), Some(0.0));
+        assert_eq!(
+            items[0]["budget_remaining"]["tool_calls_remaining"].as_u64(),
+            Some(0)
+        );
+        assert_eq!(items[0]["budget_exhausted"].as_bool(), Some(true));
+        assert_eq!(
+            items[0]["exhausted_limits"].as_array().map(|items| items.len()),
+            Some(3)
+        );
+        assert_eq!(items[0]["exhausted_limits"][0], "tokens");
+        assert_eq!(items[0]["exhausted_limits"][1], "time");
+        assert_eq!(items[0]["exhausted_limits"][2], "tool_calls");
     }
 
     #[tokio::test]
