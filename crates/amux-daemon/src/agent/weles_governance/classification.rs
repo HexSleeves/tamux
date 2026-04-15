@@ -308,6 +308,16 @@ pub(crate) fn classify_tool_call(
         };
     }
 
+    if normalized_tool == "plugin_api_call" {
+        return WelesToolClassification {
+            class: WelesGovernanceClass::GuardAlways,
+            reasons: vec![
+                "plugin API invocation can mutate plugin execution policy or external side effects"
+                    .to_string(),
+            ],
+        };
+    }
+
     if normalized_tool == "setup_web_browsing" {
         let action = tool_args
             .get("action")

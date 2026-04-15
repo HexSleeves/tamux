@@ -28,6 +28,10 @@ fn tool_specific_caution_claim(tool_name: &str, action_summary: &str) -> Option<
             "Require explicit operator confirmation before changing the provider or model for {} because it rewrites persisted agent execution policy.",
             crate::agent::summarize_text(action_summary, 96)
         )),
+        "plugin_api_call" => Some(format!(
+            "Require explicit operator confirmation before invoking plugin endpoint {} because plugin API calls can rewrite plugin execution policy or trigger external side effects.",
+            crate::agent::summarize_text(action_summary, 96)
+        )),
         _ => None,
     }
 }

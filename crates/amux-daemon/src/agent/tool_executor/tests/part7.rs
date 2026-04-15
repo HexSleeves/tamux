@@ -1814,6 +1814,70 @@ async fn critique_preflight_surfaces_switch_model_specific_guidance() {
 }
 
 #[tokio::test]
+async fn critique_preflight_runs_for_guard_always_plugin_api_calls() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.critique.enabled = true;
+    config.critique.mode = crate::agent::types::CritiqueMode::Deterministic;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let classification = crate::agent::weles_governance::classify_tool_call(
+        "plugin_api_call",
+        &serde_json::json!({
+            "plugin_name": "ops_plugin",
+            "endpoint_name": "reconfigure_runtime"
+        }),
+    );
+
+    assert_eq!(
+        classification.class,
+        crate::agent::weles_governance::WelesGovernanceClass::GuardAlways
+    );
+    assert!(
+        engine
+            .should_run_critique_preflight("plugin_api_call", &classification)
+            .await,
+        "guard-always plugin_api_call invocations should trigger critique preflight"
+    );
+}
+
+#[tokio::test]
+async fn critique_preflight_surfaces_plugin_api_call_specific_guidance() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.critique.enabled = true;
+    config.critique.mode = crate::agent::types::CritiqueMode::Deterministic;
+    config.extra.insert(
+        "test_force_critique_decision".to_string(),
+        serde_json::Value::String("proceed_with_modifications".to_string()),
+    );
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let resolution = engine
+        .run_critique_preflight(
+            "action-plugin-api-guidance",
+            "plugin_api_call",
+            "Invoke an installed plugin endpoint to reconfigure runtime behavior.",
+            &["plugin API invocation can mutate plugin execution policy or external side effects"
+                .to_string()],
+            Some("thread-plugin-api-guidance"),
+            None,
+        )
+        .await
+        .expect("critique preflight should succeed")
+        .resolution
+        .expect("resolution should exist");
+
+    assert!(resolution.modifications.iter().any(|item| {
+        item.contains("Require explicit operator confirmation")
+            || item.contains("plugin execution policy")
+            || item.contains("plugin endpoint")
+    }), "expected plugin_api_call-specific critic guidance, got: {:?}", resolution.modifications);
+}
+
+#[tokio::test]
 async fn critique_preflight_runs_for_guard_always_non_allowlisted_tool() {
     let root = tempdir().expect("tempdir should succeed");
     let manager = SessionManager::new_test(root.path()).await;
