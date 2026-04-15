@@ -8,9 +8,10 @@ use crate::agent::engine::AgentEngine;
 use crate::agent::handoff::divergent::Framing;
 
 use self::protocol::{
-    advance_round, create_debate_session, finalize_verdict, now_millis, validate_argument,
+    advance_round, build_debate_round_requests, create_debate_session, finalize_verdict,
+    now_millis, validate_argument,
 };
-use self::types::{Argument, DebateRoundRequest, DebateSession, RoleKind};
+use self::types::{Argument, DebateRoundRequest, DebateSession, DebateStatus, RoleKind};
 
 impl AgentEngine {
     pub(crate) async fn start_debate_session(
@@ -156,6 +157,68 @@ impl AgentEngine {
             "role": request.role.as_str(),
             "prompt": request.prompt,
         }))
+    }
+
+    pub(crate) async fn run_debate_round_cycle(
+        &self,
+        session_id: &str,
+    ) -> Result<serde_json::Value> {
+        let session = self
+            .get_persisted_debate_session(session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("unknown debate session: {session_id}"))?;
+
+        if session.status != DebateStatus::InProgress {
+            anyhow::bail!("cannot run debate round cycle when status is not in_progress");
+        }
+
+        let requests = build_debate_round_requests(&session);
+        if requests.is_empty() {
+            anyhow::bail!("no debate round requests available for session {session_id}");
+        }
+
+        for request in requests {
+            let already_recorded = session.arguments.iter().any(|argument| {
+                argument.round == request.round
+                    && argument.role == request.role
+                    && argument.agent_id == request.agent_id
+            });
+            if already_recorded {
+                continue;
+            }
+
+            let content = match request.role {
+                RoleKind::Proponent => format!(
+                    "Round {} proponent case for '{}': back the strongest actionable path with evidence.",
+                    request.round, request.topic
+                ),
+                RoleKind::Skeptic => format!(
+                    "Round {} skeptic case for '{}': challenge the leading path with the sharpest evidence-backed counterargument.",
+                    request.round, request.topic
+                ),
+                RoleKind::Synthesizer => format!(
+                    "Round {} synthesis for '{}': capture convergence, tensions, and the safest next action.",
+                    request.round, request.topic
+                ),
+            };
+            let evidence_refs = vec![format!(
+                "debate:{}:round:{}:{}",
+                request.session_id,
+                request.round,
+                request.role.as_str()
+            )];
+
+            self.dispatch_debate_round_request(&request, &content, evidence_refs, None)
+                .await?;
+        }
+
+        if session.current_round < session.max_rounds {
+            self.advance_debate_round(session_id).await?;
+        } else {
+            self.complete_debate_session(session_id).await?;
+        }
+
+        self.get_debate_session_payload(session_id).await
     }
 
     pub(crate) async fn advance_debate_round(&self, session_id: &str) -> Result<DebateSession> {

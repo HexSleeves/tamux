@@ -164,22 +164,16 @@ fn build_debate_round_requests_from_existing_session() {
     let requests = build_debate_round_requests(&session);
 
     assert_eq!(requests.len(), 3);
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.session_id == session.id)
-    );
+    assert!(requests
+        .iter()
+        .all(|request| request.session_id == session.id));
     assert!(requests.iter().all(|request| request.round == 2));
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.topic == "debate topic")
-    );
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.prior_argument_ids == vec!["arg-1", "arg-2"])
-    );
+    assert!(requests
+        .iter()
+        .all(|request| request.topic == "debate topic"));
+    assert!(requests
+        .iter()
+        .all(|request| request.prior_argument_ids == vec!["arg-1", "arg-2"]));
 
     let proponent = requests
         .iter()
@@ -279,4 +273,88 @@ async fn dispatch_debate_round_request_persists_structured_argument() {
         arguments[0]["content"],
         "Defend canary rollout with concrete evidence."
     );
+}
+
+#[tokio::test]
+async fn run_debate_round_cycle_completes_final_round_and_persists_verdict() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.debate.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let session = create_debate_session(
+        "cache strategy".to_string(),
+        sample_framings(),
+        2,
+        true,
+        Some("thread-1".to_string()),
+        Some("goal-1".to_string()),
+    )
+    .expect("create debate session");
+
+    let seeded = engine
+        .persist_seeded_debate_session(
+            session,
+            vec![
+                Argument {
+                    id: "arg-1".to_string(),
+                    round: 1,
+                    role: RoleKind::Proponent,
+                    agent_id: "analytical-lens".to_string(),
+                    content: "Prefer a canary rollout first.".to_string(),
+                    evidence_refs: vec!["evidence:canary".to_string()],
+                    responds_to: None,
+                    timestamp_ms: 1,
+                },
+                Argument {
+                    id: "arg-2".to_string(),
+                    round: 1,
+                    role: RoleKind::Skeptic,
+                    agent_id: "pragmatic-lens".to_string(),
+                    content: "Question the operational overhead of a canary rollout.".to_string(),
+                    evidence_refs: vec!["evidence:overhead".to_string()],
+                    responds_to: Some("arg-1".to_string()),
+                    timestamp_ms: 2,
+                },
+            ],
+        )
+        .await
+        .expect("persist seeded debate session");
+
+    assert_eq!(seeded.current_round, 2);
+    assert_eq!(build_debate_round_requests(&seeded).len(), 3);
+
+    let payload = engine
+        .run_debate_round_cycle(&seeded.id)
+        .await
+        .expect("round cycle should complete the final round");
+
+    assert_eq!(payload["session_id"], seeded.id);
+    assert_eq!(payload["status"], "completed");
+    assert_eq!(payload["current_round"].as_u64(), Some(2));
+    assert_eq!(payload["max_rounds"].as_u64(), Some(2));
+    assert_eq!(
+        payload["arguments"].as_array().map(|items| items.len()),
+        Some(5)
+    );
+    assert!(payload["verdict"].is_object());
+    assert!(payload["verdict"]["recommended_action"]
+        .as_str()
+        .is_some_and(|text| text.contains("Round 2 synthesis for 'cache strategy'")));
+
+    let persisted = engine
+        .get_persisted_debate_session(&seeded.id)
+        .await
+        .expect("load persisted debate session")
+        .expect("persisted debate session should exist");
+    assert_eq!(persisted.status, DebateStatus::Completed);
+    assert!(persisted.verdict.is_some());
+
+    let verdict_row = engine
+        .history
+        .get_debate_verdict(&seeded.id)
+        .await
+        .expect("persisted verdict query should succeed");
+    assert!(verdict_row.is_some());
 }
