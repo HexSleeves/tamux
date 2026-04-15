@@ -5605,6 +5605,29 @@ fn apply_critique_modifications_renames_sensitive_shell_argument_key() {
 }
 
 #[test]
+fn apply_critique_modifications_coerces_string_shell_max_tool_calls_to_bounded_integer() {
+    let args = serde_json::json!({
+        "command": "echo safe",
+        "max_tool_calls": "999"
+    });
+
+    let (adjusted, changes) = super::apply_critique_modifications(
+        "bash_command",
+        &args,
+        Some("proceed_with_modifications"),
+        &[],
+        &["Coerce max_tool_calls to a safer bounded integer before execution.".to_string()],
+        &[],
+        None,
+    );
+
+    assert_eq!(adjusted["max_tool_calls"].as_u64(), Some(8));
+    assert!(changes
+        .iter()
+        .any(|item| item == "shell:coerce_max_tool_calls"));
+}
+
+#[test]
 fn apply_critique_modifications_uses_typed_directives_for_shell_hardening() {
     let args = serde_json::json!({
         "command": "echo safe",

@@ -415,6 +415,17 @@ fn apply_critique_modifications(
                 map.insert("safe_flag".to_string(), value);
                 adjustments.push("shell:rename_key:dangerous_flag->safe_flag".to_string());
             }
+            if let Some(parsed) = map
+                .get("max_tool_calls")
+                .and_then(|value| value.as_str())
+                .and_then(|value| value.parse::<u64>().ok())
+            {
+                map.insert(
+                    "max_tool_calls".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(parsed.min(8))),
+                );
+                adjustments.push("shell:coerce_max_tool_calls".to_string());
+            }
             if map
                 .get("allow_network")
                 .and_then(|value| value.as_bool())
