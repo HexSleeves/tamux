@@ -31,7 +31,8 @@ impl AgentEngine {
         let signal_count = model.implicit_feedback.tool_hesitation_count
             + model.implicit_feedback.revision_message_count
             + model.implicit_feedback.correction_message_count
-            + model.implicit_feedback.fast_denial_count;
+            + model.implicit_feedback.fast_denial_count
+            + model.implicit_feedback.rapid_revert_count;
         self.history
             .insert_satisfaction_score(&crate::history::SatisfactionScoreRow {
                 id: format!("satisfaction_{}", uuid::Uuid::new_v4()),
@@ -42,6 +43,72 @@ impl AgentEngine {
                 signal_count,
             })
             .await
+    }
+
+    pub(crate) async fn record_rapid_revert_feedback(
+        &self,
+        thread_id: &str,
+        path: &str,
+        source_tool: &str,
+        repo_root: Option<&str>,
+        agent_edit_recorded_at: u64,
+        detected_at: u64,
+    ) -> Result<()> {
+        let settings = self.config.read().await.operator_model.clone();
+        if !settings.enabled || !settings.allow_implicit_feedback {
+            return Ok(());
+        }
+
+        ensure_operator_model_file(&self.data_dir).await?;
+        let age_ms = detected_at.saturating_sub(agent_edit_recorded_at);
+        let model_snapshot = {
+            let mut model = self.operator_model.write().await;
+            model.last_updated = detected_at;
+            model.implicit_feedback.rapid_revert_count += 1;
+            refresh_operator_satisfaction(&mut model);
+            persist_operator_model(&self.data_dir, &model)?;
+            model.clone()
+        };
+
+        self.record_behavioral_event(
+            "rapid_revert",
+            BehavioralEventContext {
+                thread_id: Some(thread_id),
+                task_id: None,
+                goal_run_id: None,
+                approval_id: None,
+            },
+            serde_json::json!({
+                "thread_id": thread_id,
+                "path": path,
+                "source_tool": source_tool,
+                "repo_root": repo_root,
+                "agent_edit_recorded_at": agent_edit_recorded_at,
+                "detected_at": detected_at,
+                "age_ms": age_ms,
+            }),
+        )
+        .await?;
+
+        self.persist_implicit_feedback_signal(
+            thread_id,
+            "rapid_revert",
+            -0.20,
+            detected_at,
+            serde_json::json!({
+                "thread_id": thread_id,
+                "path": path,
+                "source_tool": source_tool,
+                "repo_root": repo_root,
+                "agent_edit_recorded_at": agent_edit_recorded_at,
+                "detected_at": detected_at,
+                "age_ms": age_ms,
+            }),
+        )
+        .await?;
+        self.persist_operator_satisfaction_snapshot(thread_id, detected_at, &model_snapshot)
+            .await?;
+        Ok(())
     }
 
     pub(crate) async fn learned_approval_decision(
@@ -139,7 +206,9 @@ impl AgentEngine {
             .lock()
             .await
             .remove(approval_id)
-            .ok_or_else(|| anyhow::anyhow!("unknown critique approval continuation: {approval_id}"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("unknown critique approval continuation: {approval_id}")
+            })?;
 
         Ok(execute_tool(
             &continuation.tool_call,
@@ -237,7 +306,8 @@ impl AgentEngine {
         if settings.allow_implicit_feedback
             && (model.implicit_feedback.tool_hesitation_count > 0
                 || model.implicit_feedback.revision_message_count > 0
-                || model.implicit_feedback.fast_denial_count > 0)
+                || model.implicit_feedback.fast_denial_count > 0
+                || model.implicit_feedback.rapid_revert_count > 0)
         {
             let fallback = model
                 .implicit_feedback
@@ -245,22 +315,38 @@ impl AgentEngine {
                 .first()
                 .cloned()
                 .unwrap_or_else(|| "none yet".to_string());
-            lines.push(format!(
-                "- Implicit feedback: {} tool fallback(s), {} revision-style operator message(s), {} fast denial(s); common fallback {}",
-                model.implicit_feedback.tool_hesitation_count,
-                model.implicit_feedback.revision_message_count,
-                model.implicit_feedback.fast_denial_count,
-                fallback,
-            ));
+            if model.implicit_feedback.rapid_revert_count > 0 {
+                lines.push(format!(
+                    "- Implicit feedback: {} tool fallback(s), {} revision-style operator message(s), {} fast denial(s), {} rapid revert(s); common fallback {}",
+                    model.implicit_feedback.tool_hesitation_count,
+                    model.implicit_feedback.revision_message_count,
+                    model.implicit_feedback.fast_denial_count,
+                    model.implicit_feedback.rapid_revert_count,
+                    fallback,
+                ));
+            } else {
+                lines.push(format!(
+                    "- Implicit feedback: {} tool fallback(s), {} revision-style operator message(s), {} fast denial(s); common fallback {}",
+                    model.implicit_feedback.tool_hesitation_count,
+                    model.implicit_feedback.revision_message_count,
+                    model.implicit_feedback.fast_denial_count,
+                    fallback,
+                ));
+            }
         }
         lines.push(format!(
-            "- Satisfaction signal: {} ({:.2}); friction markers revisions {}, corrections {}, tool fallbacks {}, fast denials {}",
+            "- Satisfaction signal: {} ({:.2}); friction markers revisions {}, corrections {}, tool fallbacks {}, fast denials {}{}",
             model.operator_satisfaction.label,
             model.operator_satisfaction.score,
             model.implicit_feedback.revision_message_count,
             model.implicit_feedback.correction_message_count,
             model.implicit_feedback.tool_hesitation_count,
             model.implicit_feedback.fast_denial_count,
+            if model.implicit_feedback.rapid_revert_count > 0 {
+                format!(", rapid reverts {}", model.implicit_feedback.rapid_revert_count)
+            } else {
+                String::new()
+            },
         ));
         lines.extend(operator_adaptation_lines(&model));
         if lines.is_empty() {
@@ -848,6 +934,7 @@ impl AgentEngine {
                 "revision_message_count": operator_model.implicit_feedback.revision_message_count,
                 "correction_message_count": operator_model.implicit_feedback.correction_message_count,
                 "fast_denial_count": operator_model.implicit_feedback.fast_denial_count,
+                "rapid_revert_count": operator_model.implicit_feedback.rapid_revert_count,
                 "rapid_switch_count": operator_model.attention_topology.rapid_switch_count,
                 "recent_implicit_signals": recent_implicit_signals,
                 "recent_satisfaction_scores": recent_satisfaction_scores,

@@ -528,6 +528,7 @@ fn operator_model_diagnostic_summary_exposes_thresholds_and_friction() {
     assert!(summary.contains("corrections 1"));
     assert!(summary.contains("tool fallbacks 2"));
     assert!(summary.contains("rapid switches 3"));
+    assert!(summary.contains("rapid reverts 0"));
 }
 
 #[tokio::test]
@@ -821,6 +822,101 @@ async fn operator_correction_persists_thread_scoped_signal_and_score_snapshot() 
     assert_eq!(scores[0].label, "fragile");
     assert_eq!(scores[0].signal_count, 2);
     assert!((scores[0].score - 0.54).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn rapid_revert_persists_thread_scoped_signal_when_agent_file_edit_is_quickly_reverted() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_implicit_feedback = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    engine.set_aline_startup_test_availability(false);
+
+    let git_dir = root.path();
+    let git_init = std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(git_dir)
+        .output()
+        .expect("git init should spawn");
+    assert!(git_init.status.success(), "git init should succeed");
+
+    let git_user_name = std::process::Command::new("git")
+        .args(["config", "user.name", "tamux tests"])
+        .current_dir(git_dir)
+        .output()
+        .expect("git config user.name should spawn");
+    assert!(
+        git_user_name.status.success(),
+        "git config user.name should succeed"
+    );
+
+    let git_user_email = std::process::Command::new("git")
+        .args(["config", "user.email", "tamux@example.com"])
+        .current_dir(git_dir)
+        .output()
+        .expect("git config user.email should spawn");
+    assert!(
+        git_user_email.status.success(),
+        "git config user.email should succeed"
+    );
+
+    let src_dir = root.path().join("src");
+    std::fs::create_dir_all(&src_dir).expect("create src dir");
+    let file_path = src_dir.join("lib.rs");
+    let baseline = "pub fn answer() -> u32 {\n    41\n}\n";
+    std::fs::write(&file_path, baseline).expect("write baseline file");
+
+    let git_add = std::process::Command::new("git")
+        .args(["add", "src/lib.rs"])
+        .current_dir(git_dir)
+        .output()
+        .expect("git add should spawn");
+    assert!(git_add.status.success(), "git add should succeed");
+
+    let git_commit = std::process::Command::new("git")
+        .args(["commit", "-m", "initial"])
+        .current_dir(git_dir)
+        .output()
+        .expect("git commit should spawn");
+    assert!(git_commit.status.success(), "git commit should succeed");
+
+    let agent_version = "pub fn answer() -> u32 {\n    42\n}\n";
+    std::fs::write(&file_path, agent_version).expect("write agent version");
+    engine
+        .record_file_work_context(
+            "thread-rapid-revert",
+            None,
+            "write_file",
+            file_path.to_str().expect("utf-8 file path"),
+        )
+        .await;
+
+    std::fs::write(&file_path, baseline).expect("revert file back to baseline");
+    engine
+        .refresh_thread_repo_context("thread-rapid-revert")
+        .await;
+
+    let signals = engine
+        .history
+        .list_implicit_signals("thread-rapid-revert", 10)
+        .await
+        .expect("load rapid revert signals");
+    assert_eq!(
+        signals.len(),
+        1,
+        "rapid revert should persist exactly one implicit feedback signal"
+    );
+    assert_eq!(signals[0].signal_type, "rapid_revert");
+    assert!(
+        signals[0].weight < -0.16,
+        "rapid revert should be a stronger negative signal than an operator correction"
+    );
+    assert!(signals[0]
+        .context_snapshot_json
+        .as_deref()
+        .is_some_and(|json| json.contains("src/lib.rs") && json.contains("write_file")));
 }
 
 #[test]
