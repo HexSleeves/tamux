@@ -217,7 +217,7 @@ fn sample_session(session_id: &str, workspace_id: &str) -> amux_protocol::Sessio
     }
 }
 
-async fn spawn_goal_recording_server(
+pub(crate) async fn spawn_goal_recording_server(
     recorded_bodies: Arc<StdMutex<VecDeque<String>>>,
     assistant_content: String,
 ) -> String {
