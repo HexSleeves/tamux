@@ -382,6 +382,12 @@ impl AgentEngine {
             return;
         }
 
+        let predicted_items = next_items
+            .iter()
+            .filter(|item| item.intent_prediction.is_some())
+            .cloned()
+            .collect::<Vec<_>>();
+
         let surface_cooldown_ms = settings.surface_cooldown_seconds.saturating_mul(1000);
         let cooling_down = runtime
             .last_surface_at
@@ -399,6 +405,10 @@ impl AgentEngine {
             runtime.last_surface_at = Some(now);
         }
         drop(runtime);
+
+        for item in &predicted_items {
+            self.persist_intent_prediction_if_present(item).await;
+        }
 
         self.emit_anticipatory_update(next_items);
     }

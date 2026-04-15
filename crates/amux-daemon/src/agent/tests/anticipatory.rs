@@ -759,6 +759,51 @@ async fn predictive_hydration_populates_prewarm_cache_for_hydrated_thread() {
 }
 
 #[tokio::test]
+async fn intent_prediction_persists_and_resolves_when_operator_action_matches() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let mut task = sample_task("task-approval-persist", Some("thread-intent-persist"), None);
+    task.title = "Need approval".to_string();
+    task.status = TaskStatus::AwaitingApproval;
+    engine.tasks.lock().await.push_back(task);
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-intent-persist"), None)
+        .await
+        .unwrap();
+
+    engine.run_anticipatory_tick().await;
+
+    let before = engine
+        .history
+        .list_intent_predictions("thread-intent-persist", 10)
+        .await
+        .expect("list persisted intent predictions before resolution");
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].predicted_action, "review pending approval");
+    assert_eq!(before[0].was_correct, None);
+
+    engine
+        .record_operator_message("thread-intent-persist", "please review the approval first", false)
+        .await
+        .expect("record operator message");
+
+    let after = engine
+        .history
+        .list_intent_predictions("thread-intent-persist", 10)
+        .await
+        .expect("list persisted intent predictions after resolution");
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].actual_action.as_deref(), Some("review pending approval"));
+    assert_eq!(after[0].was_correct, Some(true));
+}
+
+#[tokio::test]
 async fn intent_prediction_includes_cached_prewarm_summary_when_available() {
     let root = tempdir().unwrap();
     let manager = SessionManager::new_test(root.path()).await;

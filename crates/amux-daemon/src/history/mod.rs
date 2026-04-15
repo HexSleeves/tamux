@@ -229,6 +229,18 @@ pub struct SatisfactionScoreRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct IntentPredictionRow {
+    pub id: String,
+    pub session_id: String,
+    pub context_state_hash: String,
+    pub predicted_action: String,
+    pub confidence: f64,
+    pub actual_action: Option<String>,
+    pub was_correct: Option<bool>,
+    pub created_at_ms: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct OperatorProfileSessionRow {
     pub session_id: String,
     pub kind: String,

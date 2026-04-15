@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::learning::traces::hash_context_blob;
 use crate::agent::tool_executor::execute_tool;
 
 impl AgentEngine {
@@ -44,6 +45,51 @@ impl AgentEngine {
                 signal_count,
             })
             .await
+    }
+
+    pub(crate) async fn persist_intent_prediction_if_present(&self, item: &AnticipatoryItem) {
+        let Some(payload) = item.intent_prediction.as_ref() else {
+            return;
+        };
+        let session_id = item
+            .thread_id
+            .clone()
+            .unwrap_or_else(|| "global".to_string());
+        let context_state_hash = hash_context_blob(&format!(
+            "{}|{}|{}|{}",
+            session_id,
+            item.kind,
+            payload.primary_action,
+            item.preferred_attention_surface.as_deref().unwrap_or_default()
+        ));
+        let _ = self
+            .history
+            .insert_intent_prediction(&crate::history::IntentPredictionRow {
+                id: format!("intent_prediction_{}", uuid::Uuid::new_v4()),
+                session_id,
+                context_state_hash,
+                predicted_action: payload.primary_action.clone(),
+                confidence: payload.confidence,
+                actual_action: None,
+                was_correct: None,
+                created_at_ms: item.created_at,
+            })
+            .await;
+    }
+
+    fn classify_observed_operator_action(content: &str) -> &'static str {
+        let lowered = content.trim().to_ascii_lowercase();
+        if lowered.contains("approval") {
+            "review pending approval"
+        } else if lowered.contains("test")
+            || lowered.contains("build")
+            || lowered.contains("repo")
+            || lowered.contains("diff")
+        {
+            "inspect or test recent repo changes"
+        } else {
+            "continue the active thread"
+        }
     }
 
     pub(crate) async fn record_rapid_revert_feedback(
@@ -592,6 +638,12 @@ impl AgentEngine {
             self.persist_operator_satisfaction_snapshot(thread_id, now, &model)
                 .await?;
         }
+
+        let observed_action = Self::classify_observed_operator_action(content);
+        let _ = self
+            .history
+            .resolve_latest_intent_prediction(thread_id, observed_action, Some(observed_action))
+            .await;
 
         if let Err(error) = self.analyze_emergent_protocol_for_thread(thread_id).await {
             tracing::debug!(thread_id = %thread_id, error = %error, "emergent protocol analysis failed after operator message");

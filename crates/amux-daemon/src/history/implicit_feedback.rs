@@ -76,6 +76,107 @@ impl HistoryStore {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
+    pub async fn insert_intent_prediction(&self, row: &IntentPredictionRow) -> Result<()> {
+        let row = row.clone();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT INTO intent_predictions (id, session_id, context_state_hash, predicted_action, confidence, actual_action, was_correct, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        row.id,
+                        row.session_id,
+                        row.context_state_hash,
+                        row.predicted_action,
+                        row.confidence,
+                        row.actual_action,
+                        row.was_correct.map(|value| if value { 1i64 } else { 0i64 }),
+                        row.created_at_ms as i64,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn list_intent_predictions(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<IntentPredictionRow>> {
+        let session_id = session_id.to_string();
+        let limit = limit.max(1) as i64;
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, session_id, context_state_hash, predicted_action, confidence, actual_action, was_correct, created_at_ms
+                     FROM intent_predictions
+                     WHERE session_id = ?1
+                     ORDER BY created_at_ms DESC, id DESC
+                     LIMIT ?2",
+                )?;
+                let rows = stmt.query_map(params![session_id, limit], |row| {
+                    Ok(IntentPredictionRow {
+                        id: row.get(0)?,
+                        session_id: row.get(1)?,
+                        context_state_hash: row.get(2)?,
+                        predicted_action: row.get(3)?,
+                        confidence: row.get(4)?,
+                        actual_action: row.get(5)?,
+                        was_correct: row
+                            .get::<_, Option<i64>>(6)?
+                            .map(|value| value != 0),
+                        created_at_ms: row.get::<_, i64>(7)?.max(0) as u64,
+                    })
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn resolve_latest_intent_prediction(
+        &self,
+        session_id: &str,
+        actual_action: &str,
+        matched_predicted_action: Option<&str>,
+    ) -> Result<()> {
+        let session_id = session_id.to_string();
+        let actual_action = actual_action.to_string();
+        let matched_predicted_action = matched_predicted_action.map(str::to_string);
+        self.conn
+            .call(move |conn| {
+                let latest: Option<String> = conn
+                    .query_row(
+                        "SELECT id FROM intent_predictions
+                         WHERE session_id = ?1 AND was_correct IS NULL
+                         ORDER BY created_at_ms DESC, id DESC
+                         LIMIT 1",
+                        params![session_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let Some(id) = latest else {
+                    return Ok(());
+                };
+                let was_correct = matched_predicted_action.is_some();
+                conn.execute(
+                    "UPDATE intent_predictions
+                     SET actual_action = ?2, was_correct = ?3
+                     WHERE id = ?1",
+                    params![
+                        id,
+                        actual_action,
+                        if was_correct { 1i64 } else { 0i64 },
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     pub async fn list_satisfaction_scores(
         &self,
         session_id: &str,

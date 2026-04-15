@@ -199,6 +199,30 @@ async fn init_schema_adds_implicit_feedback_tables() -> Result<()> {
         Some("idx_satisfaction_scores_session_ts")
     );
 
+    let intent_status = store
+        .conn
+        .call(|conn| {
+            let predictions_has_actual = table_has_column(conn, "intent_predictions", "actual_action")?;
+            let predictions_has_correct = table_has_column(conn, "intent_predictions", "was_correct")?;
+            let predictions_index: Option<String> = conn
+                .query_row(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_intent_predictions_session_ts'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok((predictions_has_actual, predictions_has_correct, predictions_index))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    assert!(intent_status.0);
+    assert!(intent_status.1);
+    assert_eq!(
+        intent_status.2.as_deref(),
+        Some("idx_intent_predictions_session_ts")
+    );
+
     std::fs::remove_dir_all(root)?;
     Ok(())
 }
@@ -247,6 +271,45 @@ async fn implicit_feedback_rows_round_trip() -> Result<()> {
     assert_eq!(scores[0].label, "healthy");
     assert_eq!(scores[0].signal_count, 2);
     assert!((scores[0].score - 0.68).abs() < f64::EPSILON);
+
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn intent_prediction_rows_round_trip_and_resolve() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+
+    store
+        .insert_intent_prediction(&IntentPredictionRow {
+            id: "intent-1".to_string(),
+            session_id: "thread-intent".to_string(),
+            context_state_hash: "ctx-1".to_string(),
+            predicted_action: "review pending approval".to_string(),
+            confidence: 0.86,
+            actual_action: None,
+            was_correct: None,
+            created_at_ms: 1_717_300_003,
+        })
+        .await?;
+
+    let before = store.list_intent_predictions("thread-intent", 10).await?;
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].predicted_action, "review pending approval");
+    assert_eq!(before[0].was_correct, None);
+
+    store
+        .resolve_latest_intent_prediction(
+            "thread-intent",
+            "review pending approval",
+            Some("review pending approval"),
+        )
+        .await?;
+
+    let after = store.list_intent_predictions("thread-intent", 10).await?;
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].actual_action.as_deref(), Some("review pending approval"));
+    assert_eq!(after[0].was_correct, Some(true));
 
     std::fs::remove_dir_all(root)?;
     Ok(())
