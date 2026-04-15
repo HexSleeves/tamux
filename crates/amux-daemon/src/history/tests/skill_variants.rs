@@ -683,6 +683,89 @@ async fn successful_context_mismatch_branches_new_variant() -> Result<()> {
 }
 
 #[tokio::test]
+async fn cross_breed_skill_variants_creates_candidate_offspring_variant() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    store.init_schema().await?;
+    let frontend = root.join("skills/generated/build-pipeline--frontend.md");
+    let rust = root.join("skills/generated/build-pipeline--rust.md");
+    fs::write(
+        &frontend,
+        "# Build pipeline (frontend)\n\n## When To Use\nUse this variant for frontend build pipelines.\n\n## How\nRun react build checks first.\n",
+    )?;
+    fs::write(
+        &rust,
+        "# Build pipeline (rust)\n\n## When To Use\nUse this variant for rust build pipelines.\n\n## How\nRun cargo build --workspace.\n",
+    )?;
+
+    let frontend_record = store.register_skill_document(&frontend).await?;
+    let rust_record = store.register_skill_document(&rust).await?;
+    let frontend_tags = vec!["frontend".to_string()];
+    let rust_tags = vec!["rust".to_string()];
+
+    store
+        .record_skill_variant_consultation(&SkillVariantConsultationRecord {
+            usage_id: "usage-cross-breed-frontend",
+            variant_id: &frontend_record.variant_id,
+            thread_id: Some("thread-cross-breed-frontend"),
+            task_id: Some("task-cross-breed-frontend"),
+            goal_run_id: Some("goal-cross-breed-frontend"),
+            context_tags: &frontend_tags,
+            consulted_at: 100,
+        })
+        .await?;
+    store
+        .settle_skill_variant_usage(
+            Some("thread-cross-breed-frontend"),
+            Some("task-cross-breed-frontend"),
+            Some("goal-cross-breed-frontend"),
+            "success",
+        )
+        .await?;
+
+    store
+        .record_skill_variant_consultation(&SkillVariantConsultationRecord {
+            usage_id: "usage-cross-breed-rust",
+            variant_id: &rust_record.variant_id,
+            thread_id: Some("thread-cross-breed-rust"),
+            task_id: Some("task-cross-breed-rust"),
+            goal_run_id: Some("goal-cross-breed-rust"),
+            context_tags: &rust_tags,
+            consulted_at: 101,
+        })
+        .await?;
+    store
+        .settle_skill_variant_usage(
+            Some("thread-cross-breed-rust"),
+            Some("task-cross-breed-rust"),
+            Some("goal-cross-breed-rust"),
+            "success",
+        )
+        .await?;
+
+    let offspring = store
+        .cross_breed_skill_variants(&frontend_record, &rust_record)
+        .await?
+        .expect("cross-breeding should create a candidate offspring variant");
+
+    assert_eq!(offspring.skill_name, "build-pipeline");
+    assert_eq!(offspring.status, "draft");
+    assert_ne!(offspring.variant_id, frontend_record.variant_id);
+    assert_ne!(offspring.variant_id, rust_record.variant_id);
+    assert!(offspring.context_tags.iter().any(|tag| tag == "frontend"));
+    assert!(offspring.context_tags.iter().any(|tag| tag == "rust"));
+    assert!(root.join("skills").join(&offspring.relative_path).exists());
+
+    let fetched = store
+        .get_skill_variant(&offspring.variant_id)
+        .await?
+        .expect("offspring should be inserted into the variant table");
+    assert_eq!(fetched.status, "draft");
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stable_variant_merges_back_into_canonical() -> Result<()> {
     let (store, root) = make_test_store().await?;
     store.init_schema().await?;

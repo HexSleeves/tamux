@@ -459,6 +459,103 @@ impl HistoryStore {
         self.list_skill_variants(Some(&skill_name), 200).await
     }
 
+    pub async fn cross_breed_skill_variants(
+        &self,
+        left_parent: &SkillVariantRecord,
+        right_parent: &SkillVariantRecord,
+    ) -> Result<Option<SkillVariantRecord>> {
+        if left_parent.skill_name != right_parent.skill_name {
+            anyhow::bail!(
+                "cannot cross-breed variants from different skill families: '{}' vs '{}'",
+                left_parent.skill_name,
+                right_parent.skill_name
+            );
+        }
+
+        let left_path = self.skills_root().join(&left_parent.relative_path);
+        let right_path = self.skills_root().join(&right_parent.relative_path);
+        if !left_path.exists() || !right_path.exists() {
+            return Ok(None);
+        }
+
+        let left_content = std::fs::read_to_string(&left_path)
+            .with_context(|| format!("failed to read left parent skill {}", left_path.display()))?;
+        let right_content = std::fs::read_to_string(&right_path)
+            .with_context(|| format!("failed to read right parent skill {}", right_path.display()))?;
+
+        let title = extract_markdown_title(&left_content)
+            .or_else(|| extract_markdown_title(&right_content))
+            .unwrap_or_else(|| {
+                left_parent
+                    .skill_name
+                    .split('-')
+                    .map(|part| {
+                        let mut chars = part.chars();
+                        match chars.next() {
+                            Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                            None => String::new(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            });
+
+        let mut combined_tags = left_parent
+            .context_tags
+            .iter()
+            .chain(right_parent.context_tags.iter())
+            .map(|tag| tag.to_ascii_lowercase())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        combined_tags.sort();
+        if combined_tags.is_empty() {
+            combined_tags.push("hybrid".to_string());
+        }
+
+        let left_slug = left_parent.variant_name.to_ascii_lowercase();
+        let right_slug = right_parent.variant_name.to_ascii_lowercase();
+        let variant_slug = format!("cross-{}-{}", left_slug, right_slug)
+            .replace("canonical", "base")
+            .replace("--", "-");
+        let offspring_path = self
+            .skills_root()
+            .join("generated")
+            .join(format!("{}--{}.md", left_parent.skill_name, variant_slug));
+        if offspring_path.exists() {
+            let record = self.register_skill_document(&offspring_path).await?;
+            self.update_skill_variant_status(&record.variant_id, "draft").await?;
+            return self.get_skill_variant(&record.variant_id).await;
+        }
+
+        let offspring_content = format!(
+            "# {} ({})\n\n> Auto cross-bred from `{}` (`{}`) and `{}` (`{}`).\n\n## When To Use\nUse this candidate when the workspace context combines: {}.\n\n## Parent A Signals\n{}\n\n## Parent B Signals\n{}\n",
+            title,
+            combined_tags.join(", "),
+            left_parent.relative_path,
+            left_parent.variant_id,
+            right_parent.relative_path,
+            right_parent.variant_id,
+            combined_tags.join(", "),
+            extract_mergeable_variant_body(&left_content),
+            extract_mergeable_variant_body(&right_content),
+        );
+
+        if let Some(parent) = offspring_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&offspring_path, offspring_content).with_context(|| {
+            format!(
+                "failed to write cross-bred skill variant {}",
+                offspring_path.display()
+            )
+        })?;
+
+        let record = self.register_skill_document(&offspring_path).await?;
+        self.update_skill_variant_status(&record.variant_id, "draft").await?;
+        self.get_skill_variant(&record.variant_id).await
+    }
+
     async fn create_branched_skill_variant(
         &self,
         skill_name: &str,
