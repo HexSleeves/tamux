@@ -4940,6 +4940,117 @@ fn apply_critique_modifications_strips_explicit_messaging_targets_and_broadcasts
 }
 
 #[tokio::test]
+async fn critique_confirmation_marker_returns_pending_approval_for_plugin_api_call() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.critique.enabled = true;
+    config.critique.mode = crate::agent::types::CritiqueMode::Deterministic;
+    config.extra.insert(
+        "test_force_critique_decision".to_string(),
+        serde_json::Value::String("proceed_with_modifications".to_string()),
+    );
+    let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-plugin-api-critique-pending-approval".to_string(),
+        ToolFunction {
+            name: "plugin_api_call".to_string(),
+            arguments: serde_json::json!({
+                "plugin_name": "ops_plugin",
+                "endpoint_name": "reconfigure_runtime"
+            })
+            .to_string(),
+        },
+    );
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.risk_fingerprint.risk_tolerance = crate::agent::operator_model::RiskTolerance::Moderate;
+        model.operator_satisfaction.label = "strained".to_string();
+        model.operator_satisfaction.score = 0.21;
+    }
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        "thread-plugin-api-critique-pending-approval",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(!result.is_error, "critique confirmation should return a pending approval");
+    let pending = result
+        .pending_approval
+        .expect("plugin_api_call should surface a pending approval");
+    assert!(pending.approval_id.starts_with("critique-confirmation-"));
+    assert!(pending.command.contains("plugin_api_call"));
+    assert!(result.content.contains("requires operator approval before execution"));
+}
+
+#[tokio::test]
+async fn critique_confirmation_marker_returns_pending_approval_for_synthesize_tool() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.critique.enabled = true;
+    config.critique.mode = crate::agent::types::CritiqueMode::Deterministic;
+    config.extra.insert(
+        "test_force_critique_decision".to_string(),
+        serde_json::Value::String("proceed_with_modifications".to_string()),
+    );
+    let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-synthesize-tool-critique-pending-approval".to_string(),
+        ToolFunction {
+            name: "synthesize_tool".to_string(),
+            arguments: serde_json::json!({
+                "kind": "cli",
+                "target": "gh --help",
+                "activate": true
+            })
+            .to_string(),
+        },
+    );
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.risk_fingerprint.risk_tolerance = crate::agent::operator_model::RiskTolerance::Moderate;
+        model.operator_satisfaction.label = "strained".to_string();
+        model.operator_satisfaction.score = 0.21;
+    }
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        "thread-synthesize-tool-critique-pending-approval",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(!result.is_error, "critique confirmation should return a pending approval");
+    let pending = result
+        .pending_approval
+        .expect("synthesize_tool should surface a pending approval");
+    assert!(pending.approval_id.starts_with("critique-confirmation-"));
+    assert!(pending.command.contains("synthesize_tool"));
+    assert!(result.content.contains("requires operator approval before execution"));
+}
+
+#[tokio::test]
 async fn critique_confirmation_marker_returns_pending_approval_for_switch_model() {
     let root = tempdir().expect("tempdir should succeed");
     let manager = SessionManager::new_test(root.path()).await;
