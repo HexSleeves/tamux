@@ -53,6 +53,22 @@ pub struct Argument {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebateRoundRequest {
+    pub session_id: String,
+    pub round: u8,
+    pub role: RoleKind,
+    pub agent_id: String,
+    pub topic: String,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub framing_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub framing_contribution_id: Option<String>,
+    #[serde(default)]
+    pub prior_argument_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DebateVerdict {
     pub consensus_points: Vec<String>,
     pub unresolved_tensions: Vec<String>,
