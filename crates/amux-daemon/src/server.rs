@@ -78,6 +78,8 @@ fn client_message_requires_startup_readiness(msg: &ClientMessage) -> bool {
     !matches!(
         msg,
         ClientMessage::Ping
+            | ClientMessage::AgentGetConfig
+            | ClientMessage::AgentGetEffectiveConfigState
             | ClientMessage::GatewayRegister { .. }
             | ClientMessage::GatewayAck { .. }
             | ClientMessage::GatewayIncomingEvent { .. }
@@ -96,6 +98,21 @@ fn client_message_requires_startup_readiness(msg: &ClientMessage) -> bool {
             | ClientMessage::AgentGetOperationStatus { .. }
             | ClientMessage::AgentGetHealthStatus
     )
+}
+
+#[cfg(test)]
+mod startup_readiness_tests {
+    use super::*;
+
+    #[test]
+    fn config_requests_are_not_blocked_on_startup_readiness() {
+        assert!(!client_message_requires_startup_readiness(
+            &ClientMessage::AgentGetConfig
+        ));
+        assert!(!client_message_requires_startup_readiness(
+            &ClientMessage::AgentGetEffectiveConfigState
+        ));
+    }
 }
 
 async fn handle_connection<S>(

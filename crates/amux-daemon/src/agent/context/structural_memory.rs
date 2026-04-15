@@ -247,7 +247,11 @@ impl ThreadStructuralMemory {
             .find(|node_id| self.knows_node(node_id))
             .cloned()
             .or_else(|| self.observed_files.first().map(|node| node.node_id.clone()))
-            .or_else(|| self.workspace_seeds.first().map(|seed| seed.node_id.clone()));
+            .or_else(|| {
+                self.workspace_seeds
+                    .first()
+                    .map(|seed| seed.node_id.clone())
+            });
         let Some(anchor) = anchor else {
             return Vec::new();
         };

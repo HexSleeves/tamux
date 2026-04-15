@@ -1772,6 +1772,125 @@ async fn dispatch_via_bid_protocol_tool_routes_through_collaboration_runtime() {
     assert_eq!(session["role_assignment"]["reviewer_task_id"], child_b.id);
 }
 
+#[tokio::test]
+async fn dispatch_via_bid_protocol_tool_bootstraps_collaboration_agents_before_role_assignment() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.collaboration.enabled = true;
+    let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let parent = engine
+        .enqueue_task(
+            "Parent coordinator".to_string(),
+            "Choose the best owner for the next workstream".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "user",
+            None,
+            None,
+            Some("thread-parent".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    let child_a = engine
+        .enqueue_task(
+            "Research child".to_string(),
+            "Prepare a bid for implementation ownership".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "subagent",
+            None,
+            Some(parent.id.clone()),
+            Some("thread-parent".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    let child_b = engine
+        .enqueue_task(
+            "Review child".to_string(),
+            "Prepare a bid for review ownership".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "subagent",
+            None,
+            Some(parent.id.clone()),
+            Some("thread-parent".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-dispatch-via-bid-protocol-bootstrap".to_string(),
+        ToolFunction {
+            name: "dispatch_via_bid_protocol".to_string(),
+            arguments: serde_json::json!({
+                "parent_task_id": parent.id,
+                "bids": [
+                    {
+                        "task_id": child_b.id,
+                        "confidence": 0.63,
+                        "availability": "available"
+                    },
+                    {
+                        "task_id": child_a.id,
+                        "confidence": 0.88,
+                        "availability": "available"
+                    }
+                ]
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        "thread-parent",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(
+        !result.is_error,
+        "dispatch_via_bid_protocol should bootstrap collaboration agents: {}",
+        result.content
+    );
+
+    let payload: serde_json::Value =
+        serde_json::from_str(&result.content).expect("tool result should be valid json");
+    assert_eq!(payload["primary_task_id"], child_a.id);
+    assert_eq!(payload["reviewer_task_id"], child_b.id);
+
+    let session = engine
+        .collaboration_sessions_json(Some(&parent.id))
+        .await
+        .expect("session lookup should succeed");
+    assert_eq!(
+        session["agents"].as_array().map(|items| items.len()),
+        Some(2),
+        "eligible subagents should be bootstrapped into the collaboration session"
+    );
+    assert_eq!(session["role_assignment"]["primary_task_id"], child_a.id);
+    assert_eq!(session["role_assignment"]["reviewer_task_id"], child_b.id);
+}
+
 async fn spawn_model_fetch_server(models_body: serde_json::Value) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
