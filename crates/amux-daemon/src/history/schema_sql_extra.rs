@@ -521,6 +521,24 @@ pub(super) fn extended_schema_sql() -> &'static str {
             );
             CREATE INDEX IF NOT EXISTS idx_forge_pass_log_agent ON forge_pass_log(agent_id, completed_at_ms DESC);
 
+            CREATE TABLE IF NOT EXISTS event_triggers (
+                id                 TEXT PRIMARY KEY,
+                event_family       TEXT NOT NULL,
+                event_kind         TEXT NOT NULL,
+                target_state       TEXT,
+                thread_id          TEXT,
+                enabled            INTEGER NOT NULL DEFAULT 1,
+                cooldown_secs      INTEGER NOT NULL DEFAULT 0,
+                risk_label         TEXT NOT NULL DEFAULT 'low',
+                notification_kind  TEXT NOT NULL,
+                title_template     TEXT NOT NULL,
+                body_template      TEXT NOT NULL,
+                created_at         INTEGER NOT NULL,
+                updated_at         INTEGER NOT NULL,
+                last_fired_at      INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_event_triggers_family_kind_enabled ON event_triggers(event_family, event_kind, enabled, updated_at DESC);
+
             CREATE TABLE IF NOT EXISTS operator_profile_checkins (
                 id            TEXT PRIMARY KEY,
                 kind          TEXT NOT NULL,

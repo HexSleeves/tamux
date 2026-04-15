@@ -229,6 +229,24 @@ pub struct SatisfactionScoreRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct EventTriggerRow {
+    pub id: String,
+    pub event_family: String,
+    pub event_kind: String,
+    pub target_state: Option<String>,
+    pub thread_id: Option<String>,
+    pub enabled: bool,
+    pub cooldown_secs: u64,
+    pub risk_label: String,
+    pub notification_kind: String,
+    pub title_template: String,
+    pub body_template: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub last_fired_at: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
 pub struct IntentPredictionRow {
     pub id: String,
     pub session_id: String,
@@ -758,6 +776,7 @@ mod context_archive;
 mod core;
 mod critique;
 mod debate;
+mod event_triggers;
 mod gateway_state;
 mod goal_runs;
 mod governance;
