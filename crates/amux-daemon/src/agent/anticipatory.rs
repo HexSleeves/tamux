@@ -656,14 +656,18 @@ impl AgentEngine {
         let git = crate::git::get_git_status(&repo_root);
         let now = now_millis();
         let recent_health = self.history.list_health_log(8).await.unwrap_or_default();
-        let recent_cargo_failure = recent_health.into_iter().find(|entry| {
-            now.saturating_sub(entry.6) <= RECENT_HEALTH_WINDOW_MS
-                && entry.3 != "healthy"
-                && entry
-                    .5
-                    .as_deref()
-                    .is_some_and(|text| text.contains("cargo test failed"))
-        });
+        let degraded_cargo_entries = recent_health
+            .into_iter()
+            .filter(|entry| {
+                now.saturating_sub(entry.6) <= RECENT_HEALTH_WINDOW_MS
+                    && entry.3 != "healthy"
+                    && entry
+                        .5
+                        .as_deref()
+                        .is_some_and(|text| text.contains("cargo test failed"))
+            })
+            .collect::<Vec<_>>();
+        let recent_cargo_failure = degraded_cargo_entries.first().cloned();
 
         let hydration_age_ms = {
             let runtime = self.anticipatory.read().await;
@@ -730,11 +734,17 @@ impl AgentEngine {
 
         let (_, _, _, health_state, _, intervention, _) =
             recent_cargo_failure.expect("checked is_some above");
+        let degraded_count = degraded_cargo_entries.len() as f64;
+        let confidence = (0.72 + (degraded_count - 1.0).max(0.0) * 0.08).clamp(0.0, 1.0);
         let mut bullets = vec![
             "prediction_type=build_test_risk".to_string(),
             format!(
                 "dirty repo state: modified={} staged={} untracked={}",
                 git.modified, git.staged, git.untracked
+            ),
+            format!(
+                "degraded cargo health evidence count={} within rolling window",
+                degraded_cargo_entries.len()
             ),
         ];
         if let Some(intervention) = intervention {
@@ -747,7 +757,7 @@ impl AgentEngine {
 
         Some(SystemForesight {
             prediction_type: "build_test_risk",
-            confidence: 0.78,
+            confidence,
             rationale:
                 "Dirty repo context overlaps with a recent cargo failure, so another build/test failure is likely until the changes are verified."
                     .to_string(),

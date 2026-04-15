@@ -681,6 +681,100 @@ async fn anticipatory_tick_surfaces_persisted_system_outcome_foresight_for_build
 }
 
 #[tokio::test]
+async fn build_test_risk_confidence_increases_with_repeated_degraded_health_entries() {
+    let root = tempdir().unwrap();
+    let repo_root = root.path().join("repo-build-confidence");
+    std::fs::create_dir_all(&repo_root).unwrap();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("git init");
+    std::fs::write(
+        repo_root.join("Cargo.toml"),
+        "[package]\nname='demo'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(repo_root.join("src")).unwrap();
+    std::fs::write(repo_root.join("src/lib.rs"), "pub fn broken() {}\n").unwrap();
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-build-confidence"), None)
+        .await
+        .unwrap();
+    engine.thread_work_contexts.write().await.insert(
+        "thread-build-confidence".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-build-confidence".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "src/lib.rs".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some(repo_root.to_string_lossy().to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+
+    engine
+        .history
+        .insert_health_log(
+            "health-build-confidence-1",
+            "task",
+            "cargo-test",
+            "degraded",
+            Some("{\"tool\":\"cargo test\",\"error\":\"Command failed\"}"),
+            Some("recent cargo test failed in this repo"),
+            now_millis() - 2_000,
+        )
+        .await
+        .expect("save first health log");
+    let settings = engine.config.read().await.anticipatory.clone();
+    let single_confidence = engine
+        .compute_system_outcome_foresight(&settings)
+        .await
+        .map(|item| item.confidence)
+        .expect("expected foresight item after one degraded health entry");
+
+    engine
+        .history
+        .insert_health_log(
+            "health-build-confidence-2",
+            "task",
+            "cargo-test",
+            "degraded",
+            Some("{\"tool\":\"cargo test\",\"error\":\"Command failed\"}"),
+            Some("recent cargo test failed in this repo"),
+            now_millis() - 1_000,
+        )
+        .await
+        .expect("save second health log");
+    let repeated_confidence = engine
+        .compute_system_outcome_foresight(&settings)
+        .await
+        .map(|item| item.confidence)
+        .expect("expected foresight item after repeated degraded health entries");
+
+    assert!((0.0..=1.0).contains(&single_confidence));
+    assert!((0.0..=1.0).contains(&repeated_confidence));
+    assert!(
+        repeated_confidence > single_confidence,
+        "expected repeated degraded build/test health evidence to raise foresight confidence"
+    );
+}
+
+#[tokio::test]
 async fn anticipatory_tick_surfaces_stale_context_foresight_when_hydration_lags_session_rhythm() {
     let root = tempdir().unwrap();
     let manager = SessionManager::new_test(root.path()).await;
