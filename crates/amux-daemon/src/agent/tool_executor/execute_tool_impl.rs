@@ -920,6 +920,13 @@ fn apply_critique_modifications(
     (adjusted, adjustments)
 }
 
+fn injected_reserved_critique_marker(args: &serde_json::Value) -> Option<String> {
+    let map = args.as_object()?;
+    map.keys()
+        .find(|key| key.starts_with("__critique_"))
+        .cloned()
+}
+
 fn annotate_review_with_critique(
     review: &mut crate::agent::types::WelesReviewMeta,
     critique_session_id: Option<&str>,
@@ -991,6 +998,18 @@ async fn prepare_tool_execution(
     };
     let critique_classification =
         crate::agent::weles_governance::classify_tool_call(tool_call.function.name.as_str(), &args);
+    if let Some(marker) = injected_reserved_critique_marker(&args) {
+        return Err(ToolResult {
+            tool_call_id: tool_call.id.clone(),
+            name: tool_call.function.name.clone(),
+            content: format!(
+                "Rejected reserved internal critique marker `{marker}` in tool arguments."
+            ),
+            is_error: true,
+            weles_review: tool_call.weles_review.clone(),
+            pending_approval: None,
+        });
+    }
     let current_task = if let Some(task_id) = task_id {
         agent.list_tasks().await.into_iter().find(|task| task.id == task_id)
     } else {
