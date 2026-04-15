@@ -400,6 +400,53 @@ fn has_directive(
     directives.iter().any(|directive| *directive == needle)
 }
 
+fn maybe_rewrite_shell_tool_to_replace_in_file(
+    tool_name: &str,
+    args: &serde_json::Value,
+    critique_modifications: &[String],
+) -> Option<(String, serde_json::Value, Vec<String>)> {
+    if !matches!(
+        tool_name,
+        "bash_command" | "run_terminal_command" | "execute_managed_command"
+    ) {
+        return None;
+    }
+
+    let prefers_replace_in_file = critique_modifications.iter().any(|modification| {
+        modification
+            .trim()
+            .to_ascii_lowercase()
+            .contains("prefer replace_in_file")
+    });
+    if !prefers_replace_in_file {
+        return None;
+    }
+
+    let path = args.get("path").and_then(|value| value.as_str())?;
+    let old_text = args.get("old_text").and_then(|value| value.as_str())?;
+    let new_text = args.get("new_text").and_then(|value| value.as_str())?;
+
+    let mut rewritten = serde_json::Map::new();
+    rewritten.insert("path".to_string(), serde_json::Value::String(path.to_string()));
+    rewritten.insert(
+        "old_text".to_string(),
+        serde_json::Value::String(old_text.to_string()),
+    );
+    rewritten.insert(
+        "new_text".to_string(),
+        serde_json::Value::String(new_text.to_string()),
+    );
+    if let Some(replace_all) = args.get("replace_all").and_then(|value| value.as_bool()) {
+        rewritten.insert("replace_all".to_string(), serde_json::Value::Bool(replace_all));
+    }
+
+    Some((
+        "replace_in_file".to_string(),
+        serde_json::Value::Object(rewritten),
+        vec!["fallback:rewrite_to_replace_in_file".to_string()],
+    ))
+}
+
 fn apply_critique_modifications(
     tool_name: &str,
     args: &serde_json::Value,
@@ -900,7 +947,7 @@ async fn prepare_tool_execution(
         .await
         .session_rhythm
         .typical_start_hour_utc;
-    let (mut runtime_args, critique_adjustments) = apply_critique_modifications(
+    let (mut runtime_args, mut critique_adjustments) = apply_critique_modifications(
         tool_call.function.name.as_str(),
         &args,
         critique_decision.as_deref(),
@@ -992,18 +1039,34 @@ async fn prepare_tool_execution(
             });
         }
     }
+    let (effective_tool_name, effective_args, rewrite_adjustments) =
+        maybe_rewrite_shell_tool_to_replace_in_file(
+            tool_call.function.name.as_str(),
+            &runtime_args,
+            &critique_modifications,
+        )
+        .unwrap_or_else(|| {
+            (
+                tool_call.function.name.clone(),
+                runtime_args.clone(),
+                Vec::new(),
+            )
+        });
+    if !rewrite_adjustments.is_empty() {
+        critique_adjustments.extend(rewrite_adjustments);
+    }
     let security_level = {
         let config = agent.config.read().await;
         crate::agent::weles_governance::security_level_for_tool_call(
             &config,
-            tool_call.function.name.as_str(),
-            &runtime_args,
+            effective_tool_name.as_str(),
+            &effective_args,
         )
     };
     let active_scope_id = crate::agent::agent_identity::current_agent_scope_id();
     let governance_classification = crate::agent::weles_governance::classify_tool_call(
-        tool_call.function.name.as_str(),
-        &runtime_args,
+        effective_tool_name.as_str(),
+        &effective_args,
     );
     let governance_decision = if !crate::agent::weles_governance::should_guard_classification(
         &governance_classification,
@@ -1045,8 +1108,8 @@ async fn prepare_tool_execution(
                 thread_id,
                 task_id,
                 crate::agent::agent_identity::WELES_GOVERNANCE_SCOPE,
-                tool_call.function.name.as_str(),
-                &runtime_args,
+                effective_tool_name.as_str(),
+                &effective_args,
                 security_level,
                 &governance_classification.reasons,
             )
@@ -1134,7 +1197,7 @@ async fn prepare_tool_execution(
         }
     }
     let (dispatch_tool_name, dispatch_args) =
-        normalize_tool_dispatch(tool_call.function.name.as_str(), &runtime_args);
+        normalize_tool_dispatch(effective_tool_name.as_str(), &effective_args);
 
     if !thread_id.trim().is_empty()
         && matches!(
@@ -1166,8 +1229,8 @@ async fn prepare_tool_execution(
     }
 
     Ok(PreparedToolExecution {
-        tool_name: tool_call.function.name.clone(),
-        args: runtime_args.clone(),
+        tool_name: effective_tool_name,
+        args: effective_args.clone(),
         dispatch_tool_name,
         dispatch_args,
         governance_decision,
