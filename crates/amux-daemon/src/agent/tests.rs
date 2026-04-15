@@ -794,3 +794,100 @@ async fn request_goal_plan_adapts_prompt_and_truncates_output_when_satisfaction_
         "expected divergent guidance in the plan prompt"
     );
 }
+
+#[tokio::test]
+async fn request_goal_plan_adapts_execution_recommendation_when_satisfaction_is_strained() {
+    let plan_payload = serde_json::json!({
+        "title": "Execution plan",
+        "summary": "Use the normal execution mode.",
+        "steps": [
+            {
+                "title": "Step 1",
+                "instructions": "Inspect the current state.",
+                "kind": "research",
+                "success_criteria": "current state understood",
+                "session_id": null,
+                "llm_confidence": "likely",
+                "llm_confidence_rationale": "small inspection"
+            },
+            {
+                "title": "Step 2",
+                "instructions": "Apply the smallest viable fix.",
+                "kind": "command",
+                "success_criteria": "fix applied",
+                "session_id": null,
+                "llm_confidence": "likely",
+                "llm_confidence_rationale": "direct change"
+            }
+        ],
+        "rejected_alternatives": ["Alternative A: broader but slower"]
+    })
+    .to_string();
+
+    let root_normal = tempdir().expect("tempdir");
+    let manager_normal = SessionManager::new_test(root_normal.path()).await;
+    let mut config_normal = AgentConfig::default();
+    config_normal.provider = "openai".to_string();
+    config_normal.base_url = spawn_goal_recording_server(
+        Arc::new(StdMutex::new(VecDeque::new())),
+        plan_payload.clone(),
+    )
+    .await;
+    config_normal.model = "gpt-4o-mini".to_string();
+    config_normal.api_key = "test-key".to_string();
+    config_normal.api_transport = ApiTransport::ChatCompletions;
+    config_normal.auto_retry = false;
+    config_normal.max_retries = 0;
+    config_normal.max_tool_loops = 1;
+    let engine_normal =
+        AgentEngine::new_test(manager_normal, config_normal, root_normal.path()).await;
+
+    {
+        let mut model = engine_normal.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.operator_satisfaction.score = 0.72;
+        model.operator_satisfaction.label = "healthy".to_string();
+    }
+
+    let normal_plan = engine_normal
+        .request_goal_plan(&sample_goal_run())
+        .await
+        .expect("normal goal plan should succeed");
+
+    let root_strained = tempdir().expect("tempdir");
+    let manager_strained = SessionManager::new_test(root_strained.path()).await;
+    let mut config_strained = AgentConfig::default();
+    config_strained.provider = "openai".to_string();
+    config_strained.base_url =
+        spawn_goal_recording_server(Arc::new(StdMutex::new(VecDeque::new())), plan_payload).await;
+    config_strained.model = "gpt-4o-mini".to_string();
+    config_strained.api_key = "test-key".to_string();
+    config_strained.api_transport = ApiTransport::ChatCompletions;
+    config_strained.auto_retry = false;
+    config_strained.max_retries = 0;
+    config_strained.max_tool_loops = 1;
+    let engine_strained =
+        AgentEngine::new_test(manager_strained, config_strained, root_strained.path()).await;
+
+    {
+        let mut model = engine_strained.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.operator_satisfaction.score = 0.18;
+        model.operator_satisfaction.label = "strained".to_string();
+    }
+
+    let strained_plan = engine_strained
+        .request_goal_plan(&sample_goal_run())
+        .await
+        .expect("strained goal plan should succeed");
+
+    assert_eq!(normal_plan.summary, "Use the normal execution mode.");
+    assert_ne!(strained_plan.summary, normal_plan.summary);
+    assert!(strained_plan
+        .summary
+        .contains("Conservative execution mode:"));
+    assert!(strained_plan.summary.contains("prefer proven tools"));
+    assert!(strained_plan
+        .summary
+        .contains("keep iteration bounds short"));
+}

@@ -34,6 +34,25 @@ impl AgentEngine {
         if plan.rejected_alternatives.len() > max_rejected {
             plan.rejected_alternatives.truncate(max_rejected);
         }
+        match adaptation {
+            SatisfactionAdaptationMode::Minimal => {
+                plan.summary = format!(
+                    "Conservative execution mode: prefer proven tools, keep iteration bounds short, and require explicit operator confirmation before broadening scope. {}",
+                    plan.summary.trim()
+                )
+                .trim()
+                .to_string();
+            }
+            SatisfactionAdaptationMode::Tightened => {
+                plan.summary = format!(
+                    "Cautious execution mode: prefer proven tools and keep iteration bounds short. {}",
+                    plan.summary.trim()
+                )
+                .trim()
+                .to_string();
+            }
+            SatisfactionAdaptationMode::Normal => {}
+        }
     }
 
     pub(super) async fn request_orchestrator_policy_decision(
