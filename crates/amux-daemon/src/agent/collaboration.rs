@@ -35,7 +35,14 @@ pub(in crate::agent) struct ConsensusRoleAssignment {
     pub assigned_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(in crate::agent) struct DispatchBidRequest {
+    pub task_id: String,
+    pub confidence: f64,
+    pub availability: BidAvailability,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::agent) struct CollaborationSession {
     pub id: String,
     pub parent_task_id: String,

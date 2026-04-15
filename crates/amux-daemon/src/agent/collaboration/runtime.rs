@@ -449,6 +449,31 @@ impl AgentEngine {
         Ok(report)
     }
 
+    pub(in crate::agent) async fn dispatch_via_bid_protocol(
+        &self,
+        parent_task_id: &str,
+        bids: &[DispatchBidRequest],
+    ) -> Result<serde_json::Value> {
+        if bids.is_empty() {
+            anyhow::bail!("dispatch_via_bid_protocol requires at least one bid request");
+        }
+        let eligible_agents = bids
+            .iter()
+            .map(|bid| bid.task_id.clone())
+            .collect::<Vec<_>>();
+        self.call_for_bids(parent_task_id, &eligible_agents).await?;
+        for bid in bids {
+            self.submit_bid(
+                parent_task_id,
+                &bid.task_id,
+                bid.confidence,
+                bid.availability.clone(),
+            )
+            .await?;
+        }
+        self.resolve_bids(parent_task_id).await
+    }
+
     pub(in crate::agent) async fn record_collaboration_contribution(
         &self,
         parent_task_id: &str,
