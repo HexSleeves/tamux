@@ -857,6 +857,25 @@ fn apply_patch_tool_uses_top_level_object_schema() {
                     .and_then(|v| v.as_array())
                     .is_some_and(|tags| !tags.is_empty())
             }));
+        assert!(payload
+            .get("specialization_diagnostics")
+            .and_then(|v| v.as_object())
+            .and_then(|diag| diag.get("routing_confidence"))
+            .and_then(|v| v.as_object())
+            .is_some_and(|confidence| {
+                confidence
+                    .get("score")
+                    .and_then(|v| v.as_f64())
+                    .is_some()
+                    && confidence
+                        .get("threshold")
+                        .and_then(|v| v.as_f64())
+                        .is_some()
+                    && confidence
+                        .get("cleared_threshold")
+                        .and_then(|v| v.as_bool())
+                        .is_some()
+            }));
     }
 
     #[tokio::test]

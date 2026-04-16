@@ -189,36 +189,51 @@ impl AgentEngine {
         };
 
         // Match specialist
-        let selection = if let Some((profile_idx, routing_score)) = learned_selection {
-            super::profiles::RoutingSelection {
-                profile_idx,
-                routing_method: RoutingMethod::Probabilistic,
-                routing_score,
-                fallback_used: false,
-            }
+        let (selection, routing_confidence_threshold) = if let Some((profile_idx, routing_score)) = learned_selection {
+            (
+                super::profiles::RoutingSelection {
+                    profile_idx,
+                    routing_method: RoutingMethod::Probabilistic,
+                    routing_score,
+                    fallback_used: false,
+                },
+                routing_cfg.confidence_threshold,
+            )
         } else if matches!(routing_cfg.method, RoutingMode::Deterministic) {
             if let Some((idx, score)) = match_specialist(&profiles, capability_tags, threshold) {
-                super::profiles::RoutingSelection {
-                    profile_idx: idx,
-                    routing_method: RoutingMethod::Deterministic,
-                    routing_score: score,
-                    fallback_used: false,
-                }
+                (
+                    super::profiles::RoutingSelection {
+                        profile_idx: idx,
+                        routing_method: RoutingMethod::Deterministic,
+                        routing_score: score,
+                        fallback_used: false,
+                    },
+                    threshold,
+                )
             } else {
-                super::profiles::RoutingSelection {
-                    profile_idx: profiles.len().saturating_sub(1),
-                    routing_method: RoutingMethod::Deterministic,
-                    routing_score: 0.0,
-                    fallback_used: true,
-                }
+                (
+                    super::profiles::RoutingSelection {
+                        profile_idx: profiles.len().saturating_sub(1),
+                        routing_method: RoutingMethod::Deterministic,
+                        routing_score: 0.0,
+                        fallback_used: true,
+                    },
+                    threshold,
+                )
             }
         } else {
+            let had_learned_weights = !learned_weights.is_empty();
             let mut fallback = select_specialist(&profiles, capability_tags, threshold)
                 .context("selecting specialist profile for handoff")?;
-            if !learned_weights.is_empty() {
+            if had_learned_weights {
                 fallback.fallback_used = true;
             }
-            fallback
+            let routing_confidence_threshold = if had_learned_weights && fallback.fallback_used {
+                routing_cfg.confidence_threshold
+            } else {
+                threshold
+            };
+            (fallback, routing_confidence_threshold)
         };
         let profile_idx = selection.profile_idx;
         let routing_method = selection.routing_method;
@@ -259,6 +274,11 @@ impl AgentEngine {
             "matched_capability_tags": matched_capability_tags,
             "learned_routing_influenced": matches!(routing_method, RoutingMethod::Probabilistic),
             "fallback_used": fallback_used,
+            "routing_confidence": {
+                "score": routing_score,
+                "threshold": routing_confidence_threshold,
+                "cleared_threshold": !fallback_used && routing_score >= routing_confidence_threshold,
+            },
         });
 
         // Assemble context bundle
