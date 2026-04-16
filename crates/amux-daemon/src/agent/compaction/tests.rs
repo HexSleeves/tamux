@@ -699,7 +699,7 @@ fn native_assistant_transport_falls_back_to_compacted_message_stack_when_compact
 }
 
 #[test]
-fn github_copilot_responses_request_uses_previous_response_id_for_plain_follow_up_turns() {
+fn github_copilot_responses_request_does_not_use_previous_response_id_for_plain_follow_up_turns() {
     let mut config = AgentConfig::default();
     config.provider = PROVIDER_ID_GITHUB_COPILOT.to_string();
 
@@ -765,22 +765,24 @@ fn github_copilot_responses_request_uses_previous_response_id_for_plain_follow_u
     let prepared = prepare_llm_request(&thread, &config, &provider);
 
     assert_eq!(prepared.transport, ApiTransport::Responses);
-    assert_eq!(prepared.previous_response_id.as_deref(), Some("resp_123"));
-    assert_eq!(prepared.messages.len(), 1);
+    assert!(prepared.previous_response_id.is_none());
+    assert_eq!(prepared.messages.len(), 3);
     assert_eq!(prepared.messages[0].role, "user");
+    assert_eq!(prepared.messages[1].role, "assistant");
+    assert_eq!(prepared.messages[2].role, "user");
 }
 
 #[test]
 fn reused_user_turn_is_injected_when_responses_continuation_only_has_weles_notice() {
     let mut config = AgentConfig::default();
-    config.provider = PROVIDER_ID_GITHUB_COPILOT.to_string();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
 
     let provider = ProviderConfig {
-        base_url: "https://api.githubcopilot.com".to_string(),
+        base_url: "https://api.openai.com/v1".to_string(),
         model: "gpt-5.4".to_string(),
         api_key: String::new(),
         assistant_id: String::new(),
-        auth_source: AuthSource::GithubCopilot,
+        auth_source: AuthSource::ApiKey,
         api_transport: ApiTransport::Responses,
         reasoning_effort: "high".to_string(),
         context_window_tokens: 128_000,
@@ -820,7 +822,7 @@ fn reused_user_turn_is_injected_when_responses_continuation_only_has_weles_notic
             input_tokens: 11,
             output_tokens: 7,
             cost: None,
-            provider: Some(PROVIDER_ID_GITHUB_COPILOT.to_string()),
+            provider: Some(PROVIDER_ID_OPENAI.to_string()),
             model: Some("gpt-5.4".to_string()),
             api_transport: Some(ApiTransport::Responses),
             response_id: Some("resp_123".to_string()),
