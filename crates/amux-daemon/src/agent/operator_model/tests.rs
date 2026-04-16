@@ -1259,6 +1259,45 @@ async fn operator_profile_summary_json_exposes_behavior_adaptation_from_satisfac
     );
 }
 
+#[tokio::test]
+async fn operator_profile_summary_json_exposes_implicit_feedback_learning_history() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    config.operator_model.allow_implicit_feedback = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_message("thread-summary-learning", "Please run tests.", true)
+        .await
+        .expect("record operator message");
+    engine
+        .record_tool_hesitation("read_file", "search_files", true, false)
+        .await
+        .expect("record tool hesitation");
+
+    let summary_json = engine
+        .get_operator_profile_summary_json()
+        .await
+        .expect("operator profile summary json");
+    let payload: serde_json::Value =
+        serde_json::from_str(&summary_json).expect("valid operator profile summary json");
+
+    let learning = &payload["implicit_feedback_learning"];
+    assert!(learning["recent_implicit_signals"]
+        .as_array()
+        .is_some_and(|items| items
+            .iter()
+            .any(|item| { item["signal_type"].as_str() == Some("tool_fallback") })));
+    assert!(learning["recent_satisfaction_scores"]
+        .as_array()
+        .is_some_and(|items| items
+            .iter()
+            .any(|item| { item["label"].as_str() == Some("healthy") })));
+}
+
 #[test]
 fn persisted_satisfaction_decay_requires_enough_history() {
     let mut model = OperatorModel::default();

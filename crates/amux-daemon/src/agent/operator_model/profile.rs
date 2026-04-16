@@ -373,6 +373,40 @@ impl AgentEngine {
         let config = self.config.read().await.operator_model.clone();
         let adaptation = BehaviorAdaptationProfile::from_model(&model);
         let resonance = CognitiveResonanceSnapshot::from_model(&model);
+        let recent_implicit_signals = self
+            .history
+            .list_implicit_signals("global", 5)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id": row.id,
+                    "session_id": row.session_id,
+                    "signal_type": row.signal_type,
+                    "weight": row.weight,
+                    "timestamp_ms": row.timestamp_ms,
+                    "context_snapshot_json": row.context_snapshot_json,
+                })
+            })
+            .collect::<Vec<_>>();
+        let recent_satisfaction_scores = self
+            .history
+            .list_satisfaction_scores("global", 5)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id": row.id,
+                    "session_id": row.session_id,
+                    "score": row.score,
+                    "computed_at_ms": row.computed_at_ms,
+                    "label": row.label,
+                    "signal_count": row.signal_count,
+                })
+            })
+            .collect::<Vec<_>>();
         let adaptation_mode = match adaptation.mode {
             SatisfactionAdaptationMode::Normal => "normal",
             SatisfactionAdaptationMode::Tightened => "tightened",
@@ -385,6 +419,10 @@ impl AgentEngine {
                 "prompt_for_clarification": adaptation.prompt_for_clarification,
                 "compact_response": adaptation.compact_response,
                 "preferred_tool_fallbacks": adaptation.preferred_tool_fallbacks,
+            },
+            "implicit_feedback_learning": {
+                "recent_implicit_signals": recent_implicit_signals,
+                "recent_satisfaction_scores": recent_satisfaction_scores,
             },
             "cognitive_resonance": resonance,
             "consents": {
