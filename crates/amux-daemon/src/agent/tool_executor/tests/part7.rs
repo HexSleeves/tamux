@@ -8357,6 +8357,128 @@ async fn search_memory_matches_thread_structural_graph_neighbors() {
 }
 
 #[tokio::test]
+async fn search_memory_exposes_thread_structural_graph_neighbors_metadata() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+    let thread_id = "thread-search-memory-graph-neighbor-metadata";
+    let agent_data_dir = root.path().join("agent");
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        make_thread(
+            thread_id,
+            Some(crate::agent::agent_identity::MAIN_AGENT_NAME),
+            "Search memory graph neighbor metadata",
+            false,
+            1,
+            1,
+            vec![crate::agent::types::AgentMessage::user("search graph neighbor metadata", 1)],
+        ),
+    );
+
+    write_scope_memory_files(
+        &agent_data_dir,
+        crate::agent::agent_identity::MAIN_AGENT_ID,
+        "# Soul\n\n- Stable soul fact\n",
+        "# Memory\n\n- Stable memory fact\n",
+        "# User\n\n- Stable user fact\n",
+    );
+    engine.thread_structural_memories.write().await.insert(
+        thread_id.to_string(),
+        crate::agent::context::structural_memory::ThreadStructuralMemory {
+            observed_files: vec![crate::agent::context::structural_memory::ObservedFileNode {
+                node_id: "node:file:src/lib.rs".to_string(),
+                relative_path: "src/lib.rs".to_string(),
+            }],
+            ..Default::default()
+        },
+    );
+    engine
+        .history
+        .upsert_memory_node(
+            "node:file:src/lib.rs",
+            "src/lib.rs",
+            "file",
+            Some("observed file"),
+            1_717_180_451,
+        )
+        .await
+        .expect("persist file node");
+    engine
+        .history
+        .upsert_memory_node(
+            "node:package:cargo:graph-metadata-demo",
+            "graph-metadata-demo",
+            "package",
+            Some("package linked from structural graph metadata"),
+            1_717_180_452,
+        )
+        .await
+        .expect("persist package node");
+    engine
+        .history
+        .upsert_memory_edge(
+            "node:file:src/lib.rs",
+            "node:package:cargo:graph-metadata-demo",
+            "file_in_package",
+            2.0,
+            1_717_180_453,
+        )
+        .await
+        .expect("persist graph edge");
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-search-memory-graph-neighbor-metadata".to_string(),
+        ToolFunction {
+            name: "search_memory".to_string(),
+            arguments: serde_json::json!({
+                "query": "graph-metadata-demo",
+                "limit": 5,
+                "include_base_markdown": false,
+                "include_operator_profile_json": false,
+                "include_operator_model_summary": false,
+                "include_thread_structural_memory": true
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        thread_id,
+        None,
+        &manager,
+        None,
+        &event_tx,
+        &agent_data_dir,
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(!result.is_error, "search_memory should succeed: {}", result.content);
+    let payload: serde_json::Value =
+        serde_json::from_str(&result.content).expect("search_memory should return JSON");
+    let thread_structural_memory = payload
+        .get("thread_structural_memory")
+        .expect("search_memory should expose thread structural memory metadata");
+    let neighbors = thread_structural_memory
+        .get("graph_neighbors")
+        .and_then(|value| value.as_array())
+        .expect("search_memory should expose graph neighbors metadata");
+    assert!(neighbors.iter().any(|item| {
+        item.get("node_id").and_then(|value| value.as_str())
+            == Some("node:package:cargo:graph-metadata-demo")
+            && item
+                .get("relation_type")
+                .and_then(|value| value.as_str())
+                == Some("file_in_package")
+    }));
+}
+
+#[tokio::test]
 async fn read_memory_includes_second_hop_thread_structural_graph_neighbors() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;

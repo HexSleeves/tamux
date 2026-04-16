@@ -1165,11 +1165,6 @@ async fn execute_memory_search_tool(
                 &request.query,
                 MEMORY_SEARCH_MAX_CANDIDATES_PER_LAYER,
             );
-            if !preferred_refs.is_empty() {
-                thread_structural_memory_metadata = Some(serde_json::json!({
-                    "preferred_refs": preferred_refs.clone(),
-                }));
-            }
             collect_thread_structural_graph_lookup_candidates(
                 &mut structural_candidates,
                 &structural_memory,
@@ -1182,6 +1177,24 @@ async fn execute_memory_search_tool(
                 MEMORY_SEARCH_MAX_CANDIDATES_PER_LAYER,
             )
             .await?;
+            let graph_neighbors_metadata = graph_neighbors
+                .iter()
+                .map(|row| {
+                    serde_json::json!({
+                        "node_id": row.node.id,
+                        "label": row.node.label,
+                        "node_type": row.node.node_type,
+                        "relation_type": row.via_edge.relation_type,
+                        "summary": memory_graph_neighbor_snippet(row),
+                    })
+                })
+                .collect::<Vec<_>>();
+            if !preferred_refs.is_empty() || !graph_neighbors_metadata.is_empty() {
+                thread_structural_memory_metadata = Some(serde_json::json!({
+                    "preferred_refs": preferred_refs.clone(),
+                    "graph_neighbors": graph_neighbors_metadata,
+                }));
+            }
             for row in graph_neighbors.into_iter().take(MEMORY_SEARCH_MAX_CANDIDATES_PER_LAYER) {
                 structural_candidates.push(MemorySearchCandidate {
                     layer: "thread_structural_memory",
