@@ -93,6 +93,8 @@ struct MemorySearchEnvelope {
     injection_state: MemoryReadInjectionState,
     layers_consulted: Vec<String>,
     layers_skipped: Vec<MemoryReadSkippedLayer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread_structural_memory: Option<serde_json::Value>,
     matches: Vec<MemorySearchMatch>,
     truncated: bool,
 }
@@ -1079,6 +1081,7 @@ async fn execute_memory_search_tool(
     let mut layers_skipped = Vec::new();
     let mut candidates = Vec::new();
     let mut collection_truncated = false;
+    let mut thread_structural_memory_metadata = None;
 
     if request.include_base_markdown {
         let should_skip_base_markdown = base_layer_injected
@@ -1162,6 +1165,11 @@ async fn execute_memory_search_tool(
                 &request.query,
                 MEMORY_SEARCH_MAX_CANDIDATES_PER_LAYER,
             );
+            if !preferred_refs.is_empty() {
+                thread_structural_memory_metadata = Some(serde_json::json!({
+                    "preferred_refs": preferred_refs.clone(),
+                }));
+            }
             collect_thread_structural_graph_lookup_candidates(
                 &mut structural_candidates,
                 &structural_memory,
@@ -1222,6 +1230,7 @@ async fn execute_memory_search_tool(
         ),
         layers_consulted,
         layers_skipped,
+        thread_structural_memory: thread_structural_memory_metadata,
         matches,
         truncated: collection_truncated || ranking_truncated,
     };

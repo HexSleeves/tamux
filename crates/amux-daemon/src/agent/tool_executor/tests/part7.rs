@@ -8128,6 +8128,14 @@ async fn search_memory_uses_preferred_structural_refs_for_graph_lookup_without_m
     assert!(!result.is_error, "search_memory should succeed: {}", result.content);
     let payload: serde_json::Value =
         serde_json::from_str(&result.content).expect("search_memory should return JSON");
+    let preferred_refs = payload
+        .get("thread_structural_memory")
+        .and_then(|value| value.get("preferred_refs"))
+        .and_then(|value| value.as_array())
+        .expect("search_memory should expose preferred structural refs");
+    assert!(preferred_refs
+        .iter()
+        .any(|value| value.as_str() == Some("node:file:src/lib.rs")));
     let matches = payload
         .get("matches")
         .and_then(|value| value.as_array())
