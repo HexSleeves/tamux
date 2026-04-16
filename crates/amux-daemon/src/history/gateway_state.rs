@@ -36,7 +36,7 @@ impl HistoryStore {
     }
 
     pub async fn list_gateway_thread_bindings(&self) -> Result<Vec<(String, String)>> {
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT channel_key, thread_id FROM gateway_threads ORDER BY updated_at DESC",
@@ -85,7 +85,7 @@ impl HistoryStore {
     }
 
     pub async fn list_gateway_route_modes(&self) -> Result<Vec<(String, String)>> {
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT channel_key, route_mode FROM gateway_channel_modes ORDER BY updated_at DESC",
@@ -130,7 +130,7 @@ impl HistoryStore {
         provider_id: &str,
     ) -> Result<Option<WhatsAppProviderStateRow>> {
         let provider_id = provider_id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 conn.query_row(
                     "SELECT provider_id, linked_phone, auth_json, metadata_json, last_reset_at, last_linked_at, updated_at \
@@ -199,7 +199,7 @@ impl HistoryStore {
     ) -> Result<Option<GatewayReplayCursorRow>> {
         let platform = platform.to_string();
         let channel_id = channel_id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 conn.query_row(
                     "SELECT platform, channel_id, cursor_value, cursor_type, updated_at FROM gateway_replay_cursors WHERE platform = ?1 AND channel_id = ?2",
@@ -226,7 +226,7 @@ impl HistoryStore {
         platform: &str,
     ) -> Result<Vec<GatewayReplayCursorRow>> {
         let platform = platform.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT platform, channel_id, cursor_value, cursor_type, updated_at FROM gateway_replay_cursors WHERE platform = ?1 ORDER BY updated_at DESC",
@@ -267,7 +267,7 @@ impl HistoryStore {
     }
 
     pub async fn list_gateway_health_snapshots(&self) -> Result<Vec<GatewayHealthSnapshotRow>> {
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT platform, state_json, updated_at FROM gateway_health_snapshots ORDER BY updated_at DESC",
@@ -323,7 +323,7 @@ impl HistoryStore {
     }
 
     pub async fn list_operator_profile_sessions(&self) -> Result<Vec<OperatorProfileSessionRow>> {
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT session_id, kind, session_json, updated_at FROM operator_profile_sessions ORDER BY updated_at DESC",

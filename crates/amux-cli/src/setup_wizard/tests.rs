@@ -1,6 +1,8 @@
 use super::flow::{
-    parse_fetch_models_terminal_response, parse_set_config_item_response,
-    setup_probe_from_config_json, SetupProbe,
+    parse_fetch_models_terminal_response, parse_gh_cli_token_output,
+    parse_set_config_item_response, provider_requires_api_key_prompt, provider_uses_browser_auth,
+    setup_probe_from_config_json, should_validate_provider_after_setup, AuthSetupResult,
+    SetupProbe,
 };
 use super::*;
 
@@ -137,6 +139,27 @@ fn raw_mode_guard_requests_only_disambiguate_enhancement_flag() {
     assert!(!flags.contains(crossterm::event::KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS));
     assert!(!flags
         .contains(crossterm::event::KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES));
+}
+
+#[test]
+fn actionable_key_event_kind_accepts_press() {
+    assert!(terminal_ui::is_actionable_key_event_kind(
+        crossterm::event::KeyEventKind::Press
+    ));
+}
+
+#[test]
+fn actionable_key_event_kind_accepts_repeat() {
+    assert!(terminal_ui::is_actionable_key_event_kind(
+        crossterm::event::KeyEventKind::Repeat
+    ));
+}
+
+#[test]
+fn actionable_key_event_kind_rejects_release() {
+    assert!(!terminal_ui::is_actionable_key_event_kind(
+        crossterm::event::KeyEventKind::Release
+    ));
 }
 
 #[test]
@@ -371,4 +394,73 @@ fn setup_probe_treats_invalid_config_as_needing_setup() {
         setup_probe_from_config_json("{not-json"),
         SetupProbe::NeedsSetup
     );
+}
+
+#[test]
+fn github_copilot_setup_prefers_browser_auth_over_api_key_prompt() {
+    let provider = ProviderSelection {
+        provider_id: "github-copilot".to_string(),
+        provider_name: "GitHub Copilot".to_string(),
+        base_url: "https://api.githubcopilot.com".to_string(),
+        default_model: "gpt-4.1".to_string(),
+        auth_source: "github_copilot".to_string(),
+    };
+
+    assert!(provider_uses_browser_auth(&provider));
+    assert!(!provider_requires_api_key_prompt(&provider));
+}
+
+#[test]
+fn github_copilot_browser_auth_setup_still_runs_provider_validation() {
+    let provider = ProviderSelection {
+        provider_id: "github-copilot".to_string(),
+        provider_name: "GitHub Copilot".to_string(),
+        base_url: "https://api.githubcopilot.com".to_string(),
+        default_model: "gpt-4.1".to_string(),
+        auth_source: "github_copilot".to_string(),
+    };
+
+    assert!(should_validate_provider_after_setup(
+        &provider,
+        AuthSetupResult {
+            auth_source: "github_copilot".to_string(),
+            api_key_for_requests: String::new(),
+            authenticated: true,
+        }
+    ));
+}
+
+#[test]
+fn anthropic_setup_uses_api_key_prompt_and_validation() {
+    let provider = ProviderSelection {
+        provider_id: "anthropic".to_string(),
+        provider_name: "Anthropic".to_string(),
+        base_url: "https://api.anthropic.com".to_string(),
+        default_model: "claude-opus-4-7".to_string(),
+        auth_source: "api_key".to_string(),
+    };
+
+    assert!(!provider_uses_browser_auth(&provider));
+    assert!(provider_requires_api_key_prompt(&provider));
+    assert!(should_validate_provider_after_setup(
+        &provider,
+        AuthSetupResult {
+            auth_source: "api_key".to_string(),
+            api_key_for_requests: "sk-ant-api03-test".to_string(),
+            authenticated: false,
+        }
+    ));
+}
+
+#[test]
+fn github_cli_token_output_trims_trailing_newlines() {
+    assert_eq!(
+        parse_gh_cli_token_output(b"copilot-token\n"),
+        Some("copilot-token".to_string())
+    );
+}
+
+#[test]
+fn github_cli_token_output_rejects_empty_stdout() {
+    assert_eq!(parse_gh_cli_token_output(b"\n"), None);
 }

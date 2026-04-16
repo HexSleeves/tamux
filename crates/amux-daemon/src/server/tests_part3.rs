@@ -520,6 +520,27 @@ fn setup_server_openai_codex_auth_test() -> (tempfile::TempDir, EnvGuard) {
     (temp_dir, env_guard)
 }
 
+fn install_fake_gh_cli(root: &std::path::Path) -> std::path::PathBuf {
+    let bin_dir = root.join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("create fake gh bin dir");
+    let gh_path = bin_dir.join("gh");
+    std::fs::write(
+        &gh_path,
+        "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"login\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"token\" ]; then\n  printf 'copilot-browser-token\\n'\n  exit 0\nfi\nexit 1\n",
+    )
+    .expect("write fake gh");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&gh_path)
+            .expect("stat fake gh")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&gh_path, perms).expect("chmod fake gh");
+    }
+    bin_dir
+}
+
 fn parse_json(raw: &str) -> serde_json::Value {
     serde_json::from_str(raw).expect("json payload should decode")
 }
@@ -782,6 +803,56 @@ async fn openai_codex_auth_status_request_returns_status_payload() {
 
     conn.shutdown().await;
     crate::agent::openai_codex_auth::clear_openai_codex_auth_test_state();
+}
+
+#[tokio::test]
+async fn github_copilot_login_provider_without_token_uses_browser_auth_flow() {
+    let _lock = crate::agent::provider_auth_test_env_lock();
+    let temp_dir = tempfile::tempdir().expect("tempdir should succeed");
+    let _env_guard = EnvGuard::new(&[
+        "PATH",
+        "TAMUX_PROVIDER_AUTH_DB_PATH",
+        "TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI",
+    ]);
+    let fake_gh_bin = install_fake_gh_cli(temp_dir.path());
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let combined_path = if original_path.is_empty() {
+        fake_gh_bin.display().to_string()
+    } else {
+        format!("{}:{original_path}", fake_gh_bin.display())
+    };
+    std::env::set_var("PATH", combined_path);
+    std::env::set_var(
+        "TAMUX_PROVIDER_AUTH_DB_PATH",
+        temp_dir.path().join("provider-auth.db"),
+    );
+    std::env::remove_var("TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI");
+
+    let mut conn = spawn_test_connection().await;
+
+    conn.framed
+        .send(ClientMessage::AgentLoginProvider {
+            provider_id: "github-copilot".to_string(),
+            api_key: String::new(),
+            base_url: String::new(),
+        })
+        .await
+        .expect("send github copilot login request");
+
+    let states: Vec<crate::agent::types::ProviderAuthState> = match conn.recv().await {
+        DaemonMessage::AgentProviderAuthStates { states_json } => {
+            serde_json::from_str(&states_json).expect("parse provider auth states")
+        }
+        other => panic!("expected AgentProviderAuthStates, got {other:?}"),
+    };
+    let copilot = states
+        .into_iter()
+        .find(|state| state.provider_id == "github-copilot")
+        .expect("github copilot provider state should be present");
+    assert!(copilot.authenticated);
+    assert_eq!(copilot.auth_source, crate::agent::types::AuthSource::GithubCopilot);
+
+    conn.shutdown().await;
 }
 
 #[tokio::test]

@@ -20,7 +20,7 @@ impl HistoryStore {
     ) -> Result<AgentStatisticsSnapshot> {
         let cutoff_ms = window_cutoff_ms(window);
         let totals_row = self
-            .conn
+            .read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT
@@ -52,7 +52,7 @@ impl HistoryStore {
 
         let provider_cutoff_ms = cutoff_ms;
         let mut providers = self
-            .conn
+            .read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT
@@ -89,7 +89,7 @@ impl HistoryStore {
 
         let model_cutoff_ms = cutoff_ms;
         let models = self
-            .conn
+            .read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT

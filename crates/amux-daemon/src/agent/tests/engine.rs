@@ -148,6 +148,129 @@ async fn hydrate_restores_full_persisted_thread_history() {
 }
 
 #[tokio::test]
+async fn hydrate_keeps_persisted_thread_messages_lazy_until_thread_detail_is_requested() {
+    let (engine, temp_dir) = make_test_engine(AgentConfig::default()).await;
+    let thread_id = "thread-hydrate-lazy-history";
+    let message_count = 12u64;
+
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Lazy Hydrated Thread".to_string(),
+            messages: (0..message_count)
+                .map(|index| AgentMessage::user(format!("message-{index}"), 2_000 + index))
+                .collect(),
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            created_at: 2_000,
+            updated_at: 2_000 + message_count,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+        },
+    );
+    engine.persist_thread_by_id(thread_id).await;
+
+    let rehydrated = AgentEngine::new_test(
+        SessionManager::new_test(temp_dir.path()).await,
+        AgentConfig::default(),
+        temp_dir.path(),
+    )
+    .await;
+    rehydrated.hydrate().await.expect("hydrate should succeed");
+
+    let in_memory = rehydrated.threads.read().await;
+    let thread = in_memory
+        .get(thread_id)
+        .expect("thread summary should exist after hydrate");
+    assert!(
+        thread.messages.is_empty(),
+        "startup hydrate should avoid loading full message bodies into memory"
+    );
+    drop(in_memory);
+
+    let loaded = rehydrated
+        .get_thread(thread_id)
+        .await
+        .expect("thread detail should lazy-load persisted history");
+    assert_eq!(loaded.messages.len(), message_count as usize);
+    assert_eq!(
+        loaded
+            .messages
+            .last()
+            .map(|message| message.content.as_str()),
+        Some("message-11")
+    );
+}
+
+#[tokio::test]
+async fn persist_thread_by_id_preserves_lazy_hydrated_thread_history() {
+    let (engine, temp_dir) = make_test_engine(AgentConfig::default()).await;
+    let thread_id = "thread-lazy-persist-safe";
+
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Persisted Lazy Thread".to_string(),
+            messages: (0..8)
+                .map(|index| AgentMessage::user(format!("message-{index}"), 3_000 + index))
+                .collect(),
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            created_at: 3_000,
+            updated_at: 3_008,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+        },
+    );
+    engine.persist_thread_by_id(thread_id).await;
+
+    let rehydrated = AgentEngine::new_test(
+        SessionManager::new_test(temp_dir.path()).await,
+        AgentConfig::default(),
+        temp_dir.path(),
+    )
+    .await;
+    rehydrated.hydrate().await.expect("hydrate should succeed");
+    rehydrated.persist_thread_by_id(thread_id).await;
+
+    let reloaded = AgentEngine::new_test(
+        SessionManager::new_test(temp_dir.path()).await,
+        AgentConfig::default(),
+        temp_dir.path(),
+    )
+    .await;
+    reloaded
+        .hydrate()
+        .await
+        .expect("second hydrate should succeed");
+
+    let thread = reloaded
+        .get_thread(thread_id)
+        .await
+        .expect("thread should still have its persisted history");
+    assert_eq!(thread.messages.len(), 8);
+    assert_eq!(
+        thread
+            .messages
+            .last()
+            .map(|message| message.content.as_str()),
+        Some("message-7")
+    );
+}
+
+#[tokio::test]
 async fn hydrate_restores_thread_token_totals_from_persisted_history() {
     let (engine, temp_dir) = make_test_engine(AgentConfig::default()).await;
     let thread_id = "thread-hydrate-token-totals";

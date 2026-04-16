@@ -137,6 +137,17 @@ fn render_auth_tab<'a>(
             ),
         ]);
         lines.push(line);
+        if let Some((success, message)) = auth.validation_results.get(&entry.provider_id) {
+            let result_style = if *success {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Red)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("    {message}"),
+                result_style,
+            )));
+        }
     }
 
     lines.push(Line::raw(""));

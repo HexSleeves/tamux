@@ -35,6 +35,9 @@ pub const PROVIDER_ID_Z_AI_CODING_PLAN: &str = "z.ai-coding-plan";
 pub const ALIBABA_CODING_PLAN_PROVIDER: ProviderRef = ProviderRef {
     id: PROVIDER_ID_ALIBABA_CODING_PLAN,
 };
+pub const ANTHROPIC_PROVIDER: ProviderRef = ProviderRef {
+    id: PROVIDER_ID_ANTHROPIC,
+};
 pub const CUSTOM_PROVIDER: ProviderRef = ProviderRef {
     id: PROVIDER_ID_CUSTOM,
 };

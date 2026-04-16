@@ -119,6 +119,7 @@ pub enum ClientMessage {
     AgentValidateProvider { provider_id: String, base_url: String, api_key: String, auth_source: String },
     AgentGetProviderAuthStates,
     AgentLoginProvider { provider_id: String, api_key: String, #[serde(default)] base_url: String },
+    AgentStoreGithubCopilotAuthToken { access_token: String, source: String },
     AgentLogoutProvider { provider_id: String },
     AgentSetSubAgent { sub_agent_json: String },
     AgentRemoveSubAgent { sub_agent_id: String },

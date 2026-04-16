@@ -93,6 +93,14 @@ fn stored_from_token(token: String, source: &str) -> StoredGithubCopilotAuth {
     }
 }
 
+pub fn store_github_copilot_auth_token(token: String, source: &str) -> Result<()> {
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        anyhow::bail!("GitHub Copilot token cannot be empty");
+    }
+    write_stored_github_copilot_auth(&stored_from_token(token, source))
+}
+
 fn gh_cli_token() -> Option<String> {
     if env_flag_is_enabled(GITHUB_COPILOT_DISABLE_GH_CLI_ENV) {
         return None;

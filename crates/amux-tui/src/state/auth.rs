@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use std::collections::HashMap;
+
 /// Entry describing one provider's authentication status (TUI-side).
 #[derive(Debug, Clone)]
 pub struct ProviderAuthEntry {
@@ -16,6 +18,7 @@ pub struct AuthState {
     pub loaded: bool,
     pub selected: usize,
     pub validating: Option<String>,
+    pub validation_results: HashMap<String, (bool, String)>,
     pub login_buffer: String,
     pub login_cursor: usize,
     pub login_target: Option<String>,
@@ -30,6 +33,7 @@ impl AuthState {
             loaded: false,
             selected: 0,
             validating: None,
+            validation_results: HashMap::new(),
             login_buffer: String::new(),
             login_cursor: 0,
             login_target: None,
@@ -62,14 +66,30 @@ impl AuthState {
             AuthAction::Received(entries) => {
                 self.loaded = true;
                 self.entries = entries;
+                self.validation_results.retain(|provider_id, _| {
+                    self.entries
+                        .iter()
+                        .any(|entry| &entry.provider_id == provider_id)
+                });
                 if self.selected >= self.entries.len() {
                     self.selected = self.entries.len().saturating_sub(1);
                 }
             }
-            AuthAction::ValidationResult { provider_id, .. } => {
+            AuthAction::ValidationResult {
+                provider_id,
+                valid,
+                error,
+            } => {
                 if self.validating.as_deref() == Some(&provider_id) {
                     self.validating = None;
                 }
+                let message = if valid {
+                    "Connection OK".to_string()
+                } else {
+                    format!("Error: {}", error.unwrap_or_else(|| "unknown".to_string()))
+                };
+                self.validation_results
+                    .insert(provider_id, (valid, message));
             }
             AuthAction::Select(idx) => {
                 if idx < self.entries.len() {

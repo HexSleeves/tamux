@@ -109,7 +109,7 @@ impl HistoryStore {
     }
 
     pub async fn list_goal_runs(&self) -> Result<Vec<GoalRun>> {
-        self.conn.call(move |conn| {
+        self.read_conn.call(move |conn| {
         let mut step_stmt = conn.prepare(
             "SELECT id, goal_run_id, ordinal, title, instructions, kind, success_criteria, session_id, status, task_id, summary, error, started_at, completed_at \
              FROM goal_run_steps ORDER BY goal_run_id ASC, ordinal ASC",

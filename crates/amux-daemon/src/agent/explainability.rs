@@ -215,6 +215,9 @@ impl AgentEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::AgentConfig;
+    use crate::session_manager::SessionManager;
+    use tempfile::tempdir;
 
     #[test]
     fn explanation_response_round_trips_serde() {
@@ -321,5 +324,104 @@ mod tests {
 
         assert_eq!(decoded.source, "negative_knowledge");
         assert_eq!(decoded.reasons.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn explain_action_step_index_uses_chronological_step_order() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+        let earlier_selected = serde_json::json!({
+            "option_type": "goal_plan",
+            "reasoning": "first chronological step reasoning",
+            "rejection_reason": null,
+            "estimated_success_prob": 0.61,
+            "arguments_hash": "ctx-early"
+        })
+        .to_string();
+        let later_selected = serde_json::json!({
+            "option_type": "goal_plan",
+            "reasoning": "second chronological step reasoning",
+            "rejection_reason": null,
+            "estimated_success_prob": 0.73,
+            "arguments_hash": "ctx-late"
+        })
+        .to_string();
+        let rejected_json = serde_json::json!([
+            {
+                "option_type": "goal_plan_alt",
+                "reasoning": "fallback alternative",
+                "rejection_reason": "lower confidence",
+                "estimated_success_prob": 0.42,
+                "arguments_hash": "ctx-alt"
+            }
+        ])
+        .to_string();
+        let factors_json = serde_json::json!([
+            {
+                "factor_type": "pattern_match",
+                "description": "matched prior plan pattern",
+                "weight": 0.7
+            }
+        ])
+        .to_string();
+        let unresolved =
+            serde_json::to_string(&crate::agent::learning::traces::CausalTraceOutcome::Unresolved)
+                .expect("serialize unresolved outcome");
+
+        engine
+            .history
+            .insert_causal_trace(
+                "causal-explain-step-early",
+                Some("thread-explain-step-order"),
+                Some("goal-explain-step-order"),
+                Some("task-step-0"),
+                "plan_selection",
+                &earlier_selected,
+                &rejected_json,
+                "ctx-early",
+                &factors_json,
+                &unresolved,
+                Some("gpt-4o-mini"),
+                1_717_190_001,
+            )
+            .await
+            .expect("insert earlier causal trace");
+        engine
+            .history
+            .insert_causal_trace(
+                "causal-explain-step-late",
+                Some("thread-explain-step-order"),
+                Some("goal-explain-step-order"),
+                Some("task-step-1"),
+                "plan_selection",
+                &later_selected,
+                &rejected_json,
+                "ctx-late",
+                &factors_json,
+                &unresolved,
+                Some("gpt-4o-mini"),
+                1_717_190_999,
+            )
+            .await
+            .expect("insert later causal trace");
+
+        let explanation = engine
+            .handle_explain_action("goal-explain-step-order", Some(0))
+            .await;
+
+        assert_eq!(explanation.source, "causal_trace");
+        assert_eq!(
+            explanation.chosen_approach, "first chronological step reasoning",
+            "step_index=0 should explain the earliest step, not the most recently created one"
+        );
+        assert_eq!(explanation.alternatives_considered.len(), 1);
+        assert_eq!(
+            explanation.alternatives_considered[0]
+                .rejection_reason
+                .as_deref(),
+            Some("lower confidence")
+        );
     }
 }

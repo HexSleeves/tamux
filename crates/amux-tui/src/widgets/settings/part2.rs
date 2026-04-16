@@ -401,22 +401,34 @@ fn auth_hit_test(
     mouse: Position,
 ) -> Option<SettingsHitTarget> {
     let row = mouse.y.saturating_sub(content_area.y) as usize;
-    let entry_index = row.checked_sub(4)?;
-    let entry = auth.entries.get(entry_index)?;
-    let (primary_start, primary_end, test_start) = auth_row_action_offsets(content_area, entry);
-    if mouse.x >= primary_start && mouse.x < primary_end {
-        Some(SettingsHitTarget::AuthAction {
-            index: entry_index,
-            action: AuthTabAction::Primary,
-        })
-    } else if mouse.x >= test_start {
-        Some(SettingsHitTarget::AuthAction {
-            index: entry_index,
-            action: AuthTabAction::Test,
-        })
-    } else {
-        Some(SettingsHitTarget::AuthProviderItem(entry_index))
+    let mut current_row = 4usize;
+    for (entry_index, entry) in auth.entries.iter().enumerate() {
+        if row == current_row {
+            let (primary_start, primary_end, test_start) =
+                auth_row_action_offsets(content_area, entry);
+            return if mouse.x >= primary_start && mouse.x < primary_end {
+                Some(SettingsHitTarget::AuthAction {
+                    index: entry_index,
+                    action: AuthTabAction::Primary,
+                })
+            } else if mouse.x >= test_start {
+                Some(SettingsHitTarget::AuthAction {
+                    index: entry_index,
+                    action: AuthTabAction::Test,
+                })
+            } else {
+                Some(SettingsHitTarget::AuthProviderItem(entry_index))
+            };
+        }
+        current_row += 1;
+        if auth.validation_results.contains_key(&entry.provider_id) {
+            if row == current_row {
+                return Some(SettingsHitTarget::AuthProviderItem(entry_index));
+            }
+            current_row += 1;
+        }
     }
+    None
 }
 
 fn subagent_row_action_offsets(

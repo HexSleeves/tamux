@@ -9,6 +9,7 @@ pub struct AgentThread {
     pub total_message_count: usize,
     pub loaded_message_start: usize,
     pub loaded_message_end: usize,
+    pub pinned_messages: Vec<PinnedThreadMessage>,
     pub older_page_pending: bool,
     pub older_page_request_cooldown_until_tick: Option<u64>,
     pub history_window_expanded: bool,
@@ -20,6 +21,14 @@ pub struct AgentThread {
     pub runtime_provider: Option<String>,
     pub runtime_model: Option<String>,
     pub runtime_reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PinnedThreadMessage {
+    pub message_id: String,
+    pub absolute_index: usize,
+    pub role: MessageRole,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Default)]

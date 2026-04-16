@@ -36,7 +36,7 @@ impl HistoryStore {
         thread_id: &str,
     ) -> Result<Option<ThreadStructuralMemoryRow>> {
         let thread_id = thread_id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 conn.query_row(
                     "SELECT thread_id, state_json, updated_at FROM thread_structural_memory WHERE thread_id = ?1",

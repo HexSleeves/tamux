@@ -214,10 +214,7 @@ async fn run_unix(
     startup_readiness: StartupReadiness,
 ) -> Result<()> {
     // Graceful shutdown on SIGINT / SIGTERM.
-    let shutdown = async {
-        tokio::signal::ctrl_c().await.ok();
-        tracing::info!("shutdown signal received");
-    };
+    let shutdown = await_shutdown_signal(tokio::signal::ctrl_c(), false);
 
     tokio::select! {
         _ = accept_loop_unix(listener, manager, agent, plugin_manager, startup_readiness) => {}
@@ -374,6 +371,59 @@ mod unix_socket_tests {
     }
 }
 
+async fn await_shutdown_signal<F>(signal: F, keep_running_on_error: bool)
+where
+    F: std::future::Future<Output = std::io::Result<()>>,
+{
+    match signal.await {
+        Ok(()) => tracing::info!("shutdown signal received"),
+        Err(error) if keep_running_on_error => {
+            tracing::warn!(
+                error = %error,
+                "shutdown signal listener unavailable; keeping daemon alive in headless mode"
+            );
+            std::future::pending::<()>().await;
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "shutdown signal listener unavailable");
+        }
+    }
+}
+
+#[cfg(test)]
+mod shutdown_signal_tests {
+    use super::await_shutdown_signal;
+    use std::io;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn shutdown_signal_completes_when_signal_arrives() {
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            await_shutdown_signal(async { Ok::<(), io::Error>(()) }, false),
+        )
+        .await
+        .expect("shutdown future should complete when the signal arrives");
+    }
+
+    #[tokio::test]
+    async fn shutdown_signal_stays_pending_when_headless_mode_has_no_signal_source() {
+        let timeout = tokio::time::timeout(
+            Duration::from_millis(50),
+            await_shutdown_signal(
+                async { Err::<(), io::Error>(io::Error::other("no console")) },
+                true,
+            ),
+        )
+        .await;
+
+        assert!(
+            timeout.is_err(),
+            "headless shutdown handling should stay pending instead of exiting immediately"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Windows IPC implementation
 // ---------------------------------------------------------------------------
@@ -387,10 +437,7 @@ async fn run_windows(
     plugin_manager: Arc<crate::plugin::PluginManager>,
     startup_readiness: StartupReadiness,
 ) -> Result<()> {
-    let shutdown = async {
-        tokio::signal::ctrl_c().await.ok();
-        tracing::info!("shutdown signal received");
-    };
+    let shutdown = await_shutdown_signal(tokio::signal::ctrl_c(), true);
 
     tokio::select! {
         _ = accept_loop_tcp(listener, manager, agent, plugin_manager, startup_readiness) => {}

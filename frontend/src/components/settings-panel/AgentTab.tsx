@@ -52,6 +52,7 @@ export function AgentTab({
 
     const allProviderOptions: { id: AgentProviderId; label: string }[] = [
         { id: "featherless", label: "Featherless" },
+        { id: "anthropic", label: "Anthropic" },
         { id: "openai", label: "OpenAI / ChatGPT" },
         { id: "github-copilot", label: "GitHub Copilot" },
         { id: "qwen", label: "Qwen" },

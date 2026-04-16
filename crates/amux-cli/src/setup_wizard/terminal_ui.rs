@@ -8,6 +8,10 @@ pub(super) fn is_submit_key(code: KeyCode, modifiers: KeyModifiers) -> bool {
         || (code == KeyCode::Char('j') && modifiers.contains(KeyModifiers::CONTROL))
 }
 
+pub(super) fn is_actionable_key_event_kind(kind: KeyEventKind) -> bool {
+    matches!(kind, KeyEventKind::Press | KeyEventKind::Repeat)
+}
+
 pub(super) fn select_list(
     title: &str,
     items: &[(&str, &str)],
@@ -65,35 +69,40 @@ pub(super) fn select_list(
             stdout.flush()?;
 
             if let Event::Key(KeyEvent {
-                code, modifiers, ..
+                code,
+                modifiers,
+                kind,
+                ..
             }) = event::read()?
             {
-                match code {
-                    KeyCode::Up => {
-                        if selected == 0 {
-                            selected = items.len().saturating_sub(1);
-                        } else {
-                            selected -= 1;
+                if is_actionable_key_event_kind(kind) {
+                    match code {
+                        KeyCode::Up => {
+                            if selected == 0 {
+                                selected = items.len().saturating_sub(1);
+                            } else {
+                                selected -= 1;
+                            }
                         }
-                    }
-                    KeyCode::Down => {
-                        selected += 1;
-                        if selected >= items.len() {
-                            selected = 0;
+                        KeyCode::Down => {
+                            selected += 1;
+                            if selected >= items.len() {
+                                selected = 0;
+                            }
                         }
+                        _ if is_submit_key(code, modifiers) => {
+                            execute!(stdout, style::SetForegroundColor(style::Color::Reset),)?;
+                            return Ok(Some(selected));
+                        }
+                        KeyCode::Esc if allow_esc => {
+                            execute!(stdout, style::SetForegroundColor(style::Color::Reset),)?;
+                            return Ok(None);
+                        }
+                        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                            anyhow::bail!("Setup cancelled by user");
+                        }
+                        _ => {}
                     }
-                    _ if is_submit_key(code, modifiers) => {
-                        execute!(stdout, style::SetForegroundColor(style::Color::Reset),)?;
-                        return Ok(Some(selected));
-                    }
-                    KeyCode::Esc if allow_esc => {
-                        execute!(stdout, style::SetForegroundColor(style::Color::Reset),)?;
-                        return Ok(None);
-                    }
-                    KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-                        anyhow::bail!("Setup cancelled by user");
-                    }
-                    _ => {}
                 }
             }
 
@@ -123,40 +132,45 @@ pub(super) fn text_input(prompt_text: &str, default: &str, masked: bool) -> Resu
         let mut input = String::new();
         loop {
             if let Event::Key(KeyEvent {
-                code, modifiers, ..
+                code,
+                modifiers,
+                kind,
+                ..
             }) = event::read()?
             {
-                match code {
-                    _ if is_submit_key(code, modifiers) => {
-                        execute!(stdout, style::Print("\r\n"))?;
-                        let value = if input.is_empty() && !default.is_empty() {
-                            default.to_string()
-                        } else {
-                            input
-                        };
-                        return Ok(Some(value));
-                    }
-                    KeyCode::Esc => {
-                        execute!(stdout, style::Print("\r\n"))?;
-                        return Ok(None);
-                    }
-                    KeyCode::Backspace => {
-                        if input.pop().is_some() {
-                            execute!(stdout, style::Print("\x08 \x08"))?;
+                if is_actionable_key_event_kind(kind) {
+                    match code {
+                        _ if is_submit_key(code, modifiers) => {
+                            execute!(stdout, style::Print("\r\n"))?;
+                            let value = if input.is_empty() && !default.is_empty() {
+                                default.to_string()
+                            } else {
+                                input
+                            };
+                            return Ok(Some(value));
                         }
-                    }
-                    KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-                        anyhow::bail!("Setup cancelled by user");
-                    }
-                    KeyCode::Char(c) => {
-                        input.push(c);
-                        if masked {
-                            execute!(stdout, style::Print("*"))?;
-                        } else {
-                            execute!(stdout, style::Print(format!("{c}")))?;
+                        KeyCode::Esc => {
+                            execute!(stdout, style::Print("\r\n"))?;
+                            return Ok(None);
                         }
+                        KeyCode::Backspace => {
+                            if input.pop().is_some() {
+                                execute!(stdout, style::Print("\x08 \x08"))?;
+                            }
+                        }
+                        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                            anyhow::bail!("Setup cancelled by user");
+                        }
+                        KeyCode::Char(c) => {
+                            input.push(c);
+                            if masked {
+                                execute!(stdout, style::Print("*"))?;
+                            } else {
+                                execute!(stdout, style::Print(format!("{c}")))?;
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }

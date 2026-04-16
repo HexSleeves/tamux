@@ -589,6 +589,56 @@ async fn get_thread_filtered_truncates_to_last_n_messages() {
 }
 
 #[tokio::test]
+async fn agent_thread_detail_json_includes_offscreen_pinned_message_summaries() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    let mut pinned = AgentMessage::user("Pinned offscreen", 1);
+    pinned.pinned_for_compaction = true;
+    let pinned_id = pinned.id.clone();
+
+    engine.threads.write().await.insert(
+        "thread-pinned".to_string(),
+        make_thread(
+            "thread-pinned",
+            Some(crate::agent::agent_identity::MAIN_AGENT_NAME),
+            "Pinned thread",
+            false,
+            1,
+            3,
+            vec![
+                AgentMessage::user("oldest", 0),
+                pinned,
+                assistant_message("latest visible", 2),
+            ],
+        ),
+    );
+
+    let json = engine
+        .agent_thread_detail_json("thread-pinned", Some(1), Some(0))
+        .await;
+    let value: serde_json::Value = serde_json::from_str(&json).expect("decode thread detail");
+    let pinned_messages = value["pinned_messages"]
+        .as_array()
+        .expect("pinned_messages should be an array");
+
+    assert_eq!(value["loaded_message_start"].as_u64(), Some(2));
+    assert_eq!(value["loaded_message_end"].as_u64(), Some(3));
+    assert_eq!(value["messages"].as_array().map(Vec::len), Some(1));
+    assert_eq!(pinned_messages.len(), 1);
+    assert_eq!(
+        pinned_messages[0]["message_id"].as_str(),
+        Some(pinned_id.as_str())
+    );
+    assert_eq!(pinned_messages[0]["absolute_index"].as_u64(), Some(1));
+    assert_eq!(
+        pinned_messages[0]["content"].as_str(),
+        Some("Pinned offscreen")
+    );
+}
+
+#[tokio::test]
 async fn get_thread_capped_for_ipc_truncates_oversized_thread_detail_payload() {
     let root = tempdir().expect("temp dir");
     let manager = SessionManager::new_test(root.path()).await;
@@ -670,6 +720,47 @@ async fn get_thread_filtered_hides_internal_threads_unless_requested() {
         .expect("include_internal should reveal hidden thread");
     assert_eq!(detail.thread.id, "weles-hidden");
     assert!(!detail.messages_truncated);
+}
+
+#[tokio::test]
+async fn agent_thread_detail_json_paginates_internal_dm_threads() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    engine.threads.write().await.insert(
+        "dm:svarog:weles".to_string(),
+        make_thread(
+            "dm:svarog:weles",
+            Some(crate::agent::agent_identity::MAIN_AGENT_NAME),
+            "Internal DM · Svarog ↔ WELES",
+            false,
+            1,
+            4,
+            vec![
+                AgentMessage::user("message-0", 1),
+                assistant_message("message-1", 2),
+                AgentMessage::user("message-2", 3),
+                assistant_message("message-3", 4),
+            ],
+        ),
+    );
+
+    let json = engine
+        .agent_thread_detail_json("dm:svarog:weles", Some(2), Some(1))
+        .await;
+    let value: serde_json::Value = serde_json::from_str(&json).expect("thread detail json");
+
+    assert_eq!(value["id"].as_str(), Some("dm:svarog:weles"));
+    assert_eq!(value["total_message_count"].as_u64(), Some(4));
+    assert_eq!(value["loaded_message_start"].as_u64(), Some(1));
+    assert_eq!(value["loaded_message_end"].as_u64(), Some(3));
+    let messages = value["messages"]
+        .as_array()
+        .expect("messages should be serialized");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["content"].as_str(), Some("message-1"));
+    assert_eq!(messages[1]["content"].as_str(), Some("message-2"));
 }
 
 #[tokio::test]

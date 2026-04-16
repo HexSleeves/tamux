@@ -53,6 +53,7 @@ export type AgentRole = "user" | "assistant" | "system" | "tool";
 
 export type AgentProviderId =
   | "featherless"
+  | "anthropic"
   | "openai"
   | "github-copilot"
   | "qwen"
@@ -80,6 +81,7 @@ export type AgentProviderId =
 
 export const AGENT_PROVIDER_IDS: AgentProviderId[] = [
   "featherless",
+  "anthropic",
   "openai",
   "github-copilot",
   "qwen",

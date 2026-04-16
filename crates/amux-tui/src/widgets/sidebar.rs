@@ -30,7 +30,7 @@ pub enum SidebarHitTarget {
     Pinned(usize),
 }
 
-type PinnedSidebarRows<'a> = Vec<(usize, &'a crate::state::chat::AgentMessage)>;
+type PinnedSidebarRows = Vec<crate::state::chat::PinnedThreadMessage>;
 
 fn file_entry_matches(entry: &crate::state::task::WorkContextEntry, filter: &str) -> bool {
     let query = filter.trim();
@@ -88,20 +88,16 @@ pub fn filtered_file_index(
         .position(|entry| entry.path == path)
 }
 
-pub fn selected_pinned_message_index(chat: &ChatState, sidebar: &SidebarState) -> Option<usize> {
-    chat.active_thread()
-        .and_then(|thread| {
-            thread
-                .messages
-                .iter()
-                .enumerate()
-                .filter(|(_, message)| message.pinned_for_compaction)
-                .nth(sidebar.selected_item())
-        })
-        .map(|(message_index, _)| message_index)
+pub fn selected_pinned_message(
+    chat: &ChatState,
+    sidebar: &SidebarState,
+) -> Option<crate::state::chat::PinnedThreadMessage> {
+    chat.active_thread_pinned_messages()
+        .into_iter()
+        .nth(sidebar.selected_item())
 }
 
-fn pinned_message_chars(message: &crate::state::chat::AgentMessage) -> usize {
+fn pinned_message_chars(message: &crate::state::chat::PinnedThreadMessage) -> usize {
     message.content.chars().count()
 }
 
@@ -131,17 +127,8 @@ fn pinned_message_snippet(content: &str, width: usize) -> String {
     }
 }
 
-fn active_thread_pinned_rows(chat: &ChatState) -> PinnedSidebarRows<'_> {
-    chat.active_thread()
-        .map(|thread| {
-            thread
-                .messages
-                .iter()
-                .enumerate()
-                .filter(|(_, message)| message.pinned_for_compaction)
-                .collect()
-        })
-        .unwrap_or_default()
+fn active_thread_pinned_rows(chat: &ChatState) -> PinnedSidebarRows {
+    chat.active_thread_pinned_messages()
 }
 
 fn pinned_footer_line(theme: &ThemeTokens) -> Line<'static> {
@@ -161,7 +148,7 @@ fn rows_for_thread(
     thread_id: Option<&str>,
     theme: &ThemeTokens,
     width: usize,
-    pinned_rows: &[(usize, &crate::state::chat::AgentMessage)],
+    pinned_rows: &[crate::state::chat::PinnedThreadMessage],
 ) -> Vec<SidebarRow> {
     let Some(thread_id) = thread_id else {
         return vec![SidebarRow {
@@ -299,7 +286,7 @@ fn rows_for_thread(
             pinned_rows
                 .iter()
                 .enumerate()
-                .map(|(row_idx, (message_index, message))| {
+                .map(|(row_idx, message)| {
                     let snippet = pinned_message_snippet(&message.content, width);
                     let line = Line::from(vec![
                         Span::styled(
@@ -323,7 +310,7 @@ fn rows_for_thread(
                         } else {
                             line
                         },
-                        target: Some(SidebarHitTarget::Pinned(*message_index)),
+                        target: Some(SidebarHitTarget::Pinned(row_idx)),
                     }
                 })
                 .collect()

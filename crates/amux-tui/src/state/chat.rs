@@ -241,6 +241,54 @@ fn adjust_message_ref_for_deleted_absolute(
     }
 }
 
+fn derived_pinned_message(
+    thread: &AgentThread,
+    index: usize,
+    message: &AgentMessage,
+) -> PinnedThreadMessage {
+    PinnedThreadMessage {
+        message_id: message.id.clone().unwrap_or_default(),
+        absolute_index: thread.loaded_message_start.saturating_add(index),
+        role: message.role,
+        content: message.content.clone(),
+    }
+}
+
+fn effective_pinned_messages(thread: &AgentThread) -> Vec<PinnedThreadMessage> {
+    let mut pinned = thread.pinned_messages.clone();
+    for (index, message) in thread.messages.iter().enumerate() {
+        if !message.pinned_for_compaction {
+            continue;
+        }
+        let derived = derived_pinned_message(thread, index, message);
+        let duplicate = pinned.iter().any(|existing| {
+            (!existing.message_id.is_empty()
+                && !derived.message_id.is_empty()
+                && existing.message_id == derived.message_id)
+                || existing.absolute_index == derived.absolute_index
+        });
+        if !duplicate {
+            pinned.push(derived);
+        }
+    }
+    pinned.sort_by_key(|message| message.absolute_index);
+    pinned
+}
+
+fn adjust_pinned_message_for_deleted_absolute(
+    mut message: PinnedThreadMessage,
+    deleted_absolute_index: usize,
+) -> Option<PinnedThreadMessage> {
+    match message.absolute_index.cmp(&deleted_absolute_index) {
+        std::cmp::Ordering::Less => Some(message),
+        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Greater => {
+            message.absolute_index -= 1;
+            Some(message)
+        }
+    }
+}
+
 impl ChatState {
     pub fn new() -> Self {
         Self {
@@ -323,26 +371,36 @@ impl ChatState {
         })
     }
 
-    pub fn active_thread_pinned_messages(&self) -> Vec<(usize, &AgentMessage)> {
+    pub fn active_thread_pinned_messages(&self) -> Vec<PinnedThreadMessage> {
         self.active_thread()
-            .map(|thread| {
-                thread
-                    .messages
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, message)| message.pinned_for_compaction)
-                    .collect()
-            })
+            .map(effective_pinned_messages)
             .unwrap_or_default()
     }
 
     pub fn active_thread_has_pinned_messages(&self) -> bool {
-        self.active_thread().is_some_and(|thread| {
-            thread
-                .messages
-                .iter()
-                .any(|message| message.pinned_for_compaction)
-        })
+        !self.active_thread_pinned_messages().is_empty()
+    }
+
+    pub fn resolve_active_pinned_message_to_loaded_index(
+        &self,
+        pinned_message: &PinnedThreadMessage,
+    ) -> Option<usize> {
+        let thread = self.active_thread()?;
+        if let Some(index) = thread.messages.iter().position(|message| {
+            !pinned_message.message_id.is_empty()
+                && message.id.as_deref() == Some(pinned_message.message_id.as_str())
+        }) {
+            return Some(index);
+        }
+        resolve_message_ref(
+            thread,
+            &StoredMessageRef {
+                thread_id: thread.id.clone(),
+                message_id: (!pinned_message.message_id.is_empty())
+                    .then(|| pinned_message.message_id.clone()),
+                absolute_index: pinned_message.absolute_index,
+            },
+        )
     }
 
     pub fn active_thread_mut(&mut self) -> Option<&mut AgentThread> {
@@ -436,9 +494,18 @@ impl ChatState {
         let mut deleted_thread_id = None;
         if let Some(thread) = self.active_thread_mut() {
             if index < thread.messages.len() {
-                deleted_absolute_index = Some(thread.loaded_message_start + index);
+                let absolute_index = thread.loaded_message_start + index;
+                deleted_absolute_index = Some(absolute_index);
                 deleted_thread_id = Some(thread.id.clone());
                 thread.messages.remove(index);
+                thread.pinned_messages = thread
+                    .pinned_messages
+                    .clone()
+                    .into_iter()
+                    .filter_map(|message| {
+                        adjust_pinned_message_for_deleted_absolute(message, absolute_index)
+                    })
+                    .collect();
                 thread.total_message_count = thread.total_message_count.saturating_sub(1);
                 thread.loaded_message_end = thread.loaded_message_start + thread.messages.len();
                 normalize_thread_window(thread);
@@ -925,6 +992,9 @@ impl ChatState {
                                 incoming.history_window_expanded = existing.history_window_expanded;
                                 incoming.collapse_deadline_tick = existing.collapse_deadline_tick;
                             }
+                            if incoming.pinned_messages.is_empty() {
+                                incoming.pinned_messages = existing.pinned_messages.clone();
+                            }
                             if incoming.thread_participants.is_empty() {
                                 incoming.thread_participants = existing.thread_participants.clone();
                             }
@@ -984,6 +1054,7 @@ impl ChatState {
                     existing.total_output_tokens = incoming
                         .total_output_tokens
                         .max(existing.total_output_tokens);
+                    existing.pinned_messages = effective_pinned_messages(&incoming);
                     existing.thread_participants = incoming.thread_participants;
                     existing.queued_participant_suggestions =
                         incoming.queued_participant_suggestions;
@@ -995,6 +1066,7 @@ impl ChatState {
                     }
                     normalize_thread_window(existing);
                 } else {
+                    incoming.pinned_messages = effective_pinned_messages(&incoming);
                     incoming.history_window_expanded =
                         incoming.messages.len() > self.history_page_size;
                     self.threads.push(incoming);

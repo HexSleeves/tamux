@@ -113,9 +113,15 @@ pub(super) fn whatsapp_timeout_retry_selected(index: usize) -> bool {
 pub(super) fn poll_for_setup_cancel_key() -> Result<bool> {
     if event::poll(std::time::Duration::from_millis(0)).context("Failed to poll keyboard input")? {
         if let Event::Key(KeyEvent {
-            code, modifiers, ..
+            code,
+            modifiers,
+            kind,
+            ..
         }) = event::read().context("Failed to read keyboard input")?
         {
+            if !is_actionable_key_event_kind(kind) {
+                return Ok(false);
+            }
             match code {
                 KeyCode::Esc => return Ok(true),
                 KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {

@@ -50,6 +50,22 @@ const OPENAI_CHATGPT_SUBSCRIPTION_MODELS: ModelDefinition[] = [
   { id: "gpt-5.1-codex-mini", name: "GPT-5.1 Codex Mini", contextWindow: 400_000 },
 ];
 
+const ANTHROPIC_MODELS: ModelDefinition[] = [
+  { id: "claude-opus-4-7", name: "Claude Opus 4.7", contextWindow: 1_000_000, modalities: M_TI },
+  { id: "claude-opus-4-6", name: "Claude Opus 4.6", contextWindow: 1_000_000, modalities: M_TI },
+  { id: "claude-opus-4-5-20251101", name: "Claude Opus 4.5", contextWindow: 200_000, modalities: M_TI },
+  { id: "claude-opus-4-1-20250805", name: "Claude Opus 4.1", contextWindow: 200_000, modalities: M_TI },
+  { id: "claude-opus-4-20250514", name: "Claude Opus 4", contextWindow: 200_000, modalities: M_TI },
+  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", contextWindow: 1_000_000, modalities: M_TI },
+  { id: "claude-sonnet-4-5-20250929", name: "Claude Sonnet 4.5", contextWindow: 200_000, modalities: M_TI },
+  { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", contextWindow: 200_000, modalities: M_TI },
+  { id: "claude-3-7-sonnet-20250219", name: "Claude Sonnet 3.7", contextWindow: 200_000, modalities: M_TI },
+  { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", contextWindow: 200_000, modalities: M_TI },
+  { id: "claude-3-5-haiku-20241022", name: "Claude Haiku 3.5", contextWindow: 200_000, modalities: M_TI },
+  { id: "claude-3-opus-20240229", name: "Claude Opus 3", contextWindow: 200_000, modalities: M_TI },
+  { id: "claude-3-haiku-20240307", name: "Claude Haiku 3", contextWindow: 200_000, modalities: M_TI },
+];
+
 const GITHUB_COPILOT_MODELS: ModelDefinition[] = [
   { id: "claude-haiku-4.5", name: "Claude Haiku 4.5", contextWindow: 160_000, modalities: M_TI },
   { id: "claude-opus-4.5", name: "Claude Opus 4.5", contextWindow: 160_000, modalities: M_TI },
@@ -247,6 +263,7 @@ export function modelSupports(model: ModelDefinition | undefined, modality: Moda
 
 export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
   { id: "featherless", name: "Featherless", defaultBaseUrl: "https://api.featherless.ai/v1", defaultModel: "meta-llama/Llama-3.3-70B-Instruct", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
+  { id: "anthropic", name: "Anthropic", defaultBaseUrl: "https://api.anthropic.com", defaultModel: "claude-opus-4-7", apiType: "anthropic", authMethod: "x-api-key", models: ANTHROPIC_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "openai", name: "OpenAI / ChatGPT", defaultBaseUrl: "https://api.openai.com/v1", defaultModel: "gpt-5.4", apiType: "openai", authMethod: "bearer", models: OPENAI_API_MODELS, supportsModelFetch: true, supportedTransports: RESPONSES_AND_CHAT_TRANSPORTS, defaultTransport: "responses", supportedAuthSources: OPENAI_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: true },
   { id: "github-copilot", name: "GitHub Copilot", defaultBaseUrl: "https://api.githubcopilot.com", defaultModel: "gpt-4.1", apiType: "openai", authMethod: "bearer", models: GITHUB_COPILOT_MODELS, supportsModelFetch: true, supportedTransports: RESPONSES_AND_CHAT_TRANSPORTS, defaultTransport: "responses", supportedAuthSources: GITHUB_COPILOT_AUTH_SOURCES, defaultAuthSource: "github_copilot", supportsResponseContinuity: true },
   { id: "qwen", name: "Qwen", defaultBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", defaultModel: "qwen-max", apiType: "openai", authMethod: "bearer", models: ALIBABA_CODING_MODELS, supportsModelFetch: true, supportedTransports: NATIVE_AND_CHAT_TRANSPORTS, defaultTransport: "native_assistant", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", nativeTransportKind: "alibaba_assistant_api", nativeBaseUrl: "https://dashscope-intl.aliyuncs.com/api/v1", supportsResponseContinuity: false },

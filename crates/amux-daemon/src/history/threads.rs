@@ -391,7 +391,7 @@ impl HistoryStore {
     }
 
     pub async fn list_threads(&self) -> Result<Vec<AgentDbThread>> {
-        self.conn.call(move |conn| {
+        self.read_conn.call(move |conn| {
         let mut stmt = conn.prepare(
             "SELECT id, workspace_id, surface_id, pane_id, agent_name, title, created_at, updated_at, message_count, total_tokens, last_preview, metadata_json \
              FROM agent_threads ORDER BY updated_at DESC",
@@ -403,7 +403,7 @@ impl HistoryStore {
 
     pub async fn get_thread(&self, id: &str) -> Result<Option<AgentDbThread>> {
         let id = id.to_string();
-        self.conn.call(move |conn| {
+        self.read_conn.call(move |conn| {
         conn
             .query_row(
                 "SELECT id, workspace_id, surface_id, pane_id, agent_name, title, created_at, updated_at, message_count, total_tokens, last_preview, metadata_json \
@@ -535,7 +535,7 @@ impl HistoryStore {
         limit: Option<usize>,
     ) -> Result<Vec<AgentDbMessage>> {
         let thread_id = thread_id.to_string();
-        self.conn.call(move |conn| {
+        self.read_conn.call(move |conn| {
             let messages = if let Some(limit) = limit {
                 let limit = limit.max(1) as i64;
                 let mut stmt = conn.prepare(
@@ -564,7 +564,7 @@ impl HistoryStore {
         limit: usize,
     ) -> Result<Vec<AgentDbMessage>> {
         let thread_id = thread_id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let limit = limit.clamp(1, 1000) as i64;
                 let mut stmt = conn.prepare(
@@ -588,7 +588,7 @@ impl HistoryStore {
     ) -> Result<Vec<AgentDbMessage>> {
         let thread_id = thread_id.to_string();
         let after = after.cloned();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let messages = match (after.as_ref(), limit) {
                     (Some(cursor), Some(limit)) => {

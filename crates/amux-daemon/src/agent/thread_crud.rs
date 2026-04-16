@@ -28,6 +28,31 @@ pub(crate) struct ThreadDetailResult {
     pub total_message_count: usize,
     pub loaded_message_start: usize,
     pub loaded_message_end: usize,
+    #[serde(default)]
+    pub pinned_messages: Vec<PinnedThreadMessageSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PinnedThreadMessageSummary {
+    pub message_id: String,
+    pub absolute_index: usize,
+    pub role: MessageRole,
+    pub content: String,
+}
+
+fn pinned_message_summaries(thread: &AgentThread) -> Vec<PinnedThreadMessageSummary> {
+    thread
+        .messages
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| message.pinned_for_compaction)
+        .map(|(absolute_index, message)| PinnedThreadMessageSummary {
+            message_id: message.id.clone(),
+            absolute_index,
+            role: message.role,
+            content: message.content.clone(),
+        })
+        .collect()
 }
 
 fn thread_detail_frame_fits_ipc(thread: &Option<AgentThread>) -> bool {
@@ -46,6 +71,7 @@ impl AgentEngine {
         thread_id: &str,
         message_id: &str,
     ) -> ThreadMessagePinMutationResult {
+        self.ensure_thread_messages_loaded(thread_id).await;
         let config = self.config.read().await.clone();
         let provider_config = match resolve_active_provider_config(&config) {
             Ok(provider_config) => provider_config,
@@ -97,6 +123,7 @@ impl AgentEngine {
         thread_id: &str,
         message_id: &str,
     ) -> ThreadMessagePinMutationResult {
+        self.ensure_thread_messages_loaded(thread_id).await;
         let config = self.config.read().await.clone();
         let provider_config = match resolve_active_provider_config(&config) {
             Ok(provider_config) => provider_config,
@@ -308,10 +335,12 @@ impl AgentEngine {
         message_limit: Option<usize>,
         message_offset: usize,
     ) -> Option<ThreadDetailResult> {
+        self.ensure_thread_messages_loaded(thread_id).await;
         let mut thread = self.threads.read().await.get(thread_id).cloned()?;
         if !thread_is_query_visible(&thread, include_internal) {
             return None;
         }
+        let pinned_messages = pinned_message_summaries(&thread);
 
         let total_messages = thread.messages.len();
         let end = total_messages.saturating_sub(message_offset);
@@ -335,6 +364,7 @@ impl AgentEngine {
             total_message_count: total_messages,
             loaded_message_start: start,
             loaded_message_end: end,
+            pinned_messages,
         })
     }
 
@@ -373,10 +403,12 @@ impl AgentEngine {
             total_message_count: detail.total_message_count,
             loaded_message_start: detail.loaded_message_start + low,
             loaded_message_end: detail.loaded_message_end,
+            pinned_messages: detail.pinned_messages,
         })
     }
 
     pub async fn planner_required_for_thread(&self, thread_id: &str) -> bool {
+        self.ensure_thread_messages_loaded(thread_id).await;
         let threads = self.threads.read().await;
         let Some(thread) = threads.get(thread_id) else {
             return false;
@@ -392,6 +424,7 @@ impl AgentEngine {
     }
 
     pub async fn delete_thread(&self, thread_id: &str) -> bool {
+        self.ensure_thread_messages_loaded(thread_id).await;
         let thread_snapshot = self.threads.read().await.get(thread_id).cloned();
         let removed = self.threads.write().await.remove(thread_id).is_some();
         if removed {
@@ -409,6 +442,7 @@ impl AgentEngine {
                 .write()
                 .await
                 .remove(thread_id);
+            self.clear_thread_message_hydration_pending(thread_id).await;
             self.remove_repo_watcher(thread_id).await;
             self.thread_todos.write().await.remove(thread_id);
             self.thread_work_contexts.write().await.remove(thread_id);

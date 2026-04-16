@@ -29,6 +29,22 @@ pub(super) fn convert_thread(t: crate::wire::AgentThread) -> chat::AgentThread {
         total_message_count: derived_total_message_count,
         loaded_message_start: derived_loaded_message_start,
         loaded_message_end: derived_loaded_message_end,
+        pinned_messages: t
+            .pinned_messages
+            .into_iter()
+            .map(|message| chat::PinnedThreadMessage {
+                message_id: message.message_id,
+                absolute_index: message.absolute_index,
+                role: match message.role {
+                    crate::wire::MessageRole::System => chat::MessageRole::System,
+                    crate::wire::MessageRole::User => chat::MessageRole::User,
+                    crate::wire::MessageRole::Assistant => chat::MessageRole::Assistant,
+                    crate::wire::MessageRole::Tool => chat::MessageRole::Tool,
+                    crate::wire::MessageRole::Unknown => chat::MessageRole::Unknown,
+                },
+                content: message.content,
+            })
+            .collect(),
         older_page_pending: false,
         older_page_request_cooldown_until_tick: None,
         history_window_expanded: false,

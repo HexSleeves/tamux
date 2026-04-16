@@ -9,7 +9,117 @@ fn clear_message_pin_state(message: &mut AgentMessage) {
     message.pinned_for_compaction = false;
 }
 
+fn agent_message_from_db(msg: amux_protocol::AgentDbMessage) -> Option<AgentMessage> {
+    let role = match msg.role.as_str() {
+        "user" => MessageRole::User,
+        "assistant" => MessageRole::Assistant,
+        "tool" => MessageRole::Tool,
+        "system" => MessageRole::System,
+        _ => return None,
+    };
+
+    let tool_calls: Option<Vec<ToolCall>> = msg
+        .tool_calls_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok());
+    let metadata = parse_message_metadata(msg.metadata_json.as_deref());
+
+    Some(AgentMessage {
+        id: msg.id.clone(),
+        role,
+        content: msg.content,
+        tool_calls,
+        tool_call_id: metadata.tool_call_id,
+        tool_name: metadata.tool_name,
+        tool_arguments: metadata.tool_arguments,
+        tool_status: metadata.tool_status,
+        weles_review: metadata.weles_review,
+        input_tokens: msg.input_tokens.unwrap_or(0) as u64,
+        output_tokens: msg.output_tokens.unwrap_or(0) as u64,
+        cost: msg.cost_usd,
+        provider: msg.provider,
+        model: msg.model,
+        api_transport: metadata.api_transport,
+        response_id: metadata.response_id,
+        upstream_message: metadata.upstream_message,
+        provider_final_result: metadata.provider_final_result,
+        author_agent_id: metadata.author_agent_id,
+        author_agent_name: metadata.author_agent_name,
+        reasoning: msg.reasoning,
+        message_kind: metadata.message_kind,
+        compaction_strategy: metadata.compaction_strategy,
+        compaction_payload: metadata.compaction_payload,
+        offloaded_payload_id: metadata.offloaded_payload_id,
+        structural_refs: metadata.structural_refs,
+        pinned_for_compaction: metadata.pinned_for_compaction,
+        timestamp: msg.created_at as u64,
+    })
+}
+
+fn thread_message_token_totals(messages: &[AgentMessage]) -> (u64, u64) {
+    messages
+        .iter()
+        .fold((0u64, 0u64), |(input_acc, output_acc), message| {
+            (
+                input_acc.saturating_add(message.input_tokens),
+                output_acc.saturating_add(message.output_tokens),
+            )
+        })
+}
+
 impl AgentEngine {
+    pub(super) async fn clear_thread_message_hydration_pending(&self, thread_id: &str) {
+        self.thread_message_hydration_pending
+            .write()
+            .await
+            .remove(thread_id);
+    }
+
+    pub(super) async fn ensure_thread_messages_loaded(&self, thread_id: &str) -> bool {
+        let needs_hydration = self
+            .thread_message_hydration_pending
+            .read()
+            .await
+            .contains(thread_id);
+        if !needs_hydration {
+            return self.threads.read().await.contains_key(thread_id);
+        }
+
+        let _guard = self.thread_message_hydration_lock.lock().await;
+        let still_needs_hydration = self
+            .thread_message_hydration_pending
+            .read()
+            .await
+            .contains(thread_id);
+        if !still_needs_hydration {
+            return self.threads.read().await.contains_key(thread_id);
+        }
+
+        let Some(db_messages) = self.history.list_messages(thread_id, None).await.ok() else {
+            return false;
+        };
+        let messages: Vec<AgentMessage> = db_messages
+            .into_iter()
+            .filter_map(agent_message_from_db)
+            .collect();
+        let (total_input_tokens, total_output_tokens) = thread_message_token_totals(&messages);
+
+        let updated = {
+            let mut threads = self.threads.write().await;
+            let Some(thread) = threads.get_mut(thread_id) else {
+                return false;
+            };
+            thread.messages = messages;
+            thread.total_input_tokens = total_input_tokens;
+            thread.total_output_tokens = total_output_tokens;
+            true
+        };
+        if updated {
+            self.clear_thread_message_hydration_pending(thread_id).await;
+        }
+        updated
+    }
+
     async fn prepare_internal_dm_thread(
         &self,
         sender: &str,
@@ -224,6 +334,7 @@ impl AgentEngine {
             },
         );
         drop(threads);
+        self.clear_thread_message_hydration_pending(&tid).await;
         self.thread_handoff_states.write().await.insert(
             tid.clone(),
             initial_thread_handoff_state(
@@ -303,17 +414,14 @@ impl AgentEngine {
             }
         }
         drop(threads);
+        self.clear_thread_message_hydration_pending(&id).await;
         (id, created)
     }
 
     /// Attempt to restore a thread and its messages from the SQLite history database.
     async fn restore_thread_from_db(&self, thread_id: &str) -> Option<AgentThread> {
         let db_thread = self.history.get_thread(thread_id).await.ok().flatten()?;
-        let db_messages = self
-            .history
-            .list_messages(thread_id, Some(500))
-            .await
-            .ok()?;
+        let db_messages = self.history.list_messages(thread_id, None).await.ok()?;
         let thread_metadata = parse_thread_metadata(db_thread.metadata_json.as_deref());
         if let Some(client_surface) = thread_metadata.client_surface {
             self.thread_client_surfaces
@@ -348,57 +456,11 @@ impl AgentEngine {
 
         let messages: Vec<AgentMessage> = db_messages
             .into_iter()
-            .filter_map(|msg| {
-                let role = match msg.role.as_str() {
-                    "user" => MessageRole::User,
-                    "assistant" => MessageRole::Assistant,
-                    "tool" => MessageRole::Tool,
-                    "system" => MessageRole::System,
-                    _ => return None,
-                };
-
-                let tool_calls: Option<Vec<ToolCall>> = msg
-                    .tool_calls_json
-                    .as_deref()
-                    .and_then(|json| serde_json::from_str(json).ok());
-
-                let metadata = parse_message_metadata(msg.metadata_json.as_deref());
-
-                Some(AgentMessage {
-                    id: msg.id.clone(),
-                    role,
-                    content: msg.content,
-                    tool_calls,
-                    tool_call_id: metadata.tool_call_id,
-                    tool_name: metadata.tool_name,
-                    tool_arguments: metadata.tool_arguments,
-                    tool_status: metadata.tool_status,
-                    weles_review: metadata.weles_review,
-                    input_tokens: msg.input_tokens.unwrap_or(0) as u64,
-                    output_tokens: msg.output_tokens.unwrap_or(0) as u64,
-                    cost: None,
-                    provider: msg.provider,
-                    model: msg.model,
-                    api_transport: metadata.api_transport,
-                    response_id: metadata.response_id,
-                    upstream_message: metadata.upstream_message,
-                    provider_final_result: metadata.provider_final_result,
-                    author_agent_id: metadata.author_agent_id,
-                    author_agent_name: metadata.author_agent_name,
-                    reasoning: msg.reasoning,
-                    message_kind: metadata.message_kind,
-                    compaction_strategy: metadata.compaction_strategy,
-                    compaction_payload: metadata.compaction_payload,
-                    offloaded_payload_id: metadata.offloaded_payload_id,
-                    structural_refs: metadata.structural_refs,
-                    pinned_for_compaction: false,
-                    timestamp: msg.created_at as u64,
-                })
-            })
+            .filter_map(agent_message_from_db)
             .collect();
 
-        let total_input: u64 = messages.iter().map(|m| m.input_tokens).sum();
-        let total_output: u64 = messages.iter().map(|m| m.output_tokens).sum();
+        let (total_input, total_output) = thread_message_token_totals(&messages);
+        self.clear_thread_message_hydration_pending(thread_id).await;
 
         Some(AgentThread {
             id: thread_id.to_string(),

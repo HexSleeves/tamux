@@ -48,6 +48,7 @@ pub struct WormIntegrityResult {
 #[derive(Clone)]
 pub struct HistoryStore {
     pub(crate) conn: tokio_rusqlite::Connection,
+    pub(crate) read_conn: tokio_rusqlite::Connection,
     skill_dir: PathBuf,
     telemetry_dir: PathBuf,
     worm_dir: PathBuf,

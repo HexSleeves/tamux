@@ -110,6 +110,8 @@ async fn make_test_engine(
         session_manager: sm,
         history,
         threads: RwLock::new(HashMap::new()),
+        thread_message_hydration_pending: RwLock::new(HashSet::new()),
+        thread_message_hydration_lock: Mutex::new(()),
         thread_handoff_states: RwLock::new(HashMap::new()),
         thread_participants: RwLock::new(HashMap::new()),
         thread_participant_suggestions: RwLock::new(HashMap::new()),

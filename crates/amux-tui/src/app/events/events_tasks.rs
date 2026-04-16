@@ -142,7 +142,9 @@ impl TuiModel {
         let threads = threads
             .into_iter()
             .filter(|thread| {
-                !crate::wire::is_weles_thread(thread)
+                let is_internal =
+                    Self::is_internal_agent_thread(&thread.id, Some(thread.title.as_str()));
+                (is_internal || !crate::wire::is_weles_thread(thread))
                     && !thread.id.starts_with("handoff:")
                     && !thread
                         .title
@@ -164,7 +166,8 @@ impl TuiModel {
     }
 
     pub(in crate::app) fn handle_thread_detail_event(&mut self, thread: crate::wire::AgentThread) {
-        if crate::wire::is_weles_thread(&thread)
+        let is_internal = Self::is_internal_agent_thread(&thread.id, Some(thread.title.as_str()));
+        if (!is_internal && crate::wire::is_weles_thread(&thread))
             || thread.id.starts_with("handoff:")
             || thread
                 .title
@@ -242,6 +245,36 @@ impl TuiModel {
         if should_select_thread {
             self.chat
                 .reduce(chat::ChatAction::SelectThread(thread_id.clone()));
+        }
+        if self
+            .pending_pinned_jump
+            .as_ref()
+            .is_some_and(|pending| pending.thread_id == thread_id)
+        {
+            let pending = self
+                .pending_pinned_jump
+                .as_ref()
+                .expect("checked pending pinned jump")
+                .clone();
+            if let Some(message_index) = self
+                .chat
+                .active_thread_pinned_messages()
+                .into_iter()
+                .find(|message| {
+                    (!pending.message_id.is_empty() && message.message_id == pending.message_id)
+                        || message.absolute_index == pending.absolute_index
+                })
+                .and_then(|message| {
+                    self.chat
+                        .resolve_active_pinned_message_to_loaded_index(&message)
+                })
+            {
+                self.pending_pinned_jump = None;
+                self.main_pane_view = MainPaneView::Conversation;
+                self.focus = FocusArea::Chat;
+                self.chat.select_message(Some(message_index));
+                self.status_line = "Pinned message".to_string();
+            }
         }
         self.sync_pending_approvals_from_tasks();
         self.send_daemon_command(DaemonCommand::RequestThreadTodos(thread_id.clone()));

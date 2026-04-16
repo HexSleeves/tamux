@@ -1,13 +1,13 @@
 use super::*;
 use crate::providers::context::is_known_default_url;
 use amux_shared::providers::{
-    MINIMAX_PROVIDER, PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_ARCEE,
+    MINIMAX_PROVIDER, PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_ANTHROPIC, PROVIDER_ID_ARCEE,
     PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_NVIDIA, PROVIDER_ID_OPENAI, QWEN_PROVIDER,
 };
 
 #[test]
-fn provider_count_is_25() {
-    assert_eq!(PROVIDERS.len(), 25);
+fn provider_count_is_26() {
+    assert_eq!(PROVIDERS.len(), 26);
 }
 
 #[test]
@@ -45,6 +45,10 @@ fn anthropic_message_providers_are_detected() {
     assert!(uses_fixed_anthropic_messages(
         MINIMAX_PROVIDER.id,
         "MiniMax-M2.7"
+    ));
+    assert!(uses_fixed_anthropic_messages(
+        PROVIDER_ID_ANTHROPIC,
+        "claude-opus-4-7"
     ));
     assert!(!uses_fixed_anthropic_messages(QWEN_PROVIDER.id, "qwen-max"));
     assert!(!uses_fixed_anthropic_messages(
@@ -84,6 +88,33 @@ fn known_models_openai_chatgpt_subscription_is_restricted() {
 fn known_models_unknown_returns_empty() {
     let models = known_models_for_provider("nonexistent");
     assert!(models.is_empty());
+}
+
+#[test]
+fn anthropic_provider_uses_expected_defaults() {
+    let provider = find_by_id(PROVIDER_ID_ANTHROPIC).unwrap();
+    assert_eq!(provider.name, "Anthropic");
+    assert_eq!(provider.default_base_url, "https://api.anthropic.com");
+    assert_eq!(provider.default_model, "claude-opus-4-7");
+    assert_eq!(provider.default_auth_source, "api_key");
+    assert_eq!(provider.supported_auth_sources, API_KEY_ONLY_AUTH_SOURCES);
+    assert_eq!(provider.default_transport, "chat_completions");
+    assert_eq!(provider.supported_transports, CHAT_ONLY_TRANSPORTS);
+    assert_eq!(
+        known_context_window_for(PROVIDER_ID_ANTHROPIC, "claude-opus-4-7"),
+        Some(1_000_000)
+    );
+    assert_eq!(
+        known_context_window_for(PROVIDER_ID_ANTHROPIC, "claude-haiku-4-5-20251001"),
+        Some(200_000)
+    );
+    assert!(!supports_model_fetch_for(PROVIDER_ID_ANTHROPIC));
+    let models = known_models_for_provider(PROVIDER_ID_ANTHROPIC);
+    assert_eq!(models.len(), 13);
+    assert!(models.iter().any(|model| model.id == "claude-opus-4-7"));
+    assert!(models
+        .iter()
+        .any(|model| model.id == "claude-sonnet-4-5-20250929"));
 }
 
 #[test]
