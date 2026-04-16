@@ -1194,6 +1194,74 @@ impl AgentEngine {
                     })
                 })
             });
+        let all_tasks = self.list_tasks().await;
+        let parse_subagent_containment_scope = |scope: Option<&str>| -> Option<(u8, u8)> {
+            let scope = scope?.trim();
+            let payload = scope.strip_prefix("subagent-depth:")?;
+            let (depth, max_depth) = payload.split_once('/')?;
+            let depth = depth.trim().parse::<u8>().ok()?;
+            let max_depth = max_depth.trim().parse::<u8>().ok()?;
+            Some((depth, max_depth))
+        };
+        let compute_task_delegation_depth = |task: &AgentTask| -> u8 {
+            let mut depth = 0u8;
+            let mut current_parent_id = task.parent_task_id.as_deref();
+            while let Some(parent_id) = current_parent_id {
+                depth = depth.saturating_add(1);
+                current_parent_id = all_tasks
+                    .iter()
+                    .find(|candidate| candidate.id == parent_id)
+                    .and_then(|parent| parent.parent_task_id.as_deref());
+            }
+            depth
+        };
+        let effective_subagent_max_depth = |task: &AgentTask| -> u8 {
+            parse_subagent_containment_scope(task.containment_scope.as_deref())
+                .map(|(_, max_depth)| max_depth)
+                .unwrap_or_else(|| compute_task_delegation_depth(task).max(1))
+        };
+        let active_subagents = all_tasks
+            .iter()
+            .filter(|task| task.source == "subagent")
+            .collect::<Vec<_>>();
+        let max_observed_depth = active_subagents
+            .iter()
+            .map(|task| compute_task_delegation_depth(task))
+            .max()
+            .unwrap_or(0);
+        let max_observed_allowed_depth = active_subagents
+            .iter()
+            .map(|task| {
+                parse_subagent_containment_scope(task.containment_scope.as_deref())
+                    .map(|(_, max_depth)| max_depth)
+                    .unwrap_or_else(|| effective_subagent_max_depth(task))
+            })
+            .max()
+            .unwrap_or(0);
+        let root_parent_task_ids = active_subagents
+            .iter()
+            .filter_map(|task| {
+                let mut current_parent_id = task.parent_task_id.as_deref()?;
+                loop {
+                    let next_parent = all_tasks
+                        .iter()
+                        .find(|candidate| candidate.id == current_parent_id)
+                        .and_then(|parent| parent.parent_task_id.as_deref());
+                    match next_parent {
+                        Some(next_parent_id) => current_parent_id = next_parent_id,
+                        None => return Some(current_parent_id.to_string()),
+                    }
+                }
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let recursive_subagents = serde_json::json!({
+            "active_subagent_count": active_subagents.len(),
+            "max_observed_depth": max_observed_depth,
+            "max_observed_allowed_depth": max_observed_allowed_depth,
+            "root_parent_task_ids": root_parent_task_ids,
+        });
         let mut memory_distillation_progress = self
             .history
             .list_memory_distillation_progress(5)
@@ -1294,6 +1362,7 @@ impl AgentEngine {
             "intent_prediction": intent_prediction,
             "routing_decision": routing_decision,
             "debate_session": debate_session,
+            "recursive_subagents": recursive_subagents,
             "system_outcome_foresight": system_outcome_foresight,
             "operator_satisfaction": {
                 "label": operator_model.operator_satisfaction.label,

@@ -1053,6 +1053,88 @@ async fn status_diagnostics_snapshot_includes_latest_debate_session_summary() {
     assert_eq!(debate["has_verdict"].as_bool(), Some(true));
 }
 
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_recursive_subagent_tree_summary() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    let parent = engine
+        .enqueue_task(
+            "Parent coordinator".to_string(),
+            "Coordinate the child work".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "user",
+            None,
+            None,
+            Some("thread-parent-diag".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+
+    let mut child = engine
+        .enqueue_task(
+            "Depth child".to_string(),
+            "Inspect deployment risks".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "subagent",
+            None,
+            Some(parent.id.clone()),
+            Some("thread-parent-diag".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    child.containment_scope = Some("subagent-depth:1/3".to_string());
+
+    let mut grandchild = engine
+        .enqueue_task(
+            "Grandchild helper".to_string(),
+            "Inspect one narrow edge case".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "subagent",
+            None,
+            Some(child.id.clone()),
+            Some("thread-parent-diag".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    grandchild.containment_scope = Some("subagent-depth:2/3".to_string());
+
+    {
+        let mut tasks = engine.tasks.lock().await;
+        if let Some(existing) = tasks.iter_mut().find(|task| task.id == child.id) {
+            *existing = child.clone();
+        }
+        if let Some(existing) = tasks.iter_mut().find(|task| task.id == grandchild.id) {
+            *existing = grandchild.clone();
+        }
+    }
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let subtree = &snapshot["recursive_subagents"];
+    assert_eq!(subtree["active_subagent_count"].as_u64(), Some(2));
+    assert_eq!(subtree["max_observed_depth"].as_u64(), Some(2));
+    assert_eq!(subtree["max_observed_allowed_depth"].as_u64(), Some(3));
+    let roots = subtree["root_parent_task_ids"]
+        .as_array()
+        .expect("root parent task ids array");
+    assert!(roots
+        .iter()
+        .any(|value| value.as_str() == Some(parent.id.as_str())));
+}
+
 #[test]
 fn preferred_tool_fallback_targets_deduplicates_and_skips_invalid_pairs() {
     let preferred = preferred_tool_fallback_targets(
