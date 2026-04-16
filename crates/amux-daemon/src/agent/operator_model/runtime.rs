@@ -1105,15 +1105,23 @@ impl AgentEngine {
             .collect::<Vec<_>>();
         let cognitive_resonance = CognitiveResonanceSnapshot::from_model(&operator_model);
         let meta_cognitive_self_model = self.meta_cognitive_self_model.read().await.clone();
-        let anticipatory_items = self.anticipatory.read().await.items.clone();
+        let anticipatory_runtime = self.anticipatory.read().await;
+        let anticipatory_items = anticipatory_runtime.items.clone();
         let intent_prediction = anticipatory_items
             .iter()
             .filter_map(|item| {
                 item.intent_prediction.as_ref().map(|prediction| {
+                    let cached_prewarm_summary = item.thread_id.as_deref().and_then(|thread_id| {
+                        anticipatory_runtime
+                            .prewarm_cache_by_thread
+                            .get(thread_id)
+                            .map(|snapshot| snapshot.summary.clone())
+                    });
                     serde_json::json!({
                         "thread_id": item.thread_id,
                         "primary_action": prediction.primary_action,
                         "confidence": prediction.confidence,
+                        "cached_prewarm_summary": cached_prewarm_summary,
                         "ranked_actions": prediction.ranked_actions,
                     })
                 })

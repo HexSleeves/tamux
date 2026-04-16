@@ -815,6 +815,58 @@ async fn status_diagnostics_snapshot_includes_ranked_intent_prediction_confidenc
         .is_some_and(|value| value >= 0.86));
 }
 
+#[tokio::test]
+async fn status_diagnostics_snapshot_exposes_cached_prewarm_for_intent_prediction() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-intent-cache-diag"), None)
+        .await
+        .expect("record operator attention");
+    engine.thread_work_contexts.write().await.insert(
+        "thread-intent-cache-diag".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-intent-cache-diag".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "src/main.rs".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some("/tmp/repo".to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+    engine.anticipatory.write().await.prewarm_cache_by_thread.insert(
+        "thread-intent-cache-diag".to_string(),
+        crate::agent::anticipatory::AnticipatoryPrewarmSnapshot {
+            summary: "branch main; dirty=true; modified 1; staged 0; untracked 0; ahead 0; behind 0; context entries 1".to_string(),
+        },
+    );
+
+    engine.run_anticipatory_tick().await;
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let intent = &snapshot["intent_prediction"];
+    assert_eq!(
+        intent["thread_id"].as_str(),
+        Some("thread-intent-cache-diag")
+    );
+    assert_eq!(
+        intent["cached_prewarm_summary"].as_str(),
+        Some("branch main; dirty=true; modified 1; staged 0; untracked 0; ahead 0; behind 0; context entries 1")
+    );
+}
+
 #[test]
 fn preferred_tool_fallback_targets_deduplicates_and_skips_invalid_pairs() {
     let preferred = preferred_tool_fallback_targets(
