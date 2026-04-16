@@ -333,6 +333,8 @@ fn format_anticipatory_items_highlights_system_outcome_foresight_for_operator() 
 
     assert!(output.contains("system_outcome_foresight"));
     assert!(output.contains("OPERATOR-VISIBLE FORESIGHT"));
+    assert!(output.contains("trigger=stale_context"));
+    assert!(output.contains("trigger=build_test_risk"));
     assert!(output.contains("stale context"));
     assert!(output.contains("build/test failure risk"));
     assert!(output.contains("prediction_type=stale_context"));

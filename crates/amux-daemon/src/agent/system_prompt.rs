@@ -714,6 +714,8 @@ mod tests {
         assert!(prompt.contains("write or update a short working spec in `/tmp/*.md`"));
         assert!(prompt.contains("look up and reread the relevant `/tmp/*.md` spec"));
         assert!(prompt.contains("Create a general specs todo for big work"));
-        assert!(prompt.contains("continue following up on spawned/background tasks until each one is resolved"));
+        assert!(prompt.contains(
+            "continue following up on spawned/background tasks until each one is resolved"
+        ));
     }
 }

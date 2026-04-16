@@ -111,14 +111,26 @@ pub(super) fn format_anticipatory_items_for_heartbeat(items: &[AnticipatoryItem]
             } else {
                 "ACTIONABLE"
             };
+            let trigger_suffix = item
+                .bullets
+                .iter()
+                .find_map(|bullet| bullet.strip_prefix("prediction_type="))
+                .map(|value| format!(" trigger={}", value.trim()))
+                .unwrap_or_default();
             let bullets_text = if !item.bullets.is_empty() {
                 format!("\n    Bullets: {}", item.bullets.join(", "))
             } else {
                 String::new()
             };
             format!(
-                "- [{}] ({}) {} (confidence: {:.2}): {}{}",
-                item.kind, priority_hint, item.title, item.confidence, item.summary, bullets_text
+                "- [{}] ({}) {}{} (confidence: {:.2}): {}{}",
+                item.kind,
+                priority_hint,
+                item.title,
+                trigger_suffix,
+                item.confidence,
+                item.summary,
+                bullets_text
             )
         })
         .collect::<Vec<_>>()

@@ -101,10 +101,8 @@ pub(crate) fn detect_protocol_candidates(
 }
 
 fn extract_tool_sequence_pattern(message: &AgentDbMessage) -> Option<String> {
-    let tool_calls: Vec<crate::agent::types::ToolCall> = serde_json::from_str(
-        message.tool_calls_json.as_deref()?,
-    )
-    .ok()?;
+    let tool_calls: Vec<crate::agent::types::ToolCall> =
+        serde_json::from_str(message.tool_calls_json.as_deref()?).ok()?;
 
     let sequence = tool_calls
         .into_iter()

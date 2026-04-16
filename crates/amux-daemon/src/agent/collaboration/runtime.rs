@@ -434,7 +434,11 @@ impl AgentEngine {
         }
 
         for subagent in eligible_subagents {
-            if session.agents.iter().any(|agent| agent.task_id == subagent.id) {
+            if session
+                .agents
+                .iter()
+                .any(|agent| agent.task_id == subagent.id)
+            {
                 continue;
             }
             session.agents.push(CollaborativeAgent {

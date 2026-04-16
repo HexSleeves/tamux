@@ -602,8 +602,8 @@ fn rank_state(state: ProtocolCandidateState) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{types::AgentConfig, AgentEngine};
     use crate::agent::types::{ToolCall, ToolFunction};
+    use crate::agent::{types::AgentConfig, AgentEngine};
     use crate::session_manager::SessionManager;
     use tempfile::tempdir;
 

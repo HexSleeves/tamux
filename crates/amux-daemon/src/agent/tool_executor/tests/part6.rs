@@ -2214,6 +2214,34 @@ async fn list_agents_returns_effective_runtime_targets() {
         rarog.get("provider").and_then(|value| value.as_str()),
         Some(amux_shared::providers::PROVIDER_ID_GROQ)
     );
+    let perun = rows
+        .iter()
+        .find(|row| row.get("agent").and_then(|value| value.as_str()) == Some("perun"))
+        .expect("perun row should be present");
+    assert_eq!(
+        perun.get("name").and_then(|value| value.as_str()),
+        Some("Perun")
+    );
+    assert_eq!(
+        perun.get("kind").and_then(|value| value.as_str()),
+        Some("builtin")
+    );
+    let mokosh = rows
+        .iter()
+        .find(|row| row.get("agent").and_then(|value| value.as_str()) == Some("mokosh"))
+        .expect("mokosh row should be present");
+    assert_eq!(
+        mokosh.get("name").and_then(|value| value.as_str()),
+        Some("Mokosh")
+    );
+    let dazhbog = rows
+        .iter()
+        .find(|row| row.get("agent").and_then(|value| value.as_str()) == Some("dazhbog"))
+        .expect("dazhbog row should be present");
+    assert_eq!(
+        dazhbog.get("name").and_then(|value| value.as_str()),
+        Some("Dazhbog")
+    );
     let weles = rows
         .iter()
         .find(|row| row.get("agent").and_then(|value| value.as_str()) == Some("weles"))
