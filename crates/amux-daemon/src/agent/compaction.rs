@@ -228,15 +228,15 @@ pub(super) fn prepare_llm_request_with_reused_user_message(
     provider_config: &ProviderConfig,
     reused_user_message: Option<&str>,
 ) -> PreparedLlmRequest {
+    let uses_chatgpt_subscription_responses = config.provider == PROVIDER_ID_OPENAI
+        && provider_config.auth_source == crate::agent::types::AuthSource::ChatgptSubscription;
     let mut selected_transport =
         if provider_supports_transport(&config.provider, provider_config.api_transport) {
             provider_config.api_transport
         } else {
             default_api_transport_for_provider(&config.provider)
         };
-    if config.provider == PROVIDER_ID_OPENAI
-        && provider_config.auth_source == crate::agent::types::AuthSource::ChatgptSubscription
-    {
+    if uses_chatgpt_subscription_responses {
         selected_transport = ApiTransport::Responses;
     }
     let messages = &thread.messages;
@@ -283,7 +283,9 @@ pub(super) fn prepare_llm_request_with_reused_user_message(
     }
 
     if selected_transport == ApiTransport::Responses {
-        let previous_response_id = if supports_response_continuity(&config.provider) {
+        let previous_response_id = if !uses_chatgpt_subscription_responses
+            && supports_response_continuity(&config.provider)
+        {
             request_messages
                 .iter()
                 .enumerate()
@@ -308,7 +310,8 @@ pub(super) fn prepare_llm_request_with_reused_user_message(
                     {
                         return None;
                     }
-                    let trailing_messages = continuation_api_messages(trailing, reused_user_message);
+                    let trailing_messages =
+                        continuation_api_messages(trailing, reused_user_message);
                     if trailing_messages.is_empty() {
                         None
                     } else {
@@ -335,7 +338,12 @@ pub(super) fn prepare_llm_request_with_reused_user_message(
             messages: messages_to_api_format(&request_messages),
             transport: ApiTransport::Responses,
             previous_response_id: None,
-            upstream_thread_id: None,
+            upstream_thread_id: uses_chatgpt_subscription_responses.then(|| {
+                thread
+                    .upstream_thread_id
+                    .clone()
+                    .unwrap_or_else(|| thread.id.clone())
+            }),
             force_connection_close: false,
         };
     }

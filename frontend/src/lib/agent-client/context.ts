@@ -88,6 +88,7 @@ export function prepareOpenAIRequest(
   assistant_id?: string,
   thread?: Pick<
     AgentThread,
+    | "id"
     | "upstreamThreadId"
     | "upstreamTransport"
     | "upstreamProvider"
@@ -95,12 +96,14 @@ export function prepareOpenAIRequest(
     | "upstreamAssistantId"
   >,
 ): PreparedOpenAIRequest {
+  const isChatGptSubscription = provider === "openai" &&
+    auth_source === "chatgpt_subscription";
   let selectedTransport = getSupportedApiTransports(provider).includes(
     requestedTransport,
   )
     ? requestedTransport
     : getDefaultApiTransport(provider);
-  if (provider === "openai" && auth_source === "chatgpt_subscription") {
+  if (isChatGptSubscription) {
     selectedTransport = "responses";
   }
   const compacted = compactMessagesForRequest(messages, settings);
@@ -135,7 +138,7 @@ export function prepareOpenAIRequest(
   }
 
   if (selectedTransport === "responses") {
-    if (!compactionActive && providerSupportsResponseContinuity(provider)) {
+    if (!isChatGptSubscription && !compactionActive && providerSupportsResponseContinuity(provider)) {
       const responseAnchorIndex = [...messages.keys()].reverse().find((index) => {
         const message = messages[index];
         return (
@@ -164,6 +167,9 @@ export function prepareOpenAIRequest(
     return {
       messages: messagesToApiFormat(requestMessages),
       transport: "responses",
+      upstreamThreadId: isChatGptSubscription
+        ? thread?.upstreamThreadId ?? thread?.id
+        : undefined,
     };
   }
 

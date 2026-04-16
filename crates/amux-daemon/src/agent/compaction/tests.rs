@@ -773,6 +773,81 @@ fn github_copilot_responses_request_does_not_use_previous_response_id_for_plain_
 }
 
 #[test]
+fn chatgpt_subscription_responses_request_uses_local_thread_id_instead_of_previous_response_id() {
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+
+    let provider = ProviderConfig {
+        base_url: "https://api.openai.com/v1".to_string(),
+        model: "gpt-5.4".to_string(),
+        api_key: String::new(),
+        assistant_id: String::new(),
+        auth_source: AuthSource::ChatgptSubscription,
+        api_transport: ApiTransport::Responses,
+        reasoning_effort: "high".to_string(),
+        context_window_tokens: 128_000,
+        response_schema: None,
+        stop_sequences: None,
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        metadata: None,
+        service_tier: None,
+        container: None,
+        inference_geo: None,
+        cache_control: None,
+        max_tokens: None,
+        anthropic_tool_choice: None,
+        output_effort: None,
+    };
+
+    let thread = sample_thread(vec![
+        AgentMessage::user("first question", 1),
+        AgentMessage {
+            id: "assistant-1".to_string(),
+            role: MessageRole::Assistant,
+            content: "Initial answer".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_arguments: None,
+            tool_status: None,
+            weles_review: None,
+            input_tokens: 11,
+            output_tokens: 7,
+            cost: None,
+            provider: Some(PROVIDER_ID_OPENAI.to_string()),
+            model: Some("gpt-5.4".to_string()),
+            api_transport: Some(ApiTransport::Responses),
+            response_id: Some("resp_123".to_string()),
+            upstream_message: None,
+            provider_final_result: None,
+            author_agent_id: None,
+            author_agent_name: None,
+            reasoning: None,
+            message_kind: AgentMessageKind::Normal,
+            compaction_strategy: None,
+            compaction_payload: None,
+            offloaded_payload_id: None,
+            structural_refs: Vec::new(),
+            pinned_for_compaction: false,
+            timestamp: 2,
+        },
+        AgentMessage::user("continue", 3),
+    ]);
+
+    let prepared = prepare_llm_request(&thread, &config, &provider);
+
+    assert_eq!(prepared.transport, ApiTransport::Responses);
+    assert!(prepared.previous_response_id.is_none());
+    assert_eq!(prepared.upstream_thread_id.as_deref(), Some("thread-1"));
+    assert_eq!(prepared.messages.len(), 3);
+    assert_eq!(prepared.messages[0].role, "user");
+    assert_eq!(prepared.messages[1].role, "assistant");
+    assert_eq!(prepared.messages[2].role, "user");
+}
+
+#[test]
 fn openai_responses_request_keeps_previous_response_id_when_compaction_artifact_exists() {
     let mut config = AgentConfig::default();
     config.provider = PROVIDER_ID_OPENAI.to_string();

@@ -246,6 +246,7 @@ pub(crate) fn send_completion_request_with_options(
                             &messages,
                             &tools,
                             previous_response_id.as_deref(),
+                            upstream_thread_id.as_deref(),
                             options.copilot_initiator,
                             options.force_connection_close,
                             &tx,

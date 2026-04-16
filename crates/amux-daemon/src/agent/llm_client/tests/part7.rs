@@ -1,4 +1,55 @@
 #[test]
+fn anthropic_request_defaults_to_top_level_ephemeral_cache_control() {
+    let client = reqwest::Client::new();
+    let config = ProviderConfig {
+        base_url: "https://api.anthropic.com".to_string(),
+        model: "claude-sonnet-4-6".to_string(),
+        api_key: "secret".to_string(),
+        assistant_id: String::new(),
+        auth_source: AuthSource::ApiKey,
+        api_transport: ApiTransport::ChatCompletions,
+        reasoning_effort: "off".to_string(),
+        context_window_tokens: 0,
+        response_schema: None,
+        stop_sequences: None,
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        metadata: None,
+        service_tier: None,
+        container: None,
+        inference_geo: None,
+        cache_control: None,
+        max_tokens: None,
+        anthropic_tool_choice: None,
+        output_effort: None,
+    };
+    let request = build_anthropic_request(
+        &client,
+        "anthropic",
+        &config,
+        "system",
+        &[ApiMessage {
+            role: "user".to_string(),
+            content: ApiContent::Text("hello".to_string()),
+            tool_call_id: None,
+            name: None,
+            tool_calls: None,
+        }],
+        &[],
+        false,
+    )
+    .expect("request should build");
+
+    let body: serde_json::Value = serde_json::from_slice(
+        request.body().and_then(|body| body.as_bytes()).expect("body bytes"),
+    )
+    .expect("json body");
+    assert_eq!(body["cache_control"]["type"], "ephemeral");
+    assert!(body["cache_control"]["ttl"].is_null());
+}
+
+#[test]
 fn anthropic_request_includes_sampling_and_stop_sequence_fields_when_configured() {
     let client = reqwest::Client::new();
     let config = ProviderConfig {

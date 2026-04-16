@@ -420,6 +420,7 @@ async fn run_openai_responses(
     messages: &[ApiMessage],
     tools: &[ToolDefinition],
     previous_response_id: Option<&str>,
+    upstream_thread_id: Option<&str>,
     copilot_initiator: CopilotInitiator,
     force_connection_close: bool,
     tx: &mpsc::Sender<Result<CompletionChunk>>,
@@ -441,19 +442,29 @@ async fn run_openai_responses(
     );
 
     let req = if let Some(codex_auth) = codex_auth {
-        maybe_force_connection_close(
+        let req = maybe_force_connection_close(
             client
-            .post(&url)
-            .header("Content-Type", "application/json")
+                .post(&url)
+                .header("Content-Type", "application/json")
             .header(
                 "Authorization",
                 format!("Bearer {}", codex_auth.access_token),
-            )
-            .header("chatgpt-account-id", codex_auth.account_id)
-            .header("OpenAI-Beta", "responses=experimental")
-            .header("originator", "tamux"),
+                )
+                .header("chatgpt-account-id", codex_auth.account_id)
+                .header("OpenAI-Beta", "responses=experimental")
+                .header("originator", "tamux"),
             force_connection_close,
-        )
+        );
+        let upstream_thread_id = upstream_thread_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let req = if let Some(upstream_thread_id) = upstream_thread_id {
+            req.header("session_id", upstream_thread_id)
+                .header("x-client-request-id", upstream_thread_id)
+        } else {
+            req
+        };
+        req
     } else {
         build_openai_auth_request(
             client,

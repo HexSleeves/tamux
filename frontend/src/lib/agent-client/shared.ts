@@ -106,6 +106,7 @@ export function buildChatGptCodexResponsesUrl(): string {
 export function buildChatGptCodexHeaders(
   api_key: string,
   accountId?: string,
+  upstreamThreadId?: string,
 ): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -115,6 +116,11 @@ export function buildChatGptCodexHeaders(
   };
   if (accountId) {
     headers["chatgpt-account-id"] = accountId;
+  }
+  const threadId = upstreamThreadId?.trim();
+  if (threadId) {
+    headers["session_id"] = threadId;
+    headers["x-client-request-id"] = threadId;
   }
   return headers;
 }
