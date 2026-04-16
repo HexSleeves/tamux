@@ -104,8 +104,7 @@ pub(super) fn format_anticipatory_items_for_heartbeat(items: &[AnticipatoryItem]
     items
         .iter()
         .map(|item| {
-            let priority_hint = if item.kind == "hydration"
-                || item.kind == "proactive_suppression"
+            let priority_hint = if item.kind == "hydration" || item.kind == "proactive_suppression"
             {
                 "LOW-PRIORITY INFORMATIONAL"
             } else if item.kind == "system_outcome_foresight" {

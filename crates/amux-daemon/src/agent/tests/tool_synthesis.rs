@@ -207,7 +207,9 @@ async fn synthesize_openapi_tool_reuses_equivalent_existing_generated_tool_recor
     })
     .to_string();
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind openapi server");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind openapi server");
     let addr = listener.local_addr().expect("openapi addr");
     tokio::spawn(async move {
         loop {
@@ -251,7 +253,8 @@ async fn synthesize_openapi_tool_reuses_equivalent_existing_generated_tool_recor
         )
         .await
         .expect("first synthesize generated OpenAPI tool");
-    let first_record: serde_json::Value = serde_json::from_str(&first).expect("parse first synth record");
+    let first_record: serde_json::Value =
+        serde_json::from_str(&first).expect("parse first synth record");
 
     let second = engine
         .synthesize_tool_json(
@@ -266,19 +269,26 @@ async fn synthesize_openapi_tool_reuses_equivalent_existing_generated_tool_recor
         )
         .await
         .expect("second synthesize generated OpenAPI tool");
-    let second_record: serde_json::Value = serde_json::from_str(&second).expect("parse second synth record");
+    let second_record: serde_json::Value =
+        serde_json::from_str(&second).expect("parse second synth record");
 
     assert_eq!(
         second_record.get("id").and_then(|value| value.as_str()),
         first_record.get("id").and_then(|value| value.as_str())
     );
     assert_eq!(
-        second_record.get("openapi").and_then(|value| value.get("operation_id")).and_then(|value| value.as_str()),
+        second_record
+            .get("openapi")
+            .and_then(|value| value.get("operation_id"))
+            .and_then(|value| value.as_str()),
         Some("getStatus")
     );
 
     let tools: Vec<serde_json::Value> = serde_json::from_str(
-        &engine.list_generated_tools_json().await.expect("list generated tools json"),
+        &engine
+            .list_generated_tools_json()
+            .await
+            .expect("list generated tools json"),
     )
     .expect("parse generated tools list");
     let matching = tools

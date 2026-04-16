@@ -452,7 +452,8 @@ async fn slow_approval_latency_surfaces_proactive_suppression_transparency() {
     assert!(item
         .bullets
         .iter()
-        .any(|bullet| bullet.contains("approval latency") || bullet.contains("reduce proactive noise")));
+        .any(|bullet| bullet.contains("approval latency")
+            || bullet.contains("reduce proactive noise")));
 }
 
 #[tokio::test]

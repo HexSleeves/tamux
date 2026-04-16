@@ -189,7 +189,9 @@ impl AgentEngine {
         };
 
         // Match specialist
-        let (selection, routing_confidence_threshold) = if let Some((profile_idx, routing_score)) = learned_selection {
+        let (selection, routing_confidence_threshold) = if let Some((profile_idx, routing_score)) =
+            learned_selection
+        {
             (
                 super::profiles::RoutingSelection {
                     profile_idx,
