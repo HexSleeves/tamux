@@ -68,7 +68,7 @@ impl HistoryStore {
         payload_id: &str,
     ) -> Result<Option<OffloadedPayloadMetadataRow>> {
         let payload_id = payload_id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 conn.query_row(
                     "SELECT payload_id, thread_id, tool_name, tool_call_id, storage_path, content_type, byte_size, summary, created_at \
@@ -100,7 +100,7 @@ impl HistoryStore {
         thread_id: &str,
     ) -> Result<Vec<OffloadedPayloadMetadataRow>> {
         let thread_id = thread_id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT payload_id, thread_id, tool_name, tool_call_id, storage_path, content_type, byte_size, summary, created_at \

@@ -36,7 +36,7 @@ impl HistoryStore {
         token: &str,
     ) -> Result<Option<EmergentProtocolRow>> {
         let token = token.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 conn.query_row(
                     "SELECT protocol_id, token, description, agent_a, agent_b, thread_id, normalized_pattern, signal_kind, context_signature_json, created_at, activated_at, last_used_at, usage_count, success_rate, source_candidate_id FROM emergent_protocols WHERE token = ?1",
@@ -75,7 +75,7 @@ impl HistoryStore {
     ) -> Result<Option<EmergentProtocolRow>> {
         let thread_id = thread_id.to_string();
         let normalized_pattern = normalized_pattern.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 conn.query_row(
                     "SELECT protocol_id, token, description, agent_a, agent_b, thread_id, normalized_pattern, signal_kind, context_signature_json, created_at, activated_at, last_used_at, usage_count, success_rate, source_candidate_id FROM emergent_protocols WHERE thread_id = ?1 AND normalized_pattern = ?2 ORDER BY activated_at DESC LIMIT 1",
@@ -112,7 +112,7 @@ impl HistoryStore {
         protocol_id: &str,
     ) -> Result<Option<EmergentProtocolRow>> {
         let protocol_id = protocol_id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 conn.query_row(
                     "SELECT protocol_id, token, description, agent_a, agent_b, thread_id, normalized_pattern, signal_kind, context_signature_json, created_at, activated_at, last_used_at, usage_count, success_rate, source_candidate_id FROM emergent_protocols WHERE protocol_id = ?1 LIMIT 1",
@@ -149,7 +149,7 @@ impl HistoryStore {
         thread_id: &str,
     ) -> Result<Vec<EmergentProtocolRow>> {
         let thread_id = thread_id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT protocol_id, token, description, agent_a, agent_b, thread_id, normalized_pattern, signal_kind, context_signature_json, created_at, activated_at, last_used_at, usage_count, success_rate, source_candidate_id FROM emergent_protocols WHERE thread_id = ?1 ORDER BY activated_at DESC",
@@ -214,7 +214,7 @@ impl HistoryStore {
 
     pub async fn list_protocol_steps(&self, protocol_id: &str) -> Result<Vec<ProtocolStepRow>> {
         let protocol_id = protocol_id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT protocol_id, step_index, intent, tool_name, args_template_json FROM protocol_steps WHERE protocol_id = ?1 ORDER BY step_index ASC",
@@ -280,7 +280,7 @@ impl HistoryStore {
         protocol_id: &str,
     ) -> Result<Vec<ProtocolUsageLogRow>> {
         let protocol_id = protocol_id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, protocol_id, used_at, execution_time_ms, success, fallback_reason FROM protocol_usage_log WHERE protocol_id = ?1 ORDER BY used_at DESC",

@@ -58,7 +58,7 @@ impl HistoryStore {
 
         let event_family = event_family.map(str::to_string);
         let event_kind = event_kind.map(str::to_string);
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let sql = match (event_family.is_some(), event_kind.is_some()) {
                     (true, true) => {

@@ -107,9 +107,15 @@ impl AgentEngine {
 
         // If step_index is provided, try to find a trace for that specific step
         let trace = if let Some(idx) = step_index {
-            // Filter traces that have a task_id (step-level), pick the one at the step index
-            let step_traces: Vec<_> = traces.iter().filter(|t| t.task_id.is_some()).collect();
-            step_traces.get(idx).copied().or(traces.first())
+            // Filter traces that have a task_id (step-level), sort them chronologically,
+            // then pick the requested step index so step 0 means the earliest step.
+            let mut step_traces: Vec<_> = traces.iter().filter(|t| t.task_id.is_some()).collect();
+            step_traces.sort_by_key(|trace| trace.created_at);
+            step_traces
+                .get(idx)
+                .copied()
+                .or_else(|| step_traces.last().copied())
+                .or(traces.first())
         } else {
             traces.first()
         }?;

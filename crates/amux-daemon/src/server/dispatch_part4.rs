@@ -67,6 +67,7 @@ if matches!(
 
                 ClientMessage::AgentListThreads => {
                     let (threads, truncated) = cap_agent_thread_list_for_ipc(agent.list_threads().await);
+                    client_agent_threads.extend(threads.iter().map(|thread| thread.id.clone()));
                     if truncated {
                         tracing::warn!("truncated agent thread list to fit IPC frame limit");
                     }

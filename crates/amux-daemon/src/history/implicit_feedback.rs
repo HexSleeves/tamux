@@ -29,7 +29,7 @@ impl HistoryStore {
     ) -> Result<Vec<ImplicitSignalRow>> {
         let session_id = session_id.to_string();
         let limit = limit.max(1) as i64;
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, session_id, signal_type, weight, timestamp_ms, context_snapshot_json
@@ -132,7 +132,7 @@ impl HistoryStore {
     ) -> Result<Vec<IntentPredictionRow>> {
         let session_id = session_id.to_string();
         let limit = limit.max(1) as i64;
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, session_id, context_state_hash, predicted_action, confidence, actual_action, was_correct, created_at_ms
@@ -169,7 +169,7 @@ impl HistoryStore {
     ) -> Result<Vec<SystemOutcomePredictionRow>> {
         let session_id = session_id.to_string();
         let limit = limit.max(1) as i64;
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, session_id, prediction_type, predicted_outcome, confidence, actual_outcome, was_correct, created_at_ms
@@ -276,7 +276,7 @@ impl HistoryStore {
     ) -> Result<Vec<SatisfactionScoreRow>> {
         let session_id = session_id.to_string();
         let limit = limit.max(1) as i64;
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, session_id, score, computed_at_ms, label, signal_count
@@ -307,7 +307,7 @@ impl HistoryStore {
         limit: usize,
     ) -> Result<Vec<(f64, u64)>> {
         let limit = limit.max(1) as i64;
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT weight, timestamp_ms
@@ -332,7 +332,7 @@ impl HistoryStore {
     ) -> Result<Option<f64>> {
         let predicted_action = predicted_action.to_string();
         let limit = limit.max(1) as i64;
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT was_correct

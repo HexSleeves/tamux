@@ -779,6 +779,82 @@ fn wait_for_listener_and_send_callback(state: &str, code: &str) {
 }
 
 #[tokio::test]
+async fn thread_list_subscription_registers_threads_for_live_agent_events() {
+    let mut conn = spawn_test_connection().await;
+    let thread_id = "thread-list-subscription";
+
+    conn.agent.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Listed thread".to_string(),
+            messages: vec![AgentMessage::user("continue", 1)],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            created_at: 1,
+            updated_at: 1,
+        },
+    );
+
+    conn.framed
+        .send(ClientMessage::AgentSubscribe)
+        .await
+        .expect("subscribe to agent events");
+    conn.framed
+        .send(ClientMessage::AgentListThreads)
+        .await
+        .expect("request thread list");
+
+    loop {
+        match conn.recv().await {
+            DaemonMessage::AgentThreadList { .. } => break,
+            DaemonMessage::AgentEvent { .. } => continue,
+            other => panic!("expected thread list before live event test, got {other:?}"),
+        }
+    }
+
+    let _ = conn.agent.event_tx.send(AgentEvent::Delta {
+        thread_id: thread_id.to_string(),
+        content: "stream chunk".to_string(),
+    });
+
+    let event = timeout(Duration::from_millis(250), async {
+        loop {
+            match conn.recv().await {
+                DaemonMessage::AgentEvent { event_json } => {
+                    let parsed: serde_json::Value =
+                        serde_json::from_str(&event_json).expect("parse agent event");
+                    if parsed.get("type").and_then(|value| value.as_str()) == Some("delta") {
+                        return parsed;
+                    }
+                }
+                other => panic!("expected forwarded delta event, got {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("listed thread should receive live delta events");
+
+    assert_eq!(
+        event.get("thread_id").and_then(|value| value.as_str()),
+        Some(thread_id)
+    );
+    assert_eq!(
+        event.get("content").and_then(|value| value.as_str()),
+        Some("stream chunk")
+    );
+
+    conn.shutdown().await;
+}
+
+#[tokio::test]
 async fn openai_codex_auth_status_request_returns_status_payload() {
     let _lock = crate::agent::provider_auth_test_env_lock();
     let (_temp_dir, _env_guard) = setup_server_openai_codex_auth_test();
