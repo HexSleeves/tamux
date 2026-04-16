@@ -290,6 +290,36 @@ fn parse_digest_items_handles_camelcase_types() {
 }
 
 #[test]
+fn format_anticipatory_items_surfaces_proactive_suppression_as_low_priority_transparency() {
+    let output = super::helpers::format_anticipatory_items_for_heartbeat(&[
+        AnticipatoryItem {
+            id: "proactive_suppression_thread-1".to_string(),
+            kind: "proactive_suppression".to_string(),
+            title: "Proactive Surfacing Tightened".to_string(),
+            summary: "Optional proactive suggestions were suppressed to reduce noise.".to_string(),
+            bullets: vec![
+                "suppressed_kinds=intent_prediction,morning_brief".to_string(),
+                "approval latency increased; optional proactive surfacing is tightened"
+                    .to_string(),
+            ],
+            intent_prediction: None,
+            confidence: 0.72,
+            goal_run_id: None,
+            thread_id: Some("thread-1".to_string()),
+            preferred_client_surface: Some("conversation".to_string()),
+            preferred_attention_surface: Some("conversation:chat".to_string()),
+            created_at: 1,
+            updated_at: 1,
+        },
+    ]);
+
+    assert!(output.contains("proactive_suppression"));
+    assert!(output.contains("LOW-PRIORITY INFORMATIONAL"));
+    assert!(output.contains("suppressed_kinds=intent_prediction,morning_brief"));
+    assert!(output.contains("reduce noise"));
+}
+
+#[test]
 fn format_anticipatory_items_highlights_system_outcome_foresight_for_operator() {
     let output = super::helpers::format_anticipatory_items_for_heartbeat(&[
         AnticipatoryItem {

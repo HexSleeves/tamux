@@ -262,6 +262,12 @@ impl AgentEngine {
                 items.push(item);
             }
         }
+        if let Some(item) = self
+            .compute_proactive_suppression_transparency(settings, adaptation_mode)
+            .await
+        {
+            items.push(item);
+        }
 
         items.sort_by(|left, right| {
             right
@@ -420,6 +426,99 @@ impl AgentEngine {
         }
 
         self.emit_anticipatory_update(next_items);
+    }
+
+    async fn compute_proactive_suppression_transparency(
+        &self,
+        settings: &AnticipatoryConfig,
+        adaptation_mode: AnticipatoryAdaptationMode,
+    ) -> Option<AnticipatoryItem> {
+        if matches!(adaptation_mode, AnticipatoryAdaptationMode::Normal) {
+            return None;
+        }
+
+        let attention_surface = self.current_attention_surface().await;
+        let mut suppressed_kinds = Vec::new();
+        if settings.morning_brief
+            && should_surface_anticipatory_kind("morning_brief", attention_surface.as_deref())
+        {
+            suppressed_kinds.push("morning_brief");
+        }
+        if should_surface_anticipatory_kind(
+            "system_outcome_foresight",
+            attention_surface.as_deref(),
+        ) {
+            suppressed_kinds.push("system_outcome_foresight");
+        }
+        if should_surface_anticipatory_kind("intent_prediction", attention_surface.as_deref()) {
+            suppressed_kinds.push("intent_prediction");
+        }
+        if self.config.read().await.collaboration.enabled {
+            suppressed_kinds.push("collaboration_disagreement");
+        }
+        if suppressed_kinds.is_empty() {
+            return None;
+        }
+
+        let (reason, confidence) = match adaptation_mode {
+            AnticipatoryAdaptationMode::Minimal => (
+                "operator satisfaction is strained; optional proactive surfacing is suppressed",
+                0.73,
+            ),
+            AnticipatoryAdaptationMode::Tightened => {
+                let model = self.operator_model.read().await;
+                if model.implicit_feedback.tool_hesitation_count > 0 {
+                    (
+                        "tool hesitation detected; optional proactive surfacing is tightened",
+                        0.72,
+                    )
+                } else {
+                    (
+                        "approval latency increased; optional proactive surfacing is tightened",
+                        0.72,
+                    )
+                }
+            }
+            AnticipatoryAdaptationMode::Normal => return None,
+        };
+
+        let attention = self.current_attention_focus().await;
+        let route = self
+            .resolve_anticipatory_route(
+                "stuck_hint",
+                attention.goal_run_id.as_deref(),
+                attention.thread_id.as_deref(),
+            )
+            .await;
+        let now = now_millis();
+        Some(AnticipatoryItem {
+            id: format!(
+                "proactive_suppression_{}",
+                attention
+                    .thread_id
+                    .clone()
+                    .unwrap_or_else(|| "global".to_string())
+            ),
+            kind: "proactive_suppression".to_string(),
+            title: "Proactive Surfacing Tightened".to_string(),
+            summary: format!(
+                "Optional proactive suggestions were suppressed to reduce noise: {}.",
+                reason
+            ),
+            bullets: vec![
+                format!("suppressed_kinds={}", suppressed_kinds.join(",")),
+                "reduce proactive noise while the operator is under friction or slower approval flow"
+                    .to_string(),
+            ],
+            intent_prediction: None,
+            confidence,
+            goal_run_id: attention.goal_run_id,
+            thread_id: attention.thread_id,
+            preferred_client_surface: route.preferred_client_surface,
+            preferred_attention_surface: route.preferred_attention_surface,
+            created_at: now,
+            updated_at: now,
+        })
     }
 
     async fn compute_morning_brief(

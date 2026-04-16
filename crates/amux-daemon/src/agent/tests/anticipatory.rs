@@ -409,6 +409,53 @@ async fn tool_hesitation_suppresses_optional_morning_brief() {
 }
 
 #[tokio::test]
+async fn slow_approval_latency_surfaces_proactive_suppression_transparency() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    config.anticipatory.stuck_detection = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let mut task = sample_task("task-latency-intent", Some("thread-latency-intent"), None);
+    task.title = "Need approval".to_string();
+    task.status = TaskStatus::AwaitingApproval;
+    engine.tasks.lock().await.push_back(task);
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-latency-intent"), None)
+        .await
+        .unwrap();
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.risk_fingerprint.approval_requests = 4;
+        model.risk_fingerprint.approvals = 2;
+        model.risk_fingerprint.denials = 2;
+        model.risk_fingerprint.avg_response_time_secs = 45.0;
+        refresh_risk_metrics(&mut model.risk_fingerprint);
+        refresh_operator_satisfaction(&mut model);
+    }
+
+    engine.run_anticipatory_tick().await;
+
+    let item = engine
+        .anticipatory
+        .read()
+        .await
+        .items
+        .iter()
+        .find(|item| item.kind == "proactive_suppression")
+        .cloned()
+        .expect("expected a proactive suppression transparency item");
+    assert_eq!(item.thread_id.as_deref(), Some("thread-latency-intent"));
+    assert!(item.summary.contains("suppressed") || item.summary.contains("tightened"));
+    assert!(item
+        .bullets
+        .iter()
+        .any(|bullet| bullet.contains("approval latency") || bullet.contains("reduce proactive noise")));
+}
+
+#[tokio::test]
 async fn slow_approval_latency_suppresses_optional_intent_prediction() {
     let root = tempdir().unwrap();
     let manager = SessionManager::new_test(root.path()).await;
