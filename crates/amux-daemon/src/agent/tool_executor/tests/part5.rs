@@ -816,6 +816,21 @@ fn apply_patch_tool_uses_top_level_object_schema() {
             .get("roles")
             .and_then(|v| v.as_array())
             .is_some_and(|roles| !roles.is_empty()));
+
+        let complete_response = execute_complete_debate_session(
+            &serde_json::json!({ "session_id": session_id }),
+            &engine,
+        )
+        .await
+        .expect("complete_debate_session should succeed");
+        let complete_payload: serde_json::Value = serde_json::from_str(&complete_response)
+            .expect("complete_debate_session payload should be valid JSON");
+        assert_eq!(
+            complete_payload
+                .get("completion_reason")
+                .and_then(|v| v.as_str()),
+            Some("manual_completion")
+        );
     }
 
     #[tokio::test]
