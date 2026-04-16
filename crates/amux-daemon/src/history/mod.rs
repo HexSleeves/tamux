@@ -511,6 +511,19 @@ pub struct MemoryDistillationLogRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ForgePassLogRow {
+    pub id: i64,
+    pub agent_id: String,
+    pub period_start_ms: i64,
+    pub period_end_ms: i64,
+    pub traces_analyzed: i64,
+    pub patterns_found: i64,
+    pub hints_applied: i64,
+    pub hints_logged: i64,
+    pub completed_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApprovalRecordRow {
     pub approval_id: String,
     pub run_id: Option<String>,

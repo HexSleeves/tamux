@@ -787,6 +787,22 @@ impl HistoryStore {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
+    pub async fn list_forge_pass_log(&self, limit: usize) -> Result<Vec<ForgePassLogRow>> {
+        let limit = limit.max(1) as i64;
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, agent_id, period_start_ms, period_end_ms, traces_analyzed, patterns_found, hints_applied, hints_logged, completed_at_ms \
+                     FROM forge_pass_log ORDER BY completed_at_ms DESC, id DESC LIMIT ?1",
+                )?;
+                let rows = stmt.query_map(params![limit], map_forge_pass_log_row)?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     pub async fn get_worm_chain_tip(&self, kind: &str) -> Result<Option<WormChainTip>> {
         let kind = kind.to_string();
         let kind = kind.to_string();

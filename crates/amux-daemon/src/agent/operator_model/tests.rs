@@ -933,6 +933,48 @@ async fn status_diagnostics_snapshot_includes_memory_distillation_activity() {
     assert_eq!(progress[0]["last_processed_message_id"], "m-last");
 }
 
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_forge_pass_activity() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    engine
+        .history
+        .conn
+        .call(|conn| {
+            conn.execute(
+                "INSERT INTO forge_pass_log (agent_id, period_start_ms, period_end_ms, traces_analyzed, patterns_found, hints_applied, hints_logged, completed_at_ms) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![
+                    "svarog",
+                    1_717_200_000_i64,
+                    1_717_203_600_i64,
+                    11_i64,
+                    3_i64,
+                    1_i64,
+                    2_i64,
+                    1_717_203_700_i64,
+                ],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("insert forge pass log");
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let forge = &snapshot["forge_reflection"];
+    let passes = forge["recent_passes"]
+        .as_array()
+        .expect("recent forge passes array");
+    assert_eq!(passes.len(), 1);
+    assert_eq!(passes[0]["agent_id"], "svarog");
+    assert_eq!(passes[0]["traces_analyzed"].as_i64(), Some(11));
+    assert_eq!(passes[0]["patterns_found"].as_i64(), Some(3));
+    assert_eq!(passes[0]["hints_applied"].as_i64(), Some(1));
+    assert_eq!(passes[0]["hints_logged"].as_i64(), Some(2));
+}
+
 #[test]
 fn preferred_tool_fallback_targets_deduplicates_and_skips_invalid_pairs() {
     let preferred = preferred_tool_fallback_targets(

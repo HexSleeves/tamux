@@ -1124,6 +1124,26 @@ impl AgentEngine {
                 })
             })
             .collect::<Vec<_>>();
+        let recent_forge_passes = self
+            .history
+            .list_forge_pass_log(5)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id": row.id,
+                    "agent_id": row.agent_id,
+                    "period_start_ms": row.period_start_ms,
+                    "period_end_ms": row.period_end_ms,
+                    "traces_analyzed": row.traces_analyzed,
+                    "patterns_found": row.patterns_found,
+                    "hints_applied": row.hints_applied,
+                    "hints_logged": row.hints_logged,
+                    "completed_at_ms": row.completed_at_ms,
+                })
+            })
+            .collect::<Vec<_>>();
         let mut memory_distillation_progress = self
             .history
             .list_memory_distillation_progress(5)
@@ -1243,6 +1263,9 @@ impl AgentEngine {
             "memory_distillation": {
                 "recent_activity": recent_memory_distillation,
                 "progress_by_thread": memory_distillation_progress,
+            },
+            "forge_reflection": {
+                "recent_passes": recent_forge_passes,
             },
             "meta_cognitive_self_model": meta_cognitive_self_model,
             "cognitive_resonance": cognitive_resonance,

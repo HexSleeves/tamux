@@ -158,6 +158,20 @@ pub(super) fn map_memory_distillation_log_row(
     })
 }
 
+pub(super) fn map_forge_pass_log_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ForgePassLogRow> {
+    Ok(ForgePassLogRow {
+        id: row.get(0)?,
+        agent_id: row.get(1)?,
+        period_start_ms: row.get(2)?,
+        period_end_ms: row.get(3)?,
+        traces_analyzed: row.get(4)?,
+        patterns_found: row.get(5)?,
+        hints_applied: row.get(6)?,
+        hints_logged: row.get(7)?,
+        completed_at_ms: row.get(8)?,
+    })
+}
+
 pub(super) fn map_transcript_index_entry(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<TranscriptIndexEntry> {
