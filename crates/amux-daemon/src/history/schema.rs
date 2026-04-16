@@ -65,14 +65,24 @@ impl HistoryStore {
         let offloaded_payloads_dir = self.offloaded_payloads_dir();
         self.conn
             .call(move |connection| {
-                let schema_sql = format!("{}{}", base_schema_sql(), extended_schema_sql());
-                connection.execute_batch(&schema_sql)?;
-                ensure_execution_traces_extended_schema(connection)?;
-                ensure_context_archive_fts(connection);
-                apply_schema_migrations(connection, &offloaded_payloads_dir)?;
-                Ok(())
+                Ok(init_schema_on_connection(
+                    connection,
+                    &offloaded_payloads_dir,
+                )?)
             })
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
+}
+
+pub(super) fn init_schema_on_connection(
+    connection: &rusqlite::Connection,
+    offloaded_payloads_dir: &std::path::Path,
+) -> rusqlite::Result<()> {
+    let schema_sql = format!("{}{}", base_schema_sql(), extended_schema_sql());
+    connection.execute_batch(&schema_sql)?;
+    ensure_execution_traces_extended_schema(connection)?;
+    ensure_context_archive_fts(connection);
+    apply_schema_migrations(connection, offloaded_payloads_dir)?;
+    Ok(())
 }

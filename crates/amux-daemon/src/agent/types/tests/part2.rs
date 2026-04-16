@@ -607,3 +607,29 @@ use amux_shared::providers::{
             ApiType::OpenAI
         );
     }
+
+    #[test]
+    fn anthropic_provider_exposes_static_anthropic_defaults() {
+        let provider = get_provider_definition(PROVIDER_ID_ANTHROPIC).expect("anthropic provider");
+        assert_eq!(provider.default_base_url, "https://api.anthropic.com");
+        assert_eq!(provider.default_model, "claude-opus-4-7");
+        assert_eq!(provider.api_type, ApiType::Anthropic);
+        assert_eq!(provider.auth_method, AuthMethod::XApiKey);
+        assert!(!provider.supports_model_fetch);
+        assert_eq!(provider.default_transport, ApiTransport::ChatCompletions);
+        assert_eq!(provider.models.len(), 13);
+        assert_eq!(provider.models[0].id, "claude-opus-4-7");
+        assert_eq!(provider.models[0].context_window, 1_000_000);
+        assert_eq!(provider.models[5].id, "claude-sonnet-4-6");
+        assert_eq!(provider.models[5].context_window, 1_000_000);
+        assert_eq!(provider.models[9].id, "claude-haiku-4-5-20251001");
+        assert_eq!(provider.models[9].context_window, 200_000);
+        assert_eq!(
+            get_provider_api_type(
+                PROVIDER_ID_ANTHROPIC,
+                "claude-opus-4-7",
+                "https://api.anthropic.com"
+            ),
+            ApiType::Anthropic
+        );
+    }

@@ -1013,6 +1013,11 @@ impl AgentEngine {
                     "loaded_message_end".to_string(),
                     serde_json::Value::from(result.loaded_message_end),
                 );
+                detail.insert(
+                    "pinned_messages".to_string(),
+                    serde_json::to_value(&result.pinned_messages)
+                        .unwrap_or(serde_json::Value::Array(Vec::new())),
+                );
             }
             let participants = self.list_thread_participants(thread_id).await;
             let suggestions = self.list_thread_participant_suggestions(thread_id).await;

@@ -157,6 +157,90 @@ fn mouse_wheel_over_sidebar_moves_file_selection() {
 }
 
 #[test]
+fn deleting_message_keeps_sidebar_visible_when_thread_still_has_pins() {
+    let mut model = build_model();
+    model.chat.reduce(chat::ChatAction::ThreadDetailReceived(
+        crate::state::chat::AgentThread {
+            id: "thread-1".to_string(),
+            title: "Pinned".to_string(),
+            messages: vec![
+                chat::AgentMessage {
+                    id: Some("message-1".to_string()),
+                    role: chat::MessageRole::Assistant,
+                    content: "Pinned one".to_string(),
+                    pinned_for_compaction: true,
+                    ..Default::default()
+                },
+                chat::AgentMessage {
+                    id: Some("message-2".to_string()),
+                    role: chat::MessageRole::Assistant,
+                    content: "Pinned two".to_string(),
+                    pinned_for_compaction: true,
+                    ..Default::default()
+                },
+            ],
+            loaded_message_end: 2,
+            total_message_count: 2,
+            ..Default::default()
+        },
+    ));
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model
+        .sidebar
+        .reduce(SidebarAction::SwitchTab(SidebarTab::Pinned));
+
+    assert!(
+        model.pane_layout().sidebar.is_some(),
+        "pinned threads should keep the sidebar visible"
+    );
+
+    model.delete_message(0);
+
+    assert!(
+        model.pane_layout().sidebar.is_some(),
+        "remaining pins should keep the sidebar visible after deletion"
+    );
+    assert_eq!(model.sidebar.active_tab(), SidebarTab::Pinned);
+}
+
+#[test]
+fn pinned_summary_only_thread_keeps_sidebar_visible() {
+    let mut model = build_model();
+    model.chat.reduce(chat::ChatAction::ThreadDetailReceived(
+        crate::state::chat::AgentThread {
+            id: "thread-1".to_string(),
+            title: "Pinned".to_string(),
+            messages: vec![chat::AgentMessage {
+                id: Some("message-2".to_string()),
+                role: chat::MessageRole::Assistant,
+                content: "Latest visible".to_string(),
+                ..Default::default()
+            }],
+            pinned_messages: vec![chat::PinnedThreadMessage {
+                message_id: "message-1".to_string(),
+                absolute_index: 0,
+                role: chat::MessageRole::User,
+                content: "Pinned offscreen".to_string(),
+            }],
+            loaded_message_start: 1,
+            loaded_message_end: 2,
+            total_message_count: 2,
+            ..Default::default()
+        },
+    ));
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    assert!(
+        model.pane_layout().sidebar.is_some(),
+        "summary pins should keep the sidebar visible even when the loaded page has no pinned rows"
+    );
+}
+
+#[test]
 fn submit_operator_profile_answer_allows_empty_input_when_question_is_optional() {
     let (_daemon_tx, daemon_rx) = mpsc::channel();
     let (cmd_tx, mut cmd_rx) = unbounded_channel();

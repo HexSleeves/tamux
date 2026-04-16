@@ -525,13 +525,13 @@ use amux_shared::providers::{
     }
 
     #[test]
-    fn build_openai_responses_request_serializes_full_typed_body() {
+    fn build_openai_responses_request_omits_previous_response_id_for_chatgpt_subscription() {
         let config = ProviderConfig {
-            base_url: "https://api.githubcopilot.com".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
             model: "gpt-5.4".to_string(),
             api_key: String::new(),
             assistant_id: String::new(),
-            auth_source: AuthSource::GithubCopilot,
+            auth_source: AuthSource::ChatgptSubscription,
             api_transport: ApiTransport::Responses,
             reasoning_effort: "high".to_string(),
             context_window_tokens: 0,
@@ -557,7 +557,7 @@ use amux_shared::providers::{
         };
 
         let request = build_openai_responses_request(
-            PROVIDER_ID_GITHUB_COPILOT,
+            PROVIDER_ID_OPENAI,
             &config,
             "system prompt",
             &[
@@ -612,18 +612,17 @@ use amux_shared::providers::{
 
         assert_eq!(body["model"], "gpt-5.4");
         assert_eq!(body["instructions"], "system prompt");
-        assert_eq!(body["previous_response_id"], "resp_123");
+        assert!(body.get("previous_response_id").is_none());
         assert_eq!(body["stream"], true);
         assert_eq!(body["input"][0]["role"], "user");
-        assert_eq!(body["input"][1]["role"], "assistant");
-        assert_eq!(body["input"].as_array().map(Vec::len), Some(2));
+        assert_eq!(body["input"].as_array().map(Vec::len), Some(4));
         assert_eq!(body["tools"][0]["type"], "function");
         assert_eq!(body["tools"][0]["name"], "update_memory");
         assert_eq!(body["tool_choice"], "auto");
         assert_eq!(body["text"]["format"]["type"], "json_schema");
         assert_eq!(body["text"]["verbosity"], "high");
         assert_eq!(body["reasoning"]["effort"], "high");
-        assert_eq!(body["reasoning"]["summary"], "auto");
+        assert!(body["reasoning"].get("summary").is_none());
         assert_eq!(body["store"], false);
         assert_eq!(
             body["include"],

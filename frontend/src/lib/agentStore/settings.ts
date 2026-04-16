@@ -60,6 +60,7 @@ export interface AgentSettings {
   system_prompt: string;
   active_provider: AgentProviderId;
   featherless: AgentProviderConfig;
+  anthropic: AgentProviderConfig;
   openai: AgentProviderConfig;
   "github-copilot": AgentProviderConfig;
   qwen: AgentProviderConfig;
@@ -161,6 +162,7 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   system_prompt: `You are ${PRIMARY_AGENT_NAME} - The Smith (He is a blacksmith god, the creator and craftsman of the heavens in ancient Slavic belief. As an AI agent:\n- Creation: Ideal for tasks intended for use from scratch (coding, writing, design).\n- Rhythm: Associated with the sun and fire, he naturally determines the daily cycles (sunrise-sunset).\n- Personality: Strict but fair; an accessible "doer" who ensures this through perfect tools.) operating in tamux, an agentic terminal multiplexer assistant. You can execute terminal commands, check system resources, and send messages to connected chat platforms (Slack, Discord, Telegram, WhatsApp) via the gateway. Use your tools proactively when the user asks you to perform actions. Be concise and direct.`,
   active_provider: "openai",
   featherless: { base_url: "https://api.featherless.ai/v1", model: "meta-llama/Llama-3.3-70B-Instruct", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
+  anthropic: { base_url: "https://api.anthropic.com", model: "claude-opus-4-7", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "chat_completions", auth_source: "api_key", context_window_tokens: null },
   openai: { base_url: "https://api.openai.com/v1", model: "gpt-5.4", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "responses", auth_source: "api_key", context_window_tokens: null },
   "github-copilot": { base_url: "https://api.githubcopilot.com", model: "gpt-4.1", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "responses", auth_source: "github_copilot", context_window_tokens: null },
   qwen: { base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", model: "qwen-max", custom_model_name: "", api_key: "", assistant_id: "", api_transport: "native_assistant", auth_source: "api_key", context_window_tokens: null },
@@ -424,6 +426,7 @@ export function normalizeAgentSettingsFromSource(source: DiskAgentSettings): Age
     active_provider,
     agent_backend: normalizeAgentBackendModeFromSource(source, active_provider, authSource),
     featherless: providerConfigFromRaw("featherless", source),
+    anthropic: providerConfigFromRaw("anthropic", source),
     openai: providerConfigFromRaw("openai", source),
     "github-copilot": providerConfigFromRaw("github-copilot", source),
     qwen: providerConfigFromRaw("qwen", source),

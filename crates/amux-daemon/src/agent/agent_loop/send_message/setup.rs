@@ -243,6 +243,7 @@ impl<'a> SendMessageRunner<'a> {
         let (tid, is_new_thread) = engine
             .get_or_create_thread(thread_id, stored_user_content)
             .await;
+        engine.ensure_thread_messages_loaded(&tid).await;
         if let Some(client_surface) = client_surface {
             engine.set_thread_client_surface(&tid, client_surface).await;
         }

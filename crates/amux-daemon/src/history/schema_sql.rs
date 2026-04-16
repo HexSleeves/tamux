@@ -61,6 +61,7 @@ pub(super) fn base_schema_sql() -> &'static str {
                 metadata_json   TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_messages_thread ON agent_messages(thread_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_messages_thread_created_id ON agent_messages(thread_id, created_at, id);
             CREATE TABLE IF NOT EXISTS worm_chain_tip (
                 kind      TEXT PRIMARY KEY,
                 seq       INTEGER NOT NULL,

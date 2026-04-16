@@ -35,7 +35,7 @@ impl HistoryStore {
         limit: usize,
     ) -> Result<Vec<MemoryTombstoneRow>> {
         let target = target.map(str::to_string);
-        self.conn.call(move |conn| {
+        self.read_conn.call(move |conn| {
             if let Some(target) = target {
                 let mut stmt = conn.prepare(
                     "SELECT id, target, original_content, fact_key, replaced_by, replaced_at, source_kind, provenance_id, created_at FROM memory_tombstones WHERE target = ?1 ORDER BY created_at DESC LIMIT ?2",
@@ -124,7 +124,7 @@ impl HistoryStore {
 
     pub async fn get_consolidation_state(&self, key: &str) -> Result<Option<String>> {
         let key = key.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let value: Option<String> = conn
                     .query_row(
@@ -157,7 +157,7 @@ impl HistoryStore {
         prefix: &str,
     ) -> Result<Vec<(String, String)>> {
         let like = format!("{}%", prefix);
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt =
                     conn.prepare("SELECT key, value FROM consolidation_state WHERE key LIKE ?1")?;
@@ -211,7 +211,7 @@ impl HistoryStore {
         after_timestamp: u64,
         limit: usize,
     ) -> Result<Vec<ExecutionTraceRow>> {
-        self.conn.call(move |conn| {
+        self.read_conn.call(move |conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, goal_run_id, task_id, task_type, outcome, quality_score, tool_sequence_json, metrics_json, duration_ms, tokens_used, created_at FROM execution_traces WHERE outcome = 'success' AND created_at > ?1 ORDER BY created_at ASC LIMIT ?2",
             )?;

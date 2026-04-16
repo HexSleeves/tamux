@@ -9,7 +9,7 @@
 
 use amux_protocol::{parse_whatsapp_allowed_contacts, AmuxCodec, ClientMessage, DaemonMessage};
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::style::{self, Stylize};
 use crossterm::terminal;
 use futures::{SinkExt, StreamExt};

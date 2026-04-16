@@ -51,6 +51,65 @@ async fn wal_pragmas_applied() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn read_connection_uses_wal_and_query_only_mode() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    let read_pragmas = store
+        .read_conn
+        .call(|conn: &mut rusqlite::Connection| {
+            let journal_mode: String =
+                conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+            let query_only: i64 = conn.query_row("PRAGMA query_only", [], |row| row.get(0))?;
+            let busy_timeout: i64 = conn.query_row("PRAGMA busy_timeout", [], |row| row.get(0))?;
+            Ok((journal_mode, query_only, busy_timeout))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    assert_eq!(read_pragmas.0.to_lowercase(), "wal");
+    assert_eq!(read_pragmas.1, 1);
+    assert_eq!(read_pragmas.2, 5000);
+
+    let write_query_only: i64 = store
+        .conn
+        .call(|conn: &mut rusqlite::Connection| {
+            conn.query_row("PRAGMA query_only", [], |row| row.get(0))
+                .map_err(Into::into)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    assert_eq!(write_query_only, 0);
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn agent_messages_have_cursor_friendly_thread_created_id_index() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    let indexed_columns = store
+        .conn
+        .call(|conn| {
+            let mut stmt = conn.prepare("PRAGMA index_info('idx_messages_thread_created_id')")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(2))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    assert_eq!(
+        indexed_columns,
+        vec![
+            "thread_id".to_string(),
+            "created_at".to_string(),
+            "id".to_string()
+        ]
+    );
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
 /// FOUN-02: HistoryStore can perform a basic async roundtrip through .call().
 #[tokio::test]
 async fn async_connection_roundtrip() -> Result<()> {

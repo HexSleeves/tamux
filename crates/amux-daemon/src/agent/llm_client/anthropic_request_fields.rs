@@ -1,3 +1,5 @@
+use crate::agent::types::AnthropicCacheControlEphemeral;
+
 fn apply_anthropic_optional_request_fields(
     body: &mut serde_json::Value,
     config: &ProviderConfig,
@@ -30,9 +32,14 @@ fn apply_anthropic_optional_request_fields(
     if let Some(inference_geo) = config.inference_geo.as_ref() {
         body["inference_geo"] = serde_json::json!(inference_geo);
     }
-    if let Some(cache_control) = config.cache_control.as_ref() {
-        body["cache_control"] = serde_json::json!(cache_control);
-    }
+    let cache_control = config
+        .cache_control
+        .clone()
+        .unwrap_or(AnthropicCacheControlEphemeral {
+            cache_type: "ephemeral".to_string(),
+            ttl: None,
+        });
+    body["cache_control"] = serde_json::json!(cache_control);
 }
 
 fn anthropic_tool_choice_json(config: &ProviderConfig) -> Option<serde_json::Value> {

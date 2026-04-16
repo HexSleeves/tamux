@@ -37,6 +37,87 @@ pub const ALIBABA_CODING_MODELS: &[ModelDefinition] = &[
     },
 ];
 
+pub const ANTHROPIC_MODELS: &[ModelDefinition] = &[
+    ModelDefinition {
+        id: "claude-opus-4-7",
+        name: "Claude Opus 4.7",
+        context_window: 1_000_000,
+        modalities: TEXT_IMAGE,
+    },
+    ModelDefinition {
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        context_window: 1_000_000,
+        modalities: TEXT_IMAGE,
+    },
+    ModelDefinition {
+        id: "claude-opus-4-5-20251101",
+        name: "Claude Opus 4.5",
+        context_window: 200_000,
+        modalities: TEXT_IMAGE,
+    },
+    ModelDefinition {
+        id: "claude-opus-4-1-20250805",
+        name: "Claude Opus 4.1",
+        context_window: 200_000,
+        modalities: TEXT_IMAGE,
+    },
+    ModelDefinition {
+        id: "claude-opus-4-20250514",
+        name: "Claude Opus 4",
+        context_window: 200_000,
+        modalities: TEXT_IMAGE,
+    },
+    ModelDefinition {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        context_window: 1_000_000,
+        modalities: TEXT_IMAGE,
+    },
+    ModelDefinition {
+        id: "claude-sonnet-4-5-20250929",
+        name: "Claude Sonnet 4.5",
+        context_window: 200_000,
+        modalities: TEXT_IMAGE,
+    },
+    ModelDefinition {
+        id: "claude-sonnet-4-20250514",
+        name: "Claude Sonnet 4",
+        context_window: 200_000,
+        modalities: TEXT_IMAGE,
+    },
+    ModelDefinition {
+        id: "claude-3-7-sonnet-20250219",
+        name: "Claude Sonnet 3.7",
+        context_window: 200_000,
+        modalities: TEXT_IMAGE,
+    },
+    ModelDefinition {
+        id: "claude-haiku-4-5-20251001",
+        name: "Claude Haiku 4.5",
+        context_window: 200_000,
+        modalities: TEXT_IMAGE,
+    },
+    ModelDefinition {
+        id: "claude-3-5-haiku-20241022",
+        name: "Claude Haiku 3.5",
+        context_window: 200_000,
+        modalities: TEXT_IMAGE,
+    },
+    ModelDefinition {
+        id: "claude-3-opus-20240229",
+        name: "Claude Opus 3",
+        context_window: 200_000,
+        modalities: TEXT_IMAGE,
+    },
+    ModelDefinition {
+        id: "claude-3-haiku-20240307",
+        name: "Claude Haiku 3",
+        context_window: 200_000,
+        modalities: TEXT_IMAGE,
+    },
+];
+
 pub const XIAOMI_MIMO_TOKEN_PLAN_MODELS: &[ModelDefinition] = &[
     ModelDefinition {
         id: "mimo-v2-pro",

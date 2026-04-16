@@ -80,7 +80,7 @@ impl HistoryStore {
 
     pub async fn get_memory_node(&self, id: &str) -> Result<Option<MemoryNodeRow>> {
         let id = id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 conn.query_row(
                     "SELECT id, label, node_type, embedding_blob, created_at_ms, last_accessed_ms, access_count, summary_text
@@ -148,7 +148,7 @@ impl HistoryStore {
 
     pub async fn list_memory_edges_for_node(&self, node_id: &str) -> Result<Vec<MemoryEdgeRow>> {
         let node_id = node_id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, source_node_id, target_node_id, relation_type, weight, last_updated_ms
@@ -180,7 +180,7 @@ impl HistoryStore {
     ) -> Result<Vec<MemoryGraphNeighborRow>> {
         let node_id = node_id.to_string();
         let limit = limit.max(1) as i64;
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT

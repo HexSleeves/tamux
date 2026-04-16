@@ -33,11 +33,12 @@ pub(super) fn whatsapp_gateway_config_writes(raw_allowlist: &str) -> Result<Vec<
     let parsed_allowlist = parse_whatsapp_setup_allowlist(raw_allowlist).ok_or_else(|| {
         anyhow::anyhow!("Enter at least one valid WhatsApp phone number before linking.")
     })?;
+    let normalized_allowlist = parsed_allowlist.join(",");
 
     Ok(vec![
         ConfigWrite {
             key_path: "/gateway/whatsapp_allowed_contacts".to_string(),
-            value_json: serde_json::to_string(&parsed_allowlist)
+            value_json: serde_json::to_string(&normalized_allowlist)
                 .context("Failed to encode WhatsApp allowlist")?,
         },
         ConfigWrite {
@@ -112,9 +113,15 @@ pub(super) fn whatsapp_timeout_retry_selected(index: usize) -> bool {
 pub(super) fn poll_for_setup_cancel_key() -> Result<bool> {
     if event::poll(std::time::Duration::from_millis(0)).context("Failed to poll keyboard input")? {
         if let Event::Key(KeyEvent {
-            code, modifiers, ..
+            code,
+            modifiers,
+            kind,
+            ..
         }) = event::read().context("Failed to read keyboard input")?
         {
+            if !is_actionable_key_event_kind(kind) {
+                return Ok(false);
+            }
             match code {
                 KeyCode::Esc => return Ok(true),
                 KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {

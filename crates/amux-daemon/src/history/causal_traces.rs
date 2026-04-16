@@ -86,7 +86,7 @@ impl HistoryStore {
         limit: u32,
     ) -> Result<Vec<String>> {
         let task_type = task_type.map(str::to_string);
-        self.conn.call(move |conn| {
+        self.read_conn.call(move |conn| {
         if let Some(task_type) = task_type {
             let mut stmt = conn.prepare(
                 "SELECT metrics_json FROM execution_traces WHERE task_type = ?1 ORDER BY created_at DESC LIMIT ?2",
@@ -159,7 +159,7 @@ impl HistoryStore {
         limit: u32,
     ) -> Result<Vec<String>> {
         let option_type = option_type.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT outcome_json
@@ -182,7 +182,7 @@ impl HistoryStore {
         limit: u32,
     ) -> Result<Vec<CausalTraceRecord>> {
         let option_type = option_type.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT selected_json, causal_factors_json, outcome_json, created_at
@@ -214,7 +214,7 @@ impl HistoryStore {
         limit: u32,
     ) -> Result<Vec<CausalTraceFullRecord>> {
         let goal_run_id = goal_run_id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, thread_id, goal_run_id, task_id, decision_type,

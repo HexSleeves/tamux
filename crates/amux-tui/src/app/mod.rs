@@ -160,6 +160,13 @@ pub(crate) struct PendingPinnedBudgetExceeded {
 }
 
 #[derive(Clone, Debug)]
+struct PendingPinnedJump {
+    thread_id: String,
+    message_id: String,
+    absolute_index: usize,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct QueuedPrompt {
     pub(crate) text: String,
     pub(crate) thread_id: Option<String>,
@@ -360,6 +367,7 @@ pub struct TuiModel {
     input_notice: Option<InputNotice>,
     pending_chat_action_confirm: Option<PendingChatActionConfirm>,
     pending_pinned_budget_exceeded: Option<PendingPinnedBudgetExceeded>,
+    pending_pinned_jump: Option<PendingPinnedJump>,
     chat_action_confirm_accept_selected: bool,
     retry_wait_start_selected: bool,
     auto_response_selection: AutoResponseActionSelection,

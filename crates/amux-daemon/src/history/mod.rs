@@ -48,6 +48,7 @@ pub struct WormIntegrityResult {
 #[derive(Clone)]
 pub struct HistoryStore {
     pub(crate) conn: tokio_rusqlite::Connection,
+    pub(crate) read_conn: tokio_rusqlite::Connection,
     skill_dir: PathBuf,
     telemetry_dir: PathBuf,
     worm_dir: PathBuf,
@@ -847,7 +848,7 @@ mod thread_structural_memory;
 mod threads;
 
 use integrity_helpers::*;
-pub use memory_graph::MemoryGraphNeighborRow;
+pub use memory_graph::{MemoryEdgeRow, MemoryGraphNeighborRow, MemoryNodeRow};
 pub use offloaded_payloads::OffloadedPayloadMetadataRow;
 use row_mapping::*;
 use skill_metadata::*;

@@ -25,6 +25,54 @@ pub(super) fn parse_set_config_item_response(msg: DaemonMessage) -> Option<Resul
     }
 }
 
+pub(super) fn parse_provider_login_terminal_response(
+    msg: DaemonMessage,
+) -> Option<Result<Vec<ProviderAuthState>>> {
+    match msg {
+        DaemonMessage::OperationAccepted { .. } => None,
+        DaemonMessage::AgentProviderAuthStates { states_json } => Some(
+            serde_json::from_str(&states_json)
+                .context("Failed to parse provider auth states from daemon"),
+        ),
+        DaemonMessage::AgentError { message } | DaemonMessage::Error { message } => {
+            Some(Err(anyhow::anyhow!(message)))
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn parse_gh_cli_token_output(stdout: &[u8]) -> Option<String> {
+    let token = String::from_utf8_lossy(stdout).trim().to_string();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AuthSetupResult {
+    pub auth_source: String,
+    pub api_key_for_requests: String,
+    pub authenticated: bool,
+}
+
+pub(super) fn provider_uses_browser_auth(provider: &ProviderSelection) -> bool {
+    provider.provider_id == "github-copilot" && provider.auth_source == "github_copilot"
+}
+
+pub(super) fn provider_requires_api_key_prompt(provider: &ProviderSelection) -> bool {
+    !is_local_provider(&provider.provider_id) && !provider_uses_browser_auth(provider)
+}
+
+pub(super) fn should_validate_provider_after_setup(
+    provider: &ProviderSelection,
+    auth_result: AuthSetupResult,
+) -> bool {
+    !is_local_provider(&provider.provider_id)
+        && (auth_result.authenticated || !auth_result.api_key_for_requests.is_empty())
+}
+
 async fn recv_fetch_models_terminal_response(
     framed: &mut Framed<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin, AmuxCodec>,
 ) -> Result<String> {
@@ -56,6 +104,61 @@ pub(super) async fn set_config_item(
             return result;
         }
     }
+}
+
+async fn store_github_copilot_auth_token_on_stream(
+    framed: &mut Framed<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin, AmuxCodec>,
+    access_token: &str,
+    source: &str,
+) -> Result<Vec<ProviderAuthState>> {
+    wizard_send(
+        framed,
+        ClientMessage::AgentStoreGithubCopilotAuthToken {
+            access_token: access_token.to_string(),
+            source: source.to_string(),
+        },
+    )
+    .await?;
+
+    loop {
+        let msg = wizard_recv(framed).await?;
+        if let Some(result) = parse_provider_login_terminal_response(msg) {
+            return result;
+        }
+    }
+}
+
+fn run_github_copilot_gh_login() -> Result<()> {
+    let status = match std::process::Command::new("gh")
+        .args(["auth", "login", "--web", "--scopes", "read:org,models:read"])
+        .status()
+    {
+        Ok(status) => status,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!("GitHub CLI (`gh`) is not installed or not available in this shell");
+        }
+        Err(error) => {
+            return Err(error).context("failed to start GitHub CLI login flow");
+        }
+    };
+    if !status.success() {
+        anyhow::bail!("GitHub CLI login flow failed");
+    }
+    Ok(())
+}
+
+fn read_github_copilot_gh_token() -> Result<String> {
+    let output = std::process::Command::new("gh")
+        .args(["auth", "token"])
+        .output()
+        .context(
+            "failed to read token from GitHub CLI. Make sure `gh auth status` works in this shell",
+        )?;
+    if !output.status.success() {
+        anyhow::bail!("GitHub CLI did not return an authenticated token");
+    }
+    parse_gh_cli_token_output(&output.stdout)
+        .ok_or_else(|| anyhow::anyhow!("GitHub CLI returned an empty token"))
 }
 
 pub(super) async fn select_provider(
@@ -91,17 +194,121 @@ pub(super) async fn select_provider(
     })
 }
 
-async fn configure_api_key(
+async fn configure_provider_auth(
     framed: &mut Framed<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin, AmuxCodec>,
     provider: &ProviderSelection,
     selected_provider: &ProviderAuthState,
-) -> Result<String> {
+) -> Result<AuthSetupResult> {
     if is_local_provider(&provider.provider_id) {
         println!("Local provider -- no API key needed.");
-        return Ok(String::new());
+        return Ok(AuthSetupResult {
+            auth_source: provider.auth_source.clone(),
+            api_key_for_requests: String::new(),
+            authenticated: true,
+        });
     }
 
-    if selected_provider.authenticated {
+    if provider_uses_browser_auth(provider) {
+        let choice_idx = if selected_provider.authenticated {
+            println!(
+                "{} is already authenticated.",
+                provider.provider_name.clone().bold()
+            );
+            select_list(
+                "How do you want to continue?",
+                &[
+                    ("Keep existing browser login", ""),
+                    ("Sign in again in browser", ""),
+                    ("Use a token instead", ""),
+                ],
+                false,
+                0,
+            )?
+            .unwrap_or(0)
+        } else {
+            select_list(
+                "Authenticate GitHub Copilot:",
+                &[
+                    ("Sign in with GitHub in browser", ""),
+                    ("Use a token instead", ""),
+                ],
+                false,
+                0,
+            )?
+            .unwrap_or(0)
+        };
+
+        let wants_browser_auth = if selected_provider.authenticated {
+            match choice_idx {
+                0 => {
+                    println!("Keeping existing browser login.");
+                    return Ok(AuthSetupResult {
+                        auth_source: "github_copilot".to_string(),
+                        api_key_for_requests: String::new(),
+                        authenticated: true,
+                    });
+                }
+                1 => true,
+                _ => false,
+            }
+        } else {
+            choice_idx == 0
+        };
+
+        if wants_browser_auth {
+            println!("Starting GitHub browser login...");
+            match run_github_copilot_gh_login() {
+                Ok(()) => match read_github_copilot_gh_token() {
+                    Ok(token) => {
+                        match store_github_copilot_auth_token_on_stream(framed, &token, "gh_cli")
+                            .await
+                        {
+                            Ok(states) => {
+                                let updated_state = states
+                                    .into_iter()
+                                    .find(|state| state.provider_id == provider.provider_id)
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!(
+                                            "selected provider disappeared from daemon state"
+                                        )
+                                    })?;
+                                if !updated_state.authenticated {
+                                    println!(
+                                        "GitHub Copilot browser login did not complete successfully."
+                                    );
+                                    println!("Falling back to token entry.");
+                                } else {
+                                    println!("GitHub Copilot browser login completed.");
+                                    return Ok(AuthSetupResult {
+                                        auth_source: "github_copilot".to_string(),
+                                        api_key_for_requests: String::new(),
+                                        authenticated: true,
+                                    });
+                                }
+                            }
+                            Err(error) => {
+                                println!("Could not import GitHub Copilot browser login: {error}");
+                                println!("Falling back to token entry.");
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        println!("Could not read GitHub CLI token: {error}");
+                        println!("Falling back to token entry.");
+                    }
+                },
+                Err(error) => {
+                    println!("GitHub browser login unavailable: {error}");
+                    println!("Falling back to token entry.");
+                }
+            }
+        }
+    }
+
+    let has_existing_api_key_auth =
+        selected_provider.authenticated && selected_provider.auth_source == "api_key";
+
+    if has_existing_api_key_auth {
         println!(
             "{} is already authenticated.",
             provider.provider_name.clone().bold()
@@ -115,11 +322,15 @@ async fn configure_api_key(
         .unwrap_or(0);
         if replace_idx == 0 {
             println!("Keeping existing API key.");
-            return Ok("(existing)".to_string());
+            return Ok(AuthSetupResult {
+                auth_source: "api_key".to_string(),
+                api_key_for_requests: "(existing)".to_string(),
+                authenticated: true,
+            });
         }
     }
 
-    let prompt = if selected_provider.authenticated {
+    let prompt = if has_existing_api_key_auth {
         format!("Enter new API key for {}", provider.provider_name)
     } else {
         format!("Enter API key for {}", provider.provider_name)
@@ -127,10 +338,14 @@ async fn configure_api_key(
     let api_key = text_input(&prompt, "", true)?.unwrap_or_default();
     if api_key.is_empty() {
         println!("No API key entered. You can set it later with `tamux setup`.");
-        return Ok(String::new());
+        return Ok(AuthSetupResult {
+            auth_source: "api_key".to_string(),
+            api_key_for_requests: String::new(),
+            authenticated: selected_provider.authenticated,
+        });
     }
 
-    let writes = if selected_provider.authenticated {
+    let writes = if has_existing_api_key_auth {
         vec![
             (
                 "provider",
@@ -170,13 +385,17 @@ async fn configure_api_key(
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     println!(
         "{}",
-        if selected_provider.authenticated {
+        if has_existing_api_key_auth {
             "API key updated."
         } else {
             "API key saved."
         }
     );
-    Ok(api_key)
+    Ok(AuthSetupResult {
+        auth_source: "api_key".to_string(),
+        api_key_for_requests: api_key,
+        authenticated: true,
+    })
 }
 
 async fn fetch_selected_provider_state(
@@ -402,7 +621,7 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
     let selected_provider =
         fetch_selected_provider_state(&mut framed, &provider.provider_id).await?;
     println!();
-    let api_key_saved = configure_api_key(&mut framed, &provider, &selected_provider).await?;
+    let auth_result = configure_provider_auth(&mut framed, &provider, &selected_provider).await?;
     println!();
 
     set_config_item(
@@ -412,12 +631,19 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
     )
     .await
     .context("Failed to set active provider")?;
+    set_config_item(
+        &mut framed,
+        "/auth_source",
+        format!("\"{}\"", auth_result.auth_source),
+    )
+    .await
+    .context("Failed to set provider auth source")?;
 
     let mut summary = SetupSummary::default();
     configure_model(
         &mut framed,
         &provider,
-        &api_key_saved,
+        &auth_result.api_key_for_requests,
         &tier_string,
         &mut summary,
     )
@@ -425,11 +651,15 @@ pub async fn run_setup_wizard() -> Result<PostSetupAction> {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     configure_advanced_agents(&mut framed, &tier_string, &mut summary).await?;
 
-    if !is_local_provider(&provider.provider_id) && !api_key_saved.is_empty() {
+    if should_validate_provider_after_setup(&provider, auth_result.clone()) {
         println!();
         println!("Testing connection to {}...", provider.provider_name);
-        match validate_provider_on_stream(&mut framed, &provider.provider_id, &provider.auth_source)
-            .await
+        match validate_provider_on_stream(
+            &mut framed,
+            &provider.provider_id,
+            &auth_result.auth_source,
+        )
+        .await
         {
             Ok(true) => println!("{}", "Connection successful!".with(style::Color::Green)),
             Ok(false) => {

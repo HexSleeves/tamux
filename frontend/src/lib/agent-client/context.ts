@@ -16,6 +16,10 @@ import type {
   PreparedOpenAIRequest,
 } from "./types";
 import { APPROX_CHARS_PER_TOKEN, MIN_CONTEXT_TARGET_TOKENS } from "./types";
+import {
+  countUnicodeScalars,
+  pinnedMessageBudgetChars,
+} from "./pinnedMessageBudget";
 
 export function messagesToApiFormat(messages: AgentMessage[]): ApiChatMessage[] {
   const announcedToolCalls = new Set<string>();
@@ -84,6 +88,7 @@ export function prepareOpenAIRequest(
   assistant_id?: string,
   thread?: Pick<
     AgentThread,
+    | "id"
     | "upstreamThreadId"
     | "upstreamTransport"
     | "upstreamProvider"
@@ -91,12 +96,14 @@ export function prepareOpenAIRequest(
     | "upstreamAssistantId"
   >,
 ): PreparedOpenAIRequest {
+  const isChatGptSubscription = provider === "openai" &&
+    auth_source === "chatgpt_subscription";
   let selectedTransport = getSupportedApiTransports(provider).includes(
     requestedTransport,
   )
     ? requestedTransport
     : getDefaultApiTransport(provider);
-  if (provider === "openai" && auth_source === "chatgpt_subscription") {
+  if (isChatGptSubscription) {
     selectedTransport = "responses";
   }
   const compacted = compactMessagesForRequest(messages, settings);
@@ -131,7 +138,7 @@ export function prepareOpenAIRequest(
   }
 
   if (selectedTransport === "responses") {
-    if (!compactionActive && providerSupportsResponseContinuity(provider)) {
+    if (!isChatGptSubscription && !compactionActive && providerSupportsResponseContinuity(provider)) {
       const responseAnchorIndex = [...messages.keys()].reverse().find((index) => {
         const message = messages[index];
         return (
@@ -160,6 +167,9 @@ export function prepareOpenAIRequest(
     return {
       messages: messagesToApiFormat(requestMessages),
       transport: "responses",
+      upstreamThreadId: isChatGptSubscription
+        ? thread?.upstreamThreadId ?? thread?.id
+        : undefined,
     };
   }
 
@@ -167,14 +177,6 @@ export function prepareOpenAIRequest(
     messages: messagesToApiFormat(requestMessages),
     transport: "chat_completions",
   };
-}
-
-function pinnedMessageBudgetChars(
-  settings: ContextCompactionSettings,
-): number {
-  return Math.floor(
-    Number(settings.context_window_tokens || 0) * 0.25 * APPROX_CHARS_PER_TOKEN,
-  );
 }
 
 function appendPinnedMessagesAfterCompactionArtifact(
@@ -189,13 +191,15 @@ function appendPinnedMessagesAfterCompactionArtifact(
     return compacted;
   }
 
-  const budgetChars = pinnedMessageBudgetChars(settings);
+  const budgetChars = pinnedMessageBudgetChars(
+    Number(settings.context_window_tokens || 0),
+  );
   let usedChars = 0;
   const pinnedMessages = allMessages.filter((message) => message.pinnedForCompaction);
   const injectedPins: AgentMessage[] = [];
 
   for (const message of pinnedMessages) {
-    const messageChars = message.content.length;
+    const messageChars = countUnicodeScalars(message.content);
     if (usedChars + messageChars > budgetChars) {
       break;
     }

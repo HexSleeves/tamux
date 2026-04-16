@@ -276,10 +276,44 @@ fn active_thread_pinned_messages_follow_thread_order() {
 
     let pinned = state.active_thread_pinned_messages();
     assert_eq!(pinned.len(), 2);
-    assert_eq!(pinned[0].0, 1);
-    assert_eq!(pinned[0].1.id.as_deref(), Some("m2"));
-    assert_eq!(pinned[1].0, 2);
-    assert_eq!(pinned[1].1.id.as_deref(), Some("m3"));
+    assert_eq!(pinned[0].absolute_index, 1);
+    assert_eq!(pinned[0].message_id, "m2");
+    assert_eq!(pinned[1].absolute_index, 2);
+    assert_eq!(pinned[1].message_id, "m3");
+}
+
+#[test]
+fn thread_detail_hydrates_pinned_summaries_outside_loaded_window() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Pinned".into(),
+        messages: vec![AgentMessage {
+            id: Some("m3".into()),
+            role: MessageRole::Assistant,
+            content: "latest".into(),
+            pinned_for_compaction: false,
+            ..Default::default()
+        }],
+        pinned_messages: vec![PinnedThreadMessage {
+            message_id: "m1".into(),
+            absolute_index: 0,
+            role: MessageRole::User,
+            content: "offscreen pin".into(),
+        }],
+        loaded_message_start: 2,
+        loaded_message_end: 3,
+        total_message_count: 3,
+        ..Default::default()
+    }));
+    state.reduce(ChatAction::SelectThread("t1".into()));
+
+    let pinned = state.active_thread_pinned_messages();
+    assert!(state.active_thread_has_pinned_messages());
+    assert_eq!(pinned.len(), 1);
+    assert_eq!(pinned[0].message_id, "m1");
+    assert_eq!(pinned[0].absolute_index, 0);
+    assert_eq!(pinned[0].content, "offscreen pin");
 }
 
 #[test]

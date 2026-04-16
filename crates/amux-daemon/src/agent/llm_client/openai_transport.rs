@@ -116,7 +116,9 @@ fn build_openai_responses_request(
     previous_response_id: Option<&str>,
     codex_auth: bool,
 ) -> OpenAiResponsesCreateRequest {
-    let previous_response_id = previous_response_id
+    let previous_response_id = (!codex_auth)
+        .then_some(previous_response_id)
+        .flatten()
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned);
     let mut text = config
@@ -365,4 +367,3 @@ fn api_message_to_text(message: &ApiMessage) -> Option<String> {
         }
     }
 }
-

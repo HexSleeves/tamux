@@ -56,10 +56,7 @@ impl TuiModel {
         &mut self,
         mut entries: Vec<crate::state::ProviderAuthEntry>,
     ) {
-        if self.config.provider == PROVIDER_ID_OPENAI
-            && self.config.auth_source == "chatgpt_subscription"
-            && self.config.chatgpt_auth_available
-        {
+        if self.config.chatgpt_auth_available {
             if let Some(openai_entry) = entries
                 .iter_mut()
                 .find(|entry| entry.provider_id == PROVIDER_ID_OPENAI)
@@ -78,6 +75,21 @@ impl TuiModel {
         valid: bool,
         error: Option<String>,
     ) {
+        let provider_name = self
+            .auth
+            .entries
+            .iter()
+            .find(|entry| entry.provider_id == provider_id)
+            .map(|entry| entry.provider_name.clone())
+            .unwrap_or_else(|| provider_id.clone());
+        self.status_line = if valid {
+            format!("{provider_name} connection OK")
+        } else {
+            format!(
+                "{provider_name} test failed: {}",
+                error.clone().unwrap_or_else(|| "unknown".to_string())
+            )
+        };
         self.auth
             .reduce(crate::state::auth::AuthAction::ValidationResult {
                 provider_id,

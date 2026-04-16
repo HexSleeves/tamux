@@ -19,7 +19,7 @@ impl HistoryStore {
     }
 
     pub async fn list_collaboration_sessions(&self) -> Result<Vec<CollaborationSessionRow>> {
-        self.conn.call(move |conn| {
+        self.read_conn.call(move |conn| {
         let mut stmt = conn.prepare(
             "SELECT parent_task_id, session_json, updated_at FROM collaboration_sessions ORDER BY updated_at DESC",
         )?;

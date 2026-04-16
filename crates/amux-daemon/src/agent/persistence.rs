@@ -167,10 +167,13 @@ impl AgentEngine {
             Err(error) => tracing::warn!("failed to read agent config items from sqlite: {error}"),
         }
 
+        self.init_gateway().await;
+
         // Load threads
         match self.history.list_threads().await {
             Ok(thread_rows) if !thread_rows.is_empty() => {
                 let mut threads = HashMap::new();
+                let mut thread_message_hydration_pending = HashSet::new();
                 let mut handoff_states = HashMap::new();
                 let mut thread_participants = HashMap::new();
                 let mut thread_participant_suggestions = HashMap::new();
@@ -216,63 +219,10 @@ impl AgentEngine {
                         thread_row.created_at as u64,
                         thread_metadata.handoff_state,
                     );
-                    let messages = self
-                        .history
-                        .list_messages(&thread_id, None)
-                        .await
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|message| {
-                            let metadata = parse_message_metadata(message.metadata_json.as_deref());
-                            AgentMessage {
-                                id: message.id.clone(),
-                                role: match message.role.as_str() {
-                                    "system" => MessageRole::System,
-                                    "assistant" => MessageRole::Assistant,
-                                    "tool" => MessageRole::Tool,
-                                    _ => MessageRole::User,
-                                },
-                                content: message.content,
-                                tool_calls: message
-                                    .tool_calls_json
-                                    .as_deref()
-                                    .and_then(|json| serde_json::from_str(json).ok()),
-                                tool_call_id: metadata.tool_call_id,
-                                tool_name: metadata.tool_name,
-                                tool_arguments: metadata.tool_arguments,
-                                tool_status: metadata.tool_status,
-                                weles_review: metadata.weles_review,
-                                input_tokens: message.input_tokens.unwrap_or(0) as u64,
-                                output_tokens: message.output_tokens.unwrap_or(0) as u64,
-                                cost: message.cost_usd,
-                                provider: message.provider,
-                                model: message.model,
-                                api_transport: metadata.api_transport,
-                                response_id: metadata.response_id,
-                                upstream_message: metadata.upstream_message,
-                                provider_final_result: metadata.provider_final_result,
-                                author_agent_id: metadata.author_agent_id,
-                                author_agent_name: metadata.author_agent_name,
-                                reasoning: message.reasoning,
-                                message_kind: metadata.message_kind,
-                                compaction_strategy: metadata.compaction_strategy,
-                                compaction_payload: metadata.compaction_payload,
-                                offloaded_payload_id: metadata.offloaded_payload_id,
-                                structural_refs: metadata.structural_refs,
-                                pinned_for_compaction: metadata.pinned_for_compaction,
-                                timestamp: message.created_at as u64,
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    let (total_input_tokens, total_output_tokens) =
-                        messages
-                            .iter()
-                            .fold((0u64, 0u64), |(input_acc, output_acc), message| {
-                                (
-                                    input_acc.saturating_add(message.input_tokens),
-                                    output_acc.saturating_add(message.output_tokens),
-                                )
-                            });
+                    let total_tokens = thread_row.total_tokens.max(0) as u64;
+                    if thread_row.message_count > 0 {
+                        thread_message_hydration_pending.insert(thread_id.clone());
+                    }
 
                     threads.insert(
                         thread_id.clone(),
@@ -282,7 +232,7 @@ impl AgentEngine {
                                 canonical_agent_name(&handoff_state.active_agent_id).to_string(),
                             ),
                             title: thread_title,
-                            messages,
+                            messages: Vec::new(),
                             pinned: false,
                             upstream_thread_id: thread_metadata.upstream_thread_id,
                             upstream_transport: thread_metadata.upstream_transport,
@@ -291,8 +241,8 @@ impl AgentEngine {
                             upstream_assistant_id: thread_metadata.upstream_assistant_id,
                             created_at: thread_row.created_at as u64,
                             updated_at: thread_row.updated_at as u64,
-                            total_input_tokens,
-                            total_output_tokens,
+                            total_input_tokens: total_tokens,
+                            total_output_tokens: 0,
                         },
                     );
                     match self
@@ -313,6 +263,8 @@ impl AgentEngine {
                     handoff_states.insert(thread_id, handoff_state);
                 }
                 *self.threads.write().await = threads;
+                *self.thread_message_hydration_pending.write().await =
+                    thread_message_hydration_pending;
                 *self.thread_handoff_states.write().await = handoff_states;
                 *self.thread_participants.write().await = thread_participants;
                 *self.thread_participant_suggestions.write().await = thread_participant_suggestions;
@@ -334,7 +286,9 @@ impl AgentEngine {
                     self.schedule_participant_observer_restore_after_hydrate();
                 }
             }
-            Ok(_) => {}
+            Ok(_) => {
+                *self.thread_message_hydration_pending.write().await = HashSet::new();
+            }
             Err(e) => tracing::warn!("failed to load agent threads from sqlite: {e}"),
         }
 
@@ -819,6 +773,12 @@ impl AgentEngine {
         self.schedule_repo_watcher_restore(repo_watches);
 
         let startup_repo_roots = self.collect_aline_startup_repo_roots().await;
+
+        tracing::info!("agent engine hydrated from {:?}", self.data_dir);
+
+        // Initialize gateway runtime ownership and spawn the standalone gateway when enabled.
+        self.maybe_spawn_gateway().await;
+
         match startup_repo_roots.as_slice() {
             [repo_root] => self.schedule_aline_startup_reconciliation(repo_root.clone()),
             [] => {
@@ -850,11 +810,6 @@ impl AgentEngine {
                 self.schedule_aline_watcher_bootstrap();
             }
         }
-
-        tracing::info!("agent engine hydrated from {:?}", self.data_dir);
-
-        // Initialize gateway runtime ownership and spawn the standalone gateway when enabled.
-        self.maybe_spawn_gateway().await;
 
         Ok(())
     }

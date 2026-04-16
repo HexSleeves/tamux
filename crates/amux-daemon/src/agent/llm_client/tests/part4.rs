@@ -68,6 +68,12 @@ fn minimax_anthropic_requests_keep_connection_close_without_extra_transport_head
             .and_then(|value| value.to_str().ok()),
         Some("fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14")
     );
+    let body: serde_json::Value = serde_json::from_slice(
+        request.body().and_then(|body| body.as_bytes()).expect("body bytes"),
+    )
+    .expect("json body");
+    assert_eq!(body["cache_control"]["type"], "ephemeral");
+    assert!(body["cache_control"]["ttl"].is_null());
 }
 
 #[test]

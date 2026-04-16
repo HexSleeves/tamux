@@ -107,6 +107,17 @@ pub const PROVIDERS: &[ProviderDef] = &[
         native_base_url: None,
     },
     ProviderDef {
+        id: PROVIDER_ID_ANTHROPIC,
+        name: "Anthropic",
+        default_base_url: "https://api.anthropic.com",
+        default_model: "claude-opus-4-7",
+        supported_transports: CHAT_ONLY_TRANSPORTS,
+        default_transport: "chat_completions",
+        supported_auth_sources: API_KEY_ONLY_AUTH_SOURCES,
+        default_auth_source: "api_key",
+        native_base_url: None,
+    },
+    ProviderDef {
         id: PROVIDER_ID_GITHUB_COPILOT,
         name: "GitHub Copilot",
         default_base_url: "https://api.githubcopilot.com",
@@ -398,7 +409,7 @@ pub fn default_transport_for(provider: &str) -> &'static str {
 pub fn uses_fixed_anthropic_messages(provider: &str, model: &str) -> bool {
     matches!(
         provider,
-        PROVIDER_ID_MINIMAX | PROVIDER_ID_MINIMAX_CODING_PLAN
+        PROVIDER_ID_ANTHROPIC | PROVIDER_ID_MINIMAX | PROVIDER_ID_MINIMAX_CODING_PLAN
     ) || (provider == PROVIDER_ID_OPENCODE_ZEN && model.starts_with("claude"))
 }
 
@@ -426,6 +437,7 @@ pub fn supports_model_fetch_for(provider: &str) -> bool {
             | PROVIDER_ID_HUGGINGFACE
             | PROVIDER_ID_MINIMAX
             | PROVIDER_ID_MINIMAX_CODING_PLAN
+            | PROVIDER_ID_ANTHROPIC
             | PROVIDER_ID_ALIBABA_CODING_PLAN
             | PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN
     )

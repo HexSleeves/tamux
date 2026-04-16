@@ -2,6 +2,24 @@
 
 use super::*;
 
+async fn apply_sqlite_connection_pragmas(
+    conn: &tokio_rusqlite::Connection,
+    query_only: bool,
+) -> Result<()> {
+    conn.call(move |conn| {
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.pragma_update(None, "wal_autocheckpoint", "1000")?;
+        conn.pragma_update(None, "busy_timeout", "5000")?;
+        conn.pragma_update(None, "query_only", if query_only { "ON" } else { "OFF" })?;
+        Ok(())
+    })
+    .await
+    .context("failed to apply SQLite connection pragmas")?;
+    Ok(())
+}
+
 impl HistoryStore {
     async fn open_for_root(root: &Path) -> Result<Self> {
         let history_dir = root.join("history");
@@ -18,25 +36,30 @@ impl HistoryStore {
         let conn = tokio_rusqlite::Connection::open(&db_path)
             .await
             .context("failed to open SQLite connection via tokio-rusqlite")?;
+        apply_sqlite_connection_pragmas(&conn, false).await?;
 
-        conn.call(|conn| {
-            conn.pragma_update(None, "journal_mode", "WAL")?;
-            conn.pragma_update(None, "synchronous", "NORMAL")?;
-            conn.pragma_update(None, "foreign_keys", "ON")?;
-            conn.pragma_update(None, "wal_autocheckpoint", "1000")?;
-            conn.pragma_update(None, "busy_timeout", "5000")?;
-            Ok(())
+        let offloaded_payloads_dir = root.join("offloaded-payloads");
+        conn.call(move |connection| {
+            Ok(super::schema::init_schema_on_connection(
+                connection,
+                &offloaded_payloads_dir,
+            )?)
         })
         .await
-        .context("failed to apply WAL pragmas")?;
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let read_conn = tokio_rusqlite::Connection::open(&db_path)
+            .await
+            .context("failed to open read SQLite connection via tokio-rusqlite")?;
+        apply_sqlite_connection_pragmas(&read_conn, true).await?;
 
         let store = Self {
             conn,
+            read_conn,
             skill_dir,
             telemetry_dir,
             worm_dir,
         };
-        store.init_schema().await?;
         Ok(store)
     }
 
@@ -67,7 +90,7 @@ impl HistoryStore {
     }
 
     pub async fn list_agent_config_items(&self) -> Result<Vec<(String, serde_json::Value)>> {
-        self.conn.call(|conn| {
+        self.read_conn.call(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT key_path, value_json FROM agent_config_items ORDER BY length(key_path) ASC, key_path ASC",
             )?;
@@ -148,7 +171,7 @@ impl HistoryStore {
     ) -> Result<Option<ProviderAuthStateRow>> {
         let provider_id = provider_id.to_string();
         let auth_mode = auth_mode.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 let row = conn
                     .query_row(
@@ -311,7 +334,7 @@ impl HistoryStore {
         execution_id: &str,
     ) -> Result<Option<ManagedCommandFinishedRecord>> {
         let execution_id = execution_id.to_string();
-        self.conn
+        self.read_conn
             .call(move |conn| {
                 Ok(conn
                     .query_row(
@@ -343,7 +366,7 @@ impl HistoryStore {
     ) -> Result<(String, Vec<HistorySearchHit>)> {
         let query = query.to_string();
         let query = query.to_string();
-        self.conn.call(move |conn| {
+        self.read_conn.call(move |conn| {
             let mut stmt = conn.prepare(
                 "SELECT history_entries.id, history_entries.kind, history_entries.title, history_entries.excerpt, history_entries.path, history_entries.timestamp, bm25(history_fts) \
                  FROM history_fts JOIN history_entries ON history_entries.id = history_fts.id \

@@ -1830,6 +1830,55 @@ fn prepending_older_history_releases_the_top_edge_until_user_scrolls_again() {
 }
 
 #[test]
+fn sidebar_enter_on_offscreen_pinned_message_requests_containing_page() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.config.tui_chat_history_page_size = 100;
+    model.handle_client_event(ClientEvent::ThreadDetail(Some(crate::wire::AgentThread {
+        id: "thread-user".to_string(),
+        title: "User Thread".to_string(),
+        messages: (200..300)
+            .map(|index| crate::wire::AgentMessage {
+                id: Some(format!("msg-{index}")),
+                role: crate::wire::MessageRole::Assistant,
+                content: format!("msg {index}"),
+                timestamp: index as u64,
+                message_kind: "normal".to_string(),
+                ..Default::default()
+            })
+            .collect(),
+        pinned_messages: vec![crate::wire::PinnedThreadMessage {
+            message_id: "msg-50".to_string(),
+            absolute_index: 50,
+            role: crate::wire::MessageRole::User,
+            content: "Pinned offscreen".to_string(),
+        }],
+        total_message_count: 300,
+        loaded_message_start: 200,
+        loaded_message_end: 300,
+        created_at: 1,
+        updated_at: 1,
+        ..Default::default()
+    })));
+    model.focus = FocusArea::Sidebar;
+    model
+        .sidebar
+        .reduce(crate::state::sidebar::SidebarAction::SwitchTab(
+            crate::state::sidebar::SidebarTab::Pinned,
+        ));
+
+    model.handle_sidebar_enter();
+
+    match next_thread_request(&mut daemon_rx) {
+        Some((thread_id, message_limit, message_offset)) => {
+            assert_eq!(thread_id, "thread-user");
+            assert_eq!(message_limit, Some(100));
+            assert_eq!(message_offset, Some(200));
+        }
+        other => panic!("expected containing-page request, got {other:?}"),
+    }
+}
+
+#[test]
 fn thread_detail_preserves_message_author_metadata() {
     let mut model = make_model();
 
@@ -2060,6 +2109,48 @@ fn selected_internal_dm_thread_detail_is_loaded() {
         thread.messages[0].content,
         "Keep reviewing the migration plan."
     );
+}
+
+#[test]
+fn selected_internal_dm_thread_detail_with_weles_persona_marker_is_loaded() {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "dm:svarog:weles".to_string(),
+        title: "Internal DM · Svarog ↔ WELES".to_string(),
+    });
+    model.chat.reduce(chat::ChatAction::SelectThread(
+        "dm:svarog:weles".to_string(),
+    ));
+
+    model.handle_client_event(ClientEvent::ThreadDetail(Some(crate::wire::AgentThread {
+        id: "dm:svarog:weles".to_string(),
+        title: "Internal DM · Svarog ↔ WELES".to_string(),
+        messages: vec![crate::wire::AgentMessage {
+            role: crate::wire::MessageRole::Assistant,
+            content: "Agent persona id: weles\n\nKeep reviewing the migration plan.".to_string(),
+            timestamp: 1,
+            message_kind: "normal".to_string(),
+            ..Default::default()
+        }],
+        total_message_count: 150,
+        loaded_message_start: 50,
+        loaded_message_end: 150,
+        created_at: 1,
+        updated_at: 1,
+        ..Default::default()
+    })));
+
+    let thread = model
+        .chat
+        .threads()
+        .iter()
+        .find(|thread| thread.id == "dm:svarog:weles")
+        .expect("selected internal dm thread should remain in chat state");
+    assert_eq!(model.chat.active_thread_id(), Some("dm:svarog:weles"));
+    assert_eq!(thread.messages.len(), 1);
+    assert_eq!(thread.total_message_count, 150);
+    assert_eq!(thread.loaded_message_start, 50);
+    assert_eq!(thread.loaded_message_end, 150);
 }
 
 #[test]
@@ -3428,6 +3519,65 @@ fn provider_auth_states_overlay_chatgpt_auth_when_openai_is_configured_for_chatg
         "chatgpt daemon auth should surface as connected"
     );
     assert_eq!(openai.auth_source, "chatgpt_subscription");
+}
+
+#[test]
+fn provider_auth_states_overlay_chatgpt_auth_for_openai_even_when_another_provider_is_active() {
+    let mut model = make_model();
+    model.config.provider = PROVIDER_ID_GITHUB_COPILOT.to_string();
+    model.config.auth_source = "github_copilot".to_string();
+    model.config.chatgpt_auth_available = true;
+    model.config.chatgpt_auth_source = Some("tamux-daemon".to_string());
+
+    model.handle_provider_auth_states_event(vec![crate::state::ProviderAuthEntry {
+        provider_id: PROVIDER_ID_OPENAI.to_string(),
+        provider_name: "OpenAI".to_string(),
+        authenticated: false,
+        auth_source: "api_key".to_string(),
+        model: "gpt-5.4".to_string(),
+    }]);
+
+    let openai = model
+        .auth
+        .entries
+        .iter()
+        .find(|entry| entry.provider_id == PROVIDER_ID_OPENAI)
+        .expect("openai auth entry should exist");
+    assert!(
+        openai.authenticated,
+        "chatgpt daemon auth should keep openai selectable in provider picker"
+    );
+    assert_eq!(openai.auth_source, "chatgpt_subscription");
+}
+
+#[test]
+fn provider_validation_event_updates_auth_result_and_status_line() {
+    let mut model = make_model();
+    model.auth.entries = vec![crate::state::ProviderAuthEntry {
+        provider_id: PROVIDER_ID_OPENAI.to_string(),
+        provider_name: "OpenAI".to_string(),
+        authenticated: true,
+        auth_source: "api_key".to_string(),
+        model: "gpt-5.4".to_string(),
+    }];
+    model.auth.validating = Some(PROVIDER_ID_OPENAI.to_string());
+
+    model.handle_client_event(ClientEvent::ProviderValidation {
+        provider_id: PROVIDER_ID_OPENAI.to_string(),
+        valid: false,
+        error: Some("bad key".to_string()),
+    });
+
+    assert_eq!(model.auth.validating, None);
+    assert_eq!(model.status_line, "OpenAI test failed: bad key");
+    assert_eq!(
+        model
+            .auth
+            .validation_results
+            .get(PROVIDER_ID_OPENAI)
+            .cloned(),
+        Some((false, "Error: bad key".to_string()))
+    );
 }
 
 #[test]

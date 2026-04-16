@@ -1042,15 +1042,42 @@ impl TuiModel {
                 self.status_line = "Todo details".to_string();
             }
             sidebar::SidebarTab::Pinned => {
-                let Some(message_index) =
-                    widgets::sidebar::selected_pinned_message_index(&self.chat, &self.sidebar)
+                let Some(pinned_message) =
+                    widgets::sidebar::selected_pinned_message(&self.chat, &self.sidebar)
                 else {
                     return;
                 };
-                self.main_pane_view = MainPaneView::Conversation;
-                self.focus = FocusArea::Chat;
-                self.chat.select_message(Some(message_index));
-                self.status_line = "Pinned message".to_string();
+                if let Some(message_index) = self
+                    .chat
+                    .resolve_active_pinned_message_to_loaded_index(&pinned_message)
+                {
+                    self.main_pane_view = MainPaneView::Conversation;
+                    self.focus = FocusArea::Chat;
+                    self.chat.select_message(Some(message_index));
+                    self.status_line = "Pinned message".to_string();
+                    return;
+                }
+
+                let Some(thread) = self.chat.active_thread() else {
+                    return;
+                };
+                let total_messages = thread.total_message_count.max(thread.loaded_message_end);
+                let page_size = self.chat_history_page_size().max(1);
+                let end = pinned_message
+                    .absolute_index
+                    .saturating_add(1)
+                    .max(page_size)
+                    .min(total_messages);
+                let start = end.saturating_sub(page_size);
+                let limit = end.saturating_sub(start).max(1);
+                let offset = total_messages.saturating_sub(end);
+                self.pending_pinned_jump = Some(PendingPinnedJump {
+                    thread_id: thread_id.clone(),
+                    message_id: pinned_message.message_id.clone(),
+                    absolute_index: pinned_message.absolute_index,
+                });
+                self.request_thread_page(thread_id, limit, offset, false);
+                self.status_line = "Loading pinned message".to_string();
             }
         }
     }
@@ -1149,13 +1176,8 @@ impl TuiModel {
                 .map(|todo| todo.content.clone())
                 .filter(|value| !value.trim().is_empty()),
             sidebar::SidebarTab::Pinned => {
-                widgets::sidebar::selected_pinned_message_index(&self.chat, &self.sidebar)
-                    .and_then(|message_index| {
-                        self.chat
-                            .active_thread()
-                            .and_then(|thread| thread.messages.get(message_index))
-                            .map(|message| message.content.clone())
-                    })
+                widgets::sidebar::selected_pinned_message(&self.chat, &self.sidebar)
+                    .map(|message| message.content)
                     .filter(|value| !value.trim().is_empty())
             }
         };
@@ -1213,6 +1235,10 @@ impl TuiModel {
             (thread.id.clone(), message_id)
         };
 
+        self.unpin_message_for_compaction_by_id(thread_id, message_id);
+    }
+
+    fn unpin_message_for_compaction_by_id(&mut self, thread_id: String, message_id: String) {
         self.send_daemon_command(DaemonCommand::UnpinThreadMessageForCompaction {
             thread_id,
             message_id,
@@ -1220,12 +1246,15 @@ impl TuiModel {
     }
 
     pub(super) fn unpin_selected_sidebar_message(&mut self) {
-        let Some(index) =
-            widgets::sidebar::selected_pinned_message_index(&self.chat, &self.sidebar)
+        let Some(pinned_message) =
+            widgets::sidebar::selected_pinned_message(&self.chat, &self.sidebar)
         else {
             return;
         };
-        self.unpin_message_for_compaction(index);
+        let Some(thread_id) = self.chat.active_thread_id().map(str::to_string) else {
+            return;
+        };
+        self.unpin_message_for_compaction_by_id(thread_id, pinned_message.message_id);
     }
 
     pub(super) fn delete_message(&mut self, index: usize) {

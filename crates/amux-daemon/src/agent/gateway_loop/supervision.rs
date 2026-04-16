@@ -65,7 +65,9 @@ impl AgentEngine {
         let telegram_token = gw.telegram_token.clone();
         let discord_token = gw.discord_token.clone();
 
-        self.init_gateway().await;
+        if self.gateway_state.lock().await.is_none() {
+            self.init_gateway().await;
+        }
 
         if slack_token.is_empty() && telegram_token.is_empty() && discord_token.is_empty() {
             tracing::info!("gateway: no platform tokens configured, skipping");

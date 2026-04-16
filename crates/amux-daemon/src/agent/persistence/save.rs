@@ -179,6 +179,7 @@ impl AgentEngine {
     }
 
     pub(crate) async fn persist_thread_by_id(&self, thread_id: &str) {
+        self.ensure_thread_messages_loaded(thread_id).await;
         let thread = {
             let threads = self.threads.read().await;
             threads.get(thread_id).cloned()
@@ -189,9 +190,12 @@ impl AgentEngine {
     }
 
     pub(in crate::agent) async fn persist_threads(&self) {
-        let threads = self.threads.read().await;
-        for thread in threads.values() {
-            self.persist_thread_snapshot(thread).await;
+        let thread_ids = {
+            let threads = self.threads.read().await;
+            threads.keys().cloned().collect::<Vec<_>>()
+        };
+        for thread_id in thread_ids {
+            self.persist_thread_by_id(&thread_id).await;
         }
     }
 

@@ -228,15 +228,15 @@ pub(super) fn prepare_llm_request_with_reused_user_message(
     provider_config: &ProviderConfig,
     reused_user_message: Option<&str>,
 ) -> PreparedLlmRequest {
+    let uses_chatgpt_subscription_responses = config.provider == PROVIDER_ID_OPENAI
+        && provider_config.auth_source == crate::agent::types::AuthSource::ChatgptSubscription;
     let mut selected_transport =
         if provider_supports_transport(&config.provider, provider_config.api_transport) {
             provider_config.api_transport
         } else {
             default_api_transport_for_provider(&config.provider)
         };
-    if config.provider == PROVIDER_ID_OPENAI
-        && provider_config.auth_source == crate::agent::types::AuthSource::ChatgptSubscription
-    {
+    if uses_chatgpt_subscription_responses {
         selected_transport = ApiTransport::Responses;
     }
     let messages = &thread.messages;
@@ -283,43 +283,44 @@ pub(super) fn prepare_llm_request_with_reused_user_message(
     }
 
     if selected_transport == ApiTransport::Responses {
-        let previous_response_id =
-            if !compaction_active && supports_response_continuity(&config.provider) {
-                messages
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find(|(_, message)| {
-                        message.role == MessageRole::Assistant
-                            && message.response_id.is_some()
-                            && message.provider.as_deref() == Some(config.provider.as_str())
-                            && message.model.as_deref() == Some(provider_config.model.as_str())
-                            && message.api_transport == Some(ApiTransport::Responses)
-                    })
-                    .and_then(|(anchor_index, anchor_message)| {
-                        let trailing = &messages[anchor_index + 1..];
-                        if config.provider == PROVIDER_ID_GITHUB_COPILOT
-                            && trailing.iter().any(|message| {
-                                message.role == MessageRole::Tool
-                                    || message
-                                        .tool_calls
-                                        .as_ref()
-                                        .is_some_and(|tool_calls| !tool_calls.is_empty())
-                            })
-                        {
-                            return None;
-                        }
-                        let trailing_messages =
-                            continuation_api_messages(trailing, reused_user_message);
-                        if trailing_messages.is_empty() {
-                            None
-                        } else {
-                            Some((trailing_messages, anchor_message.response_id.clone()))
-                        }
-                    })
-            } else {
-                None
-            };
+        let previous_response_id = if !uses_chatgpt_subscription_responses
+            && supports_response_continuity(&config.provider)
+        {
+            request_messages
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, message)| {
+                    message.role == MessageRole::Assistant
+                        && message.response_id.is_some()
+                        && message.provider.as_deref() == Some(config.provider.as_str())
+                        && message.model.as_deref() == Some(provider_config.model.as_str())
+                        && message.api_transport == Some(ApiTransport::Responses)
+                })
+                .and_then(|(anchor_index, anchor_message)| {
+                    let trailing = &request_messages[anchor_index + 1..];
+                    if config.provider == PROVIDER_ID_GITHUB_COPILOT
+                        && trailing.iter().any(|message| {
+                            message.role == MessageRole::Tool
+                                || message
+                                    .tool_calls
+                                    .as_ref()
+                                    .is_some_and(|tool_calls| !tool_calls.is_empty())
+                        })
+                    {
+                        return None;
+                    }
+                    let trailing_messages =
+                        continuation_api_messages(trailing, reused_user_message);
+                    if trailing_messages.is_empty() {
+                        None
+                    } else {
+                        Some((trailing_messages, anchor_message.response_id.clone()))
+                    }
+                })
+        } else {
+            None
+        };
 
         if let Some((messages, previous_response_id)) = previous_response_id {
             let mut messages = messages;
@@ -337,7 +338,12 @@ pub(super) fn prepare_llm_request_with_reused_user_message(
             messages: messages_to_api_format(&request_messages),
             transport: ApiTransport::Responses,
             previous_response_id: None,
-            upstream_thread_id: None,
+            upstream_thread_id: uses_chatgpt_subscription_responses.then(|| {
+                thread
+                    .upstream_thread_id
+                    .clone()
+                    .unwrap_or_else(|| thread.id.clone())
+            }),
             force_connection_close: false,
         };
     }

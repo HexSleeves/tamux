@@ -19,6 +19,7 @@ if matches!(
         ClientMessage::AgentRetireGeneratedTool{ .. } |
         ClientMessage::AgentGetProviderAuthStates |
         ClientMessage::AgentLoginProvider{ .. } |
+        ClientMessage::AgentStoreGithubCopilotAuthToken{ .. } |
         ClientMessage::AgentLogoutProvider{ .. } |
         ClientMessage::AgentGetOpenAICodexAuthStatus |
         ClientMessage::AgentLoginOpenAICodex |
@@ -635,6 +636,30 @@ if matches!(
                     api_key,
                     base_url,
                 } => {
+                    if provider_id == amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT
+                        && api_key.trim().is_empty()
+                    {
+                        match crate::agent::copilot_auth::begin_github_copilot_auth_flow() {
+                            Ok(_) => {
+                                let states = agent.get_provider_auth_states().await;
+                                let json = serde_json::to_string(&states).unwrap_or_default();
+                                framed
+                                    .send(DaemonMessage::AgentProviderAuthStates {
+                                        states_json: json,
+                                    })
+                                    .await?;
+                            }
+                            Err(error) => {
+                                framed
+                                    .send(DaemonMessage::Error {
+                                        message: error.to_string(),
+                                    })
+                                    .await?;
+                            }
+                        }
+                        continue;
+                    }
+
                     // Surgical update: modify only the target provider's key.
                     let mut config = agent.get_config().await;
                     let entry = config
@@ -685,6 +710,33 @@ if matches!(
                     framed
                         .send(DaemonMessage::AgentProviderAuthStates { states_json: json })
                         .await?;
+                }
+
+                ClientMessage::AgentStoreGithubCopilotAuthToken {
+                    access_token,
+                    source,
+                } => {
+                    match crate::agent::copilot_auth::store_github_copilot_auth_token(
+                        access_token,
+                        &source,
+                    ) {
+                        Ok(()) => {
+                            let states = agent.get_provider_auth_states().await;
+                            let json = serde_json::to_string(&states).unwrap_or_default();
+                            framed
+                                .send(DaemonMessage::AgentProviderAuthStates {
+                                    states_json: json,
+                                })
+                                .await?;
+                        }
+                        Err(error) => {
+                            framed
+                                .send(DaemonMessage::Error {
+                                    message: error.to_string(),
+                                })
+                                .await?;
+                        }
+                    }
                 }
 
                 ClientMessage::AgentLogoutProvider { provider_id } => {

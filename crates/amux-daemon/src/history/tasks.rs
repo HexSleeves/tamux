@@ -250,7 +250,7 @@ impl HistoryStore {
     }
 
     pub async fn list_agent_tasks(&self) -> Result<Vec<AgentTask>> {
-        self.conn.call(move |conn| {
+        self.read_conn.call(move |conn| {
         let mut dependency_stmt = conn.prepare(
             "SELECT task_id, depends_on_task_id FROM agent_task_dependencies ORDER BY ordinal ASC",
         )?;

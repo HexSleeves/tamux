@@ -183,6 +183,75 @@ fn sidebar_shows_pinned_tab_when_active_thread_has_pins() {
 }
 
 #[test]
+fn sidebar_shows_pinned_tab_when_only_summary_pins_exist() {
+    let sidebar = SidebarState::new();
+    let tasks = TaskState::new();
+    let mut chat = ChatState::new();
+    chat.reduce(ChatAction::ThreadDetailReceived(
+        crate::state::chat::AgentThread {
+            id: "thread-1".to_string(),
+            title: "Pinned".to_string(),
+            messages: vec![AgentMessage {
+                id: Some("message-2".to_string()),
+                role: MessageRole::Assistant,
+                content: "Latest visible".to_string(),
+                pinned_for_compaction: false,
+                ..Default::default()
+            }],
+            pinned_messages: vec![crate::state::chat::PinnedThreadMessage {
+                message_id: "message-1".to_string(),
+                absolute_index: 0,
+                role: MessageRole::User,
+                content: "Offscreen pinned content".to_string(),
+            }],
+            loaded_message_start: 1,
+            loaded_message_end: 2,
+            total_message_count: 2,
+            ..Default::default()
+        },
+    ));
+    chat.reduce(ChatAction::SelectThread("thread-1".to_string()));
+
+    let area = Rect::new(0, 0, 36, 8);
+    let backend = TestBackend::new(area.width, area.height);
+    let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+    terminal
+        .draw(|frame| {
+            render(
+                frame,
+                area,
+                &chat,
+                &sidebar,
+                &tasks,
+                Some("thread-1"),
+                &ThemeTokens::default(),
+                true,
+                &[],
+                &crate::state::tier::TierState::default(),
+                None,
+                None,
+                &[],
+            );
+        })
+        .expect("sidebar render should succeed");
+
+    let buffer = terminal.backend().buffer();
+    let plain = (area.y..area.y.saturating_add(area.height))
+        .map(|y| {
+            (area.x..area.x.saturating_add(area.width))
+                .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        plain.contains("Pinned"),
+        "expected pinned tab from summary pins, got: {plain}"
+    );
+}
+
+#[test]
 fn pinned_sidebar_rows_follow_thread_order() {
     let mut sidebar = SidebarState::new();
     sidebar.reduce(crate::state::sidebar::SidebarAction::SwitchTab(
@@ -217,7 +286,7 @@ fn pinned_sidebar_rows_follow_thread_order() {
     ));
     chat.reduce(ChatAction::SelectThread("thread-1".to_string()));
 
-    let area = Rect::new(0, 0, 40, 8);
+    let area = Rect::new(0, 0, 40, 10);
     let backend = TestBackend::new(area.width, area.height);
     let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
     terminal
@@ -257,4 +326,77 @@ fn pinned_sidebar_rows_follow_thread_order() {
         .find("Second pin")
         .expect("second pin row should render");
     assert!(first < second, "expected thread order, got: {plain}");
+}
+
+#[test]
+fn pinned_sidebar_renders_footer_hints() {
+    let mut sidebar = SidebarState::new();
+    sidebar.reduce(crate::state::sidebar::SidebarAction::SwitchTab(
+        crate::state::sidebar::SidebarTab::Pinned,
+    ));
+    let tasks = TaskState::new();
+    let mut chat = ChatState::new();
+    chat.reduce(ChatAction::ThreadDetailReceived(
+        crate::state::chat::AgentThread {
+            id: "thread-1".to_string(),
+            title: "Pinned".to_string(),
+            messages: vec![AgentMessage {
+                id: Some("message-1".to_string()),
+                role: MessageRole::Assistant,
+                content: "Pinned content".to_string(),
+                pinned_for_compaction: true,
+                ..Default::default()
+            }],
+            loaded_message_end: 1,
+            total_message_count: 1,
+            ..Default::default()
+        },
+    ));
+    chat.reduce(ChatAction::SelectThread("thread-1".to_string()));
+
+    let area = Rect::new(0, 0, 72, 10);
+    let backend = TestBackend::new(area.width, area.height);
+    let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+    terminal
+        .draw(|frame| {
+            render(
+                frame,
+                area,
+                &chat,
+                &sidebar,
+                &tasks,
+                Some("thread-1"),
+                &ThemeTokens::default(),
+                true,
+                &[],
+                &crate::state::tier::TierState::default(),
+                None,
+                None,
+                &[],
+            );
+        })
+        .expect("sidebar render should succeed");
+
+    let buffer = terminal.backend().buffer();
+    let plain = (area.y..area.y.saturating_add(area.height))
+        .map(|y| {
+            (area.x..area.x.saturating_add(area.width))
+                .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        plain.contains("Enter jump"),
+        "expected jump hint, got: {plain}"
+    );
+    assert!(
+        plain.contains("u unpin"),
+        "expected unpin hint, got: {plain}"
+    );
+    assert!(
+        plain.contains("Ctrl+C copy"),
+        "expected copy hint, got: {plain}"
+    );
 }

@@ -354,6 +354,21 @@ impl AgentEngine {
 
     pub(crate) async fn trim_persisted_participant_playground_threads_on_hydrate(&self) -> usize {
         let max_messages = self.participant_playground_message_limit().await;
+        let playground_thread_ids = {
+            let threads = self.threads.read().await;
+            threads
+                .keys()
+                .filter(|thread_id| {
+                    crate::agent::agent_identity::is_participant_playground_thread(thread_id)
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+
+        for thread_id in &playground_thread_ids {
+            self.ensure_thread_messages_loaded(thread_id).await;
+        }
+
         let trimmed_thread_ids = {
             let mut threads = self.threads.write().await;
             let updated_at = now_millis();

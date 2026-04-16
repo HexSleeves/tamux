@@ -364,7 +364,7 @@ export async function* sendOpenAIResponses(
     ...(isSubscription ? { store: false } : {}),
   };
 
-  if (req.previousResponseId) {
+  if (req.previousResponseId && !isSubscription) {
     body.previous_response_id = req.previousResponseId;
   }
   if (req.tools && req.tools.length > 0) {
@@ -391,7 +391,11 @@ export async function* sendOpenAIResponses(
   }
 
   const headers = isSubscription
-    ? buildChatGptCodexHeaders(req.config.api_key, req._chatgptAccountId)
+    ? buildChatGptCodexHeaders(
+      req.config.api_key,
+      req._chatgptAccountId,
+      req.upstreamThreadId,
+    )
     : (() => {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",

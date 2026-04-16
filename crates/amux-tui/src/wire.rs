@@ -113,6 +113,8 @@ pub struct AgentThread {
     pub loaded_message_start: usize,
     #[serde(default)]
     pub loaded_message_end: usize,
+    #[serde(default)]
+    pub pinned_messages: Vec<PinnedThreadMessage>,
 
     #[serde(default)]
     pub total_input_tokens: u64,
@@ -124,6 +126,18 @@ pub struct AgentThread {
 
     #[serde(default)]
     pub queued_participant_suggestions: Vec<ThreadParticipantSuggestion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PinnedThreadMessage {
+    #[serde(default)]
+    pub message_id: String,
+    #[serde(default)]
+    pub absolute_index: usize,
+    #[serde(default)]
+    pub role: MessageRole,
+    #[serde(default)]
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
