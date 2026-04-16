@@ -1354,6 +1354,23 @@ impl AgentEngine {
                     .partial_cmp(&right.get("confidence").and_then(|value| value.as_f64()))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
+        let proactive_suppression = anticipatory_items
+            .iter()
+            .filter(|item| item.kind == "proactive_suppression")
+            .map(|item| {
+                serde_json::json!({
+                    "thread_id": item.thread_id,
+                    "confidence": item.confidence,
+                    "summary": item.summary,
+                    "bullets": item.bullets,
+                })
+            })
+            .max_by(|left, right| {
+                left.get("confidence")
+                    .and_then(|value| value.as_f64())
+                    .partial_cmp(&right.get("confidence").and_then(|value| value.as_f64()))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
         serde_json::json!({
             "operator_profile_sync_state": sync_state,
@@ -1363,6 +1380,7 @@ impl AgentEngine {
             "routing_decision": routing_decision,
             "debate_session": debate_session,
             "recursive_subagents": recursive_subagents,
+            "proactive_suppression": proactive_suppression,
             "system_outcome_foresight": system_outcome_foresight,
             "operator_satisfaction": {
                 "label": operator_model.operator_satisfaction.label,

@@ -1773,6 +1773,78 @@ async fn status_diagnostics_snapshot_includes_system_outcome_foresight_details()
 }
 
 #[tokio::test]
+async fn status_diagnostics_snapshot_includes_proactive_suppression_transparency() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    config.anticipatory.stuck_detection = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let mut task = engine
+        .enqueue_task(
+            "Need approval".to_string(),
+            "Need approval".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "user",
+            None,
+            None,
+            Some("thread-latency-diagnostics".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    task.status = TaskStatus::AwaitingApproval;
+    {
+        let mut tasks = engine.tasks.lock().await;
+        if let Some(existing) = tasks.iter_mut().find(|existing| existing.id == task.id) {
+            *existing = task.clone();
+        }
+    }
+    engine
+        .record_operator_attention(
+            "conversation:chat",
+            Some("thread-latency-diagnostics"),
+            None,
+        )
+        .await
+        .expect("record operator attention");
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.risk_fingerprint.approval_requests = 4;
+        model.risk_fingerprint.approvals = 2;
+        model.risk_fingerprint.denials = 2;
+        model.risk_fingerprint.avg_response_time_secs = 45.0;
+        refresh_risk_metrics(&mut model.risk_fingerprint);
+        refresh_operator_satisfaction(&mut model);
+    }
+
+    engine.run_anticipatory_tick().await;
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let suppression = &snapshot["proactive_suppression"];
+    assert_eq!(
+        suppression["thread_id"].as_str(),
+        Some("thread-latency-diagnostics")
+    );
+    assert!(suppression["confidence"]
+        .as_f64()
+        .is_some_and(|value| value >= 0.7));
+    assert!(suppression["summary"]
+        .as_str()
+        .is_some_and(|text| text.contains("suppressed") || text.contains("tightened")));
+    assert!(suppression["bullets"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item
+            .as_str()
+            .is_some_and(|text| text.contains("suppressed_kinds=")))));
+}
+
+#[tokio::test]
 async fn status_diagnostics_snapshot_includes_meta_cognitive_self_model() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
