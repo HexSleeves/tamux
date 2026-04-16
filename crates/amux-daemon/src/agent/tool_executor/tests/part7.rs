@@ -7024,7 +7024,7 @@ async fn fetch_url_openapi_spec_emits_openapi_tool_synthesis_proposal_notice() {
 }
 
 #[tokio::test]
-async fn fetch_url_openapi_spec_does_not_emit_proposal_when_equivalent_generated_tool_exists() {
+async fn fetch_url_openapi_spec_emits_activate_notice_when_equivalent_generated_tool_is_new() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -7120,12 +7120,54 @@ async fn fetch_url_openapi_spec_does_not_emit_proposal_when_equivalent_generated
     .await;
 
     assert!(!result.is_error, "fetch_url should succeed: {}", result.content);
-    assert!(
-        timeout(Duration::from_millis(150), event_rx.recv())
-            .await
-            .is_err(),
-        "existing equivalent generated OpenAPI tool should suppress fresh synthesis proposal notices"
-    );
+
+    let notice = timeout(Duration::from_millis(250), event_rx.recv())
+        .await
+        .expect("expected existing-tool status notice")
+        .expect("workflow notice should be received");
+    match notice {
+        AgentEvent::WorkflowNotice {
+            kind,
+            message,
+            details: Some(details),
+            ..
+        } => {
+            assert_eq!(kind, "tool-synthesis-proposal");
+            assert!(message.contains("Activate it"));
+            let details: serde_json::Value =
+                serde_json::from_str(&details).expect("notice details should be json");
+            assert_eq!(
+                details.get("reason").and_then(|value| value.as_str()),
+                Some("existing_equivalent_generated_tool")
+            );
+            assert_eq!(
+                details.get("source_reason").and_then(|value| value.as_str()),
+                Some("fetched_openapi_get_gap")
+            );
+            assert_eq!(
+                details
+                    .get("recommended_action")
+                    .and_then(|value| value.as_str()),
+                Some("activate_generated_tool")
+            );
+            assert_eq!(
+                details.get("proposal_kind").and_then(|value| value.as_str()),
+                Some("openapi")
+            );
+            assert_eq!(
+                details
+                    .get("existing_tool")
+                    .and_then(|value| value.get("status"))
+                    .and_then(|value| value.as_str()),
+                Some("new")
+            );
+            assert_eq!(
+                details.get("target").and_then(|value| value.as_str()),
+                Some(spec_url.as_str())
+            );
+        }
+        other => panic!("expected workflow notice, got {other:?}"),
+    }
 }
 
 #[tokio::test]

@@ -101,6 +101,7 @@ async fn maybe_emit_existing_tool_status_notice(
     dedupe_hint: &str,
     proposal_tool_name: &str,
     proposal_target: &str,
+    proposal_kind: &str,
     existing: &serde_json::Value,
     source_reason: &str,
 ) {
@@ -112,10 +113,14 @@ async fn maybe_emit_existing_tool_status_notice(
         .get("id")
         .and_then(|value| value.as_str())
         .unwrap_or(proposal_tool_name);
+    let gap_label = match proposal_kind {
+        "openapi" => "OpenAPI gap",
+        _ => "CLI gap",
+    };
     let (message, recommended_action) = match status {
         "new" => (
             format!(
-                "Equivalent generated tool `{id}` already exists for this CLI gap. Activate it instead of synthesizing a duplicate."
+                "Equivalent generated tool `{id}` already exists for this {gap_label}. Activate it instead of synthesizing a duplicate."
             ),
             "activate_generated_tool",
         ),
@@ -143,7 +148,7 @@ async fn maybe_emit_existing_tool_status_notice(
         "source_reason": source_reason,
         "recommended_action": recommended_action,
         "existing_tool": existing,
-        "proposal_kind": "cli",
+        "proposal_kind": proposal_kind,
         "target": proposal_target,
     });
     maybe_emit_cli_wrapper_synthesis_proposal_notice(
@@ -199,6 +204,7 @@ async fn maybe_emit_unknown_tool_synthesis_proposal_notice(
             &format!("existing-unknown::{missing_tool}"),
             &proposal.tool_name,
             &proposal.target,
+            "cli",
             &existing,
             "unknown_tool_safe_cli_gap",
         )
@@ -254,6 +260,7 @@ async fn maybe_emit_successful_shell_synthesis_proposal_notice(
             &format!("existing-shell::{command}"),
             &proposal.tool_name,
             &proposal.target,
+            "cli",
             &existing,
             "successful_safe_shell_cli_gap",
         )
@@ -396,14 +403,25 @@ async fn maybe_emit_openapi_synthesis_proposal_notice(
         });
 
     let dedupe_hint = format!("openapi::{url}");
-    if find_equivalent_generated_openapi_tool(
+    if let Some(existing) = find_equivalent_generated_openapi_tool(
         &agent.data_dir,
         url,
         selected_operation_id.as_deref(),
     )
     .unwrap_or(None)
-    .is_some()
     {
+        maybe_emit_existing_tool_status_notice(
+            agent,
+            event_tx,
+            thread_id,
+            &format!("existing-openapi::{url}"),
+            &tool_name,
+            url,
+            "openapi",
+            &existing,
+            "fetched_openapi_get_gap",
+        )
+        .await;
         return;
     }
     let synthesize_args = serde_json::json!({
