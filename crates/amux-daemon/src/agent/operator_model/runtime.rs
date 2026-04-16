@@ -1144,6 +1144,29 @@ impl AgentEngine {
                 })
             })
             .collect::<Vec<_>>();
+        let routing_decision = self
+            .history
+            .list_recent_handoff_routing(1)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .next()
+            .map(|row| {
+                let capability_tags = row
+                    .capability_tags_json
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+                    .unwrap_or_default();
+                serde_json::json!({
+                    "handoff_log_id": row.id,
+                    "specialist_id": row.to_specialist_id,
+                    "capability_tags": capability_tags,
+                    "routing_method": row.routing_method,
+                    "routing_score": row.routing_score,
+                    "fallback_used": row.fallback_used,
+                    "created_at": row.created_at,
+                })
+            });
         let mut memory_distillation_progress = self
             .history
             .list_memory_distillation_progress(5)
@@ -1242,6 +1265,7 @@ impl AgentEngine {
             "operator_profile_sync_dirty": sync_state != "clean",
             "operator_profile_scheduler_fallback": false,
             "intent_prediction": intent_prediction,
+            "routing_decision": routing_decision,
             "system_outcome_foresight": system_outcome_foresight,
             "operator_satisfaction": {
                 "label": operator_model.operator_satisfaction.label,

@@ -523,6 +523,17 @@ pub struct ForgePassLogRow {
     pub completed_at_ms: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HandoffRoutingRow {
+    pub id: String,
+    pub to_specialist_id: String,
+    pub capability_tags_json: Option<String>,
+    pub routing_method: String,
+    pub routing_score: f64,
+    pub fallback_used: bool,
+    pub created_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApprovalRecordRow {
     pub approval_id: String,

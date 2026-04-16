@@ -803,6 +803,25 @@ impl HistoryStore {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
+    pub async fn list_recent_handoff_routing(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<HandoffRoutingRow>> {
+        let limit = limit.max(1) as i64;
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, to_specialist_id, capability_tags_json, routing_method, routing_score, fallback_used, created_at \
+                     FROM handoff_log ORDER BY created_at DESC, id DESC LIMIT ?1",
+                )?;
+                let rows = stmt.query_map(params![limit], map_handoff_routing_row)?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     pub async fn get_worm_chain_tip(&self, kind: &str) -> Result<Option<WormChainTip>> {
         let kind = kind.to_string();
         let kind = kind.to_string();

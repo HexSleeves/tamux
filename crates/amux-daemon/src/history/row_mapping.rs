@@ -172,6 +172,20 @@ pub(super) fn map_forge_pass_log_row(row: &rusqlite::Row<'_>) -> rusqlite::Resul
     })
 }
 
+pub(super) fn map_handoff_routing_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<HandoffRoutingRow> {
+    Ok(HandoffRoutingRow {
+        id: row.get(0)?,
+        to_specialist_id: row.get(1)?,
+        capability_tags_json: row.get(2)?,
+        routing_method: row.get(3)?,
+        routing_score: row.get(4)?,
+        fallback_used: row.get::<_, i64>(5)? != 0,
+        created_at: row.get(6)?,
+    })
+}
+
 pub(super) fn map_transcript_index_entry(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<TranscriptIndexEntry> {

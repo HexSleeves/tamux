@@ -975,6 +975,52 @@ async fn status_diagnostics_snapshot_includes_forge_pass_activity() {
     assert_eq!(passes[0]["hints_logged"].as_i64(), Some(2));
 }
 
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_routing_confidence() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    engine
+        .history
+        .conn
+        .call(|conn| {
+            conn.execute(
+                "INSERT INTO handoff_log (id, from_task_id, to_specialist_id, to_task_id, task_description, acceptance_criteria_json, context_bundle_json, capability_tags_json, handoff_depth, outcome, confidence_band, routing_method, routing_score, fallback_used, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    "handoff-diag-1",
+                    "task-parent-1",
+                    "specialist-research",
+                    "task-child-1",
+                    "Investigate routing confidence",
+                    "{}",
+                    "{}",
+                    serde_json::json!(["research", "analysis"]).to_string(),
+                    0_i64,
+                    "dispatched",
+                    Option::<String>::None,
+                    "probabilistic",
+                    0.92_f64,
+                    0_i64,
+                    1_717_210_000_i64,
+                ],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("insert handoff log");
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let routing = &snapshot["routing_decision"];
+    assert_eq!(routing["specialist_id"], "specialist-research");
+    assert_eq!(routing["routing_method"], "probabilistic");
+    assert_eq!(routing["fallback_used"].as_bool(), Some(false));
+    assert!(routing["routing_score"]
+        .as_f64()
+        .is_some_and(|value| value >= 0.9));
+}
+
 #[test]
 fn preferred_tool_fallback_targets_deduplicates_and_skips_invalid_pairs() {
     let preferred = preferred_tool_fallback_targets(
