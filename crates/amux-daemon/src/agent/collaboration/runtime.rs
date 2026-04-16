@@ -34,6 +34,36 @@ struct PendingDebateLaunch {
     collaboration_snapshot: CollaborationSession,
 }
 
+fn collaboration_resolution_outcome(session: &CollaborationSession) -> Option<serde_json::Value> {
+    let disagreement = session
+        .disagreements
+        .iter()
+        .find(|item| item.resolution == "resolved")?;
+    let winner_task_id = session
+        .consensus
+        .as_ref()
+        .map(|consensus| consensus.winner.clone());
+    let reviewer_task_id = session
+        .role_assignment
+        .as_ref()
+        .map(|assignment| assignment.reviewer_task_id.clone());
+    let rationale = session
+        .consensus
+        .as_ref()
+        .map(|consensus| consensus.rationale.clone())
+        .unwrap_or_default();
+
+    Some(serde_json::json!({
+        "status": disagreement.resolution,
+        "disagreement_id": disagreement.id,
+        "topic": disagreement.topic,
+        "winner_task_id": winner_task_id,
+        "reviewer_task_id": reviewer_task_id,
+        "rationale": rationale,
+        "debate_session_id": disagreement.debate_session_id,
+    }))
+}
+
 fn build_pending_debate_seed(
     session: &CollaborationSession,
     debate_config: &DebateConfig,
@@ -1157,11 +1187,25 @@ impl AgentEngine {
         if let Some(parent_task_id) = parent_task_id {
             let collaboration = self.collaboration.read().await;
             if let Some(session) = collaboration.get(parent_task_id) {
-                return Ok(serde_json::to_value(session).unwrap_or_else(|_| serde_json::json!({})));
+                let mut value =
+                    serde_json::to_value(session).unwrap_or_else(|_| serde_json::json!({}));
+                if let Some(outcome) = collaboration_resolution_outcome(session) {
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert("resolution_outcome".to_string(), outcome);
+                    }
+                }
+                return Ok(value);
             }
             drop(collaboration);
             if let Some(session) = self.persisted_collaboration_session(parent_task_id).await? {
-                return Ok(serde_json::to_value(session).unwrap_or_else(|_| serde_json::json!({})));
+                let mut value =
+                    serde_json::to_value(&session).unwrap_or_else(|_| serde_json::json!({}));
+                if let Some(outcome) = collaboration_resolution_outcome(&session) {
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert("resolution_outcome".to_string(), outcome);
+                    }
+                }
+                return Ok(value);
             }
             return Ok(serde_json::json!([]));
         }
