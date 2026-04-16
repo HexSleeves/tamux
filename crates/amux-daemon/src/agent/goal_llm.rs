@@ -34,7 +34,7 @@ impl AgentEngine {
         match adaptation.mode {
             SatisfactionAdaptationMode::Minimal => {
                 plan.summary = format!(
-                    "Conservative execution mode: prefer proven tools, keep iteration bounds short, and require explicit operator confirmation before broadening scope. {}",
+                    "Meta-cognitive intervention: Conservative execution mode: prefer proven tools, keep iteration bounds short, and require explicit operator confirmation before broadening scope. {}",
                     plan.summary.trim()
                 )
                 .trim()
@@ -42,7 +42,7 @@ impl AgentEngine {
             }
             SatisfactionAdaptationMode::Tightened => {
                 plan.summary = format!(
-                    "Cautious execution mode: prefer proven tools and keep iteration bounds short. {}",
+                    "Meta-cognitive intervention: Cautious execution mode: prefer proven tools and keep iteration bounds short. {}",
                     plan.summary.trim()
                 )
                 .trim()
