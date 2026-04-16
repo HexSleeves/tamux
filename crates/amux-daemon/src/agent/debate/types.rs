@@ -93,6 +93,8 @@ pub struct DebateSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal_run_id: Option<String>,

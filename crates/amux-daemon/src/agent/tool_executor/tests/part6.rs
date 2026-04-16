@@ -334,6 +334,7 @@ async fn compaction_trims_participant_playground_threads_for_visible_thread() {
         compaction_payload: None,
         offloaded_payload_id: None,
         structural_refs: Vec::new(),
+        pinned_for_compaction: false,
         timestamp,
     };
     let provider_config = {
@@ -3151,6 +3152,10 @@ async fn list_subagents_reports_exhausted_budget_limits() {
         Some(0)
     );
     assert_eq!(items[0]["budget_exhausted"].as_bool(), Some(true));
+    assert_eq!(
+        items[0]["effective_status"].as_str(),
+        Some("budget_exhausted")
+    );
     assert_eq!(
         items[0]["exhausted_limits"]
             .as_array()

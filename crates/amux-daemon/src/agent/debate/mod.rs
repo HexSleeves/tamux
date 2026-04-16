@@ -260,7 +260,8 @@ impl AgentEngine {
         if session.current_round < session.max_rounds {
             self.advance_debate_round(session_id).await?;
         } else {
-            self.complete_debate_session(session_id).await?;
+            self.complete_debate_session_with_reason(session_id, "max_rounds_reached")
+                .await?;
         }
 
         self.get_debate_session_payload(session_id).await
@@ -298,6 +299,15 @@ impl AgentEngine {
     pub(crate) async fn complete_debate_session(
         &self,
         session_id: &str,
+    ) -> Result<serde_json::Value> {
+        self.complete_debate_session_with_reason(session_id, "manual_completion")
+            .await
+    }
+
+    async fn complete_debate_session_with_reason(
+        &self,
+        session_id: &str,
+        completion_reason: &str,
     ) -> Result<serde_json::Value> {
         let required_sections = self
             .config
@@ -339,6 +349,7 @@ impl AgentEngine {
             unresolved_tensions,
             recommended_action,
             0.7,
+            completion_reason,
         )?;
         let verdict_json = serde_json::to_string(session.verdict.as_ref().expect("verdict set"))?;
         self.history
@@ -354,6 +365,7 @@ impl AgentEngine {
             "arguments": session.arguments.len(),
             "current_round": session.current_round,
             "max_rounds": session.max_rounds,
+            "completion_reason": session.completion_reason,
         }))
     }
 
@@ -387,6 +399,7 @@ impl AgentEngine {
             "verdict": session.verdict,
             "created_at_ms": session.created_at_ms,
             "completed_at_ms": session.completed_at_ms,
+            "completion_reason": session.completion_reason,
         }))
     }
 }

@@ -104,7 +104,8 @@ pub(super) fn format_anticipatory_items_for_heartbeat(items: &[AnticipatoryItem]
     items
         .iter()
         .map(|item| {
-            let priority_hint = if item.kind == "hydration" {
+            let priority_hint = if item.kind == "hydration" || item.kind == "proactive_suppression"
+            {
                 "LOW-PRIORITY INFORMATIONAL"
             } else if item.kind == "system_outcome_foresight" {
                 "OPERATOR-VISIBLE FORESIGHT"
@@ -176,12 +177,27 @@ pub(super) fn format_consolidation_dream_summary(result: &ConsolidationResult) -
         String::new()
     };
 
+    let counterfactual_hint_clause = if result.forge_hints_generated > 0 {
+        let logged_only_suffix = if result.forge_hints_logged_only > 0 {
+            format!(", {} logged-only", result.forge_hints_logged_only)
+        } else {
+            String::new()
+        };
+        format!(
+            ", {} counterfactual strategy hint(s) generated, {} auto-applied{}",
+            result.forge_hints_generated, result.forge_hints_auto_applied, logged_only_suffix,
+        )
+    } else {
+        String::new()
+    };
+
     Some(format!(
-        "Dream state: what the system considered while idle — {} thread(s), {} memory update(s){}, {} recurring pattern(s), {} refined fact(s), {} promoted skill(s).",
+        "Dream state: what the system considered while idle and where better strategies might have changed outcomes — {} thread(s), {} memory update(s){}, {} recurring pattern(s){}, {} refined fact(s), {} promoted skill(s).",
         result.distillation_threads_analyzed,
         result.distillation_auto_applied,
         review_queue_suffix,
         result.forge_patterns_detected,
+        counterfactual_hint_clause,
         result.facts_refined,
         result.skills_promoted,
     ))

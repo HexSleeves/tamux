@@ -290,6 +290,33 @@ fn parse_digest_items_handles_camelcase_types() {
 }
 
 #[test]
+fn format_anticipatory_items_surfaces_proactive_suppression_as_low_priority_transparency() {
+    let output = super::helpers::format_anticipatory_items_for_heartbeat(&[AnticipatoryItem {
+        id: "proactive_suppression_thread-1".to_string(),
+        kind: "proactive_suppression".to_string(),
+        title: "Proactive Surfacing Tightened".to_string(),
+        summary: "Optional proactive suggestions were suppressed to reduce noise.".to_string(),
+        bullets: vec![
+            "suppressed_kinds=intent_prediction,morning_brief".to_string(),
+            "approval latency increased; optional proactive surfacing is tightened".to_string(),
+        ],
+        intent_prediction: None,
+        confidence: 0.72,
+        goal_run_id: None,
+        thread_id: Some("thread-1".to_string()),
+        preferred_client_surface: Some("conversation".to_string()),
+        preferred_attention_surface: Some("conversation:chat".to_string()),
+        created_at: 1,
+        updated_at: 1,
+    }]);
+
+    assert!(output.contains("proactive_suppression"));
+    assert!(output.contains("LOW-PRIORITY INFORMATIONAL"));
+    assert!(output.contains("suppressed_kinds=intent_prediction,morning_brief"));
+    assert!(output.contains("reduce noise"));
+}
+
+#[test]
 fn format_anticipatory_items_highlights_system_outcome_foresight_for_operator() {
     let output = super::helpers::format_anticipatory_items_for_heartbeat(&[
         AnticipatoryItem {
@@ -394,6 +421,7 @@ fn format_consolidation_dream_summary_surfaces_what_the_system_considered_while_
     .expect("dream summary should be present when consolidation learned something");
 
     assert!(output.contains("what the system considered while idle"));
+    assert!(output.contains("where better strategies might have changed outcomes"));
     assert!(output.contains("4 thread(s)"));
     assert!(output.contains("2 memory update(s)"));
     assert!(output.contains("3 recurring pattern(s)"));
@@ -412,6 +440,31 @@ fn format_consolidation_dream_summary_surfaces_distillation_review_queue() {
 
     assert!(
         output.contains("2 queued for review"),
+        "unexpected dream summary: {output}"
+    );
+}
+
+#[test]
+fn format_consolidation_dream_summary_surfaces_counterfactual_strategy_hints() {
+    let output = super::helpers::format_consolidation_dream_summary(&ConsolidationResult {
+        distillation_ran: true,
+        distillation_threads_analyzed: 2,
+        distillation_auto_applied: 1,
+        forge_ran: true,
+        forge_hints_generated: 3,
+        forge_hints_auto_applied: 1,
+        forge_hints_logged_only: 2,
+        ..Default::default()
+    })
+    .expect("dream summary should be present when forge generated strategy hints");
+
+    assert!(
+        output.contains("counterfactual strategy hint(s)"),
+        "unexpected dream summary: {output}"
+    );
+    assert!(
+        output.contains("3 counterfactual strategy hint(s) generated")
+            && output.contains("1 auto-applied"),
         "unexpected dream summary: {output}"
     );
 }

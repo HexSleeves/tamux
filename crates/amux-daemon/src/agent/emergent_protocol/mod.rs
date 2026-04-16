@@ -496,6 +496,23 @@ impl AgentEngine {
         protocol_id: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let usage = self.history.list_protocol_usage_log(protocol_id).await?;
+        let protocol_row = self
+            .history
+            .get_emergent_protocol_by_id(protocol_id)
+            .await?;
+        let protocol_summary = protocol_row.map(|row| {
+            json!({
+                "protocol_id": row.protocol_id,
+                "token": row.token,
+                "description": row.description,
+                "thread_id": row.thread_id,
+                "normalized_pattern": row.normalized_pattern,
+                "signal_kind": row.signal_kind,
+                "usage_count": row.usage_count,
+                "success_rate": row.success_rate,
+                "last_used_at": row.last_used_at,
+            })
+        });
         let entries = usage
             .into_iter()
             .map(|entry| {
@@ -511,6 +528,7 @@ impl AgentEngine {
             .collect::<Vec<_>>();
         Ok(json!({
             "protocol_id": protocol_id,
+            "protocol": protocol_summary,
             "entries": entries,
         }))
     }
@@ -899,6 +917,22 @@ mod tests {
             .get_protocol_usage_log_payload(&protocol_id)
             .await
             .expect("usage payload should load");
+        assert_eq!(
+            usage_payload["protocol"]["token"].as_str(),
+            Some(token.as_str())
+        );
+        assert_eq!(
+            usage_payload["protocol"]["protocol_id"].as_str(),
+            Some(protocol_id.as_str())
+        );
+        assert!(usage_payload["protocol"]["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("Accepted emergent protocol")));
+        assert_eq!(usage_payload["protocol"]["usage_count"].as_u64(), Some(1));
+        assert_eq!(
+            usage_payload["protocol"]["success_rate"].as_f64(),
+            Some(0.0)
+        );
         let entries = usage_payload["entries"]
             .as_array()
             .expect("usage entries should be an array");

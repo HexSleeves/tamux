@@ -1014,6 +1014,28 @@ async fn seeded_bid_debate_advances_completes_and_persists_winning_assignment() 
                 .as_str()
                 .unwrap_or_default()
         }));
+    assert_eq!(
+        persisted["resolution_outcome"]["status"].as_str(),
+        Some("resolved")
+    );
+    assert_eq!(
+        persisted["resolution_outcome"]["winner_task_id"].as_str(),
+        Some(child_a.id.as_str())
+    );
+    assert_eq!(
+        persisted["resolution_outcome"]["reviewer_task_id"].as_str(),
+        Some(child_b.id.as_str())
+    );
+    assert_eq!(
+        persisted["resolution_outcome"]["topic"].as_str(),
+        Some("bid resolution for choose the best owner for the next workstream")
+    );
+    assert!(persisted["resolution_outcome"]["rationale"]
+        .as_str()
+        .is_some_and(|text| {
+            text.contains(&format!("primary={}", child_a.id))
+                && text.contains(&format!("reviewer={}", child_b.id))
+        }));
 }
 
 #[tokio::test]

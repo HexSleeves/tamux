@@ -495,6 +495,45 @@ pub struct MemoryDistillationProgressRow {
     pub agent_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryDistillationLogRow {
+    pub id: i64,
+    pub source_thread_id: String,
+    pub source_message_range: Option<String>,
+    pub source_message_span: Option<AgentMessageSpan>,
+    pub distilled_fact: String,
+    pub target_file: String,
+    pub category: String,
+    pub confidence: f64,
+    pub created_at_ms: i64,
+    pub applied_to_memory: bool,
+    pub agent_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ForgePassLogRow {
+    pub id: i64,
+    pub agent_id: String,
+    pub period_start_ms: i64,
+    pub period_end_ms: i64,
+    pub traces_analyzed: i64,
+    pub patterns_found: i64,
+    pub hints_applied: i64,
+    pub hints_logged: i64,
+    pub completed_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HandoffRoutingRow {
+    pub id: String,
+    pub to_specialist_id: String,
+    pub capability_tags_json: Option<String>,
+    pub routing_method: String,
+    pub routing_score: f64,
+    pub fallback_used: bool,
+    pub created_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApprovalRecordRow {
     pub approval_id: String,

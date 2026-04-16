@@ -2985,6 +2985,92 @@ async fn read_skill_records_graph_links_for_consulted_skill_variant() {
 }
 
 #[tokio::test]
+async fn read_skill_surfaces_variant_fitness_snapshot_for_operator_inspection() {
+    let root = tempdir().expect("tempdir");
+    let agent_data_dir = root.path().join("agent");
+    fs::create_dir_all(&agent_data_dir).expect("create agent data dir");
+    let skill_path = root
+        .path()
+        .join("skills")
+        .join("generated")
+        .join("systematic-debugging.md");
+    fs::create_dir_all(skill_path.parent().expect("skill directory"))
+        .expect("create skill directory");
+    fs::write(
+        &skill_path,
+        "---\nname: systematic-debugging\ndescription: Debug backend failures systematically.\nkeywords: [debug, backend]\n---\n# Systematic Debugging\n",
+    )
+    .expect("write skill");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let variant = engine
+        .history
+        .register_skill_document(&skill_path)
+        .await
+        .expect("register skill variant");
+    engine
+        .history
+        .record_skill_variant_use(&variant.variant_id, Some(true))
+        .await
+        .expect("record first successful usage");
+    engine
+        .history
+        .record_skill_variant_use(&variant.variant_id, Some(false))
+        .await
+        .expect("record failed usage");
+    engine
+        .history
+        .record_skill_variant_use(&variant.variant_id, Some(true))
+        .await
+        .expect("record second successful usage");
+
+    let (event_tx, _) = broadcast::channel(8);
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-read-skill-fitness-snapshot".to_string(),
+        ToolFunction {
+            name: "read_skill".to_string(),
+            arguments: serde_json::json!({
+                "skill": "systematic-debugging",
+                "max_lines": 50
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        "thread-read-skill-fitness-snapshot",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        &agent_data_dir,
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(!result.is_error, "read_skill should succeed: {}", result.content);
+    assert!(
+        result.content.contains("Fitness snapshot:"),
+        "read_skill should expose the selected variant fitness snapshot: {}",
+        result.content
+    );
+    assert!(
+        result.content.contains("fitness=") && result.content.contains("success_rate="),
+        "read_skill should include compact fitness metrics for operator inspection: {}",
+        result.content
+    );
+    assert!(
+        result.content.contains("Recent fitness history:"),
+        "read_skill should include recent fitness history summary: {}",
+        result.content
+    );
+}
+
+#[tokio::test]
 async fn settled_success_strengthens_skill_consultation_graph_edge() {
     let root = tempdir().expect("tempdir");
     let agent_data_dir = root.path().join("agent");
@@ -6938,7 +7024,7 @@ async fn fetch_url_openapi_spec_emits_openapi_tool_synthesis_proposal_notice() {
 }
 
 #[tokio::test]
-async fn fetch_url_openapi_spec_does_not_emit_proposal_when_equivalent_generated_tool_exists() {
+async fn fetch_url_openapi_spec_emits_activate_notice_when_equivalent_generated_tool_is_new() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -7034,12 +7120,54 @@ async fn fetch_url_openapi_spec_does_not_emit_proposal_when_equivalent_generated
     .await;
 
     assert!(!result.is_error, "fetch_url should succeed: {}", result.content);
-    assert!(
-        timeout(Duration::from_millis(150), event_rx.recv())
-            .await
-            .is_err(),
-        "existing equivalent generated OpenAPI tool should suppress fresh synthesis proposal notices"
-    );
+
+    let notice = timeout(Duration::from_millis(250), event_rx.recv())
+        .await
+        .expect("expected existing-tool status notice")
+        .expect("workflow notice should be received");
+    match notice {
+        AgentEvent::WorkflowNotice {
+            kind,
+            message,
+            details: Some(details),
+            ..
+        } => {
+            assert_eq!(kind, "tool-synthesis-proposal");
+            assert!(message.contains("Activate it"));
+            let details: serde_json::Value =
+                serde_json::from_str(&details).expect("notice details should be json");
+            assert_eq!(
+                details.get("reason").and_then(|value| value.as_str()),
+                Some("existing_equivalent_generated_tool")
+            );
+            assert_eq!(
+                details.get("source_reason").and_then(|value| value.as_str()),
+                Some("fetched_openapi_get_gap")
+            );
+            assert_eq!(
+                details
+                    .get("recommended_action")
+                    .and_then(|value| value.as_str()),
+                Some("activate_generated_tool")
+            );
+            assert_eq!(
+                details.get("proposal_kind").and_then(|value| value.as_str()),
+                Some("openapi")
+            );
+            assert_eq!(
+                details
+                    .get("existing_tool")
+                    .and_then(|value| value.get("status"))
+                    .and_then(|value| value.as_str()),
+                Some("new")
+            );
+            assert_eq!(
+                details.get("target").and_then(|value| value.as_str()),
+                Some(spec_url.as_str())
+            );
+        }
+        other => panic!("expected workflow notice, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -8128,6 +8256,14 @@ async fn search_memory_uses_preferred_structural_refs_for_graph_lookup_without_m
     assert!(!result.is_error, "search_memory should succeed: {}", result.content);
     let payload: serde_json::Value =
         serde_json::from_str(&result.content).expect("search_memory should return JSON");
+    let preferred_refs = payload
+        .get("thread_structural_memory")
+        .and_then(|value| value.get("preferred_refs"))
+        .and_then(|value| value.as_array())
+        .expect("search_memory should expose preferred structural refs");
+    assert!(preferred_refs
+        .iter()
+        .any(|value| value.as_str() == Some("node:file:src/lib.rs")));
     let matches = payload
         .get("matches")
         .and_then(|value| value.as_array())
@@ -8259,6 +8395,128 @@ async fn search_memory_matches_thread_structural_graph_neighbors() {
                 .get("snippet")
                 .and_then(|value| value.as_str())
                 .is_some_and(|snippet| snippet.contains("graph-demo"))
+    }));
+}
+
+#[tokio::test]
+async fn search_memory_exposes_thread_structural_graph_neighbors_metadata() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+    let thread_id = "thread-search-memory-graph-neighbor-metadata";
+    let agent_data_dir = root.path().join("agent");
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        make_thread(
+            thread_id,
+            Some(crate::agent::agent_identity::MAIN_AGENT_NAME),
+            "Search memory graph neighbor metadata",
+            false,
+            1,
+            1,
+            vec![crate::agent::types::AgentMessage::user("search graph neighbor metadata", 1)],
+        ),
+    );
+
+    write_scope_memory_files(
+        &agent_data_dir,
+        crate::agent::agent_identity::MAIN_AGENT_ID,
+        "# Soul\n\n- Stable soul fact\n",
+        "# Memory\n\n- Stable memory fact\n",
+        "# User\n\n- Stable user fact\n",
+    );
+    engine.thread_structural_memories.write().await.insert(
+        thread_id.to_string(),
+        crate::agent::context::structural_memory::ThreadStructuralMemory {
+            observed_files: vec![crate::agent::context::structural_memory::ObservedFileNode {
+                node_id: "node:file:src/lib.rs".to_string(),
+                relative_path: "src/lib.rs".to_string(),
+            }],
+            ..Default::default()
+        },
+    );
+    engine
+        .history
+        .upsert_memory_node(
+            "node:file:src/lib.rs",
+            "src/lib.rs",
+            "file",
+            Some("observed file"),
+            1_717_180_451,
+        )
+        .await
+        .expect("persist file node");
+    engine
+        .history
+        .upsert_memory_node(
+            "node:package:cargo:graph-metadata-demo",
+            "graph-metadata-demo",
+            "package",
+            Some("package linked from structural graph metadata"),
+            1_717_180_452,
+        )
+        .await
+        .expect("persist package node");
+    engine
+        .history
+        .upsert_memory_edge(
+            "node:file:src/lib.rs",
+            "node:package:cargo:graph-metadata-demo",
+            "file_in_package",
+            2.0,
+            1_717_180_453,
+        )
+        .await
+        .expect("persist graph edge");
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-search-memory-graph-neighbor-metadata".to_string(),
+        ToolFunction {
+            name: "search_memory".to_string(),
+            arguments: serde_json::json!({
+                "query": "graph-metadata-demo",
+                "limit": 5,
+                "include_base_markdown": false,
+                "include_operator_profile_json": false,
+                "include_operator_model_summary": false,
+                "include_thread_structural_memory": true
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        thread_id,
+        None,
+        &manager,
+        None,
+        &event_tx,
+        &agent_data_dir,
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(!result.is_error, "search_memory should succeed: {}", result.content);
+    let payload: serde_json::Value =
+        serde_json::from_str(&result.content).expect("search_memory should return JSON");
+    let thread_structural_memory = payload
+        .get("thread_structural_memory")
+        .expect("search_memory should expose thread structural memory metadata");
+    let neighbors = thread_structural_memory
+        .get("graph_neighbors")
+        .and_then(|value| value.as_array())
+        .expect("search_memory should expose graph neighbors metadata");
+    assert!(neighbors.iter().any(|item| {
+        item.get("node_id").and_then(|value| value.as_str())
+            == Some("node:package:cargo:graph-metadata-demo")
+            && item
+                .get("relation_type")
+                .and_then(|value| value.as_str())
+                == Some("file_in_package")
     }));
 }
 

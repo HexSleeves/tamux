@@ -751,6 +751,388 @@ async fn status_diagnostics_snapshot_includes_operator_satisfaction_summary() {
         .expect("operator satisfaction summary string");
     assert!(summary.contains("strong >=0.80"));
     assert!(summary.contains("signal present"));
+    let resonance = &snapshot["cognitive_resonance"];
+    assert_eq!(resonance["state"], "flow");
+    assert_eq!(resonance["compact_response"].as_bool(), Some(false));
+    assert!(resonance["adjustments"]["proactiveness"]
+        .as_f64()
+        .is_some_and(|value| value >= 0.8));
+}
+
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_ranked_intent_prediction_confidences() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    config.anticipatory.stuck_detection = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let mut task = engine
+        .enqueue_task(
+            "Need approval".to_string(),
+            "Need approval".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "user",
+            None,
+            None,
+            Some("thread-intent-diag".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    task.status = TaskStatus::AwaitingApproval;
+    {
+        let mut tasks = engine.tasks.lock().await;
+        if let Some(existing) = tasks.iter_mut().find(|existing| existing.id == task.id) {
+            *existing = task.clone();
+        }
+    }
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-intent-diag"), None)
+        .await
+        .expect("record operator attention");
+
+    engine.run_anticipatory_tick().await;
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let intent = &snapshot["intent_prediction"];
+    assert_eq!(intent["primary_action"], "review pending approval");
+    assert!(intent["confidence"]
+        .as_f64()
+        .is_some_and(|value| value >= 0.86));
+    let ranked = intent["ranked_actions"]
+        .as_array()
+        .expect("ranked actions should be present in diagnostics");
+    assert!(ranked.len() >= 3);
+    assert_eq!(ranked[0]["rank"].as_u64(), Some(1));
+    assert_eq!(ranked[0]["action"], "review pending approval");
+    assert!(ranked[0]["confidence"]
+        .as_f64()
+        .is_some_and(|value| value >= 0.86));
+}
+
+#[tokio::test]
+async fn status_diagnostics_snapshot_exposes_cached_prewarm_for_intent_prediction() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-intent-cache-diag"), None)
+        .await
+        .expect("record operator attention");
+    engine.thread_work_contexts.write().await.insert(
+        "thread-intent-cache-diag".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-intent-cache-diag".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "src/main.rs".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some("/tmp/repo".to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+    engine.anticipatory.write().await.prewarm_cache_by_thread.insert(
+        "thread-intent-cache-diag".to_string(),
+        crate::agent::anticipatory::AnticipatoryPrewarmSnapshot {
+            summary: "branch main; dirty=true; modified 1; staged 0; untracked 0; ahead 0; behind 0; context entries 1".to_string(),
+        },
+    );
+
+    engine.run_anticipatory_tick().await;
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let intent = &snapshot["intent_prediction"];
+    assert_eq!(
+        intent["thread_id"].as_str(),
+        Some("thread-intent-cache-diag")
+    );
+    assert_eq!(
+        intent["cached_prewarm_summary"].as_str(),
+        Some("branch main; dirty=true; modified 1; staged 0; untracked 0; ahead 0; behind 0; context entries 1")
+    );
+}
+
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_memory_distillation_activity() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    engine
+        .history
+        .append_memory_distillation_log(
+            "thread-distill-diag",
+            Some("last_turn"),
+            None,
+            "Use the cargo package name `tamux-daemon` for `cargo -p`.",
+            "MEMORY.md",
+            "convention",
+            0.91,
+            1_717_190_001,
+            true,
+            "rarog",
+        )
+        .await
+        .expect("append distillation log");
+    engine
+        .history
+        .upsert_memory_distillation_progress(&crate::history::MemoryDistillationProgressRow {
+            source_thread_id: "thread-distill-diag".to_string(),
+            last_processed_cursor: crate::history::AgentMessageCursor {
+                created_at: 1_717_190_000,
+                message_id: "m-last".to_string(),
+            },
+            last_processed_span: Some(crate::history::AgentMessageSpan::LastTurn {
+                message: crate::history::AgentMessageCursor {
+                    created_at: 1_717_190_000,
+                    message_id: "m-last".to_string(),
+                },
+            }),
+            last_run_at_ms: 1_717_190_010,
+            updated_at_ms: 1_717_190_020,
+            agent_id: "rarog".to_string(),
+        })
+        .await
+        .expect("upsert distillation progress");
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let distillation = &snapshot["memory_distillation"];
+    let recent = distillation["recent_activity"]
+        .as_array()
+        .expect("recent distillation activity array");
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0]["source_thread_id"], "thread-distill-diag");
+    assert_eq!(recent[0]["target_file"], "MEMORY.md");
+    assert_eq!(recent[0]["category"], "convention");
+    assert_eq!(recent[0]["applied_to_memory"].as_bool(), Some(true));
+    assert!(recent[0]["confidence"]
+        .as_f64()
+        .is_some_and(|value| value >= 0.9));
+
+    let progress = distillation["progress_by_thread"]
+        .as_array()
+        .expect("distillation progress array");
+    assert_eq!(progress.len(), 1);
+    assert_eq!(progress[0]["source_thread_id"], "thread-distill-diag");
+    assert_eq!(progress[0]["agent_id"], "rarog");
+    assert_eq!(progress[0]["last_processed_message_id"], "m-last");
+}
+
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_forge_pass_activity() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    engine
+        .history
+        .conn
+        .call(|conn| {
+            conn.execute(
+                "INSERT INTO forge_pass_log (agent_id, period_start_ms, period_end_ms, traces_analyzed, patterns_found, hints_applied, hints_logged, completed_at_ms) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![
+                    "svarog",
+                    1_717_200_000_i64,
+                    1_717_203_600_i64,
+                    11_i64,
+                    3_i64,
+                    1_i64,
+                    2_i64,
+                    1_717_203_700_i64,
+                ],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("insert forge pass log");
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let forge = &snapshot["forge_reflection"];
+    let passes = forge["recent_passes"]
+        .as_array()
+        .expect("recent forge passes array");
+    assert_eq!(passes.len(), 1);
+    assert_eq!(passes[0]["agent_id"], "svarog");
+    assert_eq!(passes[0]["traces_analyzed"].as_i64(), Some(11));
+    assert_eq!(passes[0]["patterns_found"].as_i64(), Some(3));
+    assert_eq!(passes[0]["hints_applied"].as_i64(), Some(1));
+    assert_eq!(passes[0]["hints_logged"].as_i64(), Some(2));
+}
+
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_routing_confidence() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    engine
+        .history
+        .conn
+        .call(|conn| {
+            conn.execute(
+                "INSERT INTO handoff_log (id, from_task_id, to_specialist_id, to_task_id, task_description, acceptance_criteria_json, context_bundle_json, capability_tags_json, handoff_depth, outcome, confidence_band, routing_method, routing_score, fallback_used, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    "handoff-diag-1",
+                    "task-parent-1",
+                    "specialist-research",
+                    "task-child-1",
+                    "Investigate routing confidence",
+                    "{}",
+                    "{}",
+                    serde_json::json!(["research", "analysis"]).to_string(),
+                    0_i64,
+                    "dispatched",
+                    Option::<String>::None,
+                    "probabilistic",
+                    0.92_f64,
+                    0_i64,
+                    1_717_210_000_i64,
+                ],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("insert handoff log");
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let routing = &snapshot["routing_decision"];
+    assert_eq!(routing["specialist_id"], "specialist-research");
+    assert_eq!(routing["routing_method"], "probabilistic");
+    assert_eq!(routing["fallback_used"].as_bool(), Some(false));
+    assert!(routing["routing_score"]
+        .as_f64()
+        .is_some_and(|value| value >= 0.9));
+}
+
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_latest_debate_session_summary() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.debate.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let session_id = engine
+        .start_debate_session("cache strategy", None, "thread-debate-diag", Some("goal-1"))
+        .await
+        .expect("start debate session");
+
+    let _ = engine
+        .complete_debate_session(&session_id)
+        .await
+        .expect("complete debate session");
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let debate = &snapshot["debate_session"];
+    assert_eq!(debate["session_id"].as_str(), Some(session_id.as_str()));
+    assert_eq!(debate["topic"].as_str(), Some("cache strategy"));
+    assert_eq!(debate["status"].as_str(), Some("completed"));
+    assert_eq!(
+        debate["completion_reason"].as_str(),
+        Some("manual_completion")
+    );
+    assert!(debate["current_round"].as_u64().is_some());
+    assert!(debate["max_rounds"].as_u64().is_some());
+    assert_eq!(debate["has_verdict"].as_bool(), Some(true));
+}
+
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_recursive_subagent_tree_summary() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    let parent = engine
+        .enqueue_task(
+            "Parent coordinator".to_string(),
+            "Coordinate the child work".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "user",
+            None,
+            None,
+            Some("thread-parent-diag".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+
+    let mut child = engine
+        .enqueue_task(
+            "Depth child".to_string(),
+            "Inspect deployment risks".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "subagent",
+            None,
+            Some(parent.id.clone()),
+            Some("thread-parent-diag".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    child.containment_scope = Some("subagent-depth:1/3".to_string());
+
+    let mut grandchild = engine
+        .enqueue_task(
+            "Grandchild helper".to_string(),
+            "Inspect one narrow edge case".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "subagent",
+            None,
+            Some(child.id.clone()),
+            Some("thread-parent-diag".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    grandchild.containment_scope = Some("subagent-depth:2/3".to_string());
+
+    {
+        let mut tasks = engine.tasks.lock().await;
+        if let Some(existing) = tasks.iter_mut().find(|task| task.id == child.id) {
+            *existing = child.clone();
+        }
+        if let Some(existing) = tasks.iter_mut().find(|task| task.id == grandchild.id) {
+            *existing = grandchild.clone();
+        }
+    }
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let subtree = &snapshot["recursive_subagents"];
+    assert_eq!(subtree["active_subagent_count"].as_u64(), Some(2));
+    assert_eq!(subtree["max_observed_depth"].as_u64(), Some(2));
+    assert_eq!(subtree["max_observed_allowed_depth"].as_u64(), Some(3));
+    let roots = subtree["root_parent_task_ids"]
+        .as_array()
+        .expect("root parent task ids array");
+    assert!(roots
+        .iter()
+        .any(|value| value.as_str() == Some(parent.id.as_str())));
 }
 
 #[test]
@@ -1082,6 +1464,161 @@ fn persisted_satisfaction_decay_uses_recent_signal_history() {
 }
 
 #[test]
+fn cognitive_resonance_snapshot_maps_strained_feedback_to_frustrated_state() {
+    let mut model = OperatorModel::default();
+    model.cognitive_style.message_count = 1;
+    model.operator_satisfaction.label = "strained".to_string();
+    model.operator_satisfaction.score = 0.18;
+    model.implicit_feedback.correction_message_count = 1;
+    model.implicit_feedback.top_tool_fallbacks = vec![
+        "read_file -> search_files".to_string(),
+        "bash_command -> read_file".to_string(),
+    ];
+
+    let resonance = CognitiveResonanceSnapshot::from_model(&model);
+    assert_eq!(resonance.state, CognitiveResonanceState::Frustrated);
+    assert!((resonance.score - 0.18).abs() < f64::EPSILON);
+    assert!(resonance.compact_response);
+    assert!(resonance.prompt_for_clarification);
+    assert!(resonance.adjustments.verbosity <= 0.2);
+    assert!(resonance.adjustments.proactiveness <= 0.15);
+    assert!(resonance.adjustments.memory_urgency >= 0.8);
+    assert_eq!(
+        resonance.preferred_tool_fallbacks,
+        vec!["search_files".to_string(), "read_file".to_string()]
+    );
+}
+
+#[test]
+fn cognitive_resonance_snapshot_maps_strong_feedback_to_flow_state() {
+    let mut model = OperatorModel::default();
+    model.cognitive_style.message_count = 1;
+    model.operator_satisfaction.label = "strong".to_string();
+    model.operator_satisfaction.score = 0.8;
+    model.risk_fingerprint.risk_tolerance = RiskTolerance::Aggressive;
+
+    let resonance = CognitiveResonanceSnapshot::from_model(&model);
+    assert_eq!(resonance.state, CognitiveResonanceState::Flow);
+    assert!((resonance.score - 0.8).abs() < f64::EPSILON);
+    assert!(!resonance.compact_response);
+    assert!(!resonance.prompt_for_clarification);
+    assert!(resonance.adjustments.verbosity >= 0.9);
+    assert!(resonance.adjustments.risk_tolerance >= 0.85);
+    assert!(resonance.adjustments.proactiveness >= 0.8);
+    assert!(resonance.adjustments.memory_urgency <= 0.3);
+}
+
+#[tokio::test]
+async fn operator_profile_summary_json_exposes_behavior_adaptation_from_satisfaction_signals() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    config.operator_model.allow_implicit_feedback = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_message("thread-summary-adaptation", "Please run tests.", true)
+        .await
+        .expect("record operator message");
+    engine
+        .record_tool_hesitation("read_file", "search_files", true, false)
+        .await
+        .expect("record tool hesitation");
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.implicit_feedback.revision_message_count = 1;
+        model.implicit_feedback.correction_message_count = 1;
+        model.implicit_feedback.fast_denial_count = 1;
+        model.attention_topology.rapid_switch_count = 2;
+        refresh_operator_satisfaction(&mut model);
+    }
+
+    let summary_json = engine
+        .get_operator_profile_summary_json()
+        .await
+        .expect("operator profile summary json");
+    let payload: serde_json::Value =
+        serde_json::from_str(&summary_json).expect("valid operator profile summary json");
+
+    assert_eq!(
+        payload["behavior_adaptation"]["mode"].as_str(),
+        Some("minimal")
+    );
+    assert_eq!(
+        payload["behavior_adaptation"]["compact_response"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        payload["behavior_adaptation"]["prompt_for_clarification"].as_bool(),
+        Some(true)
+    );
+    assert!(payload["behavior_adaptation"]["preferred_tool_fallbacks"]
+        .as_array()
+        .is_some_and(|items| items
+            .iter()
+            .any(|item| item.as_str() == Some("search_files"))));
+    assert_eq!(
+        payload["cognitive_resonance"]["state"].as_str(),
+        Some("frustrated")
+    );
+    assert_eq!(
+        payload["cognitive_resonance"]["compact_response"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        payload["cognitive_resonance"]["prompt_for_clarification"].as_bool(),
+        Some(true)
+    );
+    assert!(
+        payload["cognitive_resonance"]["adjustments"]["memory_urgency"]
+            .as_f64()
+            .is_some_and(|value| value >= 0.8)
+    );
+}
+
+#[tokio::test]
+async fn operator_profile_summary_json_exposes_implicit_feedback_learning_history() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    config.operator_model.allow_implicit_feedback = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_message("thread-summary-learning", "Please run tests.", true)
+        .await
+        .expect("record operator message");
+    engine
+        .record_tool_hesitation("read_file", "search_files", true, false)
+        .await
+        .expect("record tool hesitation");
+
+    let summary_json = engine
+        .get_operator_profile_summary_json()
+        .await
+        .expect("operator profile summary json");
+    let payload: serde_json::Value =
+        serde_json::from_str(&summary_json).expect("valid operator profile summary json");
+
+    let learning = &payload["implicit_feedback_learning"];
+    assert!(learning["recent_implicit_signals"]
+        .as_array()
+        .is_some_and(|items| items
+            .iter()
+            .any(|item| { item["signal_type"].as_str() == Some("tool_fallback") })));
+    assert!(learning["recent_satisfaction_scores"]
+        .as_array()
+        .is_some_and(|items| items
+            .iter()
+            .any(|item| { item["label"].as_str() == Some("healthy") })));
+}
+
+#[test]
 fn persisted_satisfaction_decay_requires_enough_history() {
     let mut model = OperatorModel::default();
     model.cognitive_style.message_count = 1;
@@ -1140,4 +1677,218 @@ async fn status_diagnostics_snapshot_includes_persisted_implicit_feedback_histor
     assert_eq!(signals[0]["signal_type"], "tool_fallback");
     assert_eq!(scores.len(), 1);
     assert_eq!(scores[0]["label"], "healthy");
+}
+
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_system_outcome_foresight_details() {
+    let root = tempdir().expect("tempdir");
+    let repo_root = root.path().join("repo-build-risk-diagnostics");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("git init");
+    std::fs::write(
+        repo_root.join("Cargo.toml"),
+        "[package]\nname='demo'\nversion='0.1.0'\n",
+    )
+    .expect("write cargo manifest");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create src dir");
+    std::fs::write(repo_root.join("src/lib.rs"), "pub fn broken() {}\n").expect("write lib");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_attention(
+            "conversation:chat",
+            Some("thread-build-risk-diagnostics"),
+            None,
+        )
+        .await
+        .expect("record operator attention");
+    engine.thread_work_contexts.write().await.insert(
+        "thread-build-risk-diagnostics".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-build-risk-diagnostics".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "src/lib.rs".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some(repo_root.to_string_lossy().to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+    engine
+        .history
+        .insert_health_log(
+            "health-build-risk-diagnostics",
+            "task",
+            "cargo-test",
+            "degraded",
+            Some("{\"tool\":\"cargo test\",\"error\":\"Command failed\"}"),
+            Some("recent cargo test failed in this repo"),
+            now_millis(),
+        )
+        .await
+        .expect("save health log");
+
+    engine.run_anticipatory_tick().await;
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let foresight = &snapshot["system_outcome_foresight"];
+    assert_eq!(
+        foresight["thread_id"].as_str(),
+        Some("thread-build-risk-diagnostics")
+    );
+    assert_eq!(
+        foresight["prediction_type"].as_str(),
+        Some("build_test_risk")
+    );
+    assert_eq!(
+        foresight["predicted_outcome"].as_str(),
+        Some("build/test failure")
+    );
+    assert!(foresight["confidence"]
+        .as_f64()
+        .is_some_and(|value| value >= 0.7));
+    assert!(foresight["summary"]
+        .as_str()
+        .is_some_and(|text| text.contains("build/test failure risk")));
+    assert!(foresight["bullets"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item
+            .as_str()
+            .is_some_and(|text| text.contains("prediction_type=build_test_risk")))));
+}
+
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_proactive_suppression_transparency() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    config.anticipatory.stuck_detection = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let mut task = engine
+        .enqueue_task(
+            "Need approval".to_string(),
+            "Need approval".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "user",
+            None,
+            None,
+            Some("thread-latency-diagnostics".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    task.status = TaskStatus::AwaitingApproval;
+    {
+        let mut tasks = engine.tasks.lock().await;
+        if let Some(existing) = tasks.iter_mut().find(|existing| existing.id == task.id) {
+            *existing = task.clone();
+        }
+    }
+    engine
+        .record_operator_attention(
+            "conversation:chat",
+            Some("thread-latency-diagnostics"),
+            None,
+        )
+        .await
+        .expect("record operator attention");
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.risk_fingerprint.approval_requests = 4;
+        model.risk_fingerprint.approvals = 2;
+        model.risk_fingerprint.denials = 2;
+        model.risk_fingerprint.avg_response_time_secs = 45.0;
+        refresh_risk_metrics(&mut model.risk_fingerprint);
+        refresh_operator_satisfaction(&mut model);
+    }
+
+    engine.run_anticipatory_tick().await;
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let suppression = &snapshot["proactive_suppression"];
+    assert_eq!(
+        suppression["thread_id"].as_str(),
+        Some("thread-latency-diagnostics")
+    );
+    assert!(suppression["confidence"]
+        .as_f64()
+        .is_some_and(|value| value >= 0.7));
+    assert!(suppression["summary"]
+        .as_str()
+        .is_some_and(|text| text.contains("suppressed") || text.contains("tightened")));
+    assert!(suppression["bullets"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item
+            .as_str()
+            .is_some_and(|text| text.contains("suppressed_kinds=")))));
+}
+
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_meta_cognitive_self_model() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    {
+        let mut model = engine.meta_cognitive_self_model.write().await;
+        model.agent_id = "svarog".to_string();
+        model.calibration_offset = -0.22;
+        model.last_updated_ms = 1_717_299_999;
+        if let Some(bias) = model
+            .biases
+            .iter_mut()
+            .find(|bias| bias.name == "sunk_cost")
+        {
+            bias.occurrence_count = 4;
+            bias.severity = 0.81;
+        }
+        if let Some(profile) = model
+            .workflow_profiles
+            .iter_mut()
+            .find(|profile| profile.name == "debug_loop")
+        {
+            profile.avg_success_rate = 0.63;
+            profile.avg_steps = 7;
+        }
+    }
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let self_model = &snapshot["meta_cognitive_self_model"];
+    assert_eq!(self_model["agent_id"], "svarog");
+    assert_eq!(self_model["last_updated_ms"].as_u64(), Some(1_717_299_999));
+    assert!(self_model["calibration_offset"]
+        .as_f64()
+        .is_some_and(|value| (value + 0.22).abs() < f64::EPSILON));
+    assert!(self_model["biases"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| {
+            item["name"].as_str() == Some("sunk_cost")
+                && item["occurrence_count"].as_u64() == Some(4)
+        })));
+    assert!(self_model["workflow_profiles"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| {
+            item["name"].as_str() == Some("debug_loop") && item["avg_steps"].as_u64() == Some(7)
+        })));
 }

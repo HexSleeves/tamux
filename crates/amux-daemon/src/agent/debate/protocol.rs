@@ -156,6 +156,7 @@ pub(crate) fn create_debate_session(
         status: DebateStatus::InProgress,
         created_at_ms: now_millis(),
         completed_at_ms: None,
+        completion_reason: None,
         thread_id,
         goal_run_id,
     })
@@ -179,6 +180,7 @@ pub(crate) fn finalize_verdict(
     unresolved_tensions: Vec<String>,
     recommended_action: String,
     confidence: f64,
+    completion_reason: impl Into<String>,
 ) -> Result<()> {
     let synthesizer_agent = session
         .roles
@@ -195,5 +197,6 @@ pub(crate) fn finalize_verdict(
     });
     session.status = DebateStatus::Completed;
     session.completed_at_ms = Some(now_millis());
+    session.completion_reason = Some(completion_reason.into());
     Ok(())
 }

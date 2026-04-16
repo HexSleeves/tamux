@@ -101,10 +101,15 @@ fn advance_round_and_finalize_verdict_progress_session() {
         vec!["observability budget".to_string()],
         "Run a small canary first".to_string(),
         0.8,
+        "manual_completion",
     )
     .expect("finalize verdict");
     assert_eq!(session.status, DebateStatus::Completed);
     assert!(session.verdict.is_some());
+    assert_eq!(
+        session.completion_reason.as_deref(),
+        Some("manual_completion")
+    );
 }
 
 #[test]
@@ -386,6 +391,10 @@ async fn run_debate_round_cycle_completes_final_round_and_persists_verdict() {
     assert_eq!(payload["current_round"].as_u64(), Some(2));
     assert_eq!(payload["max_rounds"].as_u64(), Some(2));
     assert_eq!(
+        payload["completion_reason"].as_str(),
+        Some("max_rounds_reached")
+    );
+    assert_eq!(
         payload["arguments"].as_array().map(|items| items.len()),
         Some(5)
     );
@@ -492,4 +501,54 @@ async fn run_debate_to_completion_cycles_remaining_rounds_and_persists_verdict()
         .await
         .expect("persisted verdict query should succeed");
     assert!(verdict_row.is_some());
+}
+
+#[tokio::test]
+async fn complete_debate_session_marks_manual_completion_reason_in_payload_and_session() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.debate.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let session_id = engine
+        .start_debate_session(
+            "cache strategy",
+            Some(sample_framings()),
+            "thread-1",
+            Some("goal-1"),
+        )
+        .await
+        .expect("start debate session");
+
+    let payload = engine
+        .complete_debate_session(&session_id)
+        .await
+        .expect("manual completion should succeed");
+
+    assert_eq!(payload["status"], "completed");
+    assert_eq!(
+        payload["completion_reason"].as_str(),
+        Some("manual_completion")
+    );
+
+    let persisted = engine
+        .get_persisted_debate_session(&session_id)
+        .await
+        .expect("load persisted debate session")
+        .expect("persisted debate session should exist");
+    assert_eq!(persisted.status, DebateStatus::Completed);
+    assert_eq!(
+        persisted.completion_reason.as_deref(),
+        Some("manual_completion")
+    );
+
+    let session_payload = engine
+        .get_debate_session_payload(&session_id)
+        .await
+        .expect("debate payload should load");
+    assert_eq!(
+        session_payload["completion_reason"].as_str(),
+        Some("manual_completion")
+    );
 }

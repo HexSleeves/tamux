@@ -816,6 +816,21 @@ fn apply_patch_tool_uses_top_level_object_schema() {
             .get("roles")
             .and_then(|v| v.as_array())
             .is_some_and(|roles| !roles.is_empty()));
+
+        let complete_response = execute_complete_debate_session(
+            &serde_json::json!({ "session_id": session_id }),
+            &engine,
+        )
+        .await
+        .expect("complete_debate_session should succeed");
+        let complete_payload: serde_json::Value = serde_json::from_str(&complete_response)
+            .expect("complete_debate_session payload should be valid JSON");
+        assert_eq!(
+            complete_payload
+                .get("completion_reason")
+                .and_then(|v| v.as_str()),
+            Some("manual_completion")
+        );
     }
 
     #[tokio::test]
@@ -848,6 +863,33 @@ fn apply_patch_tool_uses_top_level_object_schema() {
             .and_then(|v| v.as_str())
             .is_some_and(|text| {
                 text.contains("routing") || text.contains("fallback") || text.contains("score")
+            }));
+        assert!(payload
+            .get("specialization_diagnostics")
+            .and_then(|v| v.as_object())
+            .is_some_and(|diag| {
+                diag.get("matched_capability_tags")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|tags| !tags.is_empty())
+            }));
+        assert!(payload
+            .get("specialization_diagnostics")
+            .and_then(|v| v.as_object())
+            .and_then(|diag| diag.get("routing_confidence"))
+            .and_then(|v| v.as_object())
+            .is_some_and(|confidence| {
+                confidence
+                    .get("score")
+                    .and_then(|v| v.as_f64())
+                    .is_some()
+                    && confidence
+                        .get("threshold")
+                        .and_then(|v| v.as_f64())
+                        .is_some()
+                    && confidence
+                        .get("cleared_threshold")
+                        .and_then(|v| v.as_bool())
+                        .is_some()
             }));
     }
 

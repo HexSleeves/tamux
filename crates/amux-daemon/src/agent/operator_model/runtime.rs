@@ -121,13 +121,9 @@ impl AgentEngine {
         thread_id: &str,
         observed_outcome: &str,
     ) {
-        let matched = match observed_outcome.trim() {
-            "build/test failure" | "stale context" => Some(observed_outcome),
-            _ => None,
-        };
         let _ = self
             .history
-            .resolve_latest_system_outcome_prediction(thread_id, observed_outcome, matched)
+            .resolve_latest_system_outcome_prediction(thread_id, observed_outcome)
             .await;
     }
 
@@ -696,7 +692,7 @@ impl AgentEngine {
         let observed_action = Self::classify_observed_operator_action(content);
         let _ = self
             .history
-            .resolve_latest_intent_prediction(thread_id, observed_action, Some(observed_action))
+            .resolve_latest_intent_prediction(thread_id, observed_action)
             .await;
 
         if let Err(error) = self.analyze_emergent_protocol_for_thread(thread_id).await {
@@ -1107,11 +1103,285 @@ impl AgentEngine {
                 })
             })
             .collect::<Vec<_>>();
+        let recent_memory_distillation = self
+            .history
+            .list_memory_distillation_log(5)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id": row.id,
+                    "source_thread_id": row.source_thread_id,
+                    "source_message_range": row.source_message_range,
+                    "distilled_fact": row.distilled_fact,
+                    "target_file": row.target_file,
+                    "category": row.category,
+                    "confidence": row.confidence,
+                    "created_at_ms": row.created_at_ms,
+                    "applied_to_memory": row.applied_to_memory,
+                    "agent_id": row.agent_id,
+                })
+            })
+            .collect::<Vec<_>>();
+        let recent_forge_passes = self
+            .history
+            .list_forge_pass_log(5)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id": row.id,
+                    "agent_id": row.agent_id,
+                    "period_start_ms": row.period_start_ms,
+                    "period_end_ms": row.period_end_ms,
+                    "traces_analyzed": row.traces_analyzed,
+                    "patterns_found": row.patterns_found,
+                    "hints_applied": row.hints_applied,
+                    "hints_logged": row.hints_logged,
+                    "completed_at_ms": row.completed_at_ms,
+                })
+            })
+            .collect::<Vec<_>>();
+        let routing_decision = self
+            .history
+            .list_recent_handoff_routing(1)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .next()
+            .map(|row| {
+                let capability_tags = row
+                    .capability_tags_json
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+                    .unwrap_or_default();
+                serde_json::json!({
+                    "handoff_log_id": row.id,
+                    "specialist_id": row.to_specialist_id,
+                    "capability_tags": capability_tags,
+                    "routing_method": row.routing_method,
+                    "routing_score": row.routing_score,
+                    "fallback_used": row.fallback_used,
+                    "created_at": row.created_at,
+                })
+            });
+        let debate_session = self
+            .history
+            .list_debate_sessions(1)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .next()
+            .and_then(|row| {
+                serde_json::from_str::<crate::agent::debate::types::DebateSession>(
+                    &row.session_json,
+                )
+                .ok()
+                .map(|session| {
+                    serde_json::json!({
+                        "session_id": session.id,
+                        "topic": session.topic,
+                        "status": session.status,
+                        "current_round": session.current_round,
+                        "max_rounds": session.max_rounds,
+                        "completion_reason": session.completion_reason,
+                        "thread_id": session.thread_id,
+                        "goal_run_id": session.goal_run_id,
+                        "has_verdict": session.verdict.is_some(),
+                        "updated_at": row.updated_at,
+                    })
+                })
+            });
+        let all_tasks = self.list_tasks().await;
+        let parse_subagent_containment_scope = |scope: Option<&str>| -> Option<(u8, u8)> {
+            let scope = scope?.trim();
+            let payload = scope.strip_prefix("subagent-depth:")?;
+            let (depth, max_depth) = payload.split_once('/')?;
+            let depth = depth.trim().parse::<u8>().ok()?;
+            let max_depth = max_depth.trim().parse::<u8>().ok()?;
+            Some((depth, max_depth))
+        };
+        let compute_task_delegation_depth = |task: &AgentTask| -> u8 {
+            let mut depth = 0u8;
+            let mut current_parent_id = task.parent_task_id.as_deref();
+            while let Some(parent_id) = current_parent_id {
+                depth = depth.saturating_add(1);
+                current_parent_id = all_tasks
+                    .iter()
+                    .find(|candidate| candidate.id == parent_id)
+                    .and_then(|parent| parent.parent_task_id.as_deref());
+            }
+            depth
+        };
+        let effective_subagent_max_depth = |task: &AgentTask| -> u8 {
+            parse_subagent_containment_scope(task.containment_scope.as_deref())
+                .map(|(_, max_depth)| max_depth)
+                .unwrap_or_else(|| compute_task_delegation_depth(task).max(1))
+        };
+        let active_subagents = all_tasks
+            .iter()
+            .filter(|task| task.source == "subagent")
+            .collect::<Vec<_>>();
+        let max_observed_depth = active_subagents
+            .iter()
+            .map(|task| compute_task_delegation_depth(task))
+            .max()
+            .unwrap_or(0);
+        let max_observed_allowed_depth = active_subagents
+            .iter()
+            .map(|task| {
+                parse_subagent_containment_scope(task.containment_scope.as_deref())
+                    .map(|(_, max_depth)| max_depth)
+                    .unwrap_or_else(|| effective_subagent_max_depth(task))
+            })
+            .max()
+            .unwrap_or(0);
+        let root_parent_task_ids = active_subagents
+            .iter()
+            .filter_map(|task| {
+                let mut current_parent_id = task.parent_task_id.as_deref()?;
+                loop {
+                    let next_parent = all_tasks
+                        .iter()
+                        .find(|candidate| candidate.id == current_parent_id)
+                        .and_then(|parent| parent.parent_task_id.as_deref());
+                    match next_parent {
+                        Some(next_parent_id) => current_parent_id = next_parent_id,
+                        None => return Some(current_parent_id.to_string()),
+                    }
+                }
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let recursive_subagents = serde_json::json!({
+            "active_subagent_count": active_subagents.len(),
+            "max_observed_depth": max_observed_depth,
+            "max_observed_allowed_depth": max_observed_allowed_depth,
+            "root_parent_task_ids": root_parent_task_ids,
+        });
+        let mut memory_distillation_progress = self
+            .history
+            .list_memory_distillation_progress(5)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "source_thread_id": row.source_thread_id,
+                    "last_processed_created_at_ms": row.last_processed_cursor.created_at,
+                    "last_processed_message_id": row.last_processed_cursor.message_id,
+                    "last_run_at_ms": row.last_run_at_ms,
+                    "updated_at_ms": row.updated_at_ms,
+                    "agent_id": row.agent_id,
+                })
+            })
+            .collect::<Vec<_>>();
+        memory_distillation_progress.sort_by(|left, right| {
+            right
+                .get("updated_at_ms")
+                .and_then(|value| value.as_i64())
+                .cmp(&left.get("updated_at_ms").and_then(|value| value.as_i64()))
+                .then(
+                    left.get("source_thread_id")
+                        .and_then(|value| value.as_str())
+                        .cmp(
+                            &right
+                                .get("source_thread_id")
+                                .and_then(|value| value.as_str()),
+                        ),
+                )
+        });
+        memory_distillation_progress.truncate(5);
+        let cognitive_resonance = CognitiveResonanceSnapshot::from_model(&operator_model);
+        let meta_cognitive_self_model = self.meta_cognitive_self_model.read().await.clone();
+        let anticipatory_runtime = self.anticipatory.read().await;
+        let anticipatory_items = anticipatory_runtime.items.clone();
+        let intent_prediction = anticipatory_items
+            .iter()
+            .filter_map(|item| {
+                item.intent_prediction.as_ref().map(|prediction| {
+                    let cached_prewarm_summary = item.thread_id.as_deref().and_then(|thread_id| {
+                        anticipatory_runtime
+                            .prewarm_cache_by_thread
+                            .get(thread_id)
+                            .map(|snapshot| snapshot.summary.clone())
+                    });
+                    serde_json::json!({
+                        "thread_id": item.thread_id,
+                        "primary_action": prediction.primary_action,
+                        "confidence": prediction.confidence,
+                        "cached_prewarm_summary": cached_prewarm_summary,
+                        "ranked_actions": prediction.ranked_actions,
+                    })
+                })
+            })
+            .max_by(|left, right| {
+                left.get("confidence")
+                    .and_then(|value| value.as_f64())
+                    .partial_cmp(&right.get("confidence").and_then(|value| value.as_f64()))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        let system_outcome_foresight = anticipatory_items
+            .iter()
+            .filter(|item| item.kind == "system_outcome_foresight")
+            .map(|item| {
+                let prediction_type = item
+                    .bullets
+                    .iter()
+                    .find_map(|bullet| bullet.strip_prefix("prediction_type="))
+                    .unwrap_or("unknown")
+                    .to_string();
+                let predicted_outcome = if prediction_type == "stale_context" {
+                    "hydration-needed risk"
+                } else {
+                    "build/test failure"
+                };
+                serde_json::json!({
+                    "thread_id": item.thread_id,
+                    "prediction_type": prediction_type,
+                    "predicted_outcome": predicted_outcome,
+                    "confidence": item.confidence,
+                    "summary": item.summary,
+                    "bullets": item.bullets,
+                })
+            })
+            .max_by(|left, right| {
+                left.get("confidence")
+                    .and_then(|value| value.as_f64())
+                    .partial_cmp(&right.get("confidence").and_then(|value| value.as_f64()))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        let proactive_suppression = anticipatory_items
+            .iter()
+            .filter(|item| item.kind == "proactive_suppression")
+            .map(|item| {
+                serde_json::json!({
+                    "thread_id": item.thread_id,
+                    "confidence": item.confidence,
+                    "summary": item.summary,
+                    "bullets": item.bullets,
+                })
+            })
+            .max_by(|left, right| {
+                left.get("confidence")
+                    .and_then(|value| value.as_f64())
+                    .partial_cmp(&right.get("confidence").and_then(|value| value.as_f64()))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
         serde_json::json!({
             "operator_profile_sync_state": sync_state,
             "operator_profile_sync_dirty": sync_state != "clean",
             "operator_profile_scheduler_fallback": false,
+            "intent_prediction": intent_prediction,
+            "routing_decision": routing_decision,
+            "debate_session": debate_session,
+            "recursive_subagents": recursive_subagents,
+            "proactive_suppression": proactive_suppression,
+            "system_outcome_foresight": system_outcome_foresight,
             "operator_satisfaction": {
                 "label": operator_model.operator_satisfaction.label,
                 "score": operator_model.operator_satisfaction.score,
@@ -1129,6 +1399,15 @@ impl AgentEngine {
                 "recent_implicit_signals": recent_implicit_signals,
                 "recent_satisfaction_scores": recent_satisfaction_scores,
             },
+            "memory_distillation": {
+                "recent_activity": recent_memory_distillation,
+                "progress_by_thread": memory_distillation_progress,
+            },
+            "forge_reflection": {
+                "recent_passes": recent_forge_passes,
+            },
+            "meta_cognitive_self_model": meta_cognitive_self_model,
+            "cognitive_resonance": cognitive_resonance,
             "aline": {
                 "available": aline_available,
                 "watcher_state": watcher_state,

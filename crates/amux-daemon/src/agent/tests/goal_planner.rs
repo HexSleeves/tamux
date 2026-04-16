@@ -503,6 +503,7 @@ async fn handle_goal_run_step_failure_surfaces_strained_replan_summary_guidance(
         .reflection_summary
         .as_deref()
         .expect("replan summary should be surfaced");
+    assert!(summary.contains("Meta-cognitive intervention:"));
     assert!(summary.contains("Conservative execution mode:"));
     assert!(summary.contains("prefer proven tools"));
     assert!(summary.contains("keep iteration bounds short"));
