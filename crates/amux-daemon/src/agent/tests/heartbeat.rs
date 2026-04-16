@@ -444,6 +444,31 @@ fn format_consolidation_dream_summary_surfaces_distillation_review_queue() {
     );
 }
 
+#[test]
+fn format_consolidation_dream_summary_surfaces_counterfactual_strategy_hints() {
+    let output = super::helpers::format_consolidation_dream_summary(&ConsolidationResult {
+        distillation_ran: true,
+        distillation_threads_analyzed: 2,
+        distillation_auto_applied: 1,
+        forge_ran: true,
+        forge_hints_generated: 3,
+        forge_hints_auto_applied: 1,
+        forge_hints_logged_only: 2,
+        ..Default::default()
+    })
+    .expect("dream summary should be present when forge generated strategy hints");
+
+    assert!(
+        output.contains("counterfactual strategy hint(s)"),
+        "unexpected dream summary: {output}"
+    );
+    assert!(
+        output.contains("3 counterfactual strategy hint(s) generated")
+            && output.contains("1 auto-applied"),
+        "unexpected dream summary: {output}"
+    );
+}
+
 #[tokio::test]
 async fn heartbeat_consolidation_emits_workflow_notice_for_forge_learning_summary() {
     let root = tempdir().expect("tempdir should succeed");
