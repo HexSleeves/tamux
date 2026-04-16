@@ -1107,11 +1107,34 @@ impl AgentEngine {
                 })
             })
             .collect::<Vec<_>>();
+        let intent_prediction = self
+            .anticipatory
+            .read()
+            .await
+            .items
+            .iter()
+            .filter_map(|item| {
+                item.intent_prediction.as_ref().map(|prediction| {
+                    serde_json::json!({
+                        "thread_id": item.thread_id,
+                        "primary_action": prediction.primary_action,
+                        "confidence": prediction.confidence,
+                        "ranked_actions": prediction.ranked_actions,
+                    })
+                })
+            })
+            .max_by(|left, right| {
+                left.get("confidence")
+                    .and_then(|value| value.as_f64())
+                    .partial_cmp(&right.get("confidence").and_then(|value| value.as_f64()))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
         serde_json::json!({
             "operator_profile_sync_state": sync_state,
             "operator_profile_sync_dirty": sync_state != "clean",
             "operator_profile_scheduler_fallback": false,
+            "intent_prediction": intent_prediction,
             "operator_satisfaction": {
                 "label": operator_model.operator_satisfaction.label,
                 "score": operator_model.operator_satisfaction.score,

@@ -753,6 +753,58 @@ async fn status_diagnostics_snapshot_includes_operator_satisfaction_summary() {
     assert!(summary.contains("signal present"));
 }
 
+#[tokio::test]
+async fn status_diagnostics_snapshot_includes_ranked_intent_prediction_confidences() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    config.anticipatory.stuck_detection = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let mut task = engine
+        .enqueue_task(
+            "Need approval".to_string(),
+            "Need approval".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "user",
+            None,
+            None,
+            Some("thread-intent-diag".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    task.status = TaskStatus::AwaitingApproval;
+    {
+        let mut tasks = engine.tasks.lock().await;
+        if let Some(existing) = tasks.iter_mut().find(|existing| existing.id == task.id) {
+            *existing = task.clone();
+        }
+    }
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-intent-diag"), None)
+        .await
+        .expect("record operator attention");
+
+    engine.run_anticipatory_tick().await;
+
+    let snapshot = engine.status_diagnostics_snapshot().await;
+    let intent = &snapshot["intent_prediction"];
+    assert_eq!(intent["primary_action"], "review pending approval");
+    assert!(intent["confidence"].as_f64().is_some_and(|value| value >= 0.86));
+    let ranked = intent["ranked_actions"]
+        .as_array()
+        .expect("ranked actions should be present in diagnostics");
+    assert!(ranked.len() >= 3);
+    assert_eq!(ranked[0]["rank"].as_u64(), Some(1));
+    assert_eq!(ranked[0]["action"], "review pending approval");
+    assert!(ranked[0]["confidence"].as_f64().is_some_and(|value| value >= 0.86));
+}
+
 #[test]
 fn preferred_tool_fallback_targets_deduplicates_and_skips_invalid_pairs() {
     let preferred = preferred_tool_fallback_targets(
