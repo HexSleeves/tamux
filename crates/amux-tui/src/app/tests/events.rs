@@ -34,6 +34,36 @@ fn next_thread_request(
     None
 }
 
+fn next_goal_run_page_request(
+    daemon_rx: &mut tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
+) -> Option<(
+    String,
+    Option<usize>,
+    Option<usize>,
+    Option<usize>,
+    Option<usize>,
+)> {
+    while let Ok(command) = daemon_rx.try_recv() {
+        if let DaemonCommand::RequestGoalRunDetailPage {
+            goal_run_id,
+            step_offset,
+            step_limit,
+            event_offset,
+            event_limit,
+        } = command
+        {
+            return Some((
+                goal_run_id,
+                step_offset,
+                step_limit,
+                event_offset,
+                event_limit,
+            ));
+        }
+    }
+    None
+}
+
 #[test]
 fn connected_event_defers_concierge_welcome_until_config_loads() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
@@ -297,6 +327,64 @@ fn operator_question_event_appends_inline_message_and_actions_without_modal() {
         model.modal.top(),
         Some(modal::ModalKind::OperatorQuestionOverlay)
     );
+}
+
+#[test]
+fn thread_deleted_event_removes_thread_from_chat_state() {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadListReceived(vec![
+        chat::AgentThread {
+            id: "thread-1".into(),
+            title: "Thread One".into(),
+            ..Default::default()
+        },
+        chat::AgentThread {
+            id: "thread-2".into(),
+            title: "Thread Two".into(),
+            ..Default::default()
+        },
+    ]));
+    model.open_thread_conversation("thread-1".into());
+
+    model.handle_client_event(ClientEvent::ThreadDeleted {
+        thread_id: "thread-1".into(),
+        deleted: true,
+    });
+
+    assert!(model
+        .chat
+        .threads()
+        .iter()
+        .all(|thread| thread.id != "thread-1"));
+}
+
+#[test]
+fn goal_run_deleted_event_removes_goal_from_task_state() {
+    let mut model = make_model();
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunListReceived(vec![
+            task::GoalRun {
+                id: "goal-1".into(),
+                title: "Goal One".into(),
+                status: Some(task::GoalRunStatus::Cancelled),
+                ..Default::default()
+            },
+            task::GoalRun {
+                id: "goal-2".into(),
+                title: "Goal Two".into(),
+                status: Some(task::GoalRunStatus::Completed),
+                ..Default::default()
+            },
+        ]));
+
+    model.handle_client_event(ClientEvent::GoalRunDeleted {
+        goal_run_id: "goal-1".into(),
+        deleted: true,
+    });
+
+    assert!(model.tasks.goal_run_by_id("goal-1").is_none());
+    assert!(model.tasks.goal_run_by_id("goal-2").is_some());
 }
 
 #[test]
@@ -1933,6 +2021,176 @@ fn prepending_older_history_releases_the_top_edge_until_user_scrolls_again() {
     assert!(
         next_thread_request(&mut daemon_rx).is_none(),
         "prepend anchor should move the viewport below the new top so history does not auto-fetch again"
+    );
+}
+
+#[test]
+fn on_tick_requests_next_older_goal_run_page_when_scrolled_to_top_of_loaded_window() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Paged Goal".to_string(),
+            loaded_step_start: 20,
+            loaded_step_end: 40,
+            total_step_count: 40,
+            loaded_event_start: 60,
+            loaded_event_end: 120,
+            total_event_count: 120,
+            steps: (20..40)
+                .map(|idx| task::GoalRunStep {
+                    id: format!("step-{idx}"),
+                    title: format!("Step {idx}"),
+                    instructions: format!("instructions {idx}"),
+                    order: idx as u32,
+                    ..Default::default()
+                })
+                .collect(),
+            events: (60..120)
+                .map(|idx| task::GoalRunEvent {
+                    id: format!("event-{idx}"),
+                    message: format!("event {idx}"),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }));
+
+    model.on_tick();
+
+    match next_goal_run_page_request(&mut daemon_rx) {
+        Some((goal_run_id, step_offset, step_limit, event_offset, event_limit)) => {
+            assert_eq!(goal_run_id, "goal-1");
+            assert_eq!(step_offset, Some(0));
+            assert_eq!(step_limit, Some(20));
+            assert_eq!(event_offset, Some(0));
+            assert_eq!(event_limit, Some(60));
+        }
+        other => panic!("expected older goal-run page request, got {other:?}"),
+    }
+}
+
+#[test]
+fn prepending_older_goal_run_history_releases_top_edge_until_user_scrolls_again() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Paged Goal".to_string(),
+            loaded_step_start: 20,
+            loaded_step_end: 40,
+            total_step_count: 40,
+            loaded_event_start: 60,
+            loaded_event_end: 120,
+            total_event_count: 120,
+            steps: (20..40)
+                .map(|idx| task::GoalRunStep {
+                    id: format!("step-{idx}"),
+                    title: format!("Step {idx}"),
+                    instructions: format!("instructions {idx}"),
+                    order: idx as u32,
+                    ..Default::default()
+                })
+                .collect(),
+            events: (60..120)
+                .map(|idx| task::GoalRunEvent {
+                    id: format!("event-{idx}"),
+                    message: format!("event {idx}"),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }));
+
+    model.on_tick();
+
+    match next_goal_run_page_request(&mut daemon_rx) {
+        Some((goal_run_id, step_offset, step_limit, event_offset, event_limit)) => {
+            assert_eq!(goal_run_id, "goal-1");
+            assert_eq!(step_offset, Some(0));
+            assert_eq!(step_limit, Some(20));
+            assert_eq!(event_offset, Some(0));
+            assert_eq!(event_limit, Some(60));
+        }
+        other => panic!("expected initial older goal-run page request, got {other:?}"),
+    }
+
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Paged Goal".to_string(),
+            loaded_step_start: 0,
+            loaded_step_end: 20,
+            total_step_count: 40,
+            loaded_event_start: 0,
+            loaded_event_end: 60,
+            total_event_count: 120,
+            steps: (0..20)
+                .map(|idx| task::GoalRunStep {
+                    id: format!("step-{idx}"),
+                    title: format!("Step {idx}"),
+                    instructions: format!("instructions {idx}"),
+                    order: idx as u32,
+                    ..Default::default()
+                })
+                .collect(),
+            events: (0..60)
+                .map(|idx| task::GoalRunEvent {
+                    id: format!("event-{idx}"),
+                    message: format!("event {idx}"),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }));
+    model.handle_goal_run_detail_event(crate::wire::GoalRun {
+        id: "goal-1".to_string(),
+        title: "Paged Goal".to_string(),
+        loaded_step_start: 0,
+        loaded_step_end: 20,
+        total_step_count: 40,
+        loaded_event_start: 0,
+        loaded_event_end: 60,
+        total_event_count: 120,
+        steps: (0..20)
+            .map(|idx| crate::wire::GoalRunStep {
+                id: format!("step-{idx}"),
+                position: idx,
+                title: format!("Step {idx}"),
+                instructions: format!("instructions {idx}"),
+                ..Default::default()
+            })
+            .collect(),
+        events: (0..60)
+            .map(|idx| crate::wire::GoalRunEvent {
+                id: format!("event-{idx}"),
+                message: format!("event {idx}"),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    });
+
+    model.on_tick();
+
+    assert!(
+        next_goal_run_page_request(&mut daemon_rx).is_none(),
+        "prepend anchor should move the viewport below the new top so goal history does not auto-fetch again"
     );
 }
 

@@ -368,9 +368,7 @@ impl TuiModel {
                     self.main_pane_view,
                     MainPaneView::Task(_) | MainPaneView::WorkContext
                 ) {
-                    self.task_view_scroll = self
-                        .task_view_scroll
-                        .saturating_add((self.height / 2) as usize);
+                    self.step_detail_view_scroll((self.height / 2) as i32);
                 } else {
                     let half_page = (self.height / 2) as i32;
                     self.chat.reduce(chat::ChatAction::ScrollChat(-half_page));
@@ -383,9 +381,7 @@ impl TuiModel {
                     self.main_pane_view,
                     MainPaneView::Task(_) | MainPaneView::WorkContext
                 ) {
-                    self.task_view_scroll = self
-                        .task_view_scroll
-                        .saturating_sub((self.height / 2) as usize);
+                    self.step_detail_view_scroll(-((self.height / 2) as i32));
                 } else {
                     let half_page = (self.height / 2) as i32;
                     self.chat.reduce(chat::ChatAction::ScrollChat(half_page));
@@ -412,9 +408,7 @@ impl TuiModel {
                     self.main_pane_view,
                     MainPaneView::Task(_) | MainPaneView::WorkContext
                 ) {
-                    self.task_view_scroll = self
-                        .task_view_scroll
-                        .saturating_add((self.height / 2) as usize);
+                    self.step_detail_view_scroll((self.height / 2) as i32);
                 } else {
                     let half_page = (self.height / 2) as i32;
                     self.chat.reduce(chat::ChatAction::ScrollChat(-half_page));
@@ -425,9 +419,7 @@ impl TuiModel {
                     self.main_pane_view,
                     MainPaneView::Task(_) | MainPaneView::WorkContext
                 ) {
-                    self.task_view_scroll = self
-                        .task_view_scroll
-                        .saturating_sub((self.height / 2) as usize);
+                    self.step_detail_view_scroll(-((self.height / 2) as i32));
                 } else {
                     let half_page = (self.height / 2) as i32;
                     self.chat.reduce(chat::ChatAction::ScrollChat(half_page));
@@ -536,7 +528,7 @@ impl TuiModel {
                     self.main_pane_view,
                     MainPaneView::Task(_) | MainPaneView::WorkContext
                 ) {
-                    self.task_view_scroll = 0;
+                    self.scroll_detail_view_to_top();
                 } else {
                     self.chat.reduce(chat::ChatAction::ScrollChat(i32::MAX / 2));
                     self.chat.select_message(Some(0));
@@ -547,7 +539,7 @@ impl TuiModel {
                     self.main_pane_view,
                     MainPaneView::Task(_) | MainPaneView::WorkContext
                 ) {
-                    self.task_view_scroll = usize::MAX / 4;
+                    self.scroll_detail_view_to_bottom();
                 } else {
                     let offset = self.chat.scroll_offset() as i32;
                     self.chat.reduce(chat::ChatAction::ScrollChat(-offset));
@@ -566,7 +558,7 @@ impl TuiModel {
                         self.main_pane_view,
                         MainPaneView::Task(_) | MainPaneView::WorkContext
                     ) {
-                        self.task_view_scroll = self.task_view_scroll.saturating_add(1);
+                        self.step_detail_view_scroll(1);
                     } else {
                         self.chat.select_next_message()
                     }
@@ -586,7 +578,7 @@ impl TuiModel {
                         self.main_pane_view,
                         MainPaneView::Task(_) | MainPaneView::WorkContext
                     ) {
-                        self.task_view_scroll = self.task_view_scroll.saturating_sub(1);
+                        self.step_detail_view_scroll(-1);
                     } else {
                         self.chat.select_prev_message()
                     }
@@ -698,18 +690,21 @@ impl TuiModel {
                     && matches!(self.main_pane_view, MainPaneView::Task(_)) =>
             {
                 self.task_show_live_todos = !self.task_show_live_todos;
+                self.clamp_detail_view_scroll();
             }
             KeyCode::Char('l')
                 if self.focus == FocusArea::Chat
                     && matches!(self.main_pane_view, MainPaneView::Task(_)) =>
             {
                 self.task_show_timeline = !self.task_show_timeline;
+                self.clamp_detail_view_scroll();
             }
             KeyCode::Char('f')
                 if self.focus == FocusArea::Chat
                     && matches!(self.main_pane_view, MainPaneView::Task(_)) =>
             {
                 self.task_show_files = !self.task_show_files;
+                self.clamp_detail_view_scroll();
             }
             KeyCode::Char('e') if self.focus == FocusArea::Chat => {
                 if let Some(sel) = self.chat.selected_message() {

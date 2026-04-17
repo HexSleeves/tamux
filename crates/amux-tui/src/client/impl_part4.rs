@@ -493,6 +493,23 @@ impl DaemonClient {
         })
     }
 
+    pub fn request_goal_run_page(
+        &self,
+        goal_run_id: impl Into<String>,
+        step_offset: Option<usize>,
+        step_limit: Option<usize>,
+        event_offset: Option<usize>,
+        event_limit: Option<usize>,
+    ) -> Result<()> {
+        self.send(ClientMessage::AgentGetGoalRunPage {
+            goal_run_id: goal_run_id.into(),
+            step_offset,
+            step_limit,
+            event_offset,
+            event_limit,
+        })
+    }
+
     pub fn start_goal_run(
         &self,
         goal: String,

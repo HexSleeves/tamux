@@ -1131,6 +1131,14 @@ impl ChatState {
                 self.active_thread_id = Some(thread_id);
             }
 
+            ChatAction::ThreadDeleted { thread_id } => {
+                self.threads.retain(|thread| thread.id != thread_id);
+                self.thread_activity.remove(&thread_id);
+                if self.active_thread_id.as_deref() == Some(thread_id.as_str()) {
+                    self.active_thread_id = self.threads.first().map(|thread| thread.id.clone());
+                }
+            }
+
             ChatAction::ClearThread { thread_id } => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == thread_id) {
                     thread.messages.clear();

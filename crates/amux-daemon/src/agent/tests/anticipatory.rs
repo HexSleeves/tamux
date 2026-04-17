@@ -106,6 +106,24 @@ fn sample_goal_run(id: &str, thread_id: Option<&str>) -> GoalRun {
     }
 }
 
+fn sample_anticipatory_item(id: &str, kind: &str, title: &str, summary: &str) -> AnticipatoryItem {
+    AnticipatoryItem {
+        id: id.to_string(),
+        kind: kind.to_string(),
+        title: title.to_string(),
+        summary: summary.to_string(),
+        bullets: Vec::new(),
+        intent_prediction: None,
+        confidence: 0.0,
+        goal_run_id: None,
+        thread_id: None,
+        preferred_client_surface: None,
+        preferred_attention_surface: None,
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
 #[test]
 fn circular_hour_distance_wraps_across_midnight() {
     assert_eq!(circular_hour_distance(23, 1), 2);
@@ -330,6 +348,122 @@ async fn morning_brief_inherits_route_from_top_goal_surface() {
         .find(|candidate| candidate.kind == "morning_brief")
         .expect("expected a morning brief");
     assert_eq!(item.preferred_client_surface.as_deref(), Some("tui"));
+}
+
+#[tokio::test]
+async fn anticipatory_updates_are_persisted_as_inbox_notifications() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let mut item = sample_anticipatory_item(
+        "digest-1",
+        "stuck_hint",
+        "Task May Be Stuck",
+        "Release packaging has stalled for 28m.",
+    );
+    item.bullets = vec![
+        "No terminal output has arrived since the last retry.".to_string(),
+        "Operator attention is focused on the release thread.".to_string(),
+    ];
+    item.confidence = 0.73;
+    item.thread_id = Some("thread-release".to_string());
+    item.created_at = 10;
+    item.updated_at = 20;
+
+    engine.emit_anticipatory_update(vec![item]).await;
+
+    let notifications = engine
+        .history
+        .list_notifications(false, Some(10))
+        .await
+        .unwrap();
+    let notification = notifications
+        .iter()
+        .find(|candidate| candidate.id == "anticipatory:digest-1")
+        .expect("anticipatory notification should be persisted");
+
+    assert_eq!(notification.source, "anticipatory");
+    assert_eq!(notification.kind, "stuck_hint");
+    assert_eq!(notification.title, "Task May Be Stuck");
+    assert!(notification.body.contains("Release packaging has stalled"));
+    assert!(notification.body.contains("No terminal output has arrived"));
+    assert_eq!(notification.severity, "warning");
+    assert_eq!(notification.archived_at, None);
+    assert_eq!(notification.actions.len(), 1);
+    assert_eq!(notification.actions[0].action_type, "open_thread");
+    assert_eq!(
+        notification.actions[0].target.as_deref(),
+        Some("thread-release")
+    );
+}
+
+#[tokio::test]
+async fn anticipatory_updates_archive_stale_notifications() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let mut item_one = sample_anticipatory_item(
+        "digest-1",
+        "stuck_hint",
+        "Task May Be Stuck",
+        "Thread A looks blocked.",
+    );
+    item_one.confidence = 0.82;
+    item_one.thread_id = Some("thread-a".to_string());
+    item_one.created_at = 10;
+    item_one.updated_at = 20;
+
+    let mut item_two = sample_anticipatory_item(
+        "digest-2",
+        "intent_prediction",
+        "Likely Next Action",
+        "You will probably inspect the release checklist.",
+    );
+    item_two.confidence = 0.65;
+    item_two.thread_id = Some("thread-b".to_string());
+    item_two.created_at = 11;
+    item_two.updated_at = 21;
+
+    engine
+        .emit_anticipatory_update(vec![item_one, item_two])
+        .await;
+
+    let mut updated_item = sample_anticipatory_item(
+        "digest-1",
+        "stuck_hint",
+        "Task May Be Stuck",
+        "Thread A still looks blocked.",
+    );
+    updated_item.confidence = 0.84;
+    updated_item.thread_id = Some("thread-a".to_string());
+    updated_item.created_at = 10;
+    updated_item.updated_at = 30;
+
+    engine.emit_anticipatory_update(vec![updated_item]).await;
+
+    let notifications = engine
+        .history
+        .list_notifications(true, Some(10))
+        .await
+        .unwrap();
+    let active = notifications
+        .iter()
+        .find(|candidate| candidate.id == "anticipatory:digest-1")
+        .expect("active anticipatory notification should remain");
+    let archived = notifications
+        .iter()
+        .find(|candidate| candidate.id == "anticipatory:digest-2")
+        .expect("stale anticipatory notification should remain in history");
+
+    assert_eq!(active.archived_at, None);
+    assert!(archived.archived_at.is_some());
+    assert_eq!(archived.source, "anticipatory");
 }
 
 #[tokio::test]

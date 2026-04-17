@@ -91,7 +91,7 @@ impl TuiModel {
                             | MainPaneView::WorkContext
                             | MainPaneView::FilePreview(_)
                     ) {
-                        self.task_view_scroll = self.task_view_scroll.saturating_sub(3);
+                        self.step_detail_view_scroll(-3);
                         if self.work_context_drag_anchor.is_some()
                             && matches!(self.main_pane_view, MainPaneView::WorkContext)
                         {
@@ -145,7 +145,7 @@ impl TuiModel {
                             | MainPaneView::WorkContext
                             | MainPaneView::FilePreview(_)
                     ) {
-                        self.task_view_scroll = self.task_view_scroll.saturating_add(3);
+                        self.step_detail_view_scroll(3);
                         if self.work_context_drag_anchor.is_some()
                             && matches!(self.main_pane_view, MainPaneView::WorkContext)
                         {
@@ -381,6 +381,7 @@ impl TuiModel {
                             self.chat.active_thread_id(),
                             self.sidebar.active_tab(),
                             self.sidebar.selected_item(),
+                            self.task_view_scroll,
                             Position::new(mouse.column, mouse.row),
                             &self.theme,
                         ) {
@@ -409,6 +410,7 @@ impl TuiModel {
                                 chat_area,
                                 &self.tasks,
                                 target,
+                                self.task_view_scroll,
                                 Position::new(mouse.column, mouse.row),
                                 &self.theme,
                             )
@@ -549,14 +551,14 @@ impl TuiModel {
                     && matches!(self.main_pane_view, MainPaneView::WorkContext)
                 {
                     if mouse.row <= chat_area.y.saturating_add(1) {
-                        self.task_view_scroll = self.task_view_scroll.saturating_sub(1);
+                        self.step_detail_view_scroll(-1);
                     } else if mouse.row
                         >= chat_area
                             .y
                             .saturating_add(chat_area.height)
                             .saturating_sub(2)
                     {
-                        self.task_view_scroll = self.task_view_scroll.saturating_add(1);
+                        self.step_detail_view_scroll(1);
                     }
                     let pos = Position::new(mouse.column, mouse.row);
                     self.work_context_drag_current = Some(pos);

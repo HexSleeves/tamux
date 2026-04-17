@@ -1,5 +1,4 @@
 use super::*;
-use amux_shared::providers::{PROVIDER_ID_CHATGPT_SUBSCRIPTION, PROVIDER_ID_OPENAI};
 use std::path::{Path, PathBuf};
 
 #[path = "commands_goal_targets.rs"]
@@ -212,6 +211,80 @@ impl TuiModel {
                     || run.goal.to_lowercase().contains(&query)
             })
             .collect()
+    }
+
+    pub(super) fn selected_thread_picker_thread(&self) -> Option<&chat::AgentThread> {
+        let cursor = self.modal.picker_cursor();
+        if cursor == 0 {
+            return None;
+        }
+        widgets::thread_picker::filtered_threads(&self.chat, &self.modal)
+            .get(cursor - 1)
+            .copied()
+    }
+
+    pub(super) fn selected_goal_picker_run(&self) -> Option<&task::GoalRun> {
+        let cursor = self.modal.picker_cursor();
+        if cursor == 0 {
+            return None;
+        }
+        self.filtered_goal_runs().get(cursor - 1).copied()
+    }
+
+    pub(super) fn can_stop_selected_thread(&self) -> bool {
+        self.selected_thread_picker_thread().is_some_and(|thread| {
+            self.chat.active_thread_id() == Some(thread.id.as_str()) && self.assistant_busy()
+        })
+    }
+
+    pub(super) fn can_resume_selected_thread(&self) -> bool {
+        self.selected_thread_picker_thread().is_some_and(|thread| {
+            thread
+                .messages
+                .iter()
+                .rev()
+                .find(|message| message.role == chat::MessageRole::Assistant)
+                .is_some_and(|message| message.content.trim_end().ends_with("[stopped]"))
+        })
+    }
+
+    pub(super) fn selected_thread_picker_confirm_action(&self) -> Option<PendingConfirmAction> {
+        let thread = self.selected_thread_picker_thread()?;
+        let title = widgets::thread_picker::thread_display_title(thread);
+        if self.can_stop_selected_thread() {
+            Some(PendingConfirmAction::StopThread {
+                thread_id: thread.id.clone(),
+                title,
+            })
+        } else if self.can_resume_selected_thread() {
+            Some(PendingConfirmAction::ResumeThread {
+                thread_id: thread.id.clone(),
+                title,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn selected_goal_picker_toggle_action(&self) -> Option<PendingConfirmAction> {
+        let run = self.selected_goal_picker_run()?;
+        let title = run.title.clone();
+        match run.status {
+            Some(task::GoalRunStatus::Paused) => Some(PendingConfirmAction::ResumeGoalRun {
+                goal_run_id: run.id.clone(),
+                title,
+            }),
+            Some(task::GoalRunStatus::Queued)
+            | Some(task::GoalRunStatus::Planning)
+            | Some(task::GoalRunStatus::Running)
+            | Some(task::GoalRunStatus::AwaitingApproval) => {
+                Some(PendingConfirmAction::PauseGoalRun {
+                    goal_run_id: run.id.clone(),
+                    title,
+                })
+            }
+            _ => None,
+        }
     }
 
     pub(super) fn request_preview_for_selected_path(&mut self, thread_id: &str) {
@@ -553,9 +626,7 @@ impl TuiModel {
                     self.config
                         .reduce(config::ConfigAction::ModelsFetched(models));
                 }
-                if !(self.config.provider == PROVIDER_ID_OPENAI
-                    && self.config.auth_source == PROVIDER_ID_CHATGPT_SUBSCRIPTION)
-                    && providers::supports_model_fetch_for(&self.config.provider)
+                if self.should_fetch_remote_models(&self.config.provider, &self.config.auth_source)
                 {
                     self.send_daemon_command(DaemonCommand::FetchModels {
                         provider_id: self.config.provider.clone(),

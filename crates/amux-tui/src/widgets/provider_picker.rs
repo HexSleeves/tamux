@@ -8,14 +8,13 @@ use crate::state::auth::AuthState;
 use crate::state::config::ConfigState;
 use crate::state::modal::ModalState;
 use crate::theme::ThemeTokens;
-use amux_shared::providers::{PROVIDER_ID_AZURE_OPENAI, PROVIDER_ID_CUSTOM};
+use amux_shared::providers::PROVIDER_ID_CUSTOM;
 
 pub fn available_provider_defs(auth: &AuthState) -> Vec<&'static ProviderDef> {
     PROVIDERS
         .iter()
         .filter(|provider| {
             provider.id == PROVIDER_ID_CUSTOM
-                || provider.id == PROVIDER_ID_AZURE_OPENAI
                 || auth
                     .entries
                     .iter()
@@ -122,7 +121,7 @@ pub fn render(
 mod tests {
     use super::*;
     use crate::state::auth::{AuthState, ProviderAuthEntry};
-    use amux_shared::providers::{PROVIDER_ID_GROQ, PROVIDER_ID_OPENAI};
+    use amux_shared::providers::{PROVIDER_ID_AZURE_OPENAI, PROVIDER_ID_GROQ, PROVIDER_ID_OPENAI};
 
     #[test]
     fn available_provider_defs_filters_to_authenticated_entries_plus_custom() {
@@ -142,6 +141,13 @@ mod tests {
                 auth_source: "api_key".to_string(),
                 model: "llama".to_string(),
             },
+            ProviderAuthEntry {
+                provider_id: PROVIDER_ID_AZURE_OPENAI.to_string(),
+                provider_name: "Azure OpenAI".to_string(),
+                authenticated: false,
+                auth_source: "api_key".to_string(),
+                model: String::new(),
+            },
         ];
 
         let defs = available_provider_defs(&auth);
@@ -151,6 +157,9 @@ mod tests {
         assert!(defs
             .iter()
             .any(|provider| provider.id == PROVIDER_ID_CUSTOM));
+        assert!(!defs
+            .iter()
+            .any(|provider| provider.id == PROVIDER_ID_AZURE_OPENAI));
         assert!(!defs.iter().any(|provider| provider.id == PROVIDER_ID_GROQ));
     }
 

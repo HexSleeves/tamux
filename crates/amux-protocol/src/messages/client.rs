@@ -69,7 +69,19 @@ pub enum ClientMessage {
     AgentGetRun { run_id: String },
     AgentListGoalRuns,
     AgentGetGoalRun { goal_run_id: String },
+    AgentGetGoalRunPage {
+        goal_run_id: String,
+        #[serde(default)]
+        step_offset: Option<usize>,
+        #[serde(default)]
+        step_limit: Option<usize>,
+        #[serde(default)]
+        event_offset: Option<usize>,
+        #[serde(default)]
+        event_limit: Option<usize>,
+    },
     AgentControlGoalRun { goal_run_id: String, action: String, step_index: Option<usize> },
+    AgentDeleteGoalRun { goal_run_id: String },
     AgentListTodos,
     AgentGetTodos { thread_id: String },
     AgentGetWorkContext { thread_id: String },

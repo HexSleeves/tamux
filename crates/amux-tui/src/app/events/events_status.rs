@@ -254,10 +254,9 @@ impl TuiModel {
 
     pub(in crate::app) fn handle_anticipatory_items_event(
         &mut self,
-        items: Vec<crate::wire::AnticipatoryItem>,
+        _items: Vec<crate::wire::AnticipatoryItem>,
     ) {
-        self.anticipatory
-            .reduce(crate::state::AnticipatoryAction::Replace(items));
+        // Anticipatory items are surfaced through inbox notifications now.
     }
 
     pub(in crate::app) fn handle_gateway_status_event(

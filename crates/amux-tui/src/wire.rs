@@ -308,6 +308,18 @@ pub struct GoalRun {
     #[serde(default)]
     pub child_task_ids: Vec<String>,
     #[serde(default)]
+    pub loaded_step_start: usize,
+    #[serde(default)]
+    pub loaded_step_end: usize,
+    #[serde(default)]
+    pub total_step_count: usize,
+    #[serde(default)]
+    pub loaded_event_start: usize,
+    #[serde(default)]
+    pub loaded_event_end: usize,
+    #[serde(default)]
+    pub total_event_count: usize,
+    #[serde(default)]
     pub steps: Vec<GoalRunStep>,
     #[serde(default)]
     pub events: Vec<GoalRunEvent>,

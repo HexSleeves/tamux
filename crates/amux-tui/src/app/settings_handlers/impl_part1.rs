@@ -14,6 +14,36 @@ impl TuiModel {
             .clamp_field_cursor(self.settings.field_count_with_config(&self.config));
     }
 
+    pub(super) fn open_honcho_editor(&mut self) {
+        let editor = crate::state::config::HonchoEditorState::from_config(&self.config);
+        self.config.honcho_editor = Some(editor);
+        self.settings.reduce(SettingsAction::CancelEdit);
+        self.status_line = "Editing Honcho memory settings".to_string();
+    }
+
+    pub(super) fn close_honcho_editor(&mut self) {
+        self.config.honcho_editor = None;
+        self.settings.reduce(SettingsAction::CancelEdit);
+        self.status_line = "Closed Honcho memory editor".to_string();
+    }
+
+    pub(super) fn commit_honcho_editor(&mut self) {
+        let Some(editor) = self.config.honcho_editor.take() else {
+            return;
+        };
+        self.config.enable_honcho_memory = editor.enabled;
+        self.config.honcho_api_key = editor.api_key;
+        self.config.honcho_base_url = editor.base_url;
+        self.config.honcho_workspace_id = if editor.workspace_id.trim().is_empty() {
+            "tamux".to_string()
+        } else {
+            editor.workspace_id
+        };
+        self.settings.reduce(SettingsAction::CancelEdit);
+        self.sync_config_to_daemon();
+        self.status_line = "Updated Honcho memory settings".to_string();
+    }
+
     pub(super) fn cycle_compaction_strategy(&mut self) {
         self.config.compaction_strategy = match self.config.compaction_strategy.as_str() {
             "heuristic" => "weles".to_string(),
@@ -69,7 +99,7 @@ impl TuiModel {
         let models = providers::known_models_for_provider_auth(&provider_id, &auth_source);
         self.config
             .reduce(config::ConfigAction::ModelsFetched(models));
-        if providers::supports_model_fetch_for(&provider_id) {
+        if self.should_fetch_remote_models(&provider_id, &auth_source) {
             let base_url = providers::find_by_id(&provider_id)
                 .map(|provider| provider.default_base_url.to_string())
                 .unwrap_or_default();
@@ -93,7 +123,8 @@ impl TuiModel {
         );
         self.config
             .reduce(config::ConfigAction::ModelsFetched(models));
-        if providers::supports_model_fetch_for(&provider_id) {
+        if self.should_fetch_remote_models(&provider_id, &self.config.compaction_custom_auth_source)
+        {
             self.send_daemon_command(DaemonCommand::FetchModels {
                 provider_id,
                 base_url: self.config.compaction_custom_base_url.clone(),
@@ -204,7 +235,12 @@ impl TuiModel {
             .map(|def| def.default_base_url.to_string())
             .unwrap_or_default();
         let mut api_key = String::new();
-        let mut auth_source = providers::default_auth_source_for(provider_id).to_string();
+        let mut auth_source =
+            if provider_id == PROVIDER_ID_OPENAI && self.config.chatgpt_auth_available {
+                "chatgpt_subscription".to_string()
+            } else {
+                providers::default_auth_source_for(provider_id).to_string()
+            };
 
         if self.config.provider == provider_id {
             return (
@@ -286,6 +322,11 @@ impl TuiModel {
         })
     }
 
+    pub(super) fn should_fetch_remote_models(&self, provider_id: &str, auth_source: &str) -> bool {
+        providers::supports_model_fetch_for(provider_id)
+            && !(provider_id == PROVIDER_ID_OPENAI && auth_source == "chatgpt_subscription")
+    }
+
     fn upsert_saved_provider_api_key(&mut self, provider_id: &str, api_key: &str) {
         let mut raw = self
             .config
@@ -336,7 +377,12 @@ impl TuiModel {
         self.config.model = def.default_model.to_string();
         self.config.custom_model_name.clear();
         self.config.api_key.clear();
-        self.config.auth_source = providers::default_auth_source_for(def.id).to_string();
+        self.config.auth_source =
+            if def.id == PROVIDER_ID_OPENAI && self.config.chatgpt_auth_available {
+                "chatgpt_subscription".to_string()
+            } else {
+                providers::default_auth_source_for(def.id).to_string()
+            };
         self.config.api_transport = def.default_transport.to_string();
         self.config.assistant_id.clear();
         self.config.custom_context_window_tokens = if def.id == PROVIDER_ID_CUSTOM {

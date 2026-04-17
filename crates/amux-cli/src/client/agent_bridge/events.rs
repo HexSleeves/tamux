@@ -213,6 +213,14 @@ where
             let msg = serde_json::json!({"type":"goal-run-controlled","data":{"goal_run_id":goal_run_id,"ok":ok}});
             emit_agent_event(&msg.to_string())?;
         }
+        Some(Ok(DaemonMessage::AgentThreadControlled {
+            thread_id,
+            action,
+            ok,
+        })) => {
+            let msg = serde_json::json!({"type":"thread-controlled","data":{"thread_id":thread_id,"action":action,"ok":ok}});
+            emit_agent_event(&msg.to_string())?;
+        }
         Some(Ok(DaemonMessage::AgentTodoList { todos_json })) => {
             let msg = serde_json::json!({"type":"todo-list","data":serde_json::from_str::<serde_json::Value>(&todos_json).unwrap_or_default()});
             emit_agent_event(&msg.to_string())?;

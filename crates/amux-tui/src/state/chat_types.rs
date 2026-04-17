@@ -278,6 +278,9 @@ pub enum ChatAction {
         thread_id: String,
         title: String,
     },
+    ThreadDeleted {
+        thread_id: String,
+    },
     AppendMessage {
         thread_id: String,
         message: AgentMessage,

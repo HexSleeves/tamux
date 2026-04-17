@@ -2,6 +2,8 @@
 // These mirror the types in state.rs
 #![allow(dead_code)]
 
+pub const GOAL_RUN_HISTORY_FETCH_DEBOUNCE_TICKS: u64 = 6;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
     Queued,
@@ -32,8 +34,11 @@ pub struct AgentTask {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoalRunStatus {
-    Pending,
+    Queued,
+    Planning,
     Running,
+    AwaitingApproval,
+    Paused,
     Completed,
     Failed,
     Cancelled,
@@ -80,6 +85,14 @@ pub struct GoalRun {
     pub memory_updates: Vec<String>,
     pub generated_skill_path: Option<String>,
     pub child_task_ids: Vec<String>,
+    pub loaded_step_start: usize,
+    pub loaded_step_end: usize,
+    pub total_step_count: usize,
+    pub loaded_event_start: usize,
+    pub loaded_event_end: usize,
+    pub total_event_count: usize,
+    pub older_page_pending: bool,
+    pub older_page_request_cooldown_until_tick: Option<u64>,
     pub steps: Vec<GoalRunStep>,
     pub events: Vec<GoalRunEvent>,
     pub created_at: u64,
@@ -198,6 +211,9 @@ pub enum TaskAction {
         goal_run_id: String,
         checkpoints: Vec<GoalRunCheckpointSummary>,
     },
+    GoalRunDeleted {
+        goal_run_id: String,
+    },
     ThreadTodosReceived {
         thread_id: String,
         items: Vec<TodoItem>,
@@ -297,11 +313,68 @@ impl TaskState {
         self.goal_runs.iter().find(|r| r.id == id)
     }
 
+    pub fn goal_run_by_id_mut(&mut self, id: &str) -> Option<&mut GoalRun> {
+        self.goal_runs.iter_mut().find(|r| r.id == id)
+    }
+
     pub fn checkpoints_for_goal_run(&self, goal_run_id: &str) -> &[GoalRunCheckpointSummary] {
         self.goal_run_checkpoints
             .get(goal_run_id)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    pub fn goal_run_next_page_request(
+        &self,
+        goal_run_id: &str,
+        current_tick: u64,
+    ) -> Option<(Option<usize>, Option<usize>, Option<usize>, Option<usize>)> {
+        let run = self.goal_run_by_id(goal_run_id)?;
+        if run.older_page_pending
+            || run
+                .older_page_request_cooldown_until_tick
+                .is_some_and(|until| current_tick < until)
+        {
+            return None;
+        }
+
+        let step_limit = run
+            .loaded_step_start
+            .min(run.loaded_step_end.saturating_sub(run.loaded_step_start));
+        let event_limit = run
+            .loaded_event_start
+            .min(run.loaded_event_end.saturating_sub(run.loaded_event_start));
+        let step_request =
+            (step_limit > 0).then_some((run.loaded_step_start - step_limit, step_limit));
+        let event_request =
+            (event_limit > 0).then_some((run.loaded_event_start - event_limit, event_limit));
+
+        if step_request.is_none() && event_request.is_none() {
+            return None;
+        }
+
+        Some((
+            step_request.map(|(offset, _)| offset),
+            step_request.map(|(_, limit)| limit),
+            event_request.map(|(offset, _)| offset),
+            event_request.map(|(_, limit)| limit),
+        ))
+    }
+
+    pub fn mark_goal_run_older_page_pending(
+        &mut self,
+        goal_run_id: &str,
+        pending: bool,
+        current_tick: u64,
+        debounce_ticks: u64,
+    ) {
+        if let Some(run) = self.goal_run_by_id_mut(goal_run_id) {
+            run.older_page_pending = pending;
+            if pending {
+                run.older_page_request_cooldown_until_tick =
+                    Some(current_tick.saturating_add(debounce_ticks));
+            }
+        }
     }
 
     pub fn reduce(&mut self, action: TaskAction) {
@@ -319,12 +392,13 @@ impl TaskState {
             }
 
             TaskAction::GoalRunListReceived(runs) => {
-                self.goal_runs = runs;
+                self.goal_runs = runs.into_iter().map(normalize_goal_run_ranges).collect();
             }
 
             TaskAction::GoalRunDetailReceived(run) | TaskAction::GoalRunUpdate(run) => {
+                let run = normalize_goal_run_ranges(run);
                 if let Some(existing) = self.goal_runs.iter_mut().find(|r| r.id == run.id) {
-                    *existing = run;
+                    merge_goal_run(existing, run);
                 } else {
                     self.goal_runs.push(run);
                 }
@@ -335,6 +409,13 @@ impl TaskState {
                 checkpoints,
             } => {
                 self.goal_run_checkpoints.insert(goal_run_id, checkpoints);
+            }
+
+            TaskAction::GoalRunDeleted { goal_run_id } => {
+                self.goal_runs.retain(|run| run.id != goal_run_id);
+                self.goal_run_checkpoints.remove(&goal_run_id);
+                self.tasks
+                    .retain(|task| task.goal_run_id.as_deref() != Some(goal_run_id.as_str()));
             }
 
             TaskAction::ThreadTodosReceived { thread_id, items } => {
@@ -390,6 +471,134 @@ impl Default for TaskState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn normalize_goal_run_ranges(mut run: GoalRun) -> GoalRun {
+    if run.total_step_count == 0 {
+        run.total_step_count = run.steps.len();
+    }
+    if run.loaded_step_end == 0 && !run.steps.is_empty() {
+        run.loaded_step_end = run.loaded_step_start.saturating_add(run.steps.len());
+    }
+    if run.loaded_step_end < run.loaded_step_start {
+        run.loaded_step_end = run.loaded_step_start;
+    }
+    if run.loaded_step_start == 0
+        && run.loaded_step_end == 0
+        && run.total_step_count == run.steps.len()
+    {
+        run.loaded_step_end = run.steps.len();
+    }
+    run.total_step_count = run.total_step_count.max(run.loaded_step_end);
+
+    if run.total_event_count == 0 {
+        run.total_event_count = run.events.len();
+    }
+    if run.loaded_event_end == 0 && !run.events.is_empty() {
+        run.loaded_event_end = run.loaded_event_start.saturating_add(run.events.len());
+    }
+    if run.loaded_event_end < run.loaded_event_start {
+        run.loaded_event_end = run.loaded_event_start;
+    }
+    if run.loaded_event_start == 0
+        && run.loaded_event_end == 0
+        && run.total_event_count == run.events.len()
+    {
+        run.loaded_event_end = run.events.len();
+    }
+    run.total_event_count = run.total_event_count.max(run.loaded_event_end);
+    run
+}
+
+fn merge_range_vec<T: Clone>(
+    existing_start: usize,
+    existing_end: usize,
+    existing_items: &[T],
+    incoming_start: usize,
+    incoming_end: usize,
+    incoming_items: &[T],
+) -> (usize, usize, Vec<T>) {
+    if existing_items.is_empty() || existing_start == existing_end {
+        return (incoming_start, incoming_end, incoming_items.to_vec());
+    }
+    if incoming_items.is_empty() || incoming_start == incoming_end {
+        return (existing_start, existing_end, existing_items.to_vec());
+    }
+
+    if incoming_end <= existing_start {
+        let mut merged = incoming_items.to_vec();
+        merged.extend_from_slice(existing_items);
+        return (incoming_start, existing_end, merged);
+    }
+    if existing_end <= incoming_start {
+        let mut merged = existing_items.to_vec();
+        merged.extend_from_slice(incoming_items);
+        return (existing_start, incoming_end, merged);
+    }
+
+    let union_start = existing_start.min(incoming_start);
+    let union_end = existing_end.max(incoming_end);
+    let mut merged = Vec::with_capacity(union_end.saturating_sub(union_start));
+    for absolute_idx in union_start..union_end {
+        if absolute_idx >= incoming_start && absolute_idx < incoming_end {
+            merged.push(incoming_items[absolute_idx - incoming_start].clone());
+        } else if absolute_idx >= existing_start && absolute_idx < existing_end {
+            merged.push(existing_items[absolute_idx - existing_start].clone());
+        }
+    }
+    (union_start, union_end, merged)
+}
+
+fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun) {
+    let older_page_request_cooldown_until_tick = existing
+        .older_page_request_cooldown_until_tick
+        .max(incoming.older_page_request_cooldown_until_tick);
+
+    existing.title = incoming.title;
+    existing.thread_id = incoming.thread_id;
+    existing.session_id = incoming.session_id;
+    existing.status = incoming.status;
+    existing.current_step_title = incoming.current_step_title;
+    existing.child_task_count = incoming.child_task_count;
+    existing.approval_count = incoming.approval_count;
+    existing.last_error = incoming.last_error;
+    existing.goal = incoming.goal;
+    existing.current_step_index = incoming.current_step_index;
+    existing.reflection_summary = incoming.reflection_summary;
+    existing.memory_updates = incoming.memory_updates;
+    existing.generated_skill_path = incoming.generated_skill_path;
+    existing.child_task_ids = incoming.child_task_ids;
+    existing.created_at = incoming.created_at;
+    existing.updated_at = incoming.updated_at;
+    existing.total_step_count = existing.total_step_count.max(incoming.total_step_count);
+    existing.total_event_count = existing.total_event_count.max(incoming.total_event_count);
+
+    let (loaded_step_start, loaded_step_end, steps) = merge_range_vec(
+        existing.loaded_step_start,
+        existing.loaded_step_end,
+        &existing.steps,
+        incoming.loaded_step_start,
+        incoming.loaded_step_end,
+        &incoming.steps,
+    );
+    existing.loaded_step_start = loaded_step_start;
+    existing.loaded_step_end = loaded_step_end;
+    existing.steps = steps;
+
+    let (loaded_event_start, loaded_event_end, events) = merge_range_vec(
+        existing.loaded_event_start,
+        existing.loaded_event_end,
+        &existing.events,
+        incoming.loaded_event_start,
+        incoming.loaded_event_end,
+        &incoming.events,
+    );
+    existing.loaded_event_start = loaded_event_start;
+    existing.loaded_event_end = loaded_event_end;
+    existing.events = events;
+
+    existing.older_page_pending = false;
+    existing.older_page_request_cooldown_until_tick = older_page_request_cooldown_until_tick;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

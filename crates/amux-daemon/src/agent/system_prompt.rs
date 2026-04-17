@@ -268,6 +268,8 @@ pub(super) fn build_system_prompt(
             - If a child should use a specific provider or model, call `fetch_authenticated_providers` first and `fetch_provider_models` for the chosen provider before setting `spawn_subagent.provider` or `spawn_subagent.model`.\n\
          - Keep each subagent narrow in scope and avoid creating duplicate child assignments.\n\
          - Monitor child progress with `list_subagents` and integrate their results before declaring the parent task complete.\n\
+         - Do not use `list_agents` to check spawned child progress; it only lists runtime targets.\n\
+         - Do not busy-wait on child agents. If there is no other useful work to do after delegating, send a normal progress update and stop so tamux can resume you when children finish.\n\
          - Spawned agents carry their own Slavic persona. Treat those identities as real collaborators with bounded scope, not as disposable copies of yourself.\n",
     );
     if config.collaboration.enabled {

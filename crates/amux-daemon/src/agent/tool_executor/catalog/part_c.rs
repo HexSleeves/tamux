@@ -128,7 +128,7 @@ fn add_available_tools_part_c(
             "include_dom": { "type": "boolean", "description": "For browser panels: include page DOM text content. Ignored for terminal panes." }
         }
     })));
-    tools.push(tool_def("run_terminal_command", "Execute a shell command through a tamux-managed terminal session. This runs in the app's terminal context (not a daemon-native subprocess). For long-running work, prefer non-blocking execution and poll the returned `operation_id` with `get_operation_status`.", serde_json::json!({
+    tools.push(tool_def("run_terminal_command", "Execute a shell command through a tamux-managed terminal session. This runs in the app's terminal context (not a daemon-native subprocess). For long-running work, prefer non-blocking execution and poll the returned `operation_id` with `get_operation_status`. Not for ordinary web reads: prefer `web_search` or `fetch_url` over `curl`/`wget` unless shell networking itself is the task.", serde_json::json!({
         "type": "object",
         "properties": {
             "command": { "type": "string", "description": "Shell command to execute in a managed terminal session" },
@@ -144,7 +144,7 @@ fn add_available_tools_part_c(
         },
         "required": ["command"]
     })));
-    tools.push(tool_def("execute_managed_command", "Queue a command in a daemon-managed terminal lane. By default this tool waits for completion and returns final status/output tail. If session is omitted, uses the first active terminal session. For non-blocking execution, poll the returned `operation_id` with `get_operation_status`.", serde_json::json!({
+    tools.push(tool_def("execute_managed_command", "Queue a command in a daemon-managed terminal lane. By default this tool waits for completion and returns final status/output tail. If session is omitted, uses the first active terminal session. For non-blocking execution, poll the returned `operation_id` with `get_operation_status`. Not for ordinary web reads: prefer `web_search` or `fetch_url` over `curl`/`wget` unless shell networking itself is the task.", serde_json::json!({
         "type": "object",
         "properties": {
             "command": { "type": "string", "description": "Shell command to run in the managed terminal session" },
@@ -204,7 +204,7 @@ fn add_available_tools_part_c(
         },
         "required": ["provider"]
     })));
-    tools.push(tool_def("list_agents", "List agent runtime targets and the provider/model each one currently uses as its LLM access point.", serde_json::json!({
+    tools.push(tool_def("list_agents", "List agent runtime targets and the provider/model each one currently uses as its LLM access point. This does not report spawned child-task progress; use `list_subagents` for that.", serde_json::json!({
         "type": "object",
         "properties": {}
     })));
@@ -223,7 +223,7 @@ fn add_available_tools_part_c(
             "required": ["agent", "provider", "model"]
         })));
     }
-    tools.push(tool_def("spawn_subagent", "Spawn a bounded child task under the current task or thread. Use this to split a large task into parallel subagents with dedicated runtime/session metadata. Keep each child narrowly scoped and monitor it with list_subagents. If you want a specific provider/model, call `list_providers` first and `list_models` for the chosen provider before setting the optional override fields.", serde_json::json!({
+    tools.push(tool_def("spawn_subagent", "Spawn a bounded child task under the current task or thread. Use this to split a large task into parallel subagents with dedicated runtime/session metadata. Keep each child narrowly scoped and monitor it with list_subagents. Do not busy-wait after spawning; if nothing else is actionable, stop and let tamux resume you when children finish. If you want a specific provider/model, call `list_providers` first and `list_models` for the chosen provider before setting the optional override fields.", serde_json::json!({
         "type": "object",
         "properties": {
             "title": { "type": "string", "description": "Short subagent title" },
@@ -418,11 +418,15 @@ fn add_available_tools_part_c(
         },
         "required": ["token"]
     })));
-    tools.push(tool_def("get_emergent_protocol_usage_log", "Fetch recorded usage/fallback entries for an accepted emergent protocol.", serde_json::json!({
-        "type": "object",
-        "properties": {
-            "protocol_id": { "type": "string", "description": "Accepted emergent protocol ID" }
-        },
-        "required": ["protocol_id"]
-    })));
+    tools.push(tool_def(
+        "get_emergent_protocol_usage_log",
+        "Fetch recorded usage/fallback entries for an accepted emergent protocol.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "protocol_id": { "type": "string", "description": "Accepted emergent protocol ID" }
+            },
+            "required": ["protocol_id"]
+        }),
+    ));
 }

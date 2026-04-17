@@ -66,16 +66,22 @@ async fn execute_setup_web_browsing(
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             if !output.status.success() {
-                return Ok(format!(
+                anyhow::bail!(
                     "npm install failed (exit {}):\n{}\n{}",
                     output.status,
                     stdout.chars().take(500).collect::<String>(),
                     stderr.chars().take(500).collect::<String>(),
-                ));
+                );
             }
 
             // Verify
             let installed = detect_lightpanda().is_some();
+            if !installed {
+                anyhow::bail!(
+                    "npm install completed but Lightpanda is still unavailable on PATH.\n{}",
+                    stdout.chars().take(300).collect::<String>()
+                );
+            }
             Ok(format!(
                 "npm install completed.\nLightpanda available: {}{}",
                 installed,
@@ -138,4 +144,3 @@ async fn execute_setup_web_browsing(
 // ---------------------------------------------------------------------------
 // Terminal/session tools — daemon owns sessions directly
 // ---------------------------------------------------------------------------
-

@@ -214,6 +214,9 @@ impl TuiModel {
                 self.config.browse_provider = next.to_string();
                 self.sync_config_to_daemon();
             }
+            "enable_honcho_memory" => {
+                self.open_honcho_editor();
+            }
             "honcho_api_key" => self
                 .settings
                 .start_editing("honcho_api_key", &self.config.honcho_api_key.clone()),

@@ -121,6 +121,9 @@ fn work_context_drag_selection_copies_beyond_visible_window() {
         thread_id: "thread-1".to_string(),
         path: Some("/tmp/demo.txt".to_string()),
     });
+    model
+        .sidebar
+        .reduce(SidebarAction::SwitchTab(SidebarTab::Files));
     model.main_pane_view = MainPaneView::WorkContext;
     model.focus = FocusArea::Chat;
 
@@ -880,4 +883,261 @@ fn closing_chat_file_preview_returns_to_conversation() {
     assert!(!handled);
     assert!(matches!(model.main_pane_view, MainPaneView::Conversation));
     assert_eq!(model.focus, FocusArea::Chat);
+}
+
+#[test]
+fn goal_view_scroll_up_moves_off_bottom_after_mouse_overscroll() {
+    fn render_task_view(model: &mut TuiModel) -> Vec<String> {
+        let backend = TestBackend::new(model.width, model.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("task view render should succeed");
+
+        let chat_area = rendered_chat_area(model);
+        let buffer = terminal.backend().buffer();
+        (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .map(|y| {
+                (chat_area.x..chat_area.x.saturating_add(chat_area.width))
+                    .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    let mut model = build_model();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+    model.task_show_live_todos = false;
+    model.task_show_timeline = false;
+    model.task_show_files = false;
+
+    let steps = (1..=60)
+        .map(|idx| task::GoalRunStep {
+            id: format!("step-{idx}"),
+            title: format!("Step {idx}"),
+            instructions: format!(
+                "Line {idx}A\nLine {idx}B\nLine {idx}C\nLine {idx}D\nLine {idx}E"
+            ),
+            order: idx,
+            ..Default::default()
+        })
+        .collect();
+
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Large Goal".to_string(),
+            goal: (1..=40)
+                .map(|idx| format!("Goal line {idx}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            steps,
+            ..Default::default()
+        }));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let chat_area = rendered_chat_area(&model);
+    let mouse_column = chat_area.x.saturating_add(1);
+    let mouse_row = chat_area.y.saturating_add(1);
+
+    for _ in 0..400 {
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: mouse_column,
+            row: mouse_row,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    let bottom_snapshot = render_task_view(&mut model);
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: mouse_column,
+        row: mouse_row,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    let after_one_up = render_task_view(&mut model);
+
+    assert_ne!(
+        after_one_up, bottom_snapshot,
+        "one upward scroll should move away from the clamped bottom view"
+    );
+}
+
+#[test]
+fn task_view_renders_visible_scrollbar_when_content_overflows() {
+    let mut model = build_model();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Large Goal".to_string(),
+            goal: (1..=80)
+                .map(|idx| format!("Goal line {idx}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            steps: (1..=40)
+                .map(|idx| task::GoalRunStep {
+                    id: format!("step-{idx}"),
+                    title: format!("Step {idx}"),
+                    instructions: format!("Line {idx}A\nLine {idx}B\nLine {idx}C"),
+                    order: idx,
+                    ..Default::default()
+                })
+                .collect(),
+            events: (1..=40)
+                .map(|idx| task::GoalRunEvent {
+                    id: format!("event-{idx}"),
+                    message: format!("Event {idx}"),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let backend = TestBackend::new(model.width, model.height);
+    let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+    terminal
+        .draw(|frame| model.render(frame))
+        .expect("task view render should succeed");
+
+    let chat_area = rendered_chat_area(&model);
+    let buffer = terminal.backend().buffer();
+    let plain = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+        .map(|y| {
+            buffer
+                .cell((chat_area.x + chat_area.width - 1, y))
+                .map(|cell| cell.symbol().to_string())
+                .unwrap_or_default()
+        })
+        .collect::<String>();
+
+    assert!(
+        plain.contains("│") || plain.contains("█"),
+        "expected visible scrollbar in task view, got: {plain:?}"
+    );
+}
+
+#[test]
+fn work_context_view_renders_visible_scrollbar_when_preview_overflows() {
+    let mut model = build_model();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model.tasks.reduce(task::TaskAction::WorkContextReceived(
+        task::ThreadWorkContext {
+            thread_id: "thread-1".to_string(),
+            entries: vec![task::WorkContextEntry {
+                path: "/tmp/demo.txt".to_string(),
+                is_text: true,
+                ..Default::default()
+            }],
+        },
+    ));
+    model
+        .tasks
+        .reduce(task::TaskAction::FilePreviewReceived(task::FilePreview {
+            path: "/tmp/demo.txt".to_string(),
+            content: (1..=120)
+                .map(|idx| format!("line {idx}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            truncated: false,
+            is_text: true,
+        }));
+    model.tasks.reduce(task::TaskAction::SelectWorkPath {
+        thread_id: "thread-1".to_string(),
+        path: Some("/tmp/demo.txt".to_string()),
+    });
+    model
+        .sidebar
+        .reduce(SidebarAction::SwitchTab(SidebarTab::Files));
+    model.main_pane_view = MainPaneView::WorkContext;
+
+    let backend = TestBackend::new(model.width, model.height);
+    let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+    terminal
+        .draw(|frame| model.render(frame))
+        .expect("work-context render should succeed");
+
+    let chat_area = rendered_chat_area(&model);
+    let buffer = terminal.backend().buffer();
+    let plain = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+        .map(|y| {
+            buffer
+                .cell((chat_area.x + chat_area.width - 1, y))
+                .map(|cell| cell.symbol().to_string())
+                .unwrap_or_default()
+        })
+        .collect::<String>();
+
+    assert!(
+        plain.contains("│") || plain.contains("█"),
+        "expected visible scrollbar in work-context view, got: {plain:?}"
+    );
+}
+
+#[test]
+fn file_preview_view_renders_visible_scrollbar_when_preview_overflows() {
+    let mut model = build_model();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+    model
+        .tasks
+        .reduce(task::TaskAction::FilePreviewReceived(task::FilePreview {
+            path: "/tmp/demo.txt".to_string(),
+            content: (1..=120)
+                .map(|idx| format!("line {idx}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            truncated: false,
+            is_text: true,
+        }));
+    model.main_pane_view = MainPaneView::FilePreview(ChatFilePreviewTarget {
+        path: "/tmp/demo.txt".to_string(),
+        repo_root: None,
+        repo_relative_path: None,
+    });
+
+    let backend = TestBackend::new(model.width, model.height);
+    let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+    terminal
+        .draw(|frame| model.render(frame))
+        .expect("file preview render should succeed");
+
+    let chat_area = rendered_chat_area(&model);
+    let buffer = terminal.backend().buffer();
+    let plain = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+        .map(|y| {
+            buffer
+                .cell((chat_area.x + chat_area.width - 1, y))
+                .map(|cell| cell.symbol().to_string())
+                .unwrap_or_default()
+        })
+        .collect::<String>();
+
+    assert!(
+        plain.contains("│") || plain.contains("█"),
+        "expected visible scrollbar in file preview view, got: {plain:?}"
+    );
 }

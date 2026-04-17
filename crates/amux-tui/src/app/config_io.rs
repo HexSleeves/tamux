@@ -321,52 +321,52 @@ impl TuiModel {
             .get("anticipatory")
             .and_then(|value| value.get("enabled"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         self.config.anticipatory_morning_brief = json
             .get("anticipatory")
             .and_then(|value| value.get("morning_brief"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         self.config.anticipatory_predictive_hydration = json
             .get("anticipatory")
             .and_then(|value| value.get("predictive_hydration"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         self.config.anticipatory_stuck_detection = json
             .get("anticipatory")
             .and_then(|value| value.get("stuck_detection"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         self.config.operator_model_enabled = json
             .get("operator_model")
             .and_then(|value| value.get("enabled"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         self.config.operator_model_allow_message_statistics = json
             .get("operator_model")
             .and_then(|value| value.get("allow_message_statistics"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         self.config.operator_model_allow_approval_learning = json
             .get("operator_model")
             .and_then(|value| value.get("allow_approval_learning"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         self.config.operator_model_allow_attention_tracking = json
             .get("operator_model")
             .and_then(|value| value.get("allow_attention_tracking"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         self.config.operator_model_allow_implicit_feedback = json
             .get("operator_model")
             .and_then(|value| value.get("allow_implicit_feedback"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         self.config.collaboration_enabled = json
             .get("collaboration")
             .and_then(|value| value.get("enabled"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         self.config.compliance_mode = json
             .get("compliance")
             .and_then(|value| value.get("mode"))
@@ -382,12 +382,12 @@ impl TuiModel {
             .get("compliance")
             .and_then(|value| value.get("sign_all_events"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         self.config.tool_synthesis_enabled = json
             .get("tool_synthesis")
             .and_then(|value| value.get("enabled"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         self.config.tool_synthesis_require_activation = json
             .get("tool_synthesis")
             .and_then(|value| value.get("require_activation"))

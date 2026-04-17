@@ -143,7 +143,10 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                                     .config
                                     .reduce(config::ConfigAction::ModelsFetched(models));
                             }
-                            if providers::supports_model_fetch_for(&model.config.provider) {
+                            if model.should_fetch_remote_models(
+                                &model.config.provider,
+                                &model.config.auth_source,
+                            ) {
                                 model.send_daemon_command(DaemonCommand::FetchModels {
                                     provider_id: model.config.provider.clone(),
                                     base_url: model.config.base_url.clone(),
@@ -169,7 +172,10 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                             model.settings_picker_target = None;
                             return;
                         }
-                        if providers::supports_model_fetch_for(&model.config.provider) {
+                        if model.should_fetch_remote_models(
+                            &model.config.provider,
+                            &model.config.auth_source,
+                        ) {
                             model.send_daemon_command(DaemonCommand::FetchModels {
                                 provider_id: model.config.provider.clone(),
                                 base_url: model.config.base_url.clone(),
