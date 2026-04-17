@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { AgentRun } from "@/lib/agentRuns";
 import {
   formatRunStatus,
@@ -24,8 +25,14 @@ type SpawnedAgentNodeProps = {
   node: SpawnedAgentTreeNode<AgentRun>;
   depth: number;
   selectedDaemonThreadId: string | null;
+  selectedTaskId?: string | null;
   canOpenSpawnedThread: (run: AgentRun) => boolean;
   openSpawnedThread: (run: AgentRun) => Promise<boolean>;
+  renderActions?: (args: {
+    node: SpawnedAgentTreeNode<AgentRun>;
+    canOpen: boolean;
+    openSpawnedThread: () => void;
+  }) => ReactNode;
 };
 
 function sessionHint(run: AgentRun): string | null {
@@ -40,21 +47,27 @@ function renderNodeMeta(run: AgentRun): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-function SpawnedAgentNode({
+export function SpawnedAgentNode({
   node,
   depth,
   selectedDaemonThreadId,
+  selectedTaskId,
   canOpenSpawnedThread,
   openSpawnedThread,
+  renderActions,
 }: SpawnedAgentNodeProps) {
   const isSelected = Boolean(
-    node.item.thread_id && node.item.thread_id === selectedDaemonThreadId,
+    (node.item.thread_id && node.item.thread_id === selectedDaemonThreadId) ||
+      (selectedTaskId &&
+        (node.item.task_id === selectedTaskId || node.item.id === selectedTaskId)),
   );
   const canOpen = canOpenSpawnedThread(node.item);
   const meta = renderNodeMeta(node.item);
 
   return (
     <div
+      data-node-title={node.item.title}
+      data-node-depth={depth}
       style={{
         display: "grid",
         gap: "var(--space-2)",
@@ -121,12 +134,20 @@ function SpawnedAgentNode({
           <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
             {node.item.thread_id ? "Chat ready" : "Waiting for thread"}
           </div>
-          <ActionButton
-            disabled={!canOpen}
-            onClick={canOpen ? () => void openSpawnedThread(node.item) : undefined}
-          >
-            <span aria-label={`Open chat for ${node.item.title}`}>Open Chat</span>
-          </ActionButton>
+          {renderActions ? (
+            renderActions({
+              node,
+              canOpen,
+              openSpawnedThread: () => void openSpawnedThread(node.item),
+            })
+          ) : (
+            <ActionButton
+              disabled={!canOpen}
+              onClick={canOpen ? () => void openSpawnedThread(node.item) : undefined}
+            >
+              <span aria-label={`Open chat for ${node.item.title}`}>Open Chat</span>
+            </ActionButton>
+          )}
         </div>
       </div>
 
@@ -136,8 +157,10 @@ function SpawnedAgentNode({
           node={child}
           depth={depth + 1}
           selectedDaemonThreadId={selectedDaemonThreadId}
+          selectedTaskId={selectedTaskId}
           canOpenSpawnedThread={canOpenSpawnedThread}
           openSpawnedThread={openSpawnedThread}
+          renderActions={renderActions}
         />
       ))}
     </div>
@@ -217,6 +240,7 @@ export function SpawnedAgentsPanel({
             node={tree.anchor}
             depth={0}
             selectedDaemonThreadId={selectedDaemonThreadId}
+            selectedTaskId={null}
             canOpenSpawnedThread={canOpenSpawnedThread}
             openSpawnedThread={openSpawnedThread}
           />
@@ -228,6 +252,7 @@ export function SpawnedAgentsPanel({
             node={root}
             depth={0}
             selectedDaemonThreadId={selectedDaemonThreadId}
+            selectedTaskId={null}
             canOpenSpawnedThread={canOpenSpawnedThread}
             openSpawnedThread={openSpawnedThread}
           />
