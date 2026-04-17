@@ -1,120 +1,139 @@
-import { isTaskTerminal, type AgentTaskStatus } from "./agentTaskQueue";
+import { isTaskTerminal } from "./agentTaskQueue";
 import type { SpawnedAgentTreeSource } from "./agentRuns";
 
-export interface SpawnedAgentTreeContextItem {
-    id: string;
-    status: AgentTaskStatus;
-    created_at: number;
-    thread_id: string;
-    isContextRoot: true;
-}
-
 export interface SpawnedAgentTreeNode<T extends SpawnedAgentTreeSource> {
-    item: T | SpawnedAgentTreeContextItem;
+    item: T;
     children: SpawnedAgentTreeNode<T>[];
     openable: boolean;
     live: boolean;
 }
 
 export interface SpawnedAgentTree<T extends SpawnedAgentTreeSource> {
-    root: SpawnedAgentTreeNode<T> | null;
+    activeThreadId: string;
+    anchor: SpawnedAgentTreeNode<T> | null;
+    roots: SpawnedAgentTreeNode<T>[];
 }
 
-function pickLatest<T extends SpawnedAgentTreeSource>(items: readonly T[]): T | null {
-    if (items.length === 0) {
-        return null;
+function getTaskIdentity<T extends SpawnedAgentTreeSource>(item: T): string {
+    return item.task_id ?? item.id;
+}
+
+function compareSpawnedAgentTreeItems<T extends SpawnedAgentTreeSource>(left: T, right: T): number {
+    if (left.created_at !== right.created_at) {
+        return right.created_at - left.created_at;
     }
 
-    return items.reduce((latest, item) => {
-        if (item.created_at !== latest.created_at) {
-            return item.created_at > latest.created_at ? item : latest;
+    const leftIdentity = getTaskIdentity(left);
+    const rightIdentity = getTaskIdentity(right);
+    if (leftIdentity !== rightIdentity) {
+        return leftIdentity.localeCompare(rightIdentity);
+    }
+
+    return left.id.localeCompare(right.id);
+}
+
+function uniqueByTaskIdentity<T extends SpawnedAgentTreeSource>(items: readonly T[]): T[] {
+    const seen = new Set<string>();
+    const result: T[] = [];
+    for (const item of items) {
+        const identity = getTaskIdentity(item);
+        if (seen.has(identity)) {
+            continue;
         }
-        return item.id > latest.id ? item : latest;
-    });
+        seen.add(identity);
+        result.push(item);
+    }
+    return result;
 }
 
 function sortByCreatedDesc<T extends SpawnedAgentTreeSource>(items: readonly T[]): T[] {
-    return [...items].sort((left, right) => {
-        if (left.created_at !== right.created_at) {
-            return right.created_at - left.created_at;
-        }
-        return left.id.localeCompare(right.id);
-    });
+    return uniqueByTaskIdentity(items).sort(compareSpawnedAgentTreeItems);
+}
+
+function pickLatest<T extends SpawnedAgentTreeSource>(items: readonly T[]): T | null {
+    return sortByCreatedDesc(items)[0] ?? null;
+}
+
+function isVisibleRootCandidate<T extends SpawnedAgentTreeSource>(
+    item: T,
+    activeThreadId: string,
+    identityLookup: ReadonlySet<string>,
+): boolean {
+    const hasResolvedParent = item.parent_task_id ? identityLookup.has(item.parent_task_id) : false;
+    return Boolean(
+        !hasResolvedParent &&
+            (item.thread_id === activeThreadId || item.parent_thread_id === activeThreadId),
+    );
+}
+
+function buildTreeNode<T extends SpawnedAgentTreeSource>(
+    item: T,
+    items: readonly T[],
+    identityLookup: ReadonlySet<string>,
+    rootIdentityLookup: ReadonlySet<string>,
+    ancestry: Set<string>,
+): SpawnedAgentTreeNode<T> {
+    const currentIdentity = getTaskIdentity(item);
+    const nextAncestry = new Set(ancestry);
+    nextAncestry.add(currentIdentity);
+
+    const directChildren = items.filter((candidate) => candidate.parent_task_id === currentIdentity);
+    const fallbackChildren = item.thread_id
+        ? items.filter((candidate) => {
+            if (candidate.id === item.id) {
+                return false;
+            }
+            if (rootIdentityLookup.has(getTaskIdentity(candidate))) {
+                return false;
+            }
+            if (candidate.parent_task_id && identityLookup.has(candidate.parent_task_id)) {
+                return false;
+            }
+            return candidate.parent_thread_id === item.thread_id;
+        })
+        : [];
+
+    const childCandidates = sortByCreatedDesc([
+        ...directChildren,
+        ...fallbackChildren,
+    ]).filter((candidate, index, array) => array.findIndex((entry) => getTaskIdentity(entry) === getTaskIdentity(candidate)) === index);
+
+    return {
+        item,
+        children: childCandidates
+            .filter((candidate) => !nextAncestry.has(getTaskIdentity(candidate)))
+            .map((candidate) => buildTreeNode(candidate, items, identityLookup, rootIdentityLookup, nextAncestry)),
+        openable: Boolean(item.thread_id),
+        live: !isTaskTerminal(item),
+    };
 }
 
 export function deriveSpawnedAgentTree<T extends SpawnedAgentTreeSource>(
     items: readonly T[],
     activeThreadId: string | null | undefined,
-): SpawnedAgentTree<T> {
+): SpawnedAgentTree<T> | null {
     if (!activeThreadId || items.length === 0) {
-        return { root: null };
+        return null;
     }
 
-    const byId = new Map(items.map((item) => [item.id, item] as const));
+    const identityLookup = new Set(items.map((item) => getTaskIdentity(item)));
     const anchor = pickLatest(items.filter((item) => item.thread_id === activeThreadId));
-    const topLevelItems = anchor
-        ? items.filter((item) => item.id === anchor.id)
-        : sortByCreatedDesc(
-            items.filter((item) => {
-                if (item.parent_thread_id !== activeThreadId) {
-                    return false;
-                }
-                return !item.parent_task_id || !byId.has(item.parent_task_id);
-            }),
-        );
+    const visibleRootCandidates = sortByCreatedDesc(
+        items.filter((item) => isVisibleRootCandidate(item, activeThreadId, identityLookup)),
+    );
+    const rootIdentityLookup = new Set(visibleRootCandidates.map((item) => getTaskIdentity(item)));
 
-    if (!anchor && topLevelItems.length === 0) {
-        return { root: null };
+    const rootItems = visibleRootCandidates.filter((item) => !anchor || getTaskIdentity(item) !== getTaskIdentity(anchor));
+
+    if (rootItems.length === 0 && !anchor) {
+        return null;
     }
-
-    const buildNode = (item: T, ancestry: Set<string>): SpawnedAgentTreeNode<T> => {
-        const nextAncestry = new Set(ancestry);
-        nextAncestry.add(item.id);
-
-        const directChildren = items.filter((candidate) => candidate.parent_task_id === item.id);
-        const fallbackChildren = item.thread_id
-            ? items.filter((candidate) => {
-                if (candidate.id === item.id) {
-                    return false;
-                }
-                if (candidate.parent_thread_id !== item.thread_id) {
-                    return false;
-                }
-                return !candidate.parent_task_id || !byId.has(candidate.parent_task_id);
-            })
-            : [];
-
-        const childCandidates = sortByCreatedDesc([
-            ...directChildren,
-            ...fallbackChildren,
-        ]).filter((candidate, index, array) => array.findIndex((entry) => entry.id === candidate.id) === index);
-
-        const children = childCandidates
-            .filter((candidate) => !nextAncestry.has(candidate.id))
-            .map((candidate) => buildNode(candidate, nextAncestry));
-
-        return {
-            item,
-            children,
-            openable: Boolean(item.thread_id),
-            live: !isTaskTerminal(item),
-        };
-    };
 
     return {
-        root: {
-            item: anchor ?? {
-                id: `${activeThreadId}-root`,
-                status: anchor?.status ?? "in_progress",
-                created_at: anchor?.created_at ?? Math.max(0, ...topLevelItems.map((item) => item.created_at)),
-                thread_id: activeThreadId,
-                isContextRoot: true,
-            },
-            children: anchor
-                ? buildNode(anchor, new Set()).children
-                : topLevelItems.map((candidate) => buildNode(candidate, new Set())),
-            openable: Boolean(anchor?.thread_id),
-            live: anchor ? !isTaskTerminal(anchor) : topLevelItems.some((item) => !isTaskTerminal(item)),
-        },
+        activeThreadId,
+        anchor: anchor
+            ? buildTreeNode(anchor, items, identityLookup, rootIdentityLookup, new Set())
+            : null,
+        roots: rootItems.map((item) => buildTreeNode(item, items, identityLookup, rootIdentityLookup, new Set())),
     };
 }

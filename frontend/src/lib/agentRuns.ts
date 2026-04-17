@@ -38,6 +38,7 @@ export interface AgentRun {
 
 export interface SpawnedAgentTreeSource {
     id: string;
+    task_id?: string | null;
     status: AgentTaskStatus;
     created_at: number;
     thread_id?: string | null;
