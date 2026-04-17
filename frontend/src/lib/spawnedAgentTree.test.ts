@@ -2,6 +2,32 @@ import { describe, expect, it } from "vitest";
 import { deriveSpawnedAgentTree } from "./spawnedAgentTree.ts";
 
 describe("deriveSpawnedAgentTree", () => {
+  it("keeps the top-level ancestor as anchor when a descendant shares the same thread_id", () => {
+    const tree = deriveSpawnedAgentTree(
+      [
+        {
+          id: "ancestor",
+          status: "in_progress",
+          created_at: 10,
+          thread_id: "thread-root",
+        },
+        {
+          id: "descendant",
+          status: "in_progress",
+          created_at: 20,
+          thread_id: "thread-root",
+          parent_task_id: "ancestor",
+          parent_thread_id: "thread-root",
+        },
+      ],
+      "thread-root",
+    );
+
+    expect(tree?.anchor?.item.id).toBe("ancestor");
+    expect(tree?.roots).toHaveLength(0);
+    expect(tree?.anchor?.children[0]?.item.id).toBe("descendant");
+  });
+
   it("nests descendants by parent_task_id and keeps threadless nodes visible but closed", () => {
     const tree = deriveSpawnedAgentTree(
       [
@@ -195,5 +221,28 @@ describe("deriveSpawnedAgentTree", () => {
     expect(tree.anchor?.item.task_id).toBe("task-root");
     expect(tree.anchor?.children[0]?.item.task_id).toBe("task-child");
     expect(tree.roots).toHaveLength(0);
+  });
+
+  it("canonicalizes duplicate task identities by newest record regardless of input order", () => {
+    const older = {
+      id: "root-older",
+      task_id: "task-root",
+      status: "completed",
+      created_at: 10,
+      thread_id: "thread-root",
+    };
+    const newer = {
+      id: "root-newer",
+      task_id: "task-root",
+      status: "in_progress",
+      created_at: 20,
+      thread_id: "thread-root",
+    };
+
+    const forward = deriveSpawnedAgentTree([older, newer], "thread-root");
+    const reversed = deriveSpawnedAgentTree([newer, older], "thread-root");
+
+    expect(forward?.anchor?.item.id).toBe("root-newer");
+    expect(reversed?.anchor?.item.id).toBe("root-newer");
   });
 });

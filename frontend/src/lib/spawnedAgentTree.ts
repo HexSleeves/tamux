@@ -1,5 +1,14 @@
-import { isTaskTerminal } from "./agentTaskQueue";
-import type { SpawnedAgentTreeSource } from "./agentRuns";
+import { isTaskTerminal, type AgentTaskStatus } from "./agentTaskQueue";
+
+export interface SpawnedAgentTreeSource {
+    id: string;
+    task_id?: string | null;
+    status: AgentTaskStatus;
+    created_at: number;
+    thread_id?: string | null;
+    parent_task_id?: string | null;
+    parent_thread_id?: string | null;
+}
 
 export interface SpawnedAgentTreeNode<T extends SpawnedAgentTreeSource> {
     item: T;
@@ -13,6 +22,12 @@ export interface SpawnedAgentTree<T extends SpawnedAgentTreeSource> {
     anchor: SpawnedAgentTreeNode<T> | null;
     roots: SpawnedAgentTreeNode<T>[];
 }
+
+type SpawnedAgentTreeIndexes<T extends SpawnedAgentTreeSource> = {
+    byThreadId: Map<string, T[]>;
+    byParentTaskId: Map<string, T[]>;
+    byParentThreadId: Map<string, T[]>;
+};
 
 function getTaskIdentity<T extends SpawnedAgentTreeSource>(item: T): string {
     return item.task_id ?? item.id;
@@ -46,63 +61,99 @@ function uniqueByTaskIdentity<T extends SpawnedAgentTreeSource>(items: readonly 
     return result;
 }
 
-function sortByCreatedDesc<T extends SpawnedAgentTreeSource>(items: readonly T[]): T[] {
+function sortByPreferredOrder<T extends SpawnedAgentTreeSource>(items: readonly T[]): T[] {
     return uniqueByTaskIdentity(items).sort(compareSpawnedAgentTreeItems);
 }
 
-function pickLatest<T extends SpawnedAgentTreeSource>(items: readonly T[]): T | null {
-    return sortByCreatedDesc(items)[0] ?? null;
+function canonicalizeByIdentity<T extends SpawnedAgentTreeSource>(items: readonly T[]): T[] {
+    const byIdentity = new Map<string, T>();
+
+    for (const item of items) {
+        const identity = getTaskIdentity(item);
+        const current = byIdentity.get(identity);
+        if (!current || compareSpawnedAgentTreeItems(item, current) < 0) {
+            byIdentity.set(identity, item);
+        }
+    }
+
+    return sortByPreferredOrder([...byIdentity.values()]);
 }
 
-function isVisibleRootCandidate<T extends SpawnedAgentTreeSource>(
-    item: T,
-    activeThreadId: string,
-    identityLookup: ReadonlySet<string>,
-): boolean {
-    const hasResolvedParent = item.parent_task_id ? identityLookup.has(item.parent_task_id) : false;
-    return Boolean(
-        !hasResolvedParent &&
-            (item.thread_id === activeThreadId || item.parent_thread_id === activeThreadId),
-    );
+function buildIndexes<T extends SpawnedAgentTreeSource>(items: readonly T[]): SpawnedAgentTreeIndexes<T> {
+    const byThreadId = new Map<string, T[]>();
+    const byParentTaskId = new Map<string, T[]>();
+    const byParentThreadId = new Map<string, T[]>();
+
+    const push = (map: Map<string, T[]>, key: string, item: T) => {
+        const bucket = map.get(key);
+        if (bucket) {
+            bucket.push(item);
+            return;
+        }
+        map.set(key, [item]);
+    };
+
+    for (const item of items) {
+        if (item.thread_id) {
+            push(byThreadId, item.thread_id, item);
+        }
+        if (item.parent_task_id) {
+            push(byParentTaskId, item.parent_task_id, item);
+        }
+        if (item.parent_thread_id) {
+            push(byParentThreadId, item.parent_thread_id, item);
+        }
+    }
+
+    for (const map of [byThreadId, byParentTaskId, byParentThreadId]) {
+        for (const [key, bucket] of map.entries()) {
+            map.set(key, sortByPreferredOrder(bucket));
+        }
+    }
+
+    return { byThreadId, byParentTaskId, byParentThreadId };
 }
 
-function buildTreeNode<T extends SpawnedAgentTreeSource>(
+function hasResolvedParent<T extends SpawnedAgentTreeSource>(item: T, identityLookup: ReadonlySet<string>): boolean {
+    return Boolean(item.parent_task_id && identityLookup.has(item.parent_task_id));
+}
+
+function buildChildren<T extends SpawnedAgentTreeSource>(
     item: T,
-    items: readonly T[],
-    identityLookup: ReadonlySet<string>,
+    indexes: SpawnedAgentTreeIndexes<T>,
     rootIdentityLookup: ReadonlySet<string>,
     ancestry: Set<string>,
-): SpawnedAgentTreeNode<T> {
+): SpawnedAgentTreeNode<T>[] {
     const currentIdentity = getTaskIdentity(item);
+    const directChildren = indexes.byParentTaskId.get(currentIdentity) ?? [];
+    const fallbackChildren = item.thread_id ? indexes.byParentThreadId.get(item.thread_id) ?? [] : [];
+    const childCandidates = sortByPreferredOrder([...directChildren, ...fallbackChildren]).filter(
+        (candidate) => !rootIdentityLookup.has(getTaskIdentity(candidate)) && !ancestry.has(getTaskIdentity(candidate)),
+    );
+
+    if (childCandidates.length === 0) {
+        return [];
+    }
+
     const nextAncestry = new Set(ancestry);
     nextAncestry.add(currentIdentity);
 
-    const directChildren = items.filter((candidate) => candidate.parent_task_id === currentIdentity);
-    const fallbackChildren = item.thread_id
-        ? items.filter((candidate) => {
-            if (candidate.id === item.id) {
-                return false;
-            }
-            if (rootIdentityLookup.has(getTaskIdentity(candidate))) {
-                return false;
-            }
-            if (candidate.parent_task_id && identityLookup.has(candidate.parent_task_id)) {
-                return false;
-            }
-            return candidate.parent_thread_id === item.thread_id;
-        })
-        : [];
+    return childCandidates.map((candidate) => ({
+        item: candidate,
+        children: buildChildren(candidate, indexes, rootIdentityLookup, nextAncestry),
+        openable: Boolean(candidate.thread_id),
+        live: !isTaskTerminal(candidate),
+    }));
+}
 
-    const childCandidates = sortByCreatedDesc([
-        ...directChildren,
-        ...fallbackChildren,
-    ]).filter((candidate, index, array) => array.findIndex((entry) => getTaskIdentity(entry) === getTaskIdentity(candidate)) === index);
-
+function buildNode<T extends SpawnedAgentTreeSource>(
+    item: T,
+    indexes: SpawnedAgentTreeIndexes<T>,
+    rootIdentityLookup: ReadonlySet<string>,
+): SpawnedAgentTreeNode<T> {
     return {
         item,
-        children: childCandidates
-            .filter((candidate) => !nextAncestry.has(getTaskIdentity(candidate)))
-            .map((candidate) => buildTreeNode(candidate, items, identityLookup, rootIdentityLookup, nextAncestry)),
+        children: buildChildren(item, indexes, rootIdentityLookup, new Set([getTaskIdentity(item)])),
         openable: Boolean(item.thread_id),
         live: !isTaskTerminal(item),
     };
@@ -116,24 +167,27 @@ export function deriveSpawnedAgentTree<T extends SpawnedAgentTreeSource>(
         return null;
     }
 
-    const identityLookup = new Set(items.map((item) => getTaskIdentity(item)));
-    const anchor = pickLatest(items.filter((item) => item.thread_id === activeThreadId));
-    const visibleRootCandidates = sortByCreatedDesc(
-        items.filter((item) => isVisibleRootCandidate(item, activeThreadId, identityLookup)),
-    );
-    const rootIdentityLookup = new Set(visibleRootCandidates.map((item) => getTaskIdentity(item)));
+    const canonicalItems = canonicalizeByIdentity(items);
+    const indexes = buildIndexes(canonicalItems);
+    const identityLookup = new Set(canonicalItems.map((item) => getTaskIdentity(item)));
 
-    const rootItems = visibleRootCandidates.filter((item) => !anchor || getTaskIdentity(item) !== getTaskIdentity(anchor));
+    const visibleRootCandidates = sortByPreferredOrder([
+        ...(indexes.byThreadId.get(activeThreadId) ?? []),
+        ...(indexes.byParentThreadId.get(activeThreadId) ?? []),
+    ].filter((item) => !hasResolvedParent(item, identityLookup)));
 
-    if (rootItems.length === 0 && !anchor) {
+    if (visibleRootCandidates.length === 0) {
         return null;
     }
 
+    const anchorCandidate = visibleRootCandidates.find((item) => item.thread_id === activeThreadId) ?? null;
+    const rootIdentityLookup = new Set(visibleRootCandidates.map((item) => getTaskIdentity(item)));
+
     return {
         activeThreadId,
-        anchor: anchor
-            ? buildTreeNode(anchor, items, identityLookup, rootIdentityLookup, new Set())
-            : null,
-        roots: rootItems.map((item) => buildTreeNode(item, items, identityLookup, rootIdentityLookup, new Set())),
+        anchor: anchorCandidate ? buildNode(anchorCandidate, indexes, rootIdentityLookup) : null,
+        roots: visibleRootCandidates
+            .filter((item) => !anchorCandidate || getTaskIdentity(item) !== getTaskIdentity(anchorCandidate))
+            .map((item) => buildNode(item, indexes, rootIdentityLookup)),
     };
 }
