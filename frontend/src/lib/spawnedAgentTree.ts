@@ -1,8 +1,16 @@
-import { isTaskTerminal } from "./agentTaskQueue";
+import { isTaskTerminal, type AgentTaskStatus } from "./agentTaskQueue";
 import type { SpawnedAgentTreeSource } from "./agentRuns";
 
+export interface SpawnedAgentTreeContextItem {
+    id: string;
+    status: AgentTaskStatus;
+    created_at: number;
+    thread_id: string;
+    isContextRoot: true;
+}
+
 export interface SpawnedAgentTreeNode<T extends SpawnedAgentTreeSource> {
-    item: T;
+    item: T | SpawnedAgentTreeContextItem;
     children: SpawnedAgentTreeNode<T>[];
     openable: boolean;
     live: boolean;
@@ -43,14 +51,21 @@ export function deriveSpawnedAgentTree<T extends SpawnedAgentTreeSource>(
     }
 
     const byId = new Map(items.map((item) => [item.id, item] as const));
-    const threadRoot = pickLatest(items.filter((item) => item.thread_id === activeThreadId));
-    const parentThreadRoot = threadRoot ?? pickLatest(items.filter((item) => item.parent_thread_id === activeThreadId));
+    const anchor = pickLatest(items.filter((item) => item.thread_id === activeThreadId));
+    const topLevelItems = anchor
+        ? items.filter((item) => item.id === anchor.id)
+        : sortByCreatedDesc(
+            items.filter((item) => {
+                if (item.parent_thread_id !== activeThreadId) {
+                    return false;
+                }
+                return !item.parent_task_id || !byId.has(item.parent_task_id);
+            }),
+        );
 
-    if (!parentThreadRoot) {
+    if (!anchor && topLevelItems.length === 0) {
         return { root: null };
     }
-
-    const anchorThreadId = parentThreadRoot.thread_id ?? activeThreadId;
 
     const buildNode = (item: T, ancestry: Set<string>): SpawnedAgentTreeNode<T> => {
         const nextAncestry = new Set(ancestry);
@@ -62,22 +77,12 @@ export function deriveSpawnedAgentTree<T extends SpawnedAgentTreeSource>(
                 if (candidate.id === item.id) {
                     return false;
                 }
-                if (candidate.parent_task_id && byId.has(candidate.parent_task_id)) {
+                if (candidate.parent_thread_id !== item.thread_id) {
                     return false;
                 }
-                return candidate.parent_thread_id === item.thread_id;
+                return !candidate.parent_task_id || !byId.has(candidate.parent_task_id);
             })
-            : item.id === parentThreadRoot.id && anchorThreadId
-                ? items.filter((candidate) => {
-                    if (candidate.id === item.id) {
-                        return false;
-                    }
-                    if (candidate.parent_task_id && byId.has(candidate.parent_task_id)) {
-                        return false;
-                    }
-                    return candidate.parent_thread_id === anchorThreadId;
-                })
-                : [];
+            : [];
 
         const childCandidates = sortByCreatedDesc([
             ...directChildren,
@@ -97,6 +102,19 @@ export function deriveSpawnedAgentTree<T extends SpawnedAgentTreeSource>(
     };
 
     return {
-        root: buildNode(parentThreadRoot, new Set()),
+        root: {
+            item: anchor ?? {
+                id: `${activeThreadId}-root`,
+                status: anchor?.status ?? "in_progress",
+                created_at: anchor?.created_at ?? Math.max(0, ...topLevelItems.map((item) => item.created_at)),
+                thread_id: activeThreadId,
+                isContextRoot: true,
+            },
+            children: anchor
+                ? buildNode(anchor, new Set()).children
+                : topLevelItems.map((candidate) => buildNode(candidate, new Set())),
+            openable: Boolean(anchor?.thread_id),
+            live: anchor ? !isTaskTerminal(anchor) : topLevelItems.some((item) => !isTaskTerminal(item)),
+        },
     };
 }

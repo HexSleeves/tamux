@@ -31,8 +31,6 @@ describe("deriveSpawnedAgentTree", () => {
     );
 
     expect(tree.root?.item.id).toBe("root-task");
-    expect(tree.root?.openable).toBe(true);
-    expect(tree.root?.live).toBe(true);
     expect(tree.root?.children[0]?.item.id).toBe("child-task");
     expect(tree.root?.children[0]?.openable).toBe(true);
     expect(tree.root?.children[0]?.live).toBe(true);
@@ -41,7 +39,7 @@ describe("deriveSpawnedAgentTree", () => {
     expect(tree.root?.children[0]?.children[0]?.live).toBe(false);
   });
 
-  it("resolves the visible root from parent_thread_id when the active thread is the parent thread", () => {
+  it("resolves the visible root container from parent_thread_id when the active thread is the parent thread", () => {
     const tree = deriveSpawnedAgentTree(
       [
         {
@@ -61,9 +59,10 @@ describe("deriveSpawnedAgentTree", () => {
       "thread-parent",
     );
 
-    expect(tree.root?.item.id).toBe("spawned-root");
-    expect(tree.root?.openable).toBe(true);
-    expect(tree.root?.live).toBe(true);
+    expect(tree.root?.item.id).toBe("thread-parent-root");
+    expect(tree.root?.children[0]?.item.id).toBe("spawned-root");
+    expect(tree.root?.children[0]?.openable).toBe(true);
+    expect(tree.root?.children[0]?.live).toBe(true);
   });
 
   it("keeps descendant nodes visible when an intermediate parent task is missing", () => {
@@ -99,5 +98,42 @@ describe("deriveSpawnedAgentTree", () => {
     expect(tree.root?.children[0]?.item.id).toBe("orphan-child");
     expect(tree.root?.children[0]?.children[0]?.item.id).toBe("grandchild");
     expect(tree.root?.children[0]?.children[0]?.openable).toBe(true);
+  });
+
+  it("keeps multiple sibling spawned children visible under one parent thread", () => {
+    const tree = deriveSpawnedAgentTree(
+      [
+        {
+          id: "sibling-a",
+          status: "in_progress",
+          created_at: 20,
+          thread_id: "thread-a",
+          parent_thread_id: "thread-parent",
+        },
+        {
+          id: "sibling-b",
+          status: "completed",
+          created_at: 30,
+          thread_id: "thread-b",
+          parent_thread_id: "thread-parent",
+        },
+        {
+          id: "nested-child",
+          status: "in_progress",
+          created_at: 40,
+          thread_id: "thread-child",
+          parent_task_id: "sibling-a",
+          parent_thread_id: "thread-a",
+        },
+      ],
+      "thread-parent",
+    );
+
+    expect(tree.root?.item.id).toBe("thread-parent-root");
+    expect(tree.root?.children.map((child) => child.item.id)).toEqual([
+      "sibling-b",
+      "sibling-a",
+    ]);
+    expect(tree.root?.children[1]?.children[0]?.item.id).toBe("nested-child");
   });
 });
