@@ -1032,7 +1032,8 @@ mod tests {
         let history = HistoryStore::new_test_store(&root).await?;
         ensure_memory_files(&root).await?;
 
-        let fact = "Prefer deterministic rust memory-distillation sequencing over ad-hoc extraction.";
+        let fact =
+            "Prefer deterministic rust memory-distillation sequencing over ad-hoc extraction.";
         let candidate = DistillationCandidate {
             source_thread_id: "thread-1".into(),
             source_message_range: Some("msg#1".into()),
@@ -1056,10 +1057,7 @@ mod tests {
         assert!(!apply_distilled_candidate(&history, &root, &config, &candidate).await?);
 
         let final_content = tokio::fs::read_to_string(&memory_path).await?;
-        assert_eq!(
-            final_content.matches(fact).count(),
-            1
-        );
+        assert_eq!(final_content.matches(fact).count(), 1);
 
         fs::remove_dir_all(root)?;
         Ok(())
@@ -1071,7 +1069,8 @@ mod tests {
         let history = HistoryStore::new_test_store(&root).await?;
         ensure_memory_files(&root).await?;
 
-        let fact = "Dream-state SOUL hint: prefer blacksmith-grade toolcraft for deterministic workflows.";
+        let fact =
+            "Dream-state SOUL hint: prefer blacksmith-grade toolcraft for deterministic workflows.";
         let candidate = DistillationCandidate {
             source_thread_id: "thread-soul".into(),
             source_message_range: Some("msg#1".into()),

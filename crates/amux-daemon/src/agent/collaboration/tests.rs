@@ -794,8 +794,7 @@ async fn resolve_bids_tie_prefers_higher_agent_affinity_profile_confidence() {
         .expect("resolve_bids should succeed");
 
     assert_eq!(
-        resolution["primary_task_id"],
-        child_b.id,
+        resolution["primary_task_id"], child_b.id,
         "on exact bid ties, higher learned agent confidence profile should win primary routing"
     );
     assert_eq!(resolution["reviewer_task_id"], child_a.id);

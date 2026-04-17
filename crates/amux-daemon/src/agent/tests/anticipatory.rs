@@ -946,7 +946,11 @@ async fn intent_prediction_resolution_treats_inspect_changes_as_repo_verificatio
     let engine = AgentEngine::new_test(manager, config, root.path()).await;
 
     engine
-        .record_operator_attention("conversation:chat", Some("thread-intent-repo-resolve"), None)
+        .record_operator_attention(
+            "conversation:chat",
+            Some("thread-intent-repo-resolve"),
+            None,
+        )
         .await
         .unwrap();
     engine.thread_work_contexts.write().await.insert(
