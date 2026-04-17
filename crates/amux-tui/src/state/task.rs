@@ -22,6 +22,9 @@ pub struct AgentTask {
     pub title: String,
     pub description: String,
     pub thread_id: Option<String>,
+    pub parent_task_id: Option<String>,
+    pub parent_thread_id: Option<String>,
+    pub created_at: u64,
     pub status: Option<TaskStatus>,
     pub progress: u8,
     pub session_id: Option<String>,
@@ -309,6 +312,10 @@ impl TaskState {
         self.tasks.iter().find(|t| t.id == id)
     }
 
+    pub fn spawned_tree_items(&self) -> &[AgentTask] {
+        &self.tasks
+    }
+
     pub fn goal_run_by_id(&self, id: &str) -> Option<&GoalRun> {
         self.goal_runs.iter().find(|r| r.id == id)
     }
@@ -385,7 +392,8 @@ impl TaskState {
 
             TaskAction::TaskUpdate(updated) => {
                 if let Some(existing) = self.tasks.iter_mut().find(|t| t.id == updated.id) {
-                    *existing = updated;
+                    let merged = merge_task_update(existing, updated);
+                    *existing = merged;
                 } else {
                     self.tasks.push(updated);
                 }
@@ -464,6 +472,70 @@ impl TaskState {
                 self.last_digest = Some(digest);
             }
         }
+    }
+}
+
+fn merge_task_update(existing: &AgentTask, mut updated: AgentTask) -> AgentTask {
+    if updated.description.is_empty() {
+        updated.description = existing.description.clone();
+    }
+    if updated.thread_id.is_none() {
+        updated.thread_id = existing.thread_id.clone();
+    }
+    if updated.parent_task_id.is_none() {
+        updated.parent_task_id = existing.parent_task_id.clone();
+    }
+    if updated.parent_thread_id.is_none() {
+        updated.parent_thread_id = existing.parent_thread_id.clone();
+    }
+    if updated.created_at == 0 {
+        updated.created_at = existing.created_at;
+    }
+    if updated.session_id.is_none() {
+        updated.session_id = existing.session_id.clone();
+    }
+    if updated.goal_run_id.is_none() {
+        updated.goal_run_id = existing.goal_run_id.clone();
+    }
+    if updated.goal_step_title.is_none() {
+        updated.goal_step_title = existing.goal_step_title.clone();
+    }
+    if updated.command.is_none() {
+        updated.command = existing.command.clone();
+    }
+    if updated.awaiting_approval_id.is_none() {
+        updated.awaiting_approval_id = existing.awaiting_approval_id.clone();
+    }
+    if updated.blocked_reason.is_none() {
+        updated.blocked_reason = existing.blocked_reason.clone();
+    }
+
+    updated
+}
+
+impl super::spawned_tree::SpawnedAgentTreeSource for AgentTask {
+    fn spawned_tree_identity(&self) -> &str {
+        &self.id
+    }
+
+    fn spawned_tree_created_at(&self) -> u64 {
+        self.created_at
+    }
+
+    fn spawned_tree_thread_id(&self) -> Option<&str> {
+        self.thread_id.as_deref()
+    }
+
+    fn spawned_tree_parent_task_id(&self) -> Option<&str> {
+        self.parent_task_id.as_deref()
+    }
+
+    fn spawned_tree_parent_thread_id(&self) -> Option<&str> {
+        self.parent_thread_id.as_deref()
+    }
+
+    fn spawned_tree_status(&self) -> Option<TaskStatus> {
+        self.status
     }
 }
 

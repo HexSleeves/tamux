@@ -141,6 +141,9 @@ pub(super) fn convert_task(t: crate::wire::AgentTask) -> task::AgentTask {
         title: t.title,
         description: t.description,
         thread_id: t.thread_id,
+        parent_task_id: t.parent_task_id,
+        parent_thread_id: t.parent_thread_id,
+        created_at: t.created_at,
         status: t.status.map(|s| match s {
             crate::wire::TaskStatus::Queued => task::TaskStatus::Queued,
             crate::wire::TaskStatus::InProgress => task::TaskStatus::InProgress,

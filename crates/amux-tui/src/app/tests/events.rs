@@ -1203,6 +1203,60 @@ fn task_list_hydrates_pending_approvals_from_awaiting_approval_tasks() {
 }
 
 #[test]
+fn task_list_event_preserves_spawned_tree_metadata() {
+    let mut model = make_model();
+
+    model.handle_task_list_event(vec![crate::wire::AgentTask {
+        id: "task-1".to_string(),
+        title: "Hydrated child".to_string(),
+        thread_id: Some("thread-1".to_string()),
+        parent_task_id: Some("task-root".to_string()),
+        parent_thread_id: Some("thread-root".to_string()),
+        created_at: 42,
+        ..Default::default()
+    }]);
+
+    let task = model
+        .tasks
+        .task_by_id("task-1")
+        .expect("task should be present after hydration");
+    assert_eq!(task.parent_task_id.as_deref(), Some("task-root"));
+    assert_eq!(task.parent_thread_id.as_deref(), Some("thread-root"));
+    assert_eq!(task.created_at, 42);
+}
+
+#[test]
+fn fallback_task_update_preserves_spawned_tree_metadata() {
+    let mut model = make_model();
+
+    model.handle_task_list_event(vec![crate::wire::AgentTask {
+        id: "task-1".to_string(),
+        title: "Hydrated child".to_string(),
+        thread_id: Some("thread-1".to_string()),
+        parent_task_id: Some("task-root".to_string()),
+        parent_thread_id: Some("thread-root".to_string()),
+        created_at: 42,
+        ..Default::default()
+    }]);
+
+    model.handle_task_update_event(crate::wire::AgentTask {
+        id: "task-1".to_string(),
+        title: "Hydrated child".to_string(),
+        status: Some(crate::wire::TaskStatus::InProgress),
+        progress: 75,
+        ..Default::default()
+    });
+
+    let task = model
+        .tasks
+        .task_by_id("task-1")
+        .expect("task should still be present after update");
+    assert_eq!(task.parent_task_id.as_deref(), Some("task-root"));
+    assert_eq!(task.parent_thread_id.as_deref(), Some("thread-root"));
+    assert_eq!(task.created_at, 42);
+}
+
+#[test]
 fn unrelated_sync_does_not_clear_event_backed_pending_approval() {
     let mut model = make_model();
 

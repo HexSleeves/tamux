@@ -13,6 +13,7 @@ pub mod modal;
 pub mod notifications;
 pub mod settings;
 pub mod sidebar;
+pub mod spawned_tree;
 pub mod statistics;
 pub mod subagents;
 pub mod task;

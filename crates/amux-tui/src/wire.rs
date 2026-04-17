@@ -245,6 +245,12 @@ pub struct AgentTask {
     #[serde(default)]
     pub thread_id: Option<String>,
     #[serde(default)]
+    pub parent_task_id: Option<String>,
+    #[serde(default)]
+    pub parent_thread_id: Option<String>,
+    #[serde(default)]
+    pub created_at: u64,
+    #[serde(default)]
     pub status: Option<TaskStatus>,
     #[serde(default)]
     pub progress: u8,

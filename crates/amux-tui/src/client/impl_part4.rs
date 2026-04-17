@@ -278,6 +278,9 @@ impl DaemonClient {
                             .unwrap_or_else(|| "Task update".to_string()),
                         description: String::new(),
                         thread_id: None,
+                        parent_task_id: None,
+                        parent_thread_id: None,
+                        created_at: 0,
                         status: event
                             .get("status")
                             .cloned()

@@ -1,6 +1,14 @@
 use super::*;
 use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
 
+fn make_thread(id: &str, title: &str) -> AgentThread {
+    AgentThread {
+        id: id.into(),
+        title: title.into(),
+        ..Default::default()
+    }
+}
+
 #[test]
 fn delta_appends_to_streaming_content() {
     let mut state = ChatState::new();
@@ -151,6 +159,91 @@ fn thread_list_received_replaces_threads() {
     ];
     state.reduce(ChatAction::ThreadListReceived(threads));
     assert_eq!(state.threads().len(), 2);
+}
+
+#[test]
+fn thread_history_stack_pushes_and_pops_in_order() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadListReceived(vec![
+        make_thread("thread-a", "A"),
+        make_thread("thread-b", "B"),
+        make_thread("thread-c", "C"),
+    ]));
+    state.reduce(ChatAction::SelectThread("thread-a".into()));
+
+    assert!(state.open_spawned_thread("thread-a", "thread-b"));
+    assert!(state.open_spawned_thread("thread-b", "thread-c"));
+    assert_eq!(
+        state.thread_history_stack(),
+        &["thread-a".to_string(), "thread-b".to_string()]
+    );
+
+    assert_eq!(state.go_back_thread(), Some("thread-b".to_string()));
+    assert_eq!(state.active_thread_id(), Some("thread-b"));
+    assert_eq!(state.thread_history_stack(), &["thread-a".to_string()]);
+
+    assert_eq!(state.go_back_thread(), Some("thread-a".to_string()));
+    assert_eq!(state.active_thread_id(), Some("thread-a"));
+    assert!(state.thread_history_stack().is_empty());
+}
+
+#[test]
+fn thread_history_stack_suppresses_duplicate_top_entries() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadListReceived(vec![
+        make_thread("thread-a", "A"),
+        make_thread("thread-b", "B"),
+    ]));
+    state.reduce(ChatAction::SelectThread("thread-a".into()));
+
+    assert!(state.open_spawned_thread("thread-a", "thread-b"));
+    assert!(state.open_spawned_thread("thread-a", "thread-b"));
+
+    assert_eq!(state.thread_history_stack(), &["thread-a".to_string()]);
+}
+
+#[test]
+fn thread_history_stack_clears_on_ordinary_selection_and_prunes_deleted_threads() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadListReceived(vec![
+        make_thread("thread-a", "A"),
+        make_thread("thread-b", "B"),
+        make_thread("thread-c", "C"),
+    ]));
+    state.reduce(ChatAction::SelectThread("thread-a".into()));
+
+    assert!(state.open_spawned_thread("thread-a", "thread-b"));
+    assert!(state.open_spawned_thread("thread-b", "thread-c"));
+    assert_eq!(state.thread_navigation_depth(), 2);
+
+    state.reduce(ChatAction::SelectThread("thread-c".into()));
+    assert!(state.thread_history_stack().is_empty());
+    assert_eq!(state.go_back_thread(), None);
+
+    state.open_spawned_thread("thread-c", "thread-a");
+    state.reduce(ChatAction::ThreadDeleted {
+        thread_id: "thread-c".into(),
+    });
+    assert!(state.thread_history_stack().is_empty());
+    assert_eq!(state.go_back_thread(), None);
+}
+
+#[test]
+fn thread_history_stack_prunes_missing_threads_on_list_replacement() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadListReceived(vec![
+        make_thread("thread-a", "A"),
+        make_thread("thread-b", "B"),
+        make_thread("thread-c", "C"),
+    ]));
+    state.reduce(ChatAction::SelectThread("thread-a".into()));
+
+    assert!(state.open_spawned_thread("thread-a", "thread-b"));
+    assert_eq!(state.thread_history_stack(), &["thread-a".to_string()]);
+
+    state.reduce(ChatAction::ThreadListReceived(vec![make_thread("thread-c", "C")]));
+    assert!(state.thread_history_stack().is_empty());
+    assert_eq!(state.go_back_thread(), None);
 }
 
 #[test]
