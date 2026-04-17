@@ -36,6 +36,15 @@ export interface AgentRun {
     last_error?: string | null;
 }
 
+export interface SpawnedAgentTreeSource {
+    id: string;
+    status: AgentTaskStatus;
+    created_at: number;
+    thread_id?: string | null;
+    parent_task_id?: string | null;
+    parent_thread_id?: string | null;
+}
+
 export async function fetchAgentRuns(): Promise<AgentRun[]> {
     const amux = getBridge();
     if (!amux?.agentListRuns) {
