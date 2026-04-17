@@ -737,6 +737,7 @@ impl<'a> SendMessageRunner<'a> {
                     } => match overflow_action {
                         crate::agent::types::ContextOverflowAction::Error => {
                             tracing::warn!(thread_id = %self.tid, "context budget exceeded - stopping");
+                            self.terminated_for_budget = true;
                             self.engine.emit_workflow_notice(
                                 &self.tid,
                                 "budget-exceeded",

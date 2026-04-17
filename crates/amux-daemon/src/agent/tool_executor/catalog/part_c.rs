@@ -252,7 +252,7 @@ fn add_available_tools_part_c(
     tools.push(tool_def("list_subagents", "List child tasks spawned under the current parent task or thread, including runtime, status, thread/session metadata, delegation depth, and remaining budget info when available.", serde_json::json!({
         "type": "object",
         "properties": {
-            "status": { "type": "string", "enum": ["queued", "in_progress", "awaiting_approval", "blocked", "failed_analyzing", "completed", "failed", "cancelled"], "description": "Optional status filter" },
+            "status": { "type": "string", "enum": ["queued", "in_progress", "awaiting_approval", "blocked", "failed_analyzing", "budget_exceeded", "completed", "failed", "cancelled"], "description": "Optional status filter" },
             "parent_task_id": { "type": "string", "description": "Override parent task scope" },
             "parent_thread_id": { "type": "string", "description": "Override parent thread scope" },
             "limit": { "type": "integer", "description": "Maximum subagents to return (default: 20)" }

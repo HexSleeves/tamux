@@ -108,7 +108,7 @@ fn add_available_tools_part_d(
     tools.push(tool_def("list_tasks", "List daemon-managed background tasks and their status, dependencies, schedule, and recent execution metadata.", serde_json::json!({
         "type": "object",
         "properties": {
-            "status": { "type": "string", "enum": ["queued", "in_progress", "awaiting_approval", "blocked", "failed_analyzing", "completed", "failed", "cancelled"] },
+            "status": { "type": "string", "enum": ["queued", "in_progress", "awaiting_approval", "blocked", "failed_analyzing", "budget_exceeded", "completed", "failed", "cancelled"] },
             "limit": { "type": "integer", "description": "Maximum number of tasks to return" }
         }
     })));
