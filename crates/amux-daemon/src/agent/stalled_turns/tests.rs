@@ -109,6 +109,33 @@ fn stalled_turn_candidate_marks_escalation_ready_after_third_retry_window() {
     assert!(candidate.escalation_ready(331_000));
 }
 
+#[test]
+fn stalled_turn_worker_returns_continue_thread_action() {
+    let observation = super::types::ThreadStallObservation {
+        thread_id: "thread-1".to_string(),
+        last_message_id: "assistant-1".to_string(),
+        last_message_at: 1_000,
+        last_assistant_message: "Working. Let me draft the redesigned content now.".to_string(),
+        class: StalledTurnClass::PromiseWithoutAction,
+        stream_progress_kind: None,
+        task_id: Some("task-1".to_string()),
+        goal_run_id: None,
+    };
+
+    let result = crate::agent::background_workers::domain_safety::evaluate_tick(
+        vec![observation],
+        Vec::new(),
+        31_000,
+    );
+
+    assert_eq!(result.len(), 1);
+    assert!(matches!(
+        &result[0],
+        crate::agent::background_workers::protocol::SafetyDecision::Retry { candidate }
+            if candidate.thread_id == "thread-1" && candidate.retries_sent == 0
+    ));
+}
+
 async fn spawn_stub_assistant_server(response_text: &str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

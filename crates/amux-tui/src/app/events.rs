@@ -275,7 +275,12 @@ impl TuiModel {
             ClientEvent::SpeechToTextResult { content } => {
                 let transcript = serde_json::from_str::<serde_json::Value>(&content)
                     .ok()
-                    .and_then(|value| value.get("text").and_then(|value| value.as_str()).map(str::to_string))
+                    .and_then(|value| {
+                        value
+                            .get("text")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string)
+                    })
                     .unwrap_or_else(|| content.trim().to_string());
                 if !transcript.is_empty() {
                     if !self.input.buffer().trim().is_empty() {
@@ -291,7 +296,12 @@ impl TuiModel {
             ClientEvent::TextToSpeechResult { content } => {
                 let path = serde_json::from_str::<serde_json::Value>(&content)
                     .ok()
-                    .and_then(|value| value.get("path").and_then(|value| value.as_str()).map(str::to_string));
+                    .and_then(|value| {
+                        value
+                            .get("path")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string)
+                    });
                 if let Some(path) = path {
                     self.play_audio_path(&path);
                 } else {

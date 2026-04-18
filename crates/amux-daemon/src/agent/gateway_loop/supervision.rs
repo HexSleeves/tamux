@@ -7,6 +7,16 @@ impl AgentEngine {
         control.restart_not_before_ms = None;
     }
 
+    #[cfg(test)]
+    pub(crate) async fn gateway_restart_attempts(&self) -> u32 {
+        gateway_runtime_control().lock().await.restart_attempts
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn gateway_restart_not_before_ms(&self) -> Option<u64> {
+        gateway_runtime_control().lock().await.restart_not_before_ms
+    }
+
     pub(super) async fn schedule_gateway_restart_backoff(&self, reason: &str) {
         let mut control = gateway_runtime_control().lock().await;
         control.restart_attempts = control.restart_attempts.saturating_add(1);

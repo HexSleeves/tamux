@@ -1,4 +1,5 @@
 use super::participants::{apply_vote_to_disagreement, normalize_position, normalize_topic};
+use crate::agent::consensus::bid_priors::effective_bid_confidence;
 
 const MIN_CONSENSUS_BID_CONFIDENCE: f64 = 0.3;
 use super::*;
@@ -677,6 +678,23 @@ impl AgentEngine {
             anyhow::bail!("collaboration capability is disabled in agent config");
         }
         let debate_config = config.debate;
+        let role_by_task = {
+            let collaboration = self.collaboration.read().await;
+            let Some(session) = collaboration.get(parent_task_id) else {
+                anyhow::bail!("no collaboration session found for parent task {parent_task_id}");
+            };
+            session
+                .agents
+                .iter()
+                .map(|agent| (agent.task_id.clone(), agent.role.clone()))
+                .collect::<HashMap<_, _>>()
+        };
+        let prior_by_role = self
+            .load_consensus_bid_priors(&role_by_task.values().cloned().collect::<Vec<_>>())
+            .await?
+            .into_iter()
+            .map(|prior| (prior.role, prior.prior_score))
+            .collect::<HashMap<_, _>>();
         let mut collaboration = self.collaboration.write().await;
         let Some(session) = collaboration.get_mut(parent_task_id) else {
             anyhow::bail!("no collaboration session found for parent task {parent_task_id}");
@@ -699,12 +717,24 @@ impl AgentEngine {
                 .get(&right.task_id)
                 .copied()
                 .unwrap_or(0.0);
+            let left_prior = role_by_task
+                .get(&left.task_id)
+                .and_then(|role| prior_by_role.get(role))
+                .copied()
+                .unwrap_or(0.5);
+            let right_prior = role_by_task
+                .get(&right.task_id)
+                .and_then(|role| prior_by_role.get(role))
+                .copied()
+                .unwrap_or(0.5);
+            let left_effective_confidence = effective_bid_confidence(left.confidence, left_prior);
+            let right_effective_confidence =
+                effective_bid_confidence(right.confidence, right_prior);
             bid_sort_key(&left.availability)
                 .cmp(&bid_sort_key(&right.availability))
                 .then_with(|| {
-                    right
-                        .confidence
-                        .partial_cmp(&left.confidence)
+                    right_effective_confidence
+                        .partial_cmp(&left_effective_confidence)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .then_with(|| {
@@ -769,6 +799,7 @@ impl AgentEngine {
             "primary_task_id": assignment.primary_task_id,
             "reviewer_task_id": assignment.reviewer_task_id,
             "bids": ranked,
+            "consensus_priors": prior_by_role,
         });
         drop(collaboration);
         self.persist_collaboration_session(&snapshot).await?;
@@ -1258,6 +1289,17 @@ impl AgentEngine {
         };
         if task.source != "subagent" {
             return;
+        }
+        let inferred_role = super::participants::infer_collaboration_role(task);
+        if let Err(error) = self
+            .record_consensus_bid_outcome(&inferred_role, outcome)
+            .await
+        {
+            tracing::warn!(
+                task_id = %task.id,
+                role = %inferred_role,
+                "failed to record consensus prior outcome: {error}"
+            );
         }
         let summary = match outcome {
             "success" => task

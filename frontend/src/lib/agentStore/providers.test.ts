@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   getDefaultModelForProvider,
+  getProviderApiType,
   getProviderDefinition,
+  normalizeApiTransport,
   normalizeAgentProviderId,
   normalizeProviderConfig,
 } from "./providers.ts";
@@ -137,5 +139,26 @@ describe("frontend Azure OpenAI provider catalog", () => {
 
     expect(normalized.base_url).toBe("https://my-real-resource.openai.azure.com/openai/v1");
     expect(normalized.model).toBe("deployment-name");
+  });
+});
+
+describe("frontend GitHub Copilot provider routing", () => {
+  it("keeps Claude models on the OpenAI provider api type", () => {
+    expect(
+      getProviderApiType(
+        "github-copilot",
+        "claude-sonnet-4.6",
+        "https://api.githubcopilot.com",
+      ),
+    ).toBe("openai");
+  });
+
+  it("exposes anthropic_messages as an explicit selectable transport", () => {
+    const copilot = getProviderDefinition("github-copilot");
+
+    expect(copilot?.supportedTransports).toContain("anthropic_messages");
+    expect(normalizeApiTransport("github-copilot", "anthropic_messages")).toBe(
+      "anthropic_messages",
+    );
   });
 });

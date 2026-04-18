@@ -678,6 +678,61 @@ mod tests {
     }
 
     #[test]
+    fn routing_worker_produces_probabilistic_snapshot() {
+        let profiles = default_specialist_profiles();
+        let routing = RoutingConfig::default();
+        let rows = vec![
+            CapabilityScoreRow {
+                agent_id: "researcher".to_string(),
+                capability_tag: "research".to_string(),
+                attempts: 20,
+                successes: 18,
+                failures: 2,
+                partials: 0,
+                last_attempt_ms: Some(1_000_000),
+                avg_confidence_score: 0.92,
+                total_tokens_used: 2000,
+            },
+            CapabilityScoreRow {
+                agent_id: "generalist".to_string(),
+                capability_tag: "research".to_string(),
+                attempts: 20,
+                successes: 10,
+                failures: 10,
+                partials: 0,
+                last_attempt_ms: Some(1_000_000),
+                avg_confidence_score: 0.65,
+                total_tokens_used: 2000,
+            },
+        ];
+        let morphogenesis = vec![crate::agent::morphogenesis::types::MorphogenesisAffinity {
+            agent_id: "researcher".to_string(),
+            domain: "research".to_string(),
+            affinity_score: 0.88,
+            task_count: 14,
+            success_count: 13,
+            failure_count: 1,
+            last_updated_ms: 1_000_000,
+        }];
+
+        let snapshot = crate::agent::background_workers::domain_routing::build_routing_snapshot(
+            &profiles,
+            &["research".to_string()],
+            &rows,
+            &morphogenesis,
+            &routing,
+            1_000_000,
+        );
+
+        assert_eq!(snapshot.required_tags, vec!["research".to_string()]);
+        assert_eq!(snapshot.ranked_candidates[0].profile_id, "researcher");
+        assert!(
+            snapshot.ranked_candidates[0].final_weight > snapshot.ranked_candidates[1].final_weight
+        );
+        assert!(snapshot.ranked_candidates[0].morphogenesis_affinity >= 0.88);
+    }
+
+    #[test]
     fn compute_learned_routing_weights_converge_toward_higher_success_history() {
         let profiles = default_specialist_profiles();
         let routing = RoutingConfig::default();
@@ -730,6 +785,30 @@ mod tests {
         assert_eq!(profiles[runner_up.profile_idx].id, "generalist");
         assert!(top.weight > runner_up.weight * 2.0);
         assert!(top.weight > cold_researcher);
+    }
+
+    #[test]
+    fn morphogenesis_updates_affinity_from_success_and_decay() {
+        let updated = crate::agent::morphogenesis::affinity_tracker::apply_outcome(
+            None,
+            "researcher",
+            "research",
+            crate::agent::morphogenesis::types::MorphogenesisOutcome::Success,
+            1_000,
+        );
+        assert_eq!(updated.agent_id, "researcher");
+        assert_eq!(updated.domain, "research");
+        assert!(updated.affinity_score > 0.1);
+        assert_eq!(updated.task_count, 1);
+        assert_eq!(updated.success_count, 1);
+
+        let decayed = crate::agent::morphogenesis::affinity_tracker::apply_decay(
+            updated.clone(),
+            3 * 24 * 60 * 60 * 1000 + 1_000,
+            0.01,
+        );
+        assert!(decayed.affinity_score < updated.affinity_score);
+        assert_eq!(decayed.task_count, updated.task_count);
     }
 
     #[test]

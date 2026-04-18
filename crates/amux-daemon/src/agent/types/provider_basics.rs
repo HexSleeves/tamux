@@ -25,6 +25,7 @@ pub enum ApiTransport {
     NativeAssistant,
     #[default]
     Responses,
+    AnthropicMessages,
     ChatCompletions,
 }
 
@@ -293,4 +294,3 @@ pub struct ProviderDefinition {
     pub native_base_url: Option<&'static str>,
     pub supports_response_continuity: bool,
 }
-

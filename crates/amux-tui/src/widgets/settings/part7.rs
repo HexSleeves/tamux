@@ -182,6 +182,11 @@ fn render_feature_field_line<'a>(
         11 => "feat_heuristic_promotion_threshold",
         14 => "feat_skill_community_preapprove_timeout_secs",
         15 => "feat_skill_suggest_global_enable_after_approvals",
+        17 => "feat_audio_stt_provider",
+        18 => "feat_audio_stt_model",
+        20 => "feat_audio_tts_provider",
+        21 => "feat_audio_tts_model",
+        22 => "feat_audio_tts_voice",
         _ => "",
     };
     let is_editing = is_selected

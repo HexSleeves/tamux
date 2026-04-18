@@ -202,6 +202,48 @@ impl TuiModel {
                     raw["skill_recommendation"][key] = serde_json::Value::Bool(next);
                 }
             }
+            "feat_audio_stt_enabled" => {
+                let current = self
+                    .config
+                    .agent_config_raw
+                    .as_ref()
+                    .and_then(|r| r.get("extra"))
+                    .and_then(|e| e.get("audio_stt_enabled"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let next = !current;
+                self.send_daemon_command(DaemonCommand::SetConfigItem {
+                    key_path: "/extra/audio_stt_enabled".to_string(),
+                    value_json: next.to_string(),
+                });
+                if let Some(ref mut raw) = self.config.agent_config_raw {
+                    if raw.get("extra").is_none() {
+                        raw["extra"] = serde_json::json!({});
+                    }
+                    raw["extra"]["audio_stt_enabled"] = serde_json::Value::Bool(next);
+                }
+            }
+            "feat_audio_tts_enabled" => {
+                let current = self
+                    .config
+                    .agent_config_raw
+                    .as_ref()
+                    .and_then(|r| r.get("extra"))
+                    .and_then(|e| e.get("audio_tts_enabled"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let next = !current;
+                self.send_daemon_command(DaemonCommand::SetConfigItem {
+                    key_path: "/extra/audio_tts_enabled".to_string(),
+                    value_json: next.to_string(),
+                });
+                if let Some(ref mut raw) = self.config.agent_config_raw {
+                    if raw.get("extra").is_none() {
+                        raw["extra"] = serde_json::json!({});
+                    }
+                    raw["extra"]["audio_tts_enabled"] = serde_json::Value::Bool(next);
+                }
+            }
             "whatsapp_link_device" => {
                 self.activate_settings_field();
             }

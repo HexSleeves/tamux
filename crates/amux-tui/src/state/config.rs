@@ -405,6 +405,55 @@ impl ConfigState {
             },
         }
     }
+
+    // Audio configuration getters - parse from agent_config_raw.extra
+    fn get_audio_field(&self, field: &str) -> Option<&serde_json::Value> {
+        self.agent_config_raw
+            .as_ref()
+            .and_then(|raw| raw.get("extra"))
+            .and_then(|extra| extra.get(field))
+    }
+
+    fn get_audio_bool(&self, field: &str) -> bool {
+        self.get_audio_field(field)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    fn get_audio_string(&self, field: &str) -> String {
+        self.get_audio_field(field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    pub fn audio_stt_enabled(&self) -> bool {
+        self.get_audio_bool("audio_stt_enabled")
+    }
+
+    pub fn audio_stt_provider(&self) -> String {
+        self.get_audio_string("audio_stt_provider")
+    }
+
+    pub fn audio_stt_model(&self) -> String {
+        self.get_audio_string("audio_stt_model")
+    }
+
+    pub fn audio_tts_enabled(&self) -> bool {
+        self.get_audio_bool("audio_tts_enabled")
+    }
+
+    pub fn audio_tts_provider(&self) -> String {
+        self.get_audio_string("audio_tts_provider")
+    }
+
+    pub fn audio_tts_model(&self) -> String {
+        self.get_audio_string("audio_tts_model")
+    }
+
+    pub fn audio_tts_voice(&self) -> String {
+        self.get_audio_string("audio_tts_voice")
+    }
 }
 
 impl Default for ConfigState {
@@ -531,3 +580,7 @@ mod tests {
         assert_eq!(state.model(), "claude-3-5-sonnet");
     }
 }
+
+#[cfg(test)]
+#[path = "tests/config_audio.rs"]
+mod config_audio_tests;

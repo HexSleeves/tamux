@@ -83,6 +83,7 @@ export async function* sendChatCompletion(
       : getDefaultApiTransport(resolvedRequest.provider);
 
     if (
+      selectedTransport === "anthropic_messages" ||
       getProviderApiType(
         resolvedRequest.provider,
         resolvedRequest.config.model,

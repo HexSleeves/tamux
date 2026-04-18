@@ -175,7 +175,9 @@ export function prepareOpenAIRequest(
 
   return {
     messages: messagesToApiFormat(requestMessages),
-    transport: "chat_completions",
+    transport: selectedTransport === "anthropic_messages"
+      ? "anthropic_messages"
+      : "chat_completions",
   };
 }
 

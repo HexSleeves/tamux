@@ -7,9 +7,11 @@
 
 use anyhow::Result;
 use rusqlite::params;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::agent::engine::AgentEngine;
+use crate::agent::morphogenesis::types::MorphogenesisOutcome;
 
 /// Current Unix timestamp in seconds.
 fn now_ts() -> u64 {
@@ -23,7 +25,7 @@ fn is_terminal_handoff_outcome(outcome: &str) -> bool {
     matches!(outcome, "accepted" | "rejected" | "completed" | "failed")
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct CapabilityScoreRow {
     pub agent_id: String,
     pub capability_tag: String,
@@ -351,6 +353,13 @@ impl AgentEngine {
         let agent_id = agent_id.to_string();
         let capability_tags = capability_tags.to_vec();
         let outcome = outcome.to_string();
+        let morphogenesis_agent_id = agent_id.clone();
+        let morphogenesis_capability_tags = capability_tags.clone();
+        let morphogenesis_outcome = match outcome.as_str() {
+            "success" | "completed" | "accepted" => MorphogenesisOutcome::Success,
+            "partial" | "rejected" => MorphogenesisOutcome::Partial,
+            _ => MorphogenesisOutcome::Failure,
+        };
         let confidence = clamp_unit_interval(confidence);
         let confidence_ema_alpha = if confidence_ema_alpha.is_finite() {
             confidence_ema_alpha.clamp(0.0, 1.0)
@@ -404,7 +413,14 @@ impl AgentEngine {
                 Ok(())
             })
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        self.record_morphogenesis_outcome(
+            &morphogenesis_agent_id,
+            &morphogenesis_capability_tags,
+            morphogenesis_outcome,
+        )
+        .await
     }
 }
 

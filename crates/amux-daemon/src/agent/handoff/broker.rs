@@ -7,10 +7,13 @@
 use anyhow::{Context, Result};
 use uuid::Uuid;
 
-use super::profiles::{
-    compute_learned_routing_weights, match_specialist, select_learned_specialist, select_specialist,
-};
+use super::profiles::{match_specialist, select_specialist};
 use super::{AcceptanceCriteria, ContextBundle, HandoffResult, RoutingMethod, ValidationResult};
+use crate::agent::background_workers::domain_routing::select_snapshot_candidate;
+use crate::agent::background_workers::protocol::{
+    BackgroundWorkerCommand, BackgroundWorkerKind, BackgroundWorkerResult,
+};
+use crate::agent::background_workers::run_background_worker_command;
 use crate::agent::engine::AgentEngine;
 use crate::agent::types::RoutingMode;
 use crate::agent::TaskStatus;
@@ -211,25 +214,46 @@ impl AgentEngine {
             available_profiles
         };
 
-        let learned_weights =
+        let routing_snapshot =
             if routing_cfg.enabled && matches!(routing_cfg.method, RoutingMode::Probabilistic) {
                 let score_rows = self
                     .load_capability_score_rows(capability_tags)
                     .await
                     .context("loading capability score rows for handoff routing")?;
-                compute_learned_routing_weights(
-                    &routing_profiles,
-                    capability_tags,
-                    &score_rows,
-                    &routing_cfg,
-                    crate::history::now_ts() * 1000,
+                let morphogenesis = self
+                    .load_morphogenesis_affinities(capability_tags)
+                    .await
+                    .context("loading morphogenesis affinities for handoff routing")?;
+                let result = run_background_worker_command(
+                    BackgroundWorkerKind::Routing,
+                    BackgroundWorkerCommand::TickRouting {
+                        profiles: routing_profiles.clone(),
+                        required_tags: capability_tags.to_vec(),
+                        score_rows,
+                        morphogenesis,
+                        routing: routing_cfg.clone(),
+                        now_ms: crate::history::now_ts() * 1000,
+                    },
                 )
+                .await
+                .context("building worker-backed routing snapshot")?;
+
+                match result {
+                    BackgroundWorkerResult::RoutingTick { snapshot } => Some(snapshot),
+                    BackgroundWorkerResult::Error { message } => {
+                        anyhow::bail!("routing worker returned error: {message}");
+                    }
+                    other => {
+                        anyhow::bail!("routing worker returned unexpected response: {other:?}");
+                    }
+                }
             } else {
-                Vec::new()
+                None
             };
 
-        let learned_selection =
-            select_learned_specialist(&learned_weights, routing_cfg.confidence_threshold);
+        let learned_selection = routing_snapshot.as_ref().and_then(|snapshot| {
+            select_snapshot_candidate(snapshot, routing_cfg.confidence_threshold)
+        });
 
         // Match specialist
         let (selection, routing_confidence_threshold) =
@@ -341,9 +365,25 @@ impl AgentEngine {
         let specialization_diagnostics = serde_json::json!({
             "matched_capability_tags": matched_capability_tags,
             "learned_routing_influenced": matches!(routing_method, RoutingMethod::Probabilistic),
+            "morphogenesis_influenced": routing_snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot
+                    .ranked_candidates
+                    .iter()
+                    .any(|candidate| candidate.morphogenesis_affinity > 0.0)
+            }),
             "fallback_used": fallback_used,
             "availability_filtered": routing_profiles.len() != profiles.len(),
             "occupied_specialists": occupied_specialists,
+            "routing_snapshot_top_candidate": routing_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.ranked_candidates.first())
+                .map(|candidate| serde_json::json!({
+                    "profile_id": candidate.profile_id,
+                    "learned_weight": candidate.learned_weight,
+                    "morphogenesis_affinity": candidate.morphogenesis_affinity,
+                    "final_weight": candidate.final_weight,
+                }))
+                .unwrap_or(serde_json::Value::Null),
             "routing_confidence": {
                 "score": routing_score,
                 "threshold": routing_confidence_threshold,
@@ -753,6 +793,56 @@ mod tests {
             "routing result should reflect availability-aware fallback: {:?}",
             result
         );
+    }
+
+    #[tokio::test]
+    async fn routing_prefers_specialist_with_stronger_morphogenesis_affinity() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.routing.enabled = true;
+        config.routing.method = crate::agent::types::RoutingMode::Probabilistic;
+        config.routing.confidence_threshold = 0.3;
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+        for _ in 0..3 {
+            engine
+                .record_morphogenesis_outcome(
+                    "researcher",
+                    &["research".to_string()],
+                    crate::agent::morphogenesis::types::MorphogenesisOutcome::Success,
+                )
+                .await
+                .expect("record morphogenesis outcome");
+        }
+
+        let result = engine
+            .route_handoff(
+                "Investigate a research question",
+                &["research".to_string()],
+                None,
+                None,
+                "thread-routing-morphogenesis",
+                "non_empty",
+                0,
+            )
+            .await
+            .expect("handoff should succeed");
+
+        assert_eq!(result.specialist_profile_id, "researcher");
+        assert_eq!(result.routing_method, RoutingMethod::Probabilistic);
+        assert!(!result.fallback_used);
+        assert!(result
+            .specialization_diagnostics
+            .get("morphogenesis_influenced")
+            .and_then(|value| value.as_bool())
+            .is_some_and(|value| value));
+        assert!(result
+            .specialization_diagnostics
+            .get("routing_snapshot_top_candidate")
+            .and_then(|value| value.get("morphogenesis_affinity"))
+            .and_then(|value| value.as_f64())
+            .is_some_and(|value| value > 0.0));
     }
 
     #[tokio::test]

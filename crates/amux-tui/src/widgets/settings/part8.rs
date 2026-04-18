@@ -245,5 +245,134 @@ fn render_features_tab<'a>(
         theme,
     );
 
+    // Section: Audio
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled("  Audio", theme.fg_active)));
+    lines.push(Line::from(Span::styled(
+        "  Speech-to-text and text-to-speech configuration",
+        theme.fg_dim,
+    )));
+    lines.push(Line::raw(""));
+
+    // Field 16: audio_stt_enabled (toggle)
+    let stt_enabled = raw
+        .and_then(|r| r.get("extra"))
+        .and_then(|e| e.get("audio_stt_enabled"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    render_feature_toggle_line(
+        &mut lines,
+        settings,
+        16,
+        "STT Enabled",
+        stt_enabled,
+        theme,
+    );
+
+    // Field 17: audio_stt_provider
+    let stt_provider = raw
+        .and_then(|r| r.get("extra"))
+        .and_then(|e| e.get("audio_stt_provider"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("openai");
+    render_feature_field_line(
+        &mut lines,
+        settings,
+        17,
+        "STT Provider",
+        stt_provider,
+        "  [Enter: edit]",
+        theme,
+    );
+
+    // Field 18: audio_stt_model
+    let stt_model = raw
+        .and_then(|r| r.get("extra"))
+        .and_then(|e| e.get("audio_stt_model"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("whisper-1");
+    render_feature_field_line(
+        &mut lines,
+        settings,
+        18,
+        "STT Model",
+        stt_model,
+        "  [Enter: edit]",
+        theme,
+    );
+
+    // Field 19: audio_tts_enabled (toggle)
+    let tts_enabled = raw
+        .and_then(|r| r.get("extra"))
+        .and_then(|e| e.get("audio_tts_enabled"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    render_feature_toggle_line(
+        &mut lines,
+        settings,
+        19,
+        "TTS Enabled",
+        tts_enabled,
+        theme,
+    );
+
+    // Field 20: audio_tts_provider
+    let tts_provider = raw
+        .and_then(|r| r.get("extra"))
+        .and_then(|e| e.get("audio_tts_provider"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("openai");
+    render_feature_field_line(
+        &mut lines,
+        settings,
+        20,
+        "TTS Provider",
+        tts_provider,
+        "  [Enter: edit]",
+        theme,
+    );
+
+    // Field 21: audio_tts_model
+    let tts_model = raw
+        .and_then(|r| r.get("extra"))
+        .and_then(|e| e.get("audio_tts_model"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("tts-1");
+    render_feature_field_line(
+        &mut lines,
+        settings,
+        21,
+        "TTS Model",
+        tts_model,
+        "  [Enter: edit]",
+        theme,
+    );
+
+    // Field 22: audio_tts_voice
+    let tts_voice = raw
+        .and_then(|r| r.get("extra"))
+        .and_then(|e| e.get("audio_tts_voice"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("alloy");
+    render_feature_field_line(
+        &mut lines,
+        settings,
+        22,
+        "TTS Voice",
+        tts_voice,
+        "  [Enter: edit]",
+        theme,
+    );
+
+    // Hotkey hint row (non-editable)
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled("  Hotkeys: ", theme.fg_dim),
+        Span::styled("Ctrl+L", theme.fg_active),
+        Span::styled(" (record) | ", theme.fg_dim),
+        Span::styled("Ctrl+P", theme.fg_active),
+        Span::styled(" (speak latest)", theme.fg_dim),
+    ]));
+
     lines
 }

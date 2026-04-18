@@ -313,7 +313,7 @@ fn build_image_analysis_blocks(
     );
     let transport = effective_multimodal_transport(provider_id, provider_config);
 
-    if api_type == ApiType::Anthropic {
+    if transport == ApiTransport::AnthropicMessages || api_type == ApiType::Anthropic {
         let MediaInputSource::Inline {
             mime_type,
             base64_data,

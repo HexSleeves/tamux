@@ -27,6 +27,14 @@ fn effective_attempt_target(
     config: &ProviderConfig,
     transport: ApiTransport,
 ) -> AttemptTarget {
+    if transport == ApiTransport::AnthropicMessages {
+        return AttemptTarget {
+            api_type: ApiType::Anthropic,
+            branch: "anthropic",
+            url: anthropic_messages_url(&config.base_url),
+        };
+    }
+
     let api_type = get_provider_api_type(provider, &config.model, &config.base_url);
     if api_type == ApiType::Anthropic {
         return AttemptTarget {
@@ -54,6 +62,7 @@ fn effective_attempt_target(
             branch: "responses",
             url: build_responses_url(&config.base_url),
         },
+        ApiTransport::AnthropicMessages => unreachable!("handled above"),
     }
 }
 
@@ -195,7 +204,9 @@ pub(crate) fn send_completion_request_with_options(
                 "llm attempt start"
             );
 
-            let result = if target.api_type == ApiType::Anthropic {
+            let result = if transport == ApiTransport::AnthropicMessages
+                || target.api_type == ApiType::Anthropic
+            {
                 run_anthropic(
                     &client,
                     &provider,
@@ -253,6 +264,7 @@ pub(crate) fn send_completion_request_with_options(
                         )
                         .await
                     }
+                    ApiTransport::AnthropicMessages => unreachable!("handled above"),
                 }
             };
 

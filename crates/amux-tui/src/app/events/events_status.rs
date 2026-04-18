@@ -71,6 +71,7 @@ impl TuiModel {
         &mut self,
         cfg: crate::wire::AgentConfigSnapshot,
     ) {
+        let before_profile = self.current_conversation_agent_profile();
         self.config.reduce(config::ConfigAction::ConfigReceived(
             config::AgentConfigSnapshot {
                 provider: cfg.provider,
@@ -85,13 +86,16 @@ impl TuiModel {
                 context_window_tokens: cfg.context_window_tokens,
             },
         ));
+        self.invalidate_active_header_runtime_profile_if_profile_changed(&before_profile);
     }
 
     pub(in crate::app) fn handle_agent_config_raw_event(&mut self, raw: serde_json::Value) {
+        let before_profile = self.current_conversation_agent_profile();
         let was_loaded = self.agent_config_loaded;
         self.apply_config_json(&raw);
         self.chat
             .set_history_page_size(self.config.tui_chat_history_page_size as usize);
+        self.invalidate_active_header_runtime_profile_if_profile_changed(&before_profile);
         self.agent_config_loaded = true;
         if self.connected && !was_loaded {
             self.request_concierge_welcome();

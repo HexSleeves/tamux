@@ -7,7 +7,8 @@ mod recovery;
 mod runtime;
 mod types;
 
-pub(super) use runtime::StalledTurnCandidate;
+pub(crate) use runtime::StalledTurnCandidate;
+pub(crate) use types::ThreadStallObservation;
 
 #[cfg(test)]
 mod tests;

@@ -1622,6 +1622,68 @@ fn header_usage_summary_uses_runtime_model_context_window_for_rarog() {
 }
 
 #[test]
+fn header_profile_tracks_repeated_swarog_config_changes_after_runtime_metadata_exists() {
+    let mut model = make_model();
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-config".to_string(),
+        title: "Config".to_string(),
+        agent_name: Some("Swarog".to_string()),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-config".to_string()));
+
+    model.handle_client_event(ClientEvent::Done {
+        thread_id: "thread-config".to_string(),
+        input_tokens: 10,
+        output_tokens: 20,
+        cost: None,
+        provider: Some("provider-old".to_string()),
+        model: Some("model-old".to_string()),
+        tps: None,
+        generation_ms: None,
+        reasoning: None,
+        provider_final_result_json: None,
+    });
+
+    let initial = model.current_header_agent_profile();
+    assert_eq!(initial.provider, "provider-old");
+    assert_eq!(initial.model, "model-old");
+
+    model.handle_agent_config_event(crate::wire::AgentConfigSnapshot {
+        provider: "provider-a".to_string(),
+        base_url: "https://example.invalid/v1".to_string(),
+        model: "model-a".to_string(),
+        api_key: String::new(),
+        assistant_id: String::new(),
+        auth_source: "api_key".to_string(),
+        api_transport: "responses".to_string(),
+        reasoning_effort: "high".to_string(),
+        context_window_tokens: 200_000,
+    });
+
+    let first = model.current_header_agent_profile();
+    assert_eq!(first.provider, "provider-a");
+    assert_eq!(first.model, "model-a");
+
+    model.handle_agent_config_event(crate::wire::AgentConfigSnapshot {
+        provider: "provider-b".to_string(),
+        base_url: "https://example.invalid/v1".to_string(),
+        model: "model-b".to_string(),
+        api_key: String::new(),
+        assistant_id: String::new(),
+        auth_source: "api_key".to_string(),
+        api_transport: "responses".to_string(),
+        reasoning_effort: "medium".to_string(),
+        context_window_tokens: 400_000,
+    });
+
+    let second = model.current_header_agent_profile();
+    assert_eq!(second.provider, "provider-b");
+    assert_eq!(second.model, "model-b");
+}
+
+#[test]
 fn header_usage_summary_uses_primary_threshold_for_heuristic_compaction() {
     let mut model = make_model();
     model.config.provider = PROVIDER_ID_GITHUB_COPILOT.to_string();
@@ -1654,6 +1716,166 @@ fn header_usage_summary_uses_primary_threshold_for_heuristic_compaction() {
         "heuristic compaction should use the main model threshold"
     );
     assert_eq!(usage.context_window_tokens, 400_000);
+}
+
+#[test]
+fn header_profile_tracks_weles_subagent_updates_after_runtime_metadata_exists() {
+    let mut model = make_model();
+    model.subagents.entries.push(crate::state::SubAgentEntry {
+        id: "weles_builtin".to_string(),
+        name: "WELES".to_string(),
+        provider: "provider-old".to_string(),
+        model: "model-old".to_string(),
+        role: Some("testing".to_string()),
+        enabled: true,
+        builtin: true,
+        immutable_identity: true,
+        disable_allowed: false,
+        delete_allowed: false,
+        protected_reason: Some("Built-in reviewer".to_string()),
+        reasoning_effort: Some("medium".to_string()),
+        raw_json: None,
+    });
+    model.start_new_thread_view_for_agent(Some("weles"));
+    if let Some(thread) = model.chat.active_thread_mut() {
+        thread.runtime_provider = Some("provider-runtime".to_string());
+        thread.runtime_model = Some("model-runtime".to_string());
+    }
+
+    let before = model.current_header_agent_profile();
+    assert_eq!(before.provider, "provider-runtime");
+    assert_eq!(before.model, "model-runtime");
+
+    model.handle_subagent_updated_event(crate::state::SubAgentEntry {
+        id: "weles_builtin".to_string(),
+        name: "WELES".to_string(),
+        provider: "provider-new".to_string(),
+        model: "model-new".to_string(),
+        role: Some("testing".to_string()),
+        enabled: true,
+        builtin: true,
+        immutable_identity: true,
+        disable_allowed: false,
+        delete_allowed: false,
+        protected_reason: Some("Built-in reviewer".to_string()),
+        reasoning_effort: Some("high".to_string()),
+        raw_json: None,
+    });
+
+    let after = model.current_header_agent_profile();
+    assert_eq!(after.provider, "provider-new");
+    assert_eq!(after.model, "model-new");
+    assert_eq!(after.reasoning_effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn header_profile_switches_on_handoff_append_and_clears_stale_runtime() {
+    let mut model = make_model();
+    model.subagents.entries.push(crate::state::SubAgentEntry {
+        id: "weles_builtin".to_string(),
+        name: "Weles".to_string(),
+        provider: "provider-weles".to_string(),
+        model: "model-weles".to_string(),
+        role: Some("review".to_string()),
+        enabled: true,
+        builtin: true,
+        immutable_identity: true,
+        disable_allowed: false,
+        delete_allowed: false,
+        protected_reason: Some("Built-in reviewer".to_string()),
+        reasoning_effort: Some("high".to_string()),
+        raw_json: None,
+    });
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-handoff".to_string(),
+        title: "Handoff".to_string(),
+        agent_name: Some("Swarog".to_string()),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-handoff".to_string()));
+    if let Some(thread) = model.chat.active_thread_mut() {
+        thread.runtime_provider = Some("provider-runtime".to_string());
+        thread.runtime_model = Some("model-runtime".to_string());
+    }
+
+    model.chat.reduce(chat::ChatAction::AppendMessage {
+        thread_id: "thread-handoff".to_string(),
+        message: chat::AgentMessage {
+            role: chat::MessageRole::System,
+            content: "[[handoff_event]]{\"to_agent_id\":\"weles\",\"to_agent_name\":\"Weles\"}\nSwarog handed this thread to Weles.".to_string(),
+            ..Default::default()
+        },
+    });
+
+    let profile = model.current_header_agent_profile();
+    assert_eq!(profile.agent_label, "Weles");
+    assert_eq!(profile.provider, "provider-weles");
+    assert_eq!(profile.model, "model-weles");
+    let thread = model
+        .chat
+        .active_thread()
+        .expect("thread should remain active");
+    assert_eq!(thread.runtime_provider, None);
+    assert_eq!(thread.runtime_model, None);
+}
+
+#[test]
+fn header_profile_resets_on_return_handoff_after_thread_detail_refresh() {
+    let mut model = make_model();
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-return".to_string(),
+        title: "Return".to_string(),
+        agent_name: Some("Swarog".to_string()),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-return".to_string()));
+    if let Some(thread) = model.chat.active_thread_mut() {
+        thread.runtime_provider = Some("provider-weles-runtime".to_string());
+        thread.runtime_model = Some("model-weles-runtime".to_string());
+    }
+    model.config.provider = "provider-svarog".to_string();
+    model.config.model = "model-svarog".to_string();
+
+    model.handle_thread_detail_event(crate::wire::AgentThread {
+        id: "thread-return".to_string(),
+        title: "Return".to_string(),
+        agent_name: Some("Swarog".to_string()),
+        messages: vec![
+            crate::wire::AgentMessage {
+                role: crate::wire::MessageRole::System,
+                content: "[[handoff_event]]{\"to_agent_id\":\"weles\",\"to_agent_name\":\"Weles\"}\nSwarog handed this thread to Weles.".to_string(),
+                timestamp: 1,
+                message_kind: "normal".to_string(),
+                ..Default::default()
+            },
+            crate::wire::AgentMessage {
+                role: crate::wire::MessageRole::System,
+                content: "[[handoff_event]]{\"to_agent_id\":\"svarog\",\"to_agent_name\":\"Swarog\"}\nWeles handed this thread to Swarog.".to_string(),
+                timestamp: 2,
+                message_kind: "normal".to_string(),
+                ..Default::default()
+            },
+        ],
+        total_message_count: 2,
+        loaded_message_start: 0,
+        loaded_message_end: 2,
+        created_at: 1,
+        updated_at: 2,
+        ..Default::default()
+    });
+
+    let profile = model.current_header_agent_profile();
+    assert_eq!(profile.agent_label, "Swarog");
+    assert_eq!(profile.provider, "provider-svarog");
+    assert_eq!(profile.model, "model-svarog");
+    let thread = model
+        .chat
+        .active_thread()
+        .expect("thread should remain active");
+    assert_eq!(thread.runtime_provider, None);
+    assert_eq!(thread.runtime_model, None);
 }
 
 #[test]

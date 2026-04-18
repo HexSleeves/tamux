@@ -291,6 +291,148 @@ async fn participant_send_now_posts_direct_visible_message_then_continues_thread
 }
 
 #[tokio::test]
+async fn participant_auto_response_send_posts_visible_message_then_continues_thread() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let base_url = spawn_recording_openai_server(recorded_bodies.clone()).await;
+
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = base_url;
+    config.model = "gpt-5.4-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.auth_source = AuthSource::ApiKey;
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread_participant_auto_response_direct_post";
+
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Participant auto response direct post".to_string(),
+            messages: vec![
+                AgentMessage::user("hello", 1),
+                AgentMessage {
+                    id: generate_message_id(),
+                    role: MessageRole::Assistant,
+                    content: "Main agent reply".to_string(),
+                    content_blocks: Vec::new(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    tool_status: None,
+                    weles_review: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cost: None,
+                    provider: None,
+                    model: None,
+                    api_transport: None,
+                    response_id: None,
+                    upstream_message: None,
+                    provider_final_result: None,
+                    author_agent_id: None,
+                    author_agent_name: None,
+                    reasoning: None,
+                    message_kind: AgentMessageKind::Normal,
+                    compaction_strategy: None,
+                    compaction_payload: None,
+                    offloaded_payload_id: None,
+                    structural_refs: Vec::new(),
+                    pinned_for_compaction: false,
+                    timestamp: 30,
+                },
+            ],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            created_at: 1,
+            updated_at: 30,
+        },
+    );
+
+    engine
+        .upsert_thread_participant(thread_id, "weles", "verify claims")
+        .await
+        .expect("participant should register");
+    let suggestion = ThreadParticipantSuggestion {
+        id: format!("auto-response-{thread_id}"),
+        target_agent_id: "weles".to_string(),
+        target_agent_name: "Weles".to_string(),
+        instruction: "Respond to the latest main agent message.".to_string(),
+        suggestion_kind: ThreadParticipantSuggestionKind::AutoResponse,
+        force_send: false,
+        status: ThreadParticipantSuggestionStatus::Queued,
+        created_at: 31,
+        updated_at: 31,
+        auto_send_at: Some(31),
+        source_message_timestamp: Some(30),
+        error: None,
+    };
+    engine
+        .thread_participant_suggestions
+        .write()
+        .await
+        .insert(thread_id.to_string(), vec![suggestion.clone()]);
+    engine.persist_thread_by_id(thread_id).await;
+
+    recorded_bodies.lock().expect("lock request log").clear();
+
+    engine
+        .send_thread_participant_suggestion(thread_id, &suggestion.id, None)
+        .await
+        .expect("send auto-response suggestion");
+
+    let request_bodies = recorded_bodies
+        .lock()
+        .expect("lock request log")
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        request_bodies.len(),
+        2,
+        "auto-response send should trigger one participant turn and one main-agent continuation"
+    );
+
+    let thread_messages = {
+        let threads = engine.threads.read().await;
+        threads
+            .get(thread_id)
+            .expect("thread should still exist after auto-response send-now")
+            .messages
+            .clone()
+    };
+    let participant_idx = thread_messages
+        .iter()
+        .position(|message| {
+            message.role == MessageRole::Assistant
+                && message.author_agent_id.as_deref() == Some("weles")
+        })
+        .expect("auto-response should append a visible participant-authored message");
+    let follow_up = thread_messages[participant_idx + 1..]
+        .iter()
+        .find(|message| {
+            message.role == MessageRole::Assistant
+                && message.author_agent_id.as_deref() != Some("weles")
+        })
+        .expect("auto-response send-now should trigger a separate active-agent follow-up");
+    assert_eq!(follow_up.content, "Gateway reply ok");
+}
+
+#[tokio::test]
 async fn participant_post_resumes_main_agent_with_participant_aware_continuation_prompt() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;
@@ -366,6 +508,14 @@ async fn participant_post_resumes_main_agent_with_participant_aware_continuation
     assert!(
         continuation_request.contains("Participant verdict: claim is false."),
         "main-agent continuation should include the latest participant message in the resume prompt"
+    );
+    assert!(
+        continuation_request.contains("prefer `spawn_subagent`"),
+        "participant follow-up continuation should steer visible follow-up toward spawned subagents instead of hidden DMs"
+    );
+    assert!(
+        continuation_request.contains("Do not stop after only sending `message_agent`"),
+        "participant follow-up continuation should explicitly forbid DM-only follow-up"
     );
 }
 

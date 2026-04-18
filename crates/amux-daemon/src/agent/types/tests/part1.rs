@@ -48,6 +48,18 @@ fn alibaba_coding_plan_switches_to_anthropic_for_anthropic_base_url() {
 }
 
 #[test]
+fn github_copilot_claude_models_stay_openai_without_explicit_transport_override() {
+    assert_eq!(
+        get_provider_api_type(
+            "github-copilot",
+            "claude-sonnet-4.6",
+            "https://api.githubcopilot.com"
+        ),
+        ApiType::OpenAI
+    );
+}
+
+#[test]
 fn default_retry_delay_is_five_seconds() {
     let parsed: AgentConfig = serde_json::from_str("{}").unwrap();
     assert_eq!(parsed.retry_delay_ms, 5_000);

@@ -219,6 +219,29 @@ pub(super) fn apply_schema_migrations(
         );
         CREATE INDEX IF NOT EXISTS idx_gene_pool_offspring ON gene_pool(offspring_id, created_at DESC);",
     )?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS morphogenesis_affinities (
+            agent_id TEXT NOT NULL,
+            domain TEXT NOT NULL,
+            affinity_score REAL NOT NULL DEFAULT 0.0,
+            task_count INTEGER NOT NULL DEFAULT 0,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            failure_count INTEGER NOT NULL DEFAULT 0,
+            last_updated_ms INTEGER NOT NULL,
+            PRIMARY KEY (agent_id, domain)
+        );
+        CREATE INDEX IF NOT EXISTS idx_morphogenesis_domain_updated ON morphogenesis_affinities(domain, last_updated_ms DESC);",
+    )?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS consensus_bid_priors (
+            role TEXT PRIMARY KEY,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            failure_count INTEGER NOT NULL DEFAULT 0,
+            prior_score REAL NOT NULL DEFAULT 0.5,
+            last_updated_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_consensus_bid_priors_updated ON consensus_bid_priors(last_updated_ms DESC);",
+    )?;
     ensure_column(
         connection,
         "skill_variants",

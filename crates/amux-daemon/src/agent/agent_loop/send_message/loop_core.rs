@@ -9,12 +9,17 @@ pub(super) fn inter_request_delay(
         .then(|| std::time::Duration::from_millis(configured_delay_ms))
 }
 
-fn provider_uses_anthropic_api(config: &AgentConfig, provider_config: &ProviderConfig) -> bool {
-    crate::agent::types::get_provider_api_type(
-        &config.provider,
-        &provider_config.model,
-        &provider_config.base_url,
-    ) == ApiType::Anthropic
+fn provider_uses_anthropic_api(
+    config: &AgentConfig,
+    provider_config: &ProviderConfig,
+    transport: ApiTransport,
+) -> bool {
+    transport == ApiTransport::AnthropicMessages
+        || crate::agent::types::get_provider_api_type(
+            &config.provider,
+            &provider_config.model,
+            &provider_config.base_url,
+        ) == ApiType::Anthropic
 }
 
 const MAX_OUTER_AUTO_RETRY_WAITS_BEFORE_FRESH_RUNNER: u32 = 2;
@@ -151,8 +156,11 @@ impl<'a> SendMessageRunner<'a> {
         let llm_started_at = Instant::now();
         let mut first_token_at: Option<Instant> = None;
         let effective_transport_for_turn = prepared_request.transport;
-        let provider_is_anthropic =
-            provider_uses_anthropic_api(&self.config, &self.provider_config);
+        let provider_is_anthropic = provider_uses_anthropic_api(
+            &self.config,
+            &self.provider_config,
+            prepared_request.transport,
+        );
         let llm_retry_strategy = if provider_is_anthropic {
             match self.retry_strategy {
                 RetryStrategy::Bounded { retry_delay_ms, .. } => RetryStrategy::Bounded {

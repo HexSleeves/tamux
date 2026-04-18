@@ -413,14 +413,14 @@ impl AgentEngine {
             .unwrap_or_default();
         if latest_operator_request.trim().is_empty() {
             format!(
-                "Continue the visible operator thread as {}. A thread participant ({}) just posted a visible message. Treat that participant contribution as the latest actionable context and continue the same task flow from there instead of restarting from an older user turn.\n\nLatest participant contribution:\n{}",
+                "Continue the visible operator thread as {}. A thread participant ({}) just posted a visible message. Treat that participant contribution as the latest actionable context and continue the same task flow from there instead of restarting from an older user turn. Keep follow-up work visible from this thread: if specialist help is needed, prefer `spawn_subagent` or other visible thread-native actions over hidden internal DMs. Do not stop after only sending `message_agent`; produce visible progress on this thread.\n\nLatest participant contribution:\n{}",
                 target_agent_name,
                 participant_name.trim(),
                 participant_message.trim()
             )
         } else {
             format!(
-                "Continue the visible operator thread as {}. A thread participant ({}) just posted a visible message. Treat that participant contribution as the latest actionable context and continue the same task flow from there instead of restarting from an older user turn.\n\nLatest participant contribution:\n{}\n\nLatest operator request already on this thread:\n{}",
+                "Continue the visible operator thread as {}. A thread participant ({}) just posted a visible message. Treat that participant contribution as the latest actionable context and continue the same task flow from there instead of restarting from an older user turn. Keep follow-up work visible from this thread: if specialist help is needed, prefer `spawn_subagent` or other visible thread-native actions over hidden internal DMs. Do not stop after only sending `message_agent`; produce visible progress on this thread.\n\nLatest participant contribution:\n{}\n\nLatest operator request already on this thread:\n{}",
                 target_agent_name,
                 participant_name.trim(),
                 participant_message.trim(),

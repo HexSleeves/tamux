@@ -598,6 +598,8 @@ export function AgentTab({
                                     <option key={transport} value={transport}>
                                         {transport === "native_assistant"
                                             ? "Native Assistant"
+                                            : transport === "anthropic_messages"
+                                                ? "Anthropic Messages"
                                             : transport === "responses"
                                                 ? "Responses"
                                                 : "Legacy Chat Completions"}
@@ -1148,6 +1150,7 @@ export function AgentTab({
                                 style={inputStyle}
                             >
                                 <option value="responses">responses</option>
+                                <option value="anthropic_messages">anthropic_messages</option>
                                 <option value="chat_completions">chat_completions</option>
                                 <option value="native_assistant">native_assistant</option>
                             </select>

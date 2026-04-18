@@ -11,7 +11,8 @@ impl TuiModel {
         fallback: &str,
     ) -> String {
         raw.and_then(|value| {
-            path.iter().try_fold(value, |acc, key| acc.get(*key))
+            path.iter()
+                .try_fold(value, |acc, key| acc.get(*key))
                 .and_then(|value| value.as_str())
         })
         .map(str::trim)
@@ -22,7 +23,8 @@ impl TuiModel {
 
     fn voice_config_bool(raw: Option<&serde_json::Value>, path: &[&str], fallback: bool) -> bool {
         raw.and_then(|value| {
-            path.iter().try_fold(value, |acc, key| acc.get(*key))
+            path.iter()
+                .try_fold(value, |acc, key| acc.get(*key))
                 .and_then(|value| value.as_bool())
         })
         .unwrap_or(fallback)
@@ -38,10 +40,16 @@ impl TuiModel {
                     amux_shared::providers::PROVIDER_ID_OPENAI,
                 );
                 let model = Self::voice_config_string(raw, &["audio", "stt", "model"], "whisper-1");
-                let language = raw.and_then(|value| {
-                    ["audio", "stt", "language"].iter().try_fold(value, |acc, key| acc.get(*key))
-                        .and_then(|value| value.as_str())
-                }).map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned);
+                let language = raw
+                    .and_then(|value| {
+                        ["audio", "stt", "language"]
+                            .iter()
+                            .try_fold(value, |acc, key| acc.get(*key))
+                            .and_then(|value| value.as_str())
+                    })
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned);
                 let args_json = serde_json::json!({
                     "path": path,
                     "mime_type": "audio/wav",
@@ -56,7 +64,11 @@ impl TuiModel {
             return;
         }
 
-        let enabled = Self::voice_config_bool(self.config.agent_config_raw.as_ref(), &["audio", "stt", "enabled"], true);
+        let enabled = Self::voice_config_bool(
+            self.config.agent_config_raw.as_ref(),
+            &["audio", "stt", "enabled"],
+            true,
+        );
         if !enabled {
             self.status_line = "STT disabled in audio settings".to_string();
             return;
@@ -76,7 +88,11 @@ impl TuiModel {
             return;
         };
 
-        let enabled = Self::voice_config_bool(self.config.agent_config_raw.as_ref(), &["audio", "tts", "enabled"], true);
+        let enabled = Self::voice_config_bool(
+            self.config.agent_config_raw.as_ref(),
+            &["audio", "tts", "enabled"],
+            true,
+        );
         if !enabled {
             self.status_line = "TTS disabled in audio settings".to_string();
             return;

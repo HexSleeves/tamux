@@ -488,6 +488,10 @@ fn api_transport_cycles_for_github_copilot() {
 
     model.activate_settings_field();
 
+    assert_eq!(model.config.api_transport, "anthropic_messages");
+
+    model.activate_settings_field();
+
     assert_eq!(model.config.api_transport, "responses");
 }
 
@@ -510,6 +514,28 @@ fn github_copilot_preserves_responses_transport_when_loaded_from_saved_config() 
 
     assert_eq!(model.config.provider, PROVIDER_ID_GITHUB_COPILOT);
     assert_eq!(model.config.api_transport, "responses");
+}
+
+#[test]
+fn github_copilot_preserves_explicit_anthropic_transport_when_loaded_from_saved_config() {
+    let (mut model, _daemon_rx) = make_model();
+    model.apply_config_json(&serde_json::json!({
+        "provider": PROVIDER_ID_GITHUB_COPILOT,
+        "providers": {
+            "github-copilot": {
+                "base_url": "https://api.githubcopilot.com",
+                "model": "claude-sonnet-4.6",
+                "api_transport": "anthropic_messages",
+                "auth_source": "github_copilot"
+            }
+        }
+    }));
+
+    model.apply_provider_selection(PROVIDER_ID_GITHUB_COPILOT);
+
+    assert_eq!(model.config.provider, PROVIDER_ID_GITHUB_COPILOT);
+    assert_eq!(model.config.model, "claude-sonnet-4.6");
+    assert_eq!(model.config.api_transport, "anthropic_messages");
 }
 
 #[test]
