@@ -145,6 +145,12 @@ impl AgentEngine {
             result.skills_promoted = self.check_skill_promotions(&config, &deadline).await;
         }
 
+        if std::time::Instant::now() < deadline {
+            if let Err(error) = self.refresh_gene_pool_runtime().await {
+                tracing::warn!(%error, "failed to refresh gene pool runtime");
+            }
+        }
+
         // Sub-task 9: Expire stale negative knowledge constraints (Phase 1: Memory Foundation - NKNO-04)
         if std::time::Instant::now() < deadline {
             match self.expire_negative_constraints().await {

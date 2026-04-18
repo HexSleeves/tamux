@@ -1,5 +1,7 @@
+pub(crate) mod domain_learning;
 pub(crate) mod domain_routing;
 pub(crate) mod domain_safety;
+pub(crate) mod domain_memory;
 pub(crate) mod protocol;
 mod worker_main;
 

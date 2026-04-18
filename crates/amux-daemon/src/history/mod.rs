@@ -385,7 +385,7 @@ pub struct MemoryTombstoneRow {
 }
 
 /// Row type for execution_traces query results (Phase 5 — consolidation).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExecutionTraceRow {
     pub id: String,
     pub goal_run_id: Option<String>,

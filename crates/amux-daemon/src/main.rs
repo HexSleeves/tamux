@@ -134,6 +134,14 @@ mod tests {
             routing,
             agent::background_workers::protocol::BackgroundWorkerKind::Routing
         );
+        let memory = agent::background_workers::resolve_background_worker_kind_arg(Some(
+            "__tamux-background-worker-memory",
+        ))
+        .expect("expected memory worker arg to resolve");
+        assert_eq!(
+            memory,
+            agent::background_workers::protocol::BackgroundWorkerKind::Memory
+        );
         assert!(
             agent::background_workers::resolve_background_worker_kind_arg(Some(
                 agent::skill_preflight::SKILL_DISCOVERY_WORKER_ARG,

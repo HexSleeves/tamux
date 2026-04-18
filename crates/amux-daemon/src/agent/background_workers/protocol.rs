@@ -1,10 +1,15 @@
 use crate::agent::stalled_turns::{StalledTurnCandidate, ThreadStallObservation};
 use crate::agent::types::RoutingConfig;
 use crate::agent::{
+    background_workers::domain_memory::MemoryWorkerSnapshot,
     background_workers::domain_routing::RoutingSnapshot,
+    context::structural_memory::ThreadStructuralMemory,
+    gene_pool::types::GenePoolRuntimeSnapshot,
     handoff::{audit::CapabilityScoreRow, SpecialistProfile},
     morphogenesis::types::MorphogenesisAffinity,
+    semantic_env::SemanticPackageSummary,
 };
+use crate::history::{ExecutionTraceRow, SkillVariantRecord};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,6 +20,7 @@ pub(crate) enum BackgroundWorkerKind {
     Anticipatory,
     Learning,
     Routing,
+    Memory,
 }
 
 impl BackgroundWorkerKind {
@@ -26,6 +32,7 @@ impl BackgroundWorkerKind {
             Self::Anticipatory => "__tamux-background-worker-anticipatory",
             Self::Learning => "__tamux-background-worker-learning",
             Self::Routing => "__tamux-background-worker-routing",
+            Self::Memory => "__tamux-background-worker-memory",
         }
     }
 
@@ -36,6 +43,7 @@ impl BackgroundWorkerKind {
             "__tamux-background-worker-anticipatory" => Some(Self::Anticipatory),
             "__tamux-background-worker-learning" => Some(Self::Learning),
             "__tamux-background-worker-routing" => Some(Self::Routing),
+            "__tamux-background-worker-memory" => Some(Self::Memory),
             _ => None,
         }
     }
@@ -65,6 +73,18 @@ pub(crate) enum BackgroundWorkerCommand {
         routing: RoutingConfig,
         now_ms: u64,
     },
+    TickMemory {
+        thread_id: Option<String>,
+        task_id: Option<String>,
+        structural_memory: Option<ThreadStructuralMemory>,
+        semantic_packages: Vec<SemanticPackageSummary>,
+        now_ms: u64,
+    },
+    TickLearning {
+        successful_traces: Vec<ExecutionTraceRow>,
+        variants: Vec<SkillVariantRecord>,
+        now_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +93,8 @@ pub(crate) enum BackgroundWorkerResult {
     Pong { kind: BackgroundWorkerKind },
     SafetyTick { decisions: Vec<SafetyDecision> },
     RoutingTick { snapshot: RoutingSnapshot },
+    MemoryTick { snapshot: MemoryWorkerSnapshot },
+    LearningTick { snapshot: GenePoolRuntimeSnapshot },
     Noop { kind: BackgroundWorkerKind },
     Error { message: String },
 }

@@ -64,5 +64,45 @@ pub(crate) fn handle_background_worker_command(
                 ),
             }
         }
+        BackgroundWorkerCommand::TickMemory {
+            thread_id,
+            task_id,
+            structural_memory,
+            semantic_packages,
+            now_ms,
+        } => {
+            if kind != BackgroundWorkerKind::Memory {
+                return BackgroundWorkerResult::Error {
+                    message: format!("tick_memory is not handled by {kind:?}"),
+                };
+            }
+            BackgroundWorkerResult::MemoryTick {
+                snapshot: super::domain_memory::build_memory_snapshot(
+                    thread_id.as_deref(),
+                    task_id.as_deref(),
+                    structural_memory.as_ref(),
+                    &semantic_packages,
+                    now_ms,
+                ),
+            }
+        }
+        BackgroundWorkerCommand::TickLearning {
+            successful_traces,
+            variants,
+            now_ms,
+        } => {
+            if kind != BackgroundWorkerKind::Learning {
+                return BackgroundWorkerResult::Error {
+                    message: format!("tick_learning is not handled by {kind:?}"),
+                };
+            }
+            BackgroundWorkerResult::LearningTick {
+                snapshot: super::domain_learning::build_learning_snapshot(
+                    &successful_traces,
+                    &variants,
+                    now_ms,
+                ),
+            }
+        }
     }
 }
