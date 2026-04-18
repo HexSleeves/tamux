@@ -542,3 +542,87 @@ fn remote_model_pricing_subtitle_returns_free_for_zero_prompt_and_completion() {
         Some("free".to_string())
     );
 }
+
+#[test]
+fn weles_compaction_choice_yes_reuses_weles_provider_model_and_effort() {
+    let writes = super::agents::weles_compaction_writes(
+        super::agents::WelesCompactionChoice::Yes,
+        "anthropic",
+        "claude-opus-4-7",
+        Some("high"),
+    );
+
+    assert_eq!(
+        writes,
+        vec![
+            super::types::ConfigWrite {
+                key_path: "/auto_compact_context".to_string(),
+                value_json: "true".to_string(),
+            },
+            super::types::ConfigWrite {
+                key_path: "/compaction/strategy".to_string(),
+                value_json: "\"weles\"".to_string(),
+            },
+            super::types::ConfigWrite {
+                key_path: "/compaction/weles/provider".to_string(),
+                value_json: "\"anthropic\"".to_string(),
+            },
+            super::types::ConfigWrite {
+                key_path: "/compaction/weles/model".to_string(),
+                value_json: "\"claude-opus-4-7\"".to_string(),
+            },
+            super::types::ConfigWrite {
+                key_path: "/compaction/weles/reasoning_effort".to_string(),
+                value_json: "\"high\"".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn weles_compaction_choice_default_heuristic_enables_auto_compaction_without_overriding_weles() {
+    let writes = super::agents::weles_compaction_writes(
+        super::agents::WelesCompactionChoice::NoUseDefault,
+        "openai",
+        "gpt-5.4-mini",
+        Some("medium"),
+    );
+
+    assert_eq!(
+        writes,
+        vec![
+            super::types::ConfigWrite {
+                key_path: "/auto_compact_context".to_string(),
+                value_json: "true".to_string(),
+            },
+            super::types::ConfigWrite {
+                key_path: "/compaction/strategy".to_string(),
+                value_json: "\"heuristic\"".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn weles_compaction_choice_no_uses_default_heuristic() {
+    let writes = super::agents::weles_compaction_writes(
+        super::agents::WelesCompactionChoice::NoUseDefault,
+        "openai",
+        "gpt-5.4-mini",
+        Some("none"),
+    );
+
+    assert_eq!(
+        writes,
+        vec![
+            super::types::ConfigWrite {
+                key_path: "/auto_compact_context".to_string(),
+                value_json: "true".to_string(),
+            },
+            super::types::ConfigWrite {
+                key_path: "/compaction/strategy".to_string(),
+                value_json: "\"heuristic\"".to_string(),
+            },
+        ]
+    );
+}

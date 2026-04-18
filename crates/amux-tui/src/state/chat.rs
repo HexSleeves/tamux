@@ -389,10 +389,7 @@ impl ChatState {
     }
 
     pub fn open_spawned_thread(&mut self, from_thread_id: &str, to_thread_id: &str) -> bool {
-        if from_thread_id.is_empty()
-            || to_thread_id.is_empty()
-            || from_thread_id == to_thread_id
-        {
+        if from_thread_id.is_empty() || to_thread_id.is_empty() || from_thread_id == to_thread_id {
             return false;
         }
 

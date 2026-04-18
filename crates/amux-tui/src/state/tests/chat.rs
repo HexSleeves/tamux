@@ -205,7 +205,9 @@ fn thread_history_stack_suppresses_duplicate_top_entries() {
 #[test]
 fn thread_history_stack_allows_opening_unloaded_spawned_thread() {
     let mut state = ChatState::new();
-    state.reduce(ChatAction::ThreadListReceived(vec![make_thread("thread-a", "A")]));
+    state.reduce(ChatAction::ThreadListReceived(vec![make_thread(
+        "thread-a", "A",
+    )]));
     state.reduce(ChatAction::SelectThread("thread-a".into()));
 
     assert!(state.open_spawned_thread("thread-a", "thread-b"));
