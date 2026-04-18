@@ -168,6 +168,15 @@ If the target is not a known built-in persona or registered sub-agent alias, the
 
 Together they give the system a little presence without hiding what it is doing.
 
+## 🔊 Speech to Text / Text to Speech (Pinned)
+
+Tamux supports voice workflows in both TUI and desktop app.
+
+- **TUI:** `Ctrl+L` (record/transcribe), `Ctrl+P` (speak selected/latest assistant message), `Ctrl+S` (stop playback)
+- **Desktop app:** mic/speak controls with daemon-backed STT/TTS settings
+- **Settings persistence:** daemon config `extra.audio_*`
+
+
 ## Read More
 
 ### Documentation
@@ -177,11 +186,13 @@ Together they give the system a little presence without hiding what it is doing.
 - [Getting Started](docs/getting-started.md)
 - [How tamux Works](docs/how-tamux-works.md)
 - [Thread Participants](docs/operating/thread-participants.md)
+- [Speech to Text / Text to Speech](docs/speech-to-text-and-text-to-speech.md)
 - [Goal Runners](docs/goal-runners.md)
 - [Self-Orchestrating Agent Architecture](docs/self-orchestrating-agent.md)
 - [Agentic Mission Control](docs/agentic-mission-control.md)
 - [TUI Capabilities Map](docs/tui/capabilities-map.md)
 - [TUI README](crates/amux-tui/README.md)
+- [Speech-to-text / Text-to-speech](docs/speech-to-text-and-text-to-speech.md)
 - [CDUI YAML Views](docs/cdui-yaml-views.md)
 - [Plugin Development](docs/plugin-development.md)
 

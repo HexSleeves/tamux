@@ -663,6 +663,13 @@ impl<'a> SendMessageRunner<'a> {
                 .set_thread_memory_injection_state(&tid, injection_state)
                 .await;
         }
+        if let Some(memory_palace_context) = engine
+            .build_memory_palace_prompt_context(&tid, task_id)
+            .await
+        {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&memory_palace_context);
+        }
         if internal_dm_thread {
             system_prompt.push_str(
                 "\n\n## Internal DM Constraints\n- This thread is an internal DM between agents.\n- Internal DMs are for discussion and coordination only.\n- Do not continue visible-thread work here.\n- Do not call tools in this thread.\n- If a visible thread continuation was explicitly requested, reply briefly here and stop. The daemon will continue the visible thread separately.\n",

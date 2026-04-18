@@ -406,6 +406,7 @@ pub fn render_status_bar(
     tick: u64,
     error_tick: u64,
     voice_recording: bool,
+    voice_playing: bool,
     queued_count: usize,
     _status_line: &str,
 ) {
@@ -445,6 +446,16 @@ pub fn render_status_bar(
         spans.push(Span::raw("  "));
         spans.push(Span::styled("●", rec_style));
         spans.push(Span::styled(" REC", rec_style));
+    }
+
+    if voice_playing {
+        let playing_style = if (tick / 8) % 2 == 0 {
+            theme.accent_secondary
+        } else {
+            theme.fg_active
+        };
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled("🔊 PLAYING", playing_style));
     }
 
     if queued_count > 0 {
@@ -490,6 +501,7 @@ pub fn status_bar_hit_test(
     connected: bool,
     has_error: bool,
     voice_recording: bool,
+    voice_playing: bool,
     queued_count: usize,
     position: Position,
 ) -> Option<StatusBarHitTarget> {
@@ -512,6 +524,11 @@ pub fn status_bar_hit_test(
         x = x.saturating_add(2);
         x = x.saturating_add(1);
         x = x.saturating_add(" REC".chars().count() as u16);
+    }
+
+    if voice_playing {
+        x = x.saturating_add(2);
+        x = x.saturating_add("🔊 PLAYING".chars().count() as u16);
     }
 
     let _ = connected;
@@ -555,6 +572,7 @@ mod tests {
                     0,
                     0,
                     false,
+                    false,
                     0,
                     "ready",
                 );
@@ -573,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_shows_rec_indicator_when_recording() {
+    fn status_bar_shows_playing_indicator_when_audio_is_playing() {
         let backend = TestBackend::new(120, 1);
         let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
 
@@ -588,9 +606,10 @@ mod tests {
                     false,
                     10,
                     0,
+                    false,
                     true,
                     0,
-                    "recording",
+                    "playing",
                 );
             })
             .expect("status bar render should succeed");
@@ -600,6 +619,6 @@ mod tests {
             .filter_map(|x| buffer.cell((x, 0)).map(|cell| cell.symbol()))
             .collect::<String>();
 
-        assert!(row.contains("REC"), "missing REC indicator: {row}");
+        assert!(row.contains("PLAYING"), "missing PLAYING indicator: {row}");
     }
 }

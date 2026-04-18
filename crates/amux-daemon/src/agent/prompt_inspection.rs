@@ -204,6 +204,52 @@ fn render_prompt_memory_injection_state_section(
     lines.join("\n")
 }
 
+fn render_morphogenesis_affinity_updates_section(
+    updates: &[crate::agent::morphogenesis::types::AffinityUpdate],
+) -> String {
+    if updates.is_empty() {
+        return String::new();
+    }
+
+    let mut lines = vec![format!("- Logged affinity updates: {}", updates.len())];
+    for update in updates {
+        lines.push(format!(
+            "- {}: {:.3} -> {:.3} via {}{} at {}",
+            update.domain,
+            update.old_affinity,
+            update.new_affinity,
+            update.trigger_type,
+            update
+                .task_id
+                .as_deref()
+                .map(|task_id| format!(" (task `{task_id}`)"))
+                .unwrap_or_default(),
+            update.updated_at_ms
+        ));
+    }
+    lines.join("\n")
+}
+
+fn render_morphogenesis_soul_adaptations_section(
+    adaptations: &[crate::agent::morphogenesis::types::SoulAdaptation],
+) -> String {
+    if adaptations.is_empty() {
+        return String::new();
+    }
+
+    let mut lines = vec![format!("- Logged soul adaptations: {}", adaptations.len())];
+    for adaptation in adaptations {
+        lines.push(format!(
+            "- {} {:?} at {}: {}",
+            adaptation.domain,
+            adaptation.adaptation_type,
+            adaptation.created_at_ms,
+            adaptation.soul_snippet.trim()
+        ));
+    }
+    lines.join("\n")
+}
+
 fn render_subagent_supervision_section(config: &AgentConfig) -> String {
     let mut section = String::from(
         "- For large tasks with clearly separable work, call `spawn_subagent` to create bounded child tasks instead of trying to do everything in one loop.\n- If a child should use a specific provider or model, call `fetch_authenticated_providers` first and `fetch_provider_models` for the chosen provider before setting `spawn_subagent.provider` or `spawn_subagent.model`.\n- Keep each subagent narrow in scope and avoid creating duplicate child assignments.\n- Monitor child progress with `list_subagents` and integrate their results before declaring the parent task complete.\n- Do not use `list_agents` to check spawned child progress; it only lists runtime targets.\n- Do not busy-wait on child agents. If there is no other useful work to do after delegating, send a normal progress update and stop so tamux can resume you when children finish.\n- Spawned agents carry their own Slavic persona. Treat those identities as real collaborators with bounded scope, not as disposable copies of yourself.\n",
@@ -657,6 +703,26 @@ impl AgentEngine {
             "Prompt Memory Injection State",
             render_prompt_memory_injection_state_section(&tracked_thread_memory_injection_states),
         );
+        let affinity_updates = self
+            .load_morphogenesis_affinity_updates(&target.agent_id, None, 8)
+            .await
+            .unwrap_or_default();
+        push_section(
+            &mut sections,
+            "morphogenesis_affinity_updates",
+            "Morphogenesis Affinity Updates",
+            render_morphogenesis_affinity_updates_section(&affinity_updates),
+        );
+        let soul_adaptations = self
+            .load_soul_adaptations(&target.agent_id, 8)
+            .await
+            .unwrap_or_default();
+        push_section(
+            &mut sections,
+            "morphogenesis_soul_adaptations",
+            "Morphogenesis Soul Adaptations",
+            render_morphogenesis_soul_adaptations_section(&soul_adaptations),
+        );
 
         let payload = PromptInspectionPayload {
             agent_id: target.agent_id,
@@ -837,6 +903,59 @@ mod tests {
                 .get("injected_after_compaction")
                 .and_then(|value| value.as_bool()),
             Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn inspect_prompt_surfaces_morphogenesis_audit_sections() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+        for _ in 0..11 {
+            engine
+                .record_morphogenesis_outcome(
+                    crate::agent::agent_identity::MAIN_AGENT_ID,
+                    &[String::from("debugging")],
+                    crate::agent::morphogenesis::types::MorphogenesisOutcome::Success,
+                )
+                .await
+                .expect("record morphogenesis outcome");
+        }
+
+        let payload: serde_json::Value = serde_json::from_str(
+            &engine
+                .inspect_prompt_json(None)
+                .await
+                .expect("inspect prompt should succeed"),
+        )
+        .expect("inspect prompt should return json");
+
+        let sections = payload
+            .get("sections")
+            .and_then(|value| value.as_array())
+            .expect("payload should include sections");
+        assert!(
+            sections.iter().any(|section| {
+                section.get("id").and_then(|value| value.as_str())
+                    == Some("morphogenesis_affinity_updates")
+                    && section
+                        .get("content")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|content| content.contains("debugging"))
+            }),
+            "inspection output should expose morphogenesis affinity update history"
+        );
+        assert!(
+            sections.iter().any(|section| {
+                section.get("id").and_then(|value| value.as_str())
+                    == Some("morphogenesis_soul_adaptations")
+                    && section
+                        .get("content")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|content| content.contains("debugging"))
+            }),
+            "inspection output should expose morphogenesis soul adaptations"
         );
     }
 }

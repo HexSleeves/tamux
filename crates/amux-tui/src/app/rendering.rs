@@ -1043,6 +1043,7 @@ impl TuiModel {
             self.tick_counter,
             self.error_tick,
             self.voice_recording,
+            self.voice_player.is_some(),
             self.queued_prompts.len(),
             &self.status_line,
         );

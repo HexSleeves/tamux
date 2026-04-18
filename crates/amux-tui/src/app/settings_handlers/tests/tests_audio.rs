@@ -1,5 +1,3 @@
-use super::*;
-
 #[test]
 fn audio_toggle_fields_write_extra_paths() {
     let (mut model, mut daemon_rx) = make_model();

@@ -43,6 +43,26 @@ impl TuiModel {
         self.maybe_schedule_chat_history_collapse();
         self.chat.maybe_collapse_history(self.tick_counter);
         self.clear_expired_queued_prompt_copy_feedback();
+
+        if let Some(player) = self.voice_player.as_mut() {
+            match player.try_wait() {
+                Ok(Some(_status)) => {
+                    self.voice_player = None;
+                    if self.status_line == "Playing synthesized speech..." {
+                        self.status_line = "Audio playback finished".to_string();
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.voice_player = None;
+                    self.status_line = "Audio playback process error".to_string();
+                    self.last_error = Some(format!("Audio playback monitor failed: {error}"));
+                    self.error_active = true;
+                    self.error_tick = self.tick_counter;
+                }
+            }
+        }
+
         let _ = self.maybe_auto_send_always_auto_response();
         if self
             .active_auto_response_countdown_secs()

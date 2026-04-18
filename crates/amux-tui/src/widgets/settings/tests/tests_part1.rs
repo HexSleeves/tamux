@@ -900,7 +900,6 @@ fn subagent_editor_renders_reasoning_effort_field() {
 }
 // TDD rendering tests for audio settings display in Features tab
 
-use super::*;
 use crate::state::config::ConfigAction;
 use crate::state::settings::SettingsAction;
 use crate::state::settings::SettingsTab;

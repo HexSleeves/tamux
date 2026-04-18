@@ -499,6 +499,155 @@ async fn send_message_request_includes_runtime_continuity_and_negative_knowledge
 }
 
 #[tokio::test]
+async fn send_message_request_includes_semantic_memory_palace_context_when_graph_exists() {
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = spawn_recording_assistant_server(recorded_bodies.clone()).await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread-memory-palace-prompt";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            crate::agent::types::AgentThread {
+                id: thread_id.to_string(),
+                agent_name: None,
+                title: "Memory palace prompt thread".to_string(),
+                messages: vec![crate::agent::types::AgentMessage::user(
+                    "Investigate authentication regression",
+                    1,
+                )],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+    }
+
+    engine.thread_structural_memories.write().await.insert(
+        thread_id.to_string(),
+        crate::agent::context::structural_memory::ThreadStructuralMemory {
+            workspace_seed_scan_complete: true,
+            language_hints: vec!["rust".to_string()],
+            workspace_seeds: vec![],
+            observed_files: vec![crate::agent::context::structural_memory::ObservedFileNode {
+                node_id: "node:file:src/auth.rs".to_string(),
+                relative_path: "src/auth.rs".to_string(),
+            }],
+            edges: vec![],
+        },
+    );
+
+    engine
+        .history
+        .upsert_memory_node(
+            "node:file:src/auth.rs",
+            "src/auth.rs",
+            "file",
+            Some("authentication entrypoint"),
+            1_000,
+        )
+        .await
+        .expect("auth node");
+    engine
+        .history
+        .upsert_memory_node(
+            "node:error:LoginError",
+            "LoginError",
+            "error",
+            Some("login failed due to token parsing"),
+            1_000,
+        )
+        .await
+        .expect("error node");
+    engine
+        .history
+        .upsert_memory_node(
+            "node:file:src/tokens.rs",
+            "src/tokens.rs",
+            "file",
+            Some("token parsing logic"),
+            1_000,
+        )
+        .await
+        .expect("tokens node");
+    engine
+        .history
+        .upsert_memory_edge(
+            "node:file:src/auth.rs",
+            "node:error:LoginError",
+            "file_hit_error",
+            2.0,
+            1_000,
+        )
+        .await
+        .expect("auth edge");
+    engine
+        .history
+        .upsert_memory_edge(
+            "node:error:LoginError",
+            "node:file:src/tokens.rs",
+            "caused_by",
+            2.0,
+            1_000,
+        )
+        .await
+        .expect("error edge");
+
+    let outcome = engine
+        .send_message_inner(
+            Some(thread_id),
+            "Investigate authentication regression",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect("send message should succeed");
+
+    assert!(!outcome.interrupted_for_approval);
+
+    let recorded = recorded_bodies
+        .lock()
+        .expect("lock recorded assistant request log");
+    assert!(
+        recorded
+            .iter()
+            .any(|body| body.contains("## Semantic Memory Palace")),
+        "expected prompt to include semantic memory palace context"
+    );
+    assert!(
+        recorded.iter().any(|body| {
+            body.contains("src/tokens.rs") && body.contains("login failed due to token parsing")
+        }),
+        "expected prompt to surface related graph context from the memory palace"
+    );
+}
+
+#[tokio::test]
 async fn direct_weles_handoff_turn_uses_weles_persona_prompt() {
     let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
     let root = tempdir().unwrap();
