@@ -561,6 +561,16 @@ async fn execute_add_trigger(args: &serde_json::Value, agent: &AgentEngine) -> R
     Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()))
 }
 
+async fn execute_show_dreams(args: &serde_json::Value, agent: &AgentEngine) -> Result<String> {
+    let limit = args
+        .get("limit")
+        .and_then(|value| value.as_u64())
+        .map(|value| value as usize)
+        .unwrap_or(10);
+    let payload = agent.show_dreams_payload(limit).await?;
+    Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()))
+}
+
 async fn execute_get_todos(
     args: &serde_json::Value,
     agent: &AgentEngine,

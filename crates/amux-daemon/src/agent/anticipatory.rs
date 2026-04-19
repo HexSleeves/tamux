@@ -14,6 +14,7 @@ type AnticipatoryAdaptationMode = SatisfactionAdaptationMode;
 #[derive(Debug, Clone)]
 pub(super) struct AnticipatoryPrewarmSnapshot {
     pub summary: String,
+    pub precomputation_id: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +103,7 @@ impl AgentEngine {
         self.run_session_start_prewarm(settings).await;
         self.run_predictive_hydration(settings).await;
         let next_items = self.compute_anticipatory_items(settings).await;
+        self.sample_cognitive_resonance_runtime().await;
         self.refresh_anticipatory_items(next_items, settings).await;
     }
 
@@ -384,7 +386,7 @@ impl AgentEngine {
     ) {
         let now = now_millis();
         let mut runtime = self.anticipatory.write().await;
-        if runtime.items == next_items {
+        if anticipatory_items_semantically_equal(&runtime.items, &next_items) {
             return;
         }
 
@@ -417,6 +419,7 @@ impl AgentEngine {
         }
         drop(runtime);
 
+        self.persist_temporal_foresight_runtime(&next_items).await;
         for item in &predicted_items {
             self.persist_intent_prediction_if_present(item).await;
         }
@@ -1151,6 +1154,11 @@ impl AgentEngine {
             git.behind,
             changed_entries,
         );
+        let precomputation_id = self
+            .record_anticipatory_prewarm_precomputation(thread_id, &repo_root, &summary)
+            .await
+            .map(|(_, precomputation_id)| Some(precomputation_id))
+            .unwrap_or(None);
 
         self.anticipatory
             .write()
@@ -1158,9 +1166,35 @@ impl AgentEngine {
             .prewarm_cache_by_thread
             .insert(
                 thread_id.to_string(),
-                AnticipatoryPrewarmSnapshot { summary },
+                AnticipatoryPrewarmSnapshot {
+                    summary,
+                    precomputation_id,
+                },
             );
     }
+}
+
+fn anticipatory_items_semantically_equal(
+    left: &[AnticipatoryItem],
+    right: &[AnticipatoryItem],
+) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+
+    left.iter().zip(right).all(|(left, right)| {
+        left.id == right.id
+            && left.kind == right.kind
+            && left.title == right.title
+            && left.summary == right.summary
+            && left.bullets == right.bullets
+            && left.intent_prediction == right.intent_prediction
+            && (left.confidence - right.confidence).abs() < f64::EPSILON
+            && left.goal_run_id == right.goal_run_id
+            && left.thread_id == right.thread_id
+            && left.preferred_client_surface == right.preferred_client_surface
+            && left.preferred_attention_surface == right.preferred_attention_surface
+    })
 }
 
 #[cfg(test)]

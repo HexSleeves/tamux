@@ -25,7 +25,10 @@ async fn record_morphogenesis_outcome_persists_affinity_update_log_and_soul_adap
         .load_morphogenesis_affinity_updates("researcher", Some("research"), 32)
         .await
         .expect("load affinity updates");
-    assert!(!updates.is_empty(), "affinity update log should not be empty");
+    assert!(
+        !updates.is_empty(),
+        "affinity update log should not be empty"
+    );
     assert!(updates
         .iter()
         .any(|update| update.new_affinity > update.old_affinity));
@@ -58,8 +61,7 @@ fn classify_domains_infers_domains_from_prompt_and_capability_tags() {
 
 #[test]
 fn classify_domains_falls_back_to_general_when_no_signal_exists() {
-    let domains =
-        crate::agent::morphogenesis::task_router::classify_domains("Handle this", &[]);
+    let domains = crate::agent::morphogenesis::task_router::classify_domains("Handle this", &[]);
 
     assert_eq!(domains, vec!["general".to_string()]);
 }

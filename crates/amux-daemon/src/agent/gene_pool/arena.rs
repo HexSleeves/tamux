@@ -10,7 +10,10 @@ pub(crate) fn build_cross_breed_proposals(
     now_ms: u64,
 ) -> Vec<GenePoolCrossBreedProposal> {
     let mut by_skill = BTreeMap::<String, Vec<&SkillVariantRecord>>::new();
-    for variant in variants.iter().filter(|variant| variant.status != "archived") {
+    for variant in variants
+        .iter()
+        .filter(|variant| variant.status != "archived")
+    {
         by_skill
             .entry(variant.skill_name.clone())
             .or_default()
@@ -24,7 +27,13 @@ pub(crate) fn build_cross_breed_proposals(
         }
         let strong = records
             .into_iter()
-            .filter(|record| arena_scores.get(&record.variant_id).copied().unwrap_or_default() >= 0.72)
+            .filter(|record| {
+                arena_scores
+                    .get(&record.variant_id)
+                    .copied()
+                    .unwrap_or_default()
+                    >= 0.72
+            })
             .collect::<Vec<_>>();
         if strong.len() < 2 {
             continue;

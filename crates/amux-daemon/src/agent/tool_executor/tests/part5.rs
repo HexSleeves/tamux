@@ -268,6 +268,11 @@
                 "add_trigger should expose {required_property}"
             );
         }
+
+        tools
+            .iter()
+            .find(|tool| tool.function.name == "show_dreams")
+            .expect("show_dreams tool should be available");
     }
 
     #[test]

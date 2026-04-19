@@ -53,7 +53,8 @@ impl AgentEngine {
             BackgroundWorkerResult::MemoryTick { snapshot } => {
                 self.apply_memory_graph_updates(snapshot.update_batch.clone())
                     .await;
-                self.apply_memory_palace_clusters(snapshot.clusters.clone()).await;
+                self.apply_memory_palace_clusters(snapshot.clusters.clone())
+                    .await;
                 Ok(MemoryPalaceSnapshot {
                     thread_id: snapshot.thread_id,
                     task_id: snapshot.task_id,
@@ -181,7 +182,10 @@ fn render_memory_palace_prompt_context(context: &MemoryPalaceGraphContext) -> St
         .take(MEMORY_PALACE_PROMPT_NODE_LIMIT)
         .map(|node| {
             let mut summary = format!("- {} `{}`", node.node_type, node.label);
-            if let Some(text) = node.summary_text.as_deref().filter(|value| !value.trim().is_empty())
+            if let Some(text) = node
+                .summary_text
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
             {
                 summary.push_str(": ");
                 summary.push_str(text.trim());

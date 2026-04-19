@@ -257,6 +257,27 @@ impl AgentEngine {
                     for thread_id in due_threads {
                         pending_watcher_refreshes.remove(&thread_id);
                         self.refresh_thread_repo_context(&thread_id).await;
+                        let repo_root = self
+                            .resolve_thread_repo_root(&thread_id)
+                            .await
+                            .map(|(repo_root, _, _, _)| repo_root)
+                            .unwrap_or_default();
+                        if let Err(error) = self
+                            .maybe_fire_event_trigger(
+                                "filesystem",
+                                "file_changed",
+                                Some("detected"),
+                                Some(&thread_id),
+                                serde_json::json!({
+                                    "path": if repo_root.is_empty() { "." } else { repo_root.as_str() },
+                                    "repo_root": repo_root,
+                                    "source": "watcher_refresh",
+                                }),
+                            )
+                            .await
+                        {
+                            tracing::warn!(thread_id = %thread_id, error = %error, "failed to fire filesystem event trigger");
+                        }
                     }
                 }
                 _ = shutdown.changed() => break,

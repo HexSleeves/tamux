@@ -204,16 +204,26 @@ impl AgentEngine {
                     self.history.retire_skill_variant(variant_id).await?;
                 }
                 "cross_breed" => {
-                    let Some(left_parent_variant_id) = action.left_parent_variant_id.as_deref() else {
+                    let Some(left_parent_variant_id) = action.left_parent_variant_id.as_deref()
+                    else {
                         continue;
                     };
-                    let Some(right_parent_variant_id) = action.right_parent_variant_id.as_deref() else {
+                    let Some(right_parent_variant_id) = action.right_parent_variant_id.as_deref()
+                    else {
                         continue;
                     };
-                    let Some(left) = self.history.get_skill_variant(left_parent_variant_id).await? else {
+                    let Some(left) = self
+                        .history
+                        .get_skill_variant(left_parent_variant_id)
+                        .await?
+                    else {
                         continue;
                     };
-                    let Some(right) = self.history.get_skill_variant(right_parent_variant_id).await? else {
+                    let Some(right) = self
+                        .history
+                        .get_skill_variant(right_parent_variant_id)
+                        .await?
+                    else {
                         continue;
                     };
                     let _ = self

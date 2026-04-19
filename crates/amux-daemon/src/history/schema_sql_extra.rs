@@ -465,6 +465,34 @@ pub(super) fn extended_schema_sql() -> &'static str {
             );
             CREATE INDEX IF NOT EXISTS idx_satisfaction_scores_session_ts ON satisfaction_scores(session_id, computed_at_ms DESC);
 
+            CREATE TABLE IF NOT EXISTS cognitive_resonance_samples (
+                id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+                sampled_at_ms              INTEGER NOT NULL,
+                revision_velocity_ms       INTEGER,
+                session_entropy            REAL,
+                approval_latency_ms        INTEGER,
+                tool_hesitation_count      INTEGER NOT NULL DEFAULT 0,
+                cognitive_state            TEXT NOT NULL,
+                state_confidence           REAL NOT NULL,
+                resonance_score            REAL NOT NULL,
+                verbosity_adjustment       REAL NOT NULL,
+                risk_adjustment            REAL NOT NULL,
+                proactiveness_adjustment   REAL NOT NULL,
+                memory_urgency_adjustment  REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_cognitive_resonance_samples_sampled ON cognitive_resonance_samples(sampled_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS behavior_adjustments_log (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                adjusted_at_ms    INTEGER NOT NULL,
+                parameter         TEXT NOT NULL,
+                old_value         REAL NOT NULL,
+                new_value         REAL NOT NULL,
+                trigger_reason    TEXT NOT NULL,
+                resonance_score   REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_behavior_adjustments_log_adjusted ON behavior_adjustments_log(adjusted_at_ms DESC);
+
             CREATE TABLE IF NOT EXISTS intent_predictions (
                 id                 TEXT PRIMARY KEY,
                 session_id         TEXT NOT NULL,
@@ -477,6 +505,15 @@ pub(super) fn extended_schema_sql() -> &'static str {
             );
             CREATE INDEX IF NOT EXISTS idx_intent_predictions_session_ts ON intent_predictions(session_id, created_at_ms DESC);
 
+            CREATE TABLE IF NOT EXISTS intent_models (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id        TEXT NOT NULL UNIQUE,
+                model_blob      BLOB,
+                created_at_ms   INTEGER NOT NULL,
+                accuracy_score  REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_intent_models_agent_created ON intent_models(agent_id, created_at_ms DESC);
+
             CREATE TABLE IF NOT EXISTS system_outcome_predictions (
                 id                TEXT PRIMARY KEY,
                 session_id        TEXT NOT NULL,
@@ -488,6 +525,86 @@ pub(super) fn extended_schema_sql() -> &'static str {
                 created_at_ms     INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_system_outcome_predictions_session_ts ON system_outcome_predictions(session_id, created_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS temporal_patterns (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern_type        TEXT NOT NULL,
+                timescale           TEXT NOT NULL,
+                pattern_description TEXT NOT NULL,
+                context_filter      TEXT,
+                frequency           INTEGER NOT NULL DEFAULT 1,
+                last_observed_ms    INTEGER NOT NULL,
+                first_observed_ms   INTEGER NOT NULL,
+                confidence          REAL NOT NULL,
+                decay_rate          REAL NOT NULL DEFAULT 0.01,
+                created_at_ms       INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_temporal_patterns_type_scale ON temporal_patterns(pattern_type, timescale, created_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS temporal_predictions (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern_id       INTEGER NOT NULL,
+                predicted_action TEXT NOT NULL,
+                predicted_at_ms  INTEGER NOT NULL,
+                confidence       REAL NOT NULL,
+                actual_action    TEXT,
+                was_accepted     INTEGER,
+                accuracy_score   REAL,
+                FOREIGN KEY (pattern_id) REFERENCES temporal_patterns(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_temporal_predictions_pattern_predicted ON temporal_predictions(pattern_id, predicted_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS precomputation_log (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                prediction_id           INTEGER NOT NULL,
+                precomputation_type     TEXT NOT NULL,
+                precomputation_details  TEXT NOT NULL,
+                started_at_ms           INTEGER NOT NULL,
+                completed_at_ms         INTEGER,
+                was_used                INTEGER,
+                FOREIGN KEY (prediction_id) REFERENCES temporal_predictions(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_precomputation_log_prediction_started ON precomputation_log(prediction_id, started_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS dream_cycles (
+                id                           INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at_ms                INTEGER NOT NULL,
+                completed_at_ms              INTEGER,
+                idle_duration_ms             INTEGER NOT NULL,
+                tasks_analyzed               INTEGER NOT NULL,
+                counterfactuals_generated    INTEGER NOT NULL,
+                counterfactuals_successful   INTEGER NOT NULL,
+                status                       TEXT NOT NULL DEFAULT 'running'
+            );
+            CREATE INDEX IF NOT EXISTS idx_dream_cycles_started ON dream_cycles(started_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS counterfactual_evaluations (
+                id                            INTEGER PRIMARY KEY AUTOINCREMENT,
+                dream_cycle_id                INTEGER NOT NULL,
+                source_task_id                TEXT NOT NULL,
+                variation_type                TEXT NOT NULL,
+                counterfactual_description    TEXT NOT NULL,
+                estimated_token_saving        REAL,
+                estimated_time_saving_ms      INTEGER,
+                estimated_revision_reduction  INTEGER,
+                score                         REAL NOT NULL,
+                threshold_met                 INTEGER NOT NULL,
+                created_at_ms                 INTEGER NOT NULL,
+                FOREIGN KEY (dream_cycle_id) REFERENCES dream_cycles(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_counterfactual_evaluations_cycle ON counterfactual_evaluations(dream_cycle_id, created_at_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS event_log (
+                id             TEXT PRIMARY KEY,
+                event_family   TEXT NOT NULL,
+                event_kind     TEXT NOT NULL,
+                state          TEXT,
+                thread_id      TEXT,
+                payload_json   TEXT NOT NULL,
+                risk_label     TEXT NOT NULL,
+                handled_at_ms  INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_event_log_family_kind_ts ON event_log(event_family, event_kind, handled_at_ms DESC);
 
             CREATE TABLE IF NOT EXISTS thread_protocol_candidates (
                 thread_id   TEXT PRIMARY KEY,
@@ -641,12 +758,14 @@ pub(super) fn extended_schema_sql() -> &'static str {
                 id                 TEXT PRIMARY KEY,
                 event_family       TEXT NOT NULL,
                 event_kind         TEXT NOT NULL,
+                agent_id           TEXT,
                 target_state       TEXT,
                 thread_id          TEXT,
                 enabled            INTEGER NOT NULL DEFAULT 1,
                 cooldown_secs      INTEGER NOT NULL DEFAULT 0,
                 risk_label         TEXT NOT NULL DEFAULT 'low',
                 notification_kind  TEXT NOT NULL,
+                prompt_template    TEXT,
                 title_template     TEXT NOT NULL,
                 body_template      TEXT NOT NULL,
                 created_at         INTEGER NOT NULL,

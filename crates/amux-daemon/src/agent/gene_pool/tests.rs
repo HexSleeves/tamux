@@ -37,7 +37,12 @@ mod tests {
         }
     }
 
-    fn trace(id: &str, task_type: &str, tool_sequence: &[&str], quality_score: f64) -> ExecutionTraceRow {
+    fn trace(
+        id: &str,
+        task_type: &str,
+        tool_sequence: &[&str],
+        quality_score: f64,
+    ) -> ExecutionTraceRow {
         ExecutionTraceRow {
             id: id.to_string(),
             goal_run_id: None,
@@ -46,8 +51,13 @@ mod tests {
             outcome: Some("success".to_string()),
             quality_score: Some(quality_score),
             tool_sequence_json: Some(
-                serde_json::to_string(&tool_sequence.iter().map(|tool| tool.to_string()).collect::<Vec<_>>())
-                    .expect("tool sequence json"),
+                serde_json::to_string(
+                    &tool_sequence
+                        .iter()
+                        .map(|tool| tool.to_string())
+                        .collect::<Vec<_>>(),
+                )
+                .expect("tool sequence json"),
             ),
             metrics_json: Some("{}".to_string()),
             duration_ms: Some(800),
@@ -96,11 +106,13 @@ mod tests {
         assert!(snapshot
             .lifecycle_actions
             .iter()
-            .any(|action| action.action == "promote" && action.variant_id.as_deref() == Some("variant-draft")));
+            .any(|action| action.action == "promote"
+                && action.variant_id.as_deref() == Some("variant-draft")));
         assert!(snapshot
             .lifecycle_actions
             .iter()
-            .any(|action| action.action == "retire" && action.variant_id.as_deref() == Some("variant-active-weak")));
+            .any(|action| action.action == "retire"
+                && action.variant_id.as_deref() == Some("variant-active-weak")));
         assert!(!snapshot.fitness_history.is_empty());
     }
 
@@ -262,11 +274,11 @@ mod tests {
             .history
             .read_conn
             .call(move |conn| {
-                Ok(conn.query_row(
-                    "SELECT COUNT(*) FROM gene_fitness_history",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )?)
+                Ok(
+                    conn.query_row("SELECT COUNT(*) FROM gene_fitness_history", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                )
             })
             .await
             .expect("fitness row count");

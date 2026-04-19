@@ -836,7 +836,10 @@ impl AgentEngine {
         }
         drop(memories);
         self.apply_memory_graph_updates(graph_updates).await;
-        if let Err(error) = self.refresh_memory_palace_from_thread(thread_id, None).await {
+        if let Err(error) = self
+            .refresh_memory_palace_from_thread(thread_id, None)
+            .await
+        {
             tracing::warn!(
                 thread_id = %thread_id,
                 tool_name = %tool_name,
@@ -861,7 +864,10 @@ impl AgentEngine {
             failure_description,
         ))
         .await;
-        if let Err(error) = self.refresh_memory_palace_from_thread(thread_id, None).await {
+        if let Err(error) = self
+            .refresh_memory_palace_from_thread(thread_id, None)
+            .await
+        {
             tracing::warn!(
                 thread_id = %thread_id,
                 tool_name = %tool_name,

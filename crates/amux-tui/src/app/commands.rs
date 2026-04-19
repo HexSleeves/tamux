@@ -174,12 +174,8 @@ impl TuiModel {
             &["audio", "tts", "model"],
             "gpt-4o-mini-tts",
         );
-        let voice = Self::voice_extra_string(
-            raw,
-            "audio_tts_voice",
-            &["audio", "tts", "voice"],
-            "alloy",
-        );
+        let voice =
+            Self::voice_extra_string(raw, "audio_tts_voice", &["audio", "tts", "voice"], "alloy");
         let args_json = serde_json::json!({
             "input": content_to_speak,
             "provider": provider,

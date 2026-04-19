@@ -445,6 +445,49 @@ impl AgentEngine {
         }))
     }
 
+    pub(crate) async fn build_protocol_prompt_context(
+        &self,
+        thread_id: &str,
+        raw_content: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let token = raw_content.trim();
+        if token.is_empty() || token.contains(char::is_whitespace) {
+            return Ok(None);
+        }
+
+        let Some(decoded) = self
+            .decode_thread_protocol_token(thread_id, token, Some("user"), Some("assistant"), None)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if decoded.outcome != ProtocolDecodeOutcomeKind::Match {
+            return Ok(None);
+        }
+
+        let mut lines = vec![format!(
+            "- Decoded emergent protocol token `{}` into a reusable coordination intent.",
+            token
+        )];
+        for step in decoded.expanded_steps.iter().take(3) {
+            let tool = step
+                .tool
+                .as_deref()
+                .map(|tool| format!(" via `{tool}`"))
+                .unwrap_or_default();
+            lines.push(format!(
+                "- Step {}: {}{}",
+                step.step_index + 1,
+                step.intent,
+                tool
+            ));
+        }
+        Ok(Some(format!(
+            "## Emergent Protocol Decode\n{}\n",
+            lines.join("\n")
+        )))
+    }
+
     async fn protocol_registry_entry_from_row(
         &self,
         row: EmergentProtocolRow,
@@ -1558,5 +1601,59 @@ mod tests {
         assert!(decoded.context_match);
         assert_eq!(decoded.outcome, types::ProtocolDecodeOutcomeKind::Match);
         assert_eq!(decoded.expanded_steps.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn build_protocol_prompt_context_surfaces_decoded_steps_for_live_turns() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread-emergent-prompt-context";
+
+        let entry = ProtocolRegistryEntry {
+            protocol_id: "proto_manual_prompt_context".to_string(),
+            token: "@proto_prompt".to_string(),
+            description: "Manual protocol for prompt context".to_string(),
+            agent_a: "user".to_string(),
+            agent_b: "assistant".to_string(),
+            thread_id: thread_id.to_string(),
+            normalized_pattern: "continue".to_string(),
+            trigger_phrase: "continue".to_string(),
+            signal_kind: types::ProtocolSignalKind::RepeatedContinuationCue,
+            context_signature: types::ContextSignature {
+                thread_id: thread_id.to_string(),
+                normalized_pattern: "continue".to_string(),
+                trigger_phrase: "continue".to_string(),
+                signal_kind: types::ProtocolSignalKind::RepeatedContinuationCue,
+                source_role: "user".to_string(),
+                target_role: "assistant".to_string(),
+            },
+            steps: vec![types::ProtocolStep {
+                step_index: 0,
+                intent: "expand continue cue".to_string(),
+                tool: None,
+                args_template: serde_json::json!({}),
+            }],
+            created_at_ms: 1,
+            activated_at_ms: 1,
+            last_used_ms: None,
+            usage_count: 0,
+            success_rate: 1.0,
+            source_candidate_id: None,
+        };
+
+        engine
+            .persist_protocol_registry_entry(&entry)
+            .await
+            .expect("entry should persist");
+
+        let context = engine
+            .build_protocol_prompt_context(thread_id, "@proto_prompt")
+            .await
+            .expect("prompt context should build")
+            .expect("prompt context should exist");
+
+        assert!(context.contains("Emergent Protocol Decode"));
+        assert!(context.contains("expand continue cue"));
     }
 }

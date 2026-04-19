@@ -450,3 +450,72 @@ fn decay_handles_very_large_age_without_panic() {
     assert!((0.0..=1.0).contains(&confidence));
     assert!(confidence < 0.001);
 }
+
+#[tokio::test]
+async fn dream_state_cycle_persists_cycles_evaluations_and_show_dreams_payload() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    let task = engine
+        .enqueue_task(
+            "Review authentication diff".to_string(),
+            "Compare the auth patch, review regressions, and summarize what changed.".to_string(),
+            "normal",
+            Some("grep auth src/auth.rs".to_string()),
+            None,
+            Vec::new(),
+            None,
+            "user",
+            None,
+            None,
+            Some("thread-dream-state".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    {
+        let mut tasks = engine.tasks.lock().await;
+        let stored = tasks
+            .iter_mut()
+            .find(|entry| entry.id == task.id)
+            .expect("task should exist");
+        stored.status = TaskStatus::Completed;
+        stored.started_at = Some(now_millis().saturating_sub(30_000));
+        stored.completed_at = Some(now_millis());
+        stored.retry_count = 2;
+    }
+
+    engine.run_dream_state_cycle_if_idle(15 * 60 * 1000).await;
+
+    let cycles = engine
+        .history
+        .list_dream_cycles(4)
+        .await
+        .expect("dream cycles should persist");
+    assert!(!cycles.is_empty(), "dream cycle should be recorded");
+    let cycle_id = cycles[0].id.expect("cycle id should be present");
+    let evaluations = engine
+        .history
+        .list_counterfactual_evaluations(cycle_id)
+        .await
+        .expect("counterfactual evaluations should persist");
+    assert!(
+        !evaluations.is_empty(),
+        "dream cycle should record counterfactual evaluations"
+    );
+
+    let payload = engine
+        .show_dreams_payload(5)
+        .await
+        .expect("dream payload should build");
+    assert!(
+        payload["cycle_count"].as_u64().unwrap_or_default() >= 1,
+        "show_dreams should surface recorded cycles"
+    );
+    assert!(
+        payload["hints"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "show_dreams should surface persisted dream hints"
+    );
+}

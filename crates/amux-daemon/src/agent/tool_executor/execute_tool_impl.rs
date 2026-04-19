@@ -1656,6 +1656,7 @@ async fn dispatch_tool_execution(
         "list_tasks" => execute_list_tasks(args, agent).await,
         "list_triggers" => execute_list_triggers(args, agent).await,
         "add_trigger" => execute_add_trigger(args, agent).await,
+        "show_dreams" => execute_show_dreams(args, agent).await,
         "get_todos" => execute_get_todos(args, agent, task_id).await,
         "cancel_task" => execute_cancel_task(args, agent).await,
         "type_in_terminal" => execute_type_in_terminal(args, session_manager).await,

@@ -131,9 +131,11 @@ mod tests {
             .expect("query should succeed");
 
         assert_eq!(context.center_node_id, "node:file:src/auth.rs");
-        assert!(context
-            .summary
-            .contains("src/tokens.rs"), "expected cross-thread second hop in summary: {}", context.summary);
+        assert!(
+            context.summary.contains("src/tokens.rs"),
+            "expected cross-thread second hop in summary: {}",
+            context.summary
+        );
         assert!(context
             .subgraph_edges
             .iter()
@@ -153,7 +155,13 @@ mod tests {
             .expect("center node");
         engine
             .history
-            .upsert_memory_node("node:file:src/legacy.rs", "src/legacy.rs", "file", None, 1_000)
+            .upsert_memory_node(
+                "node:file:src/legacy.rs",
+                "src/legacy.rs",
+                "file",
+                None,
+                1_000,
+            )
             .await
             .expect("member node");
         engine

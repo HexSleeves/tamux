@@ -850,6 +850,7 @@ async fn status_diagnostics_snapshot_exposes_cached_prewarm_for_intent_predictio
         "thread-intent-cache-diag".to_string(),
         crate::agent::anticipatory::AnticipatoryPrewarmSnapshot {
             summary: "branch main; dirty=true; modified 1; staged 0; untracked 0; ahead 0; behind 0; context entries 1".to_string(),
+            precomputation_id: None,
         },
     );
 

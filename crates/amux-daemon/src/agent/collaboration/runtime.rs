@@ -663,7 +663,13 @@ impl AgentEngine {
         }
         session.updated_at = now_millis();
         let snapshot = session.clone();
-        let persisted_bid = build_persisted_bid(&snapshot, task_id, bid.confidence, &bid.availability, bid.created_at);
+        let persisted_bid = build_persisted_bid(
+            &snapshot,
+            task_id,
+            bid.confidence,
+            &bid.availability,
+            bid.created_at,
+        );
         let report = serde_json::json!({
             "session_id": session.id,
             "bid": bid,
@@ -1319,30 +1325,29 @@ impl AgentEngine {
         };
         if let Some(session) = session_snapshot.as_ref() {
             if let Some(role_assignment) = session.role_assignment.as_ref() {
-                let persisted_assignment = crate::agent::consensus::types::PersistedRoleAssignment {
-                    task_id: parent_task_id.to_string(),
-                    round_id: consensus_round_id(session),
-                    primary_agent_id: role_assignment.primary_task_id.clone(),
-                    reviewer_agent_id: Some(role_assignment.reviewer_task_id.clone()),
-                    observers: session
-                        .agents
-                        .iter()
-                        .filter(|agent| {
-                            agent.task_id != role_assignment.primary_task_id
-                                && agent.task_id != role_assignment.reviewer_task_id
-                        })
-                        .map(|agent| agent.task_id.clone())
-                        .collect(),
-                    assigned_at_ms: role_assignment.assigned_at,
-                    outcome: Some(outcome.to_string()),
-                };
-                let metric = build_quality_metric(
-                    session,
-                    &persisted_assignment,
-                    outcome,
-                    now_millis(),
-                );
-                if let Err(error) = self.mark_role_assignment_outcome(parent_task_id, outcome).await
+                let persisted_assignment =
+                    crate::agent::consensus::types::PersistedRoleAssignment {
+                        task_id: parent_task_id.to_string(),
+                        round_id: consensus_round_id(session),
+                        primary_agent_id: role_assignment.primary_task_id.clone(),
+                        reviewer_agent_id: Some(role_assignment.reviewer_task_id.clone()),
+                        observers: session
+                            .agents
+                            .iter()
+                            .filter(|agent| {
+                                agent.task_id != role_assignment.primary_task_id
+                                    && agent.task_id != role_assignment.reviewer_task_id
+                            })
+                            .map(|agent| agent.task_id.clone())
+                            .collect(),
+                        assigned_at_ms: role_assignment.assigned_at,
+                        outcome: Some(outcome.to_string()),
+                    };
+                let metric =
+                    build_quality_metric(session, &persisted_assignment, outcome, now_millis());
+                if let Err(error) = self
+                    .mark_role_assignment_outcome(parent_task_id, outcome)
+                    .await
                 {
                     tracing::warn!(
                         task_id = %task.id,

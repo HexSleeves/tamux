@@ -234,17 +234,31 @@ pub struct EventTriggerRow {
     pub id: String,
     pub event_family: String,
     pub event_kind: String,
+    pub agent_id: Option<String>,
     pub target_state: Option<String>,
     pub thread_id: Option<String>,
     pub enabled: bool,
     pub cooldown_secs: u64,
     pub risk_label: String,
     pub notification_kind: String,
+    pub prompt_template: Option<String>,
     pub title_template: String,
     pub body_template: String,
     pub created_at: u64,
     pub updated_at: u64,
     pub last_fired_at: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EventLogRow {
+    pub id: String,
+    pub event_family: String,
+    pub event_kind: String,
+    pub state: Option<String>,
+    pub thread_id: Option<String>,
+    pub payload_json: String,
+    pub risk_label: String,
+    pub handled_at_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -269,6 +283,108 @@ pub struct SystemOutcomePredictionRow {
     pub actual_outcome: Option<String>,
     pub was_correct: Option<bool>,
     pub created_at_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct IntentModelRow {
+    pub id: Option<i64>,
+    pub agent_id: String,
+    pub model_blob: Option<Vec<u8>>,
+    pub created_at_ms: u64,
+    pub accuracy_score: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DreamCycleRow {
+    pub id: Option<i64>,
+    pub started_at_ms: u64,
+    pub completed_at_ms: Option<u64>,
+    pub idle_duration_ms: u64,
+    pub tasks_analyzed: u64,
+    pub counterfactuals_generated: u64,
+    pub counterfactuals_successful: u64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CounterfactualEvaluationRow {
+    pub id: Option<i64>,
+    pub dream_cycle_id: i64,
+    pub source_task_id: String,
+    pub variation_type: String,
+    pub counterfactual_description: String,
+    pub estimated_token_saving: Option<f64>,
+    pub estimated_time_saving_ms: Option<i64>,
+    pub estimated_revision_reduction: Option<u64>,
+    pub score: f64,
+    pub threshold_met: bool,
+    pub created_at_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CognitiveResonanceSampleRow {
+    pub id: Option<i64>,
+    pub sampled_at_ms: u64,
+    pub revision_velocity_ms: Option<u64>,
+    pub session_entropy: Option<f64>,
+    pub approval_latency_ms: Option<u64>,
+    pub tool_hesitation_count: u64,
+    pub cognitive_state: String,
+    pub state_confidence: f64,
+    pub resonance_score: f64,
+    pub verbosity_adjustment: f64,
+    pub risk_adjustment: f64,
+    pub proactiveness_adjustment: f64,
+    pub memory_urgency_adjustment: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct BehaviorAdjustmentLogRow {
+    pub id: Option<i64>,
+    pub adjusted_at_ms: u64,
+    pub parameter: String,
+    pub old_value: f64,
+    pub new_value: f64,
+    pub trigger_reason: String,
+    pub resonance_score: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct TemporalPatternRow {
+    pub id: Option<i64>,
+    pub pattern_type: String,
+    pub timescale: String,
+    pub pattern_description: String,
+    pub context_filter: Option<String>,
+    pub frequency: u64,
+    pub last_observed_ms: u64,
+    pub first_observed_ms: u64,
+    pub confidence: f64,
+    pub decay_rate: f64,
+    pub created_at_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct TemporalPredictionRow {
+    pub id: Option<i64>,
+    pub pattern_id: i64,
+    pub predicted_action: String,
+    pub predicted_at_ms: u64,
+    pub confidence: f64,
+    pub actual_action: Option<String>,
+    pub was_accepted: Option<bool>,
+    pub accuracy_score: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrecomputationLogRow {
+    pub id: Option<i64>,
+    pub prediction_id: i64,
+    pub precomputation_type: String,
+    pub precomputation_details: String,
+    pub started_at_ms: u64,
+    pub completed_at_ms: Option<u64>,
+    pub was_used: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -810,12 +926,15 @@ pub struct AgentMessagePatch {
 mod audit;
 mod causal_traces;
 mod checkpoints;
+mod cognitive_resonance;
 mod command_log;
 mod consolidation;
 mod context_archive;
 mod core;
 mod critique;
 mod debate;
+mod dream_state;
+mod event_log;
 mod event_triggers;
 mod gateway_state;
 mod goal_runs;
@@ -837,6 +956,7 @@ mod schema_sql;
 mod schema_sql_extra;
 mod skill_generation;
 mod statistics;
+mod temporal_foresight;
 pub(crate) use skill_generation::page_skill_variants;
 mod skill_metadata;
 pub(crate) use skill_metadata::{derive_skill_metadata, DerivedSkillMetadata};

@@ -670,6 +670,23 @@ impl<'a> SendMessageRunner<'a> {
             system_prompt.push_str("\n\n");
             system_prompt.push_str(&memory_palace_context);
         }
+        if let Some(anticipatory_context) = engine.build_anticipatory_prompt_context(&tid).await {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&anticipatory_context);
+        }
+        match engine
+            .build_protocol_prompt_context(&tid, stored_user_content)
+            .await
+        {
+            Ok(Some(protocol_context)) => {
+                system_prompt.push_str("\n\n");
+                system_prompt.push_str(&protocol_context);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(thread_id = %tid, error = %error, "failed to decode emergent protocol token for prompt");
+            }
+        }
         if internal_dm_thread {
             system_prompt.push_str(
                 "\n\n## Internal DM Constraints\n- This thread is an internal DM between agents.\n- Internal DMs are for discussion and coordination only.\n- Do not continue visible-thread work here.\n- Do not call tools in this thread.\n- If a visible thread continuation was explicitly requested, reply briefly here and stop. The daemon will continue the visible thread separately.\n",

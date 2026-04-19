@@ -107,6 +107,11 @@ impl AgentEngine {
             self.maybe_run_forge_subphase(&deadline, &mut result).await;
         }
 
+        if std::time::Instant::now() < deadline {
+            self.run_dream_state_cycle_if_idle(now.saturating_sub(last_presence.unwrap_or(now)))
+                .await;
+        }
+
         // Sub-task 2: Decay stale memory facts and tombstone low-confidence ones (MEMO-02)
         if std::time::Instant::now() < deadline {
             result.facts_decayed = self.apply_fact_decay(&config, &deadline).await;

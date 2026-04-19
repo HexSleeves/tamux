@@ -25,17 +25,18 @@ pub(crate) fn prune_memory_update_batch(
                     weight: edge.weight,
                 });
                 let cluster_name = format!("cluster:{}", edge.source_node_id);
-                let cluster = clusters.entry(cluster_name.clone()).or_insert_with(|| {
-                    MemoryPalaceCluster {
-                        name: cluster_name,
-                        summary_text: format!(
-                            "summarized low-signal relations fanout from {}",
-                            edge.source_node_id
-                        ),
-                        center_node_id: Some(edge.source_node_id.clone()),
-                        member_node_ids: vec![edge.source_node_id.clone()],
-                    }
-                });
+                let cluster =
+                    clusters
+                        .entry(cluster_name.clone())
+                        .or_insert_with(|| MemoryPalaceCluster {
+                            name: cluster_name,
+                            summary_text: format!(
+                                "summarized low-signal relations fanout from {}",
+                                edge.source_node_id
+                            ),
+                            center_node_id: Some(edge.source_node_id.clone()),
+                            member_node_ids: vec![edge.source_node_id.clone()],
+                        });
                 if !cluster.member_node_ids.contains(&edge.target_node_id) {
                     cluster.member_node_ids.push(edge.target_node_id.clone());
                 }

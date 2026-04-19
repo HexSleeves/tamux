@@ -89,10 +89,7 @@ async fn bid_resolution_persists_consensus_bids_and_role_assignments() {
         )
         .await
         .expect("submit second bid");
-    engine
-        .resolve_bids(&parent.id)
-        .await
-        .expect("resolve bids");
+    engine.resolve_bids(&parent.id).await.expect("resolve bids");
 
     let bid_count = engine
         .history
@@ -215,10 +212,7 @@ async fn record_collaboration_outcome_persists_consensus_quality_metric() {
         )
         .await
         .expect("submit reviewer bid");
-    engine
-        .resolve_bids(&parent.id)
-        .await
-        .expect("resolve bids");
+    engine.resolve_bids(&parent.id).await.expect("resolve bids");
 
     child.result = Some("implemented successfully".to_string());
     engine.record_collaboration_outcome(&child, "success").await;

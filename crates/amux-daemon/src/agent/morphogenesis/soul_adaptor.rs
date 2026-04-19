@@ -1,8 +1,6 @@
 use sha2::{Digest, Sha256};
 
-use crate::agent::morphogenesis::types::{
-    AdaptationType, MorphogenesisAffinity, SoulAdaptation,
-};
+use crate::agent::morphogenesis::types::{AdaptationType, MorphogenesisAffinity, SoulAdaptation};
 
 const SPECIALIZATION_HEADING: &str = "## Current Specialization";
 const SPECIALIZATION_AFFINITY_THRESHOLD: f64 = 0.70;
@@ -26,7 +24,9 @@ pub(crate) fn is_specialized(affinity: &MorphogenesisAffinity) -> bool {
         && affinity.task_count >= SPECIALIZATION_TASK_COUNT_THRESHOLD
 }
 
-pub(crate) fn render_specialization_snippet(affinities: &[MorphogenesisAffinity]) -> Option<String> {
+pub(crate) fn render_specialization_snippet(
+    affinities: &[MorphogenesisAffinity],
+) -> Option<String> {
     let specialized = affinities
         .iter()
         .filter(|affinity| is_specialized(affinity))

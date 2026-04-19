@@ -42,12 +42,14 @@ pub(crate) async fn query_memory_graph(
             .list_memory_graph_neighbors(&node_id, per_hop_limit.max(1))
             .await?
         {
-            nodes.entry(neighbor.node.id.clone()).or_insert_with(|| MemoryPalaceNode {
-                id: neighbor.node.id.clone(),
-                label: neighbor.node.label.clone(),
-                node_type: neighbor.node.node_type.clone(),
-                summary_text: neighbor.node.summary_text.clone(),
-            });
+            nodes
+                .entry(neighbor.node.id.clone())
+                .or_insert_with(|| MemoryPalaceNode {
+                    id: neighbor.node.id.clone(),
+                    label: neighbor.node.label.clone(),
+                    node_type: neighbor.node.node_type.clone(),
+                    summary_text: neighbor.node.summary_text.clone(),
+                });
             edges.push(MemoryPalaceEdge {
                 source_node_id: neighbor.via_edge.source_node_id.clone(),
                 target_node_id: neighbor.via_edge.target_node_id.clone(),

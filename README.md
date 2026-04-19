@@ -176,6 +176,8 @@ Tamux supports voice workflows in both TUI and desktop app.
 - **Desktop app:** mic/speak controls with daemon-backed STT/TTS settings
 - **Settings persistence:** daemon config `extra.audio_*`
 
+## Community
+- 🗨️ Discord: [Join us!](https://discord.gg/xkZjncAX)
 
 ## Read More
 

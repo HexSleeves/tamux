@@ -52,10 +52,7 @@ pub(crate) fn build_persisted_bid(
 }
 
 impl AgentEngine {
-    pub(crate) async fn persist_consensus_bid(
-        &self,
-        bid: PersistedConsensusBid,
-    ) -> Result<()> {
+    pub(crate) async fn persist_consensus_bid(&self, bid: PersistedConsensusBid) -> Result<()> {
         self.history
             .conn
             .call(move |conn| {
