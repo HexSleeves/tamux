@@ -11,6 +11,7 @@ pub enum ModalKind {
     GoalPicker,
     ProviderPicker,
     ModelPicker,
+    RolePicker,
     OpenAIAuth,
     ErrorViewer,
     QueuedPrompts,

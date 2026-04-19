@@ -243,6 +243,7 @@ impl TuiModel {
                 | modal::ModalKind::QueuedPrompts
                 | modal::ModalKind::ProviderPicker
                 | modal::ModalKind::ModelPicker
+                | modal::ModalKind::RolePicker
                 | modal::ModalKind::OpenAIAuth
                 | modal::ModalKind::EffortPicker => {
                     self.modal.reduce(modal::ModalAction::Navigate(-1));
@@ -285,6 +286,7 @@ impl TuiModel {
                 | modal::ModalKind::QueuedPrompts
                 | modal::ModalKind::ProviderPicker
                 | modal::ModalKind::ModelPicker
+                | modal::ModalKind::RolePicker
                 | modal::ModalKind::OpenAIAuth
                 | modal::ModalKind::EffortPicker => {
                     self.modal.reduce(modal::ModalAction::Navigate(1));
@@ -330,6 +332,7 @@ impl TuiModel {
                         | modal::ModalKind::QueuedPrompts
                         | modal::ModalKind::ProviderPicker
                         | modal::ModalKind::ModelPicker
+                        | modal::ModalKind::RolePicker
                         | modal::ModalKind::OpenAIAuth
                         | modal::ModalKind::ErrorViewer
                         | modal::ModalKind::Notifications
@@ -748,6 +751,21 @@ impl TuiModel {
                     {
                         let idx = mouse.row.saturating_sub(inner.y) as usize;
                         if idx <= self.available_model_picker_models().len() {
+                            self.modal_navigate_to(idx);
+                            self.handle_modal_enter(kind);
+                        }
+                    }
+                }
+                modal::ModalKind::RolePicker => {
+                    let inner = Block::default()
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Double)
+                        .inner(overlay_area);
+                    if mouse.row >= inner.y
+                        && mouse.row < inner.y.saturating_add(inner.height.saturating_sub(1))
+                    {
+                        let idx = mouse.row.saturating_sub(inner.y) as usize;
+                        if idx <= crate::state::subagents::SUBAGENT_ROLE_PRESETS.len() {
                             self.modal_navigate_to(idx);
                             self.handle_modal_enter(kind);
                         }

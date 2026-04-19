@@ -33,6 +33,23 @@ describe("frontend NVIDIA provider catalog", () => {
   });
 });
 
+describe("frontend Chutes provider catalog", () => {
+  it("registers Chutes with fetchable OpenAI-compatible defaults", () => {
+    const chutes = getProviderDefinition("chutes" as any);
+
+    expect(chutes).toBeDefined();
+    expect(chutes?.defaultBaseUrl).toBe("https://llm.chutes.ai/v1");
+    expect(chutes?.defaultModel).toBe("deepseek-ai/DeepSeek-R1");
+    expect(chutes?.supportsModelFetch).toBe(true);
+    expect(DEFAULT_AGENT_SETTINGS.chutes.model).toBe("deepseek-ai/DeepSeek-R1");
+  });
+
+  it("recognizes Chutes as a valid provider id", () => {
+    expect(normalizeAgentProviderId("chutes")).toBe("chutes");
+    expect(getDefaultModelForProvider("chutes" as any)).toBe("deepseek-ai/DeepSeek-R1");
+  });
+});
+
 describe("frontend xAI provider catalog", () => {
   it("registers xAI with hosted defaults and responses transport", () => {
     const xai = getProviderDefinition("xai" as any);

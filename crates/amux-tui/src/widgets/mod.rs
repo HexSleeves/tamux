@@ -23,6 +23,7 @@ pub mod operator_question;
 pub mod provider_picker;
 pub mod queued_prompts;
 pub mod reasoning;
+pub mod role_picker;
 pub mod settings;
 pub mod sidebar;
 pub mod splash;

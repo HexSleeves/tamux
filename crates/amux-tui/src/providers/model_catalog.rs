@@ -220,7 +220,7 @@ pub(super) fn known_models_for_provider_auth(
             "Llama 3.3 70B",
             128_000,
         )],
-        PROVIDER_ID_CHUTES => &[("deepseek-ai/DeepSeek-V3", "DeepSeek V3", 128_000)],
+        PROVIDER_ID_CHUTES => &[("deepseek-ai/DeepSeek-R1", "DeepSeek R1", 128_000)],
         _ => &[],
     };
     models

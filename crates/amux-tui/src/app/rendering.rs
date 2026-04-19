@@ -1070,6 +1070,7 @@ impl TuiModel {
                 modal::ModalKind::QueuedPrompts => render_helpers::centered_rect(72, 42, area),
                 modal::ModalKind::ProviderPicker => render_helpers::centered_rect(35, 65, area),
                 modal::ModalKind::ModelPicker => render_helpers::centered_rect(45, 50, area),
+                modal::ModalKind::RolePicker => render_helpers::centered_rect(42, 38, area),
                 modal::ModalKind::OpenAIAuth => render_helpers::centered_rect(70, 35, area),
                 modal::ModalKind::ErrorViewer => render_helpers::centered_rect(70, 45, area),
                 modal::ModalKind::EffortPicker => render_helpers::centered_rect(35, 30, area),
@@ -1201,6 +1202,21 @@ impl TuiModel {
                         &self.theme,
                     );
                 }
+                modal::ModalKind::RolePicker => {
+                    let current_role = self
+                        .subagents
+                        .editor
+                        .as_ref()
+                        .map(|editor| editor.role.as_str())
+                        .unwrap_or("");
+                    widgets::role_picker::render(
+                        frame,
+                        overlay_area,
+                        &self.modal,
+                        current_role,
+                        &self.theme,
+                    );
+                }
                 modal::ModalKind::OpenAIAuth => {
                     render_helpers::render_openai_auth_modal(
                         frame,
@@ -1320,6 +1336,7 @@ impl TuiModel {
             modal::ModalKind::QueuedPrompts => render_helpers::centered_rect(72, 42, area),
             modal::ModalKind::ProviderPicker => render_helpers::centered_rect(35, 65, area),
             modal::ModalKind::ModelPicker => render_helpers::centered_rect(45, 50, area),
+            modal::ModalKind::RolePicker => render_helpers::centered_rect(42, 38, area),
             modal::ModalKind::OpenAIAuth => render_helpers::centered_rect(70, 35, area),
             modal::ModalKind::ErrorViewer => render_helpers::centered_rect(70, 45, area),
             modal::ModalKind::EffortPicker => render_helpers::centered_rect(35, 30, area),

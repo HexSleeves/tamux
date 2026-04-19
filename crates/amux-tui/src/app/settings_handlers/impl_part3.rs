@@ -179,30 +179,8 @@ impl TuiModel {
                     }
                     true
                 }
-                KeyCode::Left => {
-                    if let Some(editor) = self.subagents.editor.as_ref() {
-                        if matches!(
-                            editor.field,
-                            crate::state::subagents::SubAgentEditorField::Role
-                        ) {
-                            self.cycle_subagent_role(-1);
-                            return true;
-                        }
-                    }
-                    false
-                }
-                KeyCode::Right => {
-                    if let Some(editor) = self.subagents.editor.as_ref() {
-                        if matches!(
-                            editor.field,
-                            crate::state::subagents::SubAgentEditorField::Role
-                        ) {
-                            self.cycle_subagent_role(1);
-                            return true;
-                        }
-                    }
-                    false
-                }
+                KeyCode::Left => false,
+                KeyCode::Right => false,
                 KeyCode::Enter => {
                     let Some(field) = self.subagents.editor.as_ref().map(|editor| editor.field)
                     else {
@@ -238,13 +216,7 @@ impl TuiModel {
                             self.open_subagent_effort_picker();
                         }
                         crate::state::subagents::SubAgentEditorField::Role => {
-                            let current = self
-                                .subagents
-                                .editor
-                                .as_ref()
-                                .map(|editor| editor.role.clone())
-                                .unwrap_or_default();
-                            self.settings.start_editing("subagent_role", &current);
+                            self.open_subagent_role_picker();
                         }
                         crate::state::subagents::SubAgentEditorField::SystemPrompt => {
                             let current = self

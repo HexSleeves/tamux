@@ -1,8 +1,8 @@
 use super::*;
 use amux_shared::providers::{
     AudioToolKind, PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_AZURE_OPENAI,
-    PROVIDER_ID_CUSTOM, PROVIDER_ID_OPENAI, PROVIDER_ID_OPENROUTER, PROVIDER_ID_QWEN,
-    PROVIDER_ID_XAI,
+    PROVIDER_ID_CHUTES, PROVIDER_ID_CUSTOM, PROVIDER_ID_OPENAI, PROVIDER_ID_OPENROUTER,
+    PROVIDER_ID_QWEN, PROVIDER_ID_XAI,
 };
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
@@ -1404,6 +1404,67 @@ fn provider_picker_skips_remote_fetch_for_static_provider_catalogs() {
         if let DaemonCommand::FetchModels { .. } = command {
             panic!("static providers should not trigger remote model fetches");
         }
+    }
+}
+
+#[test]
+fn provider_picker_fetches_remote_models_for_chutes() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.auth.entries = vec![crate::state::auth::ProviderAuthEntry {
+        provider_id: PROVIDER_ID_CHUTES.to_string(),
+        provider_name: "Chutes".to_string(),
+        authenticated: true,
+        auth_source: "api_key".to_string(),
+        model: "deepseek-ai/DeepSeek-R1".to_string(),
+    }];
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "providers": {
+            PROVIDER_ID_CHUTES: {
+                "base_url": "https://llm.chutes.ai/v1",
+                "api_key": "chutes-key",
+                "auth_source": "api_key"
+            }
+        }
+    }));
+
+    let chutes_index = widgets::provider_picker::available_provider_defs(&model.auth)
+        .iter()
+        .position(|provider| provider.id == PROVIDER_ID_CHUTES)
+        .expect("chutes to exist");
+
+    model.settings_picker_target = Some(SettingsPickerTarget::Provider);
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ProviderPicker));
+    model.modal.set_picker_item_count(
+        widgets::provider_picker::available_provider_defs(&model.auth).len(),
+    );
+    if chutes_index > 0 {
+        model
+            .modal
+            .reduce(modal::ModalAction::Navigate(chutes_index as i32));
+    }
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ProviderPicker,
+    );
+
+    assert!(!quit);
+    assert_eq!(model.config.provider, PROVIDER_ID_CHUTES);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::FetchModels {
+            provider_id,
+            base_url,
+            api_key,
+        }) => {
+            assert_eq!(provider_id, PROVIDER_ID_CHUTES);
+            assert_eq!(base_url, "https://llm.chutes.ai/v1");
+            assert_eq!(api_key, "chutes-key");
+        }
+        other => panic!("expected FetchModels for Chutes provider picker, got {other:?}"),
     }
 }
 
@@ -2913,7 +2974,7 @@ fn audio_model_picker_render_uses_same_filtered_models_as_selection() {
 }
 
 #[test]
-fn protected_weles_editor_can_open_provider_model_and_effort_pickers() {
+fn protected_weles_editor_can_open_provider_model_role_and_effort_pickers() {
     let (mut model, _daemon_rx) = make_model();
     model.auth.entries = vec![crate::state::auth::ProviderAuthEntry {
         provider_id: PROVIDER_ID_OPENAI.to_string(),
@@ -2966,6 +3027,18 @@ fn protected_weles_editor_can_open_provider_model_and_effort_pickers() {
 
     model.close_top_modal();
     if let Some(editor) = model.subagents.editor.as_mut() {
+        editor.field = crate::state::subagents::SubAgentEditorField::Role;
+    }
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::Settings,
+    );
+    assert!(!quit);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::RolePicker));
+
+    model.close_top_modal();
+    if let Some(editor) = model.subagents.editor.as_mut() {
         editor.field = crate::state::subagents::SubAgentEditorField::ReasoningEffort;
     }
     let quit = model.handle_key_modal(
@@ -2975,6 +3048,97 @@ fn protected_weles_editor_can_open_provider_model_and_effort_pickers() {
     );
     assert!(!quit);
     assert_eq!(model.modal.top(), Some(modal::ModalKind::EffortPicker));
+}
+
+#[test]
+fn subagent_role_picker_applies_selected_role_preset() {
+    let (mut model, _daemon_rx) = make_model();
+    let mut editor = crate::state::subagents::SubAgentEditorState::new(
+        Some("worker".to_string()),
+        1,
+        PROVIDER_ID_OPENAI.to_string(),
+        "gpt-5.4-mini".to_string(),
+    );
+    editor.field = crate::state::subagents::SubAgentEditorField::Role;
+    model.subagents.editor = Some(editor);
+    model.settings_picker_target = Some(SettingsPickerTarget::SubAgentRole);
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::RolePicker));
+
+    let planning_index = crate::state::subagents::SUBAGENT_ROLE_PRESETS
+        .iter()
+        .position(|preset| preset.id == "planning")
+        .expect("planning preset should exist");
+    model
+        .modal
+        .reduce(modal::ModalAction::Navigate(planning_index as i32));
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::RolePicker,
+    );
+
+    assert!(!quit);
+    assert!(model.modal.top().is_none());
+    assert_eq!(
+        model
+            .subagents
+            .editor
+            .as_ref()
+            .map(|editor| editor.role.as_str()),
+        Some("planning")
+    );
+    assert_eq!(
+        model
+            .subagents
+            .editor
+            .as_ref()
+            .map(|editor| editor.system_prompt.as_str()),
+        crate::state::subagents::find_role_preset("planning").map(|preset| preset.system_prompt)
+    );
+    assert_eq!(model.status_line, "Sub-agent role: Planning");
+    assert!(!model.settings.is_editing());
+}
+
+#[test]
+fn subagent_role_picker_custom_option_starts_inline_edit() {
+    let (mut model, _daemon_rx) = make_model();
+    let mut editor = crate::state::subagents::SubAgentEditorState::new(
+        Some("worker".to_string()),
+        1,
+        PROVIDER_ID_OPENAI.to_string(),
+        "gpt-5.4-mini".to_string(),
+    );
+    editor.field = crate::state::subagents::SubAgentEditorField::Role;
+    editor.role = "my_custom_role".to_string();
+    model.subagents.editor = Some(editor);
+    model
+        .settings
+        .reduce(SettingsAction::SwitchTab(SettingsTab::SubAgents));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::Settings));
+    model.settings_picker_target = Some(SettingsPickerTarget::SubAgentRole);
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::RolePicker));
+    model.modal.reduce(modal::ModalAction::Navigate(
+        crate::state::subagents::SUBAGENT_ROLE_PRESETS.len() as i32,
+    ));
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::RolePicker,
+    );
+
+    assert!(!quit);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::Settings));
+    assert_eq!(model.settings.editing_field(), Some("subagent_role"));
+    assert_eq!(model.settings.edit_buffer(), "my_custom_role");
+    assert_eq!(model.status_line, "Enter sub-agent role ID");
 }
 
 #[test]

@@ -1,5 +1,6 @@
 use amux_shared::providers::{
-    PROVIDER_ID_ARCEE, PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_NVIDIA, PROVIDER_ID_XAI,
+    PROVIDER_ID_ARCEE, PROVIDER_ID_CHUTES, PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_NVIDIA,
+    PROVIDER_ID_XAI,
 };
 
     #[test]
@@ -554,6 +555,28 @@ use amux_shared::providers::{
                 PROVIDER_ID_NVIDIA,
                 "minimaxai/minimax-m2.7",
                 "https://integrate.api.nvidia.com/v1"
+            ),
+            ApiType::OpenAI
+        );
+    }
+
+    #[test]
+    fn chutes_provider_exposes_fetchable_openai_defaults() {
+        let provider = get_provider_definition(PROVIDER_ID_CHUTES).expect("chutes provider");
+        assert_eq!(provider.default_base_url, "https://llm.chutes.ai/v1");
+        assert_eq!(provider.default_model, "deepseek-ai/DeepSeek-R1");
+        assert_eq!(provider.api_type, ApiType::OpenAI);
+        assert_eq!(provider.auth_method, AuthMethod::Bearer);
+        assert!(provider.supports_model_fetch);
+        assert_eq!(provider.default_transport, ApiTransport::ChatCompletions);
+        assert_eq!(provider.models.len(), 1);
+        assert_eq!(provider.models[0].id, "deepseek-ai/DeepSeek-R1");
+        assert_eq!(provider.models[0].context_window, 128_000);
+        assert_eq!(
+            get_provider_api_type(
+                PROVIDER_ID_CHUTES,
+                "deepseek-ai/DeepSeek-R1",
+                "https://llm.chutes.ai/v1"
             ),
             ApiType::OpenAI
         );

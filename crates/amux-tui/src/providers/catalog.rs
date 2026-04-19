@@ -224,7 +224,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         id: PROVIDER_ID_CHUTES,
         name: "Chutes",
         default_base_url: "https://llm.chutes.ai/v1",
-        default_model: "deepseek-ai/DeepSeek-V3",
+        default_model: "deepseek-ai/DeepSeek-R1",
         supported_transports: CHAT_ONLY_TRANSPORTS,
         default_transport: "chat_completions",
         supported_auth_sources: API_KEY_ONLY_AUTH_SOURCES,

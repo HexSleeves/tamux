@@ -174,23 +174,6 @@ impl TuiModel {
         self.settings.reduce(SettingsAction::CancelEdit);
     }
 
-    fn cycle_subagent_role(&mut self, delta: i32) {
-        let Some(editor) = self.subagents.editor.as_mut() else {
-            return;
-        };
-        let len = crate::state::subagents::SUBAGENT_ROLE_PRESETS.len();
-        if len == 0 {
-            return;
-        }
-        let current = editor.role_preset_index().unwrap_or(0);
-        let next = if delta >= 0 {
-            (current + delta as usize) % len
-        } else {
-            current.saturating_sub((-delta) as usize)
-        };
-        editor.apply_role_preset_by_index(next);
-    }
-
     fn open_subagent_provider_picker(&mut self) {
         self.settings_picker_target = Some(SettingsPickerTarget::SubAgentProvider);
         self.modal
@@ -211,6 +194,14 @@ impl TuiModel {
         self.modal
             .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
         self.sync_model_picker_item_count();
+    }
+
+    fn open_subagent_role_picker(&mut self) {
+        self.settings_picker_target = Some(SettingsPickerTarget::SubAgentRole);
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::RolePicker));
+        self.modal
+            .set_picker_item_count(crate::state::subagents::SUBAGENT_ROLE_PRESETS.len() + 1);
     }
 
     fn open_subagent_effort_picker(&mut self) {

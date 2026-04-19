@@ -97,6 +97,7 @@ enum SettingsPickerTarget {
     CompactionCustomModel,
     SubAgentProvider,
     SubAgentModel,
+    SubAgentRole,
     SubAgentReasoningEffort,
     ConciergeProvider,
     ConciergeModel,

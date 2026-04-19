@@ -368,8 +368,8 @@ pub const OLLAMA_MODELS: &[ModelDefinition] = &[
 ];
 
 pub const CHUTES_MODELS: &[ModelDefinition] = &[ModelDefinition {
-    id: "deepseek-ai/DeepSeek-V3",
-    name: "DeepSeek V3",
+    id: "deepseek-ai/DeepSeek-R1",
+    name: "DeepSeek R1",
     context_window: 128000,
     modalities: TEXT_ONLY,
 }];

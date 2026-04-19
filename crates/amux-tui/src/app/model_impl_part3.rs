@@ -85,6 +85,7 @@ impl TuiModel {
                 modal::ModalKind::QueuedPrompts => "modal:queued_prompts".to_string(),
                 modal::ModalKind::ProviderPicker => "modal:provider_picker".to_string(),
                 modal::ModalKind::ModelPicker => "modal:model_picker".to_string(),
+                modal::ModalKind::RolePicker => "modal:role_picker".to_string(),
                 modal::ModalKind::OpenAIAuth => "modal:openai_auth".to_string(),
                 modal::ModalKind::ErrorViewer => "modal:error_viewer".to_string(),
                 modal::ModalKind::EffortPicker => "modal:effort_picker".to_string(),

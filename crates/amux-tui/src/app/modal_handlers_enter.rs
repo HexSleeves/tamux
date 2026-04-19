@@ -411,6 +411,7 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                     | SettingsPickerTarget::CompactionWelesModel
                     | SettingsPickerTarget::CompactionCustomModel
                     | SettingsPickerTarget::SubAgentModel
+                    | SettingsPickerTarget::SubAgentRole
                     | SettingsPickerTarget::SubAgentReasoningEffort
                     | SettingsPickerTarget::ConciergeModel
                     | SettingsPickerTarget::ConciergeReasoningEffort
@@ -577,6 +578,7 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                     | SettingsPickerTarget::CompactionWelesProvider
                     | SettingsPickerTarget::CompactionCustomProvider
                     | SettingsPickerTarget::SubAgentProvider
+                    | SettingsPickerTarget::SubAgentRole
                     | SettingsPickerTarget::SubAgentReasoningEffort
                     | SettingsPickerTarget::ConciergeProvider
                     | SettingsPickerTarget::ConciergeReasoningEffort
@@ -602,6 +604,32 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                     model.status_line = "Copied ChatGPT login URL to clipboard".to_string();
                 }
             }
+        }
+        modal::ModalKind::RolePicker => {
+            let presets = crate::state::subagents::SUBAGENT_ROLE_PRESETS;
+            let cursor = model.modal.picker_cursor();
+            if cursor == presets.len() {
+                let current = model
+                    .subagents
+                    .editor
+                    .as_ref()
+                    .map(|editor| editor.role.clone())
+                    .unwrap_or_default();
+                model.settings_picker_target = None;
+                model.close_top_modal();
+                model.settings.start_editing("subagent_role", &current);
+                model.status_line = "Enter sub-agent role ID".to_string();
+                return;
+            }
+
+            if let Some(preset) = presets.get(cursor) {
+                if let Some(editor) = model.subagents.editor.as_mut() {
+                    editor.apply_role_preset_by_index(cursor);
+                }
+                model.status_line = format!("Sub-agent role: {}", preset.label);
+            }
+            model.settings_picker_target = None;
+            model.close_top_modal();
         }
         modal::ModalKind::EffortPicker => {
             let efforts = ["", "minimal", "low", "medium", "high", "xhigh"];
