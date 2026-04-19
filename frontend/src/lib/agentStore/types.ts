@@ -161,7 +161,11 @@ export interface SubAgentDefinition {
 export type ApiType = "openai" | "anthropic";
 export type AuthMethod = "bearer" | "x-api-key";
 export type AuthSource = "api_key" | "chatgpt_subscription" | "github_copilot";
-export type ApiTransportMode = "native_assistant" | "responses" | "chat_completions";
+export type ApiTransportMode =
+  | "native_assistant"
+  | "responses"
+  | "anthropic_messages"
+  | "chat_completions";
 export type NativeTransportKind = "alibaba_assistant_api";
 export type Modality = "text" | "image" | "video" | "audio";
 export type AgentBackend = "daemon" | "openclaw" | "hermes" | "legacy";
@@ -198,6 +202,7 @@ export interface AgentMessage {
   createdAt: number;
   role: AgentRole;
   content: string;
+  contentBlocks?: AgentContentBlock[];
   authorAgentId?: string;
   authorAgentName?: string;
   provider?: string;
@@ -227,6 +232,24 @@ export interface AgentMessage {
   pinnedForCompaction?: boolean;
   isStreaming?: boolean;
 }
+
+export type AgentContentBlock =
+  | {
+      type: "text";
+      text: string;
+    }
+  | {
+      type: "image";
+      url?: string;
+      data_url?: string;
+      mime_type?: string;
+    }
+  | {
+      type: "audio";
+      url?: string;
+      data_url?: string;
+      mime_type?: string;
+    };
 
 export interface WelesHealthState {
   state: string;

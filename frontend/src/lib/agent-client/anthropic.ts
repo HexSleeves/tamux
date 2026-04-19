@@ -1,3 +1,4 @@
+import { getProviderDefinition } from "../agentStore";
 import type { ApiChatMessage, ChatChunk, ChatRequest } from "./types";
 import {
   applyDashScopeCodingPlanHeaders,
@@ -75,11 +76,16 @@ export async function* sendAnthropic(
     body.max_tokens = Math.max(4096, budgetTokens + 4096);
   }
 
+  const authMethod = getProviderDefinition(req.provider)?.authMethod ?? "x-api-key";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "x-api-key": req.config.api_key,
     "anthropic-dangerous-direct-browser-access": "true",
   };
+  if (authMethod === "bearer") {
+    headers["Authorization"] = `Bearer ${req.config.api_key}`;
+  } else {
+    headers["x-api-key"] = req.config.api_key;
+  }
   if (!isDashScopeCodingPlanAnthropicBaseUrl(req.config.base_url)) {
     headers["anthropic-version"] = "2023-06-01";
   }

@@ -66,6 +66,14 @@ impl<'a> SendMessageRunner<'a> {
                 .set_thread_memory_injection_state(&self.tid, injection_state)
                 .await;
         }
+        if let Some(memory_palace_context) = self
+            .engine
+            .build_memory_palace_prompt_context(&self.tid, self.task_id)
+            .await
+        {
+            self.system_prompt.push_str("\n\n");
+            self.system_prompt.push_str(&memory_palace_context);
+        }
         if let Some(recall) = self.onecontext_bootstrap.as_deref() {
             self.system_prompt.push_str("\n\n## OneContext Recall\n");
             self.system_prompt

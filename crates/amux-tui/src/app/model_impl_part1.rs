@@ -61,6 +61,10 @@ impl TuiModel {
             auto_response_selection: AutoResponseActionSelection::Yes,
             held_key_modifiers: KeyModifiers::NONE,
             attachments: Vec::new(),
+            voice_recording: false,
+            voice_capture_path: None,
+            voice_recorder: None,
+            voice_player: None,
             queued_prompts: Vec::new(),
             queued_prompt_action: QueuedPromptAction::SendNow,
             hidden_auto_response_suggestion_ids: std::collections::HashSet::new(),
@@ -673,6 +677,29 @@ impl TuiModel {
             .unwrap_or(10)
             .max(1);
         self.step_settings_modal_scroll(page * direction);
+    }
+
+    pub(crate) fn sync_settings_modal_scroll_to_selection(&mut self) {
+        let Some((kind, area)) = self.current_modal_area() else {
+            return;
+        };
+        if kind != modal::ModalKind::Settings {
+            return;
+        }
+
+        self.settings_modal_scroll = widgets::settings::scroll_for_selected_field(
+            area,
+            &self.settings,
+            &self.config,
+            &self.modal,
+            &self.auth,
+            &self.subagents,
+            &self.concierge,
+            &self.tier,
+            &self.plugin_settings,
+            self.settings_modal_scroll,
+            &self.theme,
+        );
     }
 
     pub(crate) fn set_thread_participants_modal_scroll(&mut self, scroll: usize) {

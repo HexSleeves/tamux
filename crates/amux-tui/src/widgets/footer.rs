@@ -405,6 +405,8 @@ pub fn render_status_bar(
     error_active: bool,
     tick: u64,
     error_tick: u64,
+    voice_recording: bool,
+    voice_playing: bool,
     queued_count: usize,
     _status_line: &str,
 ) {
@@ -433,6 +435,27 @@ pub fn render_status_bar(
         spans.push(Span::raw("  "));
         spans.push(Span::styled("●", error_color));
         spans.push(Span::styled(" error", theme.fg_dim));
+    }
+
+    if voice_recording {
+        let rec_style = if (tick / 8) % 2 == 0 {
+            theme.accent_danger
+        } else {
+            Style::default().fg(Color::Indexed(203))
+        };
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled("●", rec_style));
+        spans.push(Span::styled(" REC", rec_style));
+    }
+
+    if voice_playing {
+        let playing_style = if (tick / 8) % 2 == 0 {
+            theme.accent_secondary
+        } else {
+            theme.fg_active
+        };
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled("🔊 PLAYING", playing_style));
     }
 
     if queued_count > 0 {
@@ -477,6 +500,8 @@ pub fn status_bar_hit_test(
     area: Rect,
     connected: bool,
     has_error: bool,
+    voice_recording: bool,
+    voice_playing: bool,
     queued_count: usize,
     position: Position,
 ) -> Option<StatusBarHitTarget> {
@@ -493,6 +518,17 @@ pub fn status_bar_hit_test(
         x = x.saturating_add(2);
         x = x.saturating_add(1);
         x = x.saturating_add(" error".chars().count() as u16);
+    }
+
+    if voice_recording {
+        x = x.saturating_add(2);
+        x = x.saturating_add(1);
+        x = x.saturating_add(" REC".chars().count() as u16);
+    }
+
+    if voice_playing {
+        x = x.saturating_add(2);
+        x = x.saturating_add("🔊 PLAYING".chars().count() as u16);
     }
 
     let _ = connected;
@@ -535,6 +571,8 @@ mod tests {
                     false,
                     0,
                     0,
+                    false,
+                    false,
                     0,
                     "ready",
                 );
@@ -550,5 +588,37 @@ mod tests {
             row.contains("ctrl+n"),
             "missing notifications hotkey: {row}"
         );
+    }
+
+    #[test]
+    fn status_bar_shows_playing_indicator_when_audio_is_playing() {
+        let backend = TestBackend::new(120, 1);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+
+        terminal
+            .draw(|frame| {
+                render_status_bar(
+                    frame,
+                    Rect::new(0, 0, 120, 1),
+                    &ThemeTokens::default(),
+                    true,
+                    false,
+                    false,
+                    10,
+                    0,
+                    false,
+                    true,
+                    0,
+                    "playing",
+                );
+            })
+            .expect("status bar render should succeed");
+
+        let buffer = terminal.backend().buffer();
+        let row = (0..120)
+            .filter_map(|x| buffer.cell((x, 0)).map(|cell| cell.symbol()))
+            .collect::<String>();
+
+        assert!(row.contains("PLAYING"), "missing PLAYING indicator: {row}");
     }
 }

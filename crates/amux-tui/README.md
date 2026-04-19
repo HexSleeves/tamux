@@ -16,7 +16,7 @@ Requires a running amux daemon (connects via Unix socket or TCP).
 | Key | Action |
 |-----|--------|
 | Tab / Shift+Tab | Cycle focus: Chat → Sidebar → Input |
-| Ctrl+P | Open command palette |
+| Ctrl+P | Open command palette (outside chat focus) |
 | Ctrl+T | Open thread picker |
 | Ctrl+Q | Open queued messages |
 | Ctrl+B | Toggle sidebar visibility |
@@ -32,6 +32,8 @@ Requires a running amux daemon (connects via Unix socket or TCP).
 | r | Toggle reasoning on selected message |
 | e / Enter | Toggle tool call expansion |
 | c | Copy selected message to clipboard |
+| Ctrl+P | Speak selected assistant message (or latest) |
+| Ctrl+S | Stop active speech playback |
 | Esc | Clear selection |
 
 ### Input
@@ -43,6 +45,7 @@ Requires a running amux daemon (connects via Unix socket or TCP).
 | Ctrl+Backspace / Ctrl+W | Delete word backwards |
 | Ctrl+U | Clear input |
 | Ctrl+Z / Ctrl+Y | Undo / Redo |
+| Ctrl+L | Start/stop voice recording + STT |
 
 ### Streaming
 | Key | Action |
@@ -76,6 +79,10 @@ Requires a running amux daemon (connects via Unix socket or TCP).
 7 tabs: Provider, Tools, Web Search, Chat, Gateway, Agent, Advanced
 
 Agent settings load from the daemon and persist through daemon-side per-item updates.
+
+Voice/STT/TTS settings are available from **Settings → Features → Audio** and persist to daemon config under `extra.audio_*`.
+
+Detailed voice guide: [`../../docs/speech-to-text-and-text-to-speech.md`](../../docs/speech-to-text-and-text-to-speech.md)
 
 ## Architecture
 

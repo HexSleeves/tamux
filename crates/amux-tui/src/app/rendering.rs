@@ -17,6 +17,22 @@ enum ConversationAgentKind {
     Weles,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ResponderIdentity {
+    agent_id: Option<String>,
+    agent_name: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct HandoffResponderEvent {
+    #[serde(default)]
+    to_agent_id: Option<String>,
+    #[serde(default)]
+    to_agent_name: Option<String>,
+}
+
+const THREAD_HANDOFF_SYSTEM_MARKER: &str = "[[handoff_event]]";
+
 impl TuiModel {
     fn estimate_header_message_tokens(message: &chat::AgentMessage) -> u64 {
         let content = if message.message_kind == "compaction_artifact" {
@@ -48,10 +64,16 @@ impl TuiModel {
 
     fn active_compaction_window_start(thread: &chat::AgentThread) -> usize {
         thread
-            .messages
-            .iter()
-            .rposition(|message| message.message_kind == "compaction_artifact")
-            .unwrap_or(0)
+            .active_compaction_window_start
+            .map(|absolute_start| absolute_start.saturating_sub(thread.loaded_message_start))
+            .unwrap_or_else(|| {
+                thread
+                    .messages
+                    .iter()
+                    .rposition(|message| message.message_kind == "compaction_artifact")
+                    .unwrap_or(0)
+            })
+            .min(thread.messages.len())
     }
 
     fn effective_primary_context_window_tokens(&self) -> u32 {
@@ -214,6 +236,172 @@ impl TuiModel {
         }
     }
 
+    fn parse_handoff_responder_event(content: &str) -> Option<HandoffResponderEvent> {
+        let payload = content.strip_prefix(THREAD_HANDOFF_SYSTEM_MARKER)?;
+        let json = payload.lines().next()?.trim();
+        serde_json::from_str(json).ok()
+    }
+
+    fn active_thread_responder_identity(&self) -> Option<ResponderIdentity> {
+        let thread = self.chat.active_thread()?;
+        let mut responder = ResponderIdentity {
+            agent_id: None,
+            agent_name: thread
+                .agent_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+        };
+
+        for message in &thread.messages {
+            if message.role == chat::MessageRole::System {
+                if let Some(event) = Self::parse_handoff_responder_event(&message.content) {
+                    let agent_id = event
+                        .to_agent_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string);
+                    let agent_name = event
+                        .to_agent_name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string);
+                    if agent_id.is_some() || agent_name.is_some() {
+                        responder = ResponderIdentity {
+                            agent_id,
+                            agent_name,
+                        };
+                    }
+                }
+                continue;
+            }
+
+            if message.role == chat::MessageRole::Assistant
+                && (message.author_agent_id.is_some() || message.author_agent_name.is_some())
+            {
+                responder = ResponderIdentity {
+                    agent_id: message
+                        .author_agent_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string),
+                    agent_name: message
+                        .author_agent_name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string),
+                };
+            }
+        }
+
+        Some(responder)
+    }
+
+    fn identity_matches_alias(
+        alias: &str,
+        agent_id: Option<&str>,
+        agent_name: Option<&str>,
+    ) -> bool {
+        agent_id.is_some_and(|value| value.eq_ignore_ascii_case(alias))
+            || agent_name.is_some_and(|value| value.eq_ignore_ascii_case(alias))
+    }
+
+    fn subagent_profile_for_identity(
+        &self,
+        agent_id: Option<&str>,
+        agent_name: Option<&str>,
+    ) -> Option<ConversationAgentProfile> {
+        let entry = self.subagents.entries.iter().find(|entry| {
+            Self::identity_matches_alias(&entry.id, agent_id, agent_name)
+                || Self::identity_matches_alias(&entry.name, agent_id, agent_name)
+                || entry
+                    .id
+                    .strip_suffix("_builtin")
+                    .is_some_and(|alias| Self::identity_matches_alias(alias, agent_id, agent_name))
+        })?;
+
+        Some(ConversationAgentProfile {
+            agent_label: entry.name.clone(),
+            provider: entry.provider.clone(),
+            model: entry.model.clone(),
+            reasoning_effort: entry
+                .reasoning_effort
+                .clone()
+                .filter(|value| !value.is_empty()),
+        })
+    }
+
+    fn svarog_profile(&self) -> ConversationAgentProfile {
+        ConversationAgentProfile {
+            agent_label: amux_protocol::AGENT_NAME_SWAROG.to_string(),
+            provider: self.config.provider.clone(),
+            model: Self::configured_model_label(&self.config.model, &self.config.custom_model_name),
+            reasoning_effort: (!self.config.reasoning_effort.trim().is_empty())
+                .then(|| self.config.reasoning_effort.clone()),
+        }
+    }
+
+    fn rarog_profile(&self) -> ConversationAgentProfile {
+        let provider = self
+            .concierge
+            .provider
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .zip(
+                self.concierge
+                    .model
+                    .as_deref()
+                    .filter(|value| !value.is_empty()),
+            );
+
+        if let Some((provider, model)) = provider {
+            ConversationAgentProfile {
+                agent_label: amux_protocol::AGENT_NAME_RAROG.to_string(),
+                provider: provider.to_string(),
+                model: model.to_string(),
+                reasoning_effort: self
+                    .concierge
+                    .reasoning_effort
+                    .clone()
+                    .filter(|value| !value.is_empty()),
+            }
+        } else {
+            ConversationAgentProfile {
+                agent_label: amux_protocol::AGENT_NAME_RAROG.to_string(),
+                provider: self.config.provider.clone(),
+                model: Self::configured_model_label(
+                    &self.config.model,
+                    &self.config.custom_model_name,
+                ),
+                reasoning_effort: (!self.config.reasoning_effort.trim().is_empty())
+                    .then(|| self.config.reasoning_effort.clone()),
+            }
+        }
+    }
+
+    fn active_thread_responder_profile(&self) -> Option<ConversationAgentProfile> {
+        let responder = self.active_thread_responder_identity()?;
+        let agent_id = responder.agent_id.as_deref();
+        let agent_name = responder.agent_name.as_deref();
+
+        if Self::identity_matches_alias(amux_protocol::AGENT_NAME_RAROG, agent_id, agent_name)
+            || Self::identity_matches_alias(amux_protocol::AGENT_ID_RAROG, agent_id, agent_name)
+        {
+            return Some(self.rarog_profile());
+        }
+
+        if Self::identity_matches_alias("weles", agent_id, agent_name) {
+            return Some(self.weles_profile());
+        }
+
+        self.subagent_profile_for_identity(agent_id, agent_name)
+    }
+
     fn weles_profile(&self) -> ConversationAgentProfile {
         if let Some(entry) = self.subagents.entries.iter().find(|entry| {
             entry.id.eq_ignore_ascii_case("weles_builtin")
@@ -276,60 +464,22 @@ impl TuiModel {
     }
 
     pub(crate) fn current_conversation_agent_profile(&self) -> ConversationAgentProfile {
-        match self.current_conversation_agent_kind() {
-            ConversationAgentKind::Swarog => ConversationAgentProfile {
-                agent_label: amux_protocol::AGENT_NAME_SWAROG.to_string(),
-                provider: self.config.provider.clone(),
-                model: Self::configured_model_label(
-                    &self.config.model,
-                    &self.config.custom_model_name,
-                ),
-                reasoning_effort: (!self.config.reasoning_effort.trim().is_empty())
-                    .then(|| self.config.reasoning_effort.clone()),
-            },
-            ConversationAgentKind::Rarog => {
-                let provider = self
-                    .concierge
-                    .provider
-                    .as_deref()
-                    .filter(|value| !value.is_empty())
-                    .zip(
-                        self.concierge
-                            .model
-                            .as_deref()
-                            .filter(|value| !value.is_empty()),
-                    );
+        if let Some(profile) = self.active_thread_responder_profile() {
+            return profile;
+        }
 
-                if let Some((provider, model)) = provider {
-                    ConversationAgentProfile {
-                        agent_label: amux_protocol::AGENT_NAME_RAROG.to_string(),
-                        provider: provider.to_string(),
-                        model: model.to_string(),
-                        reasoning_effort: self
-                            .concierge
-                            .reasoning_effort
-                            .clone()
-                            .filter(|value| !value.is_empty()),
-                    }
-                } else {
-                    ConversationAgentProfile {
-                        agent_label: amux_protocol::AGENT_NAME_RAROG.to_string(),
-                        provider: self.config.provider.clone(),
-                        model: Self::configured_model_label(
-                            &self.config.model,
-                            &self.config.custom_model_name,
-                        ),
-                        reasoning_effort: (!self.config.reasoning_effort.trim().is_empty())
-                            .then(|| self.config.reasoning_effort.clone()),
-                    }
-                }
-            }
+        match self.current_conversation_agent_kind() {
+            ConversationAgentKind::Swarog => self.svarog_profile(),
+            ConversationAgentKind::Rarog => self.rarog_profile(),
             ConversationAgentKind::Weles => self.weles_profile(),
         }
     }
 
     pub(crate) fn current_header_agent_profile(&self) -> ConversationAgentProfile {
         let fallback = self.current_conversation_agent_profile();
+        if self.active_thread_responder_profile().is_some() {
+            return fallback;
+        }
         let Some(runtime) = self.chat.active_thread_runtime_metadata() else {
             return fallback;
         };
@@ -339,6 +489,20 @@ impl TuiModel {
             provider: runtime.provider.unwrap_or(fallback.provider),
             model: runtime.model.unwrap_or(fallback.model),
             reasoning_effort: runtime.reasoning_effort.or(fallback.reasoning_effort),
+        }
+    }
+
+    pub(crate) fn invalidate_active_header_runtime_profile_if_profile_changed(
+        &mut self,
+        before: &ConversationAgentProfile,
+    ) {
+        let after = self.current_conversation_agent_profile();
+        if before.agent_label == after.agent_label
+            && (before.provider != after.provider
+                || before.model != after.model
+                || before.reasoning_effort != after.reasoning_effort)
+        {
+            self.chat.clear_active_thread_runtime_metadata();
         }
     }
 
@@ -878,6 +1042,8 @@ impl TuiModel {
             self.error_active,
             self.tick_counter,
             self.error_tick,
+            self.voice_recording,
+            self.voice_player.is_some(),
             self.queued_prompts.len(),
             &self.status_line,
         );
@@ -1015,14 +1181,14 @@ impl TuiModel {
                     );
                 }
                 modal::ModalKind::ModelPicker => {
-                    let (current_model, custom_model_name) = self.model_picker_current_selection();
-                    widgets::model_picker::render_for(
+                    let (current_model, _custom_model_name) = self.model_picker_current_selection();
+                    let models = self.available_model_picker_models();
+                    widgets::model_picker::render_with_models(
                         frame,
                         overlay_area,
                         &self.modal,
-                        &self.config,
+                        &models,
                         &current_model,
-                        custom_model_name.as_deref(),
                         &self.theme,
                     );
                 }

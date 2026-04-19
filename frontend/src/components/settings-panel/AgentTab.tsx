@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { getDaemonOwnedAuthCapability, getProviderAuthSupportOptions } from "@/lib/agentDaemonConfig";
 import { getBridge } from "@/lib/bridge";
 import { PRIMARY_AGENT_NAME } from "@/lib/agentNames";
-import type { AgentProviderConfig, AgentProviderId, AgentSettings } from "../../lib/agentStore";
+import { filterFetchedModelsForAudio } from "@/lib/providerModels";
+import type { AgentProviderConfig, AgentProviderId, AgentSettings, ModelDefinition } from "../../lib/agentStore";
 import { DEFAULT_CUSTOM_MODEL_CONTEXT_WINDOW, getDefaultApiTransport, getDefaultAuthSource, getDefaultModelForProvider, getEffectiveContextWindow, getProviderApiType, getProviderDefinition, getProviderModels, getSupportedApiTransports, getSupportedAuthSources, modelUsesContextWindowOverride, normalizeAuthSource, providerUsesConfigurableBaseUrl, resolveProviderModelDefinition } from "../../lib/agentStore";
 import { useAgentStore } from "../../lib/agentStore";
 import { deriveOpenAICodexAuthUi } from "./openaiSubscriptionAuth";
@@ -18,6 +19,25 @@ import {
     normalizeTuiChatHistoryPageSize,
 } from "../../lib/chatHistoryPageSize";
 import { addBtnStyle, ModelSelector, NumberInput, PasswordInput, Section, SelectInput, SettingRow, TextInput, Toggle, inputStyle, smallBtnStyle } from "./shared";
+
+const OPENAI_STT_MODELS: ModelDefinition[] = [
+    { id: "gpt-4o-transcribe", name: "GPT-4o Transcribe", contextWindow: 128000, modalities: ["audio"] },
+    { id: "gpt-4o-mini-transcribe", name: "GPT-4o Mini Transcribe", contextWindow: 128000, modalities: ["audio"] },
+    { id: "whisper-1", name: "Whisper 1", contextWindow: 0, modalities: ["audio"] },
+];
+
+const OPENAI_TTS_MODELS: ModelDefinition[] = [
+    { id: "gpt-4o-mini-tts", name: "GPT-4o Mini TTS", contextWindow: 128000, modalities: ["audio"] },
+    { id: "tts-1", name: "TTS 1", contextWindow: 0, modalities: ["audio"] },
+    { id: "tts-1-hd", name: "TTS 1 HD", contextWindow: 0, modalities: ["audio"] },
+];
+
+function audioModelOptions(providerId: AgentProviderId, kind: "stt" | "tts"): ModelDefinition[] | undefined {
+    if (providerId === "openai" || providerId === "azure-openai") {
+        return kind === "stt" ? OPENAI_STT_MODELS : OPENAI_TTS_MODELS;
+    }
+    return undefined;
+}
 
 export function normalizeLlmStreamTimeoutInput(value: string): number | null {
     const parsed = Number.parseInt(value, 10);
@@ -88,6 +108,8 @@ export function AgentTab({
     );
 
     const providerConfig = settings[settings.active_provider] as AgentProviderConfig;
+    const audioSttProviderConfig = settings[settings.audio_stt_provider] as AgentProviderConfig;
+    const audioTtsProviderConfig = settings[settings.audio_tts_provider] as AgentProviderConfig;
     const authCapability = getDaemonOwnedAuthCapability(settings.agent_backend);
     const authSupportOptions = getProviderAuthSupportOptions(settings.agent_backend);
     const providerDef = getProviderDefinition(settings.active_provider);
@@ -312,6 +334,79 @@ export function AgentTab({
                 </SettingRow>
             </Section>
 
+            {settings.agent_backend !== "openclaw" && settings.agent_backend !== "hermes" ? (
+                <Section title="Audio">
+                    <SettingRow label="Enable Speech-to-Text">
+                        <Toggle value={settings.audio_stt_enabled} onChange={(value) => updateSetting("audio_stt_enabled", value)} />
+                    </SettingRow>
+                    <SettingRow label="STT Provider">
+                        <SelectInput
+                            value={settings.audio_stt_provider}
+                            options={allProviderOptions.map((provider) => provider.id)}
+                            onChange={(value) => updateSetting("audio_stt_provider", value as AgentProviderId)}
+                        />
+                    </SettingRow>
+                        <SettingRow label="STT Model">
+                        <ModelSelector
+                            providerId={settings.audio_stt_provider}
+                            value={settings.audio_stt_model}
+                            customName={audioSttProviderConfig.custom_model_name}
+                            onChange={(value) => updateSetting("audio_stt_model", value)}
+                            base_url={audioSttProviderConfig.base_url}
+                            api_key={audioSttProviderConfig.api_key}
+                            auth_source={audioSttProviderConfig.auth_source}
+                            modelOptions={audioModelOptions(settings.audio_stt_provider, "stt")}
+                            remoteModelFilter={(model) => filterFetchedModelsForAudio([model], "stt").length > 0}
+                            disabled={!settings.audio_stt_enabled}
+                        />
+                    </SettingRow>
+                    <SettingRow label="STT Language">
+                        <TextInput
+                            value={settings.audio_stt_language}
+                            onChange={(value) => updateSetting("audio_stt_language", value)}
+                            placeholder="auto"
+                            disabled={!settings.audio_stt_enabled}
+                        />
+                    </SettingRow>
+
+                    <SettingRow label="Enable Text-to-Speech">
+                        <Toggle value={settings.audio_tts_enabled} onChange={(value) => updateSetting("audio_tts_enabled", value)} />
+                    </SettingRow>
+                    <SettingRow label="TTS Provider">
+                        <SelectInput
+                            value={settings.audio_tts_provider}
+                            options={allProviderOptions.map((provider) => provider.id)}
+                            onChange={(value) => updateSetting("audio_tts_provider", value as AgentProviderId)}
+                        />
+                    </SettingRow>
+                    <SettingRow label="TTS Model">
+                        <ModelSelector
+                            providerId={settings.audio_tts_provider}
+                            value={settings.audio_tts_model}
+                            customName={audioTtsProviderConfig.custom_model_name}
+                            onChange={(value) => updateSetting("audio_tts_model", value)}
+                            base_url={audioTtsProviderConfig.base_url}
+                            api_key={audioTtsProviderConfig.api_key}
+                            auth_source={audioTtsProviderConfig.auth_source}
+                            modelOptions={audioModelOptions(settings.audio_tts_provider, "tts")}
+                            remoteModelFilter={(model) => filterFetchedModelsForAudio([model], "tts").length > 0}
+                            disabled={!settings.audio_tts_enabled}
+                        />
+                    </SettingRow>
+                    <SettingRow label="TTS Voice">
+                        <TextInput
+                            value={settings.audio_tts_voice}
+                            onChange={(value) => updateSetting("audio_tts_voice", value)}
+                            placeholder="alloy"
+                            disabled={!settings.audio_tts_enabled}
+                        />
+                    </SettingRow>
+                    <SettingRow label="Auto-speak Replies">
+                        <Toggle value={settings.audio_tts_auto_speak} onChange={(value) => updateSetting("audio_tts_auto_speak", value)} />
+                    </SettingRow>
+                </Section>
+            ) : null}
+
             <PromptPreviewSection
                 backend={settings.agent_backend}
                 refreshKey={[
@@ -527,6 +622,8 @@ export function AgentTab({
                                     <option key={transport} value={transport}>
                                         {transport === "native_assistant"
                                             ? "Native Assistant"
+                                            : transport === "anthropic_messages"
+                                                ? "Anthropic Messages"
                                             : transport === "responses"
                                                 ? "Responses"
                                                 : "Legacy Chat Completions"}
@@ -1077,6 +1174,7 @@ export function AgentTab({
                                 style={inputStyle}
                             >
                                 <option value="responses">responses</option>
+                                <option value="anthropic_messages">anthropic_messages</option>
                                 <option value="chat_completions">chat_completions</option>
                                 <option value="native_assistant">native_assistant</option>
                             </select>

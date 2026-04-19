@@ -202,6 +202,40 @@ impl TuiModel {
                     raw["skill_recommendation"][key] = serde_json::Value::Bool(next);
                 }
             }
+            "feat_audio_stt_enabled" => {
+                let current = self.config.audio_stt_enabled();
+                let next = !current;
+                self.send_daemon_command(DaemonCommand::SetConfigItem {
+                    key_path: "/audio/stt/enabled".to_string(),
+                    value_json: next.to_string(),
+                });
+                if let Some(ref mut raw) = self.config.agent_config_raw {
+                    if raw.get("audio").is_none() {
+                        raw["audio"] = serde_json::json!({});
+                    }
+                    if raw["audio"].get("stt").is_none() {
+                        raw["audio"]["stt"] = serde_json::json!({});
+                    }
+                    raw["audio"]["stt"]["enabled"] = serde_json::Value::Bool(next);
+                }
+            }
+            "feat_audio_tts_enabled" => {
+                let current = self.config.audio_tts_enabled();
+                let next = !current;
+                self.send_daemon_command(DaemonCommand::SetConfigItem {
+                    key_path: "/audio/tts/enabled".to_string(),
+                    value_json: next.to_string(),
+                });
+                if let Some(ref mut raw) = self.config.agent_config_raw {
+                    if raw.get("audio").is_none() {
+                        raw["audio"] = serde_json::json!({});
+                    }
+                    if raw["audio"].get("tts").is_none() {
+                        raw["audio"]["tts"] = serde_json::json!({});
+                    }
+                    raw["audio"]["tts"]["enabled"] = serde_json::Value::Bool(next);
+                }
+            }
             "whatsapp_link_device" => {
                 self.activate_settings_field();
             }

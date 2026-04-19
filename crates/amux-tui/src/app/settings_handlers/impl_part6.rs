@@ -143,6 +143,32 @@ impl TuiModel {
                     .start_editing("feat_skill_suggest_global_enable_after_approvals", &current);
                 true
             }
+            "feat_audio_stt_provider" => {
+                self.open_provider_picker(SettingsPickerTarget::AudioSttProvider);
+                true
+            }
+            "feat_audio_stt_model" => {
+                self.open_audio_model_picker("stt");
+                true
+            }
+            "feat_audio_tts_provider" => {
+                self.open_provider_picker(SettingsPickerTarget::AudioTtsProvider);
+                true
+            }
+            "feat_audio_tts_model" => {
+                self.open_audio_model_picker("tts");
+                true
+            }
+            "feat_audio_tts_voice" => {
+                let current = self.config.audio_tts_voice();
+                let current = if current.is_empty() {
+                    "alloy".to_string()
+                } else {
+                    current
+                };
+                self.settings.start_editing("feat_audio_tts_voice", &current);
+                true
+            }
             _ => false,
         }
     }
@@ -189,6 +215,8 @@ impl TuiModel {
                 | "feat_consolidation_enabled"
                 | "feat_skill_recommendation_enabled"
                 | "feat_skill_background_community_search"
+                | "feat_audio_stt_enabled"
+                | "feat_audio_tts_enabled"
                 | "whatsapp_link_device"
                 | "whatsapp_relink_device"
         ) || self.current_settings_field_name().starts_with("tool_")

@@ -5,6 +5,181 @@ use std::path::{Path, PathBuf};
 mod goal_targets;
 
 impl TuiModel {
+    fn voice_lookup_string(raw: Option<&serde_json::Value>, path: &[&str]) -> Option<String> {
+        raw.and_then(|value| {
+            path.iter()
+                .try_fold(value, |acc, key| acc.get(*key))
+                .and_then(|value| value.as_str())
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+    }
+
+    fn voice_lookup_bool(raw: Option<&serde_json::Value>, path: &[&str]) -> Option<bool> {
+        raw.and_then(|value| {
+            path.iter()
+                .try_fold(value, |acc, key| acc.get(*key))
+                .and_then(|value| value.as_bool())
+        })
+    }
+
+    fn voice_audio_string(
+        raw: Option<&serde_json::Value>,
+        flat_key: &str,
+        nested_path: &[&str],
+        fallback: &str,
+    ) -> String {
+        Self::voice_lookup_string(raw, nested_path)
+            .or_else(|| Self::voice_lookup_string(raw, &[flat_key]))
+            .or_else(|| {
+                Self::voice_lookup_string(raw.and_then(|value| value.get("extra")), &[flat_key])
+            })
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
+    fn voice_audio_bool(
+        raw: Option<&serde_json::Value>,
+        flat_key: &str,
+        nested_path: &[&str],
+        fallback: bool,
+    ) -> bool {
+        Self::voice_lookup_bool(raw, nested_path)
+            .or_else(|| Self::voice_lookup_bool(raw, &[flat_key]))
+            .or_else(|| {
+                Self::voice_lookup_bool(raw.and_then(|value| value.get("extra")), &[flat_key])
+            })
+            .unwrap_or(fallback)
+    }
+
+    pub(super) fn toggle_voice_capture(&mut self) {
+        if self.voice_recording {
+            if let Some(path) = self.stop_voice_capture() {
+                let raw = self.config.agent_config_raw.as_ref();
+                let provider = Self::voice_audio_string(
+                    raw,
+                    "audio_stt_provider",
+                    &["audio", "stt", "provider"],
+                    amux_shared::providers::PROVIDER_ID_OPENAI,
+                );
+                let model = Self::voice_audio_string(
+                    raw,
+                    "audio_stt_model",
+                    &["audio", "stt", "model"],
+                    "whisper-1",
+                );
+                let language = Self::voice_lookup_string(raw, &["audio", "stt", "language"])
+                    .or_else(|| Self::voice_lookup_string(raw, &["audio_stt_language"]))
+                    .or_else(|| {
+                        Self::voice_lookup_string(
+                            raw.and_then(|value| value.get("extra")),
+                            &["audio_stt_language"],
+                        )
+                    });
+                let args_json = serde_json::json!({
+                    "path": path,
+                    "mime_type": "audio/wav",
+                    "provider": provider,
+                    "model": model,
+                    "language": language,
+                })
+                .to_string();
+                self.send_daemon_command(DaemonCommand::SpeechToText { args_json });
+                self.status_line = "Transcribing voice capture...".to_string();
+            }
+            return;
+        }
+
+        let enabled = Self::voice_audio_bool(
+            self.config.agent_config_raw.as_ref(),
+            "audio_stt_enabled",
+            &["audio", "stt", "enabled"],
+            true,
+        );
+        if !enabled {
+            self.status_line = "STT disabled in audio settings".to_string();
+            return;
+        }
+        self.start_voice_capture();
+    }
+
+    pub(super) fn speak_latest_assistant_message(&mut self) {
+        let Some(thread) = self.chat.active_thread() else {
+            self.status_line = "Open a thread first".to_string();
+            return;
+        };
+
+        let selected_index = self.chat.selected_message();
+        let selected_content = selected_index
+            .and_then(|idx| thread.messages.get(idx))
+            .filter(|message| {
+                message.role == chat::MessageRole::Assistant && !message.content.trim().is_empty()
+            })
+            .map(|message| message.content.clone());
+
+        let content_to_speak = if let Some(content) = selected_content {
+            content
+        } else if selected_index.is_some() {
+            self.status_line = "Selected message is not speakable assistant text".to_string();
+            self.show_input_notice(
+                "Select an assistant message to speak",
+                InputNoticeKind::Warning,
+                60,
+                true,
+            );
+            return;
+        } else {
+            let Some(message) = thread.messages.iter().rev().find(|message| {
+                message.role == chat::MessageRole::Assistant && !message.content.trim().is_empty()
+            }) else {
+                self.status_line = "No assistant message available to speak".to_string();
+                return;
+            };
+            message.content.clone()
+        };
+
+        let enabled = Self::voice_audio_bool(
+            self.config.agent_config_raw.as_ref(),
+            "audio_tts_enabled",
+            &["audio", "tts", "enabled"],
+            true,
+        );
+        if !enabled {
+            self.status_line = "TTS disabled in audio settings".to_string();
+            return;
+        }
+
+        if let Some(mut child) = self.voice_player.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+
+        let raw = self.config.agent_config_raw.as_ref();
+        let provider = Self::voice_audio_string(
+            raw,
+            "audio_tts_provider",
+            &["audio", "tts", "provider"],
+            amux_shared::providers::PROVIDER_ID_OPENAI,
+        );
+        let model = Self::voice_audio_string(
+            raw,
+            "audio_tts_model",
+            &["audio", "tts", "model"],
+            "gpt-4o-mini-tts",
+        );
+        let voice =
+            Self::voice_audio_string(raw, "audio_tts_voice", &["audio", "tts", "voice"], "alloy");
+        let args_json = serde_json::json!({
+            "input": content_to_speak,
+            "provider": provider,
+            "model": model,
+            "voice": voice,
+        })
+        .to_string();
+        self.send_daemon_command(DaemonCommand::TextToSpeech { args_json });
+        self.status_line = "Synthesizing speech...".to_string();
+    }
+
     pub(super) fn known_agent_directive_aliases(&self) -> Vec<String> {
         let mut aliases = vec![
             "main".to_string(),
@@ -849,22 +1024,36 @@ impl TuiModel {
 
         self.cleanup_concierge_on_navigate();
 
-        let content_with_attachments = if self.attachments.is_empty() {
+        let drained_attachments = self.attachments.drain(..).collect::<Vec<_>>();
+        let mut content_blocks = Vec::new();
+        let content_with_attachments = if drained_attachments.is_empty() {
             prompt.clone()
         } else {
-            let mut parts: Vec<String> = self
-                .attachments
-                .drain(..)
-                .map(|att| {
-                    format!(
+            let mut parts: Vec<String> = Vec::new();
+            for att in drained_attachments {
+                match att.payload {
+                    AttachmentPayload::Text(content) => parts.push(format!(
                         "<attached_file name=\"{}\">\n{}\n</attached_file>",
-                        att.filename, att.content
-                    )
-                })
-                .collect();
+                        att.filename, content
+                    )),
+                    AttachmentPayload::ContentBlock(block) => content_blocks.push(block),
+                }
+            }
             parts.push(prompt.clone());
             parts.join("\n\n")
         };
+        if !content_blocks.is_empty() {
+            content_blocks.insert(
+                0,
+                serde_json::json!({
+                    "type": "text",
+                    "text": content_with_attachments.clone(),
+                }),
+            );
+        }
+        let content_blocks_json = (!content_blocks.is_empty())
+            .then(|| serde_json::to_string(&content_blocks).ok())
+            .flatten();
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let known_agent_aliases = self.known_agent_directive_aliases();
         if let Some(directive) = input_refs::parse_leading_agent_directive(
@@ -1041,6 +1230,7 @@ impl TuiModel {
         self.send_daemon_command(DaemonCommand::SendMessage {
             thread_id: thread_id.clone(),
             content: final_content,
+            content_blocks_json,
             session_id: None,
             target_agent_id,
         });

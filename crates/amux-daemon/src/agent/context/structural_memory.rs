@@ -83,7 +83,7 @@ pub struct StructuralContextEntry {
     pub summary: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryGraphNodeUpsert {
     pub id: String,
     pub label: String,
@@ -91,7 +91,7 @@ pub struct MemoryGraphNodeUpsert {
     pub summary_text: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryGraphEdgeUpsert {
     pub source_node_id: String,
     pub target_node_id: String,
@@ -99,7 +99,7 @@ pub struct MemoryGraphEdgeUpsert {
     pub weight: f64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MemoryGraphUpdateBatch {
     pub nodes: Vec<MemoryGraphNodeUpsert>,
     pub edges: Vec<MemoryGraphEdgeUpsert>,
@@ -836,6 +836,17 @@ impl AgentEngine {
         }
         drop(memories);
         self.apply_memory_graph_updates(graph_updates).await;
+        if let Err(error) = self
+            .refresh_memory_palace_from_thread(thread_id, None)
+            .await
+        {
+            tracing::warn!(
+                thread_id = %thread_id,
+                tool_name = %tool_name,
+                %error,
+                "failed to refresh memory palace from tool result"
+            );
+        }
         structural_refs
     }
 
@@ -853,6 +864,17 @@ impl AgentEngine {
             failure_description,
         ))
         .await;
+        if let Err(error) = self
+            .refresh_memory_palace_from_thread(thread_id, None)
+            .await
+        {
+            tracing::warn!(
+                thread_id = %thread_id,
+                tool_name = %tool_name,
+                %error,
+                "failed to refresh memory palace from tool failure"
+            );
+        }
     }
 
     pub(crate) async fn record_memory_graph_from_task(&self, task: &AgentTask) {
@@ -861,6 +883,19 @@ impl AgentEngine {
         if let Some(error) = task.error.as_deref().or(task.last_error.as_deref()) {
             self.apply_memory_graph_updates(build_memory_graph_updates_for_task_error(task, error))
                 .await;
+        }
+        if let Some(thread_id) = task.thread_id.as_deref() {
+            if let Err(error) = self
+                .refresh_memory_palace_from_thread(thread_id, Some(task.id.as_str()))
+                .await
+            {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    task_id = %task.id,
+                    %error,
+                    "failed to refresh memory palace from task graph update"
+                );
+            }
         }
     }
 }

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use walkdir::{DirEntry, WalkDir};
 
@@ -41,8 +41,8 @@ struct SemanticPackage {
     dependencies: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SemanticPackageSummary {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SemanticPackageSummary {
     pub ecosystem: String,
     pub name: String,
     pub manifest_path: String,

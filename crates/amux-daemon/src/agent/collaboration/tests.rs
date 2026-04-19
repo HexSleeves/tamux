@@ -594,6 +594,112 @@ async fn resolve_bids_prefers_available_over_busy_and_persists_assignment_roles(
 }
 
 #[tokio::test]
+async fn resolve_bids_prefers_role_with_stronger_consensus_prior_when_confidence_is_close() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.collaboration.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let parent = engine
+        .enqueue_task(
+            "Parent coordinator".to_string(),
+            "Choose the best owner for the next workstream".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "user",
+            None,
+            None,
+            Some("thread-parent".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    let child_research = engine
+        .enqueue_task(
+            "Research child".to_string(),
+            "Prepare a bid for implementation ownership".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "subagent",
+            None,
+            Some(parent.id.clone()),
+            Some("thread-parent".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    let child_execution = engine
+        .enqueue_task(
+            "Execution child".to_string(),
+            "Prepare a bid for implementation ownership".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "subagent",
+            None,
+            Some(parent.id.clone()),
+            Some("thread-parent".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+
+    engine
+        .register_subagent_collaboration(&parent.id, &child_research)
+        .await;
+    engine
+        .register_subagent_collaboration(&parent.id, &child_execution)
+        .await;
+    engine
+        .call_for_bids(
+            &parent.id,
+            &[child_research.id.clone(), child_execution.id.clone()],
+        )
+        .await
+        .expect("call_for_bids should succeed");
+
+    for _ in 0..3 {
+        engine
+            .record_consensus_bid_outcome("research", "success")
+            .await
+            .expect("record consensus prior");
+    }
+
+    engine
+        .submit_bid(
+            &parent.id,
+            &child_research.id,
+            0.68,
+            crate::agent::collaboration::BidAvailability::Available,
+        )
+        .await
+        .expect("research bid should succeed");
+    engine
+        .submit_bid(
+            &parent.id,
+            &child_execution.id,
+            0.72,
+            crate::agent::collaboration::BidAvailability::Available,
+        )
+        .await
+        .expect("execution bid should succeed");
+
+    let resolution = engine
+        .resolve_bids(&parent.id)
+        .await
+        .expect("resolve_bids should succeed");
+
+    assert_eq!(resolution["primary_task_id"], child_research.id);
+    assert_eq!(resolution["reviewer_task_id"], child_execution.id);
+}
+
+#[tokio::test]
 async fn dispatch_via_bid_protocol_runs_bid_flow_end_to_end_through_collaboration_runtime() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;

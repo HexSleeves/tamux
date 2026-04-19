@@ -43,6 +43,26 @@ impl TuiModel {
         self.maybe_schedule_chat_history_collapse();
         self.chat.maybe_collapse_history(self.tick_counter);
         self.clear_expired_queued_prompt_copy_feedback();
+
+        if let Some(player) = self.voice_player.as_mut() {
+            match player.try_wait() {
+                Ok(Some(_status)) => {
+                    self.voice_player = None;
+                    if self.status_line == "Playing synthesized speech..." {
+                        self.status_line = "Audio playback finished".to_string();
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.voice_player = None;
+                    self.status_line = "Audio playback process error".to_string();
+                    self.last_error = Some(format!("Audio playback monitor failed: {error}"));
+                    self.error_active = true;
+                    self.error_tick = self.tick_counter;
+                }
+            }
+        }
+
         let _ = self.maybe_auto_send_always_auto_response();
         if self
             .active_auto_response_countdown_secs()
@@ -271,6 +291,80 @@ impl TuiModel {
             }
             ClientEvent::AgentConfigRaw(raw) => {
                 self.handle_agent_config_raw_event(raw);
+            }
+            ClientEvent::SpeechToTextResult { content } => {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+                        self.status_line = format!("STT failed: {error}");
+                        self.show_input_notice(
+                            "Speech-to-text failed (see status/error)",
+                            InputNoticeKind::Warning,
+                            80,
+                            true,
+                        );
+                        self.last_error = Some(format!("STT failed: {error}"));
+                        self.error_active = true;
+                        self.error_tick = self.tick_counter;
+                        return;
+                    }
+                }
+
+                let transcript = serde_json::from_str::<serde_json::Value>(&content)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("text")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| content.trim().to_string());
+                if !transcript.is_empty() {
+                    if !self.input.buffer().trim().is_empty() {
+                        self.input.reduce(input::InputAction::InsertChar(' '));
+                    }
+                    for ch in transcript.chars() {
+                        self.input.reduce(input::InputAction::InsertChar(ch));
+                    }
+                    self.focus = FocusArea::Input;
+                    self.status_line = "Voice transcription ready".to_string();
+                }
+            }
+            ClientEvent::TextToSpeechResult { content } => {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+                        self.status_line = format!("TTS failed: {error}");
+                        self.show_input_notice(
+                            "Text-to-speech failed (see status/error)",
+                            InputNoticeKind::Warning,
+                            80,
+                            true,
+                        );
+                        self.last_error = Some(format!("TTS failed: {error}"));
+                        self.error_active = true;
+                        self.error_tick = self.tick_counter;
+                        return;
+                    }
+                }
+
+                let path = serde_json::from_str::<serde_json::Value>(&content)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("path")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string)
+                    });
+                if let Some(path) = path {
+                    self.play_audio_path(&path);
+                } else {
+                    self.status_line = "TTS result missing audio path".to_string();
+                    self.show_input_notice(
+                        "TTS returned no playable path",
+                        InputNoticeKind::Warning,
+                        70,
+                        true,
+                    );
+                }
             }
             ClientEvent::ModelsFetched(models) => {
                 self.handle_models_fetched_event(models);

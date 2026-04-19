@@ -27,6 +27,14 @@ fn effective_attempt_target(
     config: &ProviderConfig,
     transport: ApiTransport,
 ) -> AttemptTarget {
+    if transport == ApiTransport::AnthropicMessages {
+        return AttemptTarget {
+            api_type: ApiType::Anthropic,
+            branch: "anthropic",
+            url: anthropic_messages_url(&config.base_url),
+        };
+    }
+
     let api_type = get_provider_api_type(provider, &config.model, &config.base_url);
     if api_type == ApiType::Anthropic {
         return AttemptTarget {
@@ -54,6 +62,7 @@ fn effective_attempt_target(
             branch: "responses",
             url: build_responses_url(&config.base_url),
         },
+        ApiTransport::AnthropicMessages => unreachable!("handled above"),
     }
 }
 
@@ -195,7 +204,9 @@ pub(crate) fn send_completion_request_with_options(
                 "llm attempt start"
             );
 
-            let result = if target.api_type == ApiType::Anthropic {
+            let result = if transport == ApiTransport::AnthropicMessages
+                || target.api_type == ApiType::Anthropic
+            {
                 run_anthropic(
                     &client,
                     &provider,
@@ -253,6 +264,7 @@ pub(crate) fn send_completion_request_with_options(
                         )
                         .await
                     }
+                    ApiTransport::AnthropicMessages => unreachable!("handled above"),
                 }
             };
 
@@ -485,7 +497,7 @@ pub fn messages_to_api_format(messages: &[super::types::AgentMessage]) -> Vec<Ap
                     super::types::MessageRole::Assistant => "assistant".into(),
                     super::types::MessageRole::Tool => "tool".into(),
                 },
-                content: ApiContent::Text(m.content.clone()),
+                content: agent_message_content_to_api_content(m),
                 tool_call_id: normalized_tool_call_id,
                 name: m.tool_name.clone(),
                 tool_calls: normalized_tool_calls.or_else(|| {
@@ -505,6 +517,99 @@ pub fn messages_to_api_format(messages: &[super::types::AgentMessage]) -> Vec<Ap
             })
         })
         .collect()
+}
+
+fn agent_message_content_to_api_content(message: &super::types::AgentMessage) -> ApiContent {
+    let blocks = agent_content_blocks_to_api_blocks(&message.content_blocks);
+    if blocks.is_empty() {
+        ApiContent::Text(message.content.clone())
+    } else {
+        ApiContent::Blocks(blocks)
+    }
+}
+
+fn agent_content_blocks_to_api_blocks(
+    blocks: &[super::types::AgentContentBlock],
+) -> Vec<serde_json::Value> {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            super::types::AgentContentBlock::Text { text } => {
+                (!text.is_empty()).then(|| serde_json::json!({
+                    "type": "input_text",
+                    "text": text,
+                }))
+            }
+            super::types::AgentContentBlock::Image {
+                url,
+                data_url,
+                mime_type: _,
+            } => url
+                .as_ref()
+                .or(data_url.as_ref())
+                .filter(|value| !value.trim().is_empty())
+                .map(|image_url| {
+                    serde_json::json!({
+                        "type": "input_image",
+                        "image_url": image_url,
+                    })
+                }),
+            super::types::AgentContentBlock::Audio {
+                url,
+                data_url,
+                mime_type,
+            } => {
+                let audio_url = url
+                    .as_ref()
+                    .or(data_url.as_ref())
+                    .filter(|value| !value.trim().is_empty())?;
+                let input_audio = if let Some(data) = audio_url.strip_prefix("data:") {
+                    let (header, payload) = data.split_once(',')?;
+                    if !header.contains(";base64") {
+                        return None;
+                    }
+                    let format = mime_type
+                        .as_deref()
+                        .and_then(audio_format_from_mime_type)
+                        .or_else(|| {
+                            header
+                                .split(';')
+                                .next()
+                                .and_then(audio_format_from_mime_type)
+                        })
+                        .unwrap_or("wav");
+                    serde_json::json!({
+                        "data": payload,
+                        "format": format,
+                    })
+                } else {
+                    serde_json::json!({
+                        "url": audio_url,
+                        "format": mime_type
+                            .as_deref()
+                            .and_then(audio_format_from_mime_type)
+                            .unwrap_or("wav"),
+                    })
+                };
+                Some(serde_json::json!({
+                    "type": "input_audio",
+                    "input_audio": input_audio,
+                }))
+            }
+        })
+        .collect()
+}
+
+fn audio_format_from_mime_type(mime_type: &str) -> Option<&'static str> {
+    match mime_type.trim().to_ascii_lowercase().as_str() {
+        "audio/wav" | "audio/x-wav" => Some("wav"),
+        "audio/mpeg" | "audio/mp3" => Some("mp3"),
+        "audio/ogg" => Some("ogg"),
+        "audio/flac" => Some("flac"),
+        "audio/mp4" | "audio/m4a" => Some("mp4"),
+        "audio/webm" => Some("webm"),
+        _ => None,
+    }
 }
 
 fn api_content_to_json(content: &ApiContent) -> serde_json::Value {

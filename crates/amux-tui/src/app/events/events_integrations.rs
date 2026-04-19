@@ -168,8 +168,10 @@ impl TuiModel {
         &mut self,
         entry: crate::state::SubAgentEntry,
     ) {
+        let before_profile = self.current_conversation_agent_profile();
         self.subagents
             .reduce(crate::state::subagents::SubAgentsAction::Updated(entry));
+        self.invalidate_active_header_runtime_profile_if_profile_changed(&before_profile);
     }
 
     pub(in crate::app) fn handle_subagent_removed_event(&mut self, sub_agent_id: String) {
@@ -180,6 +182,7 @@ impl TuiModel {
     }
 
     pub(in crate::app) fn handle_concierge_config_event(&mut self, raw: Value) {
+        let before_profile = self.current_conversation_agent_profile();
         let detail_level = raw
             .get("detail_level")
             .and_then(|value| value.as_str())
@@ -209,6 +212,7 @@ impl TuiModel {
                     .and_then(|value| value.as_bool())
                     .unwrap_or(true),
             });
+        self.invalidate_active_header_runtime_profile_if_profile_changed(&before_profile);
     }
 
     pub(in crate::app) fn handle_concierge_welcome_event(

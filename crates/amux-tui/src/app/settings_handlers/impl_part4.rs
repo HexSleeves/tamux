@@ -52,6 +52,7 @@ impl TuiModel {
                     let only = supported.first().copied().unwrap_or("chat_completions");
                     let transport_label = match only {
                         "native_assistant" => "native assistant",
+                        "anthropic_messages" => "anthropic messages",
                         "responses" => "responses",
                         _ => "chat completions",
                     };

@@ -157,6 +157,10 @@ impl TuiModel {
             self.open_queued_prompts_modal();
             return false;
         }
+        if code == KeyCode::Char('s') && ctrl {
+            self.stop_voice_playback();
+            return false;
+        }
         if code == KeyCode::Char('a') && ctrl {
             match self.modal.top() {
                 Some(modal::ModalKind::ApprovalOverlay) => {}
@@ -364,7 +368,7 @@ impl TuiModel {
         }
 
         match code {
-            KeyCode::Char('p') if ctrl => self
+            KeyCode::Char('p') if ctrl && self.focus != FocusArea::Chat => self
                 .modal
                 .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette)),
             KeyCode::Char('t') if ctrl => {
@@ -718,6 +722,12 @@ impl TuiModel {
             }
             KeyCode::Char('j') if ctrl && self.focus == FocusArea::Input => {
                 self.input.reduce(input::InputAction::InsertNewline);
+            }
+            KeyCode::Char('l') if ctrl && self.focus == FocusArea::Input => {
+                self.toggle_voice_capture();
+            }
+            KeyCode::Char('p') if ctrl && self.focus == FocusArea::Chat => {
+                self.speak_latest_assistant_message();
             }
             KeyCode::Enter => return self.handle_enter_key(modifiers),
             KeyCode::Backspace if ctrl => {

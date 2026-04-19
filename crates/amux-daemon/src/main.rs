@@ -57,6 +57,11 @@ async fn daemon_main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some(agent::ALINE_STARTUP_WORKER_ARG) {
         return agent::run_aline_startup_worker_from_stdio().await;
     }
+    if let Some(kind) = agent::background_workers::resolve_background_worker_kind_arg(
+        std::env::args().nth(1).as_deref(),
+    ) {
+        return agent::background_workers::run_background_worker_from_stdio(kind).await;
+    }
 
     let _log_guard = init_logging()?;
 
@@ -89,4 +94,60 @@ fn main() -> Result<()> {
         .thread_stack_size(DAEMON_TOKIO_WORKER_STACK_BYTES)
         .build()?
         .block_on(daemon_main())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_worker_protocol_round_trips() {
+        let command = agent::background_workers::protocol::BackgroundWorkerCommand::Ping;
+        let encoded =
+            serde_json::to_string(&command).expect("background worker command should serialize");
+        let decoded = serde_json::from_str::<
+            agent::background_workers::protocol::BackgroundWorkerCommand,
+        >(&encoded)
+        .expect("background worker command should deserialize");
+
+        assert!(matches!(
+            decoded,
+            agent::background_workers::protocol::BackgroundWorkerCommand::Ping
+        ));
+    }
+
+    #[test]
+    fn daemon_main_dispatches_background_worker_args() {
+        let kind = agent::background_workers::resolve_background_worker_kind_arg(Some(
+            "__tamux-background-worker-safety",
+        ))
+        .expect("expected safety worker arg to resolve");
+        assert_eq!(
+            kind,
+            agent::background_workers::protocol::BackgroundWorkerKind::Safety
+        );
+        let routing = agent::background_workers::resolve_background_worker_kind_arg(Some(
+            "__tamux-background-worker-routing",
+        ))
+        .expect("expected routing worker arg to resolve");
+        assert_eq!(
+            routing,
+            agent::background_workers::protocol::BackgroundWorkerKind::Routing
+        );
+        let memory = agent::background_workers::resolve_background_worker_kind_arg(Some(
+            "__tamux-background-worker-memory",
+        ))
+        .expect("expected memory worker arg to resolve");
+        assert_eq!(
+            memory,
+            agent::background_workers::protocol::BackgroundWorkerKind::Memory
+        );
+        assert!(
+            agent::background_workers::resolve_background_worker_kind_arg(Some(
+                agent::skill_preflight::SKILL_DISCOVERY_WORKER_ARG,
+            ))
+            .is_none(),
+            "background worker resolver must ignore other daemon helper args"
+        );
+    }
 }

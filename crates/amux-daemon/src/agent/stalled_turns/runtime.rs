@@ -2,26 +2,27 @@
 
 use super::types::{StalledTurnClass, ThreadStallObservation};
 use super::*;
+use serde::{Deserialize, Serialize};
 
 pub(super) const INITIAL_GRACE_DELAY_MS: u64 = 30_000;
 const SECOND_RETRY_DELAY_MS: u64 = 60_000;
 const THIRD_RETRY_DELAY_MS: u64 = 120_000;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct StalledTurnCandidate {
-    pub(super) thread_id: String,
-    pub(super) class: StalledTurnClass,
-    pub(super) last_message_id: String,
-    pub(super) last_message_at: u64,
-    pub(super) last_message_excerpt: String,
-    pub(super) task_id: Option<String>,
-    pub(super) goal_run_id: Option<String>,
-    pub(super) retries_sent: u32,
-    pub(super) next_evaluation_at: u64,
+    pub(crate) thread_id: String,
+    pub(crate) class: StalledTurnClass,
+    pub(crate) last_message_id: String,
+    pub(crate) last_message_at: u64,
+    pub(crate) last_message_excerpt: String,
+    pub(crate) task_id: Option<String>,
+    pub(crate) goal_run_id: Option<String>,
+    pub(crate) retries_sent: u32,
+    pub(crate) next_evaluation_at: u64,
 }
 
 impl StalledTurnCandidate {
-    pub(super) fn new(
+    pub(crate) fn new(
         thread_id: impl Into<String>,
         class: StalledTurnClass,
         created_at: u64,
@@ -39,7 +40,7 @@ impl StalledTurnCandidate {
         }
     }
 
-    pub(super) fn from_observation(observation: &ThreadStallObservation) -> Self {
+    pub(crate) fn from_observation(observation: &ThreadStallObservation) -> Self {
         Self {
             thread_id: observation.thread_id.clone(),
             class: observation.class,
@@ -59,12 +60,12 @@ impl StalledTurnCandidate {
         }
     }
 
-    pub(super) fn record_retry(&mut self, now: u64) {
+    pub(crate) fn record_retry(&mut self, now: u64) {
         self.retries_sent = self.retries_sent.saturating_add(1);
         self.next_evaluation_at = now.saturating_add(delay_after_retry(self.retries_sent));
     }
 
-    pub(super) fn escalation_ready(&self, now: u64) -> bool {
+    pub(crate) fn escalation_ready(&self, now: u64) -> bool {
         self.retries_sent >= 3 && now >= self.next_evaluation_at
     }
 }
@@ -94,73 +95,89 @@ impl AgentEngine {
             .iter()
             .map(|observation| observation.thread_id.clone())
             .collect::<HashSet<_>>();
+        let current_candidates = {
+            let candidates = self.stalled_turn_candidates.lock().await;
+            candidates.values().cloned().collect::<Vec<_>>()
+        };
+        let now = now_millis();
+        let result = crate::agent::background_workers::run_background_worker_command(
+            crate::agent::background_workers::protocol::BackgroundWorkerKind::Safety,
+            crate::agent::background_workers::protocol::BackgroundWorkerCommand::TickSafety {
+                observations,
+                candidates: current_candidates,
+                now_ms: now,
+            },
+        )
+        .await?;
 
+        let crate::agent::background_workers::protocol::BackgroundWorkerResult::SafetyTick {
+            decisions,
+        } = result
+        else {
+            anyhow::bail!("background safety worker returned unexpected response");
+        };
+
+        self.apply_safety_worker_decisions(decisions, observed_ids, now)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn apply_safety_worker_decisions(
+        &self,
+        decisions: Vec<crate::agent::background_workers::protocol::SafetyDecision>,
+        observed_ids: HashSet<String>,
+        now: u64,
+    ) -> Result<()> {
         {
             let mut candidates = self.stalled_turn_candidates.lock().await;
             candidates.retain(|thread_id, _| observed_ids.contains(thread_id));
         }
 
-        for observation in observations {
-            let action = {
-                let mut candidates = self.stalled_turn_candidates.lock().await;
-                let candidate = candidates
-                    .entry(observation.thread_id.clone())
-                    .or_insert_with(|| StalledTurnCandidate::from_observation(&observation));
-
-                if candidate.last_message_id != observation.last_message_id {
-                    *candidate = StalledTurnCandidate::from_observation(&observation);
-                }
-
-                let now = now_millis();
-                if now < candidate.next_evaluation_at {
-                    None
-                } else if candidate.escalation_ready(now) {
-                    Some((candidate.clone(), true))
-                } else {
-                    Some((candidate.clone(), false))
-                }
-            };
-
-            let Some((candidate_snapshot, escalate)) = action else {
-                continue;
-            };
-
-            if escalate {
-                self.perform_stalled_turn_escalation(&candidate_snapshot)
+        for decision in decisions {
+            match decision {
+                crate::agent::background_workers::protocol::SafetyDecision::Retry { candidate } => {
+                    self.stalled_turn_candidates
+                        .lock()
+                        .await
+                        .entry(candidate.thread_id.clone())
+                        .or_insert_with(|| candidate.clone());
+                    self.perform_stalled_turn_retry(&candidate).await?;
+                    {
+                        let mut candidates = self.stalled_turn_candidates.lock().await;
+                        if let Some(current) = candidates.get_mut(&candidate.thread_id) {
+                            current.record_retry(now);
+                        }
+                    }
+                    self.persist_stalled_turn_trace(
+                        &candidate,
+                        "degraded",
+                        "retry_requested",
+                        serde_json::json!({
+                            "decision": "continue_required",
+                            "attempt": candidate.retries_sent.saturating_add(1),
+                        }),
+                    )
                     .await;
-                self.persist_stalled_turn_trace(
-                    &candidate_snapshot,
-                    "stuck",
-                    "escalated_after_retries",
-                    serde_json::json!({"decision": "escalate"}),
-                )
-                .await;
-                self.stalled_turn_candidates
-                    .lock()
-                    .await
-                    .remove(&candidate_snapshot.thread_id);
-                continue;
-            }
-
-            self.perform_stalled_turn_retry(&candidate_snapshot).await?;
-            {
-                let mut candidates = self.stalled_turn_candidates.lock().await;
-                if let Some(candidate) = candidates.get_mut(&candidate_snapshot.thread_id) {
-                    candidate.record_retry(now_millis());
+                }
+                crate::agent::background_workers::protocol::SafetyDecision::Escalate {
+                    candidate,
+                } => {
+                    self.perform_stalled_turn_escalation(&candidate).await;
+                    self.persist_stalled_turn_trace(
+                        &candidate,
+                        "stuck",
+                        "escalated_after_retries",
+                        serde_json::json!({"decision": "escalate"}),
+                    )
+                    .await;
+                    self.stalled_turn_candidates
+                        .lock()
+                        .await
+                        .remove(&candidate.thread_id);
                 }
             }
-            self.persist_stalled_turn_trace(
-                &candidate_snapshot,
-                "degraded",
-                "retry_requested",
-                serde_json::json!({
-                    "decision": "continue_required",
-                    "attempt": candidate_snapshot.retries_sent.saturating_add(1),
-                }),
-            )
-            .await;
         }
-
         Ok(())
     }
 }

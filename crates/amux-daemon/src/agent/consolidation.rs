@@ -24,6 +24,23 @@ impl AgentEngine {
         &self,
         budget: std::time::Duration,
     ) -> Option<ConsolidationResult> {
+        if crate::agent::agent_identity::current_agent_scope_id()
+            != crate::agent::agent_identity::WELES_AGENT_ID
+        {
+            return crate::agent::agent_identity::run_with_agent_scope(
+                crate::agent::agent_identity::WELES_AGENT_ID.to_string(),
+                self.maybe_run_consolidation_if_idle_inner(budget),
+            )
+            .await;
+        }
+
+        self.maybe_run_consolidation_if_idle_inner(budget).await
+    }
+
+    async fn maybe_run_consolidation_if_idle_inner(
+        &self,
+        budget: std::time::Duration,
+    ) -> Option<ConsolidationResult> {
         let config = self.config.read().await.clone();
         if !config.consolidation.enabled {
             return None;
@@ -90,6 +107,11 @@ impl AgentEngine {
             self.maybe_run_forge_subphase(&deadline, &mut result).await;
         }
 
+        if std::time::Instant::now() < deadline {
+            self.run_dream_state_cycle_if_idle(now.saturating_sub(last_presence.unwrap_or(now)))
+                .await;
+        }
+
         // Sub-task 2: Decay stale memory facts and tombstone low-confidence ones (MEMO-02)
         if std::time::Instant::now() < deadline {
             result.facts_decayed = self.apply_fact_decay(&config, &deadline).await;
@@ -126,6 +148,12 @@ impl AgentEngine {
         // Sub-task 8: Check lifecycle promotions (SKIL-05, per D-06)
         if std::time::Instant::now() < deadline {
             result.skills_promoted = self.check_skill_promotions(&config, &deadline).await;
+        }
+
+        if std::time::Instant::now() < deadline {
+            if let Err(error) = self.refresh_gene_pool_runtime().await {
+                tracing::warn!(%error, "failed to refresh gene pool runtime");
+            }
         }
 
         // Sub-task 9: Expire stale negative knowledge constraints (Phase 1: Memory Foundation - NKNO-04)

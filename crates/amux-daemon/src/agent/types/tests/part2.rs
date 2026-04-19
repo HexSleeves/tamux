@@ -504,6 +504,9 @@ use amux_shared::providers::{
         assert!(provider
             .supported_transports
             .contains(&ApiTransport::ChatCompletions));
+        assert!(provider
+            .supported_transports
+            .contains(&ApiTransport::AnthropicMessages));
         assert!(provider.models.iter().any(|model| model.id == "gpt-5.4"));
         assert!(provider
             .models

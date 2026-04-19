@@ -48,6 +48,7 @@ fn render_provider_tab<'a>(
     } else {
         match config.api_transport() {
             "native_assistant" => "native assistant".to_string(),
+            "anthropic_messages" => "anthropic messages".to_string(),
             "responses" => "responses".to_string(),
             _ => "chat completions".to_string(),
         }
@@ -84,6 +85,7 @@ use amux_shared::providers::PROVIDER_ID_CUSTOM;
             .unwrap_or("chat_completions")
         {
             "native_assistant" => " [native assistant only]",
+            "anthropic_messages" => " [anthropic messages only]",
             "responses" => " [responses only]",
             _ => " [chat completions only]",
         }
@@ -243,4 +245,3 @@ fn render_tools_tab<'a>(
 
     lines
 }
-

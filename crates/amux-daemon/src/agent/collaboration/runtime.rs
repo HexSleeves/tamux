@@ -1,4 +1,8 @@
 use super::participants::{apply_vote_to_disagreement, normalize_position, normalize_topic};
+use crate::agent::consensus::bid_engine::{build_persisted_bid, consensus_round_id};
+use crate::agent::consensus::bid_priors::effective_bid_confidence;
+use crate::agent::consensus::outcome_feedback::build_quality_metric;
+use crate::agent::consensus::role_assigner::build_role_assignment;
 
 const MIN_CONSENSUS_BID_CONFIDENCE: f64 = 0.3;
 use super::*;
@@ -659,12 +663,20 @@ impl AgentEngine {
         }
         session.updated_at = now_millis();
         let snapshot = session.clone();
+        let persisted_bid = build_persisted_bid(
+            &snapshot,
+            task_id,
+            bid.confidence,
+            &bid.availability,
+            bid.created_at,
+        );
         let report = serde_json::json!({
             "session_id": session.id,
             "bid": bid,
         });
         drop(collaboration);
         self.persist_collaboration_session(&snapshot).await?;
+        self.persist_consensus_bid(persisted_bid).await?;
         Ok(report)
     }
 
@@ -677,6 +689,23 @@ impl AgentEngine {
             anyhow::bail!("collaboration capability is disabled in agent config");
         }
         let debate_config = config.debate;
+        let role_by_task = {
+            let collaboration = self.collaboration.read().await;
+            let Some(session) = collaboration.get(parent_task_id) else {
+                anyhow::bail!("no collaboration session found for parent task {parent_task_id}");
+            };
+            session
+                .agents
+                .iter()
+                .map(|agent| (agent.task_id.clone(), agent.role.clone()))
+                .collect::<HashMap<_, _>>()
+        };
+        let prior_by_role = self
+            .load_consensus_bid_priors(&role_by_task.values().cloned().collect::<Vec<_>>())
+            .await?
+            .into_iter()
+            .map(|prior| (prior.role, prior.prior_score))
+            .collect::<HashMap<_, _>>();
         let mut collaboration = self.collaboration.write().await;
         let Some(session) = collaboration.get_mut(parent_task_id) else {
             anyhow::bail!("no collaboration session found for parent task {parent_task_id}");
@@ -699,12 +728,24 @@ impl AgentEngine {
                 .get(&right.task_id)
                 .copied()
                 .unwrap_or(0.0);
+            let left_prior = role_by_task
+                .get(&left.task_id)
+                .and_then(|role| prior_by_role.get(role))
+                .copied()
+                .unwrap_or(0.5);
+            let right_prior = role_by_task
+                .get(&right.task_id)
+                .and_then(|role| prior_by_role.get(role))
+                .copied()
+                .unwrap_or(0.5);
+            let left_effective_confidence = effective_bid_confidence(left.confidence, left_prior);
+            let right_effective_confidence =
+                effective_bid_confidence(right.confidence, right_prior);
             bid_sort_key(&left.availability)
                 .cmp(&bid_sort_key(&right.availability))
                 .then_with(|| {
-                    right
-                        .confidence
-                        .partial_cmp(&left.confidence)
+                    right_effective_confidence
+                        .partial_cmp(&left_effective_confidence)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .then_with(|| {
@@ -735,6 +776,12 @@ impl AgentEngine {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("a distinct reviewer bid is required"))?;
 
+        let persisted_assignment = build_role_assignment(
+            parent_task_id,
+            consensus_round_id(session),
+            &ranked,
+            now_millis(),
+        );
         let assignment = ConsensusRoleAssignment {
             primary_task_id: primary.task_id.clone(),
             primary_role: "primary".to_string(),
@@ -769,9 +816,11 @@ impl AgentEngine {
             "primary_task_id": assignment.primary_task_id,
             "reviewer_task_id": assignment.reviewer_task_id,
             "bids": ranked,
+            "consensus_priors": prior_by_role,
         });
         drop(collaboration);
         self.persist_collaboration_session(&snapshot).await?;
+        self.persist_role_assignment(persisted_assignment).await?;
 
         if let Some(launch) = debate_launch {
             if let Err(error) = self
@@ -1258,6 +1307,62 @@ impl AgentEngine {
         };
         if task.source != "subagent" {
             return;
+        }
+        let inferred_role = super::participants::infer_collaboration_role(task);
+        if let Err(error) = self
+            .record_consensus_bid_outcome(&inferred_role, outcome)
+            .await
+        {
+            tracing::warn!(
+                task_id = %task.id,
+                role = %inferred_role,
+                "failed to record consensus prior outcome: {error}"
+            );
+        }
+        let session_snapshot = {
+            let collaboration = self.collaboration.read().await;
+            collaboration.get(parent_task_id).cloned()
+        };
+        if let Some(session) = session_snapshot.as_ref() {
+            if let Some(role_assignment) = session.role_assignment.as_ref() {
+                let persisted_assignment =
+                    crate::agent::consensus::types::PersistedRoleAssignment {
+                        task_id: parent_task_id.to_string(),
+                        round_id: consensus_round_id(session),
+                        primary_agent_id: role_assignment.primary_task_id.clone(),
+                        reviewer_agent_id: Some(role_assignment.reviewer_task_id.clone()),
+                        observers: session
+                            .agents
+                            .iter()
+                            .filter(|agent| {
+                                agent.task_id != role_assignment.primary_task_id
+                                    && agent.task_id != role_assignment.reviewer_task_id
+                            })
+                            .map(|agent| agent.task_id.clone())
+                            .collect(),
+                        assigned_at_ms: role_assignment.assigned_at,
+                        outcome: Some(outcome.to_string()),
+                    };
+                let metric =
+                    build_quality_metric(session, &persisted_assignment, outcome, now_millis());
+                if let Err(error) = self
+                    .mark_role_assignment_outcome(parent_task_id, outcome)
+                    .await
+                {
+                    tracing::warn!(
+                        task_id = %task.id,
+                        parent_task_id = %parent_task_id,
+                        "failed to mark role assignment outcome: {error}"
+                    );
+                }
+                if let Err(error) = self.persist_consensus_quality_metric(metric).await {
+                    tracing::warn!(
+                        task_id = %task.id,
+                        parent_task_id = %parent_task_id,
+                        "failed to persist consensus quality metric: {error}"
+                    );
+                }
+            }
         }
         let summary = match outcome {
             "success" => task

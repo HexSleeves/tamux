@@ -3,6 +3,11 @@ use amux_shared::providers::*;
 pub const CHAT_ONLY_TRANSPORTS: &[ApiTransport] = &[ApiTransport::ChatCompletions];
 pub const RESPONSES_AND_CHAT_TRANSPORTS: &[ApiTransport] =
     &[ApiTransport::Responses, ApiTransport::ChatCompletions];
+pub const RESPONSES_CHAT_AND_ANTHROPIC_TRANSPORTS: &[ApiTransport] = &[
+    ApiTransport::Responses,
+    ApiTransport::ChatCompletions,
+    ApiTransport::AnthropicMessages,
+];
 pub const NATIVE_AND_CHAT_TRANSPORTS: &[ApiTransport] =
     &[ApiTransport::NativeAssistant, ApiTransport::ChatCompletions];
 
@@ -43,7 +48,7 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         id: PROVIDER_ID_OPENAI,
         name: "OpenAI",
         default_base_url: "https://api.openai.com/v1",
-        default_model: "gpt-4o",
+        default_model: "gpt-5.4",
         api_type: ApiType::OpenAI,
         auth_method: AuthMethod::Bearer,
         models: OPENAI_MODELS,
@@ -97,7 +102,7 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         models: GITHUB_COPILOT_MODELS,
         supports_model_fetch: true,
         anthropic_base_url: None,
-        supported_transports: RESPONSES_AND_CHAT_TRANSPORTS,
+        supported_transports: RESPONSES_CHAT_AND_ANTHROPIC_TRANSPORTS,
         default_transport: ApiTransport::Responses,
         native_transport_kind: None,
         native_base_url: None,
@@ -450,7 +455,9 @@ pub fn provider_supports_transport(provider_id: &str, transport: ApiTransport) -
         .map(|definition| definition.supported_transports.contains(&transport))
         .unwrap_or(matches!(
             transport,
-            ApiTransport::Responses | ApiTransport::ChatCompletions
+            ApiTransport::Responses
+                | ApiTransport::AnthropicMessages
+                | ApiTransport::ChatCompletions
         ))
 }
 

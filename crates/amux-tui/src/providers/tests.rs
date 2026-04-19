@@ -55,6 +55,10 @@ fn anthropic_message_providers_are_detected() {
         PROVIDER_ID_ALIBABA_CODING_PLAN,
         "qwen3.6-plus"
     ));
+    assert!(!uses_fixed_anthropic_messages(
+        PROVIDER_ID_GITHUB_COPILOT,
+        "claude-sonnet-4.6"
+    ));
 }
 
 #[test]
@@ -123,7 +127,10 @@ fn github_copilot_supports_browser_and_token_auth() {
     assert_eq!(provider.default_auth_source, "github_copilot");
     assert_eq!(provider.supported_auth_sources, GITHUB_COPILOT_AUTH_SOURCES);
     assert_eq!(provider.default_transport, "responses");
-    assert_eq!(provider.supported_transports, RESPONSES_AND_CHAT_TRANSPORTS);
+    assert_eq!(
+        provider.supported_transports,
+        RESPONSES_CHAT_AND_ANTHROPIC_TRANSPORTS
+    );
 }
 
 #[test]

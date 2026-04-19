@@ -1656,6 +1656,7 @@ async fn dispatch_tool_execution(
         "list_tasks" => execute_list_tasks(args, agent).await,
         "list_triggers" => execute_list_triggers(args, agent).await,
         "add_trigger" => execute_add_trigger(args, agent).await,
+        "show_dreams" => execute_show_dreams(args, agent).await,
         "get_todos" => execute_get_todos(args, agent, task_id).await,
         "cancel_task" => execute_cancel_task(args, agent).await,
         "type_in_terminal" => execute_type_in_terminal(args, session_manager).await,
@@ -1707,6 +1708,10 @@ async fn dispatch_tool_execution(
             )
             .await
         }
+        "analyze_image" => execute_analyze_image(args, agent, http_client).await,
+        "generate_image" => execute_generate_image(args, agent, http_client).await,
+        "speech_to_text" => execute_speech_to_text(args, agent, http_client).await,
+        "text_to_speech" => execute_text_to_speech(args, agent, http_client).await,
         "list_files" => execute_list_files(args, session_manager, session_id).await,
         "read_file" => execute_read_file(args).await,
         "get_git_line_statuses" => execute_get_git_line_statuses(args).await,

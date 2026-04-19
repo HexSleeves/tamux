@@ -1537,6 +1537,7 @@ async fn intent_prediction_includes_cached_prewarm_summary_when_available() {
         "thread-cache-bullets".to_string(),
         AnticipatoryPrewarmSnapshot {
             summary: "branch main; dirty=true; modified 1; staged 0; untracked 0; ahead 0; behind 0; context entries 1".to_string(),
+            precomputation_id: None,
         },
     );
 
@@ -1968,4 +1969,339 @@ async fn event_trigger_fire_respects_cooldown_and_emits_notice() {
         .await
         .expect("cooldown evaluation should succeed");
     assert_eq!(second, 0, "cooldown should suppress immediate refire");
+}
+
+#[tokio::test]
+async fn low_risk_event_trigger_enqueues_weles_background_task_and_logs_event() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    engine
+        .add_event_trigger_from_args(&serde_json::json!({
+            "id": "trigger-fs-change",
+            "event_family": "filesystem",
+            "event_kind": "file_changed",
+            "notification_kind": "file_changed",
+            "title_template": "File changed: {path}",
+            "body_template": "Observed file change for {path}",
+            "prompt_template": "The file at {path} changed. Review whether the operator likely needs follow-up.",
+            "agent_id": "weles",
+            "cooldown_secs": 10,
+            "risk_label": "low"
+        }))
+        .await
+        .expect("trigger creation should succeed");
+
+    let fired = engine
+        .maybe_fire_event_trigger(
+            "filesystem",
+            "file_changed",
+            Some("detected"),
+            Some("thread-fs-1"),
+            serde_json::json!({
+                "path": "src/lib.rs"
+            }),
+        )
+        .await
+        .expect("trigger should fire");
+    assert_eq!(fired, 1);
+
+    let tasks = engine.tasks.lock().await;
+    assert_eq!(tasks.len(), 1);
+    let task = tasks.front().expect("expected event task");
+    assert_eq!(task.source, "event_trigger");
+    assert_eq!(task.status, TaskStatus::Queued);
+    assert_eq!(task.thread_id.as_deref(), Some("thread-fs-1"));
+    assert_eq!(task.sub_agent_def_id.as_deref(), Some("weles_builtin"));
+    assert!(task.description.contains("src/lib.rs"));
+    drop(tasks);
+
+    let event_rows = engine
+        .history
+        .list_event_log(Some("filesystem"), Some("file_changed"), 4)
+        .await
+        .expect("event log query should succeed");
+    assert_eq!(event_rows.len(), 1);
+    assert_eq!(event_rows[0].thread_id.as_deref(), Some("thread-fs-1"));
+    assert!(event_rows[0].payload_json.contains("src/lib.rs"));
+}
+
+#[tokio::test]
+async fn high_risk_event_trigger_queues_approval_before_weles_dispatch() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    engine
+        .add_event_trigger_from_args(&serde_json::json!({
+            "id": "trigger-disk-pressure",
+            "event_family": "system",
+            "event_kind": "disk_pressure",
+            "notification_kind": "disk_pressure",
+            "title_template": "Disk pressure on {mount}",
+            "body_template": "Disk usage on {mount} is {usage_pct}",
+            "prompt_template": "Disk pressure detected on {mount} at {usage_pct}. Investigate and suggest cleanup actions.",
+            "agent_id": "weles",
+            "cooldown_secs": 10,
+            "risk_label": "high"
+        }))
+        .await
+        .expect("trigger creation should succeed");
+
+    let fired = engine
+        .maybe_fire_event_trigger(
+            "system",
+            "disk_pressure",
+            Some("critical"),
+            Some("thread-disk-1"),
+            serde_json::json!({
+                "mount": "/",
+                "usage_pct": 94
+            }),
+        )
+        .await
+        .expect("trigger should fire");
+    assert_eq!(fired, 1);
+
+    let tasks = engine.tasks.lock().await;
+    assert_eq!(tasks.len(), 1);
+    let approval_task = tasks.front().expect("expected approval-gated event task");
+    assert_eq!(approval_task.source, "event_trigger");
+    assert_eq!(approval_task.status, TaskStatus::AwaitingApproval);
+    assert_eq!(
+        approval_task.sub_agent_def_id.as_deref(),
+        Some("weles_builtin")
+    );
+    let approval_id = approval_task
+        .awaiting_approval_id
+        .clone()
+        .expect("approval id should be present");
+    drop(tasks);
+
+    assert_eq!(engine.pending_operator_approvals.read().await.len(), 1);
+
+    let handled = engine
+        .handle_task_approval_resolution(&approval_id, amux_protocol::ApprovalDecision::ApproveOnce)
+        .await;
+    assert!(handled, "approval resolution should resume the event task");
+
+    let tasks = engine.tasks.lock().await;
+    let resumed = tasks
+        .front()
+        .expect("task should still exist after approval");
+    assert_eq!(resumed.status, TaskStatus::Queued);
+    assert!(resumed.awaiting_approval_id.is_none());
+}
+
+#[tokio::test]
+async fn run_anticipatory_tick_persists_temporal_patterns_and_intent_model() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let thread_id = "thread-temporal-persist";
+
+    engine
+        .record_operator_attention("conversation:chat", Some(thread_id), None)
+        .await
+        .expect("attention should record");
+    engine.thread_work_contexts.write().await.insert(
+        thread_id.to_string(),
+        ThreadWorkContext {
+            thread_id: thread_id.to_string(),
+            entries: vec![WorkContextEntry {
+                path: "src/lib.rs".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some(root.path().display().to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+
+    engine.run_anticipatory_tick().await;
+
+    let patterns = engine
+        .history
+        .list_temporal_patterns("task_sequence", 8)
+        .await
+        .expect("temporal patterns should persist");
+    assert!(
+        !patterns.is_empty(),
+        "intent prediction should persist temporal task-sequence patterns"
+    );
+    let intent_model = engine
+        .history
+        .get_intent_model(crate::agent::agent_identity::WELES_AGENT_ID)
+        .await
+        .expect("intent model lookup should succeed");
+    assert!(
+        intent_model.is_some(),
+        "intent model snapshot should persist"
+    );
+}
+
+#[tokio::test]
+async fn anticipatory_prompt_context_marks_cached_precomputation_used() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let thread_id = "thread-temporal-context";
+    let now = now_millis();
+
+    let pattern_id = engine
+        .history
+        .insert_temporal_pattern(&crate::history::TemporalPatternRow {
+            id: None,
+            pattern_type: "task_sequence".to_string(),
+            timescale: "minutes".to_string(),
+            pattern_description: "Likely next step is repo verification".to_string(),
+            context_filter: Some(format!("thread={thread_id}")),
+            frequency: 1,
+            last_observed_ms: now,
+            first_observed_ms: now,
+            confidence: 0.8,
+            decay_rate: 0.01,
+            created_at_ms: now,
+        })
+        .await
+        .expect("pattern insert should succeed");
+    let prediction_id = engine
+        .history
+        .insert_temporal_prediction(&crate::history::TemporalPredictionRow {
+            id: None,
+            pattern_id,
+            predicted_action: "inspect or test recent repo changes".to_string(),
+            predicted_at_ms: now,
+            confidence: 0.8,
+            actual_action: None,
+            was_accepted: None,
+            accuracy_score: None,
+        })
+        .await
+        .expect("prediction insert should succeed");
+    let precomputation_id = engine
+        .history
+        .insert_precomputation_log(&crate::history::PrecomputationLogRow {
+            id: None,
+            prediction_id,
+            precomputation_type: "context_prefetch".to_string(),
+            precomputation_details: "branch main; dirty=true".to_string(),
+            started_at_ms: now,
+            completed_at_ms: Some(now),
+            was_used: None,
+        })
+        .await
+        .expect("precomputation insert should succeed");
+
+    engine.anticipatory.write().await.items = vec![AnticipatoryItem {
+        id: "intent_prediction_thread-temporal-context".to_string(),
+        kind: "intent_prediction".to_string(),
+        title: "Likely Next Action".to_string(),
+        summary: "Predicted next step: inspect or test recent repo changes".to_string(),
+        bullets: vec!["Recent repo changes usually lead to verification.".to_string()],
+        intent_prediction: Some(IntentPredictionPayload {
+            primary_action: "inspect or test recent repo changes".to_string(),
+            confidence: 0.8,
+            ranked_actions: vec![IntentPredictionCandidate {
+                rank: 1,
+                action: "inspect or test recent repo changes".to_string(),
+                confidence: 0.8,
+                rationale: "repo context is active".to_string(),
+            }],
+        }),
+        confidence: 0.8,
+        goal_run_id: None,
+        thread_id: Some(thread_id.to_string()),
+        preferred_client_surface: None,
+        preferred_attention_surface: None,
+        created_at: now,
+        updated_at: now,
+    }];
+    engine
+        .anticipatory
+        .write()
+        .await
+        .prewarm_cache_by_thread
+        .insert(
+            thread_id.to_string(),
+            AnticipatoryPrewarmSnapshot {
+                summary: "branch main; dirty=true".to_string(),
+                precomputation_id: Some(precomputation_id),
+            },
+        );
+
+    let context = engine
+        .build_anticipatory_prompt_context(thread_id)
+        .await
+        .expect("prompt context should exist");
+    assert!(context.contains("Temporal Foresight"));
+    assert!(context.contains("Cached precomputation"));
+
+    let precomputations = engine
+        .history
+        .list_precomputation_log(prediction_id)
+        .await
+        .expect("precomputation log should load");
+    assert_eq!(precomputations[0].was_used, Some(true));
+}
+
+#[tokio::test]
+async fn cognitive_resonance_sampling_persists_samples_and_adjustment_logs() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    engine
+        .history
+        .insert_cognitive_resonance_sample(&crate::history::CognitiveResonanceSampleRow {
+            id: None,
+            sampled_at_ms: now_millis().saturating_sub(60_000),
+            revision_velocity_ms: Some(120_000),
+            session_entropy: Some(0.1),
+            approval_latency_ms: Some(1_000),
+            tool_hesitation_count: 0,
+            cognitive_state: "flow".to_string(),
+            state_confidence: 0.8,
+            resonance_score: 0.8,
+            verbosity_adjustment: 0.9,
+            risk_adjustment: 0.85,
+            proactiveness_adjustment: 0.8,
+            memory_urgency_adjustment: 0.3,
+        })
+        .await
+        .expect("seed resonance sample should persist");
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.operator_satisfaction.label = "strained".to_string();
+        model.operator_satisfaction.score = 0.18;
+        model.implicit_feedback.tool_hesitation_count = 3;
+        model.attention_topology.rapid_switch_count = 4;
+        model.attention_topology.focus_event_count = 4;
+    }
+
+    engine.sample_cognitive_resonance_runtime().await;
+
+    let samples = engine
+        .history
+        .list_cognitive_resonance_samples(2)
+        .await
+        .expect("resonance samples should load");
+    assert_eq!(samples[0].cognitive_state, "frustrated");
+    let adjustments = engine
+        .history
+        .list_behavior_adjustment_log(8)
+        .await
+        .expect("behavior adjustments should load");
+    assert!(
+        !adjustments.is_empty(),
+        "substantial resonance shifts should log behavior adjustments"
+    );
 }

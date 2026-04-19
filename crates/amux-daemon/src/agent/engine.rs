@@ -48,7 +48,7 @@ pub struct StreamCancellationEntry {
     pub last_progress_excerpt: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StreamProgressKind {
     Started,
     Reasoning,

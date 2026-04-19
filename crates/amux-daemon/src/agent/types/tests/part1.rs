@@ -48,6 +48,18 @@ fn alibaba_coding_plan_switches_to_anthropic_for_anthropic_base_url() {
 }
 
 #[test]
+fn github_copilot_claude_models_stay_openai_without_explicit_transport_override() {
+    assert_eq!(
+        get_provider_api_type(
+            "github-copilot",
+            "claude-sonnet-4.6",
+            "https://api.githubcopilot.com"
+        ),
+        ApiType::OpenAI
+    );
+}
+
+#[test]
 fn default_retry_delay_is_five_seconds() {
     let parsed: AgentConfig = serde_json::from_str("{}").unwrap();
     assert_eq!(parsed.retry_delay_ms, 5_000);
@@ -325,12 +337,37 @@ fn interval_mins_to_cron_converts_correctly() {
     assert_eq!(interval_mins_to_cron(0), "* * * * *");
 }
 
-use amux_shared::providers::{PROVIDER_ID_ANTHROPIC, PROVIDER_ID_OPENAI};
+#[test]
+fn first_party_media_modality_matrix_matches_curated_catalog() {
+    let openai = get_provider_definition(PROVIDER_ID_OPENAI).expect("openai provider");
+    assert_eq!(model_modalities(PROVIDER_ID_OPENAI, "gpt-5.4"), MULTIMODAL);
+    assert_eq!(
+        model_modalities(PROVIDER_ID_OPENAI, "gpt-5.4-mini"),
+        TEXT_IMAGE
+    );
+    assert_eq!(openai.default_model, "gpt-5.4");
+    assert_eq!(
+        model_modalities(PROVIDER_ID_ANTHROPIC, "claude-opus-4-7"),
+        TEXT_IMAGE
+    );
+    assert_eq!(
+        model_modalities(PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN, "mimo-v2-omni"),
+        MULTIMODAL
+    );
+    assert_eq!(
+        model_modalities(PROVIDER_ID_ARCEE, "trinity-large-thinking"),
+        TEXT_ONLY
+    );
+}
+
+use amux_shared::providers::{
+    PROVIDER_ID_ANTHROPIC, PROVIDER_ID_OPENAI, PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN,
+};
 
 #[test]
 fn circuit_breaker_event_serde_roundtrip() {
     let event = AgentEvent::ProviderCircuitOpen {
-            provider: PROVIDER_ID_OPENAI.to_string(),
+        provider: PROVIDER_ID_OPENAI.to_string(),
         failed_model: None,
         trip_count: 3,
         reason: "circuit breaker open".to_string(),
@@ -361,13 +398,13 @@ fn circuit_breaker_event_serde_roundtrip() {
     }
 
     let recovery = AgentEvent::ProviderCircuitRecovered {
-            provider: PROVIDER_ID_ANTHROPIC.to_string(),
+        provider: PROVIDER_ID_ANTHROPIC.to_string(),
     };
     let json = serde_json::to_string(&recovery).unwrap();
     let parsed: AgentEvent = serde_json::from_str(&json).unwrap();
     match parsed {
         AgentEvent::ProviderCircuitRecovered { provider } => {
-                assert_eq!(provider, PROVIDER_ID_ANTHROPIC);
+            assert_eq!(provider, PROVIDER_ID_ANTHROPIC);
         }
         _ => panic!("wrong variant after deserialize"),
     }

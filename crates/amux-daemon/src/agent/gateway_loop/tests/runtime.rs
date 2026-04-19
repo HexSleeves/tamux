@@ -27,6 +27,32 @@ fn hydrate_initializes_gateway_after_config_load_and_before_thread_restore() {
     );
 }
 
+#[test]
+fn background_runtime_splits_maintenance_work_into_separate_loops() {
+    let source = gateway_loop_production_source();
+
+    for required in [
+        "engine.run_task_dispatch_loop(rx).await",
+        "engine.run_gateway_event_drain_loop(rx).await",
+        "engine.run_heartbeat_loop(rx).await",
+        "engine.run_anticipatory_loop(rx).await",
+        "engine.run_watcher_refresh_loop(rx).await",
+        "engine.run_gateway_supervision_loop(rx).await",
+        "engine.run_stalled_turn_supervision_loop(rx).await",
+        "engine.run_subagent_supervision_loop(rx).await",
+    ] {
+        assert!(
+            source.contains(required),
+            "background runtime should spawn dedicated worker loop: {required}"
+        );
+    }
+
+    assert!(
+        !source.contains("let mut supervisor_tick = tokio::time::interval"),
+        "background runtime should not multiplex maintenance work through a shared supervisor tick"
+    );
+}
+
 #[tokio::test]
 async fn gateway_init_loads_replay_cursors() {
     let root = make_test_root("gateway-init-loads-replay-cursors");
@@ -238,6 +264,7 @@ async fn gateway_auto_send_thread_response_emits_gateway_request_for_latest_assi
             id: "assistant-latest".to_string(),
             role: MessageRole::Assistant,
             content: "Intermittent update from the agent".to_string(),
+            content_blocks: Vec::new(),
             tool_calls: None,
             tool_call_id: None,
             tool_name: None,

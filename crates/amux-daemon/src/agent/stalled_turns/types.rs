@@ -1,7 +1,8 @@
 use super::StreamProgressKind;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum StalledTurnClass {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum StalledTurnClass {
     PromiseWithoutAction,
     PostToolResultNoFollowThrough,
     ActiveStreamIdle,
@@ -17,14 +18,14 @@ pub(super) struct TurnEvidence {
     pub(super) user_replied: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ThreadStallObservation {
-    pub(super) thread_id: String,
-    pub(super) last_message_id: String,
-    pub(super) last_message_at: u64,
-    pub(super) last_assistant_message: String,
-    pub(super) class: StalledTurnClass,
-    pub(super) stream_progress_kind: Option<StreamProgressKind>,
-    pub(super) task_id: Option<String>,
-    pub(super) goal_run_id: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ThreadStallObservation {
+    pub(crate) thread_id: String,
+    pub(crate) last_message_id: String,
+    pub(crate) last_message_at: u64,
+    pub(crate) last_assistant_message: String,
+    pub(crate) class: StalledTurnClass,
+    pub(crate) stream_progress_kind: Option<StreamProgressKind>,
+    pub(crate) task_id: Option<String>,
+    pub(crate) goal_run_id: Option<String>,
 }

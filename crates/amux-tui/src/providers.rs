@@ -28,6 +28,8 @@ pub struct ProviderDef {
 
 pub const CHAT_ONLY_TRANSPORTS: &[&str] = &["chat_completions"];
 pub const RESPONSES_AND_CHAT_TRANSPORTS: &[&str] = &["responses", "chat_completions"];
+pub const RESPONSES_CHAT_AND_ANTHROPIC_TRANSPORTS: &[&str] =
+    &["responses", "chat_completions", "anthropic_messages"];
 pub const NATIVE_AND_CHAT_TRANSPORTS: &[&str] = &["native_assistant", "chat_completions"];
 pub const API_KEY_ONLY_AUTH_SOURCES: &[&str] = &["api_key"];
 pub const OPENAI_AUTH_SOURCES: &[&str] = &["chatgpt_subscription", "api_key"];
@@ -137,7 +139,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         name: "GitHub Copilot",
         default_base_url: "https://api.githubcopilot.com",
         default_model: "gpt-4.1",
-        supported_transports: RESPONSES_AND_CHAT_TRANSPORTS,
+        supported_transports: RESPONSES_CHAT_AND_ANTHROPIC_TRANSPORTS,
         default_transport: "responses",
         supported_auth_sources: GITHUB_COPILOT_AUTH_SOURCES,
         default_auth_source: "github_copilot",

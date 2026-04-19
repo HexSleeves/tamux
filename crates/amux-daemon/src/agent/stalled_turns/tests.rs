@@ -109,6 +109,33 @@ fn stalled_turn_candidate_marks_escalation_ready_after_third_retry_window() {
     assert!(candidate.escalation_ready(331_000));
 }
 
+#[test]
+fn stalled_turn_worker_returns_continue_thread_action() {
+    let observation = super::types::ThreadStallObservation {
+        thread_id: "thread-1".to_string(),
+        last_message_id: "assistant-1".to_string(),
+        last_message_at: 1_000,
+        last_assistant_message: "Working. Let me draft the redesigned content now.".to_string(),
+        class: StalledTurnClass::PromiseWithoutAction,
+        stream_progress_kind: None,
+        task_id: Some("task-1".to_string()),
+        goal_run_id: None,
+    };
+
+    let result = crate::agent::background_workers::domain_safety::evaluate_tick(
+        vec![observation],
+        Vec::new(),
+        31_000,
+    );
+
+    assert_eq!(result.len(), 1);
+    assert!(matches!(
+        &result[0],
+        crate::agent::background_workers::protocol::SafetyDecision::Retry { candidate }
+            if candidate.thread_id == "thread-1" && candidate.retries_sent == 0
+    ));
+}
+
 async fn spawn_stub_assistant_server(response_text: &str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -184,6 +211,7 @@ async fn collect_stalled_turn_observations_skips_active_tool_turns() {
                     id: "assistant-tool".to_string(),
                     role: MessageRole::Assistant,
                     content: String::new(),
+                    content_blocks: Vec::new(),
                     tool_calls: Some(vec![ToolCall::with_default_weles_review(
                         "call-1".to_string(),
                         ToolFunction {
@@ -254,6 +282,7 @@ async fn collect_stalled_turn_observations_detects_promise_without_action() {
                         id: "assistant-stall".to_string(),
                         role: MessageRole::Assistant,
                         content: "Working. Let me draft the redesigned content now.".to_string(),
+                        content_blocks: Vec::new(),
                         tool_calls: None,
                         tool_call_id: None,
                         tool_name: None,
@@ -326,6 +355,7 @@ async fn supervise_stalled_turns_retries_with_internal_ping_and_continue() {
                         role: MessageRole::Assistant,
                         content: "Excellent. Let me start drafting the redesigned landing page."
                             .to_string(),
+                        content_blocks: Vec::new(),
                         tool_calls: None,
                         tool_call_id: None,
                         tool_name: None,
@@ -626,6 +656,7 @@ async fn supervise_stalled_turns_escalates_after_third_retry_window() {
                         id: "assistant-escalate".to_string(),
                         role: MessageRole::Assistant,
                         content: "Working. Let me draft the redesigned content now.".to_string(),
+                        content_blocks: Vec::new(),
                         tool_calls: None,
                         tool_call_id: None,
                         tool_name: None,

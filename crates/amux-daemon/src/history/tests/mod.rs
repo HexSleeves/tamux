@@ -8,8 +8,11 @@ async fn make_test_store() -> Result<(HistoryStore, PathBuf)> {
     Ok((store, root))
 }
 
+mod cognitive_resonance;
+mod dream_state;
 mod elastic_context;
 mod emergent_protocol;
+mod event_log;
 mod event_triggers;
 mod goal_runs;
 mod governance;
@@ -20,4 +23,5 @@ mod provider_auth;
 mod skill_variants;
 mod sqlite_audit;
 mod statistics;
+mod temporal_foresight;
 mod tombstones_gateway;

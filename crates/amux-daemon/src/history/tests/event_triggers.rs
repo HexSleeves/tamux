@@ -25,11 +25,14 @@ async fn init_schema_adds_event_trigger_registry_table() -> Result<()> {
         .call(|conn| {
             let has_event_family = table_has_column(conn, "event_triggers", "event_family")?;
             let has_event_kind = table_has_column(conn, "event_triggers", "event_kind")?;
+            let has_agent_id = table_has_column(conn, "event_triggers", "agent_id")?;
             let has_target_state = table_has_column(conn, "event_triggers", "target_state")?;
             let has_cooldown_secs = table_has_column(conn, "event_triggers", "cooldown_secs")?;
             let has_risk_label = table_has_column(conn, "event_triggers", "risk_label")?;
             let has_notification_kind =
                 table_has_column(conn, "event_triggers", "notification_kind")?;
+            let has_prompt_template =
+                table_has_column(conn, "event_triggers", "prompt_template")?;
             let trigger_index: Option<String> = conn
                 .query_row(
                     "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_event_triggers_family_kind_enabled'",
@@ -40,10 +43,12 @@ async fn init_schema_adds_event_trigger_registry_table() -> Result<()> {
             Ok((
                 has_event_family,
                 has_event_kind,
+                has_agent_id,
                 has_target_state,
                 has_cooldown_secs,
                 has_risk_label,
                 has_notification_kind,
+                has_prompt_template,
                 trigger_index,
             ))
         })
@@ -56,8 +61,10 @@ async fn init_schema_adds_event_trigger_registry_table() -> Result<()> {
     assert!(status.3);
     assert!(status.4);
     assert!(status.5);
+    assert!(status.6);
+    assert!(status.7);
     assert_eq!(
-        status.6.as_deref(),
+        status.8.as_deref(),
         Some("idx_event_triggers_family_kind_enabled")
     );
 
@@ -73,12 +80,14 @@ async fn event_trigger_registry_round_trips_weles_health_trigger() -> Result<()>
         id: "trigger-weles-degraded".to_string(),
         event_family: "health".to_string(),
         event_kind: "weles_health".to_string(),
+        agent_id: Some("weles".to_string()),
         target_state: Some("degraded".to_string()),
         thread_id: None,
         enabled: true,
         cooldown_secs: 900,
         risk_label: "medium".to_string(),
         notification_kind: "weles_health_degraded".to_string(),
+        prompt_template: Some("Investigate {state}: {reason}".to_string()),
         title_template: "WELES review degraded".to_string(),
         body_template: "WELES health changed to {state}: {reason}".to_string(),
         created_at: 100,
@@ -93,11 +102,16 @@ async fn event_trigger_registry_round_trips_weles_health_trigger() -> Result<()>
         .await?;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, "trigger-weles-degraded");
+    assert_eq!(rows[0].agent_id.as_deref(), Some("weles"));
     assert_eq!(rows[0].target_state.as_deref(), Some("degraded"));
     assert!(rows[0].enabled);
     assert_eq!(rows[0].cooldown_secs, 900);
     assert_eq!(rows[0].risk_label, "medium");
     assert_eq!(rows[0].notification_kind, "weles_health_degraded");
+    assert_eq!(
+        rows[0].prompt_template.as_deref(),
+        Some("Investigate {state}: {reason}")
+    );
     assert_eq!(rows[0].last_fired_at, Some(150));
 
     store

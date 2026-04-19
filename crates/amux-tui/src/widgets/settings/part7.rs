@@ -170,7 +170,6 @@ fn render_feature_field_line<'a>(
     hint: &'a str,
     theme: &ThemeTokens,
 ) {
-    let field_name = settings.current_field_name();
     let is_selected = settings.field_cursor() == field_idx;
     let expected_field = match field_idx {
         0 => "feat_tier_override",
@@ -182,12 +181,16 @@ fn render_feature_field_line<'a>(
         11 => "feat_heuristic_promotion_threshold",
         14 => "feat_skill_community_preapprove_timeout_secs",
         15 => "feat_skill_suggest_global_enable_after_approvals",
+        17 => "feat_audio_stt_provider",
+        18 => "feat_audio_stt_model",
+        20 => "feat_audio_tts_provider",
+        21 => "feat_audio_tts_model",
+        22 => "feat_audio_tts_voice",
         _ => "",
     };
-    let is_editing = is_selected
-        && settings.is_editing()
+    let is_editing = settings.is_editing()
         && !expected_field.is_empty()
-        && field_name == expected_field;
+        && settings.editing_field() == Some(expected_field);
 
     let marker = if is_selected { "> " } else { "  " };
     let marker_style = if is_selected {

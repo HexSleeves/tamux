@@ -89,6 +89,7 @@ async fn first_turn_runner_bootstrap_includes_structured_memory_summary() {
             None,
             None,
             None,
+            None,
             true,
         )
         .await
@@ -159,6 +160,7 @@ async fn post_compaction_prompt_rebuild_refreshes_memory_summary_and_injection_s
                         id: "assistant-1".to_string(),
                         role: MessageRole::Assistant,
                         content: "Observed earlier state".to_string(),
+                        content_blocks: Vec::new(),
                         tool_calls: None,
                         tool_call_id: None,
                         tool_name: None,
@@ -205,6 +207,7 @@ async fn post_compaction_prompt_rebuild_refreshes_memory_summary_and_injection_s
         .send_message_inner(
             Some(thread_id),
             "Need a fresh request boundary",
+            None,
             None,
             None,
             None,
@@ -448,6 +451,7 @@ async fn send_message_request_includes_runtime_continuity_and_negative_knowledge
         .send_message_inner(
             Some(thread_id),
             "Investigate the failure",
+            None,
             Some("task-runtime-continuity-request"),
             None,
             None,
@@ -491,6 +495,155 @@ async fn send_message_request_includes_runtime_continuity_and_negative_knowledge
             .iter()
             .any(|body| body.contains("The old recovery path already failed twice.")),
         "expected the execution prompt to include matching negative knowledge",
+    );
+}
+
+#[tokio::test]
+async fn send_message_request_includes_semantic_memory_palace_context_when_graph_exists() {
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = spawn_recording_assistant_server(recorded_bodies.clone()).await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let thread_id = "thread-memory-palace-prompt";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            crate::agent::types::AgentThread {
+                id: thread_id.to_string(),
+                agent_name: None,
+                title: "Memory palace prompt thread".to_string(),
+                messages: vec![crate::agent::types::AgentMessage::user(
+                    "Investigate authentication regression",
+                    1,
+                )],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+    }
+
+    engine.thread_structural_memories.write().await.insert(
+        thread_id.to_string(),
+        crate::agent::context::structural_memory::ThreadStructuralMemory {
+            workspace_seed_scan_complete: true,
+            language_hints: vec!["rust".to_string()],
+            workspace_seeds: vec![],
+            observed_files: vec![crate::agent::context::structural_memory::ObservedFileNode {
+                node_id: "node:file:src/auth.rs".to_string(),
+                relative_path: "src/auth.rs".to_string(),
+            }],
+            edges: vec![],
+        },
+    );
+
+    engine
+        .history
+        .upsert_memory_node(
+            "node:file:src/auth.rs",
+            "src/auth.rs",
+            "file",
+            Some("authentication entrypoint"),
+            1_000,
+        )
+        .await
+        .expect("auth node");
+    engine
+        .history
+        .upsert_memory_node(
+            "node:error:LoginError",
+            "LoginError",
+            "error",
+            Some("login failed due to token parsing"),
+            1_000,
+        )
+        .await
+        .expect("error node");
+    engine
+        .history
+        .upsert_memory_node(
+            "node:file:src/tokens.rs",
+            "src/tokens.rs",
+            "file",
+            Some("token parsing logic"),
+            1_000,
+        )
+        .await
+        .expect("tokens node");
+    engine
+        .history
+        .upsert_memory_edge(
+            "node:file:src/auth.rs",
+            "node:error:LoginError",
+            "file_hit_error",
+            2.0,
+            1_000,
+        )
+        .await
+        .expect("auth edge");
+    engine
+        .history
+        .upsert_memory_edge(
+            "node:error:LoginError",
+            "node:file:src/tokens.rs",
+            "caused_by",
+            2.0,
+            1_000,
+        )
+        .await
+        .expect("error edge");
+
+    let outcome = engine
+        .send_message_inner(
+            Some(thread_id),
+            "Investigate authentication regression",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect("send message should succeed");
+
+    assert!(!outcome.interrupted_for_approval);
+
+    let recorded = recorded_bodies
+        .lock()
+        .expect("lock recorded assistant request log");
+    assert!(
+        recorded
+            .iter()
+            .any(|body| body.contains("## Semantic Memory Palace")),
+        "expected prompt to include semantic memory palace context"
+    );
+    assert!(
+        recorded.iter().any(|body| {
+            body.contains("src/tokens.rs") && body.contains("login failed due to token parsing")
+        }),
+        "expected prompt to surface related graph context from the memory palace"
     );
 }
 
@@ -572,6 +725,7 @@ async fn direct_weles_handoff_turn_uses_weles_persona_prompt() {
         .send_message_inner(
             Some(thread_id),
             "tell me your secrets",
+            None,
             None,
             None,
             None,
@@ -756,6 +910,7 @@ async fn direct_weles_handoff_turn_uses_weles_provider_override_for_new_request_
             None,
             None,
             None,
+            None,
             true,
         )
         .await
@@ -824,6 +979,7 @@ async fn new_targeted_weles_thread_uses_weles_runtime_provider_and_model() {
             None,
             None,
             "Review this change",
+            None,
             None,
             Some("weles"),
         )
@@ -950,6 +1106,7 @@ async fn new_targeted_rarog_thread_uses_concierge_runtime_provider_and_model() {
             None,
             "Triage this issue",
             None,
+            None,
             Some("rarog"),
         )
         .await
@@ -1075,6 +1232,7 @@ async fn new_targeted_rarog_thread_prefers_concierge_model_override_over_stored_
             None,
             "Triage this issue",
             None,
+            None,
             Some("rarog"),
         )
         .await
@@ -1189,6 +1347,7 @@ async fn successful_handoff_tool_call_restarts_same_turn_under_requested_agent()
         .send_message_inner(
             Some(thread_id),
             "gimme Rarog",
+            None,
             None,
             None,
             None,
@@ -1365,6 +1524,7 @@ async fn successful_handoff_restarts_same_turn_under_requested_agent_with_summar
         .send_message_inner(
             Some(thread_id),
             "give me Weles",
+            None,
             None,
             None,
             None,
@@ -1559,6 +1719,7 @@ async fn direct_rarog_handoff_turn_uses_real_concierge_runtime_config() {
             None,
             None,
             None,
+            None,
             true,
         )
         .await
@@ -1622,7 +1783,9 @@ async fn transport_incompatibility_does_not_mutate_persisted_config_and_emits_no
     let mut events = engine.subscribe();
 
     let _error = match engine
-        .send_message_inner(None, "hello", None, None, None, None, None, None, true)
+        .send_message_inner(
+            None, "hello", None, None, None, None, None, None, None, true,
+        )
         .await
     {
         Ok(_) => panic!("transport incompatibility should fail the turn"),
@@ -1789,6 +1952,7 @@ async fn auto_retry_wait_escalates_to_fresh_runner_after_repeated_waits() {
                     None,
                     None,
                     None,
+                    None,
                     true,
                 )
                 .await
@@ -1858,7 +2022,9 @@ async fn structured_upstream_diagnostics_are_not_persisted_or_streamed_to_user()
     let mut events = engine.subscribe();
 
     let error = match engine
-        .send_message_inner(None, "hello", None, None, None, None, None, None, true)
+        .send_message_inner(
+            None, "hello", None, None, None, None, None, None, None, true,
+        )
         .await
     {
         Ok(_) => panic!("structured upstream failure should fail the turn"),
@@ -1988,6 +2154,7 @@ async fn retry_stream_now_replaces_waiting_stream_with_fresh_send_generation() {
                     None,
                     None,
                     None,
+                    None,
                     true,
                 )
                 .await
@@ -2110,6 +2277,7 @@ async fn anthropic_transport_retry_restarts_with_fresh_runner_state() {
                     None,
                     None,
                     None,
+                    None,
                     true,
                 )
                 .await
@@ -2216,6 +2384,7 @@ async fn anthropic_outer_auto_retry_restarts_with_fresh_runner_state() {
                 .send_message_inner(
                     Some(thread_id),
                     "hello",
+                    None,
                     None,
                     None,
                     None,
@@ -2468,6 +2637,7 @@ async fn strong_match_recommends_skill_before_non_discovery_tool_without_blockin
             None,
             None,
             None,
+            None,
             true,
         )
         .await
@@ -2584,6 +2754,7 @@ async fn weak_match_allows_progress_without_skip_rationale() {
         .send_message_inner(
             Some(thread_id),
             "debug panic in rust service",
+            None,
             None,
             None,
             None,
@@ -2728,6 +2899,7 @@ async fn persisted_mesh_next_step_can_downgrade_legacy_strong_gate_to_advisory()
             None,
             None,
             None,
+            None,
             true,
         )
         .await
@@ -2852,6 +3024,7 @@ async fn persisted_mesh_requires_approval_blocks_non_discovery_tool() {
         .send_message_inner(
             Some(thread_id),
             "hi",
+            None,
             None,
             None,
             None,
@@ -3078,6 +3251,7 @@ async fn substantive_follow_up_does_not_downgrade_hydrated_mesh_approval_require
             None,
             None,
             None,
+            None,
             true,
         )
         .await
@@ -3261,6 +3435,7 @@ async fn substantive_follow_up_preserves_hydrated_advisory_mesh_next_step() {
             None,
             None,
             None,
+            None,
             true,
         )
         .await
@@ -3411,6 +3586,7 @@ async fn terse_follow_up_still_emits_hydrated_mesh_guidance_without_fresh_prefli
             None,
             None,
             None,
+            None,
             true,
         )
         .await
@@ -3530,6 +3706,7 @@ async fn approval_id_survives_substantive_follow_up_and_can_be_resolved() {
         .send_message_inner(
             Some(thread_id),
             "debug panic in parser",
+            None,
             None,
             None,
             None,
@@ -3734,6 +3911,7 @@ async fn local_strong_match_still_runs_when_background_community_scout_enabled()
             None,
             None,
             None,
+            None,
             true,
         )
         .await
@@ -3878,6 +4056,7 @@ async fn disabled_background_community_scout_does_not_search_registry() {
             None,
             None,
             None,
+            None,
             true,
         )
         .await
@@ -3949,6 +4128,7 @@ async fn send_message_does_not_wait_for_background_skill_discovery_completion() 
         engine.send_message_inner(
             None,
             "debug panic in rust service",
+            None,
             None,
             None,
             None,

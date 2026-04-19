@@ -6,7 +6,6 @@ fn render_features_tab<'a>(
 ) -> Vec<Line<'a>> {
     let mut lines = Vec::new();
     let raw = config.agent_config_raw.as_ref();
-
     // Section: Tier & Security
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
@@ -244,6 +243,111 @@ fn render_features_tab<'a>(
         "  [Enter: edit]",
         theme,
     );
+
+    // Section: Audio
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled("  Audio", theme.fg_active)));
+    lines.push(Line::from(Span::styled(
+        "  Speech-to-text and text-to-speech configuration",
+        theme.fg_dim,
+    )));
+    lines.push(Line::raw(""));
+
+    // Field 16: audio_stt_enabled (toggle)
+    render_feature_toggle_line(
+        &mut lines,
+        settings,
+        16,
+        "STT Enabled",
+        config.audio_stt_enabled(),
+        theme,
+    );
+
+    // Field 17: audio_stt_provider
+    let stt_provider = config.audio_stt_provider();
+    render_feature_field_line(
+        &mut lines,
+        settings,
+        17,
+        "STT Provider",
+        if stt_provider.is_empty() { "openai" } else { &stt_provider },
+        "  [Enter: edit]",
+        theme,
+    );
+
+    // Field 18: audio_stt_model
+    let stt_model = config.audio_stt_model();
+    render_feature_field_line(
+        &mut lines,
+        settings,
+        18,
+        "STT Model",
+        if stt_model.is_empty() { "whisper-1" } else { &stt_model },
+        "  [Enter: edit]",
+        theme,
+    );
+
+    // Field 19: audio_tts_enabled (toggle)
+    render_feature_toggle_line(
+        &mut lines,
+        settings,
+        19,
+        "TTS Enabled",
+        config.audio_tts_enabled(),
+        theme,
+    );
+
+    // Field 20: audio_tts_provider
+    let tts_provider = config.audio_tts_provider();
+    render_feature_field_line(
+        &mut lines,
+        settings,
+        20,
+        "TTS Provider",
+        if tts_provider.is_empty() { "openai" } else { &tts_provider },
+        "  [Enter: edit]",
+        theme,
+    );
+
+    // Field 21: audio_tts_model
+    let tts_model = config.audio_tts_model();
+    render_feature_field_line(
+        &mut lines,
+        settings,
+        21,
+        "TTS Model",
+        if tts_model.is_empty() {
+            "gpt-4o-mini-tts"
+        } else {
+            &tts_model
+        },
+        "  [Enter: edit]",
+        theme,
+    );
+
+    // Field 22: audio_tts_voice
+    let tts_voice = config.audio_tts_voice();
+    render_feature_field_line(
+        &mut lines,
+        settings,
+        22,
+        "TTS Voice",
+        if tts_voice.is_empty() { "alloy" } else { &tts_voice },
+        "  [Enter: edit]",
+        theme,
+    );
+
+    // Hotkey hint row (non-editable)
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled("  Hotkeys: ", theme.fg_dim),
+        Span::styled("Ctrl+L", theme.fg_active),
+        Span::styled(" (record) | ", theme.fg_dim),
+        Span::styled("Ctrl+P", theme.fg_active),
+        Span::styled(" (speak selected/latest) | ", theme.fg_dim),
+        Span::styled("Ctrl+S", theme.fg_active),
+        Span::styled(" (stop playback)", theme.fg_dim),
+    ]));
 
     lines
 }
