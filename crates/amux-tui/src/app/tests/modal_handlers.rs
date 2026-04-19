@@ -1968,6 +1968,71 @@ fn audio_model_picker_filters_fetched_models_to_audio_capable_entries() {
 }
 
 #[test]
+fn audio_model_picker_render_uses_same_filtered_models_as_selection() {
+    let (mut model, _daemon_rx) = make_model();
+    model.width = 120;
+    model.height = 40;
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "audio": {
+            "stt": {
+                "provider": PROVIDER_ID_OPENROUTER,
+                "model": "openai/gpt-audio-mini"
+            }
+        }
+    }));
+    model
+        .config
+        .reduce(config::ConfigAction::ModelsFetched(vec![
+            crate::state::config::FetchedModel {
+                id: "anthropic/claude-opus-4.6".to_string(),
+                name: Some("Anthropic: Claude Opus 4.6".to_string()),
+                context_window: Some(1_000_000),
+                pricing: Some(crate::state::config::FetchedModelPricing {
+                    prompt: Some("0.000015".to_string()),
+                    completion: Some("0.000075".to_string()),
+                    ..Default::default()
+                }),
+                metadata: Some(serde_json::json!({
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"]
+                    }
+                })),
+            },
+            crate::state::config::FetchedModel {
+                id: "xiaomi/mimo-v2-omni".to_string(),
+                name: Some("Xiaomi: MiMo-V2-Omni".to_string()),
+                context_window: Some(262_000),
+                pricing: Some(crate::state::config::FetchedModelPricing {
+                    audio: Some("0.000032".to_string()),
+                    ..Default::default()
+                }),
+                metadata: Some(serde_json::json!({
+                    "architecture": {
+                        "input_modalities": ["text", "audio"],
+                        "output_modalities": ["text"]
+                    }
+                })),
+            },
+        ]));
+    model.settings_picker_target = Some(SettingsPickerTarget::AudioSttModel);
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
+
+    let screen = render_screen(&mut model).join("\n");
+
+    assert!(
+        !screen.contains("Anthropic: Claude Opus 4.6"),
+        "audio picker should not render text-only fetched models"
+    );
+    assert!(
+        screen.contains("Xiaomi: MiMo-V2-Omni"),
+        "audio picker should render audio-capable fetched models"
+    );
+}
+
+#[test]
 fn protected_weles_editor_can_open_provider_model_and_effort_pickers() {
     let (mut model, _daemon_rx) = make_model();
     model.auth.entries = vec![crate::state::auth::ProviderAuthEntry {

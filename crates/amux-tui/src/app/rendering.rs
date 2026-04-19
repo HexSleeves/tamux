@@ -1181,14 +1181,14 @@ impl TuiModel {
                     );
                 }
                 modal::ModalKind::ModelPicker => {
-                    let (current_model, custom_model_name) = self.model_picker_current_selection();
-                    widgets::model_picker::render_for(
+                    let (current_model, _custom_model_name) = self.model_picker_current_selection();
+                    let models = self.available_model_picker_models();
+                    widgets::model_picker::render_with_models(
                         frame,
                         overlay_area,
                         &self.modal,
-                        &self.config,
+                        &models,
                         &current_model,
-                        custom_model_name.as_deref(),
                         &self.theme,
                     );
                 }

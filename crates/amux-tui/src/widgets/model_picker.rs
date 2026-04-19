@@ -56,6 +56,18 @@ pub fn render_for(
     custom_model_name: Option<&str>,
     theme: &ThemeTokens,
 ) {
+    let models = available_models_for(config, current_model, custom_model_name);
+    render_with_models(frame, area, modal, &models, current_model, theme);
+}
+
+pub fn render_with_models(
+    frame: &mut Frame,
+    area: Rect,
+    modal: &ModalState,
+    models: &[crate::state::config::FetchedModel],
+    current_model: &str,
+    theme: &ThemeTokens,
+) {
     let block = Block::default()
         .title(" MODEL ")
         .borders(Borders::ALL)
@@ -75,7 +87,6 @@ pub fn render_for(
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(inner);
 
-    let models = available_models_for(config, current_model, custom_model_name);
     let cursor = modal.picker_cursor();
     let active_model = current_model.trim();
 

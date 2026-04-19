@@ -48,7 +48,7 @@ pub const PROVIDER_DEFINITIONS: &[ProviderDefinition] = &[
         id: PROVIDER_ID_OPENAI,
         name: "OpenAI",
         default_base_url: "https://api.openai.com/v1",
-        default_model: "gpt-4o",
+        default_model: "gpt-5.4",
         api_type: ApiType::OpenAI,
         auth_method: AuthMethod::Bearer,
         models: OPENAI_MODELS,
