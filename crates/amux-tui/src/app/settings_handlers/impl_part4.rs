@@ -9,8 +9,13 @@ impl TuiModel {
                 if self.config.provider == PROVIDER_ID_CUSTOM {
                     self.begin_custom_model_edit();
                 } else {
-                    self.settings_picker_target = Some(SettingsPickerTarget::Model);
-                    self.execute_command("model");
+                    self.open_provider_backed_model_picker(
+                        SettingsPickerTarget::Model,
+                        self.config.provider.clone(),
+                        self.config.base_url.clone(),
+                        self.config.api_key.clone(),
+                        self.config.auth_source.clone(),
+                    );
                 }
             }
             "auth_source" => {
@@ -460,20 +465,19 @@ impl TuiModel {
                 self.execute_command("provider");
             }
             "concierge_model" => {
-                self.settings_picker_target = Some(SettingsPickerTarget::ConciergeModel);
                 let provider_id = self
                     .concierge
                     .provider
                     .clone()
                     .unwrap_or_else(|| self.config.provider.clone());
-                let models = providers::known_models_for_provider_auth(&provider_id, "api_key");
-                if !models.is_empty() {
-                    self.config
-                        .reduce(config::ConfigAction::ModelsFetched(models));
-                }
-                self.modal
-                    .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
-                self.sync_model_picker_item_count();
+                let (base_url, api_key, auth_source) = self.provider_auth_snapshot(&provider_id);
+                self.open_provider_backed_model_picker(
+                    SettingsPickerTarget::ConciergeModel,
+                    provider_id,
+                    base_url,
+                    api_key,
+                    auth_source,
+                );
             }
             "concierge_reasoning_effort" => {
                 self.settings_picker_target = Some(SettingsPickerTarget::ConciergeReasoningEffort);

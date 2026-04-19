@@ -125,6 +125,29 @@ impl TuiModel {
         self.sync_model_picker_item_count();
     }
 
+    pub(super) fn open_provider_backed_model_picker(
+        &mut self,
+        target: SettingsPickerTarget,
+        provider_id: String,
+        base_url: String,
+        api_key: String,
+        auth_source: String,
+    ) {
+        let models = providers::known_models_for_provider_auth(&provider_id, &auth_source);
+        self.config.reduce(config::ConfigAction::ModelsFetched(models));
+        if self.should_fetch_remote_models(&provider_id, &auth_source) {
+            self.send_daemon_command(DaemonCommand::FetchModels {
+                provider_id,
+                base_url,
+                api_key,
+            });
+        }
+        self.settings_picker_target = Some(target);
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
+        self.sync_model_picker_item_count();
+    }
+
     fn json_array_contains_audio(value: Option<&serde_json::Value>) -> bool {
         value
             .and_then(|value| value.as_array())
@@ -360,46 +383,25 @@ impl TuiModel {
 
     pub(super) fn open_compaction_weles_model_picker(&mut self) {
         let provider_id = self.config.compaction_weles_provider.clone();
-        let (_, api_key, auth_source) = self.provider_auth_snapshot(&provider_id);
-        let models = providers::known_models_for_provider_auth(&provider_id, &auth_source);
-        self.config
-            .reduce(config::ConfigAction::ModelsFetched(models));
-        if self.should_fetch_remote_models(&provider_id, &auth_source) {
-            let base_url = providers::find_by_id(&provider_id)
-                .map(|provider| provider.default_base_url.to_string())
-                .unwrap_or_default();
-            self.send_daemon_command(DaemonCommand::FetchModels {
-                provider_id,
-                base_url,
-                api_key,
-            });
-        }
-        self.settings_picker_target = Some(SettingsPickerTarget::CompactionWelesModel);
-        self.modal
-            .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
-        self.sync_model_picker_item_count();
+        let (base_url, api_key, auth_source) = self.provider_auth_snapshot(&provider_id);
+        self.open_provider_backed_model_picker(
+            SettingsPickerTarget::CompactionWelesModel,
+            provider_id,
+            base_url,
+            api_key,
+            auth_source,
+        );
     }
 
     pub(super) fn open_compaction_custom_model_picker(&mut self) {
         let provider_id = self.config.compaction_custom_provider.clone();
-        let models = providers::known_models_for_provider_auth(
-            &provider_id,
-            &self.config.compaction_custom_auth_source,
+        self.open_provider_backed_model_picker(
+            SettingsPickerTarget::CompactionCustomModel,
+            provider_id,
+            self.config.compaction_custom_base_url.clone(),
+            self.config.compaction_custom_api_key.clone(),
+            self.config.compaction_custom_auth_source.clone(),
         );
-        self.config
-            .reduce(config::ConfigAction::ModelsFetched(models));
-        if self.should_fetch_remote_models(&provider_id, &self.config.compaction_custom_auth_source)
-        {
-            self.send_daemon_command(DaemonCommand::FetchModels {
-                provider_id,
-                base_url: self.config.compaction_custom_base_url.clone(),
-                api_key: self.config.compaction_custom_api_key.clone(),
-            });
-        }
-        self.settings_picker_target = Some(SettingsPickerTarget::CompactionCustomModel);
-        self.modal
-            .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
-        self.sync_model_picker_item_count();
     }
 
     pub(super) fn model_picker_current_selection(&self) -> (String, Option<String>) {
@@ -895,10 +897,6 @@ impl TuiModel {
         self.auth
             .reduce(crate::state::auth::AuthAction::ConfirmLogin);
         self.status_line = format!("Saved credentials for {provider_name}");
-    }
-
-    fn subagent_known_models_for(&self, provider_id: &str) -> Vec<config::FetchedModel> {
-        providers::known_models_for_provider_auth(provider_id, "api_key")
     }
 
     fn open_subagent_editor_new(&mut self) {

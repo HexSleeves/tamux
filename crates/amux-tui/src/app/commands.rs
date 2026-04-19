@@ -860,25 +860,16 @@ impl TuiModel {
                 );
             }
             "model" => {
-                let models = providers::known_models_for_provider_auth(
-                    &self.config.provider,
-                    &self.config.auth_source,
+                let target = self
+                    .settings_picker_target
+                    .unwrap_or(SettingsPickerTarget::Model);
+                self.open_provider_backed_model_picker(
+                    target,
+                    self.config.provider.clone(),
+                    self.config.base_url.clone(),
+                    self.config.api_key.clone(),
+                    self.config.auth_source.clone(),
                 );
-                if !models.is_empty() {
-                    self.config
-                        .reduce(config::ConfigAction::ModelsFetched(models));
-                }
-                if self.should_fetch_remote_models(&self.config.provider, &self.config.auth_source)
-                {
-                    self.send_daemon_command(DaemonCommand::FetchModels {
-                        provider_id: self.config.provider.clone(),
-                        base_url: self.config.base_url.clone(),
-                        api_key: self.config.api_key.clone(),
-                    });
-                }
-                self.modal
-                    .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
-                self.sync_model_picker_item_count();
             }
             "tools" => {
                 self.open_settings_tab(SettingsTab::Tools);

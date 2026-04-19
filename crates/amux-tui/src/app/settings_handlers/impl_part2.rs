@@ -187,13 +187,15 @@ impl TuiModel {
         let Some(editor) = self.subagents.editor.as_ref() else {
             return;
         };
-        let models = self.subagent_known_models_for(&editor.provider);
-        self.config
-            .reduce(config::ConfigAction::ModelsFetched(models.clone()));
-        self.settings_picker_target = Some(SettingsPickerTarget::SubAgentModel);
-        self.modal
-            .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
-        self.sync_model_picker_item_count();
+        let provider_id = editor.provider.clone();
+        let (base_url, api_key, auth_source) = self.provider_auth_snapshot(&provider_id);
+        self.open_provider_backed_model_picker(
+            SettingsPickerTarget::SubAgentModel,
+            provider_id,
+            base_url,
+            api_key,
+            auth_source,
+        );
     }
 
     fn open_subagent_role_picker(&mut self) {

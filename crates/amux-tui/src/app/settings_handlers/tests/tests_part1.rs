@@ -1,6 +1,6 @@
 use amux_shared::providers::{
-    PROVIDER_ID_ANTHROPIC, PROVIDER_ID_CUSTOM, PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_GROQ,
-    PROVIDER_ID_OPENAI, PROVIDER_ID_OPENROUTER, PROVIDER_ID_XAI,
+    PROVIDER_ID_ANTHROPIC, PROVIDER_ID_CHUTES, PROVIDER_ID_CUSTOM, PROVIDER_ID_GITHUB_COPILOT,
+    PROVIDER_ID_GROQ, PROVIDER_ID_OPENAI, PROVIDER_ID_OPENROUTER, PROVIDER_ID_XAI,
 };
 
 #[test]
@@ -431,6 +431,55 @@ fn activating_audio_tts_model_fetches_remote_models_for_audio_provider() {
             assert_eq!(api_key, "openai-key");
         }
         other => panic!("expected FetchModels for audio TTS picker, got {other:?}"),
+    }
+}
+
+#[test]
+fn activating_subagent_model_fetches_remote_models_for_fetchable_provider() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "providers": {
+            PROVIDER_ID_CHUTES: {
+                "base_url": "https://llm.chutes.ai/v1",
+                "api_key": "chutes-key",
+                "auth_source": "api_key"
+            }
+        }
+    }));
+    let mut editor = crate::state::subagents::SubAgentEditorState::new(
+        Some("worker".to_string()),
+        1,
+        PROVIDER_ID_CHUTES.to_string(),
+        "deepseek-ai/DeepSeek-R1".to_string(),
+    );
+    editor.field = crate::state::subagents::SubAgentEditorField::Model;
+    model.subagents.editor = Some(editor);
+    model
+        .settings
+        .reduce(SettingsAction::SwitchTab(SettingsTab::SubAgents));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::Settings));
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::Settings,
+    );
+
+    assert!(!quit);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::FetchModels {
+            provider_id,
+            base_url,
+            api_key,
+        }) => {
+            assert_eq!(provider_id, PROVIDER_ID_CHUTES);
+            assert_eq!(base_url, "https://llm.chutes.ai/v1");
+            assert_eq!(api_key, "chutes-key");
+        }
+        other => panic!("expected FetchModels for sub-agent model picker, got {other:?}"),
     }
 }
 
@@ -1463,6 +1512,16 @@ fn concierge_settings_fields_dispatch_expected_actions() {
     model.close_top_modal();
 
     focus_settings_field(&mut model, SettingsTab::Concierge, "concierge_model");
+    model.concierge.provider = Some(PROVIDER_ID_CHUTES.to_string());
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "providers": {
+            PROVIDER_ID_CHUTES: {
+                "base_url": "https://llm.chutes.ai/v1",
+                "api_key": "chutes-key",
+                "auth_source": "api_key"
+            }
+        }
+    }));
     let quit = model.handle_key_modal(
         KeyCode::Enter,
         KeyModifiers::NONE,
@@ -1470,6 +1529,18 @@ fn concierge_settings_fields_dispatch_expected_actions() {
     );
     assert!(!quit);
     assert_eq!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::FetchModels {
+            provider_id,
+            base_url,
+            api_key,
+        }) => {
+            assert_eq!(provider_id, PROVIDER_ID_CHUTES);
+            assert_eq!(base_url, "https://llm.chutes.ai/v1");
+            assert_eq!(api_key, "chutes-key");
+        }
+        other => panic!("expected concierge model fetch command, got {other:?}"),
+    }
     model.close_top_modal();
 
     focus_settings_field(

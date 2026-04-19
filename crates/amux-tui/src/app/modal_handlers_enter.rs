@@ -239,29 +239,13 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                         if model.config.provider == PROVIDER_ID_CUSTOM {
                             model.settings_navigate_to(3);
                         } else {
-                            let models = providers::known_models_for_provider_auth(
-                                &model.config.provider,
-                                &model.config.auth_source,
+                            model.open_provider_backed_model_picker(
+                                SettingsPickerTarget::Model,
+                                model.config.provider.clone(),
+                                model.config.base_url.clone(),
+                                model.config.api_key.clone(),
+                                model.config.auth_source.clone(),
                             );
-                            if !models.is_empty() {
-                                model
-                                    .config
-                                    .reduce(config::ConfigAction::ModelsFetched(models));
-                            }
-                            if model.should_fetch_remote_models(
-                                &model.config.provider,
-                                &model.config.auth_source,
-                            ) {
-                                model.send_daemon_command(DaemonCommand::FetchModels {
-                                    provider_id: model.config.provider.clone(),
-                                    base_url: model.config.base_url.clone(),
-                                    api_key: model.config.api_key.clone(),
-                                });
-                            }
-                            model
-                                .modal
-                                .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
-                            model.sync_model_picker_item_count();
                         }
                         return;
                     }
@@ -317,22 +301,13 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                             model.settings_picker_target = None;
                             return;
                         }
-                        if model.should_fetch_remote_models(
-                            &model.config.provider,
-                            &model.config.auth_source,
-                        ) {
-                            model.send_daemon_command(DaemonCommand::FetchModels {
-                                provider_id: model.config.provider.clone(),
-                                base_url: model.config.base_url.clone(),
-                                api_key: model.config.api_key.clone(),
-                            });
-                        }
-                        model.settings_picker_target =
-                            Some(SettingsPickerTarget::BuiltinPersonaModel);
-                        model
-                            .modal
-                            .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
-                        model.sync_model_picker_item_count();
+                        model.open_provider_backed_model_picker(
+                            SettingsPickerTarget::BuiltinPersonaModel,
+                            model.config.provider.clone(),
+                            model.config.base_url.clone(),
+                            model.config.api_key.clone(),
+                            model.config.auth_source.clone(),
+                        );
                         if let Some(setup) = model.pending_builtin_persona_setup.as_ref() {
                             model.status_line =
                                 format!("Configure {} model", setup.target_agent_name);
