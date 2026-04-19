@@ -182,14 +182,32 @@ pub async fn fetch_models(
 
     let client = reqwest::Client::new();
     let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let send_request = |include_auth: bool| {
+        let mut req = client.get(&url).header("Content-Type", "application/json");
+        if include_auth && !api_key.is_empty() {
+            req = def.auth_method.apply(req, api_key);
+        }
+        req
+    };
 
-    let mut req = client.get(&url).header("Content-Type", "application/json");
+    let mut response = send_request(true).send().await?;
 
-    if !api_key.is_empty() {
-        req = def.auth_method.apply(req, api_key);
+    // Chutes exposes a public model catalog. If the saved bearer token is stale,
+    // retry without auth so the picker can still populate from `/models`.
+    if provider_id == amux_shared::providers::PROVIDER_ID_CHUTES
+        && !api_key.is_empty()
+        && matches!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        )
+    {
+        tracing::info!(
+            provider_id,
+            status = %response.status(),
+            "retrying model catalog fetch without auth after auth failure"
+        );
+        response = send_request(false).send().await?;
     }
-
-    let response = req.send().await?;
 
     if !response.status().is_success() {
         let status = response.status();

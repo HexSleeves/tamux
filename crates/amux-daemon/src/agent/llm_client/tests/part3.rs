@@ -446,6 +446,80 @@
     }
 
     #[tokio::test]
+    async fn chutes_model_fetch_retries_without_auth_after_invalid_token() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind chutes model fetch listener");
+        let addr = listener.local_addr().expect("chutes model fetch listener addr");
+
+        let server = tokio::spawn(async move {
+            for attempt in 0..2 {
+                let (mut stream, _) = listener.accept().await.expect("accept model fetch request");
+                let mut buf = [0_u8; 4096];
+                let size = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    tokio::io::AsyncReadExt::read(&mut stream, &mut buf),
+                )
+                .await
+                .expect("read model fetch request timed out")
+                .expect("read model fetch request");
+                let request = String::from_utf8_lossy(&buf[..size]).to_string();
+                let has_auth = request
+                    .lines()
+                    .any(|line| line.eq_ignore_ascii_case("authorization: Bearer bad-key"));
+
+                let (status, body) = if attempt == 0 {
+                    assert!(has_auth, "first request should include bearer auth");
+                    ("401 Unauthorized", r#"{"detail":"Invalid token."}"#.to_string())
+                } else {
+                    assert!(
+                        !has_auth,
+                        "retry request should omit bearer auth for chutes catalog"
+                    );
+                    (
+                        "200 OK",
+                        serde_json::json!({
+                            "data": [
+                                {
+                                    "id": "Qwen/Qwen3-32B-TEE",
+                                    "context_length": 40960
+                                },
+                                {
+                                    "id": "deepseek-ai/DeepSeek-R1",
+                                    "context_length": 131072
+                                }
+                            ]
+                        })
+                        .to_string(),
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes())
+                    .await
+                    .expect("write model fetch response");
+            }
+        });
+
+        let models = fetch_models(
+            amux_shared::providers::PROVIDER_ID_CHUTES,
+            &format!("http://{addr}"),
+            "bad-key",
+        )
+        .await
+        .expect("chutes fetch should fall back to unauthenticated catalog");
+
+        server.await.expect("model fetch server task");
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "Qwen/Qwen3-32B-TEE");
+        assert_eq!(models[1].id, "deepseek-ai/DeepSeek-R1");
+    }
+
+    #[tokio::test]
     async fn azure_openai_validation_uses_models_endpoint() {
         let request_paths = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
