@@ -30,6 +30,12 @@ enum AudioToolRoute {
     XaiTts,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageGenerationRoute {
+    OpenAiCompatibleDirect,
+    OpenRouterChatCompletions,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum OrderedMultipartField {
     Text { name: String, value: String },
@@ -157,6 +163,155 @@ fn file_extension_for_generated_mime(mime_type: &str, fallback: &str) -> String 
         _ => fallback,
     }
     .to_string()
+}
+
+fn image_generation_route(provider_id: &str) -> ImageGenerationRoute {
+    if provider_id == amux_shared::providers::PROVIDER_ID_OPENROUTER {
+        ImageGenerationRoute::OpenRouterChatCompletions
+    } else {
+        ImageGenerationRoute::OpenAiCompatibleDirect
+    }
+}
+
+fn openrouter_image_generation_modalities(model: &str) -> &'static [&'static str] {
+    let normalized = model.trim().to_ascii_lowercase();
+    let image_only = [
+        "flux",
+        "sourceful",
+        "recraft",
+        "stable-diffusion",
+        "sdxl",
+        "imagen",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle));
+
+    if image_only {
+        &["image"]
+    } else {
+        &["image", "text"]
+    }
+}
+
+fn openrouter_image_aspect_ratio(size: &str) -> Option<&'static str> {
+    match size.trim() {
+        "1024x1024" | "512x512" | "2048x2048" | "4096x4096" => Some("1:1"),
+        "832x1248" => Some("2:3"),
+        "1248x832" => Some("3:2"),
+        "864x1184" => Some("3:4"),
+        "1184x864" => Some("4:3"),
+        "896x1152" => Some("4:5"),
+        "1152x896" => Some("5:4"),
+        "768x1344" => Some("9:16"),
+        "1344x768" => Some("16:9"),
+        "1536x672" => Some("21:9"),
+        _ => None,
+    }
+}
+
+fn openrouter_image_size_bucket(size: &str) -> Option<&'static str> {
+    let (width, height) = size.trim().split_once('x')?;
+    let width: u32 = width.parse().ok()?;
+    let height: u32 = height.parse().ok()?;
+    let max_dimension = width.max(height);
+    if max_dimension <= 512 {
+        Some("0.5K")
+    } else if max_dimension <= 1536 {
+        Some("1K")
+    } else if max_dimension <= 3072 {
+        Some("2K")
+    } else {
+        Some("4K")
+    }
+}
+
+fn build_openrouter_image_generation_body(
+    args: &serde_json::Value,
+    provider_config: &crate::agent::types::ProviderConfig,
+    prompt: &str,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "model": provider_config.model,
+        "messages": [{
+            "role": "user",
+            "content": prompt,
+        }],
+        "modalities": openrouter_image_generation_modalities(&provider_config.model),
+        "stream": false,
+    });
+
+    let mut image_config = serde_json::Map::new();
+    if let Some(size) = args
+        .get("size")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(aspect_ratio) = openrouter_image_aspect_ratio(size) {
+            image_config.insert(
+                "aspect_ratio".to_string(),
+                serde_json::Value::String(aspect_ratio.to_string()),
+            );
+        }
+        if let Some(image_size) = openrouter_image_size_bucket(size) {
+            image_config.insert(
+                "image_size".to_string(),
+                serde_json::Value::String(image_size.to_string()),
+            );
+        }
+    }
+
+    if !image_config.is_empty() {
+        body["image_config"] = serde_json::Value::Object(image_config);
+    }
+
+    body
+}
+
+fn extract_openrouter_generated_image(payload: &serde_json::Value) -> Result<String> {
+    let first = payload
+        .get("choices")
+        .and_then(|value| value.as_array())
+        .and_then(|items| items.first())
+        .and_then(|value| value.get("message"))
+        .and_then(|value| value.get("images"))
+        .and_then(|value| value.as_array())
+        .and_then(|items| items.first())
+        .ok_or_else(|| anyhow::anyhow!("image generation returned no image payload"))?;
+
+    let image_value = first
+        .get("image_url")
+        .or_else(|| first.get("imageUrl"))
+        .ok_or_else(|| anyhow::anyhow!("image generation returned no image URL"))?;
+
+    image_value
+        .get("url")
+        .and_then(|value| value.as_str())
+        .or_else(|| image_value.as_str())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("image generation returned no image URL"))
+}
+
+fn generated_image_response_from_data_url(
+    provider_id: &str,
+    provider_config: &crate::agent::types::ProviderConfig,
+    data_url: &str,
+) -> Result<String> {
+    let (mime_type, base64_data) = parse_data_url(data_url)?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_data)
+        .map_err(|error| anyhow::anyhow!("invalid image base64 payload: {error}"))?;
+    let extension = file_extension_for_generated_mime(&mime_type, DEFAULT_IMAGE_OUTPUT_FORMAT);
+    let output_path = temp_output_path("image", &extension);
+    std::fs::write(&output_path, &bytes)?;
+    serde_json::to_string_pretty(&serde_json::json!({
+        "provider": provider_id,
+        "model": provider_config.model,
+        "path": output_path,
+        "mime_type": mime_type,
+        "bytes": bytes.len(),
+    }))
+    .map_err(Into::into)
 }
 
 fn data_url_from_base64(mime_type: &str, base64_data: &str) -> String {
@@ -1284,6 +1439,38 @@ async fn execute_generate_image(
         .ok_or_else(|| anyhow::anyhow!("missing 'prompt' argument"))?;
     let (provider_id, provider_config) =
         resolve_media_provider_config(agent, args, Some(MediaEndpoint::ImageGeneration)).await?;
+    let route = image_generation_route(&provider_id);
+
+    if route == ImageGenerationRoute::OpenRouterChatCompletions {
+        let url = openai_like_endpoint(&provider_config.base_url, "chat/completions");
+        let body = build_openrouter_image_generation_body(args, &provider_config, prompt);
+        let request =
+            apply_media_auth_headers(http_client.post(&url), &provider_id, &provider_config)?;
+        let response = request.json(&body).send().await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!("image generation failed: HTTP {status} {text}");
+        }
+
+        let payload: serde_json::Value = response.json().await?;
+        let image_url = extract_openrouter_generated_image(&payload)?;
+        if image_url.starts_with("data:") {
+            return generated_image_response_from_data_url(
+                &provider_id,
+                &provider_config,
+                &image_url,
+            );
+        }
+
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "provider": provider_id,
+            "model": provider_config.model,
+            "url": image_url,
+        }))
+        .map_err(Into::into);
+    }
+
     ensure_openai_like_media_endpoint(&provider_id, &provider_config)?;
 
     let output_format = args
@@ -2089,5 +2276,101 @@ mod media_tools_tests {
             .expect("work context should be recorded");
         assert_eq!(context.entries.len(), 1);
         assert_eq!(context.entries[0].source, "generate_image");
+    }
+
+    #[test]
+    fn image_generation_route_prefers_openrouter_chat_completions() {
+        assert_eq!(
+            image_generation_route(amux_shared::providers::PROVIDER_ID_OPENROUTER),
+            ImageGenerationRoute::OpenRouterChatCompletions
+        );
+        assert_eq!(
+            image_generation_route(amux_shared::providers::PROVIDER_ID_OPENAI),
+            ImageGenerationRoute::OpenAiCompatibleDirect
+        );
+    }
+
+    #[test]
+    fn build_openrouter_image_generation_body_maps_size_into_image_config() {
+        let provider_config = crate::agent::types::ProviderConfig {
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            model: "google/gemini-3-pro-image-preview".to_string(),
+            api_key: "sk-openrouter".to_string(),
+            assistant_id: String::new(),
+            auth_source: crate::agent::types::AuthSource::ApiKey,
+            api_transport: crate::agent::types::ApiTransport::Responses,
+            reasoning_effort: "medium".to_string(),
+            context_window_tokens: 128_000,
+            response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
+        };
+
+        let body = build_openrouter_image_generation_body(
+            &serde_json::json!({
+                "prompt": "forge a mythic icon",
+                "size": "1024x1024",
+                "quality": "high",
+                "output_format": "png"
+            }),
+            &provider_config,
+            "forge a mythic icon",
+        );
+
+        assert_eq!(
+            body.get("model").and_then(|value| value.as_str()),
+            Some("google/gemini-3-pro-image-preview")
+        );
+        assert_eq!(
+            body.get("modalities").and_then(|value| value.as_array()).map(|items| items.len()),
+            Some(2)
+        );
+        assert_eq!(
+            body.pointer("/image_config/aspect_ratio")
+                .and_then(|value| value.as_str()),
+            Some("1:1")
+        );
+        assert_eq!(
+            body.pointer("/image_config/image_size")
+                .and_then(|value| value.as_str()),
+            Some("1K")
+        );
+        assert_eq!(
+            body.get("messages")
+                .and_then(|value| value.as_array())
+                .and_then(|items| items.first())
+                .and_then(|value| value.get("content"))
+                .and_then(|value| value.as_str()),
+            Some("forge a mythic icon")
+        );
+    }
+
+    #[test]
+    fn extract_openrouter_image_output_accepts_snake_case_image_urls() {
+        let payload = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "images": [{
+                        "image_url": {
+                            "url": "data:image/png;base64,aGVsbG8="
+                        }
+                    }]
+                }
+            }]
+        });
+
+        let extracted =
+            extract_openrouter_generated_image(&payload).expect("image should be extracted");
+        assert_eq!(extracted, "data:image/png;base64,aGVsbG8=");
     }
 }

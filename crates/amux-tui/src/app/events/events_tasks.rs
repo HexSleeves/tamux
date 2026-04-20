@@ -323,6 +323,9 @@ impl TuiModel {
                     .remove(active_thread_id)
                     .map(|activity| (active_thread_id.to_string(), activity))
             });
+        let migrated_bootstrap_activity = pending_local_activity
+            .as_ref()
+            .is_some_and(|(_, activity)| activity == "thinking");
         if Self::is_hidden_agent_thread(&thread_id, Some(title.as_str())) {
             return;
         }
@@ -359,6 +362,9 @@ impl TuiModel {
                 .entry(thread_id.clone())
                 .or_insert(activity);
         }
+        if migrated_bootstrap_activity {
+            self.mark_bootstrap_pending_activity_thread(thread_id.clone());
+        }
         self.sync_open_thread_picker();
         self.sync_pending_approvals_from_tasks();
     }
@@ -375,7 +381,9 @@ impl TuiModel {
         // Reload is the authoritative replacement for any live stream state that was
         // truncated or otherwise downgraded before reaching the TUI.
         self.chat.reduce(chat::ChatAction::ResetStreaming);
-        self.clear_agent_activity_for(Some(thread_id.as_str()));
+        if !self.should_preserve_bootstrap_activity_on_reload(thread_id.as_str()) {
+            self.clear_agent_activity_for(Some(thread_id.as_str()));
+        }
         self.clear_pending_stop();
         self.request_authoritative_thread_refresh(thread_id.clone(), true);
         self.send_daemon_command(DaemonCommand::RequestThreadTodos(thread_id.clone()));

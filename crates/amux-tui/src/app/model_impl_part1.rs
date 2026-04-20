@@ -34,6 +34,7 @@ impl TuiModel {
             tick_counter: 0,
             agent_activity: None,
             thread_agent_activity: std::collections::HashMap::new(),
+            bootstrap_pending_activity_threads: std::collections::HashSet::new(),
             participant_playground_activity: std::collections::HashMap::new(),
             last_error: None,
             error_active: false,
@@ -901,6 +902,20 @@ impl TuiModel {
 
     fn set_active_thread_activity(&mut self, activity: impl Into<String>) {
         self.set_agent_activity_for(self.chat.active_thread_id().map(str::to_string), activity);
+    }
+
+    fn mark_bootstrap_pending_activity_thread(&mut self, thread_id: impl Into<String>) {
+        self.bootstrap_pending_activity_threads.insert(thread_id.into());
+    }
+
+    fn clear_bootstrap_pending_activity_thread(&mut self, thread_id: &str) {
+        self.bootstrap_pending_activity_threads.remove(thread_id);
+    }
+
+    fn should_preserve_bootstrap_activity_on_reload(&self, thread_id: &str) -> bool {
+        self.bootstrap_pending_activity_threads.contains(thread_id)
+            && self.thread_agent_activity.get(thread_id).map(String::as_str) == Some("thinking")
+            && !self.chat.is_streaming()
     }
 
     fn clear_agent_activity_for(&mut self, thread_id: Option<&str>) {

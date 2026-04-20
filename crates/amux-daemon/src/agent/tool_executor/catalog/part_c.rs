@@ -154,17 +154,8 @@ fn add_available_tools_part_c(
         None,
         false,
     );
-    let image_generation_enabled = configured_image_generation_model(config)
-        .map(|model| {
-            amux_shared::providers::derive_model_feature_capabilities(
-                configured_image_generation_provider(config).unwrap_or(&config.provider),
-                model,
-                None,
-                false,
-            )
-            .image_generation
-        })
-        .unwrap_or(active_model_features.image_generation);
+    let image_generation_enabled =
+        configured_image_generation_model(config).is_some() || active_model_features.image_generation;
     let active_model_supports_image = crate::agent::types::model_supports(
         &config.provider,
         &config.model,
@@ -186,8 +177,8 @@ fn add_available_tools_part_c(
                     "data_url": { "type": "string", "description": "Base64 data URL for the image" },
                     "mime_type": { "type": "string", "description": "Override MIME type when using `path` or `base64`" },
                     "prompt": { "type": "string", "description": "Optional analysis instruction. Defaults to a general detailed analysis." },
-                    "provider": { "type": "string", "description": "Optional provider override" },
-                    "model": { "type": "string", "description": "Optional model override" },
+                    "provider": { "type": "string", "description": "Optional provider override, only when the operator explicitly specifies it" },
+                    "model": { "type": "string", "description": "Optional model override, only when the operator explicitly specifies it" },
                     "include_reasoning": { "type": "boolean", "description": "Include model reasoning summary when available" },
                     "include_provider_result": { "type": "boolean", "description": "Append the raw structured provider final result when available" }
                 }
@@ -204,8 +195,8 @@ fn add_available_tools_part_c(
                 "type": "object",
                 "properties": {
                     "prompt": { "type": "string", "description": "Image generation prompt" },
-                    "provider": { "type": "string", "description": "Optional provider override" },
-                    "model": { "type": "string", "description": "Optional model override" },
+                    "provider": { "type": "string", "description": "Optional provider override, only when the operator explicitly specifies it" },
+                    "model": { "type": "string", "description": "Optional model override, only when the operator explicitly specifies it" },
                     "size": { "type": "string", "description": "Optional output size such as 1024x1024" },
                     "quality": { "type": "string", "description": "Optional quality hint supported by the provider" },
                     "style": { "type": "string", "description": "Optional style hint supported by the provider" },
@@ -225,8 +216,8 @@ fn add_available_tools_part_c(
             "properties": {
                 "path": { "type": "string", "description": "Local audio file path to transcribe" },
                 "mime_type": { "type": "string", "description": "Optional MIME type override for the uploaded audio file" },
-                "provider": { "type": "string", "description": "Optional provider override" },
-                "model": { "type": "string", "description": "Optional model override" },
+                "provider": { "type": "string", "description": "Optional provider override, only when the operator explicitly specifies it" },
+                "model": { "type": "string", "description": "Optional model override, only when the operator explicitly specifies it" },
                 "language": { "type": "string", "description": "Optional language hint for the transcription model" },
                 "prompt": { "type": "string", "description": "Optional transcription prompt or vocabulary hint" },
                 "response_format": { "type": "string", "description": "Optional transcription response format such as json, verbose_json, srt, or text" }
@@ -242,8 +233,8 @@ fn add_available_tools_part_c(
             "type": "object",
             "properties": {
                 "input": { "type": "string", "description": "Text to synthesize into speech" },
-                "provider": { "type": "string", "description": "Optional provider override" },
-                "model": { "type": "string", "description": "Optional model override" },
+                "provider": { "type": "string", "description": "Optional provider override, only when the operator explicitly specifies it" },
+                "model": { "type": "string", "description": "Optional model override, only when the operator explicitly specifies it" },
                 "voice": { "type": "string", "description": "Voice identifier supported by the provider" },
                 "response_format": { "type": "string", "description": "Desired output format such as mp3, wav, ogg, flac, or m4a" }
             },

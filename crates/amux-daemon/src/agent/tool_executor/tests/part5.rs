@@ -481,7 +481,7 @@
             serde_json::json!({
                 "generation": {
                     "provider": amux_shared::providers::PROVIDER_ID_OPENROUTER,
-                    "model": "openai/gpt-image-1"
+                    "model": "google/gemini-3-pro-image-preview"
                 }
             }),
         );

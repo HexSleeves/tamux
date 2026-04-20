@@ -278,6 +278,7 @@ impl TuiModel {
         {
             return;
         }
+        self.clear_bootstrap_pending_activity_thread(thread_id.as_str());
         self.set_agent_activity_for(Some(thread_id.clone()), "writing");
         if self.should_surface_thread_activity(&thread_id) {
             self.anticipatory
@@ -296,6 +297,7 @@ impl TuiModel {
         {
             return;
         }
+        self.clear_bootstrap_pending_activity_thread(thread_id.as_str());
         self.set_agent_activity_for(Some(thread_id.clone()), "reasoning");
         if self.should_surface_thread_activity(&thread_id) {
             self.anticipatory
@@ -324,6 +326,7 @@ impl TuiModel {
         {
             return;
         }
+        self.clear_bootstrap_pending_activity_thread(thread_id.as_str());
         self.set_agent_activity_for(Some(thread_id.clone()), format!("⚙  {}", name));
         if self.should_surface_thread_activity(&thread_id) {
             self.anticipatory
@@ -359,8 +362,14 @@ impl TuiModel {
         {
             return;
         }
-        self.set_agent_activity_for(Some(thread_id.clone()), format!("⚙  {} ✓", name));
-        if self.should_surface_thread_activity(&thread_id) {
+        let tool_call_still_active = self
+            .chat
+            .thread_has_active_tool_call(thread_id.as_str(), call_id.as_str());
+        if tool_call_still_active {
+            self.clear_bootstrap_pending_activity_thread(thread_id.as_str());
+            self.set_agent_activity_for(Some(thread_id.clone()), format!("⚙  {} ✓", name));
+        }
+        if tool_call_still_active && self.should_surface_thread_activity(&thread_id) {
             self.anticipatory
                 .reduce(crate::state::AnticipatoryAction::Clear);
         }
@@ -408,6 +417,7 @@ impl TuiModel {
         {
             return;
         }
+        self.clear_bootstrap_pending_activity_thread(thread_id.as_str());
         self.clear_agent_activity_for(Some(thread_id.as_str()));
         if self.should_surface_thread_activity(&thread_id) {
             self.pending_stop = false;
@@ -731,6 +741,7 @@ impl TuiModel {
         if busy {
             self.chat.reduce(chat::ChatAction::ForceStopStreaming);
         }
+        self.bootstrap_pending_activity_threads.clear();
         self.clear_active_thread_activity();
         self.clear_pending_stop();
         self.concierge
@@ -799,6 +810,7 @@ impl TuiModel {
         failure_class: String,
         message: String,
     ) {
+        self.clear_bootstrap_pending_activity_thread(thread_id.as_str());
         if phase == "cleared" {
             self.reduce_chat_for_thread(
                 Some(thread_id.as_str()),

@@ -299,6 +299,61 @@ fn image_generation_result_refreshes_thread_and_work_context() {
     );
 }
 
+#[test]
+fn late_tool_result_after_done_does_not_restore_footer_activity() {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    model.handle_client_event(ClientEvent::ToolCall {
+        thread_id: "thread-1".to_string(),
+        call_id: "call-1".to_string(),
+        name: "generate_image".to_string(),
+        arguments: "{\"prompt\":\"test\"}".to_string(),
+        weles_review: None,
+    });
+    assert_eq!(
+        model.footer_activity_text().as_deref(),
+        Some("⚙  generate_image")
+    );
+
+    model.handle_client_event(ClientEvent::Done {
+        thread_id: "thread-1".to_string(),
+        input_tokens: 0,
+        output_tokens: 0,
+        cost: None,
+        provider: None,
+        model: None,
+        tps: None,
+        generation_ms: None,
+        reasoning: None,
+        provider_final_result_json: None,
+    });
+    assert!(
+        model.footer_activity_text().is_none(),
+        "done should clear the footer activity for the completed turn"
+    );
+
+    model.handle_client_event(ClientEvent::ToolResult {
+        thread_id: "thread-1".to_string(),
+        call_id: "call-1".to_string(),
+        name: "generate_image".to_string(),
+        content: "{\"path\":\"/tmp/image.png\"}".to_string(),
+        is_error: false,
+        weles_review: None,
+    });
+
+    assert!(
+        model.footer_activity_text().is_none(),
+        "late tool results after done must not restore the footer activity badge"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn text_to_speech_tool_result_autoplays_audio_in_chat_threads() {
@@ -4254,6 +4309,77 @@ fn new_subagent_conversation_keeps_thinking_after_thread_created_until_first_res
         content: "done".to_string(),
     });
     assert_eq!(model.footer_activity_text().as_deref(), Some("writing"));
+}
+
+#[test]
+fn new_subagent_conversation_keeps_thinking_across_reload_before_first_response() {
+    let (mut model, _daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+    model.subagents.entries.push(crate::state::SubAgentEntry {
+        id: "domowoj".to_string(),
+        name: "Domowoj".to_string(),
+        provider: "openai".to_string(),
+        model: "gpt-5.4-mini".to_string(),
+        role: Some("testing".to_string()),
+        enabled: true,
+        builtin: false,
+        immutable_identity: false,
+        disable_allowed: true,
+        delete_allowed: true,
+        protected_reason: None,
+        reasoning_effort: Some("medium".to_string()),
+        raw_json: None,
+    });
+
+    model.start_new_thread_view_for_agent(Some("domowoj"));
+    model.submit_prompt("inspect this".to_string());
+    assert_eq!(model.footer_activity_text().as_deref(), Some("thinking"));
+
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-domowoj".to_string(),
+        title: "inspect this".to_string(),
+        agent_name: Some("Domowoj".to_string()),
+    });
+    model.handle_client_event(ClientEvent::ThreadReloadRequired {
+        thread_id: "thread-domowoj".to_string(),
+    });
+
+    assert_eq!(
+        model.footer_activity_text().as_deref(),
+        Some("thinking"),
+        "reload before first response should not clear pending thinking state"
+    );
+}
+
+#[test]
+fn new_thread_generic_workflow_notice_does_not_break_thinking_preservation() {
+    let (mut model, _daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+
+    model.start_new_thread_view();
+    model.submit_prompt("do you have generate image now?".to_string());
+    assert_eq!(model.footer_activity_text().as_deref(), Some("thinking"));
+
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-main".to_string(),
+        title: "do you have generate image now?".to_string(),
+        agent_name: None,
+    });
+    model.handle_client_event(ClientEvent::WorkflowNotice {
+        thread_id: Some("thread-main".to_string()),
+        kind: "transport-fallback".to_string(),
+        message: "provider switched transport".to_string(),
+        details: Some(r#"{"to":"responses"}"#.to_string()),
+    });
+    model.handle_client_event(ClientEvent::ThreadReloadRequired {
+        thread_id: "thread-main".to_string(),
+    });
+
+    assert_eq!(
+        model.footer_activity_text().as_deref(),
+        Some("thinking"),
+        "non-activity workflow notices should not let reload clear thinking before output"
+    );
 }
 
 #[test]

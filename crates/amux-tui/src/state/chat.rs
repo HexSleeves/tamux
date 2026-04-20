@@ -880,6 +880,15 @@ impl ChatState {
             .unwrap_or(&[])
     }
 
+    pub fn thread_has_active_tool_call(&self, thread_id: &str, call_id: &str) -> bool {
+        self.thread_activity.get(thread_id).is_some_and(|activity| {
+            activity
+                .active_tool_calls
+                .iter()
+                .any(|tc| tc.call_id == call_id)
+        })
+    }
+
     pub fn render_revision(&self) -> u64 {
         self.render_revision
     }

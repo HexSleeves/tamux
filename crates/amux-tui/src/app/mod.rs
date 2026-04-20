@@ -391,6 +391,7 @@ pub struct TuiModel {
     // Agent activity state (from daemon events, not local buffers)
     agent_activity: Option<String>,
     thread_agent_activity: std::collections::HashMap<String, String>,
+    bootstrap_pending_activity_threads: std::collections::HashSet<String>,
     participant_playground_activity:
         std::collections::HashMap<String, ParticipantPlaygroundActivity>,
 
