@@ -254,6 +254,8 @@ async fn goal_run_event_todo_snapshot_round_trips() -> Result<()> {
         generated_skill_path: None,
         last_error: None,
         failure_cause: None,
+        dossier: None,
+        stopped_reason: None,
         child_task_ids: Vec::new(),
         child_task_count: 0,
         approval_count: 0,
@@ -374,10 +376,12 @@ async fn goal_run_extended_metadata_round_trips() -> Result<()> {
             completed_at: None,
         }],
         events: vec![],
+        dossier: None,
         total_prompt_tokens: 123,
         total_completion_tokens: 456,
         estimated_cost_usd: Some(0.42),
         autonomy_level: crate::agent::AutonomyLevel::Supervised,
+        stopped_reason: None,
         authorship_tag: Some(crate::agent::AuthorshipTag::Joint),
     };
 

@@ -685,3 +685,74 @@ use amux_shared::providers::{
             ApiType::Anthropic
         );
     }
+
+    #[test]
+    fn goal_dossier_serializes_into_goal_run_state() {
+        let goal_run = GoalRun {
+            id: "goal-run-1".to_string(),
+            title: "Ship dossier projection".to_string(),
+            goal: "Add dossier support to the daemon goal state".to_string(),
+            client_request_id: None,
+            status: GoalRunStatus::Paused,
+            priority: TaskPriority::Normal,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_100,
+            started_at: Some(1_700_000_010),
+            completed_at: None,
+            thread_id: Some("thread-1".to_string()),
+            session_id: Some("session-1".to_string()),
+            current_step_index: 0,
+            current_step_title: Some("Draft dossier types".to_string()),
+            current_step_kind: Some(GoalRunStepKind::Reason),
+            replan_count: 0,
+            max_replans: 3,
+            plan_summary: Some("Design a compact dossier layer".to_string()),
+            reflection_summary: None,
+            memory_updates: vec![],
+            generated_skill_path: None,
+            last_error: None,
+            failure_cause: None,
+            child_task_ids: vec![],
+            child_task_count: 0,
+            approval_count: 0,
+            awaiting_approval_id: None,
+            policy_fingerprint: None,
+            approval_expires_at: None,
+            containment_scope: None,
+            compensation_status: None,
+            compensation_summary: None,
+            active_task_id: None,
+            duration_ms: None,
+            steps: vec![],
+            events: vec![],
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            estimated_cost_usd: None,
+            autonomy_level: AutonomyLevel::default(),
+            authorship_tag: None,
+            dossier: Some(GoalRunDossier {
+                units: vec![GoalDeliveryUnit {
+                    id: "delivery-unit-1".to_string(),
+                    title: "Verify dossier plumbing".to_string(),
+                    status: GoalProjectionState::Pending,
+                    execution_binding: GoalRoleBinding::Builtin("swarog".to_string()),
+                    verification_binding: GoalRoleBinding::Subagent(
+                        "android-verifier".to_string(),
+                    ),
+                    ..Default::default()
+                }],
+                latest_resume_decision: Some(GoalResumeDecision {
+                    action: GoalResumeAction::Advance,
+                    reason_code: "proof_complete".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            stopped_reason: Some("manual stop after proof capture".to_string()),
+        };
+
+        let json = serde_json::to_string(&goal_run).unwrap();
+        assert!(json.contains("\"dossier\""));
+        assert!(json.contains("android-verifier"));
+        assert!(json.contains("\"stopped_reason\":\"manual stop after proof capture\""));
+    }

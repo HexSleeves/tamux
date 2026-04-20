@@ -52,6 +52,7 @@ include!("runtime_config.rs");
 include!("agent_event.rs");
 include!("thread_message_types.rs");
 include!("task_types.rs");
+include!("goal_dossier.rs");
 include!("goal_types.rs");
 include!("heartbeat_misc.rs");
 

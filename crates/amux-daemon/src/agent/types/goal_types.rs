@@ -123,6 +123,8 @@ pub struct GoalRun {
     pub last_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_cause: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_reason: Option<String>,
     #[serde(default)]
     pub child_task_ids: Vec<String>,
     #[serde(default)]
@@ -149,6 +151,8 @@ pub struct GoalRun {
     pub steps: Vec<GoalRunStep>,
     #[serde(default)]
     pub events: Vec<GoalRunEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dossier: Option<GoalRunDossier>,
     /// Total prompt tokens consumed across all LLM calls in this goal run (COST-01).
     #[serde(default)]
     pub total_prompt_tokens: u64,
@@ -169,4 +173,3 @@ pub struct GoalRun {
 // ---------------------------------------------------------------------------
 // Heartbeat
 // ---------------------------------------------------------------------------
-

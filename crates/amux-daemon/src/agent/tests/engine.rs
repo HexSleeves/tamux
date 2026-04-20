@@ -525,6 +525,7 @@ async fn hydrate_restores_full_persisted_goal_run_event_history() {
         generated_skill_path: None,
         last_error: None,
         failure_cause: None,
+        stopped_reason: None,
         child_task_ids: Vec::new(),
         child_task_count: 0,
         approval_count: 0,
@@ -548,6 +549,7 @@ async fn hydrate_restores_full_persisted_goal_run_event_history() {
                 todo_snapshot: Vec::new(),
             })
             .collect(),
+        dossier: None,
         total_prompt_tokens: 0,
         total_completion_tokens: 0,
         estimated_cost_usd: None,
