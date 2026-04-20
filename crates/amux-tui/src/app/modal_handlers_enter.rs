@@ -242,28 +242,28 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                     }
                 }
                 Some(GoalActionPickerItem::EditRuntimeProvider) => {
-                    if !model.stage_runtime_assignment_modal_edit(
+                    if !model.stage_mission_control_assignment_modal_edit(
                         goal_mission_control::RuntimeAssignmentEditField::Provider,
                     ) {
                         model.status_line = "Mission Control roster is unavailable".to_string();
                     }
                 }
                 Some(GoalActionPickerItem::EditRuntimeModel) => {
-                    if !model.stage_runtime_assignment_modal_edit(
+                    if !model.stage_mission_control_assignment_modal_edit(
                         goal_mission_control::RuntimeAssignmentEditField::Model,
                     ) {
                         model.status_line = "Mission Control roster is unavailable".to_string();
                     }
                 }
                 Some(GoalActionPickerItem::EditRuntimeReasoning) => {
-                    if !model.stage_runtime_assignment_modal_edit(
+                    if !model.stage_mission_control_assignment_modal_edit(
                         goal_mission_control::RuntimeAssignmentEditField::ReasoningEffort,
                     ) {
                         model.status_line = "Mission Control roster is unavailable".to_string();
                     }
                 }
                 Some(GoalActionPickerItem::EditRuntimeRole) => {
-                    if !model.stage_runtime_assignment_modal_edit(
+                    if !model.stage_mission_control_assignment_modal_edit(
                         goal_mission_control::RuntimeAssignmentEditField::Role,
                     ) {
                         model.status_line = "Mission Control roster is unavailable".to_string();

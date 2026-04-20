@@ -502,15 +502,194 @@
     }
 
     #[test]
-    fn goal_composer_escape_keeps_operator_in_goals_surface() {
+    fn goal_command_opens_blank_preflight_even_when_goal_run_is_selected() {
         let mut model = build_model();
-        model.open_new_goal_view();
-        model.focus = FocusArea::Chat;
+        model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Existing Goal".to_string(),
+            updated_at: 42,
+            launch_assignment_snapshot: vec![
+                task::GoalAgentAssignment {
+                    role_id: amux_protocol::AGENT_ID_SWAROG.to_string(),
+                    enabled: true,
+                    provider: "runtime-provider".to_string(),
+                    model: "runtime-model".to_string(),
+                    reasoning_effort: Some("high".to_string()),
+                    inherit_from_main: false,
+                },
+                task::GoalAgentAssignment {
+                    role_id: "planner".to_string(),
+                    enabled: true,
+                    provider: "planner-provider".to_string(),
+                    model: "planner-model".to_string(),
+                    reasoning_effort: Some("medium".to_string()),
+                    inherit_from_main: false,
+                },
+            ],
+            runtime_assignment_list: vec![task::GoalAgentAssignment {
+                role_id: "planner".to_string(),
+                enabled: true,
+                provider: "planner-provider".to_string(),
+                model: "planner-model".to_string(),
+                reasoning_effort: Some("medium".to_string()),
+                inherit_from_main: false,
+            }],
+            ..Default::default()
+        }));
+        model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+            goal_run_id: "goal-1".to_string(),
+            step_id: None,
+        });
 
+        model.execute_command("goal");
+
+        assert!(matches!(model.main_pane_view, MainPaneView::GoalComposer));
+        assert_eq!(model.focus, FocusArea::Input);
+        assert_eq!(model.goal_mission_control.runtime_goal_run_id, None);
+        assert_eq!(model.goal_mission_control.prompt_text, "");
+        assert_eq!(
+            model.goal_mission_control.preset_source_label,
+            "Previous goal snapshot"
+        );
+    }
+
+    #[test]
+    fn goal_composer_prompt_typing_updates_preflight_prompt_text() {
+        let mut model = build_model();
+        model.execute_command("goal");
+
+        let handled_g = model.handle_key(KeyCode::Char('g'), KeyModifiers::NONE);
+        let handled_o = model.handle_key(KeyCode::Char('o'), KeyModifiers::NONE);
+
+        assert!(!handled_g);
+        assert!(!handled_o);
+        assert_eq!(model.input.buffer(), "go");
+        assert_eq!(model.goal_mission_control.prompt_text, "go");
+    }
+
+    #[test]
+    fn goal_composer_escape_cancels_preflight_and_restores_previous_goal_view() {
+        let mut model = build_model();
+        model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Existing Goal".to_string(),
+            updated_at: 42,
+            ..Default::default()
+        }));
+        let previous = SidebarItemTarget::GoalRun {
+            goal_run_id: "goal-1".to_string(),
+            step_id: None,
+        };
+        model.main_pane_view = MainPaneView::Task(previous.clone());
+
+        model.execute_command("goal");
         let handled = model.handle_key(KeyCode::Esc, KeyModifiers::NONE);
 
         assert!(!handled);
+        assert_eq!(model.focus, FocusArea::Chat);
+        match &model.main_pane_view {
+            MainPaneView::Task(target) => assert_eq!(target, &previous),
+            other => panic!("expected previous goal pane after cancel, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn goal_composer_arrow_keys_navigate_preflight_role_assignments() {
+        let mut model = build_model();
+        model.goal_mission_control = goal_mission_control::GoalMissionControlState::from_goal_snapshot(
+            vec![
+                task::GoalAgentAssignment {
+                    role_id: amux_protocol::AGENT_ID_SWAROG.to_string(),
+                    enabled: true,
+                    provider: "openai".to_string(),
+                    model: "gpt-5.4".to_string(),
+                    reasoning_effort: Some("low".to_string()),
+                    inherit_from_main: false,
+                },
+                task::GoalAgentAssignment {
+                    role_id: "planner".to_string(),
+                    enabled: true,
+                    provider: "openai".to_string(),
+                    model: "gpt-5.4-mini".to_string(),
+                    reasoning_effort: Some("medium".to_string()),
+                    inherit_from_main: false,
+                },
+            ],
+            task::GoalAgentAssignment::default(),
+            "Previous goal snapshot",
+        );
+        model.main_pane_view = MainPaneView::GoalComposer;
+        model.focus = FocusArea::Chat;
+
+        let handled = model.handle_key(KeyCode::Down, KeyModifiers::NONE);
+
+        assert!(!handled);
+        assert_eq!(model.goal_mission_control.selected_runtime_assignment_index, 1);
+    }
+
+    #[test]
+    fn goal_composer_provider_hotkey_opens_picker_for_selected_assignment() {
+        let mut model = build_model();
+        model.goal_mission_control = goal_mission_control::GoalMissionControlState::from_goal_snapshot(
+            vec![task::GoalAgentAssignment {
+                role_id: amux_protocol::AGENT_ID_SWAROG.to_string(),
+                enabled: true,
+                provider: "openai".to_string(),
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: Some("low".to_string()),
+                inherit_from_main: false,
+            }],
+            task::GoalAgentAssignment::default(),
+            "Main agent inheritance",
+        );
+        model.main_pane_view = MainPaneView::GoalComposer;
+        model.focus = FocusArea::Chat;
+
+        let handled = model.handle_key(KeyCode::Char('p'), KeyModifiers::NONE);
+
+        assert!(!handled);
+        assert_eq!(model.modal.top(), Some(modal::ModalKind::ProviderPicker));
+        assert_eq!(
+            model.goal_mission_control.pending_runtime_edit,
+            Some(goal_mission_control::RuntimeAssignmentEditRequest {
+                row_index: 0,
+                field: goal_mission_control::RuntimeAssignmentEditField::Provider,
+            })
+        );
+    }
+
+    #[test]
+    fn goal_view_m_hotkey_opens_runtime_mission_control_editor() {
+        let mut model = build_model();
+        model.focus = FocusArea::Chat;
+        model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Existing Goal".to_string(),
+            status: Some(task::GoalRunStatus::Running),
+            runtime_assignment_list: vec![task::GoalAgentAssignment {
+                role_id: amux_protocol::AGENT_ID_SWAROG.to_string(),
+                enabled: true,
+                provider: "openai".to_string(),
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: Some("low".to_string()),
+                inherit_from_main: false,
+            }],
+            ..Default::default()
+        }));
+        model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+            goal_run_id: "goal-1".to_string(),
+            step_id: None,
+        });
+
+        let handled = model.handle_key(KeyCode::Char('m'), KeyModifiers::NONE);
+
+        assert!(!handled);
         assert!(matches!(model.main_pane_view, MainPaneView::GoalComposer));
+        assert_eq!(model.focus, FocusArea::Chat);
+        assert_eq!(
+            model.goal_mission_control.runtime_goal_run_id.as_deref(),
+            Some("goal-1")
+        );
     }
 
     #[test]

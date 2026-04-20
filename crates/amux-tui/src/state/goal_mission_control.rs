@@ -264,6 +264,9 @@ impl GoalMissionControlState {
     }
 
     pub fn runtime_assignment_status_label(&self, index: usize) -> &'static str {
+        if !self.runtime_mode() {
+            return "launch setting";
+        }
         let has_pending_row = self
             .pending_role_assignments
             .as_ref()
@@ -311,6 +314,23 @@ impl GoalMissionControlState {
         self.pending_runtime_change = None;
         self.pending_runtime_edit = None;
         self.refresh_main_assignment_from_display();
+    }
+
+    pub fn update_selected_preflight_assignment(
+        &mut self,
+        update: impl FnOnce(&mut GoalAgentAssignment),
+    ) -> bool {
+        let len = self.role_assignments.len();
+        if len == 0 {
+            return false;
+        }
+        let index = self.selected_runtime_assignment_index.min(len - 1);
+        let Some(assignment) = self.role_assignments.get_mut(index) else {
+            return false;
+        };
+        update(assignment);
+        self.refresh_main_assignment_from_display();
+        true
     }
 
     pub fn selected_assignment_matches_active_step(&self) -> bool {

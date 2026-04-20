@@ -113,13 +113,17 @@ fn render_prompt_section(
     frame.render_widget(block, area);
 
     let prompt_text = if state.prompt_text.trim().is_empty() {
-        "(empty)".to_string()
+        "Type the goal in the bottom composer, then press Tab to return here.".to_string()
     } else {
         state.prompt_text.clone()
     };
     let content = vec![
         Line::from(Span::styled("Goal prompt", theme.accent_secondary)),
         Line::from(Span::styled(prompt_text, theme.fg_active)),
+        Line::from(Span::styled(
+            "Prompt editor: bottom composer  |  Esc cancels this screen",
+            theme.fg_dim,
+        )),
     ];
     frame.render_widget(Paragraph::new(content).wrap(Wrap { trim: false }), inner);
 }
@@ -185,8 +189,12 @@ fn render_role_assignments_section(
 
     let mut lines = Vec::with_capacity(state.role_assignments.len().saturating_add(2));
     lines.push(Line::from(Span::styled(
-        "Role assignments",
+        "Agent roster",
         theme.accent_secondary,
+    )));
+    lines.push(Line::from(Span::styled(
+        "Use ↑↓ to select, P provider, M model, E effort, R role, S save default.",
+        theme.fg_dim,
     )));
 
     let live_assignments = state.role_assignments.as_slice();
@@ -299,10 +307,12 @@ fn render_footer(frame: &mut Frame, area: Rect, theme: &ThemeTokens) {
     let footer = Line::from(vec![
         Span::styled("Enter", theme.fg_active),
         Span::styled(" launch  ", theme.fg_dim),
+        Span::styled("Tab", theme.fg_active),
+        Span::styled(" prompt/roster  ", theme.fg_dim),
         Span::styled("Ctrl+O", theme.fg_active),
         Span::styled(" open thread  ", theme.fg_dim),
         Span::styled("Esc", theme.fg_active),
-        Span::styled(" focus goals", theme.fg_dim),
+        Span::styled(" cancel", theme.fg_dim),
     ]);
     frame.render_widget(Paragraph::new(footer), area);
 }

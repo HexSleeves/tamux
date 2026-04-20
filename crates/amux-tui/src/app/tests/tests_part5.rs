@@ -1470,6 +1470,7 @@ fn goal_view_renders_goal_control_hints() {
     assert!(plain.contains("Controls"), "{plain}");
     assert!(plain.contains("▶ Resume"), "{plain}");
     assert!(plain.contains("☰ Actions"), "{plain}");
+    assert!(plain.contains("✦ Mission Control"), "{plain}");
     assert!(plain.contains("↻ Retry step"), "{plain}");
     assert!(plain.contains("⟲ Rerun from here"), "{plain}");
 }
@@ -2193,8 +2194,8 @@ fn goal_composer_mission_control_preflight_renders_stable_sections() {
         "preflight should render the selected main model section"
     );
     assert!(
-        rendered.contains("Role assignments"),
-        "preflight should render the goal role assignments section"
+        rendered.contains("Agent roster"),
+        "preflight should render the goal agent roster section"
     );
     assert!(
         rendered.contains("Preset source"),

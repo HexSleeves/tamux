@@ -388,6 +388,14 @@ impl TuiModel {
             self.clear_pending_stop();
         }
 
+        if code == KeyCode::Esc
+            && matches!(self.main_pane_view, MainPaneView::GoalComposer)
+            && self.cancel_goal_mission_control()
+        {
+            self.clear_pending_stop();
+            return false;
+        }
+
         match code {
             KeyCode::Char('p') if ctrl && self.focus != FocusArea::Chat => self
                 .modal
@@ -611,6 +619,17 @@ impl TuiModel {
                         self.collaboration.reduce(CollaborationAction::SelectRow(
                             self.collaboration.selected_row_index().saturating_add(1),
                         ));
+                    } else if matches!(self.main_pane_view, MainPaneView::GoalComposer) {
+                        if self
+                            .goal_mission_control
+                            .cycle_selected_runtime_assignment(1)
+                        {
+                            let role_label = self
+                                .goal_mission_control
+                                .selected_runtime_row_label()
+                                .unwrap_or("assignment");
+                            self.status_line = format!("Mission Control selected {role_label}");
+                        }
                     } else if matches!(
                         self.main_pane_view,
                         MainPaneView::Task(_) | MainPaneView::WorkContext
@@ -637,6 +656,17 @@ impl TuiModel {
                         self.collaboration.reduce(CollaborationAction::SelectRow(
                             self.collaboration.selected_row_index().saturating_sub(1),
                         ));
+                    } else if matches!(self.main_pane_view, MainPaneView::GoalComposer) {
+                        if self
+                            .goal_mission_control
+                            .cycle_selected_runtime_assignment(-1)
+                        {
+                            let role_label = self
+                                .goal_mission_control
+                                .selected_runtime_row_label()
+                                .unwrap_or("assignment");
+                            self.status_line = format!("Mission Control selected {role_label}");
+                        }
                     } else if matches!(
                         self.main_pane_view,
                         MainPaneView::Task(_) | MainPaneView::WorkContext
@@ -780,6 +810,71 @@ impl TuiModel {
                 if self.request_selected_goal_step_rerun_confirmation() {
                     self.status_line = "Rerun goal from selected step?".to_string();
                 }
+            }
+            KeyCode::Char('m')
+                if self.focus == FocusArea::Chat
+                    && matches!(
+                        self.main_pane_view,
+                        MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                    ) =>
+            {
+                if self.open_mission_control_runtime_editor() {
+                    self.status_line = "Opened Mission Control runtime editor".to_string();
+                } else {
+                    self.status_line = "Mission Control runtime editor is unavailable".to_string();
+                }
+            }
+            KeyCode::Char('p')
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::GoalComposer) =>
+            {
+                if !self.stage_mission_control_assignment_modal_edit(
+                    goal_mission_control::RuntimeAssignmentEditField::Provider,
+                ) {
+                    self.status_line = "Mission Control roster is unavailable".to_string();
+                }
+            }
+            KeyCode::Char('m')
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::GoalComposer) =>
+            {
+                if !self.stage_mission_control_assignment_modal_edit(
+                    goal_mission_control::RuntimeAssignmentEditField::Model,
+                ) {
+                    self.status_line = "Mission Control roster is unavailable".to_string();
+                }
+            }
+            KeyCode::Char('e')
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::GoalComposer) =>
+            {
+                if !self.stage_mission_control_assignment_modal_edit(
+                    goal_mission_control::RuntimeAssignmentEditField::ReasoningEffort,
+                ) {
+                    self.status_line = "Mission Control roster is unavailable".to_string();
+                }
+            }
+            KeyCode::Char('r')
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::GoalComposer) =>
+            {
+                if !self.stage_mission_control_assignment_modal_edit(
+                    goal_mission_control::RuntimeAssignmentEditField::Role,
+                ) {
+                    self.status_line = "Mission Control roster is unavailable".to_string();
+                }
+            }
+            KeyCode::Char('s')
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::GoalComposer)
+                    && !self.goal_mission_control.runtime_mode() =>
+            {
+                self.goal_mission_control.toggle_save_as_default_pending();
+                self.status_line = if self.goal_mission_control.save_as_default_pending {
+                    "Mission Control preflight will be saved as the new default".to_string()
+                } else {
+                    "Mission Control preflight will not overwrite defaults".to_string()
+                };
             }
             KeyCode::Char('[')
                 if self.focus == FocusArea::Chat

@@ -925,7 +925,7 @@ impl TuiModel {
             .or_else(|| self.goal_mission_control.runtime_goal_run_id.clone())
     }
 
-    fn open_mission_control_runtime_editor(&mut self) -> bool {
+    pub(super) fn open_mission_control_runtime_editor(&mut self) -> bool {
         if matches!(self.main_pane_view, MainPaneView::GoalComposer)
             && self.goal_mission_control.runtime_mode()
         {
@@ -945,6 +945,34 @@ impl TuiModel {
         true
     }
 
+    pub(super) fn cancel_goal_mission_control(&mut self) -> bool {
+        if !matches!(self.main_pane_view, MainPaneView::GoalComposer) {
+            return false;
+        }
+
+        let fallback_target =
+            self.goal_mission_control
+                .runtime_goal_run_id
+                .as_ref()
+                .map(|goal_run_id| sidebar::SidebarItemTarget::GoalRun {
+                    goal_run_id: goal_run_id.clone(),
+                    step_id: None,
+                });
+        let target = self
+            .mission_control_source_goal_target()
+            .or(fallback_target);
+
+        if let Some(target) = target {
+            self.open_sidebar_target(target);
+            self.focus = FocusArea::Chat;
+            self.status_line = "Closed Mission Control".to_string();
+        } else {
+            self.set_main_pane_conversation(FocusArea::Chat);
+            self.status_line = "Cancelled new goal".to_string();
+        }
+        true
+    }
+
     fn selected_runtime_assignment_preview(&self) -> Option<(usize, task::GoalAgentAssignment)> {
         let index = self.goal_mission_control.selected_runtime_assignment_index;
         self.goal_mission_control
@@ -953,11 +981,19 @@ impl TuiModel {
             .map(|assignment| (index, assignment))
     }
 
-    pub(super) fn stage_runtime_assignment_modal_edit(
+    pub(super) fn stage_mission_control_assignment_modal_edit(
         &mut self,
         field: goal_mission_control::RuntimeAssignmentEditField,
     ) -> bool {
-        if !self.open_mission_control_runtime_editor() {
+        if matches!(self.main_pane_view, MainPaneView::GoalComposer) {
+            if self
+                .goal_mission_control
+                .display_role_assignments()
+                .is_empty()
+            {
+                return false;
+            }
+        } else if !self.open_mission_control_runtime_editor() {
             return false;
         }
         let Some((row_index, _)) = self.selected_runtime_assignment_preview() else {
@@ -1005,6 +1041,17 @@ impl TuiModel {
         &mut self,
         update: impl FnOnce(&mut task::GoalAgentAssignment),
     ) -> bool {
+        if matches!(self.main_pane_view, MainPaneView::GoalComposer)
+            && !self.goal_mission_control.runtime_mode()
+        {
+            let updated = self
+                .goal_mission_control
+                .update_selected_preflight_assignment(update);
+            if updated {
+                self.status_line = "Mission Control preflight roster updated".to_string();
+            }
+            return updated;
+        }
         let Some(goal_run_id) = self.selected_goal_run_id() else {
             return false;
         };

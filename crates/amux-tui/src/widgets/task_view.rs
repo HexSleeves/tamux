@@ -504,6 +504,10 @@ fn render_goal_controls(
         controls.push(("⟲", "Rerun from here", "Shift+R", theme.accent_primary));
     }
 
+    if has_goal_actions || has_step_context {
+        controls.push(("✦", "Mission Control", "M", theme.accent_primary));
+    }
+
     if controls.is_empty() {
         return;
     }
