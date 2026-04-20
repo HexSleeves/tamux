@@ -320,6 +320,22 @@ pub struct GoalRuntimeOwnerProfile {
     pub reasoning_effort: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct GoalAgentAssignment {
+    #[serde(default)]
+    pub role_id: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub inherit_from_main: bool,
+}
+
 fn deserialize_goal_binding<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -349,11 +365,21 @@ pub struct GoalRun {
     #[serde(default)]
     pub thread_id: Option<String>,
     #[serde(default)]
+    pub root_thread_id: Option<String>,
+    #[serde(default)]
+    pub active_thread_id: Option<String>,
+    #[serde(default)]
+    pub execution_thread_ids: Vec<String>,
+    #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
     pub status: Option<GoalRunStatus>,
     #[serde(default)]
     pub current_step_title: Option<String>,
+    #[serde(default)]
+    pub launch_assignment_snapshot: Vec<GoalAgentAssignment>,
+    #[serde(default)]
+    pub runtime_assignment_list: Vec<GoalAgentAssignment>,
     #[serde(default)]
     pub planner_owner_profile: Option<GoalRuntimeOwnerProfile>,
     #[serde(default)]

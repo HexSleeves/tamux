@@ -80,14 +80,29 @@ pub struct GoalRuntimeOwnerProfile {
     pub reasoning_effort: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GoalAgentAssignment {
+    pub role_id: String,
+    pub enabled: bool,
+    pub provider: String,
+    pub model: String,
+    pub reasoning_effort: Option<String>,
+    pub inherit_from_main: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GoalRun {
     pub id: String,
     pub title: String,
     pub thread_id: Option<String>,
+    pub root_thread_id: Option<String>,
+    pub active_thread_id: Option<String>,
+    pub execution_thread_ids: Vec<String>,
     pub session_id: Option<String>,
     pub status: Option<GoalRunStatus>,
     pub current_step_title: Option<String>,
+    pub launch_assignment_snapshot: Vec<GoalAgentAssignment>,
+    pub runtime_assignment_list: Vec<GoalAgentAssignment>,
     pub planner_owner_profile: Option<GoalRuntimeOwnerProfile>,
     pub current_step_owner_profile: Option<GoalRuntimeOwnerProfile>,
     pub child_task_count: u32,
@@ -706,6 +721,23 @@ fn merge_range_vec<T: Clone>(
     (union_start, union_end, merged)
 }
 
+fn merge_optional_field<T>(existing: &mut Option<T>, incoming: Option<T>, preserve_existing: bool) {
+    if preserve_existing {
+        if incoming.is_some() {
+            *existing = incoming;
+        }
+    } else {
+        *existing = incoming;
+    }
+}
+
+fn merge_vec_field<T>(existing: &mut Vec<T>, incoming: Vec<T>, preserve_existing_when_empty: bool) {
+    if preserve_existing_when_empty && incoming.is_empty() {
+        return;
+    }
+    *existing = incoming;
+}
+
 fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun, preserve_owner_metadata: bool) {
     let older_page_request_cooldown_until_tick = existing
         .older_page_request_cooldown_until_tick
@@ -716,6 +748,31 @@ fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun, preserve_owner_meta
     existing.session_id = incoming.session_id;
     existing.status = incoming.status;
     existing.current_step_title = incoming.current_step_title;
+    merge_vec_field(
+        &mut existing.launch_assignment_snapshot,
+        incoming.launch_assignment_snapshot,
+        preserve_owner_metadata,
+    );
+    merge_vec_field(
+        &mut existing.runtime_assignment_list,
+        incoming.runtime_assignment_list,
+        preserve_owner_metadata,
+    );
+    merge_optional_field(
+        &mut existing.root_thread_id,
+        incoming.root_thread_id,
+        preserve_owner_metadata,
+    );
+    merge_optional_field(
+        &mut existing.active_thread_id,
+        incoming.active_thread_id,
+        preserve_owner_metadata,
+    );
+    merge_vec_field(
+        &mut existing.execution_thread_ids,
+        incoming.execution_thread_ids,
+        preserve_owner_metadata,
+    );
     if preserve_owner_metadata {
         existing.planner_owner_profile = incoming
             .planner_owner_profile

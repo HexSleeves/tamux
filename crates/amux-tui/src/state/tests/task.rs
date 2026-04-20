@@ -58,6 +58,42 @@ fn make_wire_owner_profile(
     }
 }
 
+fn make_assignment(
+    role_id: &str,
+    enabled: bool,
+    provider: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
+    inherit_from_main: bool,
+) -> GoalAgentAssignment {
+    GoalAgentAssignment {
+        role_id: role_id.into(),
+        enabled,
+        provider: provider.into(),
+        model: model.into(),
+        reasoning_effort: reasoning_effort.map(str::to_string),
+        inherit_from_main,
+    }
+}
+
+fn make_wire_assignment(
+    role_id: &str,
+    enabled: bool,
+    provider: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
+    inherit_from_main: bool,
+) -> crate::wire::GoalAgentAssignment {
+    crate::wire::GoalAgentAssignment {
+        role_id: role_id.into(),
+        enabled,
+        provider: provider.into(),
+        model: model.into(),
+        reasoning_effort: reasoning_effort.map(str::to_string),
+        inherit_from_main,
+    }
+}
+
 #[test]
 fn task_list_received_replaces_tasks() {
     let mut state = TaskState::new();
@@ -138,6 +174,198 @@ fn goal_run_detail_received_upserts() {
     // Insert new via update
     state.reduce(TaskAction::GoalRunUpdate(make_goal_run("g2", "New Goal")));
     assert_eq!(state.goal_runs().len(), 2);
+}
+
+#[test]
+fn goal_run_detail_received_parses_mission_control_metadata() {
+    let wire_run = crate::wire::GoalRun {
+        id: "g1".into(),
+        title: "Mission Control".into(),
+        launch_assignment_snapshot: vec![
+            make_wire_assignment("planner", true, "openai", "gpt-4.1", Some("high"), true),
+            make_wire_assignment(
+                "validator",
+                false,
+                "anthropic",
+                "claude-sonnet-4",
+                None,
+                false,
+            ),
+        ],
+        runtime_assignment_list: vec![make_wire_assignment(
+            "planner",
+            true,
+            "openai",
+            "gpt-4.1",
+            Some("medium"),
+            true,
+        )],
+        root_thread_id: Some("thread-root".into()),
+        active_thread_id: Some("thread-active".into()),
+        execution_thread_ids: vec!["thread-root".into(), "thread-active".into()],
+        ..Default::default()
+    };
+
+    let converted = crate::app::conversion::convert_goal_run(wire_run);
+
+    assert_eq!(
+        converted.launch_assignment_snapshot,
+        vec![
+            make_assignment("planner", true, "openai", "gpt-4.1", Some("high"), true),
+            make_assignment(
+                "validator",
+                false,
+                "anthropic",
+                "claude-sonnet-4",
+                None,
+                false
+            ),
+        ]
+    );
+    assert_eq!(
+        converted.runtime_assignment_list,
+        vec![make_assignment(
+            "planner",
+            true,
+            "openai",
+            "gpt-4.1",
+            Some("medium"),
+            true,
+        )]
+    );
+    assert_eq!(converted.root_thread_id.as_deref(), Some("thread-root"));
+    assert_eq!(converted.active_thread_id.as_deref(), Some("thread-active"));
+    assert_eq!(
+        converted.execution_thread_ids,
+        vec!["thread-root".to_string(), "thread-active".to_string()]
+    );
+
+    let mut state = TaskState::new();
+    state.reduce(TaskAction::GoalRunDetailReceived(converted));
+
+    let goal = state.goal_run_by_id("g1").expect("goal should exist");
+    assert_eq!(goal.launch_assignment_snapshot.len(), 2);
+    assert_eq!(goal.runtime_assignment_list.len(), 1);
+    assert_eq!(goal.root_thread_id.as_deref(), Some("thread-root"));
+    assert_eq!(goal.active_thread_id.as_deref(), Some("thread-active"));
+    assert_eq!(
+        goal.execution_thread_ids,
+        vec!["thread-root".to_string(), "thread-active".to_string()]
+    );
+}
+
+#[test]
+fn goal_run_detail_received_replaces_mission_control_metadata() {
+    let mut state = TaskState::new();
+    state.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
+        id: "g1".into(),
+        title: "Original".into(),
+        launch_assignment_snapshot: vec![make_assignment(
+            "planner",
+            true,
+            "openai",
+            "gpt-4.1",
+            Some("high"),
+            true,
+        )],
+        runtime_assignment_list: vec![make_assignment(
+            "planner",
+            true,
+            "openai",
+            "gpt-4.1",
+            Some("high"),
+            true,
+        )],
+        root_thread_id: Some("thread-root".into()),
+        active_thread_id: Some("thread-active".into()),
+        execution_thread_ids: vec!["thread-root".into(), "thread-active".into()],
+        ..Default::default()
+    }));
+
+    state.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
+        id: "g1".into(),
+        title: "Detailed".into(),
+        launch_assignment_snapshot: Vec::new(),
+        runtime_assignment_list: Vec::new(),
+        root_thread_id: None,
+        active_thread_id: None,
+        execution_thread_ids: Vec::new(),
+        ..Default::default()
+    }));
+
+    let goal = state.goal_run_by_id("g1").expect("goal should exist");
+    assert_eq!(goal.title, "Detailed");
+    assert!(goal.launch_assignment_snapshot.is_empty());
+    assert!(goal.runtime_assignment_list.is_empty());
+    assert!(goal.root_thread_id.is_none());
+    assert!(goal.active_thread_id.is_none());
+    assert!(goal.execution_thread_ids.is_empty());
+}
+
+#[test]
+fn goal_run_update_preserves_mission_control_metadata_when_omitted() {
+    let mut state = TaskState::new();
+    state.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
+        id: "g1".into(),
+        title: "Original".into(),
+        launch_assignment_snapshot: vec![make_assignment(
+            "planner",
+            true,
+            "openai",
+            "gpt-4.1",
+            Some("high"),
+            true,
+        )],
+        runtime_assignment_list: vec![make_assignment(
+            "planner",
+            true,
+            "openai",
+            "gpt-4.1",
+            Some("high"),
+            true,
+        )],
+        root_thread_id: Some("thread-root".into()),
+        active_thread_id: Some("thread-active".into()),
+        execution_thread_ids: vec!["thread-root".into(), "thread-active".into()],
+        ..Default::default()
+    }));
+
+    state.reduce(TaskAction::GoalRunUpdate(GoalRun {
+        id: "g1".into(),
+        title: "Updated".into(),
+        ..Default::default()
+    }));
+
+    let goal = state.goal_run_by_id("g1").expect("goal should exist");
+    assert_eq!(goal.title, "Updated");
+    assert_eq!(
+        goal.launch_assignment_snapshot,
+        vec![make_assignment(
+            "planner",
+            true,
+            "openai",
+            "gpt-4.1",
+            Some("high"),
+            true,
+        )]
+    );
+    assert_eq!(
+        goal.runtime_assignment_list,
+        vec![make_assignment(
+            "planner",
+            true,
+            "openai",
+            "gpt-4.1",
+            Some("high"),
+            true,
+        )]
+    );
+    assert_eq!(goal.root_thread_id.as_deref(), Some("thread-root"));
+    assert_eq!(goal.active_thread_id.as_deref(), Some("thread-active"));
+    assert_eq!(
+        goal.execution_thread_ids,
+        vec!["thread-root".to_string(), "thread-active".to_string()]
+    );
 }
 
 #[test]

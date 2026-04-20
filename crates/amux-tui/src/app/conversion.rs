@@ -198,6 +198,9 @@ pub(crate) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
         id: r.id,
         title: r.title,
         thread_id: r.thread_id,
+        root_thread_id: r.root_thread_id,
+        active_thread_id: r.active_thread_id,
+        execution_thread_ids: r.execution_thread_ids,
         session_id: r.session_id,
         status: r.status.map(|s| match s {
             crate::wire::GoalRunStatus::Queued => task::GoalRunStatus::Queued,
@@ -209,6 +212,16 @@ pub(crate) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
             crate::wire::GoalRunStatus::Failed => task::GoalRunStatus::Failed,
             crate::wire::GoalRunStatus::Cancelled => task::GoalRunStatus::Cancelled,
         }),
+        launch_assignment_snapshot: r
+            .launch_assignment_snapshot
+            .into_iter()
+            .map(convert_goal_agent_assignment)
+            .collect(),
+        runtime_assignment_list: r
+            .runtime_assignment_list
+            .into_iter()
+            .map(convert_goal_agent_assignment)
+            .collect(),
         planner_owner_profile: r
             .planner_owner_profile
             .map(convert_goal_runtime_owner_profile),
@@ -282,6 +295,19 @@ fn convert_goal_runtime_owner_profile(
         provider: profile.provider,
         model: profile.model,
         reasoning_effort: profile.reasoning_effort,
+    }
+}
+
+fn convert_goal_agent_assignment(
+    assignment: crate::wire::GoalAgentAssignment,
+) -> task::GoalAgentAssignment {
+    task::GoalAgentAssignment {
+        role_id: assignment.role_id,
+        enabled: assignment.enabled,
+        provider: assignment.provider,
+        model: assignment.model,
+        reasoning_effort: assignment.reasoning_effort,
+        inherit_from_main: assignment.inherit_from_main,
     }
 }
 
