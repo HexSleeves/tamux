@@ -395,6 +395,10 @@ pub struct GoalRun {
     #[serde(default)]
     pub goal: String,
     #[serde(default)]
+    pub created_at: u64,
+    #[serde(default)]
+    pub updated_at: u64,
+    #[serde(default)]
     pub current_step_index: usize,
     #[serde(default)]
     pub reflection_summary: Option<String>,
@@ -422,6 +426,8 @@ pub struct GoalRun {
     pub events: Vec<GoalRunEvent>,
     #[serde(default)]
     pub dossier: Option<GoalRunDossier>,
+    #[serde(skip)]
+    pub sparse_update: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

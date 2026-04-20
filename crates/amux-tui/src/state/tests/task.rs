@@ -333,11 +333,12 @@ fn goal_run_update_preserves_mission_control_metadata_when_omitted() {
     state.reduce(TaskAction::GoalRunUpdate(GoalRun {
         id: "g1".into(),
         title: "Updated".into(),
+        sparse_update: true,
         ..Default::default()
     }));
 
     let goal = state.goal_run_by_id("g1").expect("goal should exist");
-    assert_eq!(goal.title, "Updated");
+    assert_eq!(goal.title, "Original");
     assert_eq!(
         goal.launch_assignment_snapshot,
         vec![make_assignment(
@@ -468,11 +469,12 @@ fn goal_run_update_preserves_owner_profiles_when_incremental_payload_omits_them(
     state.reduce(TaskAction::GoalRunUpdate(GoalRun {
         id: "g1".into(),
         title: "Updated".into(),
+        sparse_update: true,
         ..Default::default()
     }));
 
     let goal = state.goal_run_by_id("g1").expect("goal should exist");
-    assert_eq!(goal.title, "Updated");
+    assert_eq!(goal.title, "Original");
     assert_eq!(
         goal.planner_owner_profile,
         Some(make_owner_profile(
@@ -507,11 +509,12 @@ fn goal_run_update_preserves_planner_fallback_when_current_step_owner_is_absent(
     state.reduce(TaskAction::GoalRunUpdate(GoalRun {
         id: "g1".into(),
         title: "Updated".into(),
+        sparse_update: true,
         ..Default::default()
     }));
 
     let goal = state.goal_run_by_id("g1").expect("goal should exist");
-    assert_eq!(goal.title, "Updated");
+    assert_eq!(goal.title, "Original");
     assert_eq!(
         goal.planner_owner_profile,
         Some(make_owner_profile("Planner", "openai", "gpt-4.1", None))
@@ -544,16 +547,122 @@ fn goal_run_update_preserves_existing_dossier_when_incremental_update_omits_it()
     state.reduce(TaskAction::GoalRunUpdate(GoalRun {
         id: "g1".into(),
         title: "Updated".into(),
+        sparse_update: true,
         ..Default::default()
     }));
 
     let goal = state.goal_run_by_id("g1").expect("goal should exist");
-    assert_eq!(goal.title, "Updated");
+    assert_eq!(goal.title, "Original");
     let dossier = goal.dossier.as_ref().expect("dossier should be preserved");
     assert_eq!(dossier.projection_state, "in_progress");
     assert_eq!(dossier.summary.as_deref(), Some("planner seeded units"));
     assert_eq!(dossier.units.len(), 1);
     assert_eq!(dossier.units[0].execution_binding, "builtin:android");
+}
+
+#[test]
+fn goal_run_detail_received_clears_dossier_when_authoritative_payload_omits_it() {
+    let mut state = TaskState::new();
+    state.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
+        id: "g1".into(),
+        title: "Original".into(),
+        dossier: Some(GoalRunDossier {
+            projection_state: "in_progress".into(),
+            summary: Some("planner seeded units".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }));
+
+    state.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
+        id: "g1".into(),
+        title: "Detailed".into(),
+        ..Default::default()
+    }));
+
+    let goal = state.goal_run_by_id("g1").expect("goal should exist");
+    assert_eq!(goal.title, "Detailed");
+    assert!(goal.dossier.is_none());
+}
+
+#[test]
+fn goal_run_update_from_partial_wire_payload_preserves_existing_scalar_fields() {
+    let mut state = TaskState::new();
+    state.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
+        id: "g1".into(),
+        title: "Original".into(),
+        goal: "Ship mission control".into(),
+        current_step_index: 3,
+        child_task_count: 5,
+        approval_count: 2,
+        created_at: 10,
+        updated_at: 20,
+        dossier: Some(GoalRunDossier {
+            projection_state: "running".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }));
+
+    state.reduce(TaskAction::GoalRunUpdate(GoalRun {
+        id: "g1".into(),
+        title: "Updated".into(),
+        sparse_update: true,
+        ..Default::default()
+    }));
+
+    let goal = state.goal_run_by_id("g1").expect("goal should exist");
+    assert_eq!(goal.title, "Original");
+    assert_eq!(goal.goal, "Ship mission control");
+    assert_eq!(goal.current_step_index, 3);
+    assert_eq!(goal.child_task_count, 5);
+    assert_eq!(goal.approval_count, 2);
+    assert_eq!(goal.created_at, 10);
+    assert_eq!(goal.updated_at, 20);
+    assert_eq!(
+        goal.dossier
+            .as_ref()
+            .expect("incremental update should preserve existing dossier")
+            .projection_state,
+        "running"
+    );
+}
+
+#[test]
+fn goal_run_update_full_snapshot_can_clear_scalar_fields() {
+    let mut state = TaskState::new();
+    state.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
+        id: "g1".into(),
+        title: "Original".into(),
+        goal: "Ship mission control".into(),
+        child_task_count: 5,
+        approval_count: 2,
+        current_step_index: 3,
+        created_at: 11,
+        updated_at: 22,
+        ..Default::default()
+    }));
+
+    state.reduce(TaskAction::GoalRunUpdate(GoalRun {
+        id: "g1".into(),
+        title: "Updated".into(),
+        goal: String::new(),
+        child_task_count: 0,
+        approval_count: 0,
+        current_step_index: 0,
+        created_at: 30,
+        updated_at: 40,
+        ..Default::default()
+    }));
+
+    let goal = state.goal_run_by_id("g1").expect("goal should exist");
+    assert_eq!(goal.title, "Updated");
+    assert!(goal.goal.is_empty());
+    assert_eq!(goal.child_task_count, 0);
+    assert_eq!(goal.approval_count, 0);
+    assert_eq!(goal.current_step_index, 0);
+    assert_eq!(goal.created_at, 30);
+    assert_eq!(goal.updated_at, 40);
 }
 
 #[test]

@@ -123,6 +123,7 @@ pub struct GoalRun {
     pub total_event_count: usize,
     pub older_page_pending: bool,
     pub older_page_request_cooldown_until_tick: Option<u64>,
+    pub sparse_update: bool,
     pub steps: Vec<GoalRunStep>,
     pub events: Vec<GoalRunEvent>,
     pub dossier: Option<GoalRunDossier>,
@@ -738,42 +739,93 @@ fn merge_vec_field<T>(existing: &mut Vec<T>, incoming: Vec<T>, preserve_existing
     *existing = incoming;
 }
 
+fn merge_string_field(existing: &mut String, incoming: String, preserve_existing_when_empty: bool) {
+    if preserve_existing_when_empty && incoming.is_empty() {
+        return;
+    }
+    *existing = incoming;
+}
+
+fn merge_u32_field(existing: &mut u32, incoming: u32, preserve_existing_when_zero: bool) {
+    if preserve_existing_when_zero && incoming == 0 && *existing != 0 {
+        return;
+    }
+    *existing = incoming;
+}
+
+fn merge_u64_field(existing: &mut u64, incoming: u64, preserve_existing_when_zero: bool) {
+    if preserve_existing_when_zero && incoming == 0 && *existing != 0 {
+        return;
+    }
+    *existing = incoming;
+}
+
+fn merge_usize_field(existing: &mut usize, incoming: usize, preserve_existing_when_zero: bool) {
+    if preserve_existing_when_zero && incoming == 0 && *existing != 0 {
+        return;
+    }
+    *existing = incoming;
+}
+
 fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun, preserve_owner_metadata: bool) {
+    let preserve_sparse_fields = preserve_owner_metadata && incoming.sparse_update;
     let older_page_request_cooldown_until_tick = existing
         .older_page_request_cooldown_until_tick
         .max(incoming.older_page_request_cooldown_until_tick);
 
-    existing.title = incoming.title;
-    existing.thread_id = incoming.thread_id;
-    existing.session_id = incoming.session_id;
-    existing.status = incoming.status;
-    existing.current_step_title = incoming.current_step_title;
+    if preserve_sparse_fields {
+        if existing.title.is_empty() {
+            existing.title = incoming.title;
+        }
+    } else {
+        existing.title = incoming.title;
+    }
+    merge_optional_field(
+        &mut existing.thread_id,
+        incoming.thread_id,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.session_id,
+        incoming.session_id,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.status,
+        incoming.status,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.current_step_title,
+        incoming.current_step_title,
+        preserve_sparse_fields,
+    );
     merge_vec_field(
         &mut existing.launch_assignment_snapshot,
         incoming.launch_assignment_snapshot,
-        preserve_owner_metadata,
+        preserve_sparse_fields,
     );
     merge_vec_field(
         &mut existing.runtime_assignment_list,
         incoming.runtime_assignment_list,
-        preserve_owner_metadata,
+        preserve_sparse_fields,
     );
     merge_optional_field(
         &mut existing.root_thread_id,
         incoming.root_thread_id,
-        preserve_owner_metadata,
+        preserve_sparse_fields,
     );
     merge_optional_field(
         &mut existing.active_thread_id,
         incoming.active_thread_id,
-        preserve_owner_metadata,
+        preserve_sparse_fields,
     );
     merge_vec_field(
         &mut existing.execution_thread_ids,
         incoming.execution_thread_ids,
-        preserve_owner_metadata,
+        preserve_sparse_fields,
     );
-    if preserve_owner_metadata {
+    if preserve_sparse_fields {
         existing.planner_owner_profile = incoming
             .planner_owner_profile
             .or(existing.planner_owner_profile.take());
@@ -784,21 +836,74 @@ fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun, preserve_owner_meta
         existing.planner_owner_profile = incoming.planner_owner_profile;
         existing.current_step_owner_profile = incoming.current_step_owner_profile;
     }
-    existing.child_task_count = incoming.child_task_count;
-    existing.approval_count = incoming.approval_count;
-    existing.awaiting_approval_id = incoming.awaiting_approval_id;
-    existing.last_error = incoming.last_error;
-    existing.goal = incoming.goal;
-    existing.current_step_index = incoming.current_step_index;
-    existing.reflection_summary = incoming.reflection_summary;
-    existing.memory_updates = incoming.memory_updates;
-    existing.generated_skill_path = incoming.generated_skill_path;
-    existing.child_task_ids = incoming.child_task_ids;
-    existing.dossier = merge_goal_run_dossier(existing.dossier.take(), incoming.dossier);
-    existing.created_at = incoming.created_at;
-    existing.updated_at = incoming.updated_at;
-    existing.total_step_count = existing.total_step_count.max(incoming.total_step_count);
-    existing.total_event_count = existing.total_event_count.max(incoming.total_event_count);
+    merge_u32_field(
+        &mut existing.child_task_count,
+        incoming.child_task_count,
+        preserve_sparse_fields,
+    );
+    merge_u32_field(
+        &mut existing.approval_count,
+        incoming.approval_count,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.awaiting_approval_id,
+        incoming.awaiting_approval_id,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.last_error,
+        incoming.last_error,
+        preserve_sparse_fields,
+    );
+    merge_string_field(&mut existing.goal, incoming.goal, preserve_sparse_fields);
+    merge_usize_field(
+        &mut existing.current_step_index,
+        incoming.current_step_index,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.reflection_summary,
+        incoming.reflection_summary,
+        preserve_sparse_fields,
+    );
+    merge_vec_field(
+        &mut existing.memory_updates,
+        incoming.memory_updates,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.generated_skill_path,
+        incoming.generated_skill_path,
+        preserve_sparse_fields,
+    );
+    merge_vec_field(
+        &mut existing.child_task_ids,
+        incoming.child_task_ids,
+        preserve_sparse_fields,
+    );
+    existing.dossier = merge_goal_run_dossier(
+        existing.dossier.take(),
+        incoming.dossier,
+        preserve_sparse_fields,
+    );
+    merge_u64_field(
+        &mut existing.created_at,
+        incoming.created_at,
+        preserve_sparse_fields,
+    );
+    merge_u64_field(
+        &mut existing.updated_at,
+        incoming.updated_at,
+        preserve_sparse_fields,
+    );
+    if preserve_sparse_fields {
+        existing.total_step_count = existing.total_step_count.max(incoming.total_step_count);
+        existing.total_event_count = existing.total_event_count.max(incoming.total_event_count);
+    } else {
+        existing.total_step_count = incoming.total_step_count;
+        existing.total_event_count = incoming.total_event_count;
+    }
 
     let (loaded_step_start, loaded_step_end, steps) = merge_range_vec(
         existing.loaded_step_start,
@@ -826,12 +931,17 @@ fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun, preserve_owner_meta
 
     existing.older_page_pending = false;
     existing.older_page_request_cooldown_until_tick = older_page_request_cooldown_until_tick;
+    existing.sparse_update = false;
 }
 
 fn merge_goal_run_dossier(
     existing: Option<GoalRunDossier>,
     incoming: Option<GoalRunDossier>,
+    preserve_existing_when_missing: bool,
 ) -> Option<GoalRunDossier> {
+    if !preserve_existing_when_missing {
+        return incoming;
+    }
     match (existing, incoming) {
         (None, dossier) | (dossier, None) => dossier,
         (Some(existing), Some(mut incoming)) => {

@@ -260,6 +260,37 @@ use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
     }
 
     #[tokio::test]
+    async fn goal_run_update_placeholder_payload_is_marked_sparse() {
+        let (event_tx, mut event_rx) = mpsc::channel(8);
+
+        let should_continue = handle_daemon_message_for_test(
+            DaemonMessage::AgentEvent {
+                event_json: serde_json::json!({
+                    "type": "goal_run_update",
+                    "goal_run_id": "goal-1",
+                    "message": "Goal update",
+                    "current_step_index": 4
+                })
+                .to_string(),
+            },
+            &event_tx,
+        )
+        .await;
+
+        assert!(should_continue);
+        match event_rx.recv().await.expect("expected goal update event") {
+            ClientEvent::GoalRunUpdate(goal_run) => {
+                assert_eq!(goal_run.id, "goal-1");
+                assert_eq!(goal_run.title, "Goal run update");
+                assert!(goal_run.last_error.is_none());
+                assert_eq!(goal_run.current_step_index, 4);
+                assert!(goal_run.sparse_update);
+            }
+            other => panic!("expected goal run update event, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
     async fn checkpoint_list_event_carries_goal_id_when_empty() {
         let (event_tx, mut event_rx) = mpsc::channel(8);
 

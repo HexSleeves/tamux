@@ -303,13 +303,17 @@ impl DaemonClient {
                     .and_then(|raw| serde_json::from_value::<GoalRun>(raw).ok())
                     .unwrap_or_else(|| GoalRun {
                         id: get_string(&event, "goal_run_id").unwrap_or_default(),
-                        title: get_string(&event, "message")
-                            .unwrap_or_else(|| "Goal run update".to_string()),
+                        title: "Goal run update".to_string(),
                         status: event
                             .get("status")
                             .cloned()
                             .and_then(|raw| serde_json::from_value::<GoalRunStatus>(raw).ok()),
-                        last_error: get_string(&event, "message"),
+                        current_step_index: event
+                            .get("current_step_index")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0) as usize,
+                        last_error: None,
+                        sparse_update: true,
                         ..GoalRun::default()
                     });
 

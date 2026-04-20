@@ -255,6 +255,8 @@ pub(crate) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
         awaiting_approval_id: r.awaiting_approval_id,
         last_error: r.last_error,
         goal: r.goal,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
         current_step_index: r.current_step_index,
         reflection_summary: r.reflection_summary,
         memory_updates: r.memory_updates,
@@ -280,10 +282,9 @@ pub(crate) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
                 todo_snapshot: event.todo_snapshot.into_iter().map(convert_todo).collect(),
             })
             .collect(),
-        created_at: 0,
-        updated_at: 0,
         older_page_pending: false,
         older_page_request_cooldown_until_tick: None,
+        sparse_update: r.sparse_update,
     }
 }
 
