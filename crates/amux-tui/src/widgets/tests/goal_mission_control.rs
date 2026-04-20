@@ -55,6 +55,27 @@ fn render_plain_text(can_open_active_thread: bool) -> String {
         .join("\n")
 }
 
+fn render_return_banner_plain_text(area: Rect) -> String {
+    let backend = TestBackend::new(area.width, area.height);
+    let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+    terminal
+        .draw(|frame| {
+            render_return_to_goal_banner(frame, area, &ThemeTokens::default());
+        })
+        .expect("return-to-goal banner render should succeed");
+
+    let buffer = terminal.backend().buffer();
+    (area.y..area.y.saturating_add(area.height))
+        .map(|y| {
+            (area.x..area.x.saturating_add(area.width))
+                .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn mission_control_thread_router_widget_renders_open_active_thread_control() {
     let plain = render_plain_text(true);
@@ -62,6 +83,13 @@ fn mission_control_thread_router_widget_renders_open_active_thread_control() {
     assert!(plain.contains("Thread Router"), "{plain}");
     assert!(plain.contains("Open active thread"), "{plain}");
     assert!(plain.contains("Ctrl+O"), "{plain}");
+}
+
+#[test]
+fn mission_control_thread_router_widget_renders_unavailable_status_when_disabled() {
+    let plain = render_plain_text(false);
+
+    assert!(plain.contains("Thread routing is unavailable"), "{plain}");
 }
 
 #[test]
@@ -94,4 +122,12 @@ fn mission_control_thread_router_widget_hit_test_ignores_disabled_open_thread_co
     );
 
     assert_eq!(hit, None);
+}
+
+#[test]
+fn mission_control_return_banner_renders_return_to_goal_affordance() {
+    let plain = render_return_banner_plain_text(Rect::new(0, 0, 72, 3));
+
+    assert!(plain.contains("Return to goal"), "{plain}");
+    assert!(plain.contains("source goal run"), "{plain}");
 }

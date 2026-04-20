@@ -15,14 +15,23 @@ Goal runners are tamux's durable autonomy layer. Instead of a single prompt/resp
 
 ## Starting A Goal Run
 
-From the desktop app:
+From the TUI:
 
-1. Open the agent panel.
-2. Confirm the backend is set to `daemon`.
-3. Open `Goal Runners`.
-4. Enter a goal prompt.
-5. Optionally provide a title and target session ID.
-6. Start the run.
+1. Open `Goals`.
+2. Start a new goal to open `Mission Control`.
+3. Enter the goal prompt in the preflight view.
+4. Confirm the primary agent provider, model, and reasoning effort.
+5. Review or edit the role roster before launch.
+6. Start the run from Mission Control.
+
+Mission Control preflight is no longer a plain text composer. It is the launch surface for the run:
+
+- `Goal Prompt` keeps the requested outcome in view.
+- `Primary Agent` shows the main provider/model/reasoning selection.
+- `Role Assignments` shows the roster that will be used for planning and execution.
+- `Preset Source` tells you whether defaults came from the previous goal snapshot or from main-agent inheritance.
+
+When a previous goal snapshot exists, its roster is loaded as the default starting point. If no prior snapshot exists, Mission Control initializes every role from the main agent.
 
 Good goal prompts are specific, bounded, and outcome-oriented.
 
@@ -52,6 +61,39 @@ Step-level status is tracked separately inside the run:
 - `completed`
 - `failed`
 - `skipped`
+
+## Mission Control During A Run
+
+While a goal is running, Goals stays an orchestration surface and Threads stays a conversation surface.
+
+Mission Control exposes:
+
+- `Goal overview` for status, current step, approvals, and goal controls.
+- `Execution feed` for live tool calls, file updates, messages, errors, and todo changes.
+- `Thread router` for opening the active execution thread.
+- `Agent roster` for runtime model/provider/role edits.
+- `Step board` and dossier details for execution history and evidence.
+
+`Esc` in Goals does not collapse back into inline chat. If you want to steer the active execution thread directly, use `Open active thread` to jump into `/threads`. Threads opened that way show a `Return to goal` affordance so you can safely come back to the same goal run.
+
+Runtime agent edits are operator-safe:
+
+- edits apply to future work by default,
+- active-step changes require an explicit confirmation,
+- and the roster distinguishes `live now` from `pending next turn`.
+
+When a confirmation is cancelled, the pending Mission Control runtime change is cleared instead of getting stuck in a half-applied state.
+
+## Header Behavior In Mission Control
+
+When Mission Control is focused, the header no longer borrows whatever conversation thread happened to be selected elsewhere. It resolves from the goal run itself:
+
+1. active execution thread runtime metadata,
+2. root goal thread runtime metadata,
+3. launch assignment snapshot,
+4. generic config defaults.
+
+If the live thread is missing, the header still keeps the fallback context window visible so the operator can see which model budget is in effect even before thread hydration completes.
 
 ## How Goal Runs Use The Task Queue
 
@@ -98,6 +140,7 @@ The structured run history stays in SQLite. The editable memory and skill artifa
 - Goal runners currently require the built-in `daemon` backend.
 - `pause` stops future orchestration but does not forcibly terminate a child task that is already running.
 - Reflection-driven memory updates are intentionally conservative and should capture durable knowledge, not temporary run output.
+- Runtime agent edits in the current implementation are a TUI-side operator control. They update the live Mission Control roster and confirmation flow, but they do not yet imply a new daemon-side orchestration protocol beyond the existing goal metadata.
 
 ## Suggested Operator Workflow
 

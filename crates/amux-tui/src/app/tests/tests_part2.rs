@@ -502,6 +502,18 @@
     }
 
     #[test]
+    fn goal_composer_escape_keeps_operator_in_goals_surface() {
+        let mut model = build_model();
+        model.open_new_goal_view();
+        model.focus = FocusArea::Chat;
+
+        let handled = model.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+
+        assert!(!handled);
+        assert!(matches!(model.main_pane_view, MainPaneView::GoalComposer));
+    }
+
+    #[test]
     fn concierge_arrow_keys_navigate_visible_actions() {
         let mut model = build_model();
         model.focus = FocusArea::Chat;

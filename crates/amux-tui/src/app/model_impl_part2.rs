@@ -390,9 +390,16 @@ impl TuiModel {
             }
             MainPaneView::Collaboration
             | MainPaneView::WorkContext
-            | MainPaneView::FilePreview(_)
-            | MainPaneView::GoalComposer => {
+            | MainPaneView::FilePreview(_) => {
                 self.set_main_pane_conversation(focus);
+                true
+            }
+            MainPaneView::GoalComposer => {
+                if self.sidebar_visible() {
+                    self.focus = FocusArea::Sidebar;
+                } else {
+                    self.focus = focus;
+                }
                 true
             }
             MainPaneView::Conversation => false,

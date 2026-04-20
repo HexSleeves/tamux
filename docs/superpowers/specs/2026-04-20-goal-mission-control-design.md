@@ -171,6 +171,8 @@ When Mission Control is focused, the header should resolve in this order:
 3. launch assignment snapshot
 4. generic config defaults
 
+Current-step or planner owner-profile hints may still be used to keep the header label legible when thread metadata is partial, but they must not displace the thread-first provider/model/context-window resolution above.
+
 Values bound through this path:
 
 - provider

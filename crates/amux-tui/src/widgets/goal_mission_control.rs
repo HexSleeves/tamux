@@ -278,11 +278,16 @@ fn render_thread_router_section(
     } else {
         "No active or root goal thread is available for this Mission Control source."
     };
+    let hint = if can_open_active_thread {
+        "Inspect the live goal thread"
+    } else {
+        "Thread routing is unavailable until the goal exposes a thread target"
+    };
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
                 Span::styled(OPEN_ACTIVE_THREAD_LABEL, button_style),
-                Span::styled("  Inspect the live goal thread", theme.fg_dim),
+                Span::styled(format!("  {hint}"), theme.fg_dim),
             ]),
             Line::from(Span::styled(status, theme.fg_dim)),
         ]),
@@ -297,7 +302,7 @@ fn render_footer(frame: &mut Frame, area: Rect, theme: &ThemeTokens) {
         Span::styled("Ctrl+O", theme.fg_active),
         Span::styled(" open thread  ", theme.fg_dim),
         Span::styled("Esc", theme.fg_active),
-        Span::styled(" back to conversation", theme.fg_dim),
+        Span::styled(" focus goals", theme.fg_dim),
     ]);
     frame.render_widget(Paragraph::new(footer), area);
 }
