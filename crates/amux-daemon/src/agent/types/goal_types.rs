@@ -85,6 +85,15 @@ pub struct GoalRunEvent {
     pub todo_snapshot: Vec<TodoItem>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct GoalRuntimeOwnerProfile {
+    pub agent_label: String,
+    pub provider: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoalRun {
     pub id: String,
@@ -109,6 +118,10 @@ pub struct GoalRun {
     pub current_step_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_step_kind: Option<GoalRunStepKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planner_owner_profile: Option<GoalRuntimeOwnerProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_step_owner_profile: Option<GoalRuntimeOwnerProfile>,
     pub replan_count: u32,
     pub max_replans: u32,
     #[serde(skip_serializing_if = "Option::is_none")]

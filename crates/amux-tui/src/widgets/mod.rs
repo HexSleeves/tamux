@@ -11,6 +11,7 @@ pub mod concierge_loading;
 pub mod file_preview;
 pub mod footer;
 pub mod goal_picker;
+pub mod goal_sidebar;
 pub mod header;
 pub mod image_preview;
 pub mod landing;

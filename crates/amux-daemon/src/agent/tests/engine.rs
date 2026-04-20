@@ -517,6 +517,8 @@ async fn hydrate_restores_full_persisted_goal_run_event_history() {
         current_step_index: 0,
         current_step_title: None,
         current_step_kind: None,
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 0,
         max_replans: 0,
         plan_summary: None,

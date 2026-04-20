@@ -81,6 +81,11 @@ if matches!(
                         tracing::warn!("truncated agent thread list to fit IPC frame limit");
                     }
                     let json = serde_json::to_string(&threads).unwrap_or_default();
+                    tracing::debug!(
+                        thread_count = threads.len(),
+                        payload_bytes = json.len(),
+                        "sending agent thread list to client"
+                    );
                     framed
                         .send(DaemonMessage::AgentThreadList { threads_json: json })
                         .await?;
@@ -274,7 +279,12 @@ if matches!(
                     }
                     let json = detail
                         .map(|(goal_run_json, _)| goal_run_json)
-                        .unwrap_or_else(|| "null".to_string());
+                        .unwrap_or_else(|| {
+                            serde_json::json!({
+                                "id": goal_run_id.clone(),
+                            })
+                            .to_string()
+                        });
                     framed
                         .send(DaemonMessage::AgentGoalRunDetail {
                             goal_run_json: json,
@@ -306,7 +316,12 @@ if matches!(
                     }
                     let json = detail
                         .map(|(goal_run_json, _)| goal_run_json)
-                        .unwrap_or_else(|| "null".to_string());
+                        .unwrap_or_else(|| {
+                            serde_json::json!({
+                                "id": goal_run_id.clone(),
+                            })
+                            .to_string()
+                        });
                     framed
                         .send(DaemonMessage::AgentGoalRunDetail {
                             goal_run_json: json,
@@ -746,6 +761,10 @@ if matches!(
 
                 ClientMessage::AgentListTaskApprovalRules => {
                     let rules = agent.list_task_approval_rules().await;
+                    tracing::debug!(
+                        rule_count = rules.len(),
+                        "sending task approval rules to client"
+                    );
                     framed
                         .send(DaemonMessage::AgentTaskApprovalRules { rules })
                         .await?;
@@ -755,6 +774,10 @@ if matches!(
                     match agent.create_task_approval_rule_from_pending(&approval_id).await {
                         Ok(Some(_)) => {
                             let rules = agent.list_task_approval_rules().await;
+                            tracing::debug!(
+                                rule_count = rules.len(),
+                                "sending task approval rules to client after create"
+                            );
                             framed
                                 .send(DaemonMessage::AgentTaskApprovalRules { rules })
                                 .await?;
@@ -791,6 +814,10 @@ if matches!(
                             .await?;
                     }
                     let rules = agent.list_task_approval_rules().await;
+                    tracing::debug!(
+                        rule_count = rules.len(),
+                        "sending task approval rules to client after revoke"
+                    );
                     framed
                         .send(DaemonMessage::AgentTaskApprovalRules { rules })
                         .await?;
@@ -940,7 +967,10 @@ if matches!(
                         }
                     };
                     framed
-                        .send(DaemonMessage::AgentCheckpointList { checkpoints_json })
+                        .send(DaemonMessage::AgentCheckpointList {
+                            goal_run_id,
+                            checkpoints_json,
+                        })
                         .await
                         .ok();
                 }

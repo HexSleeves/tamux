@@ -13,16 +13,7 @@ impl ConciergeEngine {
         }
 
         let content = if detail_level == ConciergeDetailLevel::Minimal {
-            if let Some(last) = context.recent_threads.first() {
-                format!(
-                    "Welcome back! Last session: **{}** ({}). {} messages.",
-                    last.title,
-                    format_timestamp(last.updated_at),
-                    last.message_count
-                )
-            } else {
-                "Welcome to tamux! Ready to start your first session.".into()
-            }
+            minimal_welcome_content(context)
         } else {
             match self.call_llm_for_welcome(detail_level, context).await {
                 Ok(response) => strip_trailing_actions(&response),
@@ -197,6 +188,15 @@ impl ConciergeEngine {
             }
         }
 
+        if let Some(task) = context.latest_pending_task.as_ref() {
+            prompt.push_str(&format!(
+                "\nLatest pending goal/task: \"{}\" [{:?}] ({})\n",
+                task.label,
+                task.status,
+                format_timestamp(task.created_at)
+            ));
+        }
+
         if context.pending_task_total > 0 {
             prompt.push_str(&format!(
                 "\nUnresolved tasks: {} total\n",
@@ -233,11 +233,24 @@ impl ConciergeEngine {
                 format_timestamp(last.updated_at),
                 last.message_count
             )];
+            if let Some(task) = context.latest_pending_task.as_ref() {
+                parts.push(format!(
+                    "**Latest goal:** {} ({})",
+                    task.label,
+                    format_timestamp(task.created_at)
+                ));
+            }
             if context.pending_task_total > 0 {
                 parts.push(format!("**Pending tasks:** {}", context.pending_task_total));
             }
             parts.push("What would you like to work on?".into());
             parts.join("\n")
+        } else if let Some(task) = context.latest_pending_task.as_ref() {
+            format!(
+                "Welcome back! Latest goal: **{}** ({}).",
+                task.label,
+                format_timestamp(task.created_at)
+            )
         } else {
             "Welcome to tamux! Ready to start your first session.".into()
         }
@@ -349,9 +362,41 @@ pub(super) fn build_welcome_signature(
         .collect::<Vec<_>>()
         .join(";");
     let task_sig = format!(
-        "{}|{}",
+        "{}|{}|{}",
         context.pending_task_total,
-        context.pending_tasks.join(";")
+        context.pending_tasks.join(";"),
+        context
+            .latest_pending_task
+            .as_ref()
+            .map(|task| format!("{}|{:?}|{}", task.label, task.status, task.created_at))
+            .unwrap_or_default()
     );
     format!("{detail_level:?}::{thread_sig}::{task_sig}")
+}
+
+fn minimal_welcome_content(context: &WelcomeContext) -> String {
+    match (
+        context.recent_threads.first(),
+        context.latest_pending_task.as_ref(),
+    ) {
+        (Some(last), Some(task)) => format!(
+            "Welcome back! Last session: **{}** ({}). Latest goal: **{}** ({}).",
+            last.title,
+            format_timestamp(last.updated_at),
+            task.label,
+            format_timestamp(task.created_at)
+        ),
+        (Some(last), None) => format!(
+            "Welcome back! Last session: **{}** ({}). {} messages.",
+            last.title,
+            format_timestamp(last.updated_at),
+            last.message_count
+        ),
+        (None, Some(task)) => format!(
+            "Welcome back! Latest goal: **{}** ({}).",
+            task.label,
+            format_timestamp(task.created_at)
+        ),
+        (None, None) => "Welcome to tamux! Ready to start your first session.".into(),
+    }
 }

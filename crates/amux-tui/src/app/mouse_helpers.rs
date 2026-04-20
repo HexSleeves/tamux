@@ -239,6 +239,16 @@ impl TuiModel {
             return;
         };
         match hit {
+            widgets::task_view::TaskViewHitTarget::BackToGoal => {
+                let sidebar::SidebarItemTarget::Task { task_id } = target else {
+                    return;
+                };
+                let Some(parent_target) = self.parent_goal_target_for_task(task_id) else {
+                    return;
+                };
+                self.open_sidebar_target(parent_target);
+                self.focus = FocusArea::Chat;
+            }
             widgets::task_view::TaskViewHitTarget::GoalStep(step_id) => {
                 let _ = self.select_goal_step_in_active_run(step_id);
             }
@@ -262,6 +272,26 @@ impl TuiModel {
                 });
             }
         }
+    }
+
+    pub(in super::super) fn goal_sidebar_hit_test(
+        &self,
+        sidebar_area: Rect,
+        mouse: MouseEvent,
+    ) -> Option<widgets::goal_sidebar::GoalSidebarHitTarget> {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return None;
+        };
+
+        widgets::goal_sidebar::hit_test(
+            sidebar_area,
+            &self.tasks,
+            goal_run_id,
+            &self.goal_sidebar,
+            Position::new(mouse.column, mouse.row),
+        )
     }
 
     pub(super) fn modal_navigate_to(&mut self, target: usize) {

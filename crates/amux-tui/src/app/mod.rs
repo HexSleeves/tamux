@@ -6,7 +6,7 @@
 
 mod commands;
 mod config_io;
-mod conversion;
+pub(crate) mod conversion;
 mod events;
 mod input_ops;
 mod keyboard;
@@ -81,6 +81,14 @@ enum MainPaneView {
     GoalComposer,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum GoalSidebarSelectionAnchor {
+    Step(String),
+    Checkpoint(String),
+    Task(String),
+    File { thread_id: String, path: String },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsPickerTarget {
     Provider,
@@ -146,6 +154,10 @@ enum PendingConfirmAction {
         goal_run_id: String,
         title: String,
     },
+    PauseGoalRun {
+        goal_run_id: String,
+        title: String,
+    },
     StopGoalRun {
         goal_run_id: String,
         title: String,
@@ -191,6 +203,9 @@ impl PendingConfirmAction {
             }
             PendingConfirmAction::DeleteGoalRun { title, .. } => {
                 format!("Delete goal run \"{title}\"?")
+            }
+            PendingConfirmAction::PauseGoalRun { title, .. } => {
+                format!("Pause goal run \"{title}\"?")
             }
             PendingConfirmAction::StopGoalRun { title, .. } => {
                 format!("Stop goal run \"{title}\"?")
@@ -415,6 +430,8 @@ pub struct TuiModel {
     input: input::InputState,
     modal: modal::ModalState,
     sidebar: sidebar::SidebarState,
+    goal_sidebar: goal_sidebar::GoalSidebarState,
+    goal_sidebar_selection_anchor: Option<GoalSidebarSelectionAnchor>,
     tasks: task::TaskState,
     config: config::ConfigState,
     approval: approval::ApprovalState,
@@ -517,6 +534,7 @@ pub struct TuiModel {
 
     // Thread currently awaiting full detail from the daemon.
     thread_loading_id: Option<String>,
+    pending_goal_hydration_refreshes: std::collections::HashSet<String>,
 
     // Ignore a stale concierge welcome that arrives after the user navigated away.
     ignore_pending_concierge_welcome: bool,

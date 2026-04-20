@@ -4,6 +4,7 @@ pub(super) struct WelcomeContext {
     pub(super) recent_threads: Vec<ThreadSummary>,
     pub(super) pending_task_total: usize,
     pub(super) pending_tasks: Vec<String>,
+    pub(super) latest_pending_task: Option<PendingTaskSummary>,
 }
 
 pub(super) const WELCOME_CACHE_TTL: std::time::Duration =
@@ -24,4 +25,11 @@ pub(super) struct ThreadSummary {
     pub(super) message_count: usize,
     pub(super) opening_message: Option<String>,
     pub(super) last_messages: Vec<String>,
+}
+
+#[derive(Clone)]
+pub(super) struct PendingTaskSummary {
+    pub(super) label: String,
+    pub(super) status: TaskStatus,
+    pub(super) created_at: u64,
 }

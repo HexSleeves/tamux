@@ -19,6 +19,21 @@
                                         "truncated agent event to fit IPC frame limit"
                                     );
                                 }
+                                tracing::debug!(
+                                    event_type = match &event {
+                                        crate::agent::types::AgentEvent::Notification { .. } => "notification",
+                                        crate::agent::types::AgentEvent::AnticipatoryUpdate { .. } => "anticipatory_update",
+                                        crate::agent::types::AgentEvent::ConciergeWelcome { .. } => "concierge_welcome",
+                                        crate::agent::types::AgentEvent::WorkflowNotice { .. } => "workflow_notice",
+                                        crate::agent::types::AgentEvent::ThreadCreated { .. } => "thread_created",
+                                        crate::agent::types::AgentEvent::ThreadReloadRequired { .. } => "thread_reload_required",
+                                        crate::agent::types::AgentEvent::TaskUpdate { .. } => "task_update",
+                                        crate::agent::types::AgentEvent::GoalRunUpdate { .. } => "goal_run_update",
+                                        _ => "other",
+                                    },
+                                    payload_bytes = json.len(),
+                                    "forwarding agent event to client"
+                                );
                                 framed
                                     .send(DaemonMessage::AgentEvent { event_json: json })
                                     .await?;

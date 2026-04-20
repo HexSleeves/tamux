@@ -1,65 +1,92 @@
 use super::*;
+use crate::agent::types::GoalRuntimeOwnerProfile;
+
+fn serialize_goal_runtime_owner_profile(
+    profile: &Option<GoalRuntimeOwnerProfile>,
+) -> rusqlite::Result<Option<String>> {
+    profile
+        .as_ref()
+        .map(|value| {
+            serde_json::to_string(value)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+        })
+        .transpose()
+}
+
+fn deserialize_goal_runtime_owner_profile(
+    profile_json: Option<String>,
+) -> Option<GoalRuntimeOwnerProfile> {
+    profile_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+}
 
 impl HistoryStore {
     pub async fn upsert_goal_run(&self, goal_run: &GoalRun) -> Result<()> {
         let goal_run = goal_run.clone();
         self.conn.call(move |conn| {
-        let transaction = conn.transaction()?;
-        let memory_updates_json = serde_json::to_string(&goal_run.memory_updates).call_err()?;
-        let child_task_ids_json = serde_json::to_string(&goal_run.child_task_ids).call_err()?;
-        let dossier_json = goal_run
-            .dossier
-            .as_ref()
-            .map(|dossier| serde_json::to_string(dossier).call_err())
-            .transpose()?;
-        let authorship_tag = goal_run.authorship_tag.map(authorship_tag_to_str);
+            let transaction = conn.transaction()?;
+            let memory_updates_json = serde_json::to_string(&goal_run.memory_updates).call_err()?;
+            let child_task_ids_json = serde_json::to_string(&goal_run.child_task_ids).call_err()?;
+            let dossier_json = goal_run
+                .dossier
+                .as_ref()
+                .map(|dossier| serde_json::to_string(dossier).call_err())
+                .transpose()?;
+            let planner_owner_profile_json =
+                serialize_goal_runtime_owner_profile(&goal_run.planner_owner_profile)?;
+            let current_step_owner_profile_json =
+                serialize_goal_runtime_owner_profile(&goal_run.current_step_owner_profile)?;
+            let authorship_tag = goal_run.authorship_tag.map(authorship_tag_to_str);
 
-        transaction.execute(
-            "INSERT OR REPLACE INTO goal_runs \
-             (id, title, goal, client_request_id, status, priority, created_at, updated_at, started_at, completed_at, thread_id, session_id, current_step_index, replan_count, max_replans, plan_summary, reflection_summary, memory_updates_json, generated_skill_path, last_error, failure_cause, stopped_reason, child_task_ids_json, child_task_count, approval_count, awaiting_approval_id, policy_fingerprint, approval_expires_at, containment_scope, compensation_status, compensation_summary, active_task_id, duration_ms, dossier_json, total_prompt_tokens, total_completion_tokens, estimated_cost_usd, autonomy_level, authorship_tag) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39)",
-            params![
-                &goal_run.id,
-                &goal_run.title,
-                &goal_run.goal,
-                &goal_run.client_request_id,
-                goal_run_status_to_str(goal_run.status),
-                task_priority_to_str(goal_run.priority),
-                goal_run.created_at as i64,
-                goal_run.updated_at as i64,
-                goal_run.started_at.map(|value| value as i64),
-                goal_run.completed_at.map(|value| value as i64),
-                &goal_run.thread_id,
-                &goal_run.session_id,
-                goal_run.current_step_index as i64,
-                goal_run.replan_count as i64,
-                goal_run.max_replans as i64,
-                &goal_run.plan_summary,
-                &goal_run.reflection_summary,
-                memory_updates_json,
-                &goal_run.generated_skill_path,
-                &goal_run.last_error,
-                &goal_run.failure_cause,
-                &goal_run.stopped_reason,
-                child_task_ids_json,
-                goal_run.child_task_count as i64,
-                goal_run.approval_count as i64,
-                &goal_run.awaiting_approval_id,
-                &goal_run.policy_fingerprint,
-                goal_run.approval_expires_at.map(|value| value as i64),
-                &goal_run.containment_scope,
-                &goal_run.compensation_status,
-                &goal_run.compensation_summary,
-                &goal_run.active_task_id,
-                goal_run.duration_ms.map(|value| value as i64),
-                dossier_json,
-                goal_run.total_prompt_tokens as i64,
-                goal_run.total_completion_tokens as i64,
-                goal_run.estimated_cost_usd,
-                autonomy_level_to_str(goal_run.autonomy_level),
-                authorship_tag,
-            ],
-        )?;
+            transaction.execute(
+                "INSERT OR REPLACE INTO goal_runs \
+                 (id, title, goal, client_request_id, status, priority, created_at, updated_at, started_at, completed_at, thread_id, session_id, current_step_index, replan_count, max_replans, plan_summary, reflection_summary, memory_updates_json, generated_skill_path, last_error, failure_cause, stopped_reason, child_task_ids_json, child_task_count, approval_count, awaiting_approval_id, policy_fingerprint, approval_expires_at, containment_scope, compensation_status, compensation_summary, active_task_id, duration_ms, dossier_json, total_prompt_tokens, total_completion_tokens, estimated_cost_usd, autonomy_level, authorship_tag, planner_owner_profile_json, current_step_owner_profile_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41)",
+                params![
+                    &goal_run.id,
+                    &goal_run.title,
+                    &goal_run.goal,
+                    &goal_run.client_request_id,
+                    goal_run_status_to_str(goal_run.status),
+                    task_priority_to_str(goal_run.priority),
+                    goal_run.created_at as i64,
+                    goal_run.updated_at as i64,
+                    goal_run.started_at.map(|value| value as i64),
+                    goal_run.completed_at.map(|value| value as i64),
+                    &goal_run.thread_id,
+                    &goal_run.session_id,
+                    goal_run.current_step_index as i64,
+                    goal_run.replan_count as i64,
+                    goal_run.max_replans as i64,
+                    &goal_run.plan_summary,
+                    &goal_run.reflection_summary,
+                    memory_updates_json,
+                    &goal_run.generated_skill_path,
+                    &goal_run.last_error,
+                    &goal_run.failure_cause,
+                    &goal_run.stopped_reason,
+                    child_task_ids_json,
+                    goal_run.child_task_count as i64,
+                    goal_run.approval_count as i64,
+                    &goal_run.awaiting_approval_id,
+                    &goal_run.policy_fingerprint,
+                    goal_run.approval_expires_at.map(|value| value as i64),
+                    &goal_run.containment_scope,
+                    &goal_run.compensation_status,
+                    &goal_run.compensation_summary,
+                    &goal_run.active_task_id,
+                    goal_run.duration_ms.map(|value| value as i64),
+                    dossier_json,
+                    goal_run.total_prompt_tokens as i64,
+                    goal_run.total_completion_tokens as i64,
+                    goal_run.estimated_cost_usd,
+                    autonomy_level_to_str(goal_run.autonomy_level),
+                    authorship_tag,
+                    planner_owner_profile_json,
+                    current_step_owner_profile_json,
+                ],
+            )?;
 
         transaction.execute(
             "DELETE FROM goal_run_steps WHERE goal_run_id = ?1",
@@ -110,8 +137,8 @@ impl HistoryStore {
             )?;
         }
 
-        transaction.commit()?;
-        Ok(())
+            transaction.commit()?;
+            Ok(())
         }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
 
@@ -175,7 +202,7 @@ impl HistoryStore {
         }
 
         let mut stmt = conn.prepare(
-            "SELECT id, title, goal, client_request_id, status, priority, created_at, updated_at, started_at, completed_at, thread_id, session_id, current_step_index, replan_count, max_replans, plan_summary, reflection_summary, memory_updates_json, generated_skill_path, last_error, failure_cause, stopped_reason, child_task_ids_json, child_task_count, approval_count, awaiting_approval_id, policy_fingerprint, approval_expires_at, containment_scope, compensation_status, compensation_summary, active_task_id, duration_ms, dossier_json, total_prompt_tokens, total_completion_tokens, estimated_cost_usd, autonomy_level, authorship_tag \
+            "SELECT id, title, goal, client_request_id, status, priority, created_at, updated_at, started_at, completed_at, thread_id, session_id, current_step_index, replan_count, max_replans, plan_summary, reflection_summary, memory_updates_json, generated_skill_path, last_error, failure_cause, stopped_reason, child_task_ids_json, child_task_count, approval_count, awaiting_approval_id, policy_fingerprint, approval_expires_at, containment_scope, compensation_status, compensation_summary, active_task_id, duration_ms, dossier_json, total_prompt_tokens, total_completion_tokens, estimated_cost_usd, autonomy_level, authorship_tag, planner_owner_profile_json, current_step_owner_profile_json \
              FROM goal_runs ORDER BY updated_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -183,6 +210,8 @@ impl HistoryStore {
             let memory_updates_json: String = row.get(17)?;
             let dossier_json: Option<String> = row.get(33)?;
             let child_task_ids_json: String = row.get(22)?;
+            let planner_owner_profile_json: Option<String> = row.get(39)?;
+            let current_step_owner_profile_json: Option<String> = row.get(40)?;
             let child_task_ids = serde_json::from_str(&child_task_ids_json).unwrap_or_default();
             Ok(GoalRun {
                 id,
@@ -200,6 +229,12 @@ impl HistoryStore {
                 current_step_index: row.get::<_, i64>(12)? as usize,
                 current_step_title: None,
                 current_step_kind: None,
+                planner_owner_profile: deserialize_goal_runtime_owner_profile(
+                    planner_owner_profile_json,
+                ),
+                current_step_owner_profile: deserialize_goal_runtime_owner_profile(
+                    current_step_owner_profile_json,
+                ),
                 replan_count: row.get::<_, i64>(13)? as u32,
                 max_replans: row.get::<_, i64>(14)? as u32,
                 plan_summary: row.get(15)?,

@@ -214,7 +214,7 @@ async fn run_unix(
     startup_readiness: StartupReadiness,
 ) -> Result<()> {
     // Graceful shutdown on SIGINT / SIGTERM.
-    let shutdown = await_shutdown_signal(tokio::signal::ctrl_c(), false);
+    let shutdown = await_shutdown_signal_unix();
 
     tokio::select! {
         _ = accept_loop_unix(listener, manager, agent, plugin_manager, startup_readiness) => {}
@@ -224,6 +224,59 @@ async fn run_unix(
     let _ = std::fs::remove_file(&path);
     tracing::info!("daemon shut down");
     Ok(())
+}
+
+#[cfg(unix)]
+async fn await_shutdown_signal_unix() {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sigterm = match signal(SignalKind::terminate()) {
+        Ok(stream) => Some(stream),
+        Err(error) => {
+            tracing::warn!(error = %error, "SIGTERM listener unavailable");
+            None
+        }
+    };
+    let mut sighup = match signal(SignalKind::hangup()) {
+        Ok(stream) => Some(stream),
+        Err(error) => {
+            tracing::warn!(error = %error, "SIGHUP listener unavailable");
+            None
+        }
+    };
+
+    loop {
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                match result {
+                    Ok(()) => tracing::info!("shutdown signal received signal=SIGINT"),
+                    Err(error) => tracing::warn!(error = %error, "shutdown signal listener unavailable"),
+                }
+                return;
+            }
+            _ = async {
+                match sigterm.as_mut() {
+                    Some(stream) => {
+                        let _ = stream.recv().await;
+                    }
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                tracing::info!("shutdown signal received signal=SIGTERM");
+                return;
+            }
+            _ = async {
+                match sighup.as_mut() {
+                    Some(stream) => {
+                        let _ = stream.recv().await;
+                    }
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                tracing::warn!("ignoring SIGHUP to keep daemon alive");
+            }
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -420,6 +473,27 @@ mod shutdown_signal_tests {
         assert!(
             timeout.is_err(),
             "headless shutdown handling should stay pending instead of exiting immediately"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_unix_shutdown_path_handles_sigterm_and_sighup() {
+        let root = crate::test_support::repo_root();
+        let source = std::fs::read_to_string(root.join("crates/amux-daemon/src/server/post_tests.rs"))
+            .expect("read server startup source");
+
+        assert!(
+            source.contains("SignalKind::terminate()"),
+            "unix daemon shutdown should listen for SIGTERM"
+        );
+        assert!(
+            source.contains("SignalKind::hangup()"),
+            "unix daemon shutdown should install a SIGHUP handler"
+        );
+        assert!(
+            source.contains("ignoring SIGHUP to keep daemon alive"),
+            "unix daemon should log ignored SIGHUP events"
         );
     }
 }

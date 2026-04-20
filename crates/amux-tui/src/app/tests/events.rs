@@ -125,6 +125,122 @@ fn next_goal_run_checkpoints_request(
     None
 }
 
+fn next_goal_hydration_schedule(
+    daemon_rx: &mut tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
+) -> Option<String> {
+    while let Ok(command) = daemon_rx.try_recv() {
+        if let DaemonCommand::ScheduleGoalHydrationRefresh(goal_run_id) = command {
+            return Some(goal_run_id);
+        }
+    }
+    None
+}
+
+fn active_goal_run_sidebar_model() -> TuiModel {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Goal Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model.tasks.reduce(task::TaskAction::TaskListReceived(vec![
+        task::AgentTask {
+            id: "task-1".to_string(),
+            title: "Child Task One".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            goal_run_id: Some("goal-1".to_string()),
+            created_at: 10,
+            ..Default::default()
+        },
+        task::AgentTask {
+            id: "task-2".to_string(),
+            title: "Child Task Two".to_string(),
+            thread_id: Some("thread-2".to_string()),
+            goal_run_id: Some("goal-1".to_string()),
+            created_at: 20,
+            ..Default::default()
+        },
+    ]));
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Goal Title".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            goal: "goal definition body".to_string(),
+            current_step_title: Some("Implement".to_string()),
+            child_task_ids: vec!["task-1".to_string(), "task-2".to_string()],
+            steps: vec![
+                task::GoalRunStep {
+                    id: "step-1".to_string(),
+                    title: "Plan".to_string(),
+                    order: 0,
+                    ..Default::default()
+                },
+                task::GoalRunStep {
+                    id: "step-2".to_string(),
+                    title: "Implement".to_string(),
+                    order: 1,
+                    ..Default::default()
+                },
+                task::GoalRunStep {
+                    id: "step-3".to_string(),
+                    title: "Verify".to_string(),
+                    order: 2,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }));
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunCheckpointsReceived {
+            goal_run_id: "goal-1".to_string(),
+            checkpoints: vec![
+                task::GoalRunCheckpointSummary {
+                    id: "checkpoint-1".to_string(),
+                    checkpoint_type: "plan".to_string(),
+                    step_index: Some(0),
+                    context_summary_preview: Some("Checkpoint for Plan".to_string()),
+                    ..Default::default()
+                },
+                task::GoalRunCheckpointSummary {
+                    id: "checkpoint-2".to_string(),
+                    checkpoint_type: "verify".to_string(),
+                    step_index: Some(2),
+                    context_summary_preview: Some("Checkpoint for Verify".to_string()),
+                    ..Default::default()
+                },
+            ],
+        });
+    model.tasks.reduce(task::TaskAction::WorkContextReceived(
+        task::ThreadWorkContext {
+            thread_id: "thread-1".to_string(),
+            entries: vec![
+                task::WorkContextEntry {
+                    path: "/tmp/plan.md".to_string(),
+                    goal_run_id: Some("goal-1".to_string()),
+                    is_text: true,
+                    ..Default::default()
+                },
+                task::WorkContextEntry {
+                    path: "/tmp/report.md".to_string(),
+                    goal_run_id: Some("goal-1".to_string()),
+                    is_text: true,
+                    ..Default::default()
+                },
+            ],
+        },
+    ));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: Some("step-1".to_string()),
+    });
+    model
+}
+
 #[test]
 fn connected_event_defers_concierge_welcome_until_config_loads() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
@@ -132,10 +248,12 @@ fn connected_event_defers_concierge_welcome_until_config_loads() {
     model.handle_connected_event();
 
     let mut saw_refresh = false;
+    let mut saw_get_config = false;
     let mut saw_refresh_services = false;
     while let Ok(command) = daemon_rx.try_recv() {
         match command {
             DaemonCommand::Refresh => saw_refresh = true,
+            DaemonCommand::GetConfig => saw_get_config = true,
             DaemonCommand::RefreshServices => saw_refresh_services = true,
             DaemonCommand::RequestConciergeWelcome => {
                 panic!("concierge welcome should wait until config is loaded")
@@ -146,8 +264,12 @@ fn connected_event_defers_concierge_welcome_until_config_loads() {
 
     assert!(saw_refresh, "connect should still request thread refresh");
     assert!(
-        saw_refresh_services,
-        "connect should still request service refresh including config"
+        saw_get_config,
+        "connect should request config on the startup-critical lane"
+    );
+    assert!(
+        !saw_refresh_services,
+        "connect should defer heavy service refresh until config has loaded"
     );
     assert!(
         !model.concierge.loading,
@@ -180,6 +302,175 @@ fn first_raw_config_load_triggers_concierge_welcome_request() {
         model.concierge.loading,
         "first config load should start concierge welcome"
     );
+    let mut saw_welcome = false;
+    let mut saw_refresh_services = false;
+    let mut saw_provider_auth_states = false;
+    while let Ok(command) = daemon_rx.try_recv() {
+        match command {
+            DaemonCommand::RequestConciergeWelcome => saw_welcome = true,
+            DaemonCommand::RefreshServices => saw_refresh_services = true,
+            DaemonCommand::GetProviderAuthStates => saw_provider_auth_states = true,
+            _ => {}
+        }
+    }
+    assert!(saw_welcome, "expected concierge welcome request");
+    assert!(
+        saw_refresh_services,
+        "config load should trigger the deferred heavy startup refresh after concierge is queued"
+    );
+    assert!(
+        saw_provider_auth_states,
+        "config load should release deferred startup follow-up requests"
+    );
+}
+
+#[test]
+fn first_raw_config_load_replaces_goal_pane_with_concierge_loading() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+    model.agent_config_loaded = false;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Goal Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: Some("step-1".to_string()),
+    });
+
+    model.handle_agent_config_raw_event(serde_json::json!({
+        "provider": PROVIDER_ID_OPENAI,
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-5.4",
+    }));
+
+    assert!(
+        matches!(model.main_pane_view, MainPaneView::Conversation),
+        "welcome request should immediately leave the goal pane so the loading hero can render"
+    );
+    assert_eq!(
+        model.chat.active_thread_id(),
+        None,
+        "welcome request should clear the active thread until concierge content arrives"
+    );
+    assert!(
+        model.concierge.loading,
+        "welcome request should start concierge loading before the daemon responds"
+    );
+    assert!(
+        model.should_show_concierge_hero_loading(),
+        "goal panes should not block the concierge loading hero after the request is sent"
+    );
+
+    let mut saw_welcome = false;
+    while let Ok(command) = daemon_rx.try_recv() {
+        if matches!(command, DaemonCommand::RequestConciergeWelcome) {
+            saw_welcome = true;
+            break;
+        }
+    }
+    assert!(saw_welcome, "expected concierge welcome request");
+}
+
+#[test]
+fn pump_daemon_events_budgeted_stops_after_limit() {
+    let (daemon_tx, daemon_rx) = std::sync::mpsc::channel();
+    let (cmd_tx, _cmd_rx) = unbounded_channel();
+    let mut model = TuiModel::new(daemon_rx, cmd_tx);
+
+    daemon_tx
+        .send(ClientEvent::Error("first".to_string()))
+        .expect("first event should send");
+    daemon_tx
+        .send(ClientEvent::Error("second".to_string()))
+        .expect("second event should send");
+    daemon_tx
+        .send(ClientEvent::Error("third".to_string()))
+        .expect("third event should send");
+
+    let processed = model.pump_daemon_events_budgeted(2);
+
+    assert_eq!(processed, 2);
+    assert_eq!(model.last_error.as_deref(), Some("second"));
+
+    let remaining = model.pump_daemon_events_budgeted(usize::MAX);
+
+    assert_eq!(remaining, 1);
+    assert_eq!(model.last_error.as_deref(), Some("third"));
+}
+
+#[test]
+fn concierge_loading_state_is_visible_before_full_startup_burst_is_drained() {
+    let (daemon_tx, daemon_rx) = std::sync::mpsc::channel();
+    let (cmd_tx, _cmd_rx) = unbounded_channel();
+    let mut model = TuiModel::new(daemon_rx, cmd_tx);
+    model.connected = true;
+    model.agent_config_loaded = false;
+
+    daemon_tx
+        .send(ClientEvent::AgentConfigRaw(serde_json::json!({
+            "provider": PROVIDER_ID_OPENAI,
+            "base_url": "https://api.openai.com/v1",
+            "model": "gpt-5.4",
+        })))
+        .expect("config event should send");
+    daemon_tx
+        .send(ClientEvent::Error("startup follow-up".to_string()))
+        .expect("follow-up event should send");
+
+    let processed = model.pump_daemon_events_budgeted(1);
+
+    assert_eq!(processed, 1);
+    assert!(
+        model.concierge.loading,
+        "the first startup frame should keep concierge loading visible"
+    );
+    assert!(
+        matches!(model.main_pane_view, MainPaneView::Conversation),
+        "the loading hero should stay on the conversation view until later startup events are processed"
+    );
+
+    let remaining = model.pump_daemon_events_budgeted(usize::MAX);
+    assert_eq!(remaining, 1);
+    assert!(
+        !model.concierge.loading,
+        "processing the remaining burst should clear the loading state"
+    );
+}
+
+#[test]
+fn operator_profile_completion_starts_concierge_loading_before_response() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Goal Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: Some("step-1".to_string()),
+    });
+    model.operator_profile.visible = true;
+    model.operator_profile.loading = true;
+
+    model.handle_operator_profile_session_completed_event(
+        "session-1".to_string(),
+        vec!["experience".to_string()],
+    );
+
+    assert!(
+        matches!(model.main_pane_view, MainPaneView::Conversation),
+        "operator profile completion should also surface the concierge loading view immediately"
+    );
+    assert_eq!(model.chat.active_thread_id(), None);
+    assert!(model.concierge.loading);
+    assert!(model.should_show_concierge_hero_loading());
+
     let mut saw_welcome = false;
     while let Ok(command) = daemon_rx.try_recv() {
         if matches!(command, DaemonCommand::RequestConciergeWelcome) {
@@ -1887,6 +2178,359 @@ fn header_uses_rarog_daemon_runtime_metadata_after_first_reply() {
     assert_eq!(profile.reasoning_effort.as_deref(), Some("low"));
 }
 
+fn make_goal_owner_profile(
+    agent_label: &str,
+    provider: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
+) -> task::GoalRuntimeOwnerProfile {
+    task::GoalRuntimeOwnerProfile {
+        agent_label: agent_label.to_string(),
+        provider: provider.to_string(),
+        model: model.to_string(),
+        reasoning_effort: reasoning_effort.map(str::to_string),
+    }
+}
+
+fn make_goal_run_for_header_tests(
+    goal_run_id: &str,
+    thread_id: Option<&str>,
+    planner_owner_profile: Option<task::GoalRuntimeOwnerProfile>,
+    current_step_owner_profile: Option<task::GoalRuntimeOwnerProfile>,
+) -> task::GoalRun {
+    task::GoalRun {
+        id: goal_run_id.to_string(),
+        title: "Goal".to_string(),
+        thread_id: thread_id.map(str::to_string),
+        planner_owner_profile,
+        current_step_owner_profile,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn header_uses_goal_current_step_owner_profile_for_goal_run_pane() {
+    let mut model = make_model();
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-active".to_string(),
+        title: "Active Thread".to_string(),
+        agent_name: Some("Swarog".to_string()),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-active".to_string()));
+    if let Some(thread) = model.chat.active_thread_mut() {
+        thread.runtime_provider = Some("conversation-provider".to_string());
+        thread.runtime_model = Some("conversation-model".to_string());
+        thread.runtime_reasoning_effort = Some("conversation-effort".to_string());
+    }
+
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        make_goal_run_for_header_tests(
+            "goal-1",
+            None,
+            Some(make_goal_owner_profile(
+                "Planner Owner",
+                "planner-provider",
+                "planner-model",
+                Some("planner-effort"),
+            )),
+            Some(make_goal_owner_profile(
+                "Current Step Owner",
+                "step-provider",
+                "step-model",
+                Some("step-effort"),
+            )),
+        ),
+    ));
+
+    let profile = model.current_header_agent_profile();
+    assert_eq!(profile.agent_label, "Current Step Owner");
+    assert_eq!(profile.provider, "step-provider");
+    assert_eq!(profile.model, "step-model");
+    assert_eq!(profile.reasoning_effort.as_deref(), Some("step-effort"));
+}
+
+#[test]
+fn header_falls_back_to_goal_planner_owner_profile_for_goal_run_pane() {
+    let mut model = make_model();
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-active".to_string(),
+        title: "Active Thread".to_string(),
+        agent_name: Some("Swarog".to_string()),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-active".to_string()));
+    if let Some(thread) = model.chat.active_thread_mut() {
+        thread.runtime_provider = Some("conversation-provider".to_string());
+        thread.runtime_model = Some("conversation-model".to_string());
+        thread.runtime_reasoning_effort = Some("conversation-effort".to_string());
+    }
+
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-2".to_string(),
+        step_id: None,
+    });
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        make_goal_run_for_header_tests(
+            "goal-2",
+            None,
+            Some(make_goal_owner_profile(
+                "Planner Owner",
+                "planner-provider",
+                "planner-model",
+                Some("planner-effort"),
+            )),
+            None,
+        ),
+    ));
+
+    let profile = model.current_header_agent_profile();
+    assert_eq!(profile.agent_label, "Planner Owner");
+    assert_eq!(profile.provider, "planner-provider");
+    assert_eq!(profile.model, "planner-model");
+    assert_eq!(profile.reasoning_effort.as_deref(), Some("planner-effort"));
+}
+
+#[test]
+fn header_goal_run_pane_ignores_unrelated_conversation_runtime_metadata() {
+    let mut model = make_model();
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-active".to_string(),
+        title: "Active Thread".to_string(),
+        agent_name: Some("Swarog".to_string()),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-active".to_string()));
+    if let Some(thread) = model.chat.active_thread_mut() {
+        thread.runtime_provider = Some("conversation-provider".to_string());
+        thread.runtime_model = Some("conversation-model".to_string());
+        thread.runtime_reasoning_effort = Some("conversation-effort".to_string());
+    }
+
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-3".to_string(),
+        step_id: None,
+    });
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        make_goal_run_for_header_tests(
+            "goal-3",
+            None,
+            Some(make_goal_owner_profile(
+                "Planner Owner",
+                "planner-provider",
+                "planner-model",
+                Some("planner-effort"),
+            )),
+            Some(make_goal_owner_profile(
+                "Current Step Owner",
+                "step-provider",
+                "step-model",
+                Some("step-effort"),
+            )),
+        ),
+    ));
+
+    let profile = model.current_header_agent_profile();
+    assert_ne!(profile.provider, "conversation-provider");
+    assert_ne!(profile.model, "conversation-model");
+    assert_ne!(
+        profile.reasoning_effort.as_deref(),
+        Some("conversation-effort")
+    );
+    assert_eq!(profile.provider, "step-provider");
+    assert_eq!(profile.model, "step-model");
+    assert_eq!(profile.reasoning_effort.as_deref(), Some("step-effort"));
+}
+
+#[test]
+fn header_uses_goal_thread_usage_when_goal_run_thread_exists() {
+    let mut model = make_model();
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-active".to_string(),
+        title: "Active Thread".to_string(),
+        agent_name: Some("Swarog".to_string()),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-active".to_string()));
+    model.handle_thread_detail_event(crate::wire::AgentThread {
+        id: "thread-active".to_string(),
+        title: "Active Thread".to_string(),
+        messages: vec![crate::wire::AgentMessage {
+            role: crate::wire::MessageRole::User,
+            content: "active thread content that should not be used".repeat(50),
+            cost: Some(9.99),
+            message_kind: "normal".to_string(),
+            ..Default::default()
+        }],
+        total_input_tokens: 900,
+        total_output_tokens: 1_100,
+        loaded_message_start: 0,
+        loaded_message_end: 1,
+        total_message_count: 1,
+        created_at: 1,
+        updated_at: 1,
+        ..Default::default()
+    });
+    model.handle_thread_detail_event(crate::wire::AgentThread {
+        id: "thread-goal".to_string(),
+        title: "Goal Thread".to_string(),
+        messages: vec![
+            crate::wire::AgentMessage {
+                role: crate::wire::MessageRole::User,
+                content: "goal".to_string(),
+                cost: Some(0.25),
+                message_kind: "normal".to_string(),
+                ..Default::default()
+            },
+            crate::wire::AgentMessage {
+                role: crate::wire::MessageRole::Assistant,
+                content: "result".to_string(),
+                cost: Some(0.75),
+                message_kind: "normal".to_string(),
+                ..Default::default()
+            },
+        ],
+        total_input_tokens: 40,
+        total_output_tokens: 60,
+        loaded_message_start: 0,
+        loaded_message_end: 2,
+        total_message_count: 2,
+        created_at: 2,
+        updated_at: 2,
+        ..Default::default()
+    });
+
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-usage".to_string(),
+        step_id: None,
+    });
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        make_goal_run_for_header_tests(
+            "goal-usage",
+            Some("thread-goal"),
+            Some(make_goal_owner_profile(
+                "Planner Owner",
+                "planner-provider",
+                "planner-model",
+                None,
+            )),
+            Some(make_goal_owner_profile(
+                "Current Step Owner",
+                "step-provider",
+                "step-model",
+                None,
+            )),
+        ),
+    ));
+
+    let usage = model.current_header_usage_summary();
+    assert_eq!(usage.total_thread_tokens, 100);
+    assert_eq!(usage.total_cost_usd, Some(1.0));
+    assert!(usage.current_tokens < 100);
+    assert_ne!(usage.total_thread_tokens, 2_000);
+    assert_ne!(usage.total_cost_usd, Some(9.99));
+}
+
+#[test]
+fn header_goal_run_usage_defaults_when_goal_thread_missing() {
+    let mut model = make_model();
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-active".to_string(),
+        title: "Active Thread".to_string(),
+        agent_name: Some("Swarog".to_string()),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-active".to_string()));
+    model.handle_thread_detail_event(crate::wire::AgentThread {
+        id: "thread-active".to_string(),
+        title: "Active Thread".to_string(),
+        messages: vec![crate::wire::AgentMessage {
+            role: crate::wire::MessageRole::User,
+            content: "active thread content that should not be borrowed".repeat(50),
+            cost: Some(9.99),
+            message_kind: "normal".to_string(),
+            ..Default::default()
+        }],
+        total_input_tokens: 900,
+        total_output_tokens: 1_100,
+        loaded_message_start: 0,
+        loaded_message_end: 1,
+        total_message_count: 1,
+        created_at: 1,
+        updated_at: 1,
+        ..Default::default()
+    });
+
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-missing-thread".to_string(),
+        step_id: None,
+    });
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        make_goal_run_for_header_tests(
+            "goal-missing-thread",
+            Some("goal-thread-missing"),
+            Some(make_goal_owner_profile(
+                "Planner Owner",
+                "planner-provider",
+                "planner-model",
+                None,
+            )),
+            None,
+        ),
+    ));
+
+    let usage = model.current_header_usage_summary();
+    assert_eq!(usage.total_thread_tokens, 0);
+    assert_eq!(usage.current_tokens, 0);
+    assert_eq!(usage.total_cost_usd, None);
+    assert_eq!(usage.compaction_target_tokens, 0);
+    assert_eq!(usage.utilization_pct, 0);
+}
+
+#[test]
+fn header_goal_run_uses_generic_config_defaults_when_owner_profiles_missing() {
+    let mut model = make_model();
+    model.config.provider = "provider-generic".to_string();
+    model.config.model = "model-generic".to_string();
+    model.config.reasoning_effort = "low".to_string();
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-active".to_string(),
+        title: "Active Thread".to_string(),
+        agent_name: Some("Swarog".to_string()),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-active".to_string()));
+    if let Some(thread) = model.chat.active_thread_mut() {
+        thread.runtime_provider = Some("conversation-provider".to_string());
+        thread.runtime_model = Some("conversation-model".to_string());
+        thread.runtime_reasoning_effort = Some("conversation-effort".to_string());
+    }
+
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-generic".to_string(),
+        step_id: None,
+    });
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        make_goal_run_for_header_tests("goal-generic", None, None, None),
+    ));
+
+    let profile = model.current_header_agent_profile();
+    assert_eq!(profile.agent_label, "Swarog");
+    assert_eq!(profile.provider, "provider-generic");
+    assert_eq!(profile.model, "model-generic");
+    assert_eq!(profile.reasoning_effort.as_deref(), Some("low"));
+}
+
 #[test]
 fn header_usage_summary_uses_runtime_model_context_window_for_rarog() {
     let mut model = make_model();
@@ -2047,7 +2691,14 @@ fn header_profile_tracks_weles_subagent_updates_after_runtime_metadata_exists() 
         reasoning_effort: Some("medium".to_string()),
         raw_json: None,
     });
-    model.start_new_thread_view_for_agent(Some("weles"));
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-weles-runtime".to_string(),
+        title: "Reviewer Runtime".to_string(),
+        agent_name: Some("Weles".to_string()),
+    });
+    model.chat.reduce(chat::ChatAction::SelectThread(
+        "thread-weles-runtime".to_string(),
+    ));
     if let Some(thread) = model.chat.active_thread_mut() {
         thread.runtime_provider = Some("provider-runtime".to_string());
         thread.runtime_model = Some("model-runtime".to_string());
@@ -2203,7 +2854,7 @@ fn header_usage_summary_caps_target_by_weles_compaction_window() {
 
     model.handle_client_event(ClientEvent::ThreadCreated {
         thread_id: "thread-weles-target".to_string(),
-        title: "Weles".to_string(),
+        title: "Reviewer Target".to_string(),
         agent_name: Some("Swarog".to_string()),
     });
     model.chat.reduce(chat::ChatAction::SelectThread(
@@ -2916,7 +3567,7 @@ fn prepending_older_goal_run_history_releases_top_edge_until_user_scrolls_again(
 }
 
 #[test]
-fn active_goal_run_update_requests_authoritative_refresh() {
+fn active_goal_run_update_schedules_background_hydration_instead_of_immediate_refresh() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
     model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
         goal_run_id: "goal-1".to_string(),
@@ -2931,12 +3582,393 @@ fn active_goal_run_update_requests_authoritative_refresh() {
     });
 
     assert_eq!(
-        next_goal_run_detail_request(&mut daemon_rx).as_deref(),
+        next_goal_hydration_schedule(&mut daemon_rx).as_deref(),
+        Some("goal-1")
+    );
+    assert!(
+        next_goal_run_detail_request(&mut daemon_rx).is_none(),
+        "active-goal updates should no longer emit immediate detail refreshes"
+    );
+    assert!(
+        next_goal_run_checkpoints_request(&mut daemon_rx).is_none(),
+        "active-goal updates should no longer emit immediate checkpoint refreshes"
+    );
+}
+
+#[test]
+fn repeated_active_goal_updates_only_schedule_background_hydration_once_per_burst() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    model.handle_goal_run_update_event(crate::wire::GoalRun {
+        id: "goal-1".to_string(),
+        title: "Goal One".to_string(),
+        status: Some(crate::wire::GoalRunStatus::Running),
+        ..Default::default()
+    });
+    model.handle_goal_run_update_event(crate::wire::GoalRun {
+        id: "goal-1".to_string(),
+        title: "Goal One".to_string(),
+        status: Some(crate::wire::GoalRunStatus::Running),
+        ..Default::default()
+    });
+
+    assert_eq!(
+        next_goal_hydration_schedule(&mut daemon_rx).as_deref(),
+        Some("goal-1")
+    );
+    assert!(
+        next_goal_hydration_schedule(&mut daemon_rx).is_none(),
+        "duplicate active-goal updates should coalesce into one pending hydration request"
+    );
+}
+
+#[test]
+fn active_goal_hydration_reschedules_after_authoritative_detail_arrives() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    model.handle_goal_run_update_event(crate::wire::GoalRun {
+        id: "goal-1".to_string(),
+        title: "Goal One".to_string(),
+        status: Some(crate::wire::GoalRunStatus::Running),
+        ..Default::default()
+    });
+    assert_eq!(
+        next_goal_hydration_schedule(&mut daemon_rx).as_deref(),
+        Some("goal-1")
+    );
+
+    model.handle_goal_run_detail_event(crate::wire::GoalRun {
+        id: "goal-1".to_string(),
+        title: "Goal One".to_string(),
+        ..Default::default()
+    });
+    model.handle_goal_run_update_event(crate::wire::GoalRun {
+        id: "goal-1".to_string(),
+        title: "Goal One".to_string(),
+        status: Some(crate::wire::GoalRunStatus::Running),
+        ..Default::default()
+    });
+
+    assert_eq!(
+        next_goal_hydration_schedule(&mut daemon_rx).as_deref(),
+        Some("goal-1"),
+        "authoritative detail should clear the pending marker so later updates can reschedule"
+    );
+}
+
+#[test]
+fn goal_detail_placeholder_clears_pending_hydration_for_the_requested_goal() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    model.handle_goal_run_update_event(crate::wire::GoalRun {
+        id: "goal-1".to_string(),
+        title: "Goal One".to_string(),
+        status: Some(crate::wire::GoalRunStatus::Running),
+        ..Default::default()
+    });
+    assert_eq!(
+        next_goal_hydration_schedule(&mut daemon_rx).as_deref(),
+        Some("goal-1")
+    );
+    assert!(
+        model.pending_goal_hydration_refreshes.contains("goal-1"),
+        "update should leave the goal pending until an authoritative response arrives"
+    );
+
+    model.schedule_goal_hydration_refresh("goal-2".to_string());
+    assert_eq!(
+        next_goal_hydration_schedule(&mut daemon_rx).as_deref(),
+        Some("goal-2")
+    );
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-2".to_string(),
+        step_id: None,
+    });
+
+    model.handle_client_event(ClientEvent::GoalRunDetail(Some(crate::wire::GoalRun {
+        id: "goal-1".to_string(),
+        ..Default::default()
+    })));
+
+    assert!(
+        !model.pending_goal_hydration_refreshes.contains("goal-1"),
+        "placeholder detail should clear the stale pending hydration marker for the requested goal"
+    );
+    assert!(
+        model.pending_goal_hydration_refreshes.contains("goal-2"),
+        "changing panes before the empty response arrives should not clear the wrong goal"
+    );
+}
+
+#[test]
+fn goal_run_list_refresh_reconciles_pending_hydration_against_present_goals() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+
+    model.schedule_goal_hydration_refresh("goal-1".to_string());
+    model.schedule_goal_hydration_refresh("goal-2".to_string());
+    assert_eq!(
+        next_goal_hydration_schedule(&mut daemon_rx).as_deref(),
         Some("goal-1")
     );
     assert_eq!(
-        next_goal_run_checkpoints_request(&mut daemon_rx).as_deref(),
-        Some("goal-1")
+        next_goal_hydration_schedule(&mut daemon_rx).as_deref(),
+        Some("goal-2")
+    );
+    assert_eq!(model.pending_goal_hydration_refreshes.len(), 2);
+
+    model.handle_goal_run_list_event(vec![crate::wire::GoalRun {
+        id: "goal-2".to_string(),
+        title: "Goal Two".to_string(),
+        status: Some(crate::wire::GoalRunStatus::Running),
+        ..Default::default()
+    }]);
+
+    assert!(
+        !model.pending_goal_hydration_refreshes.contains("goal-1"),
+        "goal list refresh should drop pending hydration for goals no longer present"
+    );
+    assert!(
+        model.pending_goal_hydration_refreshes.contains("goal-2"),
+        "goal list refresh should preserve pending hydration for goals still present"
+    );
+}
+
+#[test]
+fn empty_goal_checkpoint_refresh_clears_pending_hydration_for_requested_goal() {
+    let (mut model, _daemon_rx) = make_model_with_daemon_rx();
+
+    model.schedule_goal_hydration_refresh("goal-1".to_string());
+    model.handle_client_event(ClientEvent::GoalRunCheckpoints {
+        goal_run_id: "goal-1".to_string(),
+        checkpoints: vec![],
+    });
+
+    assert!(
+        !model.pending_goal_hydration_refreshes.contains("goal-1"),
+        "empty checkpoint lists should still clear the exact pending goal hydration marker"
+    );
+}
+
+#[test]
+fn goal_hydration_schedule_failed_clears_pending_marker_via_client_event() {
+    let (mut model, _daemon_rx) = make_model_with_daemon_rx();
+
+    model.schedule_goal_hydration_refresh("goal-1".to_string());
+    model.handle_client_event(ClientEvent::GoalHydrationScheduleFailed {
+        goal_run_id: "goal-1".to_string(),
+    });
+
+    assert!(
+        !model.pending_goal_hydration_refreshes.contains("goal-1"),
+        "background hydration failure should clear the exact pending marker"
+    );
+}
+
+#[test]
+fn active_goal_run_goal_refresh_preserves_or_clamps_goal_sidebar_selection() {
+    let mut model = active_goal_run_sidebar_model();
+    model.activate_goal_sidebar_tab(GoalSidebarTab::Tasks);
+    model.select_goal_sidebar_row(1);
+    assert_eq!(model.goal_sidebar.selected_row(), 1);
+
+    model.handle_goal_run_update_event(crate::wire::GoalRun {
+        id: "goal-1".to_string(),
+        title: "Goal Title".to_string(),
+        thread_id: Some("thread-1".to_string()),
+        child_task_ids: vec!["task-1".to_string(), "task-2".to_string()],
+        status: Some(crate::wire::GoalRunStatus::Running),
+        ..Default::default()
+    });
+
+    assert_eq!(
+        model.goal_sidebar.selected_row(),
+        1,
+        "goal updates should preserve the selected goal-sidebar row when it stays valid"
+    );
+
+    model.handle_goal_run_detail_event(crate::wire::GoalRun {
+        id: "goal-1".to_string(),
+        title: "Goal Title".to_string(),
+        thread_id: Some("thread-1".to_string()),
+        child_task_ids: vec!["task-1".to_string()],
+        steps: vec![
+            crate::wire::GoalRunStep {
+                id: "step-1".to_string(),
+                position: 0,
+                title: "Plan".to_string(),
+                ..Default::default()
+            },
+            crate::wire::GoalRunStep {
+                id: "step-2".to_string(),
+                position: 1,
+                title: "Implement".to_string(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+
+    assert_eq!(
+        model.goal_sidebar.selected_row(),
+        0,
+        "goal detail refresh should clamp the goal-sidebar row when the previous selection no longer exists"
+    );
+}
+
+#[test]
+fn active_goal_run_checkpoint_task_file_tabs_clamp_after_refreshes() {
+    let mut model = active_goal_run_sidebar_model();
+
+    model.activate_goal_sidebar_tab(GoalSidebarTab::Checkpoints);
+    model.select_goal_sidebar_row(1);
+    model.handle_goal_run_checkpoints_event(
+        "goal-1".to_string(),
+        vec![crate::wire::CheckpointSummary {
+            id: "checkpoint-1".to_string(),
+            checkpoint_type: "plan".to_string(),
+            step_index: Some(0),
+            context_summary_preview: Some("Checkpoint for Plan".to_string()),
+            ..Default::default()
+        }],
+    );
+    assert_eq!(model.goal_sidebar.selected_row(), 0);
+
+    model.activate_goal_sidebar_tab(GoalSidebarTab::Tasks);
+    model.select_goal_sidebar_row(1);
+    model.handle_task_list_event(vec![crate::wire::AgentTask {
+        id: "task-1".to_string(),
+        title: "Child Task One".to_string(),
+        thread_id: Some("thread-1".to_string()),
+        goal_run_id: Some("goal-1".to_string()),
+        created_at: 10,
+        ..Default::default()
+    }]);
+    assert_eq!(model.goal_sidebar.selected_row(), 0);
+
+    model.activate_goal_sidebar_tab(GoalSidebarTab::Files);
+    model.select_goal_sidebar_row(1);
+    model.handle_work_context_event(crate::wire::ThreadWorkContext {
+        thread_id: "thread-1".to_string(),
+        entries: vec![crate::wire::WorkContextEntry {
+            path: "/tmp/plan.md".to_string(),
+            goal_run_id: Some("goal-1".to_string()),
+            is_text: true,
+            ..Default::default()
+        }],
+    });
+    assert_eq!(model.goal_sidebar.selected_row(), 0);
+}
+
+#[test]
+fn active_goal_run_selecting_step_in_main_pane_updates_goal_sidebar_highlight() {
+    let mut model = active_goal_run_sidebar_model();
+    model.activate_goal_sidebar_tab(GoalSidebarTab::Steps);
+    model.select_goal_sidebar_row(0);
+
+    assert!(model.select_goal_step_in_active_run("step-3".to_string()));
+
+    assert_eq!(model.goal_sidebar.selected_row(), 2);
+    assert!(matches!(
+        model.main_pane_view,
+        MainPaneView::Task(SidebarItemTarget::GoalRun {
+            ref goal_run_id,
+            step_id: Some(ref step_id),
+        }) if goal_run_id == "goal-1" && step_id == "step-3"
+    ));
+}
+
+#[test]
+fn active_goal_run_task_tab_preserves_selected_task_across_reorder_refresh() {
+    let mut model = active_goal_run_sidebar_model();
+    model.activate_goal_sidebar_tab(GoalSidebarTab::Tasks);
+    model.select_goal_sidebar_row(1);
+
+    model.handle_goal_run_detail_event(crate::wire::GoalRun {
+        id: "goal-1".to_string(),
+        title: "Goal Title".to_string(),
+        thread_id: Some("thread-1".to_string()),
+        child_task_ids: vec!["task-2".to_string(), "task-1".to_string()],
+        steps: vec![
+            crate::wire::GoalRunStep {
+                id: "step-1".to_string(),
+                position: 0,
+                title: "Plan".to_string(),
+                ..Default::default()
+            },
+            crate::wire::GoalRunStep {
+                id: "step-2".to_string(),
+                position: 1,
+                title: "Implement".to_string(),
+                ..Default::default()
+            },
+            crate::wire::GoalRunStep {
+                id: "step-3".to_string(),
+                position: 2,
+                title: "Verify".to_string(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+
+    assert_eq!(
+        model.goal_sidebar.selected_row(),
+        0,
+        "task-tab selection should follow the same task id when child task order changes"
+    );
+}
+
+#[test]
+fn active_goal_run_file_tab_restores_selected_file_after_partial_refresh() {
+    let mut model = active_goal_run_sidebar_model();
+    model.activate_goal_sidebar_tab(GoalSidebarTab::Files);
+    model.select_goal_sidebar_row(1);
+
+    model.handle_work_context_event(crate::wire::ThreadWorkContext {
+        thread_id: "thread-1".to_string(),
+        entries: vec![crate::wire::WorkContextEntry {
+            path: "/tmp/plan.md".to_string(),
+            goal_run_id: Some("goal-1".to_string()),
+            is_text: true,
+            ..Default::default()
+        }],
+    });
+    assert_eq!(model.goal_sidebar.selected_row(), 0);
+
+    model.handle_work_context_event(crate::wire::ThreadWorkContext {
+        thread_id: "thread-1".to_string(),
+        entries: vec![
+            crate::wire::WorkContextEntry {
+                path: "/tmp/plan.md".to_string(),
+                goal_run_id: Some("goal-1".to_string()),
+                is_text: true,
+                ..Default::default()
+            },
+            crate::wire::WorkContextEntry {
+                path: "/tmp/report.md".to_string(),
+                goal_run_id: Some("goal-1".to_string()),
+                is_text: true,
+                ..Default::default()
+            },
+        ],
+    });
+
+    assert_eq!(
+        model.goal_sidebar.selected_row(),
+        1,
+        "file-tab selection should restore the same path when a transient partial refresh drops it temporarily"
     );
 }
 
@@ -5034,10 +6066,17 @@ fn openai_codex_auth_events_update_config_and_modal_state() {
 }
 
 #[test]
-fn connected_event_requests_openai_codex_auth_status_from_daemon() {
+fn first_raw_config_load_requests_openai_codex_auth_status_from_daemon() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
 
-    model.handle_connected_event();
+    model.connected = true;
+    model.agent_config_loaded = false;
+
+    model.handle_agent_config_raw_event(serde_json::json!({
+        "provider": PROVIDER_ID_OPENAI,
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-5.4",
+    }));
 
     let mut saw_auth_status = false;
     while let Ok(command) = daemon_rx.try_recv() {
@@ -5047,7 +6086,10 @@ fn connected_event_requests_openai_codex_auth_status_from_daemon() {
         }
     }
 
-    assert!(saw_auth_status, "connect should request codex auth status");
+    assert!(
+        saw_auth_status,
+        "first config load should release deferred codex auth refresh"
+    );
 }
 
 #[test]

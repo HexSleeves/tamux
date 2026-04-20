@@ -211,6 +211,8 @@ pub(super) fn goal_run_fixture(thread_id: &str) -> GoalRun {
         current_step_index: 0,
         current_step_title: Some("Investigate failure".to_string()),
         current_step_kind: Some(GoalRunStepKind::Research),
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 0,
         max_replans: 2,
         plan_summary: Some("Initial plan".to_string()),

@@ -18,6 +18,8 @@ fn sample_goal_run() -> GoalRun {
         current_step_index: 2,
         current_step_title: Some("Step 3".into()),
         current_step_kind: None,
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 0,
         max_replans: 2,
         plan_summary: Some("Plan summary".into()),

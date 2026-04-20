@@ -211,6 +211,8 @@ mod tests {
             current_step_index: 1,
             current_step_title: Some("Step 2".into()),
             current_step_kind: None,
+            planner_owner_profile: None,
+            current_step_owner_profile: None,
             replan_count: 0,
             max_replans: 2,
             plan_summary: Some("Plan summary".into()),

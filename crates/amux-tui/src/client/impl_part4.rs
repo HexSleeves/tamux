@@ -482,6 +482,10 @@ impl DaemonClient {
         })
     }
 
+    pub fn get_config(&self) -> Result<()> {
+        self.send(ClientMessage::AgentGetConfig)
+    }
+
     pub fn refresh_services(&self) -> Result<()> {
         for request in [
             ClientMessage::AgentListTasks,
@@ -489,7 +493,6 @@ impl DaemonClient {
                 limit: None,
                 offset: None,
             },
-            ClientMessage::AgentGetConfig,
             ClientMessage::AgentHeartbeatGetItems,
         ] {
             self.send(request)?;

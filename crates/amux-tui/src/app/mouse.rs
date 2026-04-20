@@ -154,7 +154,11 @@ impl TuiModel {
                         }
                     }
                 } else if cursor_in_sidebar {
-                    self.sidebar.navigate(-3, self.sidebar_item_count());
+                    if self.sidebar_uses_goal_sidebar() {
+                        self.navigate_goal_sidebar(-3);
+                    } else {
+                        self.sidebar.navigate(-3, self.sidebar_item_count());
+                    }
                 } else if cursor_in_input {
                     for _ in 0..3 {
                         self.input.reduce(input::InputAction::MoveCursorUp);
@@ -229,7 +233,11 @@ impl TuiModel {
                         }
                     }
                 } else if cursor_in_sidebar {
-                    self.sidebar.navigate(3, self.sidebar_item_count());
+                    if self.sidebar_uses_goal_sidebar() {
+                        self.navigate_goal_sidebar(3);
+                    } else {
+                        self.sidebar.navigate(3, self.sidebar_item_count());
+                    }
                 } else if cursor_in_input {
                     for _ in 0..3 {
                         self.input.reduce(input::InputAction::MoveCursorDown);
@@ -487,45 +495,72 @@ impl TuiModel {
                     self.clear_work_context_drag_selection();
                     self.clear_task_view_drag_selection();
                     self.focus = FocusArea::Sidebar;
-                    match widgets::sidebar::hit_test(
-                        sidebar_area,
-                        &self.chat,
-                        &self.sidebar,
-                        &self.tasks,
-                        self.chat.active_thread_id(),
-                        Position::new(mouse.column, mouse.row),
-                    ) {
-                        Some(widgets::sidebar::SidebarHitTarget::Tab(tab)) => {
-                            self.activate_sidebar_tab(tab);
+                    if self.sidebar_uses_goal_sidebar() {
+                        match self.goal_sidebar_hit_test(sidebar_area, mouse) {
+                            Some(widgets::goal_sidebar::GoalSidebarHitTarget::Tab(tab)) => {
+                                self.activate_goal_sidebar_tab(tab);
+                            }
+                            Some(widgets::goal_sidebar::GoalSidebarHitTarget::Step(index)) => {
+                                self.select_goal_sidebar_row(index);
+                                let _ = self.handle_goal_sidebar_enter();
+                            }
+                            Some(widgets::goal_sidebar::GoalSidebarHitTarget::Checkpoint(
+                                index,
+                            )) => {
+                                self.select_goal_sidebar_row(index);
+                                let _ = self.handle_goal_sidebar_enter();
+                            }
+                            Some(widgets::goal_sidebar::GoalSidebarHitTarget::Task(index)) => {
+                                self.select_goal_sidebar_row(index);
+                                let _ = self.handle_goal_sidebar_enter();
+                            }
+                            Some(widgets::goal_sidebar::GoalSidebarHitTarget::File(index)) => {
+                                self.select_goal_sidebar_row(index);
+                                let _ = self.handle_goal_sidebar_enter();
+                            }
+                            None => {}
                         }
-                        Some(widgets::sidebar::SidebarHitTarget::File(path)) => {
-                            if let Some(thread_id) =
-                                self.chat.active_thread_id().map(str::to_string)
-                            {
-                                let index = widgets::sidebar::filtered_file_index(
-                                    &self.tasks,
-                                    &self.sidebar,
-                                    Some(thread_id.as_str()),
-                                    &path,
-                                )
-                                .unwrap_or(0);
+                    } else {
+                        match widgets::sidebar::hit_test(
+                            sidebar_area,
+                            &self.chat,
+                            &self.sidebar,
+                            &self.tasks,
+                            self.chat.active_thread_id(),
+                            Position::new(mouse.column, mouse.row),
+                        ) {
+                            Some(widgets::sidebar::SidebarHitTarget::Tab(tab)) => {
+                                self.activate_sidebar_tab(tab);
+                            }
+                            Some(widgets::sidebar::SidebarHitTarget::File(path)) => {
+                                if let Some(thread_id) =
+                                    self.chat.active_thread_id().map(str::to_string)
+                                {
+                                    let index = widgets::sidebar::filtered_file_index(
+                                        &self.tasks,
+                                        &self.sidebar,
+                                        Some(thread_id.as_str()),
+                                        &path,
+                                    )
+                                    .unwrap_or(0);
+                                    self.sidebar.select(index, self.sidebar_item_count());
+                                    self.handle_sidebar_enter();
+                                }
+                            }
+                            Some(widgets::sidebar::SidebarHitTarget::Todo(index)) => {
                                 self.sidebar.select(index, self.sidebar_item_count());
                                 self.handle_sidebar_enter();
                             }
+                            Some(widgets::sidebar::SidebarHitTarget::Spawned(index)) => {
+                                self.sidebar.select(index, self.sidebar_item_count());
+                                self.handle_sidebar_enter();
+                            }
+                            Some(widgets::sidebar::SidebarHitTarget::Pinned(index)) => {
+                                self.sidebar.select(index, self.sidebar_item_count());
+                                self.handle_sidebar_enter();
+                            }
+                            None => {}
                         }
-                        Some(widgets::sidebar::SidebarHitTarget::Todo(index)) => {
-                            self.sidebar.select(index, self.sidebar_item_count());
-                            self.handle_sidebar_enter();
-                        }
-                        Some(widgets::sidebar::SidebarHitTarget::Spawned(index)) => {
-                            self.sidebar.select(index, self.sidebar_item_count());
-                            self.handle_sidebar_enter();
-                        }
-                        Some(widgets::sidebar::SidebarHitTarget::Pinned(index)) => {
-                            self.sidebar.select(index, self.sidebar_item_count());
-                            self.handle_sidebar_enter();
-                        }
-                        None => {}
                     }
                 } else if cursor_in_input {
                     self.clear_chat_drag_selection();

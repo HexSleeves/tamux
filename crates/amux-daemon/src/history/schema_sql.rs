@@ -212,7 +212,9 @@ pub(super) fn base_schema_sql() -> &'static str {
                 total_completion_tokens INTEGER NOT NULL DEFAULT 0,
                 estimated_cost_usd  REAL,
                 autonomy_level      TEXT NOT NULL DEFAULT 'aware',
-                authorship_tag      TEXT
+                authorship_tag      TEXT,
+                planner_owner_profile_json TEXT,
+                current_step_owner_profile_json TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_goal_runs_status ON goal_runs(status, updated_at DESC);
             CREATE TABLE IF NOT EXISTS goal_run_steps (

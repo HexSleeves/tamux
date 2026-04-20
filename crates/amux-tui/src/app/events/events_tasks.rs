@@ -1,6 +1,38 @@
 use super::*;
 
 impl TuiModel {
+    pub(in crate::app) fn is_placeholder_goal_run_detail(
+        &self,
+        run: &crate::wire::GoalRun,
+    ) -> bool {
+        run.title.is_empty()
+            && run.thread_id.is_none()
+            && run.session_id.is_none()
+            && run.status.is_none()
+            && run.current_step_title.is_none()
+            && run.planner_owner_profile.is_none()
+            && run.current_step_owner_profile.is_none()
+            && run.child_task_count == 0
+            && run.approval_count == 0
+            && run.awaiting_approval_id.is_none()
+            && run.last_error.is_none()
+            && run.goal.is_empty()
+            && run.current_step_index == 0
+            && run.reflection_summary.is_none()
+            && run.memory_updates.is_empty()
+            && run.generated_skill_path.is_none()
+            && run.child_task_ids.is_empty()
+            && run.loaded_step_start == 0
+            && run.loaded_step_end == 0
+            && run.total_step_count == 0
+            && run.loaded_event_start == 0
+            && run.loaded_event_end == 0
+            && run.total_event_count == 0
+            && run.steps.is_empty()
+            && run.events.is_empty()
+            && run.dossier.is_none()
+    }
+
     fn approval_rationale_for_thread(&self, thread_id: Option<&str>) -> Option<String> {
         let prefix = "Policy escalation requested operator guidance:";
         let thread_id = thread_id?;
@@ -396,6 +428,7 @@ impl TuiModel {
         let tasks: Vec<_> = tasks.into_iter().map(conversion::convert_task).collect();
         self.tasks
             .reduce(task::TaskAction::TaskListReceived(tasks.clone()));
+        self.reconcile_goal_sidebar_selection_for_active_goal_pane();
         self.clamp_detail_view_scroll();
         self.clear_replaced_task_approvals(&previous_tasks, &tasks);
         self.sync_pending_approvals_from_tasks();
@@ -409,6 +442,7 @@ impl TuiModel {
             .and_then(|task| task.awaiting_approval_id.clone());
         self.tasks
             .reduce(task::TaskAction::TaskUpdate(converted.clone()));
+        self.reconcile_goal_sidebar_selection_for_active_goal_pane();
         self.clamp_detail_view_scroll();
         if let Some(previous_approval_id) = previous_approval_id.filter(|approval_id| {
             Some(approval_id.as_str()) != converted.awaiting_approval_id.as_deref()
@@ -422,9 +456,16 @@ impl TuiModel {
     }
 
     pub(in crate::app) fn handle_goal_run_list_event(&mut self, runs: Vec<crate::wire::GoalRun>) {
-        let runs = runs.into_iter().map(conversion::convert_goal_run).collect();
+        let runs: Vec<_> = runs.into_iter().map(conversion::convert_goal_run).collect();
+        let present_goal_run_ids = runs
+            .iter()
+            .map(|run| run.id.clone())
+            .collect::<std::collections::HashSet<_>>();
         self.tasks
-            .reduce(task::TaskAction::GoalRunListReceived(runs));
+            .reduce(task::TaskAction::GoalRunListReceived(runs.clone()));
+        self.pending_goal_hydration_refreshes
+            .retain(|goal_run_id| present_goal_run_ids.contains(goal_run_id));
+        self.reconcile_goal_sidebar_selection_for_active_goal_pane();
         if self.modal.top() == Some(modal::ModalKind::GoalPicker) {
             self.sync_goal_picker_item_count();
         }
@@ -459,15 +500,18 @@ impl TuiModel {
         } else {
             0
         };
-        self.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
-            conversion::convert_goal_run(run),
-        ));
+        let converted = conversion::convert_goal_run(run);
+        let goal_run_id = converted.id.clone();
+        self.tasks
+            .reduce(task::TaskAction::GoalRunDetailReceived(converted));
+        self.clear_goal_hydration_refresh(&goal_run_id);
         if should_preserve_prepend_anchor {
             let after_max_scroll = self.current_detail_view_max_scroll();
             self.task_view_scroll = self
                 .task_view_scroll
                 .saturating_add(after_max_scroll.saturating_sub(before_max_scroll));
         }
+        self.reconcile_goal_sidebar_selection_for_active_goal_pane();
         self.clamp_detail_view_scroll();
     }
 
@@ -482,8 +526,9 @@ impl TuiModel {
         self.tasks
             .reduce(task::TaskAction::GoalRunUpdate(run.clone()));
         if active_goal_run_id.as_deref() == Some(run.id.as_str()) {
-            self.request_authoritative_goal_run_refresh(run.id.clone());
+            self.schedule_goal_hydration_refresh(run.id.clone());
         }
+        self.reconcile_goal_sidebar_selection_for_active_goal_pane();
         self.clamp_detail_view_scroll();
     }
 
@@ -494,12 +539,14 @@ impl TuiModel {
     ) {
         self.tasks
             .reduce(task::TaskAction::GoalRunCheckpointsReceived {
-                goal_run_id,
+                goal_run_id: goal_run_id.clone(),
                 checkpoints: checkpoints
                     .into_iter()
                     .map(conversion::convert_checkpoint_summary)
                     .collect(),
             });
+        self.clear_goal_hydration_refresh(&goal_run_id);
+        self.reconcile_goal_sidebar_selection_for_active_goal_pane();
         self.clamp_detail_view_scroll();
     }
 
@@ -522,6 +569,7 @@ impl TuiModel {
         self.tasks.reduce(task::TaskAction::WorkContextReceived(
             conversion::convert_work_context(context),
         ));
+        self.reconcile_goal_sidebar_selection_for_active_goal_pane();
         self.ensure_task_view_preview();
         self.clamp_detail_view_scroll();
     }

@@ -11,6 +11,7 @@ pub enum TaskStatus {
     AwaitingApproval,
     Blocked,
     FailedAnalyzing,
+    BudgetExceeded,
     Completed,
     Failed,
     Cancelled,
@@ -71,6 +72,14 @@ pub struct GoalRunEvent {
     pub todo_snapshot: Vec<TodoItem>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GoalRuntimeOwnerProfile {
+    pub agent_label: String,
+    pub provider: String,
+    pub model: String,
+    pub reasoning_effort: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GoalRun {
     pub id: String,
@@ -79,8 +88,11 @@ pub struct GoalRun {
     pub session_id: Option<String>,
     pub status: Option<GoalRunStatus>,
     pub current_step_title: Option<String>,
+    pub planner_owner_profile: Option<GoalRuntimeOwnerProfile>,
+    pub current_step_owner_profile: Option<GoalRuntimeOwnerProfile>,
     pub child_task_count: u32,
     pub approval_count: u32,
+    pub awaiting_approval_id: Option<String>,
     pub last_error: Option<String>,
     pub goal: String,
     pub current_step_index: usize,
@@ -467,10 +479,19 @@ impl TaskState {
                 self.goal_runs = runs.into_iter().map(normalize_goal_run_ranges).collect();
             }
 
-            TaskAction::GoalRunDetailReceived(run) | TaskAction::GoalRunUpdate(run) => {
+            TaskAction::GoalRunDetailReceived(run) => {
                 let run = normalize_goal_run_ranges(run);
                 if let Some(existing) = self.goal_runs.iter_mut().find(|r| r.id == run.id) {
-                    merge_goal_run(existing, run);
+                    merge_goal_run(existing, run, false);
+                } else {
+                    self.goal_runs.push(run);
+                }
+            }
+
+            TaskAction::GoalRunUpdate(run) => {
+                let run = normalize_goal_run_ranges(run);
+                if let Some(existing) = self.goal_runs.iter_mut().find(|r| r.id == run.id) {
+                    merge_goal_run(existing, run, true);
                 } else {
                     self.goal_runs.push(run);
                 }
@@ -685,7 +706,7 @@ fn merge_range_vec<T: Clone>(
     (union_start, union_end, merged)
 }
 
-fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun) {
+fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun, preserve_owner_metadata: bool) {
     let older_page_request_cooldown_until_tick = existing
         .older_page_request_cooldown_until_tick
         .max(incoming.older_page_request_cooldown_until_tick);
@@ -695,8 +716,20 @@ fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun) {
     existing.session_id = incoming.session_id;
     existing.status = incoming.status;
     existing.current_step_title = incoming.current_step_title;
+    if preserve_owner_metadata {
+        existing.planner_owner_profile = incoming
+            .planner_owner_profile
+            .or(existing.planner_owner_profile.take());
+        existing.current_step_owner_profile = incoming
+            .current_step_owner_profile
+            .or(existing.current_step_owner_profile.take());
+    } else {
+        existing.planner_owner_profile = incoming.planner_owner_profile;
+        existing.current_step_owner_profile = incoming.current_step_owner_profile;
+    }
     existing.child_task_count = incoming.child_task_count;
     existing.approval_count = incoming.approval_count;
+    existing.awaiting_approval_id = incoming.awaiting_approval_id;
     existing.last_error = incoming.last_error;
     existing.goal = incoming.goal;
     existing.current_step_index = incoming.current_step_index;

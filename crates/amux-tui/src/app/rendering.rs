@@ -10,6 +10,12 @@ pub(crate) struct ConversationAgentProfile {
     pub(crate) reasoning_effort: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct HeaderContextVm {
+    profile: ConversationAgentProfile,
+    usage: widgets::header::HeaderUsageDisplay,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConversationAgentKind {
     Swarog,
@@ -21,6 +27,14 @@ enum ConversationAgentKind {
 struct ResponderIdentity {
     agent_id: Option<String>,
     agent_name: Option<String>,
+    source: ResponderIdentitySource,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ResponderIdentitySource {
+    #[default]
+    ThreadAgent,
+    Explicit,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -99,15 +113,21 @@ impl TuiModel {
         }
     }
 
-    fn current_header_context_window_tokens(&self) -> u32 {
-        let profile = self.current_header_agent_profile();
-        let fallback = match self.current_conversation_agent_kind() {
-            ConversationAgentKind::Swarog => self.effective_primary_context_window_tokens(),
-            ConversationAgentKind::Rarog => self.effective_primary_context_window_tokens(),
-            ConversationAgentKind::Weles => match self.config.compaction_strategy.as_str() {
-                "custom_model" => self.config.compaction_custom_context_window_tokens,
-                _ => self.config.context_window_tokens,
-            },
+    fn current_header_context_window_tokens(&self, profile: &ConversationAgentProfile) -> u32 {
+        let fallback = if matches!(
+            self.main_pane_view,
+            MainPaneView::Task(SidebarItemTarget::GoalRun { .. })
+        ) {
+            self.effective_primary_context_window_tokens()
+        } else {
+            match self.current_conversation_agent_kind() {
+                ConversationAgentKind::Swarog => self.effective_primary_context_window_tokens(),
+                ConversationAgentKind::Rarog => self.effective_primary_context_window_tokens(),
+                ConversationAgentKind::Weles => match self.config.compaction_strategy.as_str() {
+                    "custom_model" => self.config.compaction_custom_context_window_tokens,
+                    _ => self.config.context_window_tokens,
+                },
+            }
         }
         .max(1);
 
@@ -128,8 +148,8 @@ impl TuiModel {
             .max(1)
     }
 
-    fn current_header_context_target_tokens(&self) -> u32 {
-        let context_window = self.current_header_context_window_tokens().max(1);
+    fn current_header_context_target_tokens(&self, profile: &ConversationAgentProfile) -> u32 {
+        let context_window = self.current_header_context_window_tokens(profile).max(1);
         if !self.config.auto_compact_context {
             return context_window;
         }
@@ -252,6 +272,7 @@ impl TuiModel {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
+            source: ResponderIdentitySource::ThreadAgent,
         };
 
         for message in &thread.messages {
@@ -273,6 +294,7 @@ impl TuiModel {
                         responder = ResponderIdentity {
                             agent_id,
                             agent_name,
+                            source: ResponderIdentitySource::Explicit,
                         };
                     }
                 }
@@ -295,6 +317,7 @@ impl TuiModel {
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .map(str::to_string),
+                    source: ResponderIdentitySource::Explicit,
                 };
             }
         }
@@ -491,21 +514,133 @@ impl TuiModel {
         }
     }
 
-    pub(crate) fn current_header_agent_profile(&self) -> ConversationAgentProfile {
-        let fallback = self.current_conversation_agent_profile();
-        if self.active_thread_responder_profile().is_some() {
-            return fallback;
+    fn goal_runtime_owner_profile_to_header_profile(
+        profile: &task::GoalRuntimeOwnerProfile,
+    ) -> Option<ConversationAgentProfile> {
+        let provider = profile.provider.trim();
+        let model = profile.model.trim();
+        if provider.is_empty() || model.is_empty() {
+            return None;
         }
-        let Some(runtime) = self.chat.active_thread_runtime_metadata() else {
-            return fallback;
+
+        Some(ConversationAgentProfile {
+            agent_label: if profile.agent_label.trim().is_empty() {
+                "Swarog".to_string()
+            } else {
+                profile.agent_label.clone()
+            },
+            provider: provider.to_string(),
+            model: model.to_string(),
+            reasoning_effort: profile
+                .reasoning_effort
+                .clone()
+                .filter(|value| !value.trim().is_empty()),
+        })
+    }
+
+    fn goal_run_header_profile(&self) -> Option<ConversationAgentProfile> {
+        let MainPaneView::Task(SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return None;
         };
 
-        ConversationAgentProfile {
-            agent_label: fallback.agent_label,
-            provider: runtime.provider.unwrap_or(fallback.provider),
-            model: runtime.model.unwrap_or(fallback.model),
-            reasoning_effort: runtime.reasoning_effort.or(fallback.reasoning_effort),
+        let profile = self
+            .tasks
+            .goal_run_by_id(goal_run_id)
+            .and_then(|run| {
+                run.current_step_owner_profile
+                    .as_ref()
+                    .and_then(Self::goal_runtime_owner_profile_to_header_profile)
+                    .or_else(|| {
+                        run.planner_owner_profile
+                            .as_ref()
+                            .and_then(Self::goal_runtime_owner_profile_to_header_profile)
+                    })
+            })
+            .unwrap_or_else(|| self.svarog_profile());
+
+        Some(profile)
+    }
+
+    fn current_header_profile_for_active_pane(&self) -> ConversationAgentProfile {
+        if let Some(profile) = self.goal_run_header_profile() {
+            return profile;
         }
+
+        let fallback = self.current_conversation_agent_profile();
+        if let Some(responder) = self.active_thread_responder_identity() {
+            let agent_id = responder.agent_id.as_deref();
+            let agent_name = responder.agent_name.as_deref();
+            let responder_is_rarog =
+                Self::identity_matches_alias(amux_protocol::AGENT_NAME_RAROG, agent_id, agent_name)
+                    || Self::identity_matches_alias(
+                        amux_protocol::AGENT_ID_RAROG,
+                        agent_id,
+                        agent_name,
+                    );
+            let responder_uses_dedicated_profile =
+                Self::identity_matches_alias("weles", agent_id, agent_name)
+                    || self
+                        .subagent_profile_for_identity(agent_id, agent_name)
+                        .is_some();
+            if responder.source == ResponderIdentitySource::Explicit
+                && responder_uses_dedicated_profile
+                && !responder_is_rarog
+            {
+                return fallback;
+            }
+        }
+        if let Some(runtime) = self.chat.active_thread_runtime_metadata() {
+            return ConversationAgentProfile {
+                agent_label: fallback.agent_label,
+                provider: runtime.provider.unwrap_or(fallback.provider),
+                model: runtime.model.unwrap_or(fallback.model),
+                reasoning_effort: runtime.reasoning_effort.or(fallback.reasoning_effort),
+            };
+        }
+
+        fallback
+    }
+
+    fn goal_run_usage_thread(&self) -> Option<&chat::AgentThread> {
+        let MainPaneView::Task(SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return None;
+        };
+
+        let thread_id = self
+            .tasks
+            .goal_run_by_id(goal_run_id)?
+            .thread_id
+            .as_deref()?;
+        self.chat
+            .threads()
+            .iter()
+            .find(|thread| thread.id == thread_id)
+    }
+
+    fn current_header_usage_thread(&self) -> Option<&chat::AgentThread> {
+        if matches!(
+            self.main_pane_view,
+            MainPaneView::Task(SidebarItemTarget::GoalRun { .. })
+        ) {
+            return self.goal_run_usage_thread();
+        }
+
+        self.chat.active_thread()
+    }
+
+    fn current_header_context_vm(&self) -> HeaderContextVm {
+        let profile = self.current_header_profile_for_active_pane();
+        let usage = self
+            .current_header_usage_summary_for_profile(&profile, self.current_header_usage_thread());
+        HeaderContextVm { profile, usage }
+    }
+
+    pub(crate) fn current_header_agent_profile(&self) -> ConversationAgentProfile {
+        self.current_header_profile_for_active_pane()
     }
 
     pub(crate) fn invalidate_active_header_runtime_profile_if_profile_changed(
@@ -522,27 +657,37 @@ impl TuiModel {
         }
     }
 
-    pub(crate) fn current_header_usage_summary(&self) -> widgets::header::HeaderUsageDisplay {
-        let context_window_tokens = self.current_header_context_window_tokens().max(1) as u64;
-        let compaction_target_tokens = self.current_header_context_target_tokens().max(1) as u64;
-        let (total_thread_tokens, current_tokens, total_cost_usd) = self
-            .chat
-            .active_thread()
-            .map(|thread| {
-                let start = Self::active_compaction_window_start(thread);
-                let total_thread_tokens = thread.total_input_tokens + thread.total_output_tokens;
-                let current_tokens = thread.messages[start..]
-                    .iter()
-                    .map(Self::estimate_header_message_tokens)
-                    .sum::<u64>();
-                let total_cost_usd = thread
-                    .messages
-                    .iter()
-                    .filter_map(|message| message.cost)
-                    .reduce(|acc, cost| acc + cost);
-                (total_thread_tokens, current_tokens, total_cost_usd)
-            })
-            .unwrap_or((0, 0, None));
+    fn current_header_usage_summary_for_profile(
+        &self,
+        profile: &ConversationAgentProfile,
+        thread: Option<&chat::AgentThread>,
+    ) -> widgets::header::HeaderUsageDisplay {
+        let Some(thread) = thread else {
+            return widgets::header::HeaderUsageDisplay {
+                total_thread_tokens: 0,
+                current_tokens: 0,
+                context_window_tokens: 0,
+                compaction_target_tokens: 0,
+                utilization_pct: 0,
+                total_cost_usd: None,
+            };
+        };
+
+        let context_window_tokens =
+            self.current_header_context_window_tokens(profile).max(1) as u64;
+        let compaction_target_tokens =
+            self.current_header_context_target_tokens(profile).max(1) as u64;
+        let start = Self::active_compaction_window_start(thread);
+        let total_thread_tokens = thread.total_input_tokens + thread.total_output_tokens;
+        let current_tokens = thread.messages[start..]
+            .iter()
+            .map(Self::estimate_header_message_tokens)
+            .sum::<u64>();
+        let total_cost_usd = thread
+            .messages
+            .iter()
+            .filter_map(|message| message.cost)
+            .reduce(|acc, cost| acc + cost);
 
         let utilization_pct = current_tokens
             .saturating_mul(100)
@@ -558,6 +703,10 @@ impl TuiModel {
             utilization_pct,
             total_cost_usd,
         }
+    }
+
+    pub(crate) fn current_header_usage_summary(&self) -> widgets::header::HeaderUsageDisplay {
+        self.current_header_context_vm().usage
     }
 
     fn render_conversation_panel(&mut self, frame: &mut Frame, area: Rect) {
@@ -886,16 +1035,15 @@ impl TuiModel {
             ])
             .split(area);
 
-        let profile = self.current_header_agent_profile();
-        let usage = self.current_header_usage_summary();
+        let header = self.current_header_context_vm();
 
         widgets::header::render(
             frame,
             chunks[0],
-            &profile.provider,
-            &profile.model,
-            profile.reasoning_effort.as_deref(),
-            &usage,
+            &header.profile.provider,
+            &header.profile.model,
+            header.profile.reasoning_effort.as_deref(),
+            &header.usage,
             &self.theme,
             self.approval.pending_approvals().len(),
             self.modal.top() == Some(modal::ModalKind::ApprovalCenter),
@@ -926,6 +1074,7 @@ impl TuiModel {
                     self.task_show_live_todos,
                     self.task_show_timeline,
                     self.task_show_files,
+                    self.tick_counter,
                     self.task_view_drag_anchor_point
                         .zip(self.task_view_drag_current_point)
                         .or_else(|| {
@@ -988,21 +1137,39 @@ impl TuiModel {
                     render_helpers::render_goal_composer(frame, layout.chat, &self.theme)
                 }
             }
-            widgets::sidebar::render(
-                frame,
-                sidebar_area,
-                &self.chat,
-                &self.sidebar,
-                &self.tasks,
-                self.chat.active_thread_id(),
-                &self.theme,
-                self.focus == FocusArea::Sidebar,
-                &self.gateway_statuses,
-                &self.tier,
-                self.current_thread_agent_activity(),
-                self.weles_health.as_ref(),
-                &self.recent_actions,
-            );
+            if matches!(
+                self.main_pane_view,
+                MainPaneView::Task(SidebarItemTarget::GoalRun { .. })
+            ) {
+                if let MainPaneView::Task(SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+                    &self.main_pane_view
+                {
+                    widgets::goal_sidebar::render(
+                        frame,
+                        sidebar_area,
+                        &self.tasks,
+                        goal_run_id,
+                        &self.goal_sidebar,
+                        &self.theme,
+                    );
+                }
+            } else {
+                widgets::sidebar::render(
+                    frame,
+                    sidebar_area,
+                    &self.chat,
+                    &self.sidebar,
+                    &self.tasks,
+                    self.chat.active_thread_id(),
+                    &self.theme,
+                    self.focus == FocusArea::Sidebar,
+                    &self.gateway_statuses,
+                    &self.tier,
+                    self.current_thread_agent_activity(),
+                    self.weles_health.as_ref(),
+                    &self.recent_actions,
+                );
+            }
         } else {
             match &self.main_pane_view {
                 MainPaneView::Conversation => self.render_conversation_panel(frame, layout.chat),
@@ -1024,6 +1191,7 @@ impl TuiModel {
                     self.task_show_live_todos,
                     self.task_show_timeline,
                     self.task_show_files,
+                    self.tick_counter,
                     self.task_view_drag_anchor_point
                         .zip(self.task_view_drag_current_point)
                         .or_else(|| {
@@ -1194,15 +1362,17 @@ impl TuiModel {
                 }
                 modal::ModalKind::GoalStepActionPicker => {
                     let step_context = self.selected_goal_step_context();
+                    let action_items = self.goal_action_picker_items();
+                    let action_labels: Vec<_> =
+                        action_items.iter().map(|item| item.label()).collect();
                     render_helpers::render_goal_step_action_picker_modal(
                         frame,
                         overlay_area,
-                        step_context
-                            .as_ref()
-                            .map(|(_, goal_title, _, _)| goal_title.as_str()),
+                        self.selected_goal_run().map(|run| run.title.as_str()),
                         step_context
                             .as_ref()
                             .map(|(_, _, _, step)| step.title.as_str()),
+                        &action_labels,
                         self.modal.picker_cursor(),
                         &self.theme,
                     );

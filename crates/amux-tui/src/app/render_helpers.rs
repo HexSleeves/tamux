@@ -394,6 +394,7 @@ pub(super) fn render_goal_step_action_picker_modal(
     area: Rect,
     goal_title: Option<&str>,
     step_title: Option<&str>,
+    items: &[&str],
     cursor: usize,
     theme: &ThemeTokens,
 ) {
@@ -402,7 +403,7 @@ pub(super) fn render_goal_step_action_picker_modal(
     use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
 
     let block = Block::default()
-        .title(" GOAL STEP ACTIONS ")
+        .title(" GOAL ACTIONS ")
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
         .border_style(theme.accent_secondary);
@@ -421,15 +422,15 @@ pub(super) fn render_goal_step_action_picker_modal(
         .split(inner);
 
     let context = vec![
-        Line::from(goal_title.unwrap_or("Goal step actions").to_string()),
+        Line::from(goal_title.unwrap_or("Goal actions").to_string()),
         Line::from(Span::styled(
-            format!("Selected step: {}", step_title.unwrap_or("unknown")),
+            format!("Current step: {}", step_title.unwrap_or("none")),
             theme.fg_dim,
         )),
     ];
     frame.render_widget(Paragraph::new(context), layout[0]);
 
-    let items = ["Retry Step", "Rerun From Step"]
+    let items = items
         .iter()
         .enumerate()
         .map(|(index, label)| {

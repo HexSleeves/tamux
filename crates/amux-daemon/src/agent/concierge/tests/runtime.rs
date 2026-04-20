@@ -1,4 +1,171 @@
 use super::*;
+use crate::agent::now_millis;
+
+fn sample_goal_run_with_kind(
+    goal_run_id: &str,
+    kind: GoalRunStepKind,
+    instructions: &str,
+) -> GoalRun {
+    GoalRun {
+        id: goal_run_id.to_string(),
+        title: "goal with custom step".to_string(),
+        goal: "validate custom step routing".to_string(),
+        client_request_id: None,
+        status: GoalRunStatus::Running,
+        priority: TaskPriority::Normal,
+        created_at: now_millis(),
+        updated_at: now_millis(),
+        started_at: Some(now_millis()),
+        completed_at: None,
+        thread_id: Some("thread-goal-custom".to_string()),
+        session_id: None,
+        current_step_index: 0,
+        current_step_title: Some("step-1".to_string()),
+        current_step_kind: Some(kind.clone()),
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
+        replan_count: 0,
+        max_replans: 2,
+        plan_summary: Some("plan".to_string()),
+        reflection_summary: None,
+        memory_updates: Vec::new(),
+        generated_skill_path: None,
+        last_error: None,
+        failure_cause: None,
+        stopped_reason: None,
+        child_task_ids: Vec::new(),
+        child_task_count: 0,
+        approval_count: 0,
+        awaiting_approval_id: None,
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        active_task_id: None,
+        duration_ms: None,
+        steps: vec![GoalRunStep {
+            id: "step-1".to_string(),
+            position: 0,
+            title: "step-1".to_string(),
+            instructions: instructions.to_string(),
+            kind,
+            success_criteria: "done".to_string(),
+            session_id: None,
+            status: GoalRunStepStatus::Pending,
+            task_id: None,
+            summary: None,
+            error: None,
+            started_at: None,
+            completed_at: None,
+        }],
+        events: Vec::new(),
+        dossier: None,
+        total_prompt_tokens: 0,
+        total_completion_tokens: 0,
+        estimated_cost_usd: None,
+        autonomy_level: crate::agent::AutonomyLevel::Aware,
+        authorship_tag: None,
+    }
+}
+
+#[tokio::test]
+async fn generate_welcome_survives_low_confidence_goal_plan_approval_resume() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.concierge.detail_level = ConciergeDetailLevel::Minimal;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    engine.concierge.initialize(&engine.threads).await;
+
+    let goal_run_id = "goal-low-confidence-plan";
+    let approval_id = "goal-plan-approval-1";
+    let mut goal_run = sample_goal_run_with_kind(
+        goal_run_id,
+        GoalRunStepKind::Research,
+        "Inspect the deployment before taking action",
+    );
+    goal_run.status = GoalRunStatus::AwaitingApproval;
+    goal_run.awaiting_approval_id = Some(approval_id.to_string());
+    goal_run.active_task_id = Some("approval-task".to_string());
+    goal_run.thread_id = Some("thread-low-confidence-plan".to_string());
+    engine.goal_runs.lock().await.push_back(goal_run);
+
+    engine.tasks.lock().await.push_back(AgentTask {
+        id: "approval-task".to_string(),
+        title: "Review low-confidence goal plan".to_string(),
+        description: "Review low-confidence goal plan".to_string(),
+        status: TaskStatus::AwaitingApproval,
+        priority: TaskPriority::Normal,
+        progress: 0,
+        created_at: now_millis(),
+        started_at: None,
+        completed_at: None,
+        error: None,
+        result: None,
+        thread_id: Some("thread-low-confidence-plan".to_string()),
+        source: "goal_plan_approval".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: None,
+        goal_run_id: Some(goal_run_id.to_string()),
+        goal_run_title: Some("goal with custom step".to_string()),
+        goal_step_id: Some("step-1".to_string()),
+        goal_step_title: Some("step-1".to_string()),
+        parent_task_id: None,
+        parent_thread_id: None,
+        runtime: "daemon".to_string(),
+        retry_count: 0,
+        max_retries: 0,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: Some("awaiting approval".to_string()),
+        awaiting_approval_id: Some(approval_id.to_string()),
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        lane_id: None,
+        last_error: None,
+        logs: Vec::new(),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        override_provider: None,
+        override_model: None,
+        override_system_prompt: None,
+        sub_agent_def_id: None,
+    });
+
+    assert!(
+        engine
+            .handle_task_approval_resolution(
+                approval_id,
+                amux_protocol::ApprovalDecision::ApproveOnce
+            )
+            .await,
+        "approval resolution should succeed for low-confidence plan reviews"
+    );
+
+    let welcome = engine
+        .concierge
+        .generate_welcome(&engine.threads, &engine.tasks)
+        .await
+        .expect("welcome should be returned after approval resume");
+
+    assert!(
+        !welcome.0.trim().is_empty(),
+        "welcome should still render non-empty content after approval resume"
+    );
+}
 
 #[tokio::test]
 async fn concierge_recovery_deduplicates_inflight_investigations_per_thread_signature() {

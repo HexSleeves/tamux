@@ -1,6 +1,28 @@
 use super::*;
 
 impl TuiModel {
+    pub(in super::super) fn parent_goal_target_for_task(
+        &self,
+        task_id: &str,
+    ) -> Option<sidebar::SidebarItemTarget> {
+        let task = self.tasks.task_by_id(task_id)?;
+        let goal_run_id = task.goal_run_id.as_deref()?;
+        let run = self.tasks.goal_run_by_id(goal_run_id)?;
+        let step_id = run
+            .steps
+            .iter()
+            .find(|step| {
+                step.task_id.as_deref() == Some(task.id.as_str())
+                    || task.goal_step_title.as_deref() == Some(step.title.as_str())
+            })
+            .map(|step| step.id.clone());
+
+        Some(sidebar::SidebarItemTarget::GoalRun {
+            goal_run_id: run.id.clone(),
+            step_id,
+        })
+    }
+
     pub(in super::super) fn target_thread_id(
         &self,
         target: &sidebar::SidebarItemTarget,

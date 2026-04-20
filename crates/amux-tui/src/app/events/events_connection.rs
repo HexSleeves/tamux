@@ -8,25 +8,7 @@ impl TuiModel {
         self.operator_profile.loading = false;
         self.status_line = "Connected to daemon".to_string();
         self.send_daemon_command(DaemonCommand::Refresh);
-        self.send_daemon_command(DaemonCommand::RefreshServices);
-        self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
-        self.send_daemon_command(DaemonCommand::GetOpenAICodexAuthStatus);
-        self.send_daemon_command(DaemonCommand::ListSubAgents);
-        self.send_daemon_command(DaemonCommand::GetConciergeConfig);
-        self.send_daemon_command(DaemonCommand::ListNotifications);
-        self.send_daemon_command(DaemonCommand::ListTaskApprovalRules);
-        self.send_daemon_command(DaemonCommand::PluginList);
-        self.send_daemon_command(DaemonCommand::PluginListCommands);
-        let cwd = std::env::current_dir()
-            .ok()
-            .map(|p| p.to_string_lossy().to_string());
-        let shell = std::env::var("SHELL").ok();
-        self.send_daemon_command(DaemonCommand::SpawnSession {
-            shell,
-            cwd,
-            cols: self.width.max(80),
-            rows: self.height.max(24),
-        });
+        self.send_daemon_command(DaemonCommand::GetConfig);
     }
 
     pub(in crate::app) fn handle_disconnected_event(&mut self) {

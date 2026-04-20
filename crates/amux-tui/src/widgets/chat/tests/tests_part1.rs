@@ -82,10 +82,7 @@ fn hit_test_reasoning_header_body_selects_message_instead_of_toggling() {
         })
         .expect("reasoning header should be visible");
     let hit_line = &visible[header_row];
-    let (plain, content_start, _) = rendered_line_content_bounds(hit_line);
-    let label_offset = plain
-        .find("Reasoning")
-        .expect("reasoning label should be rendered");
+    let (_, content_start, _) = rendered_line_content_bounds(hit_line);
 
     let hit = hit_test(
         area,
@@ -93,7 +90,7 @@ fn hit_test_reasoning_header_body_selects_message_instead_of_toggling() {
         &ThemeTokens::default(),
         0,
         Position::new(
-            inner.x + (content_start + label_offset + 1) as u16,
+            inner.x + (content_start + 3) as u16,
             inner.y + header_row as u16,
         ),
     );

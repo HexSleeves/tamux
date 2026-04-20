@@ -44,6 +44,12 @@ impl TuiModel {
     }
 
     fn sidebar_visible(&self) -> bool {
+        if matches!(
+            self.main_pane_view,
+            MainPaneView::Task(SidebarItemTarget::GoalRun { .. })
+        ) {
+            return true;
+        }
         if !matches!(
             self.main_pane_view,
             MainPaneView::Conversation | MainPaneView::WorkContext

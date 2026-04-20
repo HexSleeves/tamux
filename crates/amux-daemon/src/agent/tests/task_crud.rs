@@ -22,6 +22,8 @@ fn sample_supervised_goal_run(goal_run_id: &str, task_id: &str, approval_id: &st
         current_step_index: 0,
         current_step_title: Some("step-1".to_string()),
         current_step_kind: Some(GoalRunStepKind::Command),
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 0,
         max_replans: 2,
         plan_summary: Some("plan".to_string()),
@@ -65,6 +67,29 @@ fn sample_supervised_goal_run(goal_run_id: &str, task_id: &str, approval_id: &st
         autonomy_level: super::autonomy::AutonomyLevel::Supervised,
         authorship_tag: None,
     }
+}
+
+fn sample_owner_profile(
+    agent_label: &str,
+    provider: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
+) -> GoalRuntimeOwnerProfile {
+    GoalRuntimeOwnerProfile {
+        agent_label: agent_label.to_string(),
+        provider: provider.to_string(),
+        model: model.to_string(),
+        reasoning_effort: reasoning_effort.map(str::to_string),
+    }
+}
+
+fn goal_run_detail_object(goal_run_json: &str) -> serde_json::Map<String, serde_json::Value> {
+    let value: serde_json::Value =
+        serde_json::from_str(goal_run_json).expect("parse capped goal run detail json");
+    value
+        .as_object()
+        .cloned()
+        .expect("goal run detail payload should be a JSON object")
 }
 
 async fn sample_awaiting_task(
@@ -781,6 +806,43 @@ async fn get_goal_run_capped_for_ipc_truncates_oversized_detail_payload() {
         .await
         .expect("goal should exist");
     assert!(truncated, "oversized goal detail should be truncated");
+    let goal_run_object = goal_run_detail_object(&goal_run_json);
+    assert_eq!(
+        goal_run_object
+            .get("loaded_step_start")
+            .and_then(serde_json::Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        goal_run_object
+            .get("loaded_step_end")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        goal_run_object
+            .get("loaded_event_start")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        goal_run_object
+            .get("loaded_event_end")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        goal_run_object
+            .get("total_step_count")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        goal_run_object
+            .get("total_event_count")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
     let goal_run: Option<GoalRun> =
         serde_json::from_str(&goal_run_json).expect("parse capped goal run detail json");
     let goal_run = goal_run.expect("goal run detail should still exist");
@@ -800,6 +862,510 @@ async fn get_goal_run_capped_for_ipc_truncates_oversized_detail_payload() {
         frame.len().saturating_sub(4) <= amux_protocol::MAX_IPC_FRAME_SIZE_BYTES,
         "goal run detail should stay below the IPC frame cap"
     );
+}
+
+#[tokio::test]
+async fn get_goal_run_capped_for_ipc_preserves_owner_profiles_when_step_slice_drops_prefix() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let goal_run_id = "goal-owner-metadata-step-slice";
+    let huge_instructions = "x".repeat(amux_protocol::MAX_IPC_FRAME_SIZE_BYTES + 1024);
+
+    let mut goal_run = sample_supervised_goal_run(goal_run_id, "task-owner", "approval-owner");
+    goal_run.planner_owner_profile = Some(sample_owner_profile(
+        "planner",
+        "openai",
+        "gpt-5",
+        Some("high"),
+    ));
+    goal_run.current_step_owner_profile = Some(sample_owner_profile(
+        "current-step",
+        "anthropic",
+        "claude-sonnet-4",
+        None,
+    ));
+    goal_run.current_step_index = 1;
+    goal_run.current_step_title = Some("step-current".to_string());
+    goal_run.current_step_kind = Some(GoalRunStepKind::Command);
+    goal_run.active_task_id = Some("task-current".to_string());
+    goal_run.steps = vec![
+        GoalRunStep {
+            id: "step-prefix".to_string(),
+            position: 0,
+            title: "step-prefix".to_string(),
+            instructions: huge_instructions,
+            kind: GoalRunStepKind::Command,
+            success_criteria: "prefix can be dropped".to_string(),
+            session_id: None,
+            status: GoalRunStepStatus::Completed,
+            task_id: Some("task-prefix".to_string()),
+            summary: None,
+            error: None,
+            started_at: Some(now_millis()),
+            completed_at: Some(now_millis()),
+        },
+        GoalRunStep {
+            id: "step-current".to_string(),
+            position: 1,
+            title: "step-current".to_string(),
+            instructions: "keep this step".to_string(),
+            kind: GoalRunStepKind::Command,
+            success_criteria: "current step remains meaningful".to_string(),
+            session_id: None,
+            status: GoalRunStepStatus::InProgress,
+            task_id: Some("task-current".to_string()),
+            summary: None,
+            error: None,
+            started_at: Some(now_millis()),
+            completed_at: None,
+        },
+    ];
+    engine.goal_runs.lock().await.push_back(goal_run);
+
+    let (goal_run_json, truncated) = engine
+        .get_goal_run_capped_for_ipc(goal_run_id)
+        .await
+        .expect("goal should exist");
+    assert!(truncated, "oversized goal detail should be truncated");
+    let goal_run_object = goal_run_detail_object(&goal_run_json);
+    assert_eq!(
+        goal_run_object
+            .get("loaded_step_start")
+            .and_then(serde_json::Value::as_u64),
+        Some(1),
+    );
+    assert_eq!(
+        goal_run_object
+            .get("loaded_step_end")
+            .and_then(serde_json::Value::as_u64),
+        Some(2),
+    );
+    assert_eq!(
+        goal_run_object
+            .get("loaded_event_start")
+            .and_then(serde_json::Value::as_u64),
+        Some(0),
+    );
+    assert_eq!(
+        goal_run_object
+            .get("loaded_event_end")
+            .and_then(serde_json::Value::as_u64),
+        Some(0),
+    );
+    assert_eq!(
+        goal_run_object
+            .get("total_step_count")
+            .and_then(serde_json::Value::as_u64),
+        Some(2),
+    );
+    assert_eq!(
+        goal_run_object
+            .get("total_event_count")
+            .and_then(serde_json::Value::as_u64),
+        Some(0),
+    );
+    assert_eq!(
+        goal_run_object
+            .get("current_step_index")
+            .and_then(serde_json::Value::as_u64),
+        Some(0),
+        "current step index should be rebased after slicing",
+    );
+    assert_eq!(
+        goal_run_object.get("current_step_kind"),
+        Some(&serde_json::json!("command")),
+        "current step kind should follow the rebased current step",
+    );
+    assert_eq!(
+        goal_run_object.get("active_task_id"),
+        Some(&serde_json::json!("task-current")),
+        "active task id should follow the rebased current step",
+    );
+    let goal_run: Option<GoalRun> =
+        serde_json::from_str(&goal_run_json).expect("parse capped goal run detail json");
+    let goal_run = goal_run.expect("goal run detail should still exist");
+    assert_eq!(
+        goal_run.planner_owner_profile,
+        Some(sample_owner_profile(
+            "planner",
+            "openai",
+            "gpt-5",
+            Some("high"),
+        )),
+        "planner owner profile should survive IPC capping",
+    );
+    assert_eq!(
+        goal_run.current_step_owner_profile,
+        Some(sample_owner_profile(
+            "current-step",
+            "anthropic",
+            "claude-sonnet-4",
+            None,
+        )),
+        "current-step owner profile should survive IPC capping when the step still exists",
+    );
+    assert_eq!(
+        goal_run.steps.len(),
+        1,
+        "step slicing should drop the oversized prefix step",
+    );
+    assert_eq!(goal_run.current_step_index, 0);
+    assert_eq!(goal_run.current_step_kind, Some(GoalRunStepKind::Command));
+    assert_eq!(goal_run.active_task_id.as_deref(), Some("task-current"));
+    assert_eq!(goal_run.current_step_title.as_deref(), Some("step-current"));
+}
+
+#[tokio::test]
+async fn get_goal_run_capped_for_ipc_preserves_planner_owner_profile_in_stripped_summary_payload() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let goal_run_id = "goal-owner-metadata-summary";
+    let huge_instructions = "x".repeat(amux_protocol::MAX_IPC_FRAME_SIZE_BYTES + 1024);
+
+    let mut goal_run = sample_supervised_goal_run(goal_run_id, "task-owner", "approval-owner");
+    goal_run.planner_owner_profile = Some(sample_owner_profile(
+        "planner",
+        "openai",
+        "gpt-5",
+        Some("high"),
+    ));
+    goal_run.current_step_owner_profile = Some(sample_owner_profile(
+        "current-step",
+        "anthropic",
+        "claude-sonnet-4",
+        None,
+    ));
+    goal_run.steps = vec![GoalRunStep {
+        id: "step-summary".to_string(),
+        position: 0,
+        title: "step-summary".to_string(),
+        instructions: huge_instructions,
+        kind: GoalRunStepKind::Command,
+        success_criteria: "summary path should strip steps".to_string(),
+        session_id: None,
+        status: GoalRunStepStatus::InProgress,
+        task_id: Some("task-summary".to_string()),
+        summary: None,
+        error: None,
+        started_at: Some(now_millis()),
+        completed_at: None,
+    }];
+    goal_run.current_step_index = 0;
+    goal_run.current_step_title = Some("step-summary".to_string());
+    goal_run.current_step_kind = Some(GoalRunStepKind::Command);
+    goal_run.active_task_id = Some("task-summary".to_string());
+    engine.goal_runs.lock().await.push_back(goal_run);
+
+    let (goal_run_json, truncated) = engine
+        .get_goal_run_capped_for_ipc(goal_run_id)
+        .await
+        .expect("goal should exist");
+    assert!(truncated, "oversized goal detail should be truncated");
+    let goal_run_object = goal_run_detail_object(&goal_run_json);
+    assert_eq!(
+        goal_run_object
+            .get("loaded_step_start")
+            .and_then(serde_json::Value::as_u64),
+        Some(1),
+    );
+    assert_eq!(
+        goal_run_object
+            .get("loaded_step_end")
+            .and_then(serde_json::Value::as_u64),
+        Some(1),
+    );
+    assert_eq!(
+        goal_run_object
+            .get("loaded_event_start")
+            .and_then(serde_json::Value::as_u64),
+        Some(0),
+    );
+    assert_eq!(
+        goal_run_object
+            .get("loaded_event_end")
+            .and_then(serde_json::Value::as_u64),
+        Some(0),
+    );
+    assert_eq!(
+        goal_run_object
+            .get("total_step_count")
+            .and_then(serde_json::Value::as_u64),
+        Some(1),
+    );
+    assert_eq!(
+        goal_run_object
+            .get("total_event_count")
+            .and_then(serde_json::Value::as_u64),
+        Some(0),
+    );
+    let goal_run: Option<GoalRun> =
+        serde_json::from_str(&goal_run_json).expect("parse capped goal run detail json");
+    let goal_run = goal_run.expect("goal run detail should still exist");
+    assert_eq!(
+        goal_run.planner_owner_profile,
+        Some(sample_owner_profile(
+            "planner",
+            "openai",
+            "gpt-5",
+            Some("high"),
+        )),
+        "planner owner profile should survive summary stripping",
+    );
+    assert!(
+        goal_run.current_step_owner_profile.is_none(),
+        "current-step owner profile should be cleared when the current step is stripped",
+    );
+    assert!(
+        goal_run_object.get("current_step_owner_profile").is_none(),
+        "the raw wire payload should omit current-step owner metadata when the current step is stripped",
+    );
+    assert!(
+        goal_run.steps.is_empty(),
+        "summary stripping should remove oversized step payloads",
+    );
+}
+
+#[tokio::test]
+async fn get_goal_run_page_capped_for_ipc_clears_current_step_owner_profile_for_empty_step_window()
+{
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let goal_run_id = "goal-empty-step-window";
+
+    let mut goal_run =
+        sample_supervised_goal_run(goal_run_id, "task-empty-window", "approval-empty-window");
+    goal_run.planner_owner_profile = Some(sample_owner_profile(
+        "planner",
+        "openai",
+        "gpt-5",
+        Some("high"),
+    ));
+    goal_run.current_step_owner_profile = Some(sample_owner_profile(
+        "current-step",
+        "anthropic",
+        "claude-sonnet-4",
+        None,
+    ));
+    engine.goal_runs.lock().await.push_back(goal_run);
+
+    let (goal_run_json, truncated) = engine
+        .get_goal_run_page_capped_for_ipc(goal_run_id, Some(1), Some(0), None, None)
+        .await
+        .expect("goal should exist");
+    assert!(
+        !truncated,
+        "an explicit empty step window should still serialize"
+    );
+
+    let goal_run_object = goal_run_detail_object(&goal_run_json);
+    assert_eq!(
+        goal_run_object
+            .get("loaded_step_start")
+            .and_then(serde_json::Value::as_u64),
+        Some(1),
+    );
+    assert_eq!(
+        goal_run_object
+            .get("loaded_step_end")
+            .and_then(serde_json::Value::as_u64),
+        Some(1),
+    );
+    assert_eq!(
+        goal_run_object.get("current_step_owner_profile"),
+        None,
+        "current-step owner profile should be cleared when the step window is empty",
+    );
+    let goal_run: Option<GoalRun> =
+        serde_json::from_str(&goal_run_json).expect("parse capped goal run detail json");
+    let goal_run = goal_run.expect("goal run detail should still exist");
+    assert!(goal_run.steps.is_empty());
+    assert!(goal_run.current_step_owner_profile.is_none());
+    assert_eq!(goal_run.current_step_index, 0);
+    assert!(goal_run.current_step_title.is_none());
+    assert!(goal_run.current_step_kind.is_none());
+    assert!(goal_run.active_task_id.is_none());
+}
+
+#[tokio::test]
+async fn get_goal_run_page_capped_for_ipc_clears_current_step_owner_profile_when_paged_window_excludes_current_step(
+) {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let goal_run_id = "goal-paged-window-excludes-current-step";
+
+    let mut goal_run =
+        sample_supervised_goal_run(goal_run_id, "task-paged-window", "approval-paged-window");
+    goal_run.planner_owner_profile = Some(sample_owner_profile(
+        "planner",
+        "openai",
+        "gpt-5",
+        Some("high"),
+    ));
+    goal_run.current_step_owner_profile = Some(sample_owner_profile(
+        "current-step",
+        "anthropic",
+        "claude-sonnet-4",
+        None,
+    ));
+    goal_run.steps = vec![
+        GoalRunStep {
+            id: "step-current".to_string(),
+            position: 0,
+            title: "step-current".to_string(),
+            instructions: "real current step".to_string(),
+            kind: GoalRunStepKind::Command,
+            success_criteria: "current step exists".to_string(),
+            session_id: None,
+            status: GoalRunStepStatus::InProgress,
+            task_id: Some("task-current".to_string()),
+            summary: None,
+            error: None,
+            started_at: Some(now_millis()),
+            completed_at: None,
+        },
+        GoalRunStep {
+            id: "step-paged".to_string(),
+            position: 1,
+            title: "step-paged".to_string(),
+            instructions: "windowed step".to_string(),
+            kind: GoalRunStepKind::Research,
+            success_criteria: "paged step exists".to_string(),
+            session_id: None,
+            status: GoalRunStepStatus::Pending,
+            task_id: Some("task-paged".to_string()),
+            summary: None,
+            error: None,
+            started_at: None,
+            completed_at: None,
+        },
+    ];
+    goal_run.current_step_index = 0;
+    goal_run.current_step_title = Some("step-current".to_string());
+    goal_run.current_step_kind = Some(GoalRunStepKind::Command);
+    goal_run.active_task_id = Some("task-current".to_string());
+    engine.goal_runs.lock().await.push_back(goal_run);
+
+    let (goal_run_json, truncated) = engine
+        .get_goal_run_page_capped_for_ipc(goal_run_id, Some(1), Some(1), None, None)
+        .await
+        .expect("goal should exist");
+    assert!(!truncated, "paged detail should fit without truncation");
+
+    let goal_run_object = goal_run_detail_object(&goal_run_json);
+    assert_eq!(
+        goal_run_object
+            .get("loaded_step_start")
+            .and_then(serde_json::Value::as_u64),
+        Some(1),
+    );
+    assert_eq!(
+        goal_run_object
+            .get("loaded_step_end")
+            .and_then(serde_json::Value::as_u64),
+        Some(2),
+    );
+    assert_eq!(
+        goal_run_object.get("current_step_title"),
+        Some(&serde_json::json!("step-paged")),
+    );
+    assert_eq!(
+        goal_run_object.get("current_step_kind"),
+        Some(&serde_json::json!("research")),
+    );
+    assert_eq!(
+        goal_run_object.get("active_task_id"),
+        Some(&serde_json::json!("task-paged")),
+    );
+    assert!(
+        goal_run_object.get("current_step_owner_profile").is_none(),
+        "current-step owner metadata should be omitted when the retained window excludes the real current step",
+    );
+
+    let goal_run: Option<GoalRun> =
+        serde_json::from_str(&goal_run_json).expect("parse capped goal run detail json");
+    let goal_run = goal_run.expect("goal run detail should still exist");
+    assert_eq!(goal_run.current_step_index, 0);
+    assert_eq!(goal_run.current_step_title.as_deref(), Some("step-paged"));
+    assert_eq!(goal_run.current_step_kind, Some(GoalRunStepKind::Research));
+    assert_eq!(goal_run.active_task_id.as_deref(), Some("task-paged"));
+    assert!(goal_run.current_step_owner_profile.is_none());
+    assert_eq!(
+        goal_run.planner_owner_profile,
+        Some(sample_owner_profile(
+            "planner",
+            "openai",
+            "gpt-5",
+            Some("high"),
+        )),
+    );
+}
+
+#[tokio::test]
+async fn goal_run_with_step_slice_clears_current_step_owner_profile_when_slice_excludes_current_step(
+) {
+    let mut goal_run =
+        sample_supervised_goal_run("goal-step-slice", "task-step-slice", "approval-step-slice");
+    goal_run.planner_owner_profile = Some(sample_owner_profile(
+        "planner",
+        "openai",
+        "gpt-5",
+        Some("high"),
+    ));
+    goal_run.current_step_owner_profile = Some(sample_owner_profile(
+        "current-step",
+        "anthropic",
+        "claude-sonnet-4",
+        None,
+    ));
+    goal_run.steps = vec![
+        GoalRunStep {
+            id: "step-current".to_string(),
+            position: 0,
+            title: "step-current".to_string(),
+            instructions: "real current step".to_string(),
+            kind: GoalRunStepKind::Command,
+            success_criteria: "current step exists".to_string(),
+            session_id: None,
+            status: GoalRunStepStatus::InProgress,
+            task_id: Some("task-current".to_string()),
+            summary: None,
+            error: None,
+            started_at: Some(now_millis()),
+            completed_at: None,
+        },
+        GoalRunStep {
+            id: "step-sliced".to_string(),
+            position: 1,
+            title: "step-sliced".to_string(),
+            instructions: "retained step".to_string(),
+            kind: GoalRunStepKind::Research,
+            success_criteria: "retained step exists".to_string(),
+            session_id: None,
+            status: GoalRunStepStatus::Pending,
+            task_id: Some("task-sliced".to_string()),
+            summary: None,
+            error: None,
+            started_at: None,
+            completed_at: None,
+        },
+    ];
+    goal_run.current_step_index = 0;
+    goal_run.current_step_title = Some("step-current".to_string());
+    goal_run.current_step_kind = Some(GoalRunStepKind::Command);
+    goal_run.active_task_id = Some("task-current".to_string());
+
+    let sliced = goal_run_with_step_slice(&goal_run, 1);
+
+    assert_eq!(sliced.steps.len(), 1);
+    assert_eq!(sliced.current_step_index, 0);
+    assert_eq!(sliced.current_step_title.as_deref(), Some("step-sliced"));
+    assert_eq!(sliced.current_step_kind, Some(GoalRunStepKind::Research));
+    assert_eq!(sliced.active_task_id.as_deref(), Some("task-sliced"));
+    assert!(sliced.current_step_owner_profile.is_none());
 }
 
 #[tokio::test]

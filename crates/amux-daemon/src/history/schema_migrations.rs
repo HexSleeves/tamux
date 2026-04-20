@@ -591,6 +591,18 @@ pub(super) fn apply_schema_migrations(
         "TEXT NOT NULL DEFAULT 'aware'",
     )?;
     ensure_column(connection, "goal_runs", "authorship_tag", "TEXT")?;
+    ensure_column(
+        connection,
+        "goal_runs",
+        "planner_owner_profile_json",
+        "TEXT",
+    )?;
+    ensure_column(
+        connection,
+        "goal_runs",
+        "current_step_owner_profile_json",
+        "TEXT",
+    )?;
     ensure_column(connection, "goal_run_events", "step_index", "INTEGER")?;
     ensure_column(connection, "goal_run_events", "todo_snapshot_json", "TEXT")?;
     // BEAT-09: user_action column for dismissal tracking in action_audit.

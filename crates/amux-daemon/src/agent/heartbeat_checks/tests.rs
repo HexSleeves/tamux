@@ -31,6 +31,8 @@ fn make_goal_run(id: &str, title: &str, status: GoalRunStatus, updated_at: u64) 
         current_step_index: 0,
         current_step_title: None,
         current_step_kind: None,
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 0,
         max_replans: 2,
         plan_summary: None,

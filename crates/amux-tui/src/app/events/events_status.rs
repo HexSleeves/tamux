@@ -99,6 +99,15 @@ impl TuiModel {
         self.agent_config_loaded = true;
         if self.connected && !was_loaded {
             self.request_concierge_welcome();
+            self.send_daemon_command(DaemonCommand::RefreshServices);
+            self.send_daemon_command(DaemonCommand::GetProviderAuthStates);
+            self.send_daemon_command(DaemonCommand::GetOpenAICodexAuthStatus);
+            self.send_daemon_command(DaemonCommand::ListSubAgents);
+            self.send_daemon_command(DaemonCommand::GetConciergeConfig);
+            self.send_daemon_command(DaemonCommand::ListNotifications);
+            self.send_daemon_command(DaemonCommand::ListTaskApprovalRules);
+            self.send_daemon_command(DaemonCommand::PluginList);
+            self.send_daemon_command(DaemonCommand::PluginListCommands);
         }
     }
 

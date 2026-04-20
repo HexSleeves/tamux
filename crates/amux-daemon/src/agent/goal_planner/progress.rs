@@ -156,6 +156,10 @@ impl AgentEngine {
             }
             task.clone()
         };
+        let current_step_owner_profile = Some(
+            self.current_step_owner_profile_for_task(&updated_task)
+                .await,
+        );
         self.persist_tasks().await;
         self.emit_task_update(&updated_task, Some(status_message(&updated_task).into()));
 
@@ -184,6 +188,7 @@ impl AgentEngine {
             goal_run.failure_cause = None;
             goal_run.awaiting_approval_id = None;
             goal_run.active_task_id = Some(updated_task.id.clone());
+            goal_run.current_step_owner_profile = current_step_owner_profile;
             goal_run.events.push(make_goal_run_event(
                 "verification",
                 "goal step verification queued",
@@ -217,6 +222,17 @@ impl AgentEngine {
         goal_run_id: &str,
         task: &AgentTask,
     ) {
+        let current_step_owner_profile = {
+            let goal_runs = self.goal_runs.lock().await;
+            goal_runs
+                .iter()
+                .find(|item| item.id == goal_run_id)
+                .and_then(|goal_run| goal_run.current_step_owner_profile.clone())
+        };
+        let current_step_owner_profile = match current_step_owner_profile {
+            Some(profile) => profile,
+            None => self.current_step_owner_profile_for_task(task).await,
+        };
         let mut maybe_updated = None;
         {
             let mut goal_runs = self.goal_runs.lock().await;
@@ -232,6 +248,11 @@ impl AgentEngine {
                 goal_run.updated_at = now_millis();
                 goal_run.awaiting_approval_id = task.awaiting_approval_id.clone();
                 goal_run.active_task_id = Some(task.id.clone());
+                let next_current_step_owner_profile = Some(current_step_owner_profile.clone());
+                if goal_run.current_step_owner_profile != next_current_step_owner_profile {
+                    changed = true;
+                }
+                goal_run.current_step_owner_profile = next_current_step_owner_profile;
                 if let Some(step) = goal_run.steps.get_mut(goal_run.current_step_index) {
                     if step.status != GoalRunStepStatus::InProgress {
                         step.status = GoalRunStepStatus::InProgress;
@@ -387,6 +408,7 @@ impl AgentEngine {
             let next_step = goal_run.steps.get(goal_run.current_step_index);
             goal_run.current_step_title = next_step.map(|step| step.title.clone());
             goal_run.current_step_kind = next_step.map(|step| step.kind.clone());
+            goal_run.current_step_owner_profile = None;
             goal_run.status = GoalRunStatus::Running;
             goal_run.updated_at = now;
             goal_run.last_error = None;
@@ -542,6 +564,18 @@ impl AgentEngine {
         if snapshot.replan_count < snapshot.max_replans
             && snapshot.current_step_index < snapshot.steps.len()
         {
+            let planner_owner_profile = self.planner_owner_profile().await;
+            {
+                let mut goal_runs = self.goal_runs.lock().await;
+                if let Some(goal_run) = goal_runs.iter_mut().find(|item| item.id == goal_run_id) {
+                    if goal_run.planner_owner_profile.as_ref() != Some(&planner_owner_profile) {
+                        goal_run.planner_owner_profile = Some(planner_owner_profile.clone());
+                        goal_run.updated_at = now_millis();
+                    }
+                }
+            }
+            self.persist_goal_runs().await;
+
             let revised = self.request_goal_replan(&snapshot, &failure).await?;
             self.persist_goal_plan_causal_trace(&snapshot, &revised, Some(&failure))
                 .await;
@@ -585,6 +619,8 @@ impl AgentEngine {
                 let next_step = goal_run.steps.get(goal_run.current_step_index);
                 goal_run.current_step_title = next_step.map(|step| step.title.clone());
                 goal_run.current_step_kind = next_step.map(|step| step.kind.clone());
+                goal_run.planner_owner_profile = Some(planner_owner_profile.clone());
+                goal_run.current_step_owner_profile = None;
                 goal_run.replan_count = goal_run.replan_count.saturating_add(1);
                 goal_run.status = GoalRunStatus::Running;
                 goal_run.updated_at = now_millis();

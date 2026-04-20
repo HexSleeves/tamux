@@ -258,6 +258,7 @@ pub enum TaskStatus {
     AwaitingApproval,
     Blocked,
     FailedAnalyzing,
+    BudgetExceeded,
     Completed,
     Failed,
     Cancelled,
@@ -310,6 +311,15 @@ pub enum GoalRunStatus {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct GoalRuntimeOwnerProfile {
+    pub agent_label: String,
+    pub provider: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+}
+
 fn deserialize_goal_binding<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -345,9 +355,15 @@ pub struct GoalRun {
     #[serde(default)]
     pub current_step_title: Option<String>,
     #[serde(default)]
+    pub planner_owner_profile: Option<GoalRuntimeOwnerProfile>,
+    #[serde(default)]
+    pub current_step_owner_profile: Option<GoalRuntimeOwnerProfile>,
+    #[serde(default)]
     pub child_task_count: u32,
     #[serde(default)]
     pub approval_count: u32,
+    #[serde(default)]
+    pub awaiting_approval_id: Option<String>,
     #[serde(default)]
     pub last_error: Option<String>,
     #[serde(default)]

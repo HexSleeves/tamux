@@ -48,6 +48,107 @@ fn make_goal_run_with_steps(
     }
 }
 
+fn seed_goal_sidebar_model() -> (
+    TuiModel,
+    tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
+) {
+    let (mut model, daemon_rx) = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Goal Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model.tasks.reduce(task::TaskAction::TaskListReceived(vec![
+        task::AgentTask {
+            id: "task-1".to_string(),
+            title: "Child Task One".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            goal_run_id: Some("goal-1".to_string()),
+            created_at: 1,
+            ..Default::default()
+        },
+        task::AgentTask {
+            id: "task-2".to_string(),
+            title: "Child Task Two".to_string(),
+            thread_id: Some("thread-2".to_string()),
+            goal_run_id: Some("goal-1".to_string()),
+            created_at: 2,
+            ..Default::default()
+        },
+    ]));
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        crate::state::task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Goal One".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            goal: "Goal for Goal One".to_string(),
+            child_task_ids: vec!["task-1".to_string(), "task-2".to_string()],
+            steps: vec![
+                crate::state::task::GoalRunStep {
+                    id: "step-1".to_string(),
+                    title: "Plan".to_string(),
+                    order: 0,
+                    ..Default::default()
+                },
+                crate::state::task::GoalRunStep {
+                    id: "step-2".to_string(),
+                    title: "Implement".to_string(),
+                    order: 1,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        },
+    ));
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunCheckpointsReceived {
+            goal_run_id: "goal-1".to_string(),
+            checkpoints: vec![
+                task::GoalRunCheckpointSummary {
+                    id: "checkpoint-1".to_string(),
+                    checkpoint_type: "plan".to_string(),
+                    step_index: Some(1),
+                    context_summary_preview: Some("Implement checkpoint".to_string()),
+                    ..Default::default()
+                },
+                task::GoalRunCheckpointSummary {
+                    id: "checkpoint-2".to_string(),
+                    checkpoint_type: "note".to_string(),
+                    context_summary_preview: Some("Loose checkpoint".to_string()),
+                    ..Default::default()
+                },
+            ],
+        });
+    model.tasks.reduce(task::TaskAction::WorkContextReceived(
+        task::ThreadWorkContext {
+            thread_id: "thread-1".to_string(),
+            entries: vec![
+                task::WorkContextEntry {
+                    path: "/tmp/first.md".to_string(),
+                    goal_run_id: Some("goal-1".to_string()),
+                    is_text: true,
+                    ..Default::default()
+                },
+                task::WorkContextEntry {
+                    path: "/tmp/second.md".to_string(),
+                    goal_run_id: Some("goal-1".to_string()),
+                    is_text: true,
+                    ..Default::default()
+                },
+            ],
+        },
+    ));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: Some("step-1".to_string()),
+    });
+    model.focus = FocusArea::Sidebar;
+    (model, daemon_rx)
+}
+
 fn render_screen(model: &mut TuiModel) -> Vec<String> {
     let backend = TestBackend::new(model.width, model.height);
     let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
@@ -4125,7 +4226,7 @@ fn goal_picker_delete_requires_confirmation_before_sending_delete_goal() {
 }
 
 #[test]
-fn goal_picker_ctrl_s_running_goal_requires_confirmation_before_stop() {
+fn goal_picker_ctrl_s_running_goal_requires_confirmation_before_pause() {
     let (mut model, mut daemon_rx) = make_model();
     model
         .tasks
@@ -4154,7 +4255,7 @@ fn goal_picker_ctrl_s_running_goal_requires_confirmation_before_stop() {
             .as_ref()
             .map(PendingConfirmAction::modal_body)
             .as_deref(),
-        Some("Stop goal run \"Goal One\"?")
+        Some("Pause goal run \"Goal One\"?")
     );
 
     let quit = model.handle_key_modal(
@@ -4171,9 +4272,39 @@ fn goal_picker_ctrl_s_running_goal_requires_confirmation_before_stop() {
             action,
             ..
         }
-            if goal_run_id == "goal-1" && action == "stop"
+            if goal_run_id == "goal-1" && action == "pause"
     ));
-    assert_eq!(model.status_line, "Stopping goal run...");
+    assert_eq!(model.status_line, "Pausing goal run...");
+}
+
+#[test]
+fn goal_picker_ctrl_s_from_handle_key_routes_to_pause_confirmation() {
+    let (mut model, _daemon_rx) = make_model();
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunListReceived(vec![make_goal_run(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Running,
+        )]));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::GoalPicker));
+    model.sync_goal_picker_item_count();
+    model.modal.reduce(modal::ModalAction::Navigate(1));
+
+    let handled = model.handle_key(KeyCode::Char('s'), KeyModifiers::CONTROL);
+
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Pause goal run \"Goal One\"?")
+    );
 }
 
 #[test]
@@ -4217,6 +4348,142 @@ fn goal_picker_ctrl_s_paused_goal_requires_confirmation_before_resume() {
         }
             if goal_run_id == "goal-1" && action == "resume"
     ));
+}
+
+#[test]
+fn goal_view_ctrl_s_paused_goal_requires_confirmation_before_resume() {
+    let (mut model, _daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(make_goal_run(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Paused,
+        )));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let handled = model.handle_key(KeyCode::Char('s'), KeyModifiers::CONTROL);
+
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Resume goal run \"Goal One\"?")
+    );
+}
+
+#[test]
+fn goal_view_action_menu_can_pause_running_goal_without_step_selection() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(make_goal_run(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Running,
+        )));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let handled = model.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(
+        model.modal.top(),
+        Some(modal::ModalKind::GoalStepActionPicker)
+    );
+
+    let handled = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::GoalStepActionPicker,
+    );
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Pause goal run \"Goal One\"?")
+    );
+
+    let handled = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ChatActionConfirm,
+    );
+    assert!(!handled);
+    assert!(matches!(
+        daemon_rx.try_recv().expect("expected control-goal command"),
+        DaemonCommand::ControlGoalRun {
+            goal_run_id,
+            action,
+            step_index: None,
+        } if goal_run_id == "goal-1" && action == "pause"
+    ));
+}
+
+#[test]
+fn goal_view_retry_uses_current_step_without_explicit_step_selection() {
+    let (mut model, _daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        make_goal_run_with_steps(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Failed,
+            vec![
+                task::GoalRunStep {
+                    id: "step-1".to_string(),
+                    title: "Plan".to_string(),
+                    order: 0,
+                    status: Some(task::GoalRunStatus::Completed),
+                    ..Default::default()
+                },
+                task::GoalRunStep {
+                    id: "step-2".to_string(),
+                    title: "Deploy".to_string(),
+                    order: 1,
+                    status: Some(task::GoalRunStatus::Failed),
+                    ..Default::default()
+                },
+            ],
+        ),
+    ));
+    if let Some(run) = model.tasks.goal_run_by_id_mut("goal-1") {
+        run.current_step_index = 1;
+        run.current_step_title = Some("Deploy".to_string());
+    }
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let handled = model.handle_key(KeyCode::Char('r'), KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Retry step 2 \"Deploy\" in goal \"Goal One\"?")
+    );
 }
 
 #[test]
@@ -4371,6 +4638,98 @@ fn selected_goal_step_action_menu_can_send_retry_step() {
             action,
             step_index: Some(1),
         } if goal_run_id == "goal-1" && action == "retry_step"
+    ));
+}
+
+#[test]
+fn sidebar_goal_enter_opens_selected_child_task() {
+    let (mut model, _daemon_rx) = seed_goal_sidebar_model();
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.navigate(1, 2);
+
+    let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(model.focus, FocusArea::Chat);
+    assert!(matches!(
+        model.main_pane_view,
+        MainPaneView::Task(SidebarItemTarget::Task { task_id }) if task_id == "task-2"
+    ));
+}
+
+#[test]
+fn sidebar_goal_enter_skips_stale_child_task_ids() {
+    let (mut model, _daemon_rx) = seed_goal_sidebar_model();
+    if let Some(run) = model.tasks.goal_run_by_id_mut("goal-1") {
+        run.child_task_ids = vec!["missing-task".to_string(), "task-1".to_string()];
+    }
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.cycle_tab_right();
+
+    let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(model.focus, FocusArea::Chat);
+    assert!(matches!(
+        model.main_pane_view,
+        MainPaneView::Task(SidebarItemTarget::Task { task_id }) if task_id == "task-1"
+    ));
+}
+
+#[test]
+fn sidebar_goal_enter_opens_selected_work_context_file() {
+    let (mut model, _daemon_rx) = seed_goal_sidebar_model();
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.navigate(1, 2);
+
+    let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(model.focus, FocusArea::Chat);
+    assert!(matches!(model.main_pane_view, MainPaneView::WorkContext));
+    assert_eq!(
+        model.tasks.selected_work_path("thread-1"),
+        Some("/tmp/second.md")
+    );
+}
+
+#[test]
+fn sidebar_goal_enter_checkpoint_with_step_index_selects_goal_step() {
+    let (mut model, _daemon_rx) = seed_goal_sidebar_model();
+    model.goal_sidebar.cycle_tab_right();
+
+    let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(model.focus, FocusArea::Chat);
+    assert!(matches!(
+        model.main_pane_view,
+        MainPaneView::Task(SidebarItemTarget::GoalRun {
+            goal_run_id,
+            step_id: Some(step_id),
+        }) if goal_run_id == "goal-1" && step_id == "step-2"
+    ));
+}
+
+#[test]
+fn sidebar_goal_enter_checkpoint_without_step_index_is_non_destructive() {
+    let (mut model, _daemon_rx) = seed_goal_sidebar_model();
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.navigate(1, 2);
+
+    let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(model.focus, FocusArea::Sidebar);
+    assert!(matches!(
+        model.main_pane_view,
+        MainPaneView::Task(SidebarItemTarget::GoalRun {
+            goal_run_id,
+            step_id: Some(step_id),
+        }) if goal_run_id == "goal-1" && step_id == "step-1"
     ));
 }
 

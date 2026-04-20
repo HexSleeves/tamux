@@ -101,13 +101,12 @@ impl DaemonClient {
                     })
                     .await;
             }
-            DaemonMessage::AgentCheckpointList { checkpoints_json } => {
+            DaemonMessage::AgentCheckpointList {
+                goal_run_id,
+                checkpoints_json,
+            } => {
                 match serde_json::from_str::<Vec<CheckpointSummary>>(&checkpoints_json) {
                     Ok(checkpoints) => {
-                        let goal_run_id = checkpoints
-                            .first()
-                            .map(|checkpoint| checkpoint.goal_run_id.clone())
-                            .unwrap_or_default();
                         let _ = event_tx
                             .send(ClientEvent::GoalRunCheckpoints {
                                 goal_run_id,

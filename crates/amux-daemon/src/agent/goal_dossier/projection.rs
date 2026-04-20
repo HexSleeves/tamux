@@ -51,10 +51,8 @@ pub(crate) struct GoalProjectionWriteDelayGuard {
 #[cfg(test)]
 impl Drop for GoalProjectionWriteDelayGuard {
     fn drop(&mut self) {
-        GOAL_PROJECTION_WRITE_DELAY_MS.store(
-            self.previous_delay_ms,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        GOAL_PROJECTION_WRITE_DELAY_MS
+            .store(self.previous_delay_ms, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

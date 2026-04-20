@@ -5,7 +5,8 @@ mod enter;
 
 impl TuiModel {
     fn pinned_shortcut_scope_active(&self) -> bool {
-        self.sidebar_visible()
+        !self.sidebar_uses_goal_sidebar()
+            && self.sidebar_visible()
             && self.sidebar.active_tab() == sidebar::SidebarTab::Pinned
             && self.chat.active_thread_has_pinned_messages()
     }
@@ -15,6 +16,11 @@ impl TuiModel {
     }
 
     fn step_sidebar_tab(&mut self, delta: i32) {
+        if self.sidebar_uses_goal_sidebar() {
+            self.step_goal_sidebar_tab(delta);
+            return;
+        }
+
         let tabs = self.sidebar_navigation_tabs();
         let Some(last_index) = tabs.len().checked_sub(1) else {
             return;
@@ -112,7 +118,7 @@ impl TuiModel {
                     }
                 }
                 KeyCode::Char('r') => {
-                    self.send_daemon_command(DaemonCommand::RetryOperatorProfile);
+                    self.retry_operator_profile_request();
                     self.status_line = "Retrying operator profile operation…".to_string();
                     self.show_input_notice(
                         "Retrying operator profile operation…",
@@ -158,8 +164,22 @@ impl TuiModel {
             return false;
         }
         if code == KeyCode::Char('s') && ctrl {
-            self.stop_voice_playback();
-            return false;
+            if self.modal.top() == Some(modal::ModalKind::GoalPicker) {
+                return self.handle_key_modal(code, modifiers, modal::ModalKind::GoalPicker);
+            }
+            if self.focus == FocusArea::Chat
+                && matches!(
+                    self.main_pane_view,
+                    MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                )
+                && self.request_selected_goal_run_toggle_confirmation()
+            {
+                return false;
+            }
+            if self.voice_player.is_some() {
+                self.stop_voice_playback();
+                return false;
+            }
         }
         if code == KeyCode::Char('a') && ctrl {
             match self.modal.top() {
@@ -180,6 +200,7 @@ impl TuiModel {
         }
 
         if self.focus == FocusArea::Sidebar
+            && !self.sidebar_uses_goal_sidebar()
             && self.sidebar.active_tab() == sidebar::SidebarTab::Files
             && !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
         {
@@ -422,7 +443,7 @@ impl TuiModel {
                     .as_ref()
                     .is_some_and(|notice| notice.text.contains("operator profile"))
                 {
-                    self.send_daemon_command(DaemonCommand::RetryOperatorProfile);
+                    self.retry_operator_profile_request();
                     self.status_line = "Retrying operator profile operation…".to_string();
                     self.show_input_notice(
                         "Retrying operator profile operation…",
@@ -592,7 +613,13 @@ impl TuiModel {
                         self.chat.select_next_message()
                     }
                 }
-                FocusArea::Sidebar => self.sidebar.navigate(1, self.sidebar_item_count()),
+                FocusArea::Sidebar => {
+                    if self.sidebar_uses_goal_sidebar() {
+                        self.navigate_goal_sidebar(1);
+                    } else {
+                        self.sidebar.navigate(1, self.sidebar_item_count());
+                    }
+                }
                 _ => {}
             },
             KeyCode::Up if self.focus != FocusArea::Input => match self.focus {
@@ -612,7 +639,13 @@ impl TuiModel {
                         self.chat.select_prev_message()
                     }
                 }
-                FocusArea::Sidebar => self.sidebar.navigate(-1, self.sidebar_item_count()),
+                FocusArea::Sidebar => {
+                    if self.sidebar_uses_goal_sidebar() {
+                        self.navigate_goal_sidebar(-1);
+                    } else {
+                        self.sidebar.navigate(-1, self.sidebar_item_count());
+                    }
+                }
                 _ => {}
             },
             KeyCode::Left
@@ -649,14 +682,31 @@ impl TuiModel {
             KeyCode::Right if self.focus == FocusArea::Sidebar => {
                 self.step_sidebar_tab(1);
             }
-            KeyCode::Char('[') if self.sidebar_visible() && self.focus != FocusArea::Input => {
+            KeyCode::Char('[')
+                if self.sidebar_visible()
+                    && self.focus != FocusArea::Input
+                    && !(self.focus == FocusArea::Chat
+                        && matches!(
+                            self.main_pane_view,
+                            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                        )) =>
+            {
                 self.step_sidebar_tab(-1);
             }
-            KeyCode::Char(']') if self.sidebar_visible() && self.focus != FocusArea::Input => {
+            KeyCode::Char(']')
+                if self.sidebar_visible()
+                    && self.focus != FocusArea::Input
+                    && !(self.focus == FocusArea::Chat
+                        && matches!(
+                            self.main_pane_view,
+                            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                        )) =>
+            {
                 self.step_sidebar_tab(1);
             }
             KeyCode::Char('u')
                 if self.focus == FocusArea::Sidebar
+                    && !self.sidebar_uses_goal_sidebar()
                     && self.sidebar.active_tab() == sidebar::SidebarTab::Pinned =>
             {
                 self.unpin_selected_sidebar_message();
@@ -698,7 +748,7 @@ impl TuiModel {
                     && matches!(self.main_pane_view, MainPaneView::Task(_)) =>
             {
                 if self.open_goal_step_action_picker() {
-                    self.status_line = "Goal step actions".to_string();
+                    self.status_line = "Goal actions".to_string();
                 }
             }
             KeyCode::Char('r')

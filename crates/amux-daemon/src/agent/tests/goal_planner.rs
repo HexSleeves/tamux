@@ -2,6 +2,24 @@ use super::*;
 use crate::session_manager::SessionManager;
 use tempfile::tempdir;
 
+fn goal_run_json(goal_run: &GoalRun) -> serde_json::Value {
+    serde_json::to_value(goal_run).expect("serialize goal run")
+}
+
+fn runtime_owner_profile(
+    agent_label: &str,
+    provider: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
+) -> crate::agent::types::GoalRuntimeOwnerProfile {
+    crate::agent::types::GoalRuntimeOwnerProfile {
+        agent_label: agent_label.to_string(),
+        provider: provider.to_string(),
+        model: model.to_string(),
+        reasoning_effort: reasoning_effort.map(str::to_string),
+    }
+}
+
 fn sample_goal_run(goal_run_id: &str) -> GoalRun {
     GoalRun {
         id: goal_run_id.to_string(),
@@ -19,6 +37,8 @@ fn sample_goal_run(goal_run_id: &str) -> GoalRun {
         current_step_index: 0,
         current_step_title: Some("step-1".to_string()),
         current_step_kind: Some(GoalRunStepKind::Command),
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 0,
         max_replans: 2,
         plan_summary: Some("plan".to_string()),
@@ -286,6 +306,485 @@ async fn fail_goal_run_appends_failure_factor_to_goal_replan_trace() {
     );
 }
 
+#[tokio::test]
+async fn plan_goal_run_preserves_planner_owner_profile_when_plan_request_fails() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = "openai".to_string();
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    config.base_url = "http://127.0.0.1:9/v1".to_string();
+    let expected_provider = config.provider.clone();
+    let expected_model = config.model.clone();
+    let expected_reasoning = Some(config.reasoning_effort.clone());
+    let engine = AgentEngine::new_test(manager, config.clone(), root.path()).await;
+
+    let goal_run_id = "goal-plan-failure-owner";
+    let mut goal_run = sample_goal_run_with_kind(
+        goal_run_id,
+        GoalRunStepKind::Command,
+        "Run the planned work",
+    );
+    goal_run.status = GoalRunStatus::Queued;
+    goal_run.steps.clear();
+    goal_run.current_step_index = 0;
+    goal_run.current_step_title = None;
+    goal_run.current_step_kind = None;
+    engine.goal_runs.lock().await.push_back(goal_run);
+
+    let result = engine.plan_goal_run(goal_run_id).await;
+    assert!(
+        result.is_err(),
+        "planning should fail against a dead endpoint"
+    );
+
+    let persisted = engine
+        .history
+        .list_goal_runs()
+        .await
+        .expect("goal runs should be readable from history")
+        .into_iter()
+        .find(|goal_run| goal_run.id == goal_run_id)
+        .expect("goal run should still exist after failed planning");
+    let planner_owner = persisted
+        .planner_owner_profile
+        .as_ref()
+        .expect("failed planning should retain planner attribution");
+    assert_eq!(
+        planner_owner,
+        &runtime_owner_profile(
+            crate::agent::agent_identity::MAIN_AGENT_NAME,
+            &expected_provider,
+            &expected_model,
+            expected_reasoning.as_deref()
+        )
+    );
+    assert_eq!(persisted.status, GoalRunStatus::Planning);
+}
+
+#[tokio::test]
+async fn handle_goal_run_step_failure_preserves_planner_owner_profile_when_replan_request_fails() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = "openai".to_string();
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    config.base_url = "http://127.0.0.1:9/v1".to_string();
+    let expected_provider = config.provider.clone();
+    let expected_model = config.model.clone();
+    let expected_reasoning = Some(config.reasoning_effort.clone());
+    let engine = AgentEngine::new_test(manager, config.clone(), root.path()).await;
+
+    let goal_run_id = "goal-replan-failure-owner";
+    let mut goal_run = sample_goal_run_with_kind(
+        goal_run_id,
+        GoalRunStepKind::Command,
+        "Run the failing command and recover",
+    );
+    goal_run.thread_id = Some("thread-replan-owner".to_string());
+    goal_run.current_step_index = 0;
+    goal_run.current_step_title = Some("step-1".to_string());
+    goal_run.current_step_kind = Some(GoalRunStepKind::Command);
+    engine.goal_runs.lock().await.push_back(goal_run.clone());
+
+    let failed_task = AgentTask {
+        id: "task-replan-owner".to_string(),
+        title: "failed step".to_string(),
+        description: "failed step".to_string(),
+        status: TaskStatus::Failed,
+        priority: TaskPriority::Normal,
+        progress: 0,
+        created_at: now_millis(),
+        started_at: Some(now_millis().saturating_sub(5_000)),
+        completed_at: Some(now_millis()),
+        error: Some("managed command failed permanently".to_string()),
+        result: None,
+        thread_id: Some("thread-replan-owner".to_string()),
+        source: "goal_run".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: None,
+        goal_run_id: Some(goal_run_id.to_string()),
+        goal_run_title: Some(goal_run.title.clone()),
+        goal_step_id: Some("step-1".to_string()),
+        goal_step_title: Some("step-1".to_string()),
+        parent_task_id: None,
+        parent_thread_id: None,
+        runtime: "daemon".to_string(),
+        retry_count: 0,
+        max_retries: 0,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: None,
+        awaiting_approval_id: None,
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        lane_id: None,
+        last_error: Some("managed command failed permanently".to_string()),
+        logs: Vec::new(),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        override_provider: None,
+        override_model: None,
+        override_system_prompt: None,
+        sub_agent_def_id: None,
+    };
+
+    let result = engine
+        .handle_goal_run_step_failure(goal_run_id, &failed_task)
+        .await;
+    assert!(
+        result.is_err(),
+        "replan should fail against a dead endpoint"
+    );
+
+    let persisted = engine
+        .history
+        .list_goal_runs()
+        .await
+        .expect("goal runs should be readable from history")
+        .into_iter()
+        .find(|goal_run| goal_run.id == goal_run_id)
+        .expect("goal run should still exist after failed replan");
+    let planner_owner = persisted
+        .planner_owner_profile
+        .as_ref()
+        .expect("failed replan should retain planner attribution");
+    assert_eq!(
+        planner_owner,
+        &runtime_owner_profile(
+            crate::agent::agent_identity::MAIN_AGENT_NAME,
+            &expected_provider,
+            &expected_model,
+            expected_reasoning.as_deref()
+        )
+    );
+    assert_eq!(persisted.status, GoalRunStatus::Running);
+}
+
+#[tokio::test]
+async fn sync_goal_run_with_task_emits_owner_only_changes_and_persists_them() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let goal_run_id = "goal-sync-owner-change";
+    let task_id = "task-sync-owner-change";
+    let mut goal_run = sample_goal_run_with_kind(
+        goal_run_id,
+        GoalRunStepKind::Command,
+        "Run the current step",
+    );
+    goal_run.status = GoalRunStatus::Running;
+    goal_run.started_at = Some(now_millis());
+    goal_run.active_task_id = Some(task_id.to_string());
+    goal_run.current_step_title = Some("step-1".to_string());
+    goal_run.current_step_kind = Some(GoalRunStepKind::Command);
+    goal_run.current_step_owner_profile = None;
+    if let Some(step) = goal_run.steps.get_mut(0) {
+        step.status = GoalRunStepStatus::InProgress;
+        step.started_at = Some(now_millis());
+        step.task_id = Some(task_id.to_string());
+    }
+    engine.goal_runs.lock().await.push_back(goal_run);
+
+    let mut events = engine.subscribe();
+    let task = AgentTask {
+        id: task_id.to_string(),
+        title: "run step".to_string(),
+        description: "run step".to_string(),
+        status: TaskStatus::InProgress,
+        priority: TaskPriority::Normal,
+        progress: 25,
+        created_at: now_millis(),
+        started_at: Some(now_millis()),
+        completed_at: None,
+        error: None,
+        result: None,
+        thread_id: Some("thread-sync-owner-change".to_string()),
+        source: "goal_run".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: None,
+        goal_run_id: Some(goal_run_id.to_string()),
+        goal_run_title: Some("goal with custom step".to_string()),
+        goal_step_id: Some("step-1".to_string()),
+        goal_step_title: Some("step-1".to_string()),
+        parent_task_id: None,
+        parent_thread_id: None,
+        runtime: "daemon".to_string(),
+        retry_count: 0,
+        max_retries: 0,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: None,
+        awaiting_approval_id: None,
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        lane_id: None,
+        last_error: None,
+        logs: Vec::new(),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        override_provider: Some("anthropic".to_string()),
+        override_model: Some("claude-3.5-sonnet".to_string()),
+        override_system_prompt: None,
+        sub_agent_def_id: None,
+    };
+
+    engine.sync_goal_run_with_task(goal_run_id, &task).await;
+
+    let emitted = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+        .await
+        .expect("goal run update should be emitted")
+        .expect("goal run update should arrive");
+    match emitted {
+        AgentEvent::GoalRunUpdate {
+            goal_run: Some(goal_run),
+            ..
+        } => {
+            let owner = goal_run
+                .current_step_owner_profile
+                .as_ref()
+                .expect("goal run update should include owner metadata");
+            assert_eq!(
+                owner,
+                &runtime_owner_profile(
+                    crate::agent::agent_identity::MAIN_AGENT_NAME,
+                    "anthropic",
+                    "claude-3.5-sonnet",
+                    Some("high")
+                )
+            );
+        }
+        other => panic!("expected goal run update, got {other:?}"),
+    }
+
+    let persisted = engine
+        .history
+        .list_goal_runs()
+        .await
+        .expect("goal runs should be readable from history")
+        .into_iter()
+        .find(|goal_run| goal_run.id == goal_run_id)
+        .expect("goal run should exist after sync");
+    assert_eq!(
+        persisted
+            .current_step_owner_profile
+            .as_ref()
+            .expect("owner metadata should persist"),
+        &runtime_owner_profile(
+            crate::agent::agent_identity::MAIN_AGENT_NAME,
+            "anthropic",
+            "claude-3.5-sonnet",
+            Some("high")
+        )
+    );
+}
+
+#[tokio::test]
+async fn sync_goal_run_with_task_preserves_captured_subagent_owner_profile_after_registry_change() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.sub_agents.push(SubAgentDefinition {
+        id: "android-verifier".to_string(),
+        name: "Android Verifier".to_string(),
+        provider: "openai".to_string(),
+        model: "gpt-4o-mini".to_string(),
+        role: Some("verification specialist".to_string()),
+        system_prompt: Some("Verify Android build artifacts.".to_string()),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        enabled: true,
+        builtin: false,
+        immutable_identity: false,
+        disable_allowed: true,
+        delete_allowed: true,
+        protected_reason: None,
+        reasoning_effort: None,
+        created_at: now_millis(),
+    });
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let goal_run_id = "goal-sync-owner-stability";
+    let task_id = "task-sync-owner-stability";
+
+    let mut goal_run = sample_goal_run_with_kind(
+        goal_run_id,
+        GoalRunStepKind::Command,
+        "Run the current step",
+    );
+    goal_run.status = GoalRunStatus::Running;
+    goal_run.started_at = Some(now_millis());
+    goal_run.active_task_id = Some(task_id.to_string());
+    goal_run.current_step_title = Some("step-1".to_string());
+    goal_run.current_step_kind = Some(GoalRunStepKind::Command);
+    goal_run.current_step_owner_profile = Some(runtime_owner_profile(
+        "Android Verifier",
+        "openai",
+        "gpt-4o-mini",
+        None,
+    ));
+    if let Some(step) = goal_run.steps.get_mut(0) {
+        step.status = GoalRunStepStatus::Pending;
+        step.task_id = Some(task_id.to_string());
+    }
+    engine.goal_runs.lock().await.push_back(goal_run);
+
+    {
+        let mut live_config = engine.config.write().await;
+        if let Some(def) = live_config
+            .sub_agents
+            .iter_mut()
+            .find(|definition| definition.id == "android-verifier")
+        {
+            def.provider = "anthropic".to_string();
+            def.model = "claude-3.5-sonnet".to_string();
+            def.reasoning_effort = Some("low".to_string());
+        }
+    }
+
+    let task = AgentTask {
+        id: task_id.to_string(),
+        title: "run step".to_string(),
+        description: "run step".to_string(),
+        status: TaskStatus::InProgress,
+        priority: TaskPriority::Normal,
+        progress: 25,
+        created_at: now_millis(),
+        started_at: Some(now_millis()),
+        completed_at: None,
+        error: None,
+        result: None,
+        thread_id: Some("thread-sync-owner-stability".to_string()),
+        source: "goal_run".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: None,
+        goal_run_id: Some(goal_run_id.to_string()),
+        goal_run_title: Some("goal with custom step".to_string()),
+        goal_step_id: Some("step-1".to_string()),
+        goal_step_title: Some("step-1".to_string()),
+        parent_task_id: None,
+        parent_thread_id: None,
+        runtime: "daemon".to_string(),
+        retry_count: 0,
+        max_retries: 0,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: None,
+        awaiting_approval_id: None,
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        lane_id: None,
+        last_error: None,
+        logs: Vec::new(),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        override_provider: None,
+        override_model: None,
+        override_system_prompt: None,
+        sub_agent_def_id: Some("android-verifier".to_string()),
+    };
+
+    engine.sync_goal_run_with_task(goal_run_id, &task).await;
+
+    let updated = engine
+        .get_goal_run(goal_run_id)
+        .await
+        .expect("goal run should still exist");
+    assert_eq!(
+        updated
+            .current_step_owner_profile
+            .as_ref()
+            .expect("captured owner metadata should remain stable"),
+        &runtime_owner_profile("Android Verifier", "openai", "gpt-4o-mini", None)
+    );
+}
+
+#[tokio::test]
+async fn requeue_goal_run_step_clears_current_step_owner_profile() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let goal_run_id = "goal-requeue-owner";
+    let mut goal_run = sample_goal_run_with_kind(
+        goal_run_id,
+        GoalRunStepKind::Command,
+        "Run the current step",
+    );
+    goal_run.active_task_id = Some("task-requeue-owner".to_string());
+    goal_run.current_step_owner_profile = Some(runtime_owner_profile(
+        crate::agent::agent_identity::MAIN_AGENT_NAME,
+        "openai",
+        "gpt-4o-mini",
+        Some("high"),
+    ));
+    if let Some(step) = goal_run.steps.get_mut(0) {
+        step.task_id = Some("task-requeue-owner".to_string());
+        step.status = GoalRunStepStatus::InProgress;
+    }
+    engine.goal_runs.lock().await.push_back(goal_run);
+
+    engine
+        .requeue_goal_run_step(goal_run_id, "task vanished")
+        .await;
+
+    let updated = engine
+        .get_goal_run(goal_run_id)
+        .await
+        .expect("goal run should still exist");
+    assert!(updated.current_step_owner_profile.is_none());
+    assert!(updated.active_task_id.is_none());
+    assert!(updated.steps[0].task_id.is_none());
+    assert_eq!(updated.steps[0].status, GoalRunStepStatus::Pending);
+}
+
 fn sample_goal_run_with_kind(
     goal_run_id: &str,
     kind: GoalRunStepKind,
@@ -307,6 +806,8 @@ fn sample_goal_run_with_kind(
         current_step_index: 0,
         current_step_title: Some("step-1".to_string()),
         current_step_kind: Some(kind.clone()),
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 0,
         max_replans: 2,
         plan_summary: Some("plan".to_string()),
@@ -932,6 +1433,36 @@ async fn handle_goal_run_step_completion_schedules_subagent_verification_before_
         .get_goal_run(goal_run_id)
         .await
         .expect("goal run should still exist");
+    let updated_json = goal_run_json(&updated);
+    let current_step_owner = updated_json
+        .get("current_step_owner_profile")
+        .and_then(serde_json::Value::as_object)
+        .expect("goal run in progress should expose current step owner metadata");
+    assert_eq!(
+        current_step_owner
+            .get("agent_label")
+            .and_then(serde_json::Value::as_str),
+        Some("Android Verifier")
+    );
+    assert_eq!(
+        current_step_owner
+            .get("provider")
+            .and_then(serde_json::Value::as_str),
+        Some("openai")
+    );
+    assert_eq!(
+        current_step_owner
+            .get("model")
+            .and_then(serde_json::Value::as_str),
+        Some("gpt-4o-mini")
+    );
+    assert!(
+        current_step_owner.get("reasoning_effort").is_none()
+            || current_step_owner
+                .get("reasoning_effort")
+                .is_some_and(|value| value.is_null()),
+        "subagent metadata should omit unset reasoning effort"
+    );
     assert_eq!(updated.current_step_index, 0);
     assert_eq!(updated.status, GoalRunStatus::Running);
     assert!(updated
@@ -1562,6 +2093,41 @@ async fn plan_goal_run_populates_dossier_units_and_proof_checks() {
         .get_goal_run(goal_run_id)
         .await
         .expect("goal run should exist");
+    let updated_goal_json = goal_run_json(&updated_goal);
+    let planner_owner = updated_goal_json
+        .get("planner_owner_profile")
+        .and_then(serde_json::Value::as_object)
+        .expect("planned goal should include planner owner metadata");
+    assert_eq!(
+        planner_owner
+            .get("agent_label")
+            .and_then(serde_json::Value::as_str),
+        Some(crate::agent::agent_identity::MAIN_AGENT_NAME)
+    );
+    assert_eq!(
+        planner_owner
+            .get("provider")
+            .and_then(serde_json::Value::as_str),
+        Some("openai")
+    );
+    assert_eq!(
+        planner_owner
+            .get("model")
+            .and_then(serde_json::Value::as_str),
+        Some("gpt-4o-mini")
+    );
+    assert_eq!(
+        planner_owner
+            .get("reasoning_effort")
+            .and_then(serde_json::Value::as_str),
+        Some("high")
+    );
+    assert!(
+        updated_goal_json
+            .get("current_step_owner_profile")
+            .is_none(),
+        "newly planned goal should not yet have a current step owner"
+    );
     let dossier = updated_goal.dossier.expect("dossier should be populated");
     assert_eq!(dossier.units.len(), 1);
     assert_eq!(dossier.units[0].title, "[LOW] Create the Android shell");

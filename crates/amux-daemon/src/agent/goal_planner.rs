@@ -39,12 +39,78 @@ fn default_verification_binding() -> GoalRoleBinding {
     GoalRoleBinding::Builtin(crate::agent::agent_identity::MAIN_AGENT_ID.to_string())
 }
 
+fn goal_runtime_owner_profile(
+    agent_label: String,
+    provider: String,
+    model: String,
+    reasoning_effort: Option<String>,
+) -> GoalRuntimeOwnerProfile {
+    GoalRuntimeOwnerProfile {
+        agent_label,
+        provider,
+        model,
+        reasoning_effort,
+    }
+}
+
+fn sub_agent_matches_identifier(def: &SubAgentDefinition, identifier: &str) -> bool {
+    def.id.eq_ignore_ascii_case(identifier)
+        || def.name.eq_ignore_ascii_case(identifier)
+        || def
+            .id
+            .strip_suffix("_builtin")
+            .is_some_and(|value| value.eq_ignore_ascii_case(identifier))
+}
+
 impl AgentEngine {
+    async fn planner_owner_profile(&self) -> GoalRuntimeOwnerProfile {
+        let config = self.config.read().await;
+        goal_runtime_owner_profile(
+            crate::agent::agent_identity::MAIN_AGENT_NAME.to_string(),
+            config.provider.clone(),
+            config.model.clone(),
+            Some(config.reasoning_effort.clone()),
+        )
+    }
+
+    async fn current_step_owner_profile_for_task(
+        &self,
+        task: &AgentTask,
+    ) -> GoalRuntimeOwnerProfile {
+        if let Some(identifier) = task.sub_agent_def_id.as_deref() {
+            let sub_agents = self.list_sub_agents().await;
+            if let Some(def) = sub_agents
+                .iter()
+                .find(|definition| sub_agent_matches_identifier(definition, identifier))
+            {
+                return goal_runtime_owner_profile(
+                    def.name.clone(),
+                    def.provider.clone(),
+                    def.model.clone(),
+                    def.reasoning_effort.clone(),
+                );
+            }
+        }
+
+        let config = self.config.read().await;
+        goal_runtime_owner_profile(
+            crate::agent::agent_identity::MAIN_AGENT_NAME.to_string(),
+            task.override_provider
+                .clone()
+                .unwrap_or_else(|| config.provider.clone()),
+            task.override_model
+                .clone()
+                .unwrap_or_else(|| config.model.clone()),
+            Some(config.reasoning_effort.clone()),
+        )
+    }
+
     pub(super) async fn plan_goal_run(&self, goal_run_id: &str) -> Result<()> {
         let goal_run = self
             .get_goal_run(goal_run_id)
             .await
             .context("goal run missing during planning")?;
+        let planner_owner_profile = self.planner_owner_profile().await;
 
         let queued = {
             let mut goal_runs = self.goal_runs.lock().await;
@@ -54,6 +120,8 @@ impl AgentEngine {
             current.status = GoalRunStatus::Planning;
             current.started_at.get_or_insert(now_millis());
             current.updated_at = now_millis();
+            current.planner_owner_profile = Some(planner_owner_profile.clone());
+            current.current_step_owner_profile = None;
             current.events.push(make_goal_run_event(
                 "planning",
                 "building execution plan",
@@ -126,6 +194,8 @@ impl AgentEngine {
             current.current_step_index = 0;
             current.current_step_title = current.steps.first().map(|step| step.title.clone());
             current.current_step_kind = current.steps.first().map(|step| step.kind.clone());
+            current.planner_owner_profile = Some(planner_owner_profile.clone());
+            current.current_step_owner_profile = None;
             current.status = GoalRunStatus::Running;
             current.updated_at = now;
             current.last_error = None;
@@ -544,28 +614,36 @@ impl AgentEngine {
                 snapshot.id, snapshot.current_step_index, step.id
             )
         });
+        let current_task_snapshot = {
+            let mut tasks = self.tasks.lock().await;
+            let Some(current_task) = tasks.iter_mut().find(|entry| entry.id == task.id) else {
+                anyhow::bail!("goal step task disappeared after enqueue");
+            };
+            current_task.goal_run_title = Some(snapshot.title.clone());
+            current_task.goal_step_id = Some(step.id.clone());
+            current_task.goal_step_title = Some(step.title.clone());
+            if let Some(ack_id) = autonomy_acknowledgment_id.as_ref() {
+                current_task.status = TaskStatus::AwaitingApproval;
+                current_task.awaiting_approval_id = Some(ack_id.clone());
+                current_task.blocked_reason =
+                    Some("awaiting supervised step acknowledgment".to_string());
+                current_task.started_at = None;
+                current_task.logs.push(make_task_log_entry(
+                    current_task.retry_count,
+                    TaskLogLevel::Info,
+                    "autonomy_acknowledgment",
+                    "supervised step queued and gated pending explicit acknowledgment",
+                    Some(ack_id.clone()),
+                ));
+            }
+            current_task.clone()
+        };
+        let current_step_owner_profile = Some(
+            self.current_step_owner_profile_for_task(&current_task_snapshot)
+                .await,
+        );
         let updated = {
             let mut goal_runs = self.goal_runs.lock().await;
-            let mut tasks = self.tasks.lock().await;
-            if let Some(current_task) = tasks.iter_mut().find(|entry| entry.id == task.id) {
-                current_task.goal_run_title = Some(snapshot.title.clone());
-                current_task.goal_step_id = Some(step.id.clone());
-                current_task.goal_step_title = Some(step.title.clone());
-                if let Some(ack_id) = autonomy_acknowledgment_id.as_ref() {
-                    current_task.status = TaskStatus::AwaitingApproval;
-                    current_task.awaiting_approval_id = Some(ack_id.clone());
-                    current_task.blocked_reason =
-                        Some("awaiting supervised step acknowledgment".to_string());
-                    current_task.started_at = None;
-                    current_task.logs.push(make_task_log_entry(
-                        current_task.retry_count,
-                        TaskLogLevel::Info,
-                        "autonomy_acknowledgment",
-                        "supervised step queued and gated pending explicit acknowledgment",
-                        Some(ack_id.clone()),
-                    ));
-                }
-            }
             let Some(goal_run) = goal_runs.iter_mut().find(|item| item.id == goal_run_id) else {
                 anyhow::bail!("goal run disappeared after task enqueue");
             };
@@ -587,6 +665,7 @@ impl AgentEngine {
             goal_run.current_step_title = Some(step.title.clone());
             goal_run.current_step_kind = Some(step.kind.clone());
             goal_run.active_task_id = Some(task.id.clone());
+            goal_run.current_step_owner_profile = current_step_owner_profile;
             goal_run.awaiting_approval_id = autonomy_acknowledgment_id.clone();
             goal_run.events.push(make_goal_run_event(
                 "execution",

@@ -76,7 +76,10 @@ fn help_modal_lines(theme: &ThemeTokens) -> Vec<Line<'static>> {
         ]),
         Line::from(vec![
             Span::styled("  Ctrl+S           ", theme.fg_active),
-            Span::styled("Stop active speech playback", theme.fg_dim),
+            Span::styled(
+                "Stop active speech playback when audio is playing",
+                theme.fg_dim,
+            ),
         ]),
         Line::from(vec![
             Span::styled("  Esc              ", theme.fg_active),
@@ -95,6 +98,18 @@ fn help_modal_lines(theme: &ThemeTokens) -> Vec<Line<'static>> {
         Line::from(vec![
             Span::styled("  f                ", theme.fg_active),
             Span::styled("Toggle files section", theme.fg_dim),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+S           ", theme.fg_active),
+            Span::styled("Pause/resume selected goal run", theme.fg_dim),
+        ]),
+        Line::from(vec![
+            Span::styled("  a                ", theme.fg_active),
+            Span::styled("Open goal actions", theme.fg_dim),
+        ]),
+        Line::from(vec![
+            Span::styled("  r / Shift+R      ", theme.fg_active),
+            Span::styled("Retry or rerun from the current goal step", theme.fg_dim),
         ]),
         Line::raw(""),
         Line::from(Span::styled("  Input", theme.accent_primary)),

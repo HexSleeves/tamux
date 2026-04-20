@@ -1,7 +1,7 @@
 use super::*;
 use crate::agent::types::{
     GoalDeliveryUnit, GoalProjectionState, GoalResumeAction, GoalResumeDecision, GoalRoleBinding,
-    GoalRunDossier,
+    GoalRunDossier, GoalRuntimeOwnerProfile,
 };
 use crate::history::schema_helpers::table_has_column;
 
@@ -250,6 +250,8 @@ async fn goal_run_event_todo_snapshot_round_trips() -> Result<()> {
         current_step_index: 0,
         current_step_title: Some("Inspect".to_string()),
         current_step_kind: Some(GoalRunStepKind::Research),
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 0,
         max_replans: 2,
         plan_summary: Some("Plan".to_string()),
@@ -345,6 +347,18 @@ async fn goal_run_extended_metadata_round_trips() -> Result<()> {
         current_step_index: 0,
         current_step_title: Some("Execute safely".to_string()),
         current_step_kind: Some(GoalRunStepKind::Command),
+        planner_owner_profile: Some(GoalRuntimeOwnerProfile {
+            agent_label: "Swarog".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+            reasoning_effort: Some("high".to_string()),
+        }),
+        current_step_owner_profile: Some(GoalRuntimeOwnerProfile {
+            agent_label: "Android Verifier".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            reasoning_effort: None,
+        }),
         replan_count: 1,
         max_replans: 3,
         plan_summary: Some("Plan summary".to_string()),
@@ -459,6 +473,24 @@ async fn goal_run_extended_metadata_round_trips() -> Result<()> {
         loaded.authorship_tag,
         Some(crate::agent::AuthorshipTag::Joint)
     );
+    assert_eq!(
+        loaded.planner_owner_profile,
+        Some(GoalRuntimeOwnerProfile {
+            agent_label: "Swarog".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+            reasoning_effort: Some("high".to_string()),
+        })
+    );
+    assert_eq!(
+        loaded.current_step_owner_profile,
+        Some(GoalRuntimeOwnerProfile {
+            agent_label: "Android Verifier".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            reasoning_effort: None,
+        })
+    );
 
     fs::remove_dir_all(root)?;
     Ok(())
@@ -528,6 +560,8 @@ async fn init_schema_migrates_legacy_goal_runs_metadata_columns() -> Result<()> 
                 table_has_column(conn, "goal_runs", "estimated_cost_usd")?,
                 table_has_column(conn, "goal_runs", "autonomy_level")?,
                 table_has_column(conn, "goal_runs", "authorship_tag")?,
+                table_has_column(conn, "goal_runs", "planner_owner_profile_json")?,
+                table_has_column(conn, "goal_runs", "current_step_owner_profile_json")?,
             ))
         })
         .await
@@ -551,6 +585,8 @@ async fn init_schema_migrates_legacy_goal_runs_metadata_columns() -> Result<()> 
     assert!(cols.15);
     assert!(cols.16);
     assert!(cols.17);
+    assert!(cols.18);
+    assert!(cols.19);
 
     fs::remove_dir_all(root)?;
     Ok(())

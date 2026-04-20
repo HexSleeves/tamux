@@ -296,12 +296,14 @@ fn cap_task_list_for_ipc(tasks: Vec<AgentTask>) -> (Vec<AgentTask>, bool) {
 
 fn goal_run_with_step_slice(goal_run: &GoalRun, start_idx: usize) -> GoalRun {
     let mut candidate = goal_run.clone();
+    let current_step_represented = goal_run.current_step_index >= start_idx;
     if start_idx >= candidate.steps.len() {
         candidate.steps.clear();
         candidate.current_step_index = 0;
         candidate.current_step_title = None;
         candidate.current_step_kind = None;
         candidate.active_task_id = None;
+        candidate.current_step_owner_profile = None;
         return candidate;
     }
 
@@ -323,6 +325,9 @@ fn goal_run_with_step_slice(goal_run: &GoalRun, start_idx: usize) -> GoalRun {
         .steps
         .get(current_idx)
         .and_then(|step| step.task_id.clone());
+    if !current_step_represented {
+        candidate.current_step_owner_profile = None;
+    }
     candidate
 }
 
@@ -334,6 +339,8 @@ fn goal_run_with_window(
     event_end: usize,
 ) -> (GoalRun, GoalRunDetailWindow) {
     let mut candidate = goal_run.clone();
+    let current_step_represented =
+        goal_run.current_step_index >= step_start && goal_run.current_step_index < step_end;
 
     let step_start = step_start.min(goal_run.steps.len());
     let step_end = step_end.clamp(step_start, goal_run.steps.len());
@@ -343,6 +350,7 @@ fn goal_run_with_window(
         candidate.current_step_title = None;
         candidate.current_step_kind = None;
         candidate.active_task_id = None;
+        candidate.current_step_owner_profile = None;
     } else {
         let current_idx = goal_run
             .current_step_index
@@ -361,6 +369,9 @@ fn goal_run_with_window(
             .steps
             .get(current_idx)
             .and_then(|step| step.task_id.clone());
+        if !current_step_represented {
+            candidate.current_step_owner_profile = None;
+        }
     }
 
     let event_start = event_start.min(goal_run.events.len());
@@ -388,6 +399,7 @@ fn goal_run_stripped_summary(goal_run: &GoalRun) -> GoalRun {
     candidate.current_step_title = None;
     candidate.current_step_kind = None;
     candidate.active_task_id = None;
+    candidate.current_step_owner_profile = None;
     candidate.plan_summary = None;
     candidate.reflection_summary = None;
     candidate.memory_updates.clear();
@@ -804,6 +816,8 @@ impl AgentEngine {
             current_step_index: 0,
             current_step_title: None,
             current_step_kind: None,
+            planner_owner_profile: None,
+            current_step_owner_profile: None,
             replan_count: 0,
             max_replans: adaptation_mode.max_goal_replans(2),
             plan_summary: None,

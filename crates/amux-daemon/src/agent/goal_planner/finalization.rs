@@ -282,6 +282,7 @@ impl AgentEngine {
                 goal_run.updated_at = now_millis();
                 goal_run.awaiting_approval_id = None;
                 goal_run.active_task_id = None;
+                goal_run.current_step_owner_profile = None;
                 goal_run.events.push(make_goal_run_event(
                     "execution",
                     "goal step returned to pending",

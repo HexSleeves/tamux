@@ -22,6 +22,8 @@ fn sample_goal_run() -> GoalRun {
         current_step_index: 1,
         current_step_title: None,
         current_step_kind: None,
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 1,
         max_replans: 2,
         plan_summary: Some("Plan".to_string()),
@@ -354,6 +356,29 @@ fn project_goal_run_snapshot_derives_metrics() {
 }
 
 #[test]
+fn project_goal_run_snapshot_clears_stale_awaiting_approval_without_approval_id() {
+    let mut goal_run = sample_goal_run();
+    goal_run.status = GoalRunStatus::AwaitingApproval;
+    goal_run.awaiting_approval_id = Some("stale-approval".to_string());
+    goal_run.completed_at = None;
+    goal_run.last_error = None;
+    goal_run.failure_cause = None;
+
+    let mut task = sample_task("task-b", "goal_test");
+    task.status = TaskStatus::InProgress;
+    task.awaiting_approval_id = None;
+    task.completed_at = None;
+    task.error = None;
+    task.last_error = None;
+    task.logs.clear();
+
+    let projected = project_goal_run_snapshot(goal_run, &[task], 100);
+
+    assert_eq!(projected.status, GoalRunStatus::Running);
+    assert!(projected.awaiting_approval_id.is_none());
+}
+
+#[test]
 fn project_task_runs_exposes_parent_runtime_workspace_and_classification() {
     let mut parent = sample_task("parent-task", "goal_test");
     parent.title = "Implement rust file patching".to_string();
@@ -573,6 +598,70 @@ fn refresh_task_queue_state_requeues_parent_after_subagents_finish() {
 
     assert_eq!(parent.status, TaskStatus::Queued);
     assert!(parent.blocked_reason.is_none());
+    assert_eq!(changed.len(), 1);
+}
+
+#[test]
+fn refresh_task_queue_state_requeues_stale_awaiting_approval_without_id() {
+    let mut tasks = VecDeque::from(vec![AgentTask {
+        id: "stale-approval".to_string(),
+        title: "Stale approval".to_string(),
+        description: "stuck without a live approval".to_string(),
+        status: TaskStatus::AwaitingApproval,
+        priority: TaskPriority::Normal,
+        progress: 35,
+        created_at: 1,
+        started_at: None,
+        completed_at: None,
+        error: None,
+        result: None,
+        thread_id: Some("thread-1".to_string()),
+        source: "goal_run".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: None,
+        goal_run_id: Some("goal-1".to_string()),
+        goal_run_title: Some("Investigate ingenix.ai".to_string()),
+        goal_step_id: Some("step-1".to_string()),
+        goal_step_title: Some("Review findings".to_string()),
+        parent_task_id: None,
+        parent_thread_id: None,
+        runtime: "daemon".to_string(),
+        retry_count: 0,
+        max_retries: 0,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: Some("awaiting approval".to_string()),
+        awaiting_approval_id: None,
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        lane_id: None,
+        last_error: None,
+        logs: Vec::new(),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        override_provider: None,
+        override_model: None,
+        override_system_prompt: None,
+        sub_agent_def_id: None,
+    }]);
+
+    let changed = refresh_task_queue_state(&mut tasks, 100, &[], &AgentConfig::default());
+    let task = tasks.front().expect("task should remain present");
+
+    assert_eq!(task.status, TaskStatus::Queued);
+    assert!(task.blocked_reason.is_none());
     assert_eq!(changed.len(), 1);
 }
 

@@ -402,6 +402,14 @@ pub(super) fn project_goal_run_snapshot(
     goal_run.awaiting_approval_id = related_tasks
         .iter()
         .find_map(|task| task.awaiting_approval_id.clone());
+    if goal_run.status == GoalRunStatus::AwaitingApproval && goal_run.awaiting_approval_id.is_none()
+    {
+        goal_run.status = if goal_run.steps.is_empty() {
+            GoalRunStatus::Queued
+        } else {
+            GoalRunStatus::Running
+        };
+    }
     goal_run.child_task_count = if goal_run.child_task_ids.is_empty() {
         related_tasks.len() as u32
     } else {

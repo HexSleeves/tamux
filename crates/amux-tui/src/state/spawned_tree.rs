@@ -100,6 +100,7 @@ fn is_terminal(status: Option<TaskStatus>) -> bool {
     matches!(
         status,
         Some(TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled)
+            | Some(TaskStatus::BudgetExceeded)
     )
 }
 

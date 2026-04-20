@@ -211,6 +211,10 @@ if matches!(
                 // Plugin operations (Plan 14-02).
                 ClientMessage::PluginList {} => {
                     let plugins = plugin_manager.list_plugins().await;
+                    tracing::debug!(
+                        plugin_count = plugins.len(),
+                        "sending plugin list to client"
+                    );
                     framed
                         .send(DaemonMessage::PluginListResult { plugins })
                         .await?;
@@ -331,6 +335,10 @@ if matches!(
 
                 ClientMessage::PluginListCommands {} => {
                     let commands = plugin_manager.list_commands().await;
+                    tracing::debug!(
+                        command_count = commands.len(),
+                        "sending plugin commands to client"
+                    );
                     framed
                         .send(DaemonMessage::PluginCommandsResult { commands })
                         .await?;

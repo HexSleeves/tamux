@@ -261,6 +261,8 @@ async fn policy_halt_aborts_before_guarded_tool_execution_and_persists_failure_t
             current_step_index: 0,
             current_step_title: Some("Investigate failure".to_string()),
             current_step_kind: Some(crate::agent::types::GoalRunStepKind::Research),
+            planner_owner_profile: None,
+            current_step_owner_profile: None,
             replan_count: 0,
             max_replans: 2,
             plan_summary: None,

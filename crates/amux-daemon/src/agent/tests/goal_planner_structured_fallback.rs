@@ -24,6 +24,8 @@ fn sample_goal_run_for_structured_fallback(goal_run_id: &str) -> GoalRun {
         current_step_index: 0,
         current_step_title: None,
         current_step_kind: None,
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 0,
         max_replans: 1,
         plan_summary: None,
@@ -173,7 +175,9 @@ async fn request_goal_plan_falls_back_when_provider_rejects_structured_schema() 
     let engine = AgentEngine::new_test(manager, config, root.path()).await;
 
     let plan = engine
-        .request_goal_plan(&sample_goal_run_for_structured_fallback("goal-schema-fallback"))
+        .request_goal_plan(&sample_goal_run_for_structured_fallback(
+            "goal-schema-fallback",
+        ))
         .await
         .expect("goal plan should fall back after schema rejection");
 
@@ -182,12 +186,18 @@ async fn request_goal_plan_falls_back_when_provider_rejects_structured_schema() 
         "Fallback to plain JSON request after schema rejection."
     );
     assert_eq!(plan.steps.len(), 1);
-    assert!(plan.steps[0].title.contains("Retry without provider-enforced schema"));
+    assert!(plan.steps[0]
+        .title
+        .contains("Retry without provider-enforced schema"));
 
     let recorded = recorded_bodies
         .lock()
         .expect("lock schema fallback request log");
-    assert_eq!(recorded.len(), 2, "expected structured request plus raw fallback");
+    assert_eq!(
+        recorded.len(),
+        2,
+        "expected structured request plus raw fallback"
+    );
     assert!(
         recorded[0].contains("\"response_format\""),
         "first request should attempt structured output: {}",

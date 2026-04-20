@@ -185,6 +185,8 @@ async fn maybe_run_consolidation_if_idle_blocks_when_goal_run_is_awaiting_approv
         current_step_index: 0,
         current_step_title: None,
         current_step_kind: None,
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 0,
         max_replans: 3,
         plan_summary: None,

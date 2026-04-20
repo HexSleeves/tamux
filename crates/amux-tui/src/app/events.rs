@@ -36,10 +36,22 @@ impl TuiModel {
         }
     }
 
-    pub fn pump_daemon_events(&mut self) {
-        while let Ok(event) = self.daemon_events_rx.try_recv() {
-            self.handle_client_event(event);
+    pub fn pump_daemon_events_budgeted(&mut self, limit: usize) -> usize {
+        let mut processed = 0;
+        while processed < limit {
+            match self.daemon_events_rx.try_recv() {
+                Ok(event) => {
+                    self.handle_client_event(event);
+                    processed += 1;
+                }
+                Err(_) => break,
+            }
         }
+        processed
+    }
+
+    pub fn pump_daemon_events(&mut self) {
+        let _ = self.pump_daemon_events_budgeted(usize::MAX);
     }
 
     pub fn on_tick(&mut self) {
@@ -233,7 +245,12 @@ impl TuiModel {
                 self.handle_goal_run_started_event(run);
             }
             ClientEvent::GoalRunDetail(Some(run)) => {
-                self.handle_goal_run_detail_event(run);
+                if self.is_placeholder_goal_run_detail(&run) {
+                    self.clear_goal_hydration_refresh(&run.id);
+                } else {
+                    self.clear_goal_hydration_refresh(&run.id);
+                    self.handle_goal_run_detail_event(run);
+                }
             }
             ClientEvent::GoalRunDetail(None) => {}
             ClientEvent::GoalRunUpdate(run) => {
@@ -244,6 +261,10 @@ impl TuiModel {
                 deleted,
             } => {
                 if deleted {
+                    let cleared_approval_id = self
+                        .tasks
+                        .goal_run_by_id(&goal_run_id)
+                        .and_then(|run| run.awaiting_approval_id.clone());
                     let viewing_deleted_goal = if let MainPaneView::Task(target) =
                         &self.main_pane_view
                     {
@@ -251,8 +272,14 @@ impl TuiModel {
                     } else {
                         false
                     };
+                    let deleted_goal_run_id = goal_run_id.clone();
                     self.tasks
                         .reduce(task::TaskAction::GoalRunDeleted { goal_run_id });
+                    self.clear_goal_hydration_refresh(&deleted_goal_run_id);
+                    if let Some(approval_id) = cleared_approval_id {
+                        self.approval
+                            .reduce(crate::state::ApprovalAction::ClearResolved(approval_id));
+                    }
                     if self.modal.top() == Some(modal::ModalKind::GoalPicker) {
                         self.sync_goal_picker_item_count();
                     }
@@ -269,6 +296,9 @@ impl TuiModel {
                 checkpoints,
             } => {
                 self.handle_goal_run_checkpoints_event(goal_run_id, checkpoints);
+            }
+            ClientEvent::GoalHydrationScheduleFailed { goal_run_id } => {
+                self.clear_goal_hydration_refresh(&goal_run_id);
             }
             ClientEvent::ThreadTodos { thread_id, items } => {
                 self.handle_thread_todos_event(thread_id, items);

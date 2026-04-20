@@ -1,4 +1,84 @@
 impl TuiModel {
+    fn goal_sidebar_items_for_tab(
+        &self,
+        goal_run_id: &str,
+        tab: GoalSidebarTab,
+    ) -> Vec<GoalSidebarSelectionAnchor> {
+        let Some(run) = self.tasks.goal_run_by_id(goal_run_id) else {
+            return Vec::new();
+        };
+
+        match tab {
+            GoalSidebarTab::Steps => {
+                let mut steps: Vec<_> = run.steps.iter().collect();
+                steps.sort_by_key(|step| step.order);
+                steps
+                    .into_iter()
+                    .map(|step| GoalSidebarSelectionAnchor::Step(step.id.clone()))
+                    .collect()
+            }
+            GoalSidebarTab::Checkpoints => self
+                .tasks
+                .checkpoints_for_goal_run(goal_run_id)
+                .iter()
+                .map(|checkpoint| GoalSidebarSelectionAnchor::Checkpoint(checkpoint.id.clone()))
+                .collect(),
+            GoalSidebarTab::Tasks => {
+                let tasks: Vec<_> = if !run.child_task_ids.is_empty() {
+                    run.child_task_ids
+                        .iter()
+                        .filter_map(|task_id| self.tasks.task_by_id(task_id))
+                        .collect()
+                } else {
+                    self.tasks
+                        .tasks()
+                        .iter()
+                        .filter(|task| task.goal_run_id.as_deref() == Some(goal_run_id))
+                        .collect()
+                };
+                tasks
+                    .into_iter()
+                    .map(|task| GoalSidebarSelectionAnchor::Task(task.id.clone()))
+                    .collect()
+            }
+            GoalSidebarTab::Files => {
+                let Some(thread_id) = run.thread_id.as_deref() else {
+                    return Vec::new();
+                };
+                let Some(context) = self.tasks.work_context_for_thread(thread_id) else {
+                    return Vec::new();
+                };
+                context
+                    .entries
+                    .iter()
+                    .filter(|entry| match entry.goal_run_id.as_deref() {
+                        Some(entry_goal_run_id) => entry_goal_run_id == goal_run_id,
+                        None => true,
+                    })
+                    .map(|entry| GoalSidebarSelectionAnchor::File {
+                        thread_id: thread_id.to_string(),
+                        path: entry.path.clone(),
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    fn current_goal_sidebar_selection_anchor(&self) -> Option<GoalSidebarSelectionAnchor> {
+        let goal_run_id = match &self.main_pane_view {
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) => {
+                goal_run_id.as_str()
+            }
+            _ => return None,
+        };
+        let items = self.goal_sidebar_items_for_tab(goal_run_id, self.goal_sidebar.active_tab());
+        items.get(self.goal_sidebar.selected_row()).cloned()
+    }
+
+    fn sync_goal_sidebar_selection_anchor(&mut self) {
+        self.goal_sidebar_selection_anchor = self.current_goal_sidebar_selection_anchor();
+    }
+
     fn chat_history_page_size(&self) -> usize {
         self.config.tui_chat_history_page_size.max(25) as usize
     }
@@ -45,6 +125,57 @@ impl TuiModel {
     fn request_authoritative_goal_run_refresh(&mut self, goal_run_id: String) {
         self.send_daemon_command(DaemonCommand::RequestGoalRunDetail(goal_run_id.clone()));
         self.send_daemon_command(DaemonCommand::RequestGoalRunCheckpoints(goal_run_id));
+    }
+
+    pub(in crate::app) fn schedule_goal_hydration_refresh(&mut self, goal_run_id: String) {
+        if self
+            .pending_goal_hydration_refreshes
+            .insert(goal_run_id.clone())
+        {
+            self.send_daemon_command(DaemonCommand::ScheduleGoalHydrationRefresh(goal_run_id));
+        }
+    }
+
+    pub(in crate::app) fn clear_goal_hydration_refresh(&mut self, goal_run_id: &str) {
+        self.pending_goal_hydration_refreshes.remove(goal_run_id);
+    }
+
+    fn goal_sidebar_item_count_for_tab(
+        &self,
+        goal_run_id: &str,
+        tab: GoalSidebarTab,
+    ) -> usize {
+        self.goal_sidebar_items_for_tab(goal_run_id, tab).len()
+    }
+
+    pub(super) fn reconcile_goal_sidebar_selection_for_active_goal_pane(&mut self) {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+            goal_run_id,
+            step_id,
+        }) = &self.main_pane_view
+        else {
+            return;
+        };
+
+        let tab = self.goal_sidebar.active_tab();
+        let items = self.goal_sidebar_items_for_tab(goal_run_id, tab);
+        let anchored_item = match (tab, step_id.as_deref()) {
+            (GoalSidebarTab::Steps, Some(step_id)) => Some(GoalSidebarSelectionAnchor::Step(
+                step_id.to_string(),
+            )),
+            _ => self.goal_sidebar_selection_anchor.clone(),
+        };
+        let matched_anchor_row = anchored_item
+            .as_ref()
+            .and_then(|anchor| items.iter().position(|item| item == anchor));
+        let target_row = matched_anchor_row.unwrap_or_else(|| self.goal_sidebar.selected_row());
+
+        self.goal_sidebar.select_row(target_row, items.len());
+        self.goal_sidebar_selection_anchor = if matched_anchor_row.is_some() {
+            items.get(self.goal_sidebar.selected_row()).cloned()
+        } else {
+            anchored_item.or_else(|| items.get(self.goal_sidebar.selected_row()).cloned())
+        };
     }
 
     fn maybe_request_older_chat_history(&mut self) {
@@ -188,11 +319,29 @@ impl TuiModel {
             .reduce(crate::state::ConciergeAction::WelcomeLoading(false));
     }
 
-    fn request_concierge_welcome(&mut self) {
+    fn begin_concierge_welcome_request(&mut self) {
         self.ignore_pending_concierge_welcome = false;
+        self.clear_chat_drag_selection();
+        self.clear_work_context_drag_selection();
+        self.clear_task_view_drag_selection();
+        self.thread_loading_id = None;
+        self.concierge
+            .reduce(crate::state::ConciergeAction::WelcomeDismissed);
+        self.chat.reduce(chat::ChatAction::DismissConciergeWelcome);
+        self.chat.reduce(chat::ChatAction::SelectThread(String::new()));
+        self.set_main_pane_conversation(FocusArea::Chat);
         self.concierge
             .reduce(crate::state::ConciergeAction::WelcomeLoading(true));
+    }
+
+    pub(in crate::app) fn request_concierge_welcome(&mut self) {
+        self.begin_concierge_welcome_request();
         self.send_daemon_command(DaemonCommand::RequestConciergeWelcome);
+    }
+
+    pub(in crate::app) fn retry_operator_profile_request(&mut self) {
+        self.begin_concierge_welcome_request();
+        self.send_daemon_command(DaemonCommand::RetryOperatorProfile);
     }
 
     fn set_main_pane_conversation(&mut self, focus: FocusArea) {
@@ -204,6 +353,13 @@ impl TuiModel {
     fn dismiss_active_main_pane(&mut self, focus: FocusArea) -> bool {
         match &self.main_pane_view {
             MainPaneView::Task(target) => {
+                if let sidebar::SidebarItemTarget::Task { task_id } = target {
+                    if let Some(parent_target) = self.parent_goal_target_for_task(task_id) {
+                        self.open_sidebar_target(parent_target);
+                        self.focus = focus;
+                        return true;
+                    }
+                }
                 if let Some(thread_id) = self.target_thread_id(target) {
                     if self.tasks.selected_work_path(&thread_id).is_some() {
                         self.tasks.reduce(task::TaskAction::SelectWorkPath {
@@ -213,6 +369,12 @@ impl TuiModel {
                         self.focus = focus;
                         return true;
                     }
+                }
+                if matches!(target, sidebar::SidebarItemTarget::GoalRun { .. }) {
+                    if self.sidebar_visible() {
+                        self.focus = FocusArea::Sidebar;
+                    }
+                    return true;
                 }
                 self.set_main_pane_conversation(focus);
                 true
@@ -428,7 +590,7 @@ impl TuiModel {
                 let _ = self.defer_operator_profile_question();
             }
             "operator_profile_retry" => {
-                self.send_daemon_command(DaemonCommand::RetryOperatorProfile);
+                self.retry_operator_profile_request();
                 self.status_line = "Retrying operator profile operation…".to_string();
                 self.show_input_notice(
                     "Retrying operator profile operation…",
@@ -514,6 +676,14 @@ impl TuiModel {
             PendingConfirmAction::DeleteGoalRun { goal_run_id, .. } => {
                 self.send_daemon_command(DaemonCommand::DeleteGoalRun { goal_run_id });
                 self.status_line = "Deleting goal run...".to_string();
+            }
+            PendingConfirmAction::PauseGoalRun { goal_run_id, .. } => {
+                self.send_daemon_command(DaemonCommand::ControlGoalRun {
+                    goal_run_id,
+                    action: "pause".to_string(),
+                    step_index: None,
+                });
+                self.status_line = "Pausing goal run...".to_string();
             }
             PendingConfirmAction::StopGoalRun { goal_run_id, .. } => {
                 self.send_daemon_command(DaemonCommand::ControlGoalRun {

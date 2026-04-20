@@ -79,23 +79,33 @@ impl ConciergeEngine {
         recent_threads.truncate(thread_limit);
         drop(threads_guard);
 
-        let (pending_task_total, pending_tasks) = if matches!(
-            detail_level,
-            ConciergeDetailLevel::ContextSummary
-                | ConciergeDetailLevel::ProactiveTriage
-                | ConciergeDetailLevel::DailyBriefing
-        ) {
+        let (pending_task_total, pending_tasks, latest_pending_task) = {
             let tasks_guard = tasks.lock().await;
             let preferred_thread_id = recent_threads.first().map(|thread| thread.id.as_str());
-            sample_pending_tasks(tasks_guard.iter(), preferred_thread_id)
-        } else {
-            (0, Vec::new())
+            let latest_pending_task = latest_pending_task(tasks_guard.iter());
+            if matches!(
+                detail_level,
+                ConciergeDetailLevel::ContextSummary
+                    | ConciergeDetailLevel::ProactiveTriage
+                    | ConciergeDetailLevel::DailyBriefing
+            ) {
+                let (pending_task_total, pending_tasks) =
+                    sample_pending_tasks(tasks_guard.iter(), preferred_thread_id);
+                (pending_task_total, pending_tasks, latest_pending_task)
+            } else {
+                (
+                    unresolved_task_total(tasks_guard.iter()),
+                    Vec::new(),
+                    latest_pending_task,
+                )
+            }
         };
 
         WelcomeContext {
             recent_threads,
             pending_task_total,
             pending_tasks,
+            latest_pending_task,
         }
     }
 
@@ -123,20 +133,14 @@ impl ConciergeEngine {
         drop(threads_guard);
 
         let tasks_guard = tasks.lock().await;
-        let pending_task_total = tasks_guard
-            .iter()
-            .filter(|task| {
-                matches!(
-                    task.status,
-                    TaskStatus::Queued | TaskStatus::InProgress | TaskStatus::Blocked
-                ) && !is_user_hidden_task(task)
-            })
-            .count();
+        let pending_task_total = unresolved_task_total(tasks_guard.iter());
+        let latest_pending_task = latest_pending_task(tasks_guard.iter());
 
         WelcomeContext {
             recent_threads,
             pending_task_total,
             pending_tasks: Vec::new(),
+            latest_pending_task,
         }
     }
 }
@@ -196,18 +200,80 @@ fn format_message_snippet(message: &AgentMessage) -> String {
     format!("{role}: {snippet}")
 }
 
+fn is_unresolved_user_task(task: &AgentTask) -> bool {
+    matches!(
+        task.status,
+        TaskStatus::Queued
+            | TaskStatus::InProgress
+            | TaskStatus::Blocked
+            | TaskStatus::AwaitingApproval
+    ) && !is_user_hidden_task(task)
+}
+
+fn pending_task_label(task: &AgentTask) -> String {
+    let base = task
+        .goal_run_title
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(task.title.as_str())
+        .trim()
+        .to_string();
+    let step = task
+        .goal_step_title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != base);
+    match step {
+        Some(step) => format!("{base}: {step}"),
+        None => base,
+    }
+}
+
+fn pending_task_summary(task: &AgentTask) -> PendingTaskSummary {
+    PendingTaskSummary {
+        label: pending_task_label(task),
+        status: task.status,
+        created_at: task.created_at,
+    }
+}
+
+fn format_pending_task_entry(summary: &PendingTaskSummary) -> String {
+    format!(
+        "- [{}] {} ({})",
+        format!("{:?}", summary.status),
+        summary.label,
+        format_timestamp(summary.created_at)
+    )
+}
+
+fn unresolved_task_total<'a, I>(tasks: I) -> usize
+where
+    I: IntoIterator<Item = &'a AgentTask>,
+{
+    tasks
+        .into_iter()
+        .filter(|task| is_unresolved_user_task(task))
+        .count()
+}
+
+fn latest_pending_task<'a, I>(tasks: I) -> Option<PendingTaskSummary>
+where
+    I: IntoIterator<Item = &'a AgentTask>,
+{
+    tasks
+        .into_iter()
+        .filter(|task| is_unresolved_user_task(task))
+        .max_by_key(|task| task.created_at)
+        .map(pending_task_summary)
+}
+
 fn sample_pending_tasks<'a, I>(tasks: I, preferred_thread_id: Option<&str>) -> (usize, Vec<String>)
 where
     I: IntoIterator<Item = &'a AgentTask>,
 {
     let unresolved: Vec<&AgentTask> = tasks
         .into_iter()
-        .filter(|task| {
-            matches!(
-                task.status,
-                TaskStatus::Queued | TaskStatus::InProgress | TaskStatus::Blocked
-            ) && !is_user_hidden_task(task)
-        })
+        .filter(|task| is_unresolved_user_task(task))
         .collect();
     let total = unresolved.len();
     if total == 0 {
@@ -230,14 +296,7 @@ where
 
     let entries = sampled
         .into_iter()
-        .map(|task| {
-            format!(
-                "- [{}] {} ({})",
-                format!("{:?}", task.status),
-                task.title,
-                format_timestamp(task.created_at)
-            )
-        })
+        .map(|task| format_pending_task_entry(&pending_task_summary(task)))
         .collect();
 
     (total, entries)

@@ -704,6 +704,8 @@ use amux_shared::providers::{
             current_step_index: 0,
             current_step_title: Some("Draft dossier types".to_string()),
             current_step_kind: Some(GoalRunStepKind::Reason),
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
             replan_count: 0,
             max_replans: 3,
             plan_summary: Some("Design a compact dossier layer".to_string()),

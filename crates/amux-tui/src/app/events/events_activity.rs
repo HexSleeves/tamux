@@ -711,7 +711,7 @@ impl TuiModel {
             120,
             true,
         );
-        self.send_daemon_command(DaemonCommand::RequestConciergeWelcome);
+        self.request_concierge_welcome();
     }
 
     pub(in crate::app) fn handle_error_event(&mut self, message: String) {

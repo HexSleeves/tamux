@@ -1,4 +1,45 @@
 impl DaemonClient {
+    fn daemon_message_kind(message: &DaemonMessage) -> &'static str {
+        match message {
+            DaemonMessage::AgentAsyncCommandCapabilityAck { .. } => {
+                "AgentAsyncCommandCapabilityAck"
+            }
+            DaemonMessage::OperationAccepted { .. } => "OperationAccepted",
+            DaemonMessage::AgentEvent { .. } => "AgentEvent",
+            DaemonMessage::AgentThreadList { .. } => "AgentThreadList",
+            DaemonMessage::AgentThreadDetail { .. } => "AgentThreadDetail",
+            DaemonMessage::AgentThreadDetailChunk { .. } => "AgentThreadDetailChunk",
+            DaemonMessage::SessionSpawned { .. } => "SessionSpawned",
+            DaemonMessage::ApprovalRequired { .. } => "ApprovalRequired",
+            DaemonMessage::ApprovalResolved { .. } => "ApprovalResolved",
+            DaemonMessage::AgentTaskList { .. } => "AgentTaskList",
+            DaemonMessage::AgentGoalRunList { .. } => "AgentGoalRunList",
+            DaemonMessage::AgentGoalRunDetail { .. } => "AgentGoalRunDetail",
+            DaemonMessage::AgentEventRows { .. } => "AgentEventRows",
+            DaemonMessage::Error { .. } => "Error",
+            DaemonMessage::AgentError { .. } => "AgentError",
+            DaemonMessage::Pong => "Pong",
+            _ => "Other",
+        }
+    }
+
+    #[cfg(unix)]
+    fn configure_daemon_bootstrap_command(command: &mut tokio::process::Command) {
+        // Detach the daemon from the TUI process group so terminal/session hangups
+        // do not tear down the daemon silently after bootstrap.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn configure_daemon_bootstrap_command(_command: &mut tokio::process::Command) {}
+
     fn next_bootstrap_attempted(bootstrap_attempted: bool, connected: bool) -> bool {
         if connected {
             false
@@ -57,14 +98,22 @@ impl DaemonClient {
             let candidate_display = candidate.to_string_lossy().to_string();
             info!(candidate = %candidate_display, "Attempting daemon bootstrap");
 
-            let spawn_result = tokio::process::Command::new(&candidate)
+            let mut command = tokio::process::Command::new(&candidate);
+            command
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn();
+                .stderr(std::process::Stdio::null());
+            Self::configure_daemon_bootstrap_command(&mut command);
+
+            let spawn_result = command.spawn();
 
             match spawn_result {
                 Ok(child) => {
+                    info!(
+                        candidate = %candidate_display,
+                        pid = child.id().unwrap_or_default(),
+                        "Daemon bootstrap process spawned"
+                    );
                     drop(child);
                     for _ in 0..20 {
                         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -268,6 +317,10 @@ impl DaemonClient {
                 inbound = stream.next() => {
                     match inbound {
                         Some(Ok(message)) => {
+                            debug!(
+                                kind = Self::daemon_message_kind(&message),
+                                "Daemon client received daemon message"
+                            );
                             last_inbound_at = Instant::now();
                             awaiting_pong_since = None;
                             if !Self::handle_daemon_message(
@@ -277,20 +330,29 @@ impl DaemonClient {
                             )
                             .await
                             {
+                                debug!("Daemon client stopping after daemon message handler requested exit");
                                 break;
                             }
                         }
                         Some(Err(err)) => {
+                            debug!(error = %err, "Daemon client stopping after inbound stream error");
                             let _ = event_tx.send(ClientEvent::Error(format!("Connection error: {}", err))).await;
                             break;
                         }
-                        None => break,
+                        None => {
+                            debug!("Daemon client stopping after daemon stream reached EOF");
+                            break;
+                        }
                     }
                 }
                 _ = ping_tick.tick() => {
                     let now = Instant::now();
                     if let Some(pending_since) = awaiting_pong_since {
                         if now.duration_since(pending_since) >= keepalive_timeout {
+                            debug!(
+                                elapsed_ms = now.duration_since(pending_since).as_millis() as u64,
+                                "Daemon client stopping after keepalive timeout"
+                            );
                             let _ = event_tx
                                 .send(ClientEvent::Error(
                                     "Connection lost: daemon health-check timed out".to_string(),
@@ -302,6 +364,7 @@ impl DaemonClient {
 
                     if now.duration_since(last_inbound_at) >= keepalive_interval {
                         if let Err(err) = sink.send(ClientMessage::Ping).await {
+                            debug!(error = %err, "Daemon client stopping after keepalive send error");
                             let _ = event_tx
                                 .send(ClientEvent::Error(format!("Keepalive send error: {}", err)))
                                 .await;
@@ -314,17 +377,22 @@ impl DaemonClient {
                     match outbound {
                         Some(request) => {
                             if let Err(err) = amux_protocol::validate_client_message_size(&request) {
+                                debug!(error = %err, "Dropping oversized outbound daemon request");
                                 let _ = event_tx
                                     .send(ClientEvent::Error(format!("Send error: {}", err)))
                                     .await;
                                 continue;
                             }
                             if let Err(err) = sink.send(request).await {
+                                debug!(error = %err, "Daemon client stopping after outbound send error");
                                 let _ = event_tx.send(ClientEvent::Error(format!("Send error: {}", err))).await;
                                 break;
                             }
                         }
-                        None => break,
+                        None => {
+                            debug!("Daemon client stopping after request channel closed");
+                            break;
+                        }
                     }
                 }
             }

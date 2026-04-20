@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::commands::GoalActionPickerItem;
 use amux_shared::providers::{AudioToolKind, PROVIDER_ID_CUSTOM};
 
 pub(super) fn begin_custom_model_edit(model: &mut TuiModel) {
@@ -207,20 +208,36 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
         }
         modal::ModalKind::GoalStepActionPicker => {
             let cursor = model.modal.picker_cursor();
+            let items = model.goal_action_picker_items();
             model.close_top_modal();
-            match cursor {
-                0 => {
+            match items.get(cursor).copied() {
+                Some(GoalActionPickerItem::PauseGoal) => {
+                    if !model.request_selected_goal_run_toggle_confirmation() {
+                        model.status_line = "Goal action is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::ResumeGoal) => {
+                    if !model.request_selected_goal_run_toggle_confirmation() {
+                        model.status_line = "Goal action is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::StopGoal) => {
+                    if !model.request_selected_goal_run_stop_confirmation() {
+                        model.status_line = "Goal action is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::RetryStep) => {
                     if !model.request_selected_goal_step_retry_confirmation() {
                         model.status_line = "Selected goal step is unavailable".to_string();
                     }
                 }
-                1 => {
+                Some(GoalActionPickerItem::RerunFromStep) => {
                     if !model.request_selected_goal_step_rerun_confirmation() {
                         model.status_line = "Selected goal step is unavailable".to_string();
                     }
                 }
-                _ => {
-                    model.status_line = "Goal step action is unavailable".to_string();
+                None => {
+                    model.status_line = "Goal action is unavailable".to_string();
                 }
             }
         }

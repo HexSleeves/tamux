@@ -7,6 +7,7 @@ pub mod chat;
 pub mod collaboration;
 pub mod concierge;
 pub mod config;
+pub mod goal_sidebar;
 pub mod input;
 pub mod input_refs;
 pub mod modal;
@@ -34,6 +35,7 @@ pub enum FocusArea {
 #[derive(Debug, Clone)]
 pub enum DaemonCommand {
     Refresh,
+    GetConfig,
     RefreshServices,
     RequestThread {
         thread_id: String,
@@ -59,6 +61,7 @@ pub enum DaemonCommand {
         event_limit: Option<usize>,
     },
     RequestGoalRunCheckpoints(String),
+    ScheduleGoalHydrationRefresh(String),
     StartGoalRun {
         goal: String,
         thread_id: Option<String>,
@@ -303,6 +306,8 @@ pub use collaboration::{
 pub use concierge::{ConciergeAction, ConciergeActionVm, ConciergeState};
 #[allow(unused_imports)]
 pub use config::{ConfigAction, ConfigState};
+#[allow(unused_imports)]
+pub use goal_sidebar::{GoalSidebarState, GoalSidebarTab};
 #[allow(unused_imports)]
 pub use input::{InputAction, InputMode, InputState};
 #[allow(unused_imports)]

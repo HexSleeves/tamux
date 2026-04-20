@@ -30,6 +30,34 @@ fn make_goal_run(id: &str, title: &str) -> GoalRun {
     }
 }
 
+fn make_owner_profile(
+    agent_label: &str,
+    provider: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
+) -> GoalRuntimeOwnerProfile {
+    GoalRuntimeOwnerProfile {
+        agent_label: agent_label.into(),
+        provider: provider.into(),
+        model: model.into(),
+        reasoning_effort: reasoning_effort.map(str::to_string),
+    }
+}
+
+fn make_wire_owner_profile(
+    agent_label: &str,
+    provider: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
+) -> crate::wire::GoalRuntimeOwnerProfile {
+    crate::wire::GoalRuntimeOwnerProfile {
+        agent_label: agent_label.into(),
+        provider: provider.into(),
+        model: model.into(),
+        reasoning_effort: reasoning_effort.map(str::to_string),
+    }
+}
+
 #[test]
 fn task_list_received_replaces_tasks() {
     let mut state = TaskState::new();
@@ -110,6 +138,157 @@ fn goal_run_detail_received_upserts() {
     // Insert new via update
     state.reduce(TaskAction::GoalRunUpdate(make_goal_run("g2", "New Goal")));
     assert_eq!(state.goal_runs().len(), 2);
+}
+
+#[test]
+fn goal_run_detail_received_stores_owner_profiles() {
+    let mut state = TaskState::new();
+    let converted = crate::app::conversion::convert_goal_run(crate::wire::GoalRun {
+        id: "g1".into(),
+        title: "Original".into(),
+        planner_owner_profile: Some(make_wire_owner_profile(
+            "Planner",
+            "openai",
+            "gpt-4.1",
+            Some("high"),
+        )),
+        current_step_owner_profile: Some(make_wire_owner_profile(
+            "Verifier",
+            "anthropic",
+            "claude-sonnet-4",
+            None,
+        )),
+        ..Default::default()
+    });
+    state.reduce(TaskAction::GoalRunDetailReceived(converted));
+
+    let goal = state.goal_run_by_id("g1").expect("goal should exist");
+    assert_eq!(
+        goal.planner_owner_profile,
+        Some(make_owner_profile(
+            "Planner",
+            "openai",
+            "gpt-4.1",
+            Some("high")
+        ))
+    );
+    assert_eq!(
+        goal.current_step_owner_profile,
+        Some(make_owner_profile(
+            "Verifier",
+            "anthropic",
+            "claude-sonnet-4",
+            None
+        ))
+    );
+}
+
+#[test]
+fn goal_run_detail_received_clears_owner_profiles_when_authoritative_payload_omits_them() {
+    let mut state = TaskState::new();
+    state.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
+        id: "g1".into(),
+        title: "Original".into(),
+        planner_owner_profile: Some(make_owner_profile(
+            "Planner",
+            "openai",
+            "gpt-4.1",
+            Some("high"),
+        )),
+        current_step_owner_profile: Some(make_owner_profile(
+            "Verifier",
+            "anthropic",
+            "claude-sonnet-4",
+            None,
+        )),
+        ..Default::default()
+    }));
+
+    state.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
+        id: "g1".into(),
+        title: "Detailed".into(),
+        ..Default::default()
+    }));
+
+    let goal = state.goal_run_by_id("g1").expect("goal should exist");
+    assert_eq!(goal.title, "Detailed");
+    assert!(goal.planner_owner_profile.is_none());
+    assert!(goal.current_step_owner_profile.is_none());
+}
+
+#[test]
+fn goal_run_update_preserves_owner_profiles_when_incremental_payload_omits_them() {
+    let mut state = TaskState::new();
+    state.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
+        id: "g1".into(),
+        title: "Original".into(),
+        planner_owner_profile: Some(make_owner_profile(
+            "Planner",
+            "openai",
+            "gpt-4.1",
+            Some("high"),
+        )),
+        current_step_owner_profile: Some(make_owner_profile(
+            "Verifier",
+            "anthropic",
+            "claude-sonnet-4",
+            None,
+        )),
+        ..Default::default()
+    }));
+
+    state.reduce(TaskAction::GoalRunUpdate(GoalRun {
+        id: "g1".into(),
+        title: "Updated".into(),
+        ..Default::default()
+    }));
+
+    let goal = state.goal_run_by_id("g1").expect("goal should exist");
+    assert_eq!(goal.title, "Updated");
+    assert_eq!(
+        goal.planner_owner_profile,
+        Some(make_owner_profile(
+            "Planner",
+            "openai",
+            "gpt-4.1",
+            Some("high")
+        ))
+    );
+    assert_eq!(
+        goal.current_step_owner_profile,
+        Some(make_owner_profile(
+            "Verifier",
+            "anthropic",
+            "claude-sonnet-4",
+            None
+        ))
+    );
+}
+
+#[test]
+fn goal_run_update_preserves_planner_fallback_when_current_step_owner_is_absent() {
+    let mut state = TaskState::new();
+    state.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
+        id: "g1".into(),
+        title: "Original".into(),
+        planner_owner_profile: Some(make_owner_profile("Planner", "openai", "gpt-4.1", None)),
+        current_step_owner_profile: None,
+        ..Default::default()
+    }));
+
+    state.reduce(TaskAction::GoalRunUpdate(GoalRun {
+        id: "g1".into(),
+        title: "Updated".into(),
+        ..Default::default()
+    }));
+
+    let goal = state.goal_run_by_id("g1").expect("goal should exist");
+    assert_eq!(goal.title, "Updated");
+    assert_eq!(
+        goal.planner_owner_profile,
+        Some(make_owner_profile("Planner", "openai", "gpt-4.1", None))
+    );
+    assert!(goal.current_step_owner_profile.is_none());
 }
 
 #[test]

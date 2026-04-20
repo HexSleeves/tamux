@@ -178,6 +178,7 @@ pub(super) fn convert_task(t: crate::wire::AgentTask) -> task::AgentTask {
             crate::wire::TaskStatus::AwaitingApproval => task::TaskStatus::AwaitingApproval,
             crate::wire::TaskStatus::Blocked => task::TaskStatus::Blocked,
             crate::wire::TaskStatus::FailedAnalyzing => task::TaskStatus::FailedAnalyzing,
+            crate::wire::TaskStatus::BudgetExceeded => task::TaskStatus::BudgetExceeded,
             crate::wire::TaskStatus::Completed => task::TaskStatus::Completed,
             crate::wire::TaskStatus::Failed => task::TaskStatus::Failed,
             crate::wire::TaskStatus::Cancelled => task::TaskStatus::Cancelled,
@@ -192,7 +193,7 @@ pub(super) fn convert_task(t: crate::wire::AgentTask) -> task::AgentTask {
     }
 }
 
-pub(super) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
+pub(crate) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
     task::GoalRun {
         id: r.id,
         title: r.title,
@@ -208,6 +209,12 @@ pub(super) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
             crate::wire::GoalRunStatus::Failed => task::GoalRunStatus::Failed,
             crate::wire::GoalRunStatus::Cancelled => task::GoalRunStatus::Cancelled,
         }),
+        planner_owner_profile: r
+            .planner_owner_profile
+            .map(convert_goal_runtime_owner_profile),
+        current_step_owner_profile: r
+            .current_step_owner_profile
+            .map(convert_goal_runtime_owner_profile),
         steps: r
             .steps
             .into_iter()
@@ -232,6 +239,7 @@ pub(super) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
         current_step_title: r.current_step_title,
         child_task_count: r.child_task_count,
         approval_count: r.approval_count,
+        awaiting_approval_id: r.awaiting_approval_id,
         last_error: r.last_error,
         goal: r.goal,
         current_step_index: r.current_step_index,
@@ -263,6 +271,17 @@ pub(super) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
         updated_at: 0,
         older_page_pending: false,
         older_page_request_cooldown_until_tick: None,
+    }
+}
+
+fn convert_goal_runtime_owner_profile(
+    profile: crate::wire::GoalRuntimeOwnerProfile,
+) -> task::GoalRuntimeOwnerProfile {
+    task::GoalRuntimeOwnerProfile {
+        agent_label: profile.agent_label,
+        provider: profile.provider,
+        model: profile.model,
+        reasoning_effort: profile.reasoning_effort,
     }
 }
 
