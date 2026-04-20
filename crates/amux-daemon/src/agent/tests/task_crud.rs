@@ -713,6 +713,50 @@ async fn cancelling_goal_run_settles_unresolved_goal_plan_trace() {
 }
 
 #[tokio::test]
+async fn stopping_goal_run_records_operator_stop_resume_decision() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let goal_run_id = "goal-supervised-stop";
+    let task_id = "task-supervised-stop";
+    let approval_id = "autonomy-ack-stop";
+
+    engine
+        .goal_runs
+        .lock()
+        .await
+        .push_back(sample_supervised_goal_run(
+            goal_run_id,
+            task_id,
+            approval_id,
+        ));
+    sample_awaiting_task(&engine, goal_run_id, task_id, approval_id).await;
+
+    let changed = engine.control_goal_run(goal_run_id, "stop", None).await;
+    assert!(changed, "stop should update goal state");
+
+    let goal = engine
+        .get_goal_run(goal_run_id)
+        .await
+        .expect("goal should exist");
+    assert_eq!(goal.status, GoalRunStatus::Cancelled);
+    assert_eq!(goal.stopped_reason.as_deref(), Some("operator_stop"));
+    assert!(goal.awaiting_approval_id.is_none());
+    assert!(goal.active_task_id.is_none());
+
+    let dossier = goal.dossier.expect("stop should create dossier state");
+    let resume_decision = dossier
+        .latest_resume_decision
+        .expect("stop should record a resume decision");
+    assert_eq!(resume_decision.action, GoalResumeAction::Stop);
+    assert_eq!(resume_decision.reason_code, "operator_stop");
+    assert_eq!(
+        resume_decision.projection_state,
+        GoalProjectionState::Failed
+    );
+}
+
+#[tokio::test]
 async fn get_goal_run_capped_for_ipc_truncates_oversized_detail_payload() {
     let root = tempdir().expect("temp dir");
     let manager = SessionManager::new_test(root.path()).await;

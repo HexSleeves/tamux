@@ -1165,6 +1165,42 @@ impl AgentEngine {
                         changed_goal = Some(goal_run.clone());
                     }
                 }
+                "stop" => {
+                    if !matches!(
+                        goal_run.status,
+                        GoalRunStatus::Completed | GoalRunStatus::Failed | GoalRunStatus::Cancelled
+                    ) {
+                        let stopped_at = now_millis();
+                        goal_run.status = GoalRunStatus::Cancelled;
+                        goal_run.completed_at = Some(stopped_at);
+                        goal_run.updated_at = stopped_at;
+                        goal_run.stopped_reason = Some("operator_stop".to_string());
+                        let mut dossier = goal_run.dossier.clone().unwrap_or_default();
+                        dossier.latest_resume_decision = Some(GoalResumeDecision {
+                            action: GoalResumeAction::Stop,
+                            reason_code: "operator_stop".to_string(),
+                            reason: Some("goal run explicitly stopped by operator".to_string()),
+                            details: vec![
+                                "stop requested through built-in goal control".to_string()
+                            ],
+                            decided_at: Some(stopped_at),
+                            projection_state: GoalProjectionState::Failed,
+                        });
+                        goal_run.dossier = Some(dossier);
+                        goal_run.events.push(make_goal_run_event(
+                            "control",
+                            "goal run stopped",
+                            Some("operator_stop".to_string()),
+                        ));
+                        goal_run.awaiting_approval_id = None;
+                        goal_run.active_task_id = None;
+                        task_to_cancel = goal_run
+                            .steps
+                            .get(goal_run.current_step_index)
+                            .and_then(|step| step.task_id.clone());
+                        changed_goal = Some(goal_run.clone());
+                    }
+                }
                 _ => {}
             }
         }

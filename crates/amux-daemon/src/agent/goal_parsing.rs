@@ -384,7 +384,21 @@ pub(super) fn project_goal_run_snapshot(
     goal_run.active_task_id = goal_run
         .steps
         .get(goal_run.current_step_index)
-        .and_then(|step| step.task_id.clone());
+        .and_then(|step| {
+            let task_id = step.task_id.as_deref()?;
+            related_tasks.iter().find_map(|task| {
+                (task.id == task_id
+                    && matches!(
+                        task.status,
+                        TaskStatus::Queued
+                            | TaskStatus::InProgress
+                            | TaskStatus::Blocked
+                            | TaskStatus::FailedAnalyzing
+                            | TaskStatus::AwaitingApproval
+                    ))
+                .then(|| task.id.clone())
+            })
+        });
     goal_run.awaiting_approval_id = related_tasks
         .iter()
         .find_map(|task| task.awaiting_approval_id.clone());
