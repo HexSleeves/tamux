@@ -113,6 +113,91 @@ fn goal_run_detail_received_upserts() {
 }
 
 #[test]
+fn goal_run_dossier_fields_merge_across_list_detail_and_update_flows() {
+    let mut state = TaskState::new();
+    state.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
+        id: "g1".into(),
+        title: "Original".into(),
+        dossier: GoalRunDossier {
+            projection_state: Some("ready".into()),
+            summary: Some("Ship the release".into()),
+            execution_binding_label: Some("exec-v1".into()),
+            verification_binding_label: Some("verify-v1".into()),
+            delivery_units: vec![GoalDeliveryUnit {
+                label: "artifact".into(),
+                summary: Some("desktop bundle".into()),
+                status: Some("ready".into()),
+                ..Default::default()
+            }],
+            proof_checks: vec![GoalProofCheck {
+                label: "lint".into(),
+                status: Some("passed".into()),
+                evidence: vec!["cargo test".into()],
+                ..Default::default()
+            }],
+            latest_resume_decision: Some(GoalResumeDecision {
+                outcome: Some("resume".into()),
+                summary: Some("Unblocked after lint".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
+
+    state.reduce(TaskAction::GoalRunUpdate(GoalRun {
+        id: "g1".into(),
+        title: "Original".into(),
+        dossier: GoalRunDossier {
+            projection_error: Some("stale projection".into()),
+            reports: vec![GoalRunReport {
+                title: "Verification".into(),
+                summary: Some("Pending smoke check".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
+
+    state.reduce(TaskAction::GoalRunListReceived(vec![GoalRun {
+        id: "g1".into(),
+        title: "Listed".into(),
+        ..Default::default()
+    }]));
+
+    let run = state.goal_run_by_id("g1").expect("goal run should remain");
+    assert_eq!(run.title, "Listed");
+    assert_eq!(run.dossier.projection_state.as_deref(), Some("ready"));
+    assert_eq!(
+        run.dossier.projection_error.as_deref(),
+        Some("stale projection")
+    );
+    assert_eq!(run.dossier.summary.as_deref(), Some("Ship the release"));
+    assert_eq!(
+        run.dossier.execution_binding_label.as_deref(),
+        Some("exec-v1")
+    );
+    assert_eq!(
+        run.dossier.verification_binding_label.as_deref(),
+        Some("verify-v1")
+    );
+    assert_eq!(run.dossier.delivery_units.len(), 1);
+    assert_eq!(run.dossier.delivery_units[0].label, "artifact");
+    assert_eq!(run.dossier.proof_checks.len(), 1);
+    assert_eq!(run.dossier.proof_checks[0].label, "lint");
+    assert_eq!(run.dossier.reports.len(), 1);
+    assert_eq!(run.dossier.reports[0].title, "Verification");
+    assert_eq!(
+        run.dossier
+            .latest_resume_decision
+            .as_ref()
+            .and_then(|decision| decision.summary.as_deref()),
+        Some("Unblocked after lint")
+    );
+}
+
+#[test]
 fn goal_run_checkpoints_received_replaces_goal_run_checkpoints() {
     let mut state = TaskState::new();
     state.reduce(TaskAction::GoalRunCheckpointsReceived {

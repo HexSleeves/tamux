@@ -26,6 +26,252 @@ fn short_checkpoint_id(id: &str) -> String {
     format!("…{tail}")
 }
 
+fn is_blank(value: Option<&str>) -> bool {
+    value.is_none_or(|value| value.trim().is_empty())
+}
+
+pub(super) fn render_goal_dossier(
+    rows: &mut Vec<RenderRow>,
+    run: &GoalRun,
+    theme: &ThemeTokens,
+    width: usize,
+) {
+    let dossier = &run.dossier;
+
+    if dossier.projection_state.is_some() || dossier.projection_error.is_some() {
+        push_section_title(
+            rows,
+            "Projection Status",
+            theme.accent_primary.add_modifier(Modifier::BOLD),
+        );
+        if let Some(state) = dossier.projection_state.as_deref() {
+            rows.push(RenderRow {
+                line: Line::from(vec![
+                    Span::styled("State: ", theme.fg_dim),
+                    Span::styled(state.to_string(), theme.fg_active),
+                ]),
+                work_path: None,
+                close_preview: false,
+            });
+        }
+        if let Some(error) = dossier.projection_error.as_deref() {
+            push_wrapped_text(rows, error, theme.accent_danger, width, 0);
+        }
+    }
+
+    if !is_blank(dossier.summary.as_deref())
+        || dossier.execution_binding_label.is_some()
+        || dossier.verification_binding_label.is_some()
+    {
+        push_section_title(
+            rows,
+            "Dossier Summary",
+            theme.accent_primary.add_modifier(Modifier::BOLD),
+        );
+        if let Some(summary) = dossier.summary.as_deref() {
+            push_wrapped_text(rows, summary, theme.fg_active, width, 0);
+        }
+        if dossier.execution_binding_label.is_some() || dossier.verification_binding_label.is_some()
+        {
+            let mut spans = Vec::new();
+            if let Some(label) = dossier.execution_binding_label.as_deref() {
+                spans.push(Span::styled("Execution: ", theme.fg_dim));
+                spans.push(Span::styled(label.to_string(), theme.fg_active));
+            }
+            if let Some(label) = dossier.verification_binding_label.as_deref() {
+                if !spans.is_empty() {
+                    spans.push(Span::raw("  "));
+                }
+                spans.push(Span::styled("Verification: ", theme.fg_dim));
+                spans.push(Span::styled(label.to_string(), theme.fg_active));
+            }
+            rows.push(RenderRow {
+                line: Line::from(spans),
+                work_path: None,
+                close_preview: false,
+            });
+        }
+    }
+
+    if !dossier.delivery_units.is_empty() {
+        push_section_title(
+            rows,
+            "Delivery Units",
+            theme.accent_primary.add_modifier(Modifier::BOLD),
+        );
+        for unit in &dossier.delivery_units {
+            let label = if unit.label.is_empty() {
+                unit.id.as_str()
+            } else {
+                unit.label.as_str()
+            };
+            let status = unit
+                .status
+                .as_deref()
+                .filter(|status| !status.trim().is_empty());
+            let mut spans = Vec::new();
+            if let Some(status) = status {
+                spans.push(Span::styled("[", theme.fg_dim));
+                spans.push(Span::styled(status.to_string(), theme.fg_active));
+                spans.push(Span::styled("] ", theme.fg_dim));
+            }
+            spans.push(Span::styled(label.to_string(), theme.fg_active));
+            if let Some(kind) = unit.kind.as_deref().filter(|kind| !kind.trim().is_empty()) {
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(format!("({kind})"), theme.fg_dim));
+            }
+            rows.push(RenderRow {
+                line: Line::from(spans),
+                work_path: None,
+                close_preview: false,
+            });
+            if let Some(summary) = unit
+                .summary
+                .as_deref()
+                .filter(|summary| !summary.trim().is_empty())
+            {
+                push_wrapped_text(rows, summary, theme.fg_dim, width, 2);
+            }
+            if let Some(path) = unit.path.as_deref().filter(|path| !path.trim().is_empty()) {
+                push_wrapped_text(rows, path, theme.fg_dim, width, 2);
+            }
+        }
+    }
+
+    if !dossier.proof_checks.is_empty() || !dossier.evidence.is_empty() {
+        push_section_title(
+            rows,
+            "Proof Coverage",
+            theme.accent_primary.add_modifier(Modifier::BOLD),
+        );
+        for check in &dossier.proof_checks {
+            let label = if check.label.is_empty() {
+                check.id.as_str()
+            } else {
+                check.label.as_str()
+            };
+            let mut spans = vec![Span::styled(label.to_string(), theme.fg_active)];
+            if let Some(status) = check
+                .status
+                .as_deref()
+                .filter(|status| !status.trim().is_empty())
+            {
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(format!("[{status}]"), theme.fg_dim));
+            }
+            rows.push(RenderRow {
+                line: Line::from(spans),
+                work_path: None,
+                close_preview: false,
+            });
+            if let Some(summary) = check
+                .summary
+                .as_deref()
+                .filter(|summary| !summary.trim().is_empty())
+            {
+                push_wrapped_text(rows, summary, theme.fg_dim, width, 2);
+            }
+            for evidence in &check.evidence {
+                push_wrapped_text(
+                    rows,
+                    &format!("evidence: {evidence}"),
+                    theme.fg_dim,
+                    width,
+                    2,
+                );
+            }
+        }
+        for evidence in &dossier.evidence {
+            push_wrapped_text(
+                rows,
+                &format!("evidence: {evidence}"),
+                theme.fg_dim,
+                width,
+                0,
+            );
+        }
+    }
+
+    if !dossier.reports.is_empty() {
+        push_section_title(
+            rows,
+            "Reports",
+            theme.accent_primary.add_modifier(Modifier::BOLD),
+        );
+        for report in &dossier.reports {
+            let title = if report.title.is_empty() {
+                report.id.as_str()
+            } else {
+                report.title.as_str()
+            };
+            let mut spans = vec![Span::styled(title.to_string(), theme.fg_active)];
+            if let Some(status) = report
+                .status
+                .as_deref()
+                .filter(|status| !status.trim().is_empty())
+            {
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(format!("[{status}]"), theme.fg_dim));
+            }
+            rows.push(RenderRow {
+                line: Line::from(spans),
+                work_path: None,
+                close_preview: false,
+            });
+            if let Some(summary) = report
+                .summary
+                .as_deref()
+                .filter(|summary| !summary.trim().is_empty())
+            {
+                push_wrapped_text(rows, summary, theme.fg_dim, width, 2);
+            }
+            if let Some(details) = report
+                .details
+                .as_deref()
+                .filter(|details| !details.trim().is_empty())
+            {
+                push_wrapped_text(rows, details, theme.fg_dim, width, 2);
+            }
+        }
+    }
+
+    if let Some(decision) = dossier.latest_resume_decision.as_ref() {
+        push_section_title(
+            rows,
+            "Latest Resume Decision",
+            theme.accent_primary.add_modifier(Modifier::BOLD),
+        );
+        if let Some(outcome) = decision
+            .outcome
+            .as_deref()
+            .filter(|outcome| !outcome.trim().is_empty())
+        {
+            rows.push(RenderRow {
+                line: Line::from(vec![
+                    Span::styled("Outcome: ", theme.fg_dim),
+                    Span::styled(outcome.to_string(), theme.fg_active),
+                ]),
+                work_path: None,
+                close_preview: false,
+            });
+        }
+        if let Some(summary) = decision
+            .summary
+            .as_deref()
+            .filter(|summary| !summary.trim().is_empty())
+        {
+            push_wrapped_text(rows, summary, theme.fg_dim, width, 0);
+        }
+        if let Some(rationale) = decision
+            .rationale
+            .as_deref()
+            .filter(|rationale| !rationale.trim().is_empty())
+        {
+            push_wrapped_text(rows, rationale, theme.fg_dim, width, 0);
+        }
+    }
+}
+
 pub(super) fn render_checkpoints(
     rows: &mut Vec<RenderRow>,
     tasks: &TaskState,

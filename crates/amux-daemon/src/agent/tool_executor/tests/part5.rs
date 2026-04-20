@@ -499,8 +499,45 @@
     fn media_tools_expose_expected_core_parameters() {
         let mut config = AgentConfig::default();
         config.tools.vision = true;
+        config.extra.insert(
+            "image".to_string(),
+            serde_json::json!({
+                "generation": {
+                    "provider": amux_shared::providers::PROVIDER_ID_OPENAI,
+                    "model": "gpt-image-1"
+                }
+            }),
+        );
         let temp_dir = std::env::temp_dir();
         let tools = get_available_tools(&config, &temp_dir, false);
+
+        let generate_image = tools
+            .iter()
+            .find(|tool| tool.function.name == "generate_image")
+            .expect("generate_image tool should be available when generation is configured");
+        let generate_properties = generate_image
+            .function
+            .parameters
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("generate_image schema should expose properties");
+        let generate_timeout = generate_properties
+            .get("timeout_seconds")
+            .expect("generate_image should expose timeout_seconds");
+        assert_eq!(
+            generate_timeout.get("type").and_then(|value| value.as_str()),
+            Some("integer")
+        );
+        assert_eq!(
+            generate_timeout
+                .get("maximum")
+                .and_then(|value| value.as_u64()),
+            Some(600)
+        );
+        assert!(generate_timeout
+            .get("description")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.contains("default: 600") && value.contains("max: 600")));
 
         let analyze_image = tools
             .iter()
@@ -518,11 +555,49 @@
                 "analyze_image should expose {property}"
             );
         }
+        let analyze_timeout = analyze_properties
+            .get("timeout_seconds")
+            .expect("analyze_image should expose timeout_seconds");
+        assert_eq!(
+            analyze_timeout.get("type").and_then(|value| value.as_str()),
+            Some("integer")
+        );
+        assert_eq!(
+            analyze_timeout
+                .get("maximum")
+                .and_then(|value| value.as_u64()),
+            Some(600)
+        );
+        assert!(analyze_timeout
+            .get("description")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.contains("default: 600") && value.contains("max: 600")));
 
         let speech_to_text = tools
             .iter()
             .find(|tool| tool.function.name == "speech_to_text")
             .expect("speech_to_text tool should be available");
+        let stt_properties = speech_to_text
+            .function
+            .parameters
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("speech_to_text schema should expose properties");
+        let stt_timeout = stt_properties
+            .get("timeout_seconds")
+            .expect("speech_to_text should expose timeout_seconds");
+        assert_eq!(
+            stt_timeout.get("type").and_then(|value| value.as_str()),
+            Some("integer")
+        );
+        assert_eq!(
+            stt_timeout.get("maximum").and_then(|value| value.as_u64()),
+            Some(600)
+        );
+        assert!(stt_timeout
+            .get("description")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.contains("default: 600") && value.contains("max: 600")));
         let stt_required = speech_to_text
             .function
             .parameters
@@ -550,6 +625,27 @@
                 .contains("temporary file path"),
             "text_to_speech description should discourage path-only follow-up replies"
         );
+        let tts_properties = text_to_speech
+            .function
+            .parameters
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("text_to_speech schema should expose properties");
+        let tts_timeout = tts_properties
+            .get("timeout_seconds")
+            .expect("text_to_speech should expose timeout_seconds");
+        assert_eq!(
+            tts_timeout.get("type").and_then(|value| value.as_str()),
+            Some("integer")
+        );
+        assert_eq!(
+            tts_timeout.get("maximum").and_then(|value| value.as_u64()),
+            Some(600)
+        );
+        assert!(tts_timeout
+            .get("description")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.contains("default: 600") && value.contains("max: 600")));
         let tts_required = text_to_speech
             .function
             .parameters

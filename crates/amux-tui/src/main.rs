@@ -6,6 +6,7 @@ mod client;
 mod projection;
 mod providers;
 mod state;
+mod terminal_graphics;
 mod theme;
 mod update;
 mod widgets;
@@ -252,10 +253,13 @@ fn main() -> Result<()> {
         // Create model
         let mut model = TuiModel::new(daemon_event_rx, daemon_cmd_tx);
         model.load_saved_settings();
+        let protocol = crate::terminal_graphics::configure_detected_protocol();
+        let mut graphics_renderer =
+            crate::terminal_graphics::TerminalGraphicsRenderer::new(protocol);
 
         // Main loop
         let tick_rate = Duration::from_millis(crate::app::TUI_TICK_RATE_MS);
-        run_loop(&mut terminal, &mut model, tick_rate)
+        run_loop(&mut terminal, &mut model, &mut graphics_renderer, tick_rate)
     }));
 
     let restore_result = restore_terminal(&mut terminal, supports_keyboard_enhancement);
@@ -287,6 +291,7 @@ fn main() -> Result<()> {
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     model: &mut TuiModel,
+    graphics_renderer: &mut crate::terminal_graphics::TerminalGraphicsRenderer,
     tick_rate: Duration,
 ) -> Result<()> {
     let mut next_tick = Instant::now() + tick_rate;
@@ -319,6 +324,8 @@ fn run_loop(
                 return Err(err.into());
             }
         }
+
+        graphics_renderer.render(terminal, model.terminal_image_overlay_spec())?;
 
         let now = Instant::now();
         let until_tick = next_tick.saturating_duration_since(now);

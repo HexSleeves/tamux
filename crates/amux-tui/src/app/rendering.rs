@@ -839,6 +839,31 @@ impl TuiModel {
         );
     }
 
+    pub(crate) fn terminal_image_overlay_spec(
+        &self,
+    ) -> Option<crate::terminal_graphics::TerminalImageOverlaySpec> {
+        let layout = self.pane_layout();
+        match &self.main_pane_view {
+            MainPaneView::FilePreview(target) => widgets::file_preview::terminal_image_overlay_spec(
+                layout.chat,
+                &self.tasks,
+                target,
+                &self.theme,
+                self.task_view_scroll,
+            ),
+            MainPaneView::WorkContext => widgets::work_context_view::terminal_image_overlay_spec(
+                layout.chat,
+                &self.tasks,
+                self.chat.active_thread_id(),
+                self.sidebar.active_tab(),
+                self.sidebar.selected_item(),
+                &self.theme,
+                self.task_view_scroll,
+            ),
+            _ => None,
+        }
+    }
+
     pub fn render(&mut self, frame: &mut Frame) {
         let area = frame.area();
         self.width = area.width;

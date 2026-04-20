@@ -12,6 +12,7 @@ pub mod file_preview;
 pub mod footer;
 pub mod goal_picker;
 pub mod header;
+pub mod image_preview;
 pub mod landing;
 pub mod message;
 pub mod message_operator_question;

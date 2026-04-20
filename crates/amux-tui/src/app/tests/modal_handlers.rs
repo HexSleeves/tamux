@@ -4109,7 +4109,7 @@ fn goal_picker_delete_requires_confirmation_before_sending_delete_goal() {
 }
 
 #[test]
-fn goal_picker_ctrl_s_running_goal_requires_confirmation_before_pause() {
+fn goal_picker_ctrl_s_running_goal_requires_confirmation_before_stop() {
     let (mut model, mut daemon_rx) = make_model();
     model
         .tasks
@@ -4132,6 +4132,14 @@ fn goal_picker_ctrl_s_running_goal_requires_confirmation_before_pause() {
 
     assert!(!quit);
     assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Stop goal run \"Goal One\"?")
+    );
 
     let quit = model.handle_key_modal(
         KeyCode::Enter,
@@ -4143,8 +4151,9 @@ fn goal_picker_ctrl_s_running_goal_requires_confirmation_before_pause() {
     assert!(matches!(
         daemon_rx.try_recv().expect("expected control-goal command"),
         DaemonCommand::ControlGoalRun { goal_run_id, action }
-            if goal_run_id == "goal-1" && action == "pause"
+            if goal_run_id == "goal-1" && action == "stop"
     ));
+    assert_eq!(model.status_line, "Stopping goal run...");
 }
 
 #[test]

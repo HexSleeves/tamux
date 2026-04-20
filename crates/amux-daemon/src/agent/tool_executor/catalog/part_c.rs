@@ -179,6 +179,7 @@ fn add_available_tools_part_c(
                     "prompt": { "type": "string", "description": "Optional analysis instruction. Defaults to a general detailed analysis." },
                     "provider": { "type": "string", "description": "Optional provider override, only when the operator explicitly specifies it" },
                     "model": { "type": "string", "description": "Optional model override, only when the operator explicitly specifies it" },
+                    "timeout_seconds": { "type": "integer", "minimum": 0, "maximum": 600, "description": "Max time to wait for completion (default: 600, max: 600)" },
                     "include_reasoning": { "type": "boolean", "description": "Include model reasoning summary when available" },
                     "include_provider_result": { "type": "boolean", "description": "Append the raw structured provider final result when available" }
                 }
@@ -201,7 +202,8 @@ fn add_available_tools_part_c(
                     "quality": { "type": "string", "description": "Optional quality hint supported by the provider" },
                     "style": { "type": "string", "description": "Optional style hint supported by the provider" },
                     "background": { "type": "string", "description": "Optional background hint supported by the provider" },
-                    "output_format": { "type": "string", "description": "Desired image format for saved bytes, e.g. png, jpg, webp" }
+                    "output_format": { "type": "string", "description": "Desired image format for saved bytes, e.g. png, jpg, webp" },
+                    "timeout_seconds": { "type": "integer", "minimum": 0, "maximum": 600, "description": "Max time to wait for completion (default: 600, max: 600)" }
                 },
                 "required": ["prompt"]
             }),
@@ -220,7 +222,8 @@ fn add_available_tools_part_c(
                 "model": { "type": "string", "description": "Optional model override, only when the operator explicitly specifies it" },
                 "language": { "type": "string", "description": "Optional language hint for the transcription model" },
                 "prompt": { "type": "string", "description": "Optional transcription prompt or vocabulary hint" },
-                "response_format": { "type": "string", "description": "Optional transcription response format such as json, verbose_json, srt, or text" }
+                "response_format": { "type": "string", "description": "Optional transcription response format such as json, verbose_json, srt, or text" },
+                "timeout_seconds": { "type": "integer", "minimum": 0, "maximum": 600, "description": "Max time to wait for completion (default: 600, max: 600)" }
             },
             "required": ["path"]
         }),
@@ -236,7 +239,8 @@ fn add_available_tools_part_c(
                 "provider": { "type": "string", "description": "Optional provider override, only when the operator explicitly specifies it" },
                 "model": { "type": "string", "description": "Optional model override, only when the operator explicitly specifies it" },
                 "voice": { "type": "string", "description": "Voice identifier supported by the provider" },
-                "response_format": { "type": "string", "description": "Desired output format such as mp3, wav, ogg, flac, or m4a" }
+                "response_format": { "type": "string", "description": "Desired output format such as mp3, wav, ogg, flac, or m4a" },
+                "timeout_seconds": { "type": "integer", "minimum": 0, "maximum": 600, "description": "Max time to wait for completion (default: 600, max: 600)" }
             },
             "required": ["input"]
         }),

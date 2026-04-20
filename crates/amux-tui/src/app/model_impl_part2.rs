@@ -509,12 +509,12 @@ impl TuiModel {
                 self.send_daemon_command(DaemonCommand::DeleteGoalRun { goal_run_id });
                 self.status_line = "Deleting goal run...".to_string();
             }
-            PendingConfirmAction::PauseGoalRun { goal_run_id, .. } => {
+            PendingConfirmAction::StopGoalRun { goal_run_id, .. } => {
                 self.send_daemon_command(DaemonCommand::ControlGoalRun {
                     goal_run_id,
-                    action: "pause".to_string(),
+                    action: "stop".to_string(),
                 });
-                self.status_line = "Pausing goal run...".to_string();
+                self.status_line = "Stopping goal run...".to_string();
             }
             PendingConfirmAction::ResumeGoalRun { goal_run_id, .. } => {
                 self.send_daemon_command(DaemonCommand::ControlGoalRun {

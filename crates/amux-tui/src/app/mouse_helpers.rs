@@ -153,6 +153,10 @@ impl TuiModel {
                 self.chat.select_message(Some(message_index));
                 self.open_chat_tool_file_preview(message_index);
             }
+            Some(chat::ChatHitTarget::MessageImage { message_index }) => {
+                self.chat.select_message(Some(message_index));
+                self.open_chat_message_image_preview(message_index);
+            }
             Some(chat::ChatHitTarget::RetryStartNow) => {
                 if let Some(thread_id) = self.chat.active_thread_id().map(str::to_string) {
                     self.retry_wait_start_selected = true;

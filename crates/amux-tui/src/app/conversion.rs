@@ -102,6 +102,33 @@ pub(super) fn convert_message(m: crate::wire::AgentMessage) -> chat::AgentMessag
             crate::wire::MessageRole::Unknown => chat::MessageRole::Unknown,
         },
         content: m.content,
+        content_blocks: m
+            .content_blocks
+            .into_iter()
+            .map(|block| match block {
+                crate::wire::AgentContentBlock::Text { text } => {
+                    chat::AgentContentBlock::Text { text }
+                }
+                crate::wire::AgentContentBlock::Image {
+                    url,
+                    data_url,
+                    mime_type,
+                } => chat::AgentContentBlock::Image {
+                    url,
+                    data_url,
+                    mime_type,
+                },
+                crate::wire::AgentContentBlock::Audio {
+                    url,
+                    data_url,
+                    mime_type,
+                } => chat::AgentContentBlock::Audio {
+                    url,
+                    data_url,
+                    mime_type,
+                },
+            })
+            .collect(),
         reasoning: m.reasoning,
         author_agent_id: m.author_agent_id,
         author_agent_name: m.author_agent_name,
@@ -211,6 +238,59 @@ pub(super) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
         reflection_summary: r.reflection_summary,
         memory_updates: r.memory_updates,
         generated_skill_path: r.generated_skill_path,
+        dossier: task::GoalRunDossier {
+            projection_state: r.dossier.projection_state,
+            projection_error: r.dossier.projection_error,
+            summary: r.dossier.summary,
+            delivery_units: r
+                .dossier
+                .delivery_units
+                .into_iter()
+                .map(|unit| task::GoalDeliveryUnit {
+                    id: unit.id,
+                    label: unit.label,
+                    summary: unit.summary,
+                    status: unit.status,
+                    kind: unit.kind,
+                    path: unit.path,
+                })
+                .collect(),
+            execution_binding_label: r.dossier.execution_binding_label,
+            verification_binding_label: r.dossier.verification_binding_label,
+            proof_checks: r
+                .dossier
+                .proof_checks
+                .into_iter()
+                .map(|check| task::GoalProofCheck {
+                    id: check.id,
+                    label: check.label,
+                    status: check.status,
+                    summary: check.summary,
+                    evidence: check.evidence,
+                })
+                .collect(),
+            evidence: r.dossier.evidence,
+            reports: r
+                .dossier
+                .reports
+                .into_iter()
+                .map(|report| task::GoalRunReport {
+                    id: report.id,
+                    title: report.title,
+                    status: report.status,
+                    summary: report.summary,
+                    details: report.details,
+                })
+                .collect(),
+            latest_resume_decision: r.dossier.latest_resume_decision.map(|decision| {
+                task::GoalResumeDecision {
+                    outcome: decision.outcome,
+                    summary: decision.summary,
+                    rationale: decision.rationale,
+                    decided_at: decision.decided_at,
+                }
+            }),
+        },
         child_task_ids: r.child_task_ids,
         loaded_step_start: r.loaded_step_start,
         loaded_step_end: r.loaded_step_end,
@@ -402,6 +482,37 @@ mod tests {
         assert!(message.is_operator_question);
         assert_eq!(message.operator_question_id.as_deref(), Some("oq-1"));
         assert_eq!(message.operator_question_answer.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn convert_thread_preserves_image_content_blocks() {
+        let thread = crate::wire::AgentThread {
+            id: "thread-1".into(),
+            title: "Thread".into(),
+            messages: vec![crate::wire::AgentMessage {
+                role: crate::wire::MessageRole::Assistant,
+                content: "Generated image.".into(),
+                content_blocks: vec![crate::wire::AgentContentBlock::Image {
+                    url: Some("file:///tmp/thread-files/generated.png".into()),
+                    data_url: None,
+                    mime_type: Some("image/png".into()),
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let converted = convert_thread(thread);
+        let message = &converted.messages[0];
+
+        assert!(matches!(
+            message.content_blocks.first(),
+            Some(chat::AgentContentBlock::Image {
+                url: Some(url),
+                mime_type: Some(mime_type),
+                ..
+            }) if url == "file:///tmp/thread-files/generated.png" && mime_type == "image/png"
+        ));
     }
 
     #[test]

@@ -618,6 +618,90 @@ fn clicking_chat_file_chip_requests_file_preview() {
     assert!(matches!(model.main_pane_view, MainPaneView::FilePreview(_)));
 }
 
+#[test]
+fn clicking_chat_image_attachment_requests_file_preview() {
+    use base64::Engine as _;
+
+    let (_daemon_tx, daemon_rx) = mpsc::channel();
+    let (cmd_tx, mut cmd_rx) = unbounded_channel();
+    let mut model = TuiModel::new(daemon_rx, cmd_tx);
+    model.show_sidebar_override = Some(false);
+    model.focus = FocusArea::Chat;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    let temp_path =
+        std::env::temp_dir().join(format!("tamux-chat-image-{}.png", uuid::Uuid::new_v4()));
+    std::fs::write(
+        &temp_path,
+        base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO0pGfcAAAAASUVORK5CYII=")
+            .expect("fixture PNG should decode"),
+    )
+    .expect("fixture PNG should write");
+    model.chat.reduce(chat::ChatAction::AppendMessage {
+        thread_id: "thread-1".to_string(),
+        message: chat::AgentMessage {
+            role: chat::MessageRole::Assistant,
+            content_blocks: vec![chat::AgentContentBlock::Image {
+                url: Some(format!("file://{}", temp_path.display())),
+                data_url: None,
+                mime_type: Some("image/png".to_string()),
+            }],
+            ..Default::default()
+        },
+    });
+
+    let input_start_row = model.height.saturating_sub(model.input_height() + 1);
+    let chat_area = Rect::new(0, 3, model.width, input_start_row.saturating_sub(3));
+    let image_pos = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+        .find_map(|row| {
+            (chat_area.x..chat_area.x.saturating_add(chat_area.width)).find_map(|column| {
+                let pos = Position::new(column, row);
+                if widgets::chat::hit_test(
+                    chat_area,
+                    &model.chat,
+                    &model.theme,
+                    model.tick_counter,
+                    pos,
+                ) == Some(chat::ChatHitTarget::MessageImage { message_index: 0 })
+                {
+                    Some(pos)
+                } else {
+                    None
+                }
+            })
+        })
+        .expect("assistant image attachment should be clickable");
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: image_pos.x,
+        row: image_pos.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: image_pos.x,
+        row: image_pos.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    match cmd_rx.try_recv() {
+        Ok(DaemonCommand::RequestFilePreview { path, max_bytes }) => {
+            assert_eq!(path, temp_path.display().to_string());
+            assert_eq!(max_bytes, Some(65_536));
+        }
+        other => panic!("expected image preview request, got {:?}", other),
+    }
+    assert!(matches!(model.main_pane_view, MainPaneView::FilePreview(_)));
+}
+
 fn spawned_thread_navigation_task(
     id: &str,
     title: &str,
@@ -1312,6 +1396,91 @@ fn task_view_renders_visible_scrollbar_when_content_overflows() {
 }
 
 #[test]
+fn goal_view_renders_goal_run_dossier_sections() {
+    fn render_task_view(model: &mut TuiModel) -> Vec<String> {
+        let backend = TestBackend::new(model.width, model.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("task view render should succeed");
+
+        let chat_area = rendered_chat_area(model);
+        let buffer = terminal.backend().buffer();
+        (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .map(|y| {
+                (chat_area.x..chat_area.x.saturating_add(chat_area.width))
+                    .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    let mut model = build_model();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+    model.task_show_live_todos = false;
+    model.task_show_timeline = false;
+    model.task_show_files = false;
+
+    model.handle_goal_run_detail_event(crate::wire::GoalRun {
+        id: "goal-1".to_string(),
+        title: "Dossier Goal".to_string(),
+        dossier: crate::wire::GoalRunDossier {
+            projection_state: Some("projected".to_string()),
+            projection_error: Some("missing fixture".to_string()),
+            delivery_units: vec![crate::wire::GoalDeliveryUnit {
+                label: "artifact".to_string(),
+                summary: Some("desktop bundle".to_string()),
+                status: Some("ready".to_string()),
+                ..Default::default()
+            }],
+            proof_checks: vec![crate::wire::GoalProofCheck {
+                label: "lint".to_string(),
+                status: Some("passed".to_string()),
+                evidence: vec!["cargo test".to_string()],
+                ..Default::default()
+            }],
+            reports: vec![crate::wire::GoalRunReport {
+                title: "Verification".to_string(),
+                summary: Some("Smoke check pending".to_string()),
+                ..Default::default()
+            }],
+            latest_resume_decision: Some(crate::wire::GoalResumeDecision {
+                outcome: Some("resume".to_string()),
+                summary: Some("Continue after manual review".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let rendered = render_task_view(&mut model).join("\n");
+    for expected in [
+        "Projection Status",
+        "projected",
+        "missing fixture",
+        "Delivery Units",
+        "artifact",
+        "Proof Coverage",
+        "cargo test",
+        "Reports",
+        "Verification",
+        "Latest Resume Decision",
+        "Continue after manual review",
+    ] {
+        assert!(
+            rendered.contains(expected),
+            "expected dossier content {expected:?} in rendered goal view:\n{rendered}"
+        );
+    }
+}
+
+#[test]
 fn work_context_view_renders_visible_scrollbar_when_preview_overflows() {
     let mut model = build_model();
     model.focus = FocusArea::Chat;
@@ -1418,5 +1587,124 @@ fn file_preview_view_renders_visible_scrollbar_when_preview_overflows() {
     assert!(
         plain.contains("│") || plain.contains("█"),
         "expected visible scrollbar in file preview view, got: {plain:?}"
+    );
+}
+
+#[test]
+fn file_preview_view_renders_image_preview_instead_of_binary_placeholder() {
+    use base64::Engine as _;
+
+    let mut model = build_model();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+
+    let image_path =
+        std::env::temp_dir().join(format!("tamux-preview-image-{}.png", uuid::Uuid::new_v4()));
+    std::fs::write(
+        &image_path,
+        base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO0pGfcAAAAASUVORK5CYII=")
+            .expect("fixture PNG should decode"),
+    )
+    .expect("fixture PNG should write");
+
+    model
+        .tasks
+        .reduce(task::TaskAction::FilePreviewReceived(task::FilePreview {
+            path: image_path.display().to_string(),
+            content: String::new(),
+            truncated: false,
+            is_text: false,
+        }));
+    model.main_pane_view = MainPaneView::FilePreview(ChatFilePreviewTarget {
+        path: image_path.display().to_string(),
+        repo_root: None,
+        repo_relative_path: None,
+    });
+
+    let backend = TestBackend::new(model.width, model.height);
+    let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+    terminal
+        .draw(|frame| model.render(frame))
+        .expect("file preview render should succeed");
+
+    let chat_area = rendered_chat_area(&model);
+    let buffer = terminal.backend().buffer();
+    let plain = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+        .flat_map(|y| {
+            (chat_area.x..chat_area.x.saturating_add(chat_area.width))
+                .filter_map(move |x| buffer.cell((x, y)).map(|cell| cell.symbol().to_string()))
+        })
+        .collect::<String>();
+
+    assert!(
+        plain.contains("Image:"),
+        "expected image preview header, got: {plain:?}"
+    );
+    assert!(
+        !plain.contains("Binary file preview is not available."),
+        "expected image preview instead of binary placeholder, got: {plain:?}"
+    );
+}
+
+#[test]
+fn file_preview_view_uses_available_height_for_image_preview() {
+    let mut model = build_model();
+    model.width = 100;
+    model.height = 40;
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+
+    let image_path =
+        std::env::temp_dir().join(format!("tamux-preview-image-{}.png", uuid::Uuid::new_v4()));
+    image::RgbaImage::from_fn(1024, 1024, |x, y| {
+        image::Rgba([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8, 255])
+    })
+    .save(&image_path)
+    .expect("fixture PNG should write");
+
+    model
+        .tasks
+        .reduce(task::TaskAction::FilePreviewReceived(task::FilePreview {
+            path: image_path.display().to_string(),
+            content: String::new(),
+            truncated: false,
+            is_text: false,
+        }));
+    model.main_pane_view = MainPaneView::FilePreview(ChatFilePreviewTarget {
+        path: image_path.display().to_string(),
+        repo_root: None,
+        repo_relative_path: None,
+    });
+
+    let backend = TestBackend::new(model.width, model.height);
+    let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+    terminal
+        .draw(|frame| model.render(frame))
+        .expect("file preview render should succeed");
+    assert!(
+        crate::widgets::image_preview::process_pending_preview_jobs_for_tests(),
+        "expected initial file preview render to queue image preview work"
+    );
+    terminal
+        .draw(|frame| model.render(frame))
+        .expect("file preview rerender should use cached image preview");
+
+    let chat_area = rendered_chat_area(&model);
+    let buffer = terminal.backend().buffer();
+    let image_rows = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+        .filter(|&y| {
+            (chat_area.x..chat_area.x.saturating_add(chat_area.width)).any(|x| {
+                buffer
+                    .cell((x, y))
+                    .map(|cell| cell.symbol() == "▀")
+                    .unwrap_or(false)
+            })
+        })
+        .count();
+
+    assert!(
+        image_rows > 20,
+        "expected image preview to use more than the old 20-row cap, got {image_rows} rows"
     );
 }

@@ -612,6 +612,53 @@ fn hit_test_returns_tool_file_path_target_for_read_skill() {
 }
 
 #[test]
+fn hit_test_returns_message_image_target_for_assistant_image_attachment() {
+    use base64::Engine as _;
+
+    let image_path = std::env::temp_dir().join(format!(
+        "tamux-inline-image-{}.png",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(
+        &image_path,
+        base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO0pGfcAAAAASUVORK5CYII=")
+            .expect("fixture PNG should decode"),
+    )
+    .expect("fixture PNG should write");
+
+    let chat = chat_with_messages(vec![AgentMessage {
+        role: MessageRole::Assistant,
+        content_blocks: vec![crate::state::chat::AgentContentBlock::Image {
+            url: Some(format!("file://{}", image_path.display())),
+            data_url: None,
+            mime_type: Some("image/png".into()),
+        }],
+        ..Default::default()
+    }]);
+
+    let area = Rect::new(0, 0, 100, 12);
+    let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0, false)
+        .expect("chat should produce visible lines");
+    let image_row = visible
+        .iter()
+        .position(|line| {
+            line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ImageAttachment)
+        })
+        .expect("image attachment row should be visible");
+
+    let hit = hit_test(
+        area,
+        &chat,
+        &ThemeTokens::default(),
+        0,
+        Position::new(inner.x.saturating_add(2), inner.y + image_row as u16),
+    );
+
+    assert_eq!(hit, Some(ChatHitTarget::MessageImage { message_index: 0 }));
+}
+
+#[test]
 fn streaming_append_preserves_locked_viewport() {
     let mut chat = ChatState::new();
     chat.reduce(ChatAction::ThreadCreated {

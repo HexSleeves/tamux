@@ -9,6 +9,7 @@ use markdown_table::{is_markdown_table_row, is_markdown_table_start, render_mark
 
 use crate::state::chat::{AgentMessage, MessageRole, TranscriptMode};
 use crate::theme::ThemeTokens;
+use crate::widgets::image_preview;
 use crate::widgets::message_operator_question::render_operator_question_message;
 use crate::widgets::tool_diff::{
     render_tool_edit_diff, render_tool_structured_json, ToolStructuredValueSource,
@@ -352,6 +353,7 @@ fn render_compact(
     lines: &mut Vec<Line<'static>>,
 ) {
     let content_width = width.max(1);
+    let image_lines = inline_image_attachment_lines(msg, content_width, theme);
 
     if msg.message_kind == "compaction_artifact" {
         let compaction_content = {
@@ -496,10 +498,10 @@ fn render_compact(
 
     let content = &msg.content;
     // Skip truly empty non-assistant messages (no content, no reasoning)
-    if content.is_empty() && msg.role != MessageRole::Assistant {
+    if content.is_empty() && image_lines.is_empty() && msg.role != MessageRole::Assistant {
         return;
     }
-    if content.is_empty() && msg.reasoning.is_none() {
+    if content.is_empty() && image_lines.is_empty() && msg.reasoning.is_none() {
         return;
     }
 
@@ -555,6 +557,21 @@ fn render_compact(
     } else {
         lines.extend(md_lines);
     }
+
+    if !image_lines.is_empty() {
+        lines.extend(image_lines);
+    }
+}
+
+fn inline_image_attachment_lines(
+    msg: &AgentMessage,
+    width: usize,
+    theme: &ThemeTokens,
+) -> Vec<Line<'static>> {
+    let Some(path) = crate::widgets::chat::message_image_preview_path(msg) else {
+        return Vec::new();
+    };
+    image_preview::render_image_preview_lines(&path, width, 12, theme)
 }
 
 fn render_tools_only(

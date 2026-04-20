@@ -13,6 +13,15 @@ pub(crate) struct ToolFileChip {
 
 pub(crate) fn tool_file_chip(message: &AgentMessage) -> Option<ToolFileChip> {
     let tool_name = message.tool_name.as_deref()?;
+    if tool_name == "generate_image" {
+        let path = generated_image_preview_path(message)?;
+        let label = file_name_label(&path);
+        return Some(ToolFileChip {
+            path,
+            label,
+            tool_name: tool_name.to_string(),
+        });
+    }
     if tool_name == "read_skill" {
         let path = read_skill_preview_path(message)?;
         let label = file_name_label(&path);
@@ -53,6 +62,28 @@ pub(crate) fn tool_file_chip(message: &AgentMessage) -> Option<ToolFileChip> {
         path,
         label,
         tool_name: tool_name.to_string(),
+    })
+}
+
+pub(crate) fn message_image_preview_path(message: &AgentMessage) -> Option<String> {
+    message.content_blocks.iter().find_map(|block| match block {
+        crate::state::chat::AgentContentBlock::Image { url, data_url, .. } => url
+            .as_deref()
+            .and_then(crate::widgets::image_preview::resolve_local_image_path)
+            .or_else(|| {
+                data_url
+                    .as_deref()
+                    .and_then(crate::widgets::image_preview::resolve_local_image_path)
+            }),
+        _ => None,
+    })
+}
+
+fn generated_image_preview_path(message: &AgentMessage) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(&message.content).ok()?;
+    non_empty_string_field(&value, "path").or_else(|| {
+        non_empty_string_field(&value, "file_url")
+            .and_then(|value| crate::widgets::image_preview::resolve_local_image_path(&value))
     })
 }
 
@@ -208,6 +239,7 @@ pub struct SelectionPoint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RenderedLineKind {
     MessageBody,
+    ImageAttachment,
     ReasoningToggle,
     ReasoningContent,
     ToolToggle,
@@ -542,6 +574,12 @@ fn classify_message_lines(
     expanded_tools: &std::collections::HashSet<usize>,
 ) -> Vec<RenderedLineKind> {
     let content_width = padded_content_width(width);
+    let image_line_count = message_image_preview_path(msg)
+        .map(|path| {
+            crate::widgets::image_preview::render_image_preview_lines(&path, content_width, 12, &ThemeTokens::default())
+                .len()
+        })
+        .unwrap_or(0);
 
     match mode {
         TranscriptMode::Tools => {
@@ -597,10 +635,10 @@ fn classify_message_lines(
                 return kinds;
             }
 
-            if msg.content.is_empty() && msg.role != MessageRole::Assistant {
+            if msg.content.is_empty() && image_line_count == 0 && msg.role != MessageRole::Assistant {
                 return Vec::new();
             }
-            if msg.content.is_empty() && msg.reasoning.is_none() {
+            if msg.content.is_empty() && image_line_count == 0 && msg.reasoning.is_none() {
                 return Vec::new();
             }
 
@@ -638,9 +676,18 @@ fn classify_message_lines(
                     RenderedLineKind::MessageBody,
                     content_lines,
                 ));
+                kinds.extend(std::iter::repeat_n(
+                    RenderedLineKind::ImageAttachment,
+                    image_line_count,
+                ));
                 kinds
             } else {
-                vec![RenderedLineKind::MessageBody; content_lines.max(1)]
+                let mut kinds = vec![RenderedLineKind::MessageBody; content_lines.max(1)];
+                kinds.extend(std::iter::repeat_n(
+                    RenderedLineKind::ImageAttachment,
+                    image_line_count,
+                ));
+                kinds
             }
         }
     }

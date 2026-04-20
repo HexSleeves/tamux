@@ -369,7 +369,10 @@ impl TuiModel {
         };
 
         let resolved_path = Self::resolve_preview_path(&chip.path);
-        let show_plain_preview = matches!(chip.tool_name.as_str(), "read_file" | "read_skill");
+        let show_plain_preview = matches!(
+            chip.tool_name.as_str(),
+            "read_file" | "read_skill" | "generate_image"
+        );
         let repo_root = if show_plain_preview {
             None
         } else {
@@ -401,6 +404,32 @@ impl TuiModel {
             });
         }
 
+        self.main_pane_view = MainPaneView::FilePreview(target);
+        self.task_view_scroll = 0;
+        self.focus = FocusArea::Chat;
+    }
+
+    pub(super) fn open_chat_message_image_preview(&mut self, message_index: usize) {
+        let Some(message) = self
+            .chat
+            .active_thread()
+            .and_then(|thread| thread.messages.get(message_index))
+        else {
+            return;
+        };
+        let Some(path) = widgets::chat::message_image_preview_path(message) else {
+            return;
+        };
+
+        let target = ChatFilePreviewTarget {
+            path,
+            repo_root: None,
+            repo_relative_path: None,
+        };
+        self.send_daemon_command(DaemonCommand::RequestFilePreview {
+            path: target.path.clone(),
+            max_bytes: Some(65_536),
+        });
         self.main_pane_view = MainPaneView::FilePreview(target);
         self.task_view_scroll = 0;
         self.focus = FocusArea::Chat;
@@ -484,7 +513,7 @@ impl TuiModel {
             | Some(task::GoalRunStatus::Planning)
             | Some(task::GoalRunStatus::Running)
             | Some(task::GoalRunStatus::AwaitingApproval) => {
-                Some(PendingConfirmAction::PauseGoalRun {
+                Some(PendingConfirmAction::StopGoalRun {
                     goal_run_id: run.id.clone(),
                     title,
                 })

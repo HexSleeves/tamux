@@ -67,6 +67,9 @@ fn merge_message_pair(
     match (existing, incoming) {
         (Some(existing), Some(incoming)) => {
             let mut merged = incoming.clone();
+            if merged.content_blocks.is_empty() && !existing.content_blocks.is_empty() {
+                merged.content_blocks = existing.content_blocks.clone();
+            }
             if !existing.actions.is_empty() && merged.actions.is_empty() {
                 merged.actions = existing.actions.clone();
             }

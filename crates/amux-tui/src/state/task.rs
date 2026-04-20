@@ -87,6 +87,7 @@ pub struct GoalRun {
     pub reflection_summary: Option<String>,
     pub memory_updates: Vec<String>,
     pub generated_skill_path: Option<String>,
+    pub dossier: GoalRunDossier,
     pub child_task_ids: Vec<String>,
     pub loaded_step_start: usize,
     pub loaded_step_end: usize,
@@ -100,6 +101,56 @@ pub struct GoalRun {
     pub events: Vec<GoalRunEvent>,
     pub created_at: u64,
     pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GoalRunDossier {
+    pub projection_state: Option<String>,
+    pub projection_error: Option<String>,
+    pub summary: Option<String>,
+    pub delivery_units: Vec<GoalDeliveryUnit>,
+    pub execution_binding_label: Option<String>,
+    pub verification_binding_label: Option<String>,
+    pub proof_checks: Vec<GoalProofCheck>,
+    pub evidence: Vec<String>,
+    pub reports: Vec<GoalRunReport>,
+    pub latest_resume_decision: Option<GoalResumeDecision>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GoalDeliveryUnit {
+    pub id: String,
+    pub label: String,
+    pub summary: Option<String>,
+    pub status: Option<String>,
+    pub kind: Option<String>,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GoalProofCheck {
+    pub id: String,
+    pub label: String,
+    pub status: Option<String>,
+    pub summary: Option<String>,
+    pub evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GoalRunReport {
+    pub id: String,
+    pub title: String,
+    pub status: Option<String>,
+    pub summary: Option<String>,
+    pub details: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GoalResumeDecision {
+    pub outcome: Option<String>,
+    pub summary: Option<String>,
+    pub rationale: Option<String>,
+    pub decided_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -400,7 +451,23 @@ impl TaskState {
             }
 
             TaskAction::GoalRunListReceived(runs) => {
-                self.goal_runs = runs.into_iter().map(normalize_goal_run_ranges).collect();
+                let existing_runs = self
+                    .goal_runs
+                    .drain(..)
+                    .map(|run| (run.id.clone(), run))
+                    .collect::<std::collections::HashMap<_, _>>();
+                self.goal_runs = runs
+                    .into_iter()
+                    .map(normalize_goal_run_ranges)
+                    .map(|run| {
+                        if let Some(mut existing) = existing_runs.get(&run.id).cloned() {
+                            merge_goal_run(&mut existing, run);
+                            existing
+                        } else {
+                            run
+                        }
+                    })
+                    .collect();
             }
 
             TaskAction::GoalRunDetailReceived(run) | TaskAction::GoalRunUpdate(run) => {
@@ -639,6 +706,7 @@ fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun) {
     existing.reflection_summary = incoming.reflection_summary;
     existing.memory_updates = incoming.memory_updates;
     existing.generated_skill_path = incoming.generated_skill_path;
+    merge_goal_run_dossier(&mut existing.dossier, incoming.dossier);
     existing.child_task_ids = incoming.child_task_ids;
     existing.created_at = incoming.created_at;
     existing.updated_at = incoming.updated_at;
@@ -671,6 +739,64 @@ fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun) {
 
     existing.older_page_pending = false;
     existing.older_page_request_cooldown_until_tick = older_page_request_cooldown_until_tick;
+}
+
+fn merge_goal_run_dossier(existing: &mut GoalRunDossier, incoming: GoalRunDossier) {
+    if incoming.projection_state.is_some() {
+        existing.projection_state = incoming.projection_state;
+    }
+    if incoming.projection_error.is_some() {
+        existing.projection_error = incoming.projection_error;
+    }
+    if incoming.summary.is_some() {
+        existing.summary = incoming.summary;
+    }
+    if incoming.execution_binding_label.is_some() {
+        existing.execution_binding_label = incoming.execution_binding_label;
+    }
+    if incoming.verification_binding_label.is_some() {
+        existing.verification_binding_label = incoming.verification_binding_label;
+    }
+    if !incoming.delivery_units.is_empty() {
+        existing.delivery_units = incoming.delivery_units;
+    }
+    if !incoming.proof_checks.is_empty() {
+        existing.proof_checks = incoming.proof_checks;
+    }
+    if !incoming.evidence.is_empty() {
+        existing.evidence = incoming.evidence;
+    }
+    if !incoming.reports.is_empty() {
+        existing.reports = incoming.reports;
+    }
+    if let Some(incoming_decision) = incoming.latest_resume_decision {
+        existing.latest_resume_decision = Some(merge_resume_decision(
+            existing.latest_resume_decision.as_ref(),
+            incoming_decision,
+        ));
+    }
+}
+
+fn merge_resume_decision(
+    existing: Option<&GoalResumeDecision>,
+    mut incoming: GoalResumeDecision,
+) -> GoalResumeDecision {
+    let Some(existing) = existing else {
+        return incoming;
+    };
+    if incoming.outcome.is_none() {
+        incoming.outcome = existing.outcome.clone();
+    }
+    if incoming.summary.is_none() {
+        incoming.summary = existing.summary.clone();
+    }
+    if incoming.rationale.is_none() {
+        incoming.rationale = existing.rationale.clone();
+    }
+    if incoming.decided_at.is_none() {
+        incoming.decided_at = existing.decided_at;
+    }
+    incoming
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

@@ -77,6 +77,27 @@
     }
 
     #[test]
+    fn daemon_tool_timeout_uses_600_seconds_for_heavy_media_tools() {
+        for tool_name in [
+            "analyze_image",
+            "generate_image",
+            "speech_to_text",
+            "text_to_speech",
+        ] {
+            assert_eq!(
+                default_timeout_seconds_for_tool(tool_name),
+                600,
+                "{tool_name} should default to a long timeout"
+            );
+            assert_eq!(
+                daemon_tool_timeout_seconds(tool_name, &serde_json::json!({})),
+                600,
+                "{tool_name} should inherit the long timeout"
+            );
+        }
+    }
+
+    #[test]
     fn daemon_tool_timeout_clamps_explicit_override_to_600_seconds() {
         assert_eq!(
             daemon_tool_timeout_seconds(

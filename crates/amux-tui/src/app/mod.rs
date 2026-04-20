@@ -130,7 +130,7 @@ enum PendingConfirmAction {
     StopThread { thread_id: String, title: String },
     ResumeThread { thread_id: String, title: String },
     DeleteGoalRun { goal_run_id: String, title: String },
-    PauseGoalRun { goal_run_id: String, title: String },
+    StopGoalRun { goal_run_id: String, title: String },
     ResumeGoalRun { goal_run_id: String, title: String },
     ReuseModelAsStt { model_id: String },
 }
@@ -156,8 +156,8 @@ impl PendingConfirmAction {
             PendingConfirmAction::DeleteGoalRun { title, .. } => {
                 format!("Delete goal run \"{title}\"?")
             }
-            PendingConfirmAction::PauseGoalRun { title, .. } => {
-                format!("Pause goal run \"{title}\"?")
+            PendingConfirmAction::StopGoalRun { title, .. } => {
+                format!("Stop goal run \"{title}\"?")
             }
             PendingConfirmAction::ResumeGoalRun { title, .. } => {
                 format!("Resume goal run \"{title}\"?")

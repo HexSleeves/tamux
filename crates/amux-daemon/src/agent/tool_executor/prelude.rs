@@ -88,6 +88,7 @@ struct FetchUrlRequest {
 fn default_timeout_seconds_for_tool(tool_name: &str) -> u64 {
     match tool_name {
         "onecontext_search" | "fetch_url" | "web_search" => 300,
+        "analyze_image" | "generate_image" | "speech_to_text" | "text_to_speech" => 600,
         _ => DEFAULT_DAEMON_TOOL_TIMEOUT_SECS,
     }
 }
