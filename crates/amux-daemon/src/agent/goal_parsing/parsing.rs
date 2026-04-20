@@ -22,6 +22,20 @@ pub(crate) fn goal_plan_json_schema() -> serde_json::Value {
                         "instructions": { "type": "string" },
                         "kind": { "type": "string", "enum": ["reason", "command", "research", "memory", "skill", "divergent", "debate"] },
                         "success_criteria": { "type": "string" },
+                        "execution_binding": { "type": ["string", "null"] },
+                        "verification_binding": { "type": ["string", "null"] },
+                        "proof_checks": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string" },
+                                    "title": { "type": "string" },
+                                    "summary": { "type": ["string", "null"] }
+                                },
+                                "additionalProperties": false
+                            }
+                        },
                         "session_id": { "type": ["string", "null"] },
                         "llm_confidence": { "type": ["string", "null"] },
                         "llm_confidence_rationale": { "type": ["string", "null"] }
@@ -100,6 +114,9 @@ pub(crate) fn parse_markdown_steps<T: serde::de::DeserializeOwned>(raw: &str) ->
             "instructions": instructions,
             "kind": kind,
             "success_criteria": criteria.trim_end_matches('.'),
+            "execution_binding": null,
+            "verification_binding": null,
+            "proof_checks": [],
             "session_id": null,
             "llm_confidence": null,
             "llm_confidence_rationale": null,

@@ -619,3 +619,86 @@ async fn low_confidence_plan_gate_creates_task_backed_approval_that_can_be_resol
     assert_eq!(resolved_task.status, TaskStatus::Completed);
     assert!(resolved_task.awaiting_approval_id.is_none());
 }
+
+#[tokio::test]
+async fn plan_goal_run_populates_dossier_units_and_proof_checks() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let recorded_bodies =
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+    let mut config = AgentConfig::default();
+    config.provider = "openai".to_string();
+    config.base_url = crate::agent::tests::spawn_goal_recording_server(
+        recorded_bodies,
+        serde_json::json!({
+            "title": "Titan first slice",
+            "summary": "Build the first validated slice.",
+            "steps": [
+                {
+                    "title": "Create the Android shell",
+                    "instructions": "Create the app shell and wire the first screen.",
+                    "kind": "command",
+                    "success_criteria": "shell builds successfully",
+                    "execution_binding": "builtin:swarog",
+                    "verification_binding": "subagent:android-verifier",
+                    "proof_checks": [
+                        {
+                            "id": "proof-build-debug",
+                            "title": "assembleDebug passes",
+                            "summary": "Run the Android debug build successfully."
+                        }
+                    ],
+                    "session_id": null,
+                    "llm_confidence": "likely",
+                    "llm_confidence_rationale": "bounded first slice"
+                }
+            ],
+            "rejected_alternatives": []
+        })
+        .to_string(),
+    )
+    .await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let goal_run_id = "goal-dossier-plan";
+    let mut goal_run = sample_goal_run_with_kind(
+        goal_run_id,
+        GoalRunStepKind::Command,
+        "Create the Android shell",
+    );
+    goal_run.status = GoalRunStatus::Queued;
+    goal_run.steps.clear();
+    goal_run.current_step_index = 0;
+    goal_run.current_step_title = None;
+    goal_run.current_step_kind = None;
+    engine.goal_runs.lock().await.push_back(goal_run);
+
+    engine
+        .plan_goal_run(goal_run_id)
+        .await
+        .expect("planning should succeed");
+
+    let updated_goal = engine
+        .get_goal_run(goal_run_id)
+        .await
+        .expect("goal run should exist");
+    let dossier = updated_goal.dossier.expect("dossier should be populated");
+    assert_eq!(dossier.units.len(), 1);
+    assert_eq!(dossier.units[0].title, "[LOW] Create the Android shell");
+    assert_eq!(
+        dossier.units[0].execution_binding,
+        GoalRoleBinding::Builtin("swarog".to_string())
+    );
+    assert_eq!(
+        dossier.units[0].verification_binding,
+        GoalRoleBinding::Subagent("android-verifier".to_string())
+    );
+    assert_eq!(dossier.units[0].proof_checks.len(), 1);
+    assert_eq!(dossier.units[0].proof_checks[0].id, "proof-build-debug");
+}

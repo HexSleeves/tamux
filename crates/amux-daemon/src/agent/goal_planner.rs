@@ -7,6 +7,38 @@ mod finalization_impl;
 #[path = "goal_planner/progress.rs"]
 mod progress_impl;
 
+fn parse_goal_role_binding(raw: Option<&str>, fallback: GoalRoleBinding) -> GoalRoleBinding {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return fallback;
+    };
+    if let Some(value) = raw.strip_prefix("builtin:") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return GoalRoleBinding::Builtin(value.to_string());
+        }
+    }
+    if let Some(value) = raw.strip_prefix("subagent:") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return GoalRoleBinding::Subagent(value.to_string());
+        }
+    }
+    fallback
+}
+
+fn default_execution_binding(kind: &GoalRunStepKind) -> GoalRoleBinding {
+    match kind {
+        GoalRunStepKind::Specialist(role) if !role.trim().is_empty() => {
+            GoalRoleBinding::Subagent(role.clone())
+        }
+        _ => GoalRoleBinding::Builtin(crate::agent::agent_identity::MAIN_AGENT_ID.to_string()),
+    }
+}
+
+fn default_verification_binding() -> GoalRoleBinding {
+    GoalRoleBinding::Builtin(crate::agent::agent_identity::MAIN_AGENT_ID.to_string())
+}
+
 impl AgentEngine {
     pub(super) async fn plan_goal_run(&self, goal_run_id: &str) -> Result<()> {
         let goal_run = self
@@ -50,12 +82,33 @@ impl AgentEngine {
                 current.title = title.trim().to_string();
             }
             current.plan_summary = Some(plan.summary.clone());
+            let planned_units = plan
+                .steps
+                .iter()
+                .enumerate()
+                .map(|(_position, step)| GoalDeliveryUnit {
+                    id: format!("goal_step_{}", Uuid::new_v4()),
+                    title: step.title.clone(),
+                    status: GoalProjectionState::Pending,
+                    execution_binding: parse_goal_role_binding(
+                        step.execution_binding.as_deref(),
+                        default_execution_binding(&step.kind),
+                    ),
+                    verification_binding: parse_goal_role_binding(
+                        step.verification_binding.as_deref(),
+                        default_verification_binding(),
+                    ),
+                    summary: Some(step.success_criteria.clone()),
+                    proof_checks: step.proof_checks.clone(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>();
             current.steps = plan
                 .steps
                 .into_iter()
                 .enumerate()
                 .map(|(position, step)| GoalRunStep {
-                    id: format!("goal_step_{}", Uuid::new_v4()),
+                    id: planned_units[position].id.clone(),
                     position,
                     title: step.title,
                     instructions: step.instructions,
@@ -79,6 +132,12 @@ impl AgentEngine {
             current.failure_cause = None;
             current.awaiting_approval_id = None;
             current.active_task_id = None;
+            let mut dossier = current.dossier.clone().unwrap_or_default();
+            dossier.units = planned_units;
+            dossier.summary = current.plan_summary.clone();
+            dossier.projection_state = GoalProjectionState::InProgress;
+            dossier.projection_error = None;
+            current.dossier = Some(dossier);
             current.events.push(make_goal_run_event(
                 "planning",
                 "goal plan generated",

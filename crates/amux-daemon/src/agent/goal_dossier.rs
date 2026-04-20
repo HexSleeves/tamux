@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 mod projection;
 
@@ -40,7 +41,7 @@ fn summary_for_goal_run(goal_run: &GoalRun) -> String {
         .unwrap_or_else(|| goal_run.goal.clone())
 }
 
-fn unit_from_step(step: &GoalRunStep) -> GoalDeliveryUnit {
+fn default_unit_from_step(step: &GoalRunStep) -> GoalDeliveryUnit {
     GoalDeliveryUnit {
         id: step.id.clone(),
         title: step.title.clone(),
@@ -58,7 +59,27 @@ fn unit_from_step(step: &GoalRunStep) -> GoalDeliveryUnit {
 
 pub(super) fn refresh_goal_run_dossier(goal_run: &mut GoalRun) {
     let mut dossier = goal_run.dossier.clone().unwrap_or_default();
-    dossier.units = goal_run.steps.iter().map(unit_from_step).collect();
+    let existing_units = dossier
+        .units
+        .iter()
+        .cloned()
+        .map(|unit| (unit.id.clone(), unit))
+        .collect::<HashMap<_, _>>();
+    dossier.units = goal_run
+        .steps
+        .iter()
+        .map(|step| {
+            let mut unit = existing_units
+                .get(&step.id)
+                .cloned()
+                .unwrap_or_else(|| default_unit_from_step(step));
+            unit.id = step.id.clone();
+            unit.title = step.title.clone();
+            unit.status = projection_state_for_step(step.status);
+            unit.summary = step.summary.clone().or(unit.summary);
+            unit
+        })
+        .collect();
     dossier.projection_state = projection_state_for_goal_run(goal_run);
     dossier.summary = Some(summary_for_goal_run(goal_run));
     dossier.projection_error = None;

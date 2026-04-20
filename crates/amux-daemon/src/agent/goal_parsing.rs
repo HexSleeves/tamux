@@ -43,6 +43,12 @@ pub(super) struct GoalPlanStepResponse {
     #[serde(default, alias = "_criteria", alias = "criteria")]
     pub success_criteria: String,
     #[serde(default)]
+    pub execution_binding: Option<String>,
+    #[serde(default)]
+    pub verification_binding: Option<String>,
+    #[serde(default)]
+    pub proof_checks: Vec<GoalProofCheck>,
+    #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
     pub llm_confidence: Option<String>,
@@ -116,6 +122,9 @@ pub(super) fn apply_plan_defaults(plan: &mut GoalPlanResponse) {
             instructions: plan.summary.clone(),
             kind: GoalRunStepKind::Command,
             success_criteria: "Step completed".to_string(),
+            execution_binding: None,
+            verification_binding: None,
+            proof_checks: Vec::new(),
             session_id: None,
             llm_confidence: None,
             llm_confidence_rationale: None,
@@ -135,6 +144,16 @@ pub(super) fn apply_plan_defaults(plan: &mut GoalPlanResponse) {
         step.title = step.title.trim().to_string();
         step.instructions = step.instructions.trim().to_string();
         step.success_criteria = step.success_criteria.trim().to_string();
+        step.execution_binding = step
+            .execution_binding
+            .take()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        step.verification_binding = step
+            .verification_binding
+            .take()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         step.session_id = step
             .session_id
             .take()
@@ -150,6 +169,16 @@ pub(super) fn apply_plan_defaults(plan: &mut GoalPlanResponse) {
             .take()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
+        for (proof_index, proof_check) in step.proof_checks.iter_mut().enumerate() {
+            proof_check.id = proof_check.id.trim().to_string();
+            proof_check.title = proof_check.title.trim().to_string();
+            if proof_check.id.is_empty() {
+                proof_check.id = format!("proof-{}-{}", i + 1, proof_index + 1);
+            }
+            if proof_check.title.is_empty() {
+                proof_check.title = format!("Proof check {}", proof_index + 1);
+            }
+        }
         if step.title.is_empty() {
             step.title = format!("Step {}", i + 1);
         }
