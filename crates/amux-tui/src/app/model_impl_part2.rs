@@ -630,6 +630,23 @@ impl TuiModel {
         }
     }
 
+    fn cancel_chat_action_confirm(&mut self) {
+        let clears_runtime_confirmation = self
+            .pending_chat_action_confirm
+            .as_ref()
+            .is_some_and(|pending| {
+                matches!(
+                    pending,
+                    PendingConfirmAction::ReuseModelAsStt { model_id }
+                        if model_id.starts_with("__mission_control__:")
+                )
+            });
+        self.close_chat_action_confirm();
+        if clears_runtime_confirmation {
+            self.goal_mission_control.clear_runtime_change();
+        }
+    }
+
     fn request_regenerate_message(&mut self, index: usize) {
         self.open_pending_action_confirm(PendingConfirmAction::RegenerateMessage {
             message_index: index,

@@ -912,7 +912,7 @@ impl TuiModel {
         if kind == modal::ModalKind::ChatActionConfirm {
             match code {
                 KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
-                    self.close_chat_action_confirm();
+                    self.cancel_chat_action_confirm();
                 }
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::Tab => {
                     self.chat_action_confirm_accept_selected =
@@ -989,7 +989,7 @@ impl TuiModel {
                             self.confirm_pending_chat_action();
                         }
                     } else {
-                        self.close_chat_action_confirm();
+                        self.cancel_chat_action_confirm();
                     }
                 }
                 _ => {}
