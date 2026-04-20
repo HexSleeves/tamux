@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 fn env_lock_cell() -> &'static Mutex<()> {
@@ -10,6 +11,15 @@ pub(crate) fn env_test_lock() -> MutexGuard<'static, ()> {
     env_lock_cell()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+pub(crate) fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("daemon crate dir")
+        .parent()
+        .expect("workspace root")
+        .to_path_buf()
 }
 
 pub(crate) struct EnvGuard {
