@@ -101,6 +101,35 @@ fn goal_sidebar_model() -> TuiModel {
                 },
             ],
         });
+    model.tasks.reduce(task::TaskAction::ThreadTodosReceived {
+        thread_id: "thread-1".to_string(),
+        items: vec![
+            task::TodoItem {
+                id: "todo-1".to_string(),
+                content: "Draft outline".to_string(),
+                status: Some(task::TodoStatus::InProgress),
+                step_index: Some(0),
+                position: 0,
+                ..Default::default()
+            },
+            task::TodoItem {
+                id: "todo-2".to_string(),
+                content: "Verify sources".to_string(),
+                status: Some(task::TodoStatus::Pending),
+                step_index: Some(0),
+                position: 1,
+                ..Default::default()
+            },
+            task::TodoItem {
+                id: "todo-3".to_string(),
+                content: "Run checks".to_string(),
+                status: Some(task::TodoStatus::Pending),
+                step_index: Some(2),
+                position: 0,
+                ..Default::default()
+            },
+        ],
+    });
     model.tasks.reduce(task::TaskAction::WorkContextReceived(
         task::ThreadWorkContext {
             thread_id: "thread-1".to_string(),
@@ -262,7 +291,7 @@ fn goal_sidebar_row_selection_clamps_per_active_tab() {
 }
 
 #[test]
-fn goal_run_render_keeps_task_view_in_chat_pane_and_goal_sidebar_in_sidebar_slot() {
+fn goal_run_render_uses_full_workspace_without_legacy_goal_sidebar_tabs() {
     let mut model = goal_sidebar_model();
 
     let backend = TestBackend::new(model.width, model.height);
@@ -273,10 +302,6 @@ fn goal_run_render_keeps_task_view_in_chat_pane_and_goal_sidebar_in_sidebar_slot
 
     let buffer = terminal.backend().buffer();
     let chat_area = rendered_chat_area(&model);
-    let sidebar_area = model
-        .pane_layout()
-        .sidebar
-        .expect("default layout should include sidebar");
 
     let chat_plain = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
         .map(|y| {
@@ -286,68 +311,75 @@ fn goal_run_render_keeps_task_view_in_chat_pane_and_goal_sidebar_in_sidebar_slot
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let sidebar_plain = (sidebar_area.y..sidebar_area.y.saturating_add(sidebar_area.height))
-        .map(|y| {
-            (sidebar_area.x..sidebar_area.x.saturating_add(sidebar_area.width))
-                .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
 
     assert!(
-        chat_plain.contains("Goal Definition") && chat_plain.contains("goal definition body"),
-        "expected goal task view content in chat pane, got: {chat_plain}"
+        chat_plain.contains("Plan")
+            && chat_plain.contains("Run timeline")
+            && chat_plain.contains("Details"),
+        "expected full goal workspace content in main pane, got: {chat_plain}"
     );
     assert!(
-        sidebar_plain.contains("Steps")
-            && sidebar_plain.contains("Checkpoint")
-            && sidebar_plain.contains("Tasks")
-            && sidebar_plain.contains("Files"),
-        "expected dedicated goal sidebar tabs in sidebar slot, got: {sidebar_plain}"
+        !chat_plain.contains("Checkpoints")
+            && !chat_plain.contains("Tasks")
+            && !chat_plain.contains("Files"),
+        "expected legacy goal sidebar labels to be absent, got: {chat_plain}"
+    );
+    assert!(
+        model.pane_layout().sidebar.is_none(),
+        "goal workspace should take the full content width"
     );
 }
 
 #[test]
-fn sidebar_goal_keyboard_navigation_uses_goal_sidebar_state() {
+fn goal_workspace_keyboard_navigation_uses_plan_state() {
     let mut model = goal_sidebar_model();
+    model.focus = FocusArea::Chat;
 
     let handled = model.handle_key(KeyCode::Right, KeyModifiers::NONE);
     assert!(!handled);
-    assert_eq!(model.goal_sidebar.active_tab(), GoalSidebarTab::Checkpoints);
-
-    let handled = model.handle_key(KeyCode::Right, KeyModifiers::NONE);
-    assert!(!handled);
-    assert_eq!(model.goal_sidebar.active_tab(), GoalSidebarTab::Tasks);
+    assert!(model.goal_workspace.is_step_expanded("step-1"));
 
     let handled = model.handle_key(KeyCode::Down, KeyModifiers::NONE);
     assert!(!handled);
-    assert_eq!(model.goal_sidebar.selected_row(), 1);
-    assert_eq!(model.sidebar.selected_item(), 0);
+    assert_eq!(model.goal_workspace.selected_plan_row(), 1);
+    assert_eq!(
+        model.goal_workspace.selected_plan_item(),
+        Some(&goal_workspace::GoalPlanSelection::Todo {
+            step_id: "step-1".to_string(),
+            todo_id: "todo-1".to_string(),
+        })
+    );
 
     let handled = model.handle_key(KeyCode::Left, KeyModifiers::NONE);
     assert!(!handled);
-    assert_eq!(model.goal_sidebar.active_tab(), GoalSidebarTab::Checkpoints);
-    assert_eq!(model.goal_sidebar.selected_row(), 0);
+    assert_eq!(model.goal_workspace.selected_plan_row(), 0);
+    assert_eq!(
+        model.goal_workspace.selected_plan_item(),
+        Some(&goal_workspace::GoalPlanSelection::Step {
+            step_id: "step-1".to_string(),
+        })
+    );
 }
 
 #[test]
-fn selected_goal_step_sidebar_click_syncs_main_goal_detail_selection() {
+fn selected_goal_step_workspace_click_syncs_main_goal_detail_selection() {
     let mut model = goal_sidebar_model();
-
-    let sidebar_area = model
-        .pane_layout()
-        .sidebar
-        .expect("default layout should include a sidebar");
+    let chat_area = rendered_chat_area(&model);
     model.handle_mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: sidebar_area.x.saturating_add(3),
-        row: sidebar_area.y.saturating_add(2),
+        column: chat_area.x.saturating_add(2),
+        row: chat_area.y.saturating_add(6),
+        modifiers: KeyModifiers::NONE,
+    });
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: chat_area.x.saturating_add(2),
+        row: chat_area.y.saturating_add(6),
         modifiers: KeyModifiers::NONE,
     });
 
     assert_eq!(model.focus, FocusArea::Chat);
-    assert_eq!(model.goal_sidebar.selected_row(), 1);
+    assert_eq!(model.goal_workspace.selected_plan_row(), 1);
     assert!(matches!(
         model.main_pane_view,
         MainPaneView::Task(SidebarItemTarget::GoalRun {
@@ -739,31 +771,36 @@ fn esc_from_goal_run_keeps_user_in_goals_view() {
         model.main_pane_view,
         MainPaneView::Task(SidebarItemTarget::GoalRun { ref goal_run_id, .. }) if goal_run_id == "goal-1"
     ));
-    assert_eq!(model.focus, FocusArea::Sidebar);
+    assert_eq!(model.focus, FocusArea::Chat);
 }
 
 #[test]
-fn sidebar_goal_mouse_wheel_moves_goal_sidebar_selection() {
+fn goal_workspace_mouse_wheel_scrolls_plan_rows() {
     let mut model = goal_sidebar_model();
-    model.goal_sidebar.cycle_tab_right();
-    model.goal_sidebar.cycle_tab_right();
+    if let Some(run) = model.tasks.goal_run_by_id_mut("goal-1") {
+        run.steps = (1..=60)
+            .map(|idx| task::GoalRunStep {
+                id: format!("step-{idx}"),
+                title: format!("Step {idx}"),
+                order: idx - 1,
+                ..Default::default()
+            })
+            .collect();
+    }
+    model.focus = FocusArea::Chat;
 
-    let sidebar_area = model
-        .pane_layout()
-        .sidebar
-        .expect("default layout should include a sidebar");
+    let chat_area = model.pane_layout().chat;
 
     model.handle_mouse(MouseEvent {
         kind: MouseEventKind::ScrollDown,
-        column: sidebar_area.x.saturating_add(2),
-        row: sidebar_area.y.saturating_add(3),
+        column: chat_area.x.saturating_add(2),
+        row: chat_area.y.saturating_add(6),
         modifiers: KeyModifiers::NONE,
     });
 
-    assert_eq!(model.focus, FocusArea::Sidebar);
-    assert_eq!(model.goal_sidebar.active_tab(), GoalSidebarTab::Tasks);
-    assert_eq!(model.goal_sidebar.selected_row(), 1);
-    assert_eq!(model.sidebar.selected_item(), 0);
+    assert_eq!(model.focus, FocusArea::Chat);
+    assert!(model.pane_layout().sidebar.is_none());
+    assert_eq!(model.goal_workspace.plan_scroll(), 3);
 }
 
 #[test]

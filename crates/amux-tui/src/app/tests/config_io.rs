@@ -5,7 +5,7 @@ use amux_shared::providers::{
     PROVIDER_ID_OPENROUTER,
 };
 use rusqlite::Connection;
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex, OnceLock};
 use tempfile::tempdir;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -13,6 +13,38 @@ fn make_model() -> TuiModel {
     let (_client_tx, client_rx) = mpsc::channel();
     let (daemon_tx, _daemon_rx) = unbounded_channel();
     TuiModel::new(client_rx, daemon_tx)
+}
+
+fn home_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct HomeEnvGuard {
+    original_home: Option<String>,
+}
+
+impl HomeEnvGuard {
+    fn set(path: &std::path::Path) -> Self {
+        let original_home = std::env::var("HOME").ok();
+        unsafe {
+            std::env::set_var("HOME", path);
+        }
+        Self { original_home }
+    }
+}
+
+impl Drop for HomeEnvGuard {
+    fn drop(&mut self) {
+        match self.original_home.take() {
+            Some(value) => unsafe {
+                std::env::set_var("HOME", value);
+            },
+            None => unsafe {
+                std::env::remove_var("HOME");
+            },
+        }
+    }
 }
 
 fn make_model_with_daemon_rx() -> (
@@ -480,6 +512,7 @@ fn build_config_patch_value_round_trips_disabled_snapshot_retention() {
 
 #[test]
 fn refresh_snapshot_stats_reads_daemon_snapshot_index_db() {
+    let _lock = home_env_lock().lock().expect("home env lock");
     let home = tempdir().expect("tempdir");
     let tamux_dir = home.path().join(".tamux");
     let history_dir = tamux_dir.join("history");
@@ -508,29 +541,18 @@ fn refresh_snapshot_stats_reads_daemon_snapshot_index_db() {
     )
     .expect("insert snapshot b");
 
-    let original_home = std::env::var("HOME").ok();
-    unsafe {
-        std::env::set_var("HOME", home.path());
-    }
+    let _home_guard = HomeEnvGuard::set(home.path());
 
     let mut model = make_model();
     model.load_saved_settings();
 
     assert_eq!(model.config.snapshot_count, 2);
     assert_eq!(model.config.snapshot_total_size_bytes, 384);
-
-    match original_home {
-        Some(value) => unsafe {
-            std::env::set_var("HOME", value);
-        },
-        None => unsafe {
-            std::env::remove_var("HOME");
-        },
-    }
 }
 
 #[test]
 fn refresh_snapshot_stats_ignores_stale_snapshot_index_rows() {
+    let _lock = home_env_lock().lock().expect("home env lock");
     let home = tempdir().expect("tempdir");
     let tamux_dir = home.path().join(".tamux");
     let history_dir = tamux_dir.join("history");
@@ -558,25 +580,13 @@ fn refresh_snapshot_stats_ignores_stale_snapshot_index_rows() {
     )
     .expect("insert missing snapshot row");
 
-    let original_home = std::env::var("HOME").ok();
-    unsafe {
-        std::env::set_var("HOME", home.path());
-    }
+    let _home_guard = HomeEnvGuard::set(home.path());
 
     let mut model = make_model();
     model.load_saved_settings();
 
     assert_eq!(model.config.snapshot_count, 1);
     assert_eq!(model.config.snapshot_total_size_bytes, 128);
-
-    match original_home {
-        Some(value) => unsafe {
-            std::env::set_var("HOME", value);
-        },
-        None => unsafe {
-            std::env::remove_var("HOME");
-        },
-    }
 }
 
 #[test]

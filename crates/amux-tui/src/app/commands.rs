@@ -260,6 +260,184 @@ impl TuiModel {
             .unwrap_or(0)
     }
 
+    pub(super) fn goal_workspace_plan_items(
+        &self,
+    ) -> Vec<crate::state::goal_workspace::GoalPlanSelection> {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return Vec::new();
+        };
+
+        let mut items = Vec::new();
+        for step in self.tasks.goal_steps_in_display_order(goal_run_id) {
+            items.push(crate::state::goal_workspace::GoalPlanSelection::Step {
+                step_id: step.id.clone(),
+            });
+            if self.goal_workspace.is_step_expanded(&step.id) {
+                for todo in self.tasks.goal_step_todos(goal_run_id, step.order as usize) {
+                    items.push(crate::state::goal_workspace::GoalPlanSelection::Todo {
+                        step_id: step.id.clone(),
+                        todo_id: todo.id,
+                    });
+                }
+            }
+        }
+        items
+    }
+
+    pub(super) fn sync_goal_workspace_selection_for_active_goal_pane(&mut self) {
+        let items = self.goal_workspace_plan_items();
+        if items.is_empty() {
+            self.goal_workspace.set_selected_plan_row(0);
+            self.goal_workspace.set_selected_plan_item(None);
+            self.goal_workspace.set_plan_scroll(0);
+            return;
+        }
+
+        let current_step_selection = match &self.main_pane_view {
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+                step_id: Some(step_id),
+                ..
+            }) => Some(crate::state::goal_workspace::GoalPlanSelection::Step {
+                step_id: step_id.clone(),
+            }),
+            _ => None,
+        };
+
+        let target = self
+            .goal_workspace
+            .selected_plan_item()
+            .cloned()
+            .filter(|item| items.contains(item))
+            .or_else(|| current_step_selection.filter(|item| items.contains(item)))
+            .unwrap_or_else(|| items[0].clone());
+
+        let row = items.iter().position(|item| *item == target).unwrap_or(0);
+        self.goal_workspace.set_selected_plan_row(row);
+        self.goal_workspace.set_selected_plan_item(Some(target));
+        self.clamp_goal_workspace_plan_scroll_to_selection();
+    }
+
+    pub(super) fn select_goal_workspace_plan_item(
+        &mut self,
+        item: crate::state::goal_workspace::GoalPlanSelection,
+    ) -> bool {
+        let step_id = match &item {
+            crate::state::goal_workspace::GoalPlanSelection::Step { step_id }
+            | crate::state::goal_workspace::GoalPlanSelection::Todo { step_id, .. } => {
+                step_id.clone()
+            }
+        };
+        let changed = self.select_goal_step_in_active_run(step_id);
+        let items = self.goal_workspace_plan_items();
+        let row = items.iter().position(|candidate| candidate == &item).unwrap_or(0);
+        self.goal_workspace.set_selected_plan_row(row);
+        self.goal_workspace.set_selected_plan_item(Some(item));
+        self.clamp_goal_workspace_plan_scroll_to_selection();
+        changed
+    }
+
+    pub(super) fn clamp_goal_workspace_plan_scroll_to_selection(&mut self) {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return;
+        };
+
+        let area = self.pane_layout().chat;
+        let viewport_height = {
+            let layout = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(4), Constraint::Min(1)])
+                .split(area);
+            let columns = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(40),
+                    Constraint::Percentage(32),
+                    Constraint::Min(24),
+                ])
+                .split(layout[1]);
+            Block::default().borders(Borders::ALL).inner(columns[0]).height as usize
+        };
+        if viewport_height == 0 {
+            self.goal_workspace.set_plan_scroll(0);
+            return;
+        }
+
+        let max_scroll = widgets::goal_workspace::max_plan_scroll(
+            area,
+            &self.tasks,
+            goal_run_id,
+            &self.goal_workspace,
+        );
+        let selected_row = self.goal_workspace.selected_plan_row();
+        let current_scroll = self.goal_workspace.plan_scroll().min(max_scroll);
+        let next_scroll = if selected_row < current_scroll {
+            selected_row
+        } else if selected_row >= current_scroll.saturating_add(viewport_height) {
+            selected_row
+                .saturating_add(1)
+                .saturating_sub(viewport_height)
+        } else {
+            current_scroll
+        };
+        self.goal_workspace
+            .set_plan_scroll(next_scroll.min(max_scroll));
+    }
+
+    pub(super) fn step_goal_workspace_plan_selection(&mut self, delta: i32) -> bool {
+        self.sync_goal_workspace_selection_for_active_goal_pane();
+        let items = self.goal_workspace_plan_items();
+        if items.is_empty() {
+            return false;
+        }
+        let current = self.goal_workspace.selected_plan_row().min(items.len() - 1);
+        let next = if delta >= 0 {
+            (current + delta as usize).min(items.len() - 1)
+        } else {
+            current.saturating_sub((-delta) as usize)
+        };
+        self.select_goal_workspace_plan_item(items[next].clone())
+    }
+
+    pub(super) fn expand_selected_goal_workspace_step(&mut self) -> bool {
+        self.sync_goal_workspace_selection_for_active_goal_pane();
+        let Some(selection) = self.goal_workspace.selected_plan_item().cloned() else {
+            return false;
+        };
+        let crate::state::goal_workspace::GoalPlanSelection::Step { step_id } = selection else {
+            return false;
+        };
+        self.goal_workspace.set_step_expanded(step_id, true);
+        self.sync_goal_workspace_selection_for_active_goal_pane();
+        true
+    }
+
+    pub(super) fn collapse_goal_workspace_selection(&mut self) -> bool {
+        self.sync_goal_workspace_selection_for_active_goal_pane();
+        let Some(selection) = self.goal_workspace.selected_plan_item().cloned() else {
+            return false;
+        };
+        match selection {
+            crate::state::goal_workspace::GoalPlanSelection::Step { step_id } => {
+                if self.goal_workspace.is_step_expanded(&step_id) {
+                    self.goal_workspace.set_step_expanded(step_id, false);
+                    self.sync_goal_workspace_selection_for_active_goal_pane();
+                    true
+                } else {
+                    false
+                }
+            }
+            crate::state::goal_workspace::GoalPlanSelection::Todo { step_id, .. } => {
+                self.select_goal_workspace_plan_item(
+                    crate::state::goal_workspace::GoalPlanSelection::Step { step_id },
+                )
+            }
+        }
+    }
+
     pub(super) fn step_goal_sidebar_tab(&mut self, delta: i32) {
         if delta < 0 {
             self.goal_sidebar.cycle_tab_left();
@@ -1404,10 +1582,12 @@ impl TuiModel {
         self.clear_task_view_drag_selection();
         if let sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. } = &target {
             self.request_authoritative_goal_run_refresh(goal_run_id.clone());
+            self.goal_workspace.set_plan_scroll(0);
         }
         self.request_task_view_context(&target);
         self.main_pane_view = MainPaneView::Task(target);
         self.reconcile_goal_sidebar_selection_for_active_goal_pane();
+        self.sync_goal_workspace_selection_for_active_goal_pane();
         self.task_view_scroll = 0;
     }
 
@@ -1470,6 +1650,7 @@ impl TuiModel {
             step_id: Some(step.id.clone()),
         });
         self.reconcile_goal_sidebar_selection_for_active_goal_pane();
+        self.sync_goal_workspace_selection_for_active_goal_pane();
         self.status_line = format!("Selected step {}: {}", step_order + 1, step_title);
         true
     }

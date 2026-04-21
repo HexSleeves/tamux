@@ -1292,39 +1292,52 @@ impl TuiModel {
                     &self.theme,
                     self.focus == FocusArea::Chat,
                 ),
-                MainPaneView::Task(target) => widgets::task_view::render(
-                    frame,
-                    layout.chat,
-                    &self.tasks,
-                    target,
-                    &self.theme,
-                    self.focus == FocusArea::Chat,
-                    self.task_view_scroll,
-                    self.task_show_live_todos,
-                    self.task_show_timeline,
-                    self.task_show_files,
-                    self.tick_counter,
-                    self.task_view_drag_anchor_point
-                        .zip(self.task_view_drag_current_point)
-                        .or_else(|| {
-                            self.task_view_drag_anchor.and_then(|anchor| {
-                                self.task_view_drag_current.and_then(|current| {
-                                    widgets::task_view::selection_points_from_mouse(
-                                        layout.chat,
-                                        &self.tasks,
-                                        target,
-                                        &self.theme,
-                                        self.task_view_scroll,
-                                        self.task_show_live_todos,
-                                        self.task_show_timeline,
-                                        self.task_show_files,
-                                        anchor,
-                                        current,
-                                    )
-                                })
-                            })
-                        }),
-                ),
+                MainPaneView::Task(target) => {
+                    if let SidebarItemTarget::GoalRun { goal_run_id, .. } = target {
+                        widgets::goal_workspace::render(
+                            frame,
+                            layout.chat,
+                            &self.tasks,
+                            goal_run_id,
+                            &self.goal_workspace,
+                            &self.theme,
+                        );
+                    } else {
+                        widgets::task_view::render(
+                            frame,
+                            layout.chat,
+                            &self.tasks,
+                            target,
+                            &self.theme,
+                            self.focus == FocusArea::Chat,
+                            self.task_view_scroll,
+                            self.task_show_live_todos,
+                            self.task_show_timeline,
+                            self.task_show_files,
+                            self.tick_counter,
+                            self.task_view_drag_anchor_point
+                                .zip(self.task_view_drag_current_point)
+                                .or_else(|| {
+                                    self.task_view_drag_anchor.and_then(|anchor| {
+                                        self.task_view_drag_current.and_then(|current| {
+                                            widgets::task_view::selection_points_from_mouse(
+                                                layout.chat,
+                                                &self.tasks,
+                                                target,
+                                                &self.theme,
+                                                self.task_view_scroll,
+                                                self.task_show_live_todos,
+                                                self.task_show_timeline,
+                                                self.task_show_files,
+                                                anchor,
+                                                current,
+                                            )
+                                        })
+                                    })
+                                }),
+                        );
+                    }
+                }
                 MainPaneView::WorkContext => widgets::work_context_view::render(
                     frame,
                     layout.chat,
@@ -1415,39 +1428,52 @@ impl TuiModel {
                     &self.theme,
                     self.focus == FocusArea::Chat,
                 ),
-                MainPaneView::Task(target) => widgets::task_view::render(
-                    frame,
-                    layout.chat,
-                    &self.tasks,
-                    target,
-                    &self.theme,
-                    self.focus == FocusArea::Chat,
-                    self.task_view_scroll,
-                    self.task_show_live_todos,
-                    self.task_show_timeline,
-                    self.task_show_files,
-                    self.tick_counter,
-                    self.task_view_drag_anchor_point
-                        .zip(self.task_view_drag_current_point)
-                        .or_else(|| {
-                            self.task_view_drag_anchor.and_then(|anchor| {
-                                self.task_view_drag_current.and_then(|current| {
-                                    widgets::task_view::selection_points_from_mouse(
-                                        layout.chat,
-                                        &self.tasks,
-                                        target,
-                                        &self.theme,
-                                        self.task_view_scroll,
-                                        self.task_show_live_todos,
-                                        self.task_show_timeline,
-                                        self.task_show_files,
-                                        anchor,
-                                        current,
-                                    )
-                                })
-                            })
-                        }),
-                ),
+                MainPaneView::Task(target) => {
+                    if let SidebarItemTarget::GoalRun { goal_run_id, .. } = target {
+                        widgets::goal_workspace::render(
+                            frame,
+                            layout.chat,
+                            &self.tasks,
+                            goal_run_id,
+                            &self.goal_workspace,
+                            &self.theme,
+                        );
+                    } else {
+                        widgets::task_view::render(
+                            frame,
+                            layout.chat,
+                            &self.tasks,
+                            target,
+                            &self.theme,
+                            self.focus == FocusArea::Chat,
+                            self.task_view_scroll,
+                            self.task_show_live_todos,
+                            self.task_show_timeline,
+                            self.task_show_files,
+                            self.tick_counter,
+                            self.task_view_drag_anchor_point
+                                .zip(self.task_view_drag_current_point)
+                                .or_else(|| {
+                                    self.task_view_drag_anchor.and_then(|anchor| {
+                                        self.task_view_drag_current.and_then(|current| {
+                                            widgets::task_view::selection_points_from_mouse(
+                                                layout.chat,
+                                                &self.tasks,
+                                                target,
+                                                &self.theme,
+                                                self.task_view_scroll,
+                                                self.task_show_live_todos,
+                                                self.task_show_timeline,
+                                                self.task_show_files,
+                                                anchor,
+                                                current,
+                                            )
+                                        })
+                                    })
+                                }),
+                        );
+                    }
+                }
                 MainPaneView::WorkContext => widgets::work_context_view::render(
                     frame,
                     layout.chat,

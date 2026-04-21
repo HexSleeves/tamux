@@ -209,10 +209,14 @@ fn goal_view_drag_selection_copies_beyond_visible_window() {
         .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
             id: "goal-1".to_string(),
             title: "Large Goal".to_string(),
-            goal: (1..=80)
-                .map(|idx| format!("goal line {idx}"))
-                .collect::<Vec<_>>()
-                .join("\n"),
+            steps: (1..=80)
+                .map(|idx| task::GoalRunStep {
+                    id: format!("step-{idx}"),
+                    title: format!("Step {idx}"),
+                    order: idx - 1,
+                    ..Default::default()
+                })
+                .collect(),
             ..Default::default()
         }));
     model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
@@ -221,27 +225,28 @@ fn goal_view_drag_selection_copies_beyond_visible_window() {
     });
 
     let chat_area = rendered_chat_area(&model);
-    let start_row = chat_area.y.saturating_add(4);
+    let start_row = chat_area.y.saturating_add(6);
+    let start_col = chat_area.x.saturating_add(4);
 
     super::conversion::reset_last_copied_text();
 
     model.handle_mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 3,
+        column: start_col,
         row: start_row,
         modifiers: KeyModifiers::NONE,
     });
     for _ in 0..4 {
         model.handle_mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
-            column: 3,
+            column: start_col,
             row: start_row,
             modifiers: KeyModifiers::NONE,
         });
     }
     model.handle_mouse(MouseEvent {
         kind: MouseEventKind::Up(MouseButton::Left),
-        column: 3,
+        column: start_col,
         row: start_row,
         modifiers: KeyModifiers::NONE,
     });
@@ -249,7 +254,7 @@ fn goal_view_drag_selection_copies_beyond_visible_window() {
     let copied = super::conversion::last_copied_text()
         .expect("dragging across goal view content should copy selected text");
     assert!(
-        copied.contains("goal line"),
+        copied.contains("Step"),
         "expected goal selection to include goal text, got: {copied:?}"
     );
     assert_eq!(model.status_line, "Copied selection to clipboard");
@@ -1341,49 +1346,15 @@ fn goal_view_renders_goal_run_dossier_sections() {
             id: "goal-1".to_string(),
             title: "Instrument Titan".to_string(),
             goal: "Ship the first dossier-aware goal view.".to_string(),
+            steps: vec![task::GoalRunStep {
+                id: "step-1".to_string(),
+                title: "Phone logging flow".to_string(),
+                order: 0,
+                ..Default::default()
+            }],
             dossier: Some(task::GoalRunDossier {
                 projection_state: "in_progress".to_string(),
                 summary: Some("Execution is split into build and verification units.".to_string()),
-                latest_resume_decision: Some(task::GoalResumeDecisionRecord {
-                    action: "advance".to_string(),
-                    reason_code: "proof_pending".to_string(),
-                    reason: Some("Verification is queued before the next unit.".to_string()),
-                    details: vec!["Validator binding resolved to builtin:weles".to_string()],
-                    projection_state: "in_progress".to_string(),
-                    ..Default::default()
-                }),
-                report: Some(task::GoalRunReportRecord {
-                    summary: "Goal is moving forward with verifier handoff.".to_string(),
-                    state: "in_progress".to_string(),
-                    ..Default::default()
-                }),
-                units: vec![task::GoalDeliveryUnitRecord {
-                    id: "unit-1".to_string(),
-                    title: "Phone logging flow".to_string(),
-                    status: "completed".to_string(),
-                    execution_binding: "builtin:android".to_string(),
-                    verification_binding: "subagent:validator".to_string(),
-                    summary: Some("Compose UI writes the expected payload.".to_string()),
-                    proof_checks: vec![task::GoalProofCheckRecord {
-                        id: "proof-1".to_string(),
-                        title: "Flow emits MQTT payload".to_string(),
-                        state: "completed".to_string(),
-                        summary: Some("Observed payload matches contract.".to_string()),
-                        ..Default::default()
-                    }],
-                    evidence: vec![task::GoalEvidenceRecord {
-                        id: "ev-1".to_string(),
-                        title: "mqtt.log".to_string(),
-                        summary: Some("Captured matching payload from verifier run.".to_string()),
-                        ..Default::default()
-                    }],
-                    report: Some(task::GoalRunReportRecord {
-                        summary: "Implementation and proof completed.".to_string(),
-                        state: "completed".to_string(),
-                        notes: vec!["Verifier consumed builtin:weles binding".to_string()],
-                        ..Default::default()
-                    }),
-                }],
                 ..Default::default()
             }),
             ..Default::default()
@@ -1395,17 +1366,12 @@ fn goal_view_renders_goal_run_dossier_sections() {
 
     let plain = render_task_view(&mut model);
 
-    assert!(plain.contains("Execution Dossier"), "{plain}");
-    assert!(plain.contains("Delivery Units"), "{plain}");
-    assert!(plain.contains("Proof Coverage"), "{plain}");
-    assert!(plain.contains("Reports"), "{plain}");
-    assert!(plain.contains("Resume Decision"), "{plain}");
+    assert!(plain.contains("Goal Mission Control"), "{plain}");
+    assert!(plain.contains("Plan"), "{plain}");
+    assert!(plain.contains("Run timeline"), "{plain}");
+    assert!(plain.contains("Details"), "{plain}");
     assert!(plain.contains("Phone logging flow"), "{plain}");
-    assert!(plain.contains("execute via builtin:android"), "{plain}");
-    assert!(
-        plain.contains("Verifier consumed builtin:weles binding"),
-        "{plain}"
-    );
+    assert!(!plain.contains("Execution Dossier"), "{plain}");
 }
 
 #[test]
@@ -1467,12 +1433,11 @@ fn goal_view_renders_goal_control_hints() {
 
     let plain = render_task_view(&mut model);
 
-    assert!(plain.contains("Controls"), "{plain}");
-    assert!(plain.contains("▶ Resume"), "{plain}");
-    assert!(plain.contains("☰ Actions"), "{plain}");
-    assert!(plain.contains("✦ Mission Control"), "{plain}");
-    assert!(plain.contains("↻ Retry step"), "{plain}");
-    assert!(plain.contains("⟲ Rerun from here"), "{plain}");
+    assert!(plain.contains("Goal Mission Control"), "{plain}");
+    assert!(plain.contains("Goal"), "{plain}");
+    assert!(plain.contains("Progress"), "{plain}");
+    assert!(plain.contains("Active agent"), "{plain}");
+    assert!(plain.contains("Needs attention"), "{plain}");
 }
 
 #[test]
@@ -1535,14 +1500,11 @@ fn goal_view_renders_visual_status_banner_and_control_chips() {
 
     let plain = render_task_view(&mut model);
 
-    assert!(plain.contains("Run Status"), "{plain}");
-    assert!(plain.contains("⏸ PAUSED"), "{plain}");
-    assert!(plain.contains("Current focus"), "{plain}");
-    assert!(plain.contains("Controls"), "{plain}");
-    assert!(plain.contains("▶ Resume"), "{plain}");
-    assert!(plain.contains("☰ Actions"), "{plain}");
-    assert!(plain.contains("↻ Retry step"), "{plain}");
-    assert!(plain.contains("⟲ Rerun from here"), "{plain}");
+    assert!(plain.contains("Goal Mission Control"), "{plain}");
+    assert!(plain.contains("Plan"), "{plain}");
+    assert!(plain.contains("Implement"), "{plain}");
+    assert!(!plain.contains("Run Status"), "{plain}");
+    assert!(!plain.contains("Controls"), "{plain}");
 }
 
 #[test]
@@ -1629,18 +1591,30 @@ fn goal_view_renders_live_activity_with_tools_files_and_todos() {
             }],
         },
     ));
+    model.tasks.reduce(task::TaskAction::ThreadTodosReceived {
+        thread_id: "thread-1".to_string(),
+        items: vec![task::TodoItem {
+            id: "todo-1".to_string(),
+            content: "Inspect failing test".to_string(),
+            status: Some(task::TodoStatus::InProgress),
+            step_index: Some(0),
+            position: 0,
+            ..Default::default()
+        }],
+    });
     model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
         goal_run_id: "goal-1".to_string(),
         step_id: None,
     });
+    model.goal_workspace.set_step_expanded("step-1", true);
 
     let plain = render_task_view(&mut model);
 
-    assert!(plain.contains("Live Activity"), "{plain}");
-    assert!(plain.contains("apply_patch"), "{plain}");
+    assert!(plain.contains("Run timeline"), "{plain}");
+    assert!(plain.contains("apply_patch updated goal view"), "{plain}");
     assert!(plain.contains("goal todo updated"), "{plain}");
     assert!(plain.contains("Inspect failing test"), "{plain}");
-    assert!(plain.contains("task_view.rs"), "{plain}");
+    assert!(plain.contains("crates/amux-tui/src/widgets/task"), "{plain}");
 }
 
 #[test]
@@ -1673,34 +1647,10 @@ fn goal_view_related_tasks_use_status_checkbox_without_duplicate_status_text() {
 
     model
         .tasks
-        .reduce(task::TaskAction::TaskListReceived(vec![
-            task::AgentTask {
-                id: "task-1".to_string(),
-                title: "Collect and index sources".to_string(),
-                goal_run_id: Some("goal-1".to_string()),
-                status: Some(task::TaskStatus::InProgress),
-                ..Default::default()
-            },
-            task::AgentTask {
-                id: "task-2".to_string(),
-                title: "Ground the user's background".to_string(),
-                goal_run_id: Some("goal-1".to_string()),
-                status: Some(task::TaskStatus::Completed),
-                ..Default::default()
-            },
-            task::AgentTask {
-                id: "task-3".to_string(),
-                title: "Review plan".to_string(),
-                goal_run_id: Some("goal-1".to_string()),
-                status: Some(task::TaskStatus::Blocked),
-                ..Default::default()
-            },
-        ]));
-    model
-        .tasks
         .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
             id: "goal-1".to_string(),
             title: "Goal".to_string(),
+            thread_id: Some("thread-1".to_string()),
             steps: vec![task::GoalRunStep {
                 id: "step-1".to_string(),
                 title: "Step".to_string(),
@@ -1709,10 +1659,40 @@ fn goal_view_related_tasks_use_status_checkbox_without_duplicate_status_text() {
             }],
             ..Default::default()
         }));
+    model.tasks.reduce(task::TaskAction::ThreadTodosReceived {
+        thread_id: "thread-1".to_string(),
+        items: vec![
+            task::TodoItem {
+                id: "todo-1".to_string(),
+                content: "Collect and index sources".to_string(),
+                status: Some(task::TodoStatus::InProgress),
+                step_index: Some(0),
+                position: 0,
+                ..Default::default()
+            },
+            task::TodoItem {
+                id: "todo-2".to_string(),
+                content: "Ground the user's background".to_string(),
+                status: Some(task::TodoStatus::Completed),
+                step_index: Some(0),
+                position: 1,
+                ..Default::default()
+            },
+            task::TodoItem {
+                id: "todo-3".to_string(),
+                content: "Review plan".to_string(),
+                status: Some(task::TodoStatus::Blocked),
+                step_index: Some(0),
+                position: 2,
+                ..Default::default()
+            },
+        ],
+    });
     model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
         goal_run_id: "goal-1".to_string(),
         step_id: None,
     });
+    model.goal_workspace.set_step_expanded("step-1", true);
 
     let plain = render_task_view(&mut model);
 
@@ -1774,9 +1754,9 @@ fn goal_view_paused_restart_renders_review_guidance() {
 
     let plain = render_task_view(&mut model);
 
-    assert!(plain.contains("Review here"), "{plain}");
-    assert!(plain.contains("Ctrl+S"), "{plain}");
-    assert!(plain.contains("Actions"), "{plain}");
+    assert!(plain.contains("Run timeline"), "{plain}");
+    assert!(plain.contains("Daemon restarted; goal run paused"), "{plain}");
+    assert!(plain.contains("operator review."), "{plain}");
 }
 
 #[test]

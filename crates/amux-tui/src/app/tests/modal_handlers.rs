@@ -4686,9 +4686,9 @@ fn sidebar_goal_enter_opens_selected_child_task() {
     model.goal_sidebar.cycle_tab_right();
     model.goal_sidebar.navigate(1, 2);
 
-    let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+    let handled = model.handle_goal_sidebar_enter();
 
-    assert!(!handled);
+    assert!(handled);
     assert_eq!(model.focus, FocusArea::Chat);
     assert!(matches!(
         model.main_pane_view,
@@ -4705,9 +4705,9 @@ fn sidebar_goal_enter_skips_stale_child_task_ids() {
     model.goal_sidebar.cycle_tab_right();
     model.goal_sidebar.cycle_tab_right();
 
-    let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+    let handled = model.handle_goal_sidebar_enter();
 
-    assert!(!handled);
+    assert!(handled);
     assert_eq!(model.focus, FocusArea::Chat);
     assert!(matches!(
         model.main_pane_view,
@@ -4723,9 +4723,9 @@ fn sidebar_goal_enter_opens_selected_work_context_file() {
     model.goal_sidebar.cycle_tab_right();
     model.goal_sidebar.navigate(1, 2);
 
-    let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+    let handled = model.handle_goal_sidebar_enter();
 
-    assert!(!handled);
+    assert!(handled);
     assert_eq!(model.focus, FocusArea::Chat);
     assert!(matches!(model.main_pane_view, MainPaneView::WorkContext));
     assert_eq!(
@@ -4739,9 +4739,9 @@ fn sidebar_goal_enter_checkpoint_with_step_index_selects_goal_step() {
     let (mut model, _daemon_rx) = seed_goal_sidebar_model();
     model.goal_sidebar.cycle_tab_right();
 
-    let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+    let handled = model.handle_goal_sidebar_enter();
 
-    assert!(!handled);
+    assert!(handled);
     assert_eq!(model.focus, FocusArea::Chat);
     assert!(matches!(
         model.main_pane_view,
@@ -4758,7 +4758,7 @@ fn sidebar_goal_enter_checkpoint_without_step_index_is_non_destructive() {
     model.goal_sidebar.cycle_tab_right();
     model.goal_sidebar.navigate(1, 2);
 
-    let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+    let handled = model.handle_goal_sidebar_enter();
 
     assert!(!handled);
     assert_eq!(model.focus, FocusArea::Sidebar);
