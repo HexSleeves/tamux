@@ -48,8 +48,8 @@ pub fn render(
         .split(layout[1]);
 
     render_plan(frame, columns[0], tasks, goal_run_id, state, theme);
-    render_placeholder(frame, columns[1], " Run timeline ", "Live run events will render here.", theme);
-    render_placeholder(frame, columns[2], " Details ", "Selected step details will render here.", theme);
+    render_timeline(frame, columns[1], tasks, goal_run_id, theme);
+    render_details(frame, columns[2], tasks, goal_run_id, state, theme);
 }
 
 pub fn hit_test(
@@ -156,6 +156,111 @@ fn render_placeholder(
         Paragraph::new(body).style(theme.fg_dim).wrap(Wrap { trim: false }),
         inner,
     );
+}
+
+fn render_timeline(
+    frame: &mut Frame,
+    area: Rect,
+    tasks: &TaskState,
+    goal_run_id: &str,
+    theme: &ThemeTokens,
+) {
+    let block = Block::default().title(" Run timeline ").borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines = Vec::new();
+    if let Some(run) = tasks.goal_run_by_id(goal_run_id) {
+        if run.events.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "Waiting for run events.",
+                theme.fg_dim,
+            )));
+        } else {
+            for event in run.events.iter().rev().take(inner.height as usize) {
+                let label = if event.message.trim().is_empty() {
+                    "event".to_string()
+                } else {
+                    event.message.clone()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("• ", theme.accent_secondary),
+                    Span::styled(label, theme.fg_active),
+                ]));
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled("No timeline available.", theme.fg_dim)));
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn render_details(
+    frame: &mut Frame,
+    area: Rect,
+    tasks: &TaskState,
+    goal_run_id: &str,
+    state: &GoalWorkspaceState,
+    theme: &ThemeTokens,
+) {
+    let block = Block::default().title(" Details ").borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let selected_step = state
+        .selected_plan_item()
+        .and_then(|selection| match selection {
+            crate::state::goal_workspace::GoalPlanSelection::Step { step_id }
+            | crate::state::goal_workspace::GoalPlanSelection::Todo { step_id, .. } => Some(step_id.as_str()),
+        })
+        .and_then(|step_id| {
+            tasks.goal_steps_in_display_order(goal_run_id)
+                .into_iter()
+                .find(|step| step.id == step_id)
+        })
+        .or_else(|| tasks.goal_steps_in_display_order(goal_run_id).into_iter().next());
+
+    let mut lines = Vec::new();
+    if let Some(step) = selected_step {
+        lines.push(Line::from(vec![
+            Span::styled("Selected ", theme.fg_dim),
+            Span::styled(step.title.clone(), theme.fg_active),
+        ]));
+        for checkpoint in tasks
+            .goal_step_checkpoints(goal_run_id, step.order as usize)
+            .into_iter()
+            .take(2)
+        {
+            lines.push(Line::from(vec![
+                Span::styled("checkpoint ", theme.fg_dim),
+                Span::styled(checkpoint.checkpoint_type.clone(), theme.fg_active),
+            ]));
+        }
+        if let Some(run) = tasks.goal_run_by_id(goal_run_id) {
+            if let Some(thread_id) = run.thread_id.as_deref() {
+                for entry in tasks
+                    .goal_step_files(goal_run_id, thread_id, step.order as usize)
+                    .into_iter()
+                    .take(2)
+                {
+                    lines.push(Line::from(vec![
+                        Span::styled("file ", theme.fg_dim),
+                        Span::styled(entry.path.clone(), theme.fg_active),
+                    ]));
+                }
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No step details selected.",
+            theme.fg_dim,
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 #[cfg(test)]

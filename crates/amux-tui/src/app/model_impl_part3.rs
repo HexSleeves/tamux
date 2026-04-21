@@ -48,7 +48,7 @@ impl TuiModel {
             self.main_pane_view,
             MainPaneView::Task(SidebarItemTarget::GoalRun { .. })
         ) {
-            return true;
+            return false;
         }
         if !matches!(
             self.main_pane_view,

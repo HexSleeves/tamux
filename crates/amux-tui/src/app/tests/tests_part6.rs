@@ -262,7 +262,7 @@ fn goal_sidebar_row_selection_clamps_per_active_tab() {
 }
 
 #[test]
-fn goal_run_render_keeps_task_view_in_chat_pane_and_goal_sidebar_in_sidebar_slot() {
+fn goal_run_render_uses_full_workspace_without_legacy_goal_sidebar_tabs() {
     let mut model = goal_sidebar_model();
 
     let backend = TestBackend::new(model.width, model.height);
@@ -273,10 +273,6 @@ fn goal_run_render_keeps_task_view_in_chat_pane_and_goal_sidebar_in_sidebar_slot
 
     let buffer = terminal.backend().buffer();
     let chat_area = rendered_chat_area(&model);
-    let sidebar_area = model
-        .pane_layout()
-        .sidebar
-        .expect("default layout should include sidebar");
 
     let chat_plain = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
         .map(|y| {
@@ -286,25 +282,22 @@ fn goal_run_render_keeps_task_view_in_chat_pane_and_goal_sidebar_in_sidebar_slot
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let sidebar_plain = (sidebar_area.y..sidebar_area.y.saturating_add(sidebar_area.height))
-        .map(|y| {
-            (sidebar_area.x..sidebar_area.x.saturating_add(sidebar_area.width))
-                .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
 
     assert!(
-        chat_plain.contains("Goal Definition") && chat_plain.contains("goal definition body"),
-        "expected goal task view content in chat pane, got: {chat_plain}"
+        chat_plain.contains("Plan")
+            && chat_plain.contains("Run timeline")
+            && chat_plain.contains("Details"),
+        "expected full goal workspace content in main pane, got: {chat_plain}"
     );
     assert!(
-        sidebar_plain.contains("Steps")
-            && sidebar_plain.contains("Checkpoint")
-            && sidebar_plain.contains("Tasks")
-            && sidebar_plain.contains("Files"),
-        "expected dedicated goal sidebar tabs in sidebar slot, got: {sidebar_plain}"
+        !chat_plain.contains("Checkpoints")
+            && !chat_plain.contains("Tasks")
+            && !chat_plain.contains("Files"),
+        "expected legacy goal sidebar labels to be absent, got: {chat_plain}"
+    );
+    assert!(
+        model.pane_layout().sidebar.is_none(),
+        "goal workspace should take the full content width"
     );
 }
 
