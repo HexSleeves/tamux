@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::commands::GoalActionPickerItem;
 use amux_shared::providers::{AudioToolKind, PROVIDER_ID_CUSTOM};
 
 pub(super) fn begin_custom_model_edit(model: &mut TuiModel) {
@@ -160,22 +161,27 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                     model.status_line = "Playgrounds are created automatically".to_string();
                     return;
                 }
+                if thread_picker_tab == modal::ThreadPickerTab::Gateway {
+                    model.status_line = "Gateway threads are created automatically".to_string();
+                    return;
+                }
                 model.close_top_modal();
                 model.input.reduce(input::InputAction::Clear);
-                model.start_new_thread_view_for_agent(TuiModel::thread_picker_target_agent_id(
-                    thread_picker_tab,
-                ));
+                let target_agent_id = TuiModel::thread_picker_target_agent_id(thread_picker_tab);
+                model.start_new_thread_view_for_agent(target_agent_id.as_deref());
                 model.status_line = "New conversation".to_string();
-            } else if let Some((tid, title)) =
-                widgets::thread_picker::filtered_threads(&model.chat, &model.modal)
-                    .get(cursor - 1)
-                    .map(|thread| {
-                        (
-                            thread.id.clone(),
-                            widgets::thread_picker::thread_display_title(thread),
-                        )
-                    })
-            {
+            } else if let Some((tid, title)) = widgets::thread_picker::filtered_threads(
+                &model.chat,
+                &model.modal,
+                &model.subagents,
+            )
+            .get(cursor - 1)
+            .map(|thread| {
+                (
+                    thread.id.clone(),
+                    widgets::thread_picker::thread_display_title(thread),
+                )
+            }) {
                 model.close_top_modal();
                 model.input.reduce(input::InputAction::Clear);
                 model.open_thread_conversation(tid);
@@ -204,6 +210,103 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                 model.status_line = "No goals available".to_string();
             }
         }
+        modal::ModalKind::GoalStepActionPicker => {
+            let cursor = model.modal.picker_cursor();
+            let items = model.goal_action_picker_items();
+            model.close_top_modal();
+            match items.get(cursor).copied() {
+                Some(GoalActionPickerItem::PauseGoal) => {
+                    if !model.request_selected_goal_run_toggle_confirmation() {
+                        model.status_line = "Goal action is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::ResumeGoal) => {
+                    if !model.request_selected_goal_run_toggle_confirmation() {
+                        model.status_line = "Goal action is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::StopGoal) => {
+                    if !model.request_selected_goal_run_stop_confirmation() {
+                        model.status_line = "Goal action is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::RetryStep) => {
+                    if !model.request_selected_goal_step_retry_confirmation() {
+                        model.status_line = "Selected goal step is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::RerunFromStep) => {
+                    if !model.request_selected_goal_step_rerun_confirmation() {
+                        model.status_line = "Selected goal step is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::CycleRuntimeAssignment) => {
+                    if !model.cycle_selected_runtime_assignment() {
+                        model.status_line = "Mission Control roster is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::EditRuntimeProvider) => {
+                    if !model.stage_mission_control_assignment_modal_edit(
+                        goal_mission_control::RuntimeAssignmentEditField::Provider,
+                    ) {
+                        model.status_line = "Mission Control roster is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::EditRuntimeModel) => {
+                    if !model.stage_mission_control_assignment_modal_edit(
+                        goal_mission_control::RuntimeAssignmentEditField::Model,
+                    ) {
+                        model.status_line = "Mission Control roster is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::EditRuntimeReasoning) => {
+                    if !model.stage_mission_control_assignment_modal_edit(
+                        goal_mission_control::RuntimeAssignmentEditField::ReasoningEffort,
+                    ) {
+                        model.status_line = "Mission Control roster is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::EditRuntimeRole) => {
+                    if !model.stage_mission_control_assignment_modal_edit(
+                        goal_mission_control::RuntimeAssignmentEditField::Role,
+                    ) {
+                        model.status_line = "Mission Control roster is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::ToggleRuntimeEnabled) => {
+                    if !model.update_selected_runtime_assignment(|assignment| {
+                        assignment.enabled = !assignment.enabled;
+                    }) {
+                        model.status_line = "Mission Control roster is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::ToggleRuntimeInherit) => {
+                    if !model.update_selected_runtime_assignment(|assignment| {
+                        assignment.inherit_from_main = !assignment.inherit_from_main;
+                    }) {
+                        model.status_line = "Mission Control roster is unavailable".to_string();
+                    }
+                }
+                Some(GoalActionPickerItem::ApplyRuntimeNextTurn) => {
+                    model.open_pending_action_confirm(PendingConfirmAction::ReuseModelAsStt {
+                        model_id: "__mission_control__:next_turn".to_string(),
+                    });
+                }
+                Some(GoalActionPickerItem::ApplyRuntimeReassignActiveStep) => {
+                    model.open_pending_action_confirm(PendingConfirmAction::ReuseModelAsStt {
+                        model_id: "__mission_control__:reassign_active_step".to_string(),
+                    });
+                }
+                Some(GoalActionPickerItem::ApplyRuntimeRestartActiveStep) => {
+                    model.open_pending_action_confirm(PendingConfirmAction::ReuseModelAsStt {
+                        model_id: "__mission_control__:restart_active_step".to_string(),
+                    });
+                }
+                None => {
+                    model.status_line = "Goal action is unavailable".to_string();
+                }
+            }
+        }
         modal::ModalKind::QueuedPrompts => {
             model.execute_selected_queued_prompt_action();
         }
@@ -211,6 +314,36 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
             model.close_pinned_budget_exceeded_modal();
         }
         modal::ModalKind::ProviderPicker => {
+            if let Some(edit) = model.goal_mission_control.pending_runtime_edit.clone() {
+                let cursor = model.modal.picker_cursor();
+                let provider_defs = widgets::provider_picker::available_provider_defs(&model.auth);
+                if let Some(def) = provider_defs.get(cursor) {
+                    let next_provider = def.id.to_string();
+                    let (_, _, auth_source) = model.provider_auth_snapshot(def.id);
+                    let next_model =
+                        providers::default_model_for_provider_auth(def.id, &auth_source);
+                    model.goal_mission_control.clear_runtime_edit();
+                    model.settings_picker_target = None;
+                    model.close_top_modal();
+                    let updated = model.update_selected_runtime_assignment(|assignment| {
+                        if edit.field == goal_mission_control::RuntimeAssignmentEditField::Provider
+                        {
+                            assignment.provider = next_provider.clone();
+                            if !next_model.trim().is_empty() {
+                                assignment.model = next_model.clone();
+                            }
+                        }
+                    });
+                    if !updated {
+                        model.status_line = "Mission Control roster is unavailable".to_string();
+                    }
+                } else {
+                    model.goal_mission_control.clear_runtime_edit();
+                    model.settings_picker_target = None;
+                    model.close_top_modal();
+                }
+                return;
+            }
             let cursor = model.modal.picker_cursor();
             let provider_defs = match model.settings_picker_target {
                 Some(SettingsPickerTarget::AudioSttProvider) => {
@@ -224,6 +357,9 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                         &model.auth,
                         AudioToolKind::TextToSpeech,
                     )
+                }
+                Some(SettingsPickerTarget::ImageGenerationProvider) => {
+                    widgets::provider_picker::available_provider_defs(&model.auth)
                 }
                 _ => widgets::provider_picker::available_provider_defs(&model.auth),
             };
@@ -239,29 +375,13 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                         if model.config.provider == PROVIDER_ID_CUSTOM {
                             model.settings_navigate_to(3);
                         } else {
-                            let models = providers::known_models_for_provider_auth(
-                                &model.config.provider,
-                                &model.config.auth_source,
+                            model.open_provider_backed_model_picker(
+                                SettingsPickerTarget::Model,
+                                model.config.provider.clone(),
+                                model.config.base_url.clone(),
+                                model.config.api_key.clone(),
+                                model.config.auth_source.clone(),
                             );
-                            if !models.is_empty() {
-                                model
-                                    .config
-                                    .reduce(config::ConfigAction::ModelsFetched(models));
-                            }
-                            if model.should_fetch_remote_models(
-                                &model.config.provider,
-                                &model.config.auth_source,
-                            ) {
-                                model.send_daemon_command(DaemonCommand::FetchModels {
-                                    provider_id: model.config.provider.clone(),
-                                    base_url: model.config.base_url.clone(),
-                                    api_key: model.config.api_key.clone(),
-                                });
-                            }
-                            model
-                                .modal
-                                .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
-                            model.sync_model_picker_item_count();
                         }
                         return;
                     }
@@ -305,6 +425,26 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                         model.status_line = format!("TTS provider: {}", def.name);
                         return;
                     }
+                    SettingsPickerTarget::ImageGenerationProvider => {
+                        let current_model = model.config.image_generation_model();
+                        let known_models = TuiModel::image_generation_catalog_models(def.id);
+                        let next_model = if current_model.trim().is_empty()
+                            || (!known_models.is_empty()
+                                && !known_models.iter().any(|entry| entry.id == current_model))
+                        {
+                            TuiModel::default_image_generation_model_for(def.id)
+                        } else {
+                            current_model
+                        };
+                        model.set_image_generation_config_string("provider", def.id.to_string());
+                        if !next_model.trim().is_empty() {
+                            model.set_image_generation_config_string("model", next_model);
+                        }
+                        model.close_top_modal();
+                        model.open_image_generation_model_picker();
+                        model.status_line = format!("Image provider: {}", def.name);
+                        return;
+                    }
                     SettingsPickerTarget::BuiltinPersonaProvider => {
                         model.apply_provider_selection_without_sync(def.id);
                         model.close_top_modal();
@@ -317,22 +457,13 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                             model.settings_picker_target = None;
                             return;
                         }
-                        if model.should_fetch_remote_models(
-                            &model.config.provider,
-                            &model.config.auth_source,
-                        ) {
-                            model.send_daemon_command(DaemonCommand::FetchModels {
-                                provider_id: model.config.provider.clone(),
-                                base_url: model.config.base_url.clone(),
-                                api_key: model.config.api_key.clone(),
-                            });
-                        }
-                        model.settings_picker_target =
-                            Some(SettingsPickerTarget::BuiltinPersonaModel);
-                        model
-                            .modal
-                            .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
-                        model.sync_model_picker_item_count();
+                        model.open_provider_backed_model_picker(
+                            SettingsPickerTarget::BuiltinPersonaModel,
+                            model.config.provider.clone(),
+                            model.config.base_url.clone(),
+                            model.config.api_key.clone(),
+                            model.config.auth_source.clone(),
+                        );
                         if let Some(setup) = model.pending_builtin_persona_setup.as_ref() {
                             model.status_line =
                                 format!("Configure {} model", setup.target_agent_name);
@@ -407,10 +538,12 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                     SettingsPickerTarget::Model
                     | SettingsPickerTarget::AudioSttModel
                     | SettingsPickerTarget::AudioTtsModel
+                    | SettingsPickerTarget::ImageGenerationModel
                     | SettingsPickerTarget::BuiltinPersonaModel
                     | SettingsPickerTarget::CompactionWelesModel
                     | SettingsPickerTarget::CompactionCustomModel
                     | SettingsPickerTarget::SubAgentModel
+                    | SettingsPickerTarget::SubAgentRole
                     | SettingsPickerTarget::SubAgentReasoningEffort
                     | SettingsPickerTarget::ConciergeModel
                     | SettingsPickerTarget::ConciergeReasoningEffort
@@ -424,6 +557,35 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
             model.close_top_modal();
         }
         modal::ModalKind::ModelPicker => {
+            if let Some(edit) = model.goal_mission_control.pending_runtime_edit.clone() {
+                let models = model.available_runtime_assignment_models();
+                let cursor = model.modal.picker_cursor();
+                if cursor == models.len() {
+                    model.settings_picker_target = None;
+                    model.close_top_modal();
+                    model.begin_mission_control_custom_model_edit();
+                    return;
+                }
+                if let Some(model_entry) = models.get(cursor) {
+                    let next_model = model_entry.id.clone();
+                    model.goal_mission_control.clear_runtime_edit();
+                    model.settings_picker_target = None;
+                    model.close_top_modal();
+                    let updated = model.update_selected_runtime_assignment(|assignment| {
+                        if edit.field == goal_mission_control::RuntimeAssignmentEditField::Model {
+                            assignment.model = next_model.clone();
+                        }
+                    });
+                    if !updated {
+                        model.status_line = "Mission Control roster is unavailable".to_string();
+                    }
+                } else {
+                    model.goal_mission_control.clear_runtime_edit();
+                    model.settings_picker_target = None;
+                    model.close_top_modal();
+                }
+                return;
+            }
             let models = model.available_model_picker_models();
             let cursor = model.modal.picker_cursor();
             if cursor == models.len() {
@@ -508,6 +670,10 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                         model.set_audio_config_string("tts", "model", model_id.clone());
                         model.status_line = format!("TTS model: {}", model_id);
                     }
+                    SettingsPickerTarget::ImageGenerationModel => {
+                        model.set_image_generation_config_string("model", model_id.clone());
+                        model.status_line = format!("Image model: {}", model_id);
+                    }
                     SettingsPickerTarget::BuiltinPersonaModel => {
                         let Some(setup) = model.pending_builtin_persona_setup.clone() else {
                             model.status_line = "No builtin persona setup is active".to_string();
@@ -573,10 +739,12 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                     SettingsPickerTarget::Provider
                     | SettingsPickerTarget::AudioSttProvider
                     | SettingsPickerTarget::AudioTtsProvider
+                    | SettingsPickerTarget::ImageGenerationProvider
                     | SettingsPickerTarget::BuiltinPersonaProvider
                     | SettingsPickerTarget::CompactionWelesProvider
                     | SettingsPickerTarget::CompactionCustomProvider
                     | SettingsPickerTarget::SubAgentProvider
+                    | SettingsPickerTarget::SubAgentRole
                     | SettingsPickerTarget::SubAgentReasoningEffort
                     | SettingsPickerTarget::ConciergeProvider
                     | SettingsPickerTarget::ConciergeReasoningEffort
@@ -603,7 +771,89 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                 }
             }
         }
+        modal::ModalKind::RolePicker => {
+            if let Some(edit) = model.goal_mission_control.pending_runtime_edit.clone() {
+                let presets = crate::state::subagents::SUBAGENT_ROLE_PRESETS;
+                let cursor = model.modal.picker_cursor();
+                if cursor == presets.len() {
+                    model.goal_mission_control.clear_runtime_edit();
+                    model.settings_picker_target = None;
+                    model.close_top_modal();
+                    model.status_line =
+                        "Custom Mission Control roles are not supported in this editor".to_string();
+                    return;
+                }
+                if let Some(preset) = presets.get(cursor) {
+                    let role_id = preset.id.to_string();
+                    model.goal_mission_control.clear_runtime_edit();
+                    model.settings_picker_target = None;
+                    model.close_top_modal();
+                    let updated = model.update_selected_runtime_assignment(|assignment| {
+                        if edit.field == goal_mission_control::RuntimeAssignmentEditField::Role {
+                            assignment.role_id = role_id.clone();
+                        }
+                    });
+                    if !updated {
+                        model.status_line = "Mission Control roster is unavailable".to_string();
+                    }
+                } else {
+                    model.goal_mission_control.clear_runtime_edit();
+                    model.settings_picker_target = None;
+                    model.close_top_modal();
+                }
+                return;
+            }
+            let presets = crate::state::subagents::SUBAGENT_ROLE_PRESETS;
+            let cursor = model.modal.picker_cursor();
+            if cursor == presets.len() {
+                let current = model
+                    .subagents
+                    .editor
+                    .as_ref()
+                    .map(|editor| editor.role.clone())
+                    .unwrap_or_default();
+                model.settings_picker_target = None;
+                model.close_top_modal();
+                model.settings.start_editing("subagent_role", &current);
+                model.status_line = "Enter sub-agent role ID".to_string();
+                return;
+            }
+
+            if let Some(preset) = presets.get(cursor) {
+                if let Some(editor) = model.subagents.editor.as_mut() {
+                    editor.apply_role_preset_by_index(cursor);
+                }
+                model.status_line = format!("Sub-agent role: {}", preset.label);
+            }
+            model.settings_picker_target = None;
+            model.close_top_modal();
+        }
         modal::ModalKind::EffortPicker => {
+            if let Some(edit) = model.goal_mission_control.pending_runtime_edit.clone() {
+                let efforts = ["", "minimal", "low", "medium", "high", "xhigh"];
+                let cursor = model.modal.picker_cursor();
+                if let Some(&effort) = efforts.get(cursor) {
+                    let next_effort = (!effort.is_empty()).then(|| effort.to_string());
+                    model.goal_mission_control.clear_runtime_edit();
+                    model.settings_picker_target = None;
+                    model.close_top_modal();
+                    let updated = model.update_selected_runtime_assignment(|assignment| {
+                        if edit.field
+                            == goal_mission_control::RuntimeAssignmentEditField::ReasoningEffort
+                        {
+                            assignment.reasoning_effort = next_effort.clone();
+                        }
+                    });
+                    if !updated {
+                        model.status_line = "Mission Control roster is unavailable".to_string();
+                    }
+                } else {
+                    model.goal_mission_control.clear_runtime_edit();
+                    model.settings_picker_target = None;
+                    model.close_top_modal();
+                }
+                return;
+            }
             let efforts = ["", "minimal", "low", "medium", "high", "xhigh"];
             let cursor = model.modal.picker_cursor();
             if let Some(&effort) = efforts.get(cursor) {

@@ -13,18 +13,9 @@ impl ConciergeEngine {
         }
 
         let content = if detail_level == ConciergeDetailLevel::Minimal {
-            if let Some(last) = context.recent_threads.first() {
-                format!(
-                    "Welcome back! Last session: **{}** ({}). {} messages.",
-                    last.title,
-                    format_timestamp(last.updated_at),
-                    last.message_count
-                )
-            } else {
-                "Welcome to tamux! Ready to start your first session.".into()
-            }
+            minimal_welcome_content(context)
         } else {
-            match self.call_llm_for_welcome(detail_level, context).await {
+            match self.call_llm_for_welcome(detail_level, context, true).await {
                 Ok(response) => strip_trailing_actions(&response),
                 Err(e) => {
                     tracing::warn!("concierge LLM call failed, falling back to template: {e}");
@@ -72,6 +63,7 @@ impl ConciergeEngine {
         &self,
         detail_level: ConciergeDetailLevel,
         context: &WelcomeContext,
+        emit_partial_progress: bool,
     ) -> Result<String> {
         let config = self.config.read().await;
         let provider_config = fast_concierge_provider_config(&resolve_concierge_provider(&config)?);
@@ -119,10 +111,20 @@ impl ConciergeEngine {
         );
 
         let mut full_content = String::new();
+        let mut last_emitted_partial = String::new();
         let mut stream = std::pin::pin!(stream);
         while let Some(chunk) = stream.next().await {
             match chunk {
-                Ok(CompletionChunk::Delta { content, .. }) => full_content.push_str(&content),
+                Ok(CompletionChunk::Delta { content, .. }) => {
+                    full_content.push_str(&content);
+                    if emit_partial_progress {
+                        self.emit_partial_welcome_progress(
+                            detail_level,
+                            &full_content,
+                            &mut last_emitted_partial,
+                        );
+                    }
+                }
                 Ok(CompletionChunk::Done { content, .. }) => {
                     self.record_llm_outcome(&provider_id, true).await;
                     if !content.is_empty() {
@@ -147,6 +149,27 @@ impl ConciergeEngine {
         }
 
         Ok(full_content)
+    }
+
+    fn emit_partial_welcome_progress(
+        &self,
+        detail_level: ConciergeDetailLevel,
+        full_content: &str,
+        last_emitted_partial: &mut String,
+    ) {
+        let partial_content = full_content.trim_end();
+        if partial_content.trim().is_empty() || partial_content == last_emitted_partial {
+            return;
+        }
+
+        let _ = self.event_tx.send(AgentEvent::ConciergeWelcome {
+            thread_id: CONCIERGE_THREAD_ID.to_string(),
+            content: partial_content.to_string(),
+            detail_level,
+            actions: Vec::new(),
+        });
+        last_emitted_partial.clear();
+        last_emitted_partial.push_str(partial_content);
     }
 
     fn build_llm_prompt(
@@ -197,27 +220,36 @@ impl ConciergeEngine {
             }
         }
 
-        if context.pending_task_total > 0 {
+        if let Some(task) = context.latest_goal_run.as_ref() {
             prompt.push_str(&format!(
-                "\nUnresolved tasks: {} total\n",
-                context.pending_task_total
+                "\nLatest goal: \"{}\" [{}] ({})\n",
+                task.label,
+                goal_run_status_label(task.status),
+                format_timestamp(task.updated_at)
             ));
-            for task in &context.pending_tasks {
-                prompt.push_str(&format!("{task}\n"));
+            if let Some(summary) = task.summary.as_deref() {
+                prompt.push_str(&format!("Goal summary: {}\n", summary));
             }
+        }
+
+        if context.running_goal_total > 0 || context.paused_goal_total > 0 {
+            prompt.push_str(&format!(
+                "\nGoal counts: {} running, {} paused\n",
+                context.running_goal_total, context.paused_goal_total
+            ));
         }
 
         match detail_level {
             ConciergeDetailLevel::ContextSummary => {
                 prompt.push_str(
-                    "\nSummarize what the user was working on in 1-2 sentences. Mention the most relevant open work if helpful. Then ask what they'd like to do.",
+                    "\nSummarize what the user was working on in 1-2 sentences. Mention the latest goal and active goal counts if helpful. Then ask what they'd like to do.",
                 );
             }
             ConciergeDetailLevel::ProactiveTriage => {
-                prompt.push_str("\nProvide a smart triage: summarize the last session, mention any pending tasks or unfinished work, and suggest 2-3 prioritized next steps.");
+                prompt.push_str("\nProvide a smart triage: summarize the last session, mention the latest goal and any active goal runs, and suggest 2-3 prioritized next steps.");
             }
             ConciergeDetailLevel::DailyBriefing => {
-                prompt.push_str("\nProvide a full operational briefing: session summary, pending tasks, and actionable recommendations. Be comprehensive but concise.");
+                prompt.push_str("\nProvide a full operational briefing: session summary, latest goal status, active goal counts, and actionable recommendations. Be comprehensive but concise.");
             }
             ConciergeDetailLevel::Minimal => unreachable!(),
         }
@@ -233,11 +265,36 @@ impl ConciergeEngine {
                 format_timestamp(last.updated_at),
                 last.message_count
             )];
-            if context.pending_task_total > 0 {
-                parts.push(format!("**Pending tasks:** {}", context.pending_task_total));
+            if let Some(task) = context.latest_goal_run.as_ref() {
+                parts.push(format!(
+                    "**Latest goal:** {} [{}] ({})",
+                    task.label,
+                    goal_run_status_label(task.status),
+                    format_timestamp(task.updated_at)
+                ));
+                if let Some(summary) = task.summary.as_deref() {
+                    parts.push(format!("**Goal summary:** {}", summary));
+                }
+            }
+            if context.running_goal_total > 0 || context.paused_goal_total > 0 {
+                parts.push(format!(
+                    "**Goals:** {} running, {} paused",
+                    context.running_goal_total, context.paused_goal_total
+                ));
             }
             parts.push("What would you like to work on?".into());
             parts.join("\n")
+        } else if let Some(task) = context.latest_goal_run.as_ref() {
+            format!(
+                "Welcome back! Latest goal: **{}** [{}] ({}).{}",
+                task.label,
+                goal_run_status_label(task.status),
+                format_timestamp(task.updated_at),
+                task.summary
+                    .as_deref()
+                    .map(|summary| format!(" Summary: {}", summary))
+                    .unwrap_or_default()
+            )
         } else {
             "Welcome to tamux! Ready to start your first session.".into()
         }
@@ -349,9 +406,76 @@ pub(super) fn build_welcome_signature(
         .collect::<Vec<_>>()
         .join(";");
     let task_sig = format!(
-        "{}|{}",
-        context.pending_task_total,
-        context.pending_tasks.join(";")
+        "{}|{}|{}",
+        context.running_goal_total,
+        context.paused_goal_total,
+        context
+            .latest_goal_run
+            .as_ref()
+            .map(|task| {
+                format!(
+                    "{}|{:?}|{}|{}",
+                    task.label,
+                    task.status,
+                    task.updated_at,
+                    task.summary.as_deref().unwrap_or("")
+                )
+            })
+            .unwrap_or_default()
     );
     format!("{detail_level:?}::{thread_sig}::{task_sig}")
+}
+
+fn minimal_welcome_content(context: &WelcomeContext) -> String {
+    match (
+        context.recent_threads.first(),
+        context.latest_goal_run.as_ref(),
+    ) {
+        (Some(last), Some(task)) => format!(
+            "Welcome back! Last session: **{}** ({}). Latest goal: **{}** [{}] ({}).{} Goals: {} running, {} paused.",
+            last.title,
+            format_timestamp(last.updated_at),
+            task.label,
+            goal_run_status_label(task.status),
+            format_timestamp(task.updated_at),
+            task.summary
+                .as_deref()
+                .map(|summary| format!(" Summary: {}.", summary))
+                .unwrap_or_default(),
+            context.running_goal_total,
+            context.paused_goal_total
+        ),
+        (Some(last), None) => format!(
+            "Welcome back! Last session: **{}** ({}). {} messages.",
+            last.title,
+            format_timestamp(last.updated_at),
+            last.message_count
+        ),
+        (None, Some(task)) => format!(
+            "Welcome back! Latest goal: **{}** [{}] ({}).{} Goals: {} running, {} paused.",
+            task.label,
+            goal_run_status_label(task.status),
+            format_timestamp(task.updated_at),
+            task.summary
+                .as_deref()
+                .map(|summary| format!(" Summary: {}.", summary))
+                .unwrap_or_default(),
+            context.running_goal_total,
+            context.paused_goal_total
+        ),
+        (None, None) => "Welcome to tamux! Ready to start your first session.".into(),
+    }
+}
+
+fn goal_run_status_label(status: GoalRunStatus) -> &'static str {
+    match status {
+        GoalRunStatus::Queued => "queued",
+        GoalRunStatus::Planning => "planning",
+        GoalRunStatus::Running => "running",
+        GoalRunStatus::AwaitingApproval => "awaiting approval",
+        GoalRunStatus::Paused => "paused",
+        GoalRunStatus::Completed => "completed",
+        GoalRunStatus::Failed => "failed",
+        GoalRunStatus::Cancelled => "cancelled",
+    }
 }

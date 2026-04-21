@@ -296,12 +296,14 @@ fn cap_task_list_for_ipc(tasks: Vec<AgentTask>) -> (Vec<AgentTask>, bool) {
 
 fn goal_run_with_step_slice(goal_run: &GoalRun, start_idx: usize) -> GoalRun {
     let mut candidate = goal_run.clone();
+    let current_step_represented = goal_run.current_step_index >= start_idx;
     if start_idx >= candidate.steps.len() {
         candidate.steps.clear();
         candidate.current_step_index = 0;
         candidate.current_step_title = None;
         candidate.current_step_kind = None;
         candidate.active_task_id = None;
+        candidate.current_step_owner_profile = None;
         return candidate;
     }
 
@@ -323,6 +325,9 @@ fn goal_run_with_step_slice(goal_run: &GoalRun, start_idx: usize) -> GoalRun {
         .steps
         .get(current_idx)
         .and_then(|step| step.task_id.clone());
+    if !current_step_represented {
+        candidate.current_step_owner_profile = None;
+    }
     candidate
 }
 
@@ -334,6 +339,8 @@ fn goal_run_with_window(
     event_end: usize,
 ) -> (GoalRun, GoalRunDetailWindow) {
     let mut candidate = goal_run.clone();
+    let current_step_represented =
+        goal_run.current_step_index >= step_start && goal_run.current_step_index < step_end;
 
     let step_start = step_start.min(goal_run.steps.len());
     let step_end = step_end.clamp(step_start, goal_run.steps.len());
@@ -343,6 +350,7 @@ fn goal_run_with_window(
         candidate.current_step_title = None;
         candidate.current_step_kind = None;
         candidate.active_task_id = None;
+        candidate.current_step_owner_profile = None;
     } else {
         let current_idx = goal_run
             .current_step_index
@@ -361,6 +369,9 @@ fn goal_run_with_window(
             .steps
             .get(current_idx)
             .and_then(|step| step.task_id.clone());
+        if !current_step_represented {
+            candidate.current_step_owner_profile = None;
+        }
     }
 
     let event_start = event_start.min(goal_run.events.len());
@@ -388,6 +399,7 @@ fn goal_run_stripped_summary(goal_run: &GoalRun) -> GoalRun {
     candidate.current_step_title = None;
     candidate.current_step_kind = None;
     candidate.active_task_id = None;
+    candidate.current_step_owner_profile = None;
     candidate.plan_summary = None;
     candidate.reflection_summary = None;
     candidate.memory_updates.clear();
@@ -658,6 +670,7 @@ impl AgentEngine {
                     compaction_strategy: None,
                     compaction_payload: None,
                     offloaded_payload_id: None,
+                    tool_output_preview_path: None,
                     structural_refs: Vec::new(),
                     pinned_for_compaction: false,
                     timestamp: now_millis(),
@@ -710,6 +723,7 @@ impl AgentEngine {
         priority: Option<&str>,
         client_request_id: Option<String>,
         autonomy_level: Option<String>,
+        launch_assignments: Option<Vec<GoalAgentAssignment>>,
     ) -> GoalRun {
         self.start_goal_run_with_surface(
             goal,
@@ -720,6 +734,7 @@ impl AgentEngine {
             client_request_id,
             autonomy_level,
             None,
+            launch_assignments,
         )
         .await
     }
@@ -734,6 +749,7 @@ impl AgentEngine {
         client_request_id: Option<String>,
         autonomy_level: Option<String>,
         client_surface: Option<amux_protocol::ClientSurface>,
+        launch_assignments: Option<Vec<GoalAgentAssignment>>,
     ) -> GoalRun {
         let normalized_goal_key = normalize_goal_key(&goal);
         let normalized_request_id = client_request_id
@@ -788,6 +804,10 @@ impl AgentEngine {
             let model = self.operator_model.read().await;
             SatisfactionAdaptationMode::from_label(&model.operator_satisfaction.label)
         };
+        let launch_assignment_snapshot = match launch_assignments {
+            Some(assignments) if !assignments.is_empty() => assignments,
+            _ => self.goal_launch_assignment_snapshot().await,
+        };
         let goal_run = GoalRun {
             id: format!("goal_{}", Uuid::new_v4()),
             title: normalized_title,
@@ -800,10 +820,17 @@ impl AgentEngine {
             started_at: None,
             completed_at: None,
             thread_id,
+            root_thread_id: None,
+            active_thread_id: None,
+            execution_thread_ids: Vec::new(),
             session_id,
             current_step_index: 0,
             current_step_title: None,
             current_step_kind: None,
+            launch_assignment_snapshot: launch_assignment_snapshot.clone(),
+            runtime_assignment_list: launch_assignment_snapshot,
+            planner_owner_profile: None,
+            current_step_owner_profile: None,
             replan_count: 0,
             max_replans: adaptation_mode.max_goal_replans(2),
             plan_summary: None,
@@ -812,6 +839,7 @@ impl AgentEngine {
             generated_skill_path: None,
             last_error: None,
             failure_cause: None,
+            stopped_reason: None,
             awaiting_approval_id: None,
             policy_fingerprint: None,
             approval_expires_at: None,
@@ -825,6 +853,7 @@ impl AgentEngine {
             approval_count: 0,
             steps: Vec::new(),
             events: vec![make_goal_run_event("queue", "goal run created", None)],
+            dossier: None,
             total_prompt_tokens: 0,
             total_completion_tokens: 0,
             estimated_cost_usd: None,
@@ -834,6 +863,10 @@ impl AgentEngine {
                 .unwrap_or_default(),
             authorship_tag: None,
         };
+        let mut goal_run = goal_run;
+        let goal_thread_id = goal_run.thread_id.clone();
+        super::goal_run_apply_thread_routing(&mut goal_run, goal_thread_id);
+        crate::agent::goal_dossier::refresh_goal_run_dossier(&mut goal_run);
 
         self.goal_runs.lock().await.push_back(goal_run.clone());
         if let Some(client_surface) = client_surface {
@@ -1161,6 +1194,43 @@ impl AgentEngine {
                         changed_goal = Some(goal_run.clone());
                     }
                 }
+                "stop" => {
+                    if !matches!(
+                        goal_run.status,
+                        GoalRunStatus::Completed | GoalRunStatus::Failed | GoalRunStatus::Cancelled
+                    ) {
+                        let stopped_at = now_millis();
+                        goal_run.status = GoalRunStatus::Cancelled;
+                        goal_run.completed_at = Some(stopped_at);
+                        goal_run.updated_at = stopped_at;
+                        goal_run.stopped_reason = Some("operator_stop".to_string());
+                        super::goal_dossier::set_goal_resume_decision(
+                            goal_run,
+                            GoalResumeAction::Stop,
+                            "operator_stop",
+                            Some("goal run explicitly stopped by operator".to_string()),
+                            vec!["stop requested through built-in goal control".to_string()],
+                        );
+                        super::goal_dossier::set_goal_report(
+                            goal_run,
+                            GoalProjectionState::Failed,
+                            "goal run explicitly stopped by operator",
+                            vec!["reason_code: operator_stop".to_string()],
+                        );
+                        goal_run.events.push(make_goal_run_event(
+                            "control",
+                            "goal run stopped",
+                            Some("operator_stop".to_string()),
+                        ));
+                        goal_run.awaiting_approval_id = None;
+                        goal_run.active_task_id = None;
+                        task_to_cancel = goal_run
+                            .steps
+                            .get(goal_run.current_step_index)
+                            .and_then(|step| step.task_id.clone());
+                        changed_goal = Some(goal_run.clone());
+                    }
+                }
                 _ => {}
             }
         }
@@ -1259,6 +1329,11 @@ impl AgentEngine {
             .await
         {
             tracing::warn!(goal_run_id = %goal_run_id, %error, "failed to delete goal checkpoints");
+        }
+        if let Err(error) =
+            crate::agent::goal_dossier::remove_goal_run_projection(self, goal_run_id).await
+        {
+            tracing::warn!(goal_run_id = %goal_run_id, %error, "failed to remove goal projection directory");
         }
         for task_id in related_task_ids {
             if let Err(error) = self.history.delete_agent_task(&task_id).await {

@@ -85,6 +85,7 @@ where
                 .send(ClientMessage::AgentListThreads {
                     limit: None,
                     offset: None,
+                    include_internal: false,
                 })
                 .await?;
         }
@@ -176,6 +177,7 @@ where
                     session_id,
                     priority,
                     client_request_id,
+                    launch_assignments: Vec::new(),
                     autonomy_level,
                     client_surface: Some(amux_protocol::ClientSurface::Electron),
                 })
@@ -239,6 +241,9 @@ where
         AgentBridgeCommand::GetConfig => {
             framed.send(ClientMessage::AgentGetConfig).await?;
         }
+        AgentBridgeCommand::GetGatewayConfig => {
+            framed.send(ClientMessage::AgentGetGatewayConfig).await?;
+        }
         AgentBridgeCommand::SetConfigItem {
             key_path,
             value_json,
@@ -259,12 +264,14 @@ where
             provider_id,
             base_url,
             api_key,
+            output_modalities,
         } => {
             framed
                 .send(ClientMessage::AgentFetchModels {
                     provider_id,
                     base_url,
                     api_key,
+                    output_modalities,
                 })
                 .await?;
         }

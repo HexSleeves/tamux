@@ -281,9 +281,9 @@ fn status_dot_for_task<'a>(status: Option<TaskStatus>, theme: &ThemeTokens) -> S
     match status {
         Some(TaskStatus::InProgress) => Span::styled("\u{25cf}", theme.accent_secondary),
         Some(TaskStatus::Completed) => Span::styled("\u{25cf}", theme.accent_success),
-        Some(TaskStatus::Failed) | Some(TaskStatus::FailedAnalyzing) => {
-            Span::styled("\u{25cf}", theme.accent_danger)
-        }
+        Some(TaskStatus::Failed)
+        | Some(TaskStatus::FailedAnalyzing)
+        | Some(TaskStatus::BudgetExceeded) => Span::styled("\u{25cf}", theme.accent_danger),
         Some(TaskStatus::Blocked) | Some(TaskStatus::AwaitingApproval) => {
             Span::styled("\u{25cf}", theme.accent_primary)
         }
@@ -295,9 +295,9 @@ fn status_label_for_task<'a>(status: Option<TaskStatus>, theme: &ThemeTokens) ->
     match status {
         Some(TaskStatus::InProgress) => Span::styled("running", theme.accent_secondary),
         Some(TaskStatus::Completed) => Span::styled("done", theme.accent_success),
-        Some(TaskStatus::Failed) | Some(TaskStatus::FailedAnalyzing) => {
-            Span::styled("failed", theme.accent_danger)
-        }
+        Some(TaskStatus::Failed)
+        | Some(TaskStatus::FailedAnalyzing)
+        | Some(TaskStatus::BudgetExceeded) => Span::styled("failed", theme.accent_danger),
         Some(TaskStatus::Blocked) => Span::styled("blocked", theme.fg_dim),
         Some(TaskStatus::AwaitingApproval) => Span::styled("awaiting", theme.accent_primary),
         Some(TaskStatus::Queued) | None => Span::styled("idle", theme.fg_dim),

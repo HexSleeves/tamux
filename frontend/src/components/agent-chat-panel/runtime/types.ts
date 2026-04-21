@@ -13,6 +13,8 @@ import type { AgentContentBlock } from "@/lib/agentStore/types";
 
 export type AgentChatPanelView =
   | "threads"
+  | "internal"
+  | "gateway"
   | "chat"
   | "pinned"
   | "trace"
@@ -43,6 +45,7 @@ export type AgentChatPanelRuntimeValue = {
   updateAgentSetting: AgentStoreState["updateAgentSetting"];
   searchQuery: string;
   setSearchQuery: (query: string) => void;
+  refreshThreadList: () => Promise<void>;
   messages: AgentMessage[];
   todos: AgentTodoItem[];
   daemonTodosByThread: Record<string, AgentTodoItem[]>;

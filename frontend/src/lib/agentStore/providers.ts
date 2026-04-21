@@ -142,6 +142,7 @@ const KIMI_MODELS: ModelDefinition[] = [
 
 const KIMI_CODING_MODELS: ModelDefinition[] = [
   { id: "kimi-for-coding", name: "Kimi for Coding", contextWindow: 262144 },
+  { id: "kimi-k2.6", name: "Kimi K2.6", contextWindow: 262144 },
   { id: "kimi-k2.5", name: "Kimi K2.5", contextWindow: 262144 },
   { id: "kimi-k2-turbo-preview", name: "Kimi K2 Turbo Preview", contextWindow: 262144 },
 ];
@@ -156,6 +157,7 @@ const ALIBABA_CODING_MODELS: ModelDefinition[] = [
   { id: "qwen3-coder-plus", name: "Qwen3 Coder Plus", contextWindow: 997952 },
   { id: "qwen3-coder-next", name: "Qwen3 Coder Next", contextWindow: 204800 },
   { id: "glm-5", name: "GLM-5", contextWindow: 202752 },
+  { id: "kimi-k2.6", name: "Kimi K2.6", contextWindow: 262144 },
   { id: "kimi-k2.5", name: "Kimi K2.5", contextWindow: 262144 },
   { id: "MiniMax-M2.5", name: "MiniMax M2.5", contextWindow: 205000 },
 ];
@@ -184,6 +186,7 @@ const OPENCODE_ZEN_MODELS: ModelDefinition[] = [
   { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", contextWindow: 128000, modalities: M_TI },
   { id: "minimax-m2.5", name: "MiniMax M2.5", contextWindow: 205000 },
   { id: "glm-5", name: "GLM-5", contextWindow: 128000 },
+  { id: "kimi-k2.6", name: "Kimi K2.6", contextWindow: 262144 },
   { id: "kimi-k2.5", name: "Kimi K2.5", contextWindow: 262144 },
 ];
 
@@ -341,7 +344,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
   { id: "together", name: "Together", defaultBaseUrl: "https://api.together.xyz/v1", defaultModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "groq", name: "Groq", defaultBaseUrl: "https://api.groq.com/openai/v1", defaultModel: "llama-3.3-70b-versatile", apiType: "openai", authMethod: "bearer", models: GROQ_MODELS, supportsModelFetch: true, supportedTransports: RESPONSES_AND_CHAT_TRANSPORTS, defaultTransport: "responses", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "ollama", name: "Ollama", defaultBaseUrl: "http://localhost:11434/v1", defaultModel: "llama3.1", apiType: "openai", authMethod: "bearer", models: OLLAMA_MODELS, supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
-  { id: "chutes", name: "Chutes", defaultBaseUrl: "https://llm.chutes.ai/v1", defaultModel: "deepseek-ai/DeepSeek-V3", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
+  { id: "chutes", name: "Chutes", defaultBaseUrl: "https://llm.chutes.ai/v1", defaultModel: "deepseek-ai/DeepSeek-R1", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: true, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "huggingface", name: "Hugging Face", defaultBaseUrl: "https://api-inference.huggingface.co/v1", defaultModel: "meta-llama/Llama-3.3-70B-Instruct", apiType: "openai", authMethod: "bearer", models: [], supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "minimax", name: "MiniMax", defaultBaseUrl: "https://api.minimax.io/anthropic", defaultModel: "MiniMax-M1-80k", apiType: "anthropic", authMethod: "x-api-key", models: MINIMAX_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },
   { id: "minimax-coding-plan", name: "MiniMax Coding Plan", defaultBaseUrl: "https://api.minimax.io/anthropic", defaultModel: "MiniMax-M2.7", apiType: "anthropic", authMethod: "x-api-key", models: MINIMAX_MODELS, supportsModelFetch: false, supportedTransports: CHAT_ONLY_TRANSPORTS, defaultTransport: "chat_completions", supportedAuthSources: API_KEY_ONLY_AUTH_SOURCES, defaultAuthSource: "api_key", supportsResponseContinuity: false },

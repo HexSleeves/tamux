@@ -330,6 +330,27 @@ function registerAgentIpcHandlers(ipcMain, runtime, options = {}) {
             return { error: err?.message || String(err) };
         }
     });
+    ipcMain.handle('agent-generate-image', async (_event, prompt, options) => {
+        try {
+            const payload = {
+                ...(options && typeof options === 'object' && !Array.isArray(options) ? options : {}),
+                prompt: typeof prompt === 'string' ? prompt : '',
+            };
+            const result = await sendAgentQuery({
+                type: 'generate-image',
+                args_json: JSON.stringify(payload),
+            }, 'image-generation-result', 120000);
+            if (result && typeof result === 'object' && typeof result.path === 'string' && result.path.trim()) {
+                return {
+                    ...result,
+                    file_url: pathToFileURL(result.path).href,
+                };
+            }
+            return result;
+        } catch (err) {
+            return { error: err?.message || String(err) };
+        }
+    });
     ipcMain.handle('agent-activate-generated-tool', async (_event, toolName) => {
         try {
             return await sendAgentQuery({
@@ -392,7 +413,7 @@ function registerAgentIpcHandlers(ipcMain, runtime, options = {}) {
     ipcMain.handle('agent-set-provider-model', async (_event, providerId, model) => { try { sendAgentCommand({ type: 'set-provider-model', provider_id: providerId, model }); return { ok: true }; } catch (err) { return { ok: false, error: err.message }; } });
     ipcMain.handle('agent-set-target-agent-provider-model', async (_event, targetAgentId, providerId, model) => { try { sendAgentCommand({ type: 'set-target-agent-provider-model', target_agent_id: targetAgentId, provider_id: providerId, model }); return { ok: true }; } catch (err) { return { ok: false, error: err.message }; } });
     ipcMain.handle('agent-set-tier-override', async (_event, tier) => { try { sendAgentCommand({ type: 'set-tier-override', tier: tier || null }); return { ok: true }; } catch (err) { return { ok: false, error: err.message }; } });
-    ipcMain.handle('gateway:get-config', async () => { try { const config = await sendAgentQuery({ type: 'get-config' }, 'config'); return config?.gateway ?? {}; } catch (err) { logToFile('warn', '[gateway] get-config IPC error', { error: err.message }); return {}; } });
+    ipcMain.handle('gateway:get-config', async () => { try { return await sendAgentQuery({ type: 'get-gateway-config' }, 'gateway-config'); } catch (err) { logToFile('warn', '[gateway] get-config IPC error', { error: err.message }); return {}; } });
     ipcMain.handle('gateway:set-config', async (_event, patch) => {
         try {
             for (const [key, value] of Object.entries(patch || {})) {

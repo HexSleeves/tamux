@@ -132,6 +132,48 @@ fn daemon_message_roundtrips_models_response_with_operation_id() {
 }
 
 #[test]
+fn daemon_message_roundtrips_goal_run_detail_placeholder_payload() {
+    let msg = DaemonMessage::AgentGoalRunDetail {
+        goal_run_json: serde_json::json!({
+            "id": "goal-1",
+        })
+        .to_string(),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    match decoded {
+        DaemonMessage::AgentGoalRunDetail { goal_run_json } => {
+            let goal_run: serde_json::Value = serde_json::from_str(&goal_run_json).unwrap();
+            assert_eq!(
+                goal_run.get("id").and_then(serde_json::Value::as_str),
+                Some("goal-1")
+            );
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
+}
+
+#[test]
+fn daemon_message_roundtrips_empty_goal_checkpoint_list_with_goal_id() {
+    let msg = DaemonMessage::AgentCheckpointList {
+        goal_run_id: "goal-1".to_string(),
+        checkpoints_json: "[]".to_string(),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    match decoded {
+        DaemonMessage::AgentCheckpointList {
+            goal_run_id,
+            checkpoints_json,
+        } => {
+            assert_eq!(goal_run_id, "goal-1");
+            assert_eq!(checkpoints_json, "[]");
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
+}
+
+#[test]
 fn daemon_message_roundtrips_agent_tool_list() {
     let msg = DaemonMessage::AgentToolList {
         result: ToolListResultPublic {
@@ -349,6 +391,32 @@ fn daemon_message_roundtrips_agent_semantic_query_result() {
 }
 
 #[test]
+fn client_message_roundtrips_agent_fetch_models_with_output_filter() {
+    let msg = ClientMessage::AgentFetchModels {
+        provider_id: "openrouter".to_string(),
+        base_url: "https://openrouter.ai/api/v1".to_string(),
+        api_key: "router-key".to_string(),
+        output_modalities: Some("image".to_string()),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+    match decoded {
+        ClientMessage::AgentFetchModels {
+            provider_id,
+            base_url,
+            api_key,
+            output_modalities,
+        } => {
+            assert_eq!(provider_id, "openrouter");
+            assert_eq!(base_url, "https://openrouter.ai/api/v1");
+            assert_eq!(api_key, "router-key");
+            assert_eq!(output_modalities.as_deref(), Some("image"));
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
+}
+
+#[test]
 fn client_message_roundtrips_agent_execute_memory_tool() {
     let msg = ClientMessage::AgentExecuteMemoryTool {
         tool_name: "search_memory".to_string(),
@@ -417,6 +485,27 @@ fn client_message_roundtrips_agent_text_to_speech() {
 }
 
 #[test]
+fn client_message_roundtrips_agent_generate_image() {
+    let msg = ClientMessage::AgentGenerateImage {
+        args_json: serde_json::json!({
+            "thread_id": "thread-image",
+            "prompt": "cinematic neon city"
+        })
+        .to_string(),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+    match decoded {
+        ClientMessage::AgentGenerateImage { args_json } => {
+            let payload: serde_json::Value = serde_json::from_str(&args_json).unwrap();
+            assert_eq!(payload["thread_id"], "thread-image");
+            assert_eq!(payload["prompt"], "cinematic neon city");
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
+}
+
+#[test]
 fn daemon_message_roundtrips_agent_memory_tool_result() {
     let msg = DaemonMessage::AgentMemoryToolResult {
         content: serde_json::json!({
@@ -473,6 +562,29 @@ fn daemon_message_roundtrips_agent_text_to_speech_result() {
             let payload: serde_json::Value = serde_json::from_str(&content).unwrap();
             assert_eq!(payload["path"], "/tmp/speech.mp3");
             assert_eq!(payload["mime_type"], "audio/mpeg");
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
+}
+
+#[test]
+fn daemon_message_roundtrips_agent_generate_image_result() {
+    let msg = DaemonMessage::AgentGenerateImageResult {
+        content: serde_json::json!({
+            "thread_id": "thread-image",
+            "path": "/tmp/thread-image/result.png",
+            "mime_type": "image/png"
+        })
+        .to_string(),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    match decoded {
+        DaemonMessage::AgentGenerateImageResult { content } => {
+            let payload: serde_json::Value = serde_json::from_str(&content).unwrap();
+            assert_eq!(payload["thread_id"], "thread-image");
+            assert_eq!(payload["path"], "/tmp/thread-image/result.png");
+            assert_eq!(payload["mime_type"], "image/png");
         }
         other => panic!("unexpected variant: {:?}", other),
     }
@@ -689,6 +801,67 @@ fn daemon_message_roundtrips_operation_status_snapshot() {
     let bytes = bincode::serialize(&msg).unwrap();
     let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
     assert!(matches!(decoded, DaemonMessage::OperationStatus { .. }));
+}
+
+#[test]
+fn daemon_message_roundtrips_task_approval_rules_with_missing_last_used_at() {
+    let msg = DaemonMessage::AgentTaskApprovalRules {
+        rules: vec![TaskApprovalRule {
+            id: "rule-1".to_string(),
+            command: "review low-confidence goal plan".to_string(),
+            created_at: 1,
+            last_used_at: None,
+            use_count: 0,
+        }],
+    };
+
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    match decoded {
+        DaemonMessage::AgentTaskApprovalRules { rules } => {
+            assert_eq!(rules.len(), 1);
+            assert_eq!(rules[0].id, "rule-1");
+            assert_eq!(rules[0].last_used_at, None);
+            assert_eq!(rules[0].use_count, 0);
+        }
+        other => panic!("expected task approval rules, got {other:?}"),
+    }
+}
+
+#[test]
+fn daemon_message_roundtrips_plugin_list_with_missing_optional_metadata() {
+    let msg = DaemonMessage::PluginListResult {
+        plugins: vec![PluginInfo {
+            name: "calendar".to_string(),
+            version: "1.1.0".to_string(),
+            description: None,
+            author: None,
+            enabled: true,
+            install_source: "bundled".to_string(),
+            has_api: true,
+            has_auth: true,
+            has_commands: true,
+            has_skills: true,
+            endpoint_count: 5,
+            settings_count: 3,
+            installed_at: "2026-04-20T00:00:00Z".to_string(),
+            updated_at: "2026-04-20T00:00:00Z".to_string(),
+            auth_status: "disconnected".to_string(),
+        }],
+    };
+
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    match decoded {
+        DaemonMessage::PluginListResult { plugins } => {
+            assert_eq!(plugins.len(), 1);
+            assert_eq!(plugins[0].name, "calendar");
+            assert_eq!(plugins[0].description, None);
+            assert_eq!(plugins[0].author, None);
+            assert_eq!(plugins[0].auth_status, "disconnected");
+        }
+        other => panic!("expected plugin list result, got {other:?}"),
+    }
 }
 
 #[test]
@@ -968,14 +1141,20 @@ fn agent_list_threads_round_trip_preserves_pagination_arguments() {
     let msg = ClientMessage::AgentListThreads {
         limit: Some(20),
         offset: Some(40),
+        include_internal: true,
     };
 
     let bytes = bincode::serialize(&msg).unwrap();
     let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
     match decoded {
-        ClientMessage::AgentListThreads { limit, offset } => {
+        ClientMessage::AgentListThreads {
+            limit,
+            offset,
+            include_internal,
+        } => {
             assert_eq!(limit, Some(20));
             assert_eq!(offset, Some(40));
+            assert!(include_internal);
         }
         other => panic!("unexpected variant: {:?}", other),
     }

@@ -110,6 +110,9 @@ pub enum ClientEvent {
         goal_run_id: String,
         checkpoints: Vec<CheckpointSummary>,
     },
+    GoalHydrationScheduleFailed {
+        goal_run_id: String,
+    },
     AgentExplanation(serde_json::Value),
     DivergentSessionStarted(serde_json::Value),
     DivergentSession(serde_json::Value),
@@ -331,6 +334,9 @@ pub enum ClientEvent {
         content: String,
     },
     TextToSpeechResult {
+        content: String,
+    },
+    GenerateImageResult {
         content: String,
     },
     OperatorProfileSessionCompleted {

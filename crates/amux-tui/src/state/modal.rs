@@ -9,8 +9,10 @@ pub enum ModalKind {
     ThreadParticipants,
     ThreadPicker,
     GoalPicker,
+    GoalStepActionPicker,
     ProviderPicker,
     ModelPicker,
+    RolePicker,
     OpenAIAuth,
     ErrorViewer,
     QueuedPrompts,
@@ -28,37 +30,36 @@ pub enum ModalKind {
     WhatsAppLink,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ThreadPickerTab {
-    #[default]
     Swarog,
     Rarog,
     Weles,
     Playgrounds,
     Internal,
+    Gateway,
+    Agent(String),
+}
+
+impl Default for ThreadPickerTab {
+    fn default() -> Self {
+        Self::Swarog
+    }
 }
 
 impl ThreadPickerTab {
-    const ALL: [ThreadPickerTab; 5] = [
-        ThreadPickerTab::Swarog,
-        ThreadPickerTab::Rarog,
-        ThreadPickerTab::Weles,
-        ThreadPickerTab::Playgrounds,
-        ThreadPickerTab::Internal,
-    ];
-
-    pub fn prev(self) -> Self {
-        let index = Self::ALL.iter().position(|tab| *tab == self).unwrap_or(0);
-        if index == 0 {
-            Self::ALL[Self::ALL.len() - 1]
-        } else {
-            Self::ALL[index - 1]
-        }
+    pub fn is_playgrounds(&self) -> bool {
+        matches!(self, Self::Playgrounds)
     }
 
-    pub fn next(self) -> Self {
-        let index = Self::ALL.iter().position(|tab| *tab == self).unwrap_or(0);
-        Self::ALL[(index + 1) % Self::ALL.len()]
+    pub fn agent_id(&self) -> Option<&str> {
+        match self {
+            Self::Swarog => Some(amux_protocol::AGENT_ID_SWAROG),
+            Self::Rarog => Some(amux_protocol::AGENT_ID_RAROG),
+            Self::Weles => Some("weles"),
+            Self::Agent(agent_id) => Some(agent_id.as_str()),
+            Self::Playgrounds | Self::Internal | Self::Gateway => None,
+        }
     }
 }
 
@@ -168,7 +169,7 @@ impl ModalState {
         };
     }
     pub fn thread_picker_tab(&self) -> ThreadPickerTab {
-        self.thread_picker_tab
+        self.thread_picker_tab.clone()
     }
     pub fn set_thread_picker_tab(&mut self, tab: ThreadPickerTab) {
         self.thread_picker_tab = tab;
@@ -387,6 +388,10 @@ fn default_command_items() -> Vec<CommandItem> {
             description: "Switch Svarog's model".into(),
         },
         CommandItem {
+            command: "image".into(),
+            description: "Compose an image generation prompt".into(),
+        },
+        CommandItem {
             command: "tools".into(),
             description: "Toggle tool categories".into(),
         },
@@ -403,12 +408,12 @@ fn default_command_items() -> Vec<CommandItem> {
             description: "New conversation".into(),
         },
         CommandItem {
-            command: "goal".into(),
-            description: "Open Goal Runner view".into(),
+            command: "new-goal".into(),
+            description: "Open new goal composer".into(),
         },
         CommandItem {
-            command: "goals".into(),
-            description: "Open Goal Runner view".into(),
+            command: "goal".into(),
+            description: "Open goal picker".into(),
         },
         CommandItem {
             command: "conversation".into(),

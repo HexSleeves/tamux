@@ -44,6 +44,12 @@ impl TuiModel {
     }
 
     fn sidebar_visible(&self) -> bool {
+        if matches!(
+            self.main_pane_view,
+            MainPaneView::Task(SidebarItemTarget::GoalRun { .. })
+        ) {
+            return false;
+        }
         if !matches!(
             self.main_pane_view,
             MainPaneView::Conversation | MainPaneView::WorkContext
@@ -82,9 +88,13 @@ impl TuiModel {
                 modal::ModalKind::ThreadParticipants => "modal:thread_participants".to_string(),
                 modal::ModalKind::ThreadPicker => "modal:thread_picker".to_string(),
                 modal::ModalKind::GoalPicker => "modal:goal_picker".to_string(),
+                modal::ModalKind::GoalStepActionPicker => {
+                    "modal:goal_step_action_picker".to_string()
+                }
                 modal::ModalKind::QueuedPrompts => "modal:queued_prompts".to_string(),
                 modal::ModalKind::ProviderPicker => "modal:provider_picker".to_string(),
                 modal::ModalKind::ModelPicker => "modal:model_picker".to_string(),
+                modal::ModalKind::RolePicker => "modal:role_picker".to_string(),
                 modal::ModalKind::OpenAIAuth => "modal:openai_auth".to_string(),
                 modal::ModalKind::ErrorViewer => "modal:error_viewer".to_string(),
                 modal::ModalKind::EffortPicker => "modal:effort_picker".to_string(),

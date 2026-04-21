@@ -4,8 +4,14 @@ use super::*;
 mod enter;
 
 impl TuiModel {
+    fn matches_shift_char(code: KeyCode, modifiers: KeyModifiers, expected: char) -> bool {
+        modifiers.contains(KeyModifiers::SHIFT)
+            && matches!(code, KeyCode::Char(ch) if ch.eq_ignore_ascii_case(&expected))
+    }
+
     fn pinned_shortcut_scope_active(&self) -> bool {
-        self.sidebar_visible()
+        !self.sidebar_uses_goal_sidebar()
+            && self.sidebar_visible()
             && self.sidebar.active_tab() == sidebar::SidebarTab::Pinned
             && self.chat.active_thread_has_pinned_messages()
     }
@@ -15,6 +21,11 @@ impl TuiModel {
     }
 
     fn step_sidebar_tab(&mut self, delta: i32) {
+        if self.sidebar_uses_goal_sidebar() {
+            self.step_goal_sidebar_tab(delta);
+            return;
+        }
+
         let tabs = self.sidebar_navigation_tabs();
         let Some(last_index) = tabs.len().checked_sub(1) else {
             return;
@@ -112,7 +123,7 @@ impl TuiModel {
                     }
                 }
                 KeyCode::Char('r') => {
-                    self.send_daemon_command(DaemonCommand::RetryOperatorProfile);
+                    self.retry_operator_profile_request();
                     self.status_line = "Retrying operator profile operation…".to_string();
                     self.show_input_notice(
                         "Retrying operator profile operation…",
@@ -158,8 +169,22 @@ impl TuiModel {
             return false;
         }
         if code == KeyCode::Char('s') && ctrl {
-            self.stop_voice_playback();
-            return false;
+            if self.modal.top() == Some(modal::ModalKind::GoalPicker) {
+                return self.handle_key_modal(code, modifiers, modal::ModalKind::GoalPicker);
+            }
+            if self.focus == FocusArea::Chat
+                && matches!(
+                    self.main_pane_view,
+                    MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                )
+                && self.request_selected_goal_run_toggle_confirmation()
+            {
+                return false;
+            }
+            if self.voice_player.is_some() {
+                self.stop_voice_playback();
+                return false;
+            }
         }
         if code == KeyCode::Char('a') && ctrl {
             match self.modal.top() {
@@ -179,7 +204,37 @@ impl TuiModel {
             return false;
         }
 
+        if self.focus == FocusArea::Chat
+            && self.goal_workspace.focused_pane()
+                == crate::state::goal_workspace::GoalWorkspacePane::CommandBar
+            && matches!(
+                self.main_pane_view,
+                MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+            )
+            && !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            let target_mode = match code {
+                KeyCode::Char('1') => Some(crate::state::goal_workspace::GoalWorkspaceMode::Goal),
+                KeyCode::Char('2') => {
+                    Some(crate::state::goal_workspace::GoalWorkspaceMode::Progress)
+                }
+                KeyCode::Char('3') => {
+                    Some(crate::state::goal_workspace::GoalWorkspaceMode::ActiveAgent)
+                }
+                KeyCode::Char('4') => Some(crate::state::goal_workspace::GoalWorkspaceMode::Threads),
+                KeyCode::Char('5') => Some(
+                    crate::state::goal_workspace::GoalWorkspaceMode::NeedsAttention,
+                ),
+                _ => None,
+            };
+            if let Some(mode) = target_mode {
+                self.set_goal_workspace_mode(mode);
+                return false;
+            }
+        }
+
         if self.focus == FocusArea::Sidebar
+            && !self.sidebar_uses_goal_sidebar()
             && self.sidebar.active_tab() == sidebar::SidebarTab::Files
             && !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
         {
@@ -367,6 +422,14 @@ impl TuiModel {
             self.clear_pending_stop();
         }
 
+        if code == KeyCode::Esc
+            && matches!(self.main_pane_view, MainPaneView::GoalComposer)
+            && self.cancel_goal_mission_control()
+        {
+            self.clear_pending_stop();
+            return false;
+        }
+
         match code {
             KeyCode::Char('p') if ctrl && self.focus != FocusArea::Chat => self
                 .modal
@@ -381,6 +444,13 @@ impl TuiModel {
                     .reduce(modal::ModalAction::Push(modal::ModalKind::GoalPicker));
                 self.sync_goal_picker_item_count();
                 self.focus = FocusArea::Chat;
+            }
+            KeyCode::Char('o')
+                if ctrl
+                    && matches!(self.main_pane_view, MainPaneView::GoalComposer)
+                    && self.mission_control_has_thread_target() =>
+            {
+                let _ = self.open_mission_control_goal_thread();
             }
             KeyCode::Char('n') if ctrl => {
                 self.toggle_notifications_modal();
@@ -422,7 +492,7 @@ impl TuiModel {
                     .as_ref()
                     .is_some_and(|notice| notice.text.contains("operator profile"))
                 {
-                    self.send_daemon_command(DaemonCommand::RetryOperatorProfile);
+                    self.retry_operator_profile_request();
                     self.status_line = "Retrying operator profile operation…".to_string();
                     self.show_input_notice(
                         "Retrying operator profile operation…",
@@ -585,6 +655,33 @@ impl TuiModel {
                         ));
                     } else if matches!(
                         self.main_pane_view,
+                        MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                    ) {
+                        match self.goal_workspace.focused_pane() {
+                            crate::state::goal_workspace::GoalWorkspacePane::Plan => {
+                                self.step_goal_workspace_plan_selection(1);
+                            }
+                            crate::state::goal_workspace::GoalWorkspacePane::Timeline => {
+                                self.step_goal_workspace_timeline_selection(1);
+                            }
+                            crate::state::goal_workspace::GoalWorkspacePane::Details => {
+                                self.step_goal_workspace_detail_selection(1);
+                            }
+                            crate::state::goal_workspace::GoalWorkspacePane::CommandBar => {}
+                        }
+                    } else if matches!(self.main_pane_view, MainPaneView::GoalComposer) {
+                        if self
+                            .goal_mission_control
+                            .cycle_selected_runtime_assignment(1)
+                        {
+                            let role_label = self
+                                .goal_mission_control
+                                .selected_runtime_row_label()
+                                .unwrap_or("assignment");
+                            self.status_line = format!("Mission Control selected {role_label}");
+                        }
+                    } else if matches!(
+                        self.main_pane_view,
                         MainPaneView::Task(_) | MainPaneView::WorkContext
                     ) {
                         self.step_detail_view_scroll(1);
@@ -592,7 +689,13 @@ impl TuiModel {
                         self.chat.select_next_message()
                     }
                 }
-                FocusArea::Sidebar => self.sidebar.navigate(1, self.sidebar_item_count()),
+                FocusArea::Sidebar => {
+                    if self.sidebar_uses_goal_sidebar() {
+                        self.navigate_goal_sidebar(1);
+                    } else {
+                        self.sidebar.navigate(1, self.sidebar_item_count());
+                    }
+                }
                 _ => {}
             },
             KeyCode::Up if self.focus != FocusArea::Input => match self.focus {
@@ -605,6 +708,33 @@ impl TuiModel {
                         ));
                     } else if matches!(
                         self.main_pane_view,
+                        MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                    ) {
+                        match self.goal_workspace.focused_pane() {
+                            crate::state::goal_workspace::GoalWorkspacePane::Plan => {
+                                self.step_goal_workspace_plan_selection(-1);
+                            }
+                            crate::state::goal_workspace::GoalWorkspacePane::Timeline => {
+                                self.step_goal_workspace_timeline_selection(-1);
+                            }
+                            crate::state::goal_workspace::GoalWorkspacePane::Details => {
+                                self.step_goal_workspace_detail_selection(-1);
+                            }
+                            crate::state::goal_workspace::GoalWorkspacePane::CommandBar => {}
+                        }
+                    } else if matches!(self.main_pane_view, MainPaneView::GoalComposer) {
+                        if self
+                            .goal_mission_control
+                            .cycle_selected_runtime_assignment(-1)
+                        {
+                            let role_label = self
+                                .goal_mission_control
+                                .selected_runtime_row_label()
+                                .unwrap_or("assignment");
+                            self.status_line = format!("Mission Control selected {role_label}");
+                        }
+                    } else if matches!(
+                        self.main_pane_view,
                         MainPaneView::Task(_) | MainPaneView::WorkContext
                     ) {
                         self.step_detail_view_scroll(-1);
@@ -612,9 +742,59 @@ impl TuiModel {
                         self.chat.select_prev_message()
                     }
                 }
-                FocusArea::Sidebar => self.sidebar.navigate(-1, self.sidebar_item_count()),
+                FocusArea::Sidebar => {
+                    if self.sidebar_uses_goal_sidebar() {
+                        self.navigate_goal_sidebar(-1);
+                    } else {
+                        self.sidebar.navigate(-1, self.sidebar_item_count());
+                    }
+                }
                 _ => {}
             },
+            KeyCode::Left
+                if self.focus == FocusArea::Chat
+                    && self.goal_workspace.focused_pane()
+                        == crate::state::goal_workspace::GoalWorkspacePane::CommandBar
+                    && matches!(
+                        self.main_pane_view,
+                        MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                    ) =>
+            {
+                self.cycle_goal_workspace_mode(-1);
+            }
+            KeyCode::Right
+                if self.focus == FocusArea::Chat
+                    && self.goal_workspace.focused_pane()
+                        == crate::state::goal_workspace::GoalWorkspacePane::CommandBar
+                    && matches!(
+                        self.main_pane_view,
+                        MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                    ) =>
+            {
+                self.cycle_goal_workspace_mode(1);
+            }
+            KeyCode::Left
+                if self.focus == FocusArea::Chat
+                    && self.goal_workspace.focused_pane()
+                        == crate::state::goal_workspace::GoalWorkspacePane::Plan
+                    && matches!(
+                        self.main_pane_view,
+                        MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                    ) =>
+            {
+                self.collapse_goal_workspace_selection();
+            }
+            KeyCode::Right
+                if self.focus == FocusArea::Chat
+                    && self.goal_workspace.focused_pane()
+                        == crate::state::goal_workspace::GoalWorkspacePane::Plan
+                    && matches!(
+                        self.main_pane_view,
+                        MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                    ) =>
+            {
+                self.expand_selected_goal_workspace_step();
+            }
             KeyCode::Left
                 if self.focus == FocusArea::Chat
                     && matches!(self.main_pane_view, MainPaneView::Collaboration) =>
@@ -649,17 +829,41 @@ impl TuiModel {
             KeyCode::Right if self.focus == FocusArea::Sidebar => {
                 self.step_sidebar_tab(1);
             }
-            KeyCode::Char('[') if self.sidebar_visible() && self.focus != FocusArea::Input => {
+            KeyCode::Char('[')
+                if self.sidebar_visible()
+                    && self.focus != FocusArea::Input
+                    && !(self.focus == FocusArea::Chat
+                        && matches!(
+                            self.main_pane_view,
+                            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                        )) =>
+            {
                 self.step_sidebar_tab(-1);
             }
-            KeyCode::Char(']') if self.sidebar_visible() && self.focus != FocusArea::Input => {
+            KeyCode::Char(']')
+                if self.sidebar_visible()
+                    && self.focus != FocusArea::Input
+                    && !(self.focus == FocusArea::Chat
+                        && matches!(
+                            self.main_pane_view,
+                            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                        )) =>
+            {
                 self.step_sidebar_tab(1);
             }
             KeyCode::Char('u')
                 if self.focus == FocusArea::Sidebar
+                    && !self.sidebar_uses_goal_sidebar()
                     && self.sidebar.active_tab() == sidebar::SidebarTab::Pinned =>
             {
                 self.unpin_selected_sidebar_message();
+            }
+            KeyCode::Char('b')
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::Conversation)
+                    && self.mission_control_return_to_goal_target().is_some() =>
+            {
+                let _ = self.return_to_goal_from_mission_control();
             }
             // Dismiss selected audit entry with 'd' key (BEAT-07)
             KeyCode::Char('d')
@@ -679,13 +883,6 @@ impl TuiModel {
                     );
                 }
             }
-            KeyCode::Char('r') if self.focus == FocusArea::Chat => {
-                if let Some(sel) = self.chat.selected_message() {
-                    self.chat.toggle_reasoning(sel);
-                } else {
-                    self.chat.toggle_last_reasoning();
-                }
-            }
             KeyCode::Char('t')
                 if self.focus == FocusArea::Chat
                     && matches!(self.main_pane_view, MainPaneView::Task(_)) =>
@@ -699,6 +896,134 @@ impl TuiModel {
             {
                 self.task_show_timeline = !self.task_show_timeline;
                 self.clamp_detail_view_scroll();
+            }
+            KeyCode::Char('a')
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::GoalComposer)
+                    && !self.goal_mission_control.runtime_mode() =>
+            {
+                self.goal_mission_control.append_preflight_assignment();
+                let role_label = self
+                    .goal_mission_control
+                    .selected_runtime_row_label()
+                    .unwrap_or("assignment");
+                self.status_line = format!("Mission Control added {role_label}");
+            }
+            KeyCode::Char('a')
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::Task(_)) =>
+            {
+                if self.open_goal_step_action_picker() {
+                    self.status_line = "Goal actions".to_string();
+                }
+            }
+            KeyCode::Char('r')
+                if self.focus == FocusArea::Chat
+                    && !modifiers.contains(KeyModifiers::SHIFT)
+                    && matches!(self.main_pane_view, MainPaneView::Task(_)) =>
+            {
+                if self.request_selected_goal_step_retry_confirmation() {
+                    self.status_line = "Retry selected goal step?".to_string();
+                }
+            }
+            KeyCode::Char(ch)
+                if self.focus == FocusArea::Chat
+                    && Self::matches_shift_char(KeyCode::Char(ch), modifiers, 'r')
+                    && matches!(self.main_pane_view, MainPaneView::Task(_)) =>
+            {
+                if self.request_selected_goal_step_rerun_confirmation() {
+                    self.status_line = "Rerun goal from selected step?".to_string();
+                }
+            }
+            KeyCode::Char('m')
+                if self.focus == FocusArea::Chat
+                    && matches!(
+                        self.main_pane_view,
+                        MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                    ) =>
+            {
+                if self.open_mission_control_runtime_editor() {
+                    self.status_line = "Opened Mission Control runtime editor".to_string();
+                } else {
+                    self.status_line = "Mission Control runtime editor is unavailable".to_string();
+                }
+            }
+            KeyCode::Char('p')
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::GoalComposer) =>
+            {
+                if !self.stage_mission_control_assignment_modal_edit(
+                    goal_mission_control::RuntimeAssignmentEditField::Provider,
+                ) {
+                    self.status_line = "Mission Control roster is unavailable".to_string();
+                }
+            }
+            KeyCode::Char('m')
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::GoalComposer) =>
+            {
+                if !self.stage_mission_control_assignment_modal_edit(
+                    goal_mission_control::RuntimeAssignmentEditField::Model,
+                ) {
+                    self.status_line = "Mission Control roster is unavailable".to_string();
+                }
+            }
+            KeyCode::Char('e')
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::GoalComposer) =>
+            {
+                if !self.stage_mission_control_assignment_modal_edit(
+                    goal_mission_control::RuntimeAssignmentEditField::ReasoningEffort,
+                ) {
+                    self.status_line = "Mission Control roster is unavailable".to_string();
+                }
+            }
+            KeyCode::Char('r')
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::GoalComposer) =>
+            {
+                if !self.stage_mission_control_assignment_modal_edit(
+                    goal_mission_control::RuntimeAssignmentEditField::Role,
+                ) {
+                    self.status_line = "Mission Control roster is unavailable".to_string();
+                }
+            }
+            KeyCode::Char('s')
+                if self.focus == FocusArea::Chat
+                    && matches!(self.main_pane_view, MainPaneView::GoalComposer)
+                    && !self.goal_mission_control.runtime_mode() =>
+            {
+                self.goal_mission_control.toggle_save_as_default_pending();
+                self.status_line = if self.goal_mission_control.save_as_default_pending {
+                    "Mission Control preflight will be saved as the new default".to_string()
+                } else {
+                    "Mission Control preflight will not overwrite defaults".to_string()
+                };
+            }
+            KeyCode::Char('[')
+                if self.focus == FocusArea::Chat
+                    && matches!(
+                        self.main_pane_view,
+                        MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                    ) =>
+            {
+                self.step_goal_step_selection(-1);
+            }
+            KeyCode::Char(']')
+                if self.focus == FocusArea::Chat
+                    && matches!(
+                        self.main_pane_view,
+                        MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                    ) =>
+            {
+                self.step_goal_step_selection(1);
+            }
+            KeyCode::Char('r') if self.focus == FocusArea::Chat => {
+                if let Some(sel) = self.chat.selected_message() {
+                    self.chat.toggle_reasoning(sel);
+                } else {
+                    self.chat.toggle_last_reasoning();
+                }
             }
             KeyCode::Char('f')
                 if self.focus == FocusArea::Chat
@@ -801,6 +1126,8 @@ impl TuiModel {
             }
             _ => {}
         }
+
+        self.sync_goal_mission_control_prompt_from_input();
 
         false
     }

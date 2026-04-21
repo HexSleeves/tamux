@@ -26,11 +26,13 @@ fn build_direct_thread_responder_config(
     agent_scope_id: &str,
     sub_agents: &[SubAgentDefinition],
 ) -> Result<Option<DirectThreadResponderConfig>> {
-    let canonical_scope = canonical_agent_id(agent_scope_id);
-    if canonical_scope == MAIN_AGENT_ID {
+    let resolved_target =
+        crate::agent::agent_identity::resolve_agent_target(agent_scope_id, sub_agents);
+    let resolved_scope = resolved_target.scope_id.as_str();
+    if resolved_scope == MAIN_AGENT_ID {
         return Ok(None);
     }
-    if canonical_scope == CONCIERGE_AGENT_ID {
+    if resolved_scope == CONCIERGE_AGENT_ID {
         let provider_id = config
             .concierge
             .provider
@@ -52,29 +54,24 @@ fn build_direct_thread_responder_config(
             tool_filter: None,
         }));
     }
-    let matched_def = if canonical_scope == crate::agent::agent_identity::WELES_AGENT_ID {
-        sub_agents
-            .iter()
-            .find(|def| def.id == crate::agent::agent_identity::WELES_BUILTIN_SUBAGENT_ID)
-            .cloned()
-    } else {
-        None
-    };
-    let builtin_persona_overrides = builtin_persona_overrides(config, canonical_scope);
-    if is_explicit_builtin_persona_scope(canonical_scope)
-        && builtin_persona_requires_setup(config, canonical_scope)
+    let matched_def = resolved_target.matched_sub_agent.clone();
+    let builtin_persona_overrides = builtin_persona_overrides(config, resolved_scope);
+    if is_explicit_builtin_persona_scope(resolved_scope)
+        && builtin_persona_requires_setup(config, resolved_scope)
     {
-        return Err(builtin_persona_setup_error(canonical_scope));
+        return Err(builtin_persona_setup_error(resolved_scope));
     }
-    let persona_prompt = if canonical_scope == crate::agent::agent_identity::WELES_AGENT_ID {
+    let persona_prompt = if resolved_scope == crate::agent::agent_identity::WELES_AGENT_ID {
         crate::agent::agent_identity::build_weles_persona_prompt(
             crate::agent::agent_identity::WELES_GOVERNANCE_SCOPE,
         )
+    } else if let Some(def) = matched_def.as_ref().filter(|def| !def.builtin) {
+        crate::agent::agent_identity::build_user_subagent_persona_prompt(def)
     } else {
-        build_spawned_persona_prompt(canonical_scope)
+        build_spawned_persona_prompt(resolved_scope)
     };
     Ok(Some(DirectThreadResponderConfig {
-        agent_name: canonical_agent_name(canonical_scope).to_string(),
+        agent_name: resolved_target.agent_name,
         provider_id: matched_def
             .as_ref()
             .map(|def| def.provider.clone())
@@ -651,6 +648,27 @@ impl<'a> SendMessageRunner<'a> {
             &active_provider_id,
             &provider_config.model,
         ));
+        if let Some(goal_run_id) = current_task_snapshot
+            .as_ref()
+            .and_then(|task| task.goal_run_id.as_deref())
+        {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&crate::agent::goal_dossier::goal_inventory_prompt_block(
+                &engine.data_dir,
+                goal_run_id,
+            ));
+            if let Some(goal_run) = engine.get_goal_run(goal_run_id).await {
+                if let Some(marker_block) =
+                    crate::agent::goal_dossier::goal_step_completion_marker_prompt_block_for_data_dir(
+                        &engine.data_dir,
+                        &goal_run,
+                    )
+                {
+                    system_prompt.push_str("\n\n");
+                    system_prompt.push_str(&marker_block);
+                }
+            }
+        }
         if let Some(injection_state) =
             crate::agent::memory_context::append_structured_memory_summary_if_needed(
                 &mut system_prompt,
@@ -962,6 +980,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn direct_thread_responder_config_preserves_user_defined_subagent() {
+        let mut config = AgentConfig::default();
+        config.system_prompt = "Main system prompt".to_string();
+        let sub_agents = vec![SubAgentDefinition {
+            id: "dola".to_string(),
+            name: "Dola".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-5.4-mini".to_string(),
+            role: Some("specialist".to_string()),
+            system_prompt: Some("Handle delegated work.".to_string()),
+            tool_whitelist: None,
+            tool_blacklist: None,
+            context_budget_tokens: None,
+            max_duration_secs: None,
+            supervisor_config: None,
+            enabled: true,
+            builtin: false,
+            immutable_identity: false,
+            disable_allowed: true,
+            delete_allowed: true,
+            protected_reason: None,
+            reasoning_effort: Some("medium".to_string()),
+            created_at: 1,
+        }];
+
+        let responder = build_direct_thread_responder_config(&config, "dola", &sub_agents)
+            .expect("config build should succeed")
+            .expect("custom subagent should produce a direct responder config");
+
+        assert_eq!(responder.agent_name, "Dola");
+        assert_eq!(responder.provider_id, "openai");
+        assert_eq!(responder.model.as_deref(), Some("gpt-5.4-mini"));
+        assert_eq!(responder.reasoning_effort.as_deref(), Some("medium"));
+        assert_eq!(responder.system_prompt, "Handle delegated work.");
+        assert!(
+            responder.persona_prompt.contains("Dola"),
+            "persona prompt should identify the targeted subagent"
+        );
+    }
+
     #[tokio::test]
     async fn participant_managed_thread_replaces_list_agents_with_list_participants() {
         let root = tempdir().expect("tempdir");
@@ -1110,6 +1169,208 @@ mod tests {
         assert!(
             tool_names.contains(&"message_agent"),
             "non-participant responder should still see message_agent"
+        );
+    }
+
+    #[tokio::test]
+    async fn durable_goal_task_prompt_includes_inventory_directories() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let task_id = "goal-task-1";
+        let inventory_root =
+            crate::agent::goal_dossier::goal_inventory_dir(&engine.data_dir, "goal-run-1");
+        let specs_dir =
+            crate::agent::goal_dossier::goal_inventory_specs_dir(&engine.data_dir, "goal-run-1");
+        let plans_dir =
+            crate::agent::goal_dossier::goal_inventory_plans_dir(&engine.data_dir, "goal-run-1");
+        let execution_dir = crate::agent::goal_dossier::goal_inventory_execution_dir(
+            &engine.data_dir,
+            "goal-run-1",
+        );
+        let marker_path = crate::agent::goal_dossier::goal_step_completion_marker_path(
+            &engine.data_dir,
+            "goal-run-1",
+            0,
+        );
+
+        engine.goal_runs.lock().await.push_back(GoalRun {
+            id: "goal-run-1".to_string(),
+            title: "Goal Inventory".to_string(),
+            goal: "Write durable goal artifacts".to_string(),
+            client_request_id: None,
+            status: GoalRunStatus::Running,
+            priority: TaskPriority::Normal,
+            created_at: 1,
+            updated_at: 1,
+            started_at: Some(1),
+            completed_at: None,
+            thread_id: Some("thread-goal-1".to_string()),
+            root_thread_id: None,
+            active_thread_id: None,
+            execution_thread_ids: Vec::new(),
+            session_id: Some("session-1".to_string()),
+            current_step_index: 0,
+            current_step_title: Some("Write plan".to_string()),
+            current_step_kind: Some(GoalRunStepKind::Command),
+            launch_assignment_snapshot: Vec::new(),
+            runtime_assignment_list: Vec::new(),
+            planner_owner_profile: None,
+            current_step_owner_profile: None,
+            replan_count: 0,
+            max_replans: 2,
+            plan_summary: None,
+            reflection_summary: None,
+            memory_updates: Vec::new(),
+            generated_skill_path: None,
+            last_error: None,
+            failure_cause: None,
+            stopped_reason: None,
+            child_task_ids: Vec::new(),
+            child_task_count: 0,
+            approval_count: 0,
+            awaiting_approval_id: None,
+            policy_fingerprint: None,
+            approval_expires_at: None,
+            containment_scope: None,
+            compensation_status: None,
+            compensation_summary: None,
+            active_task_id: None,
+            duration_ms: None,
+            steps: vec![GoalRunStep {
+                id: "goal-step-1".to_string(),
+                position: 0,
+                title: "Write plan".to_string(),
+                instructions: "Write durable goal artifacts".to_string(),
+                kind: GoalRunStepKind::Command,
+                success_criteria: "plan written".to_string(),
+                session_id: Some("session-1".to_string()),
+                status: GoalRunStepStatus::InProgress,
+                task_id: Some(task_id.to_string()),
+                summary: None,
+                error: None,
+                started_at: Some(1),
+                completed_at: None,
+            }],
+            events: Vec::new(),
+            dossier: None,
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            estimated_cost_usd: None,
+            autonomy_level: AutonomyLevel::Aware,
+            authorship_tag: None,
+        });
+
+        engine.tasks.lock().await.push_back(AgentTask {
+            id: task_id.to_string(),
+            title: "Execute goal step".to_string(),
+            description: "Write durable goal artifacts".to_string(),
+            status: TaskStatus::Queued,
+            priority: TaskPriority::Normal,
+            progress: 0,
+            created_at: 1,
+            started_at: None,
+            completed_at: None,
+            error: None,
+            result: None,
+            thread_id: None,
+            source: "goal_run".to_string(),
+            notify_on_complete: false,
+            notify_channels: Vec::new(),
+            dependencies: Vec::new(),
+            command: None,
+            session_id: Some("session-1".to_string()),
+            goal_run_id: Some("goal-run-1".to_string()),
+            goal_run_title: Some("Goal Inventory".to_string()),
+            goal_step_id: Some("goal-step-1".to_string()),
+            goal_step_title: Some("Write plan".to_string()),
+            parent_task_id: None,
+            parent_thread_id: None,
+            runtime: "daemon".to_string(),
+            retry_count: 0,
+            max_retries: 0,
+            next_retry_at: None,
+            scheduled_at: None,
+            blocked_reason: None,
+            awaiting_approval_id: None,
+            policy_fingerprint: None,
+            approval_expires_at: None,
+            containment_scope: None,
+            compensation_status: None,
+            compensation_summary: None,
+            lane_id: None,
+            last_error: None,
+            logs: Vec::new(),
+            tool_whitelist: None,
+            tool_blacklist: None,
+            context_budget_tokens: None,
+            context_overflow_action: None,
+            termination_conditions: None,
+            success_criteria: None,
+            max_duration_secs: None,
+            supervisor_config: None,
+            override_provider: None,
+            override_model: None,
+            override_system_prompt: None,
+            sub_agent_def_id: None,
+        });
+
+        let runner = SendMessageRunner::initialize(
+            &engine,
+            None,
+            "continue goal work",
+            &[],
+            "continue goal work",
+            Some(task_id),
+            None,
+            None,
+            None,
+            true,
+            true,
+            0,
+        )
+        .await
+        .expect("runner should initialize");
+
+        assert!(
+            runner
+                .system_prompt
+                .contains(&format!("{}/", inventory_root.display())),
+            "expected inventory root in the goal task prompt"
+        );
+        assert!(
+            runner
+                .system_prompt
+                .contains(&format!("{}/", specs_dir.display())),
+            "expected specs dir in the goal task prompt"
+        );
+        assert!(
+            runner
+                .system_prompt
+                .contains(&format!("{}/", plans_dir.display())),
+            "expected plans dir in the goal task prompt"
+        );
+        assert!(
+            runner
+                .system_prompt
+                .contains(&format!("{}/", execution_dir.display())),
+            "expected execution dir in the goal task prompt"
+        );
+        assert!(
+            runner.system_prompt.contains("Step 1 of 1"),
+            "expected human-readable current step label in the goal task prompt"
+        );
+        assert!(
+            runner
+                .system_prompt
+                .contains(&marker_path.display().to_string()),
+            "expected completion marker file path in the goal task prompt"
+        );
+        assert!(
+            runner
+                .system_prompt
+                .contains("This step cannot be marked complete until that file exists"),
+            "expected hard completion marker requirement in the goal task prompt"
         );
     }
 

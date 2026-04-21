@@ -1,6 +1,8 @@
 use crate::app::ChatFilePreviewTarget;
 use crate::state::task::TaskState;
+use crate::terminal_graphics::{active_protocol, TerminalImageOverlaySpec, TerminalImageProtocol};
 use crate::theme::ThemeTokens;
+use crate::widgets::image_preview;
 use crate::widgets::message::{render_markdown_pub, wrap_text};
 use ratatui::prelude::*;
 use ratatui::style::{Modifier, Style};
@@ -8,6 +10,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 const SCROLLBAR_WIDTH: u16 = 1;
+const FILE_PREVIEW_HEADER_LINES: u16 = 5;
+const TERMINAL_IMAGE_HEADER_LINES: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FilePreviewScrollbarLayout {
@@ -102,6 +106,7 @@ fn build_lines(
     tasks: &TaskState,
     target: &ChatFilePreviewTarget,
     theme: &ThemeTokens,
+    scroll: usize,
 ) -> Vec<Line<'static>> {
     let width = area.width as usize;
     let mut lines = vec![Line::from(vec![
@@ -119,6 +124,8 @@ fn build_lines(
         "Preview",
         theme.accent_primary.add_modifier(Modifier::BOLD),
     )));
+    let image_preview_height = area.height.saturating_sub(lines.len() as u16).max(1) as usize;
+    let use_terminal_graphics = uses_terminal_graphics(target, scroll);
 
     if let Some(repo_root) = target.repo_root.as_deref() {
         let diff_key = target
@@ -158,6 +165,15 @@ fn build_lines(
     if let Some(preview) = tasks.preview_for_path(&target.path) {
         if preview.is_text {
             push_preview_content(&mut lines, &target.path, &preview.content, width, theme);
+        } else if use_terminal_graphics {
+            push_terminal_graphics_placeholder(&mut lines, image_preview_height, theme);
+        } else if image_preview::is_previewable_image_path(&target.path) {
+            lines.extend(image_preview::render_image_preview_lines(
+                &target.path,
+                width,
+                image_preview_height,
+                theme,
+            ));
         } else {
             push_wrapped(
                 &mut lines,
@@ -167,10 +183,82 @@ fn build_lines(
             );
         }
     } else {
-        push_wrapped(&mut lines, "Loading preview...", theme.fg_dim, width);
+        if image_preview::is_previewable_image_path(&target.path) {
+            if use_terminal_graphics {
+                push_terminal_graphics_placeholder(&mut lines, image_preview_height, theme);
+            } else {
+                lines.extend(image_preview::render_image_preview_lines(
+                    &target.path,
+                    width,
+                    image_preview_height,
+                    theme,
+                ));
+            }
+        } else {
+            push_wrapped(&mut lines, "Loading preview...", theme.fg_dim, width);
+        }
     }
 
     lines
+}
+
+fn uses_terminal_graphics(target: &ChatFilePreviewTarget, scroll: usize) -> bool {
+    scroll == 0
+        && target.repo_root.is_none()
+        && active_protocol() != TerminalImageProtocol::None
+        && image_preview::resolve_local_image_path(&target.path)
+            .as_deref()
+            .is_some_and(image_preview::is_previewable_image_path)
+}
+
+fn push_terminal_graphics_placeholder(
+    lines: &mut Vec<Line<'static>>,
+    image_preview_height: usize,
+    theme: &ThemeTokens,
+) {
+    lines.push(Line::from(vec![
+        Span::styled("Image: ", theme.fg_dim),
+        Span::styled("high-quality terminal preview", theme.fg_active),
+    ]));
+    for _ in 1..image_preview_height {
+        lines.push(Line::raw(""));
+    }
+}
+
+pub fn terminal_image_overlay_spec(
+    area: Rect,
+    tasks: &TaskState,
+    target: &ChatFilePreviewTarget,
+    theme: &ThemeTokens,
+    scroll: usize,
+) -> Option<TerminalImageOverlaySpec> {
+    if !uses_terminal_graphics(target, scroll) {
+        return None;
+    }
+
+    let content = scrollbar_layout(area, tasks, target, theme, scroll)
+        .map(|layout| layout.content)
+        .unwrap_or(area);
+    let path = image_preview::resolve_local_image_path(&target.path)?;
+    let image_row = content
+        .y
+        .saturating_add(FILE_PREVIEW_HEADER_LINES)
+        .saturating_add(TERMINAL_IMAGE_HEADER_LINES);
+    let image_rows = content
+        .height
+        .saturating_sub(FILE_PREVIEW_HEADER_LINES)
+        .saturating_sub(TERMINAL_IMAGE_HEADER_LINES);
+    if content.width == 0 || image_rows == 0 {
+        return None;
+    }
+
+    Some(TerminalImageOverlaySpec {
+        path,
+        column: content.x,
+        row: image_row,
+        cols: content.width,
+        rows: image_rows,
+    })
 }
 
 pub fn hit_test(
@@ -213,7 +301,7 @@ pub fn render(
     let layout = scrollbar_layout(area, tasks, target, theme, scroll);
     let content = layout.map(|layout| layout.content).unwrap_or(area);
     let resolved_scroll = layout.map(|layout| layout.scroll).unwrap_or(scroll);
-    let visible = build_lines(content, tasks, target, theme)
+    let visible = build_lines(content, tasks, target, theme, resolved_scroll)
         .into_iter()
         .skip(resolved_scroll)
         .take(content.height as usize)
@@ -254,7 +342,7 @@ pub fn max_scroll(
     scrollbar_layout(area, tasks, target, theme, 0)
         .map(|layout| layout.max_scroll)
         .unwrap_or_else(|| {
-            build_lines(area, tasks, target, theme)
+            build_lines(area, tasks, target, theme, 0)
                 .len()
                 .saturating_sub(area.height as usize)
         })
@@ -271,7 +359,7 @@ fn scrollbar_layout(
         return None;
     }
 
-    let full_lines = build_lines(area, tasks, target, theme);
+    let full_lines = build_lines(area, tasks, target, theme, scroll);
     if full_lines.len() <= area.height as usize {
         return None;
     }
@@ -282,6 +370,37 @@ fn scrollbar_layout(
         area.width.saturating_sub(SCROLLBAR_WIDTH),
         area.height,
     );
-    let all_lines = build_lines(content, tasks, target, theme);
+    let all_lines = build_lines(content, tasks, target, theme, scroll);
     scrollbar_layout_from_metrics(area, all_lines.len(), scroll)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_image_overlay_spec_targets_file_preview_body() {
+        crate::terminal_graphics::set_active_protocol_for_tests(TerminalImageProtocol::Kitty);
+
+        let target = ChatFilePreviewTarget {
+            path: "/tmp/demo.png".to_string(),
+            repo_root: None,
+            repo_relative_path: None,
+        };
+        let spec = terminal_image_overlay_spec(
+            Rect::new(0, 0, 80, 30),
+            &TaskState::default(),
+            &target,
+            &ThemeTokens::default(),
+            0,
+        )
+        .expect("expected file preview image overlay spec");
+
+        assert_eq!(spec.column, 0);
+        assert_eq!(spec.row, 6);
+        assert_eq!(spec.cols, 80);
+        assert_eq!(spec.rows, 24);
+
+        crate::terminal_graphics::set_active_protocol_for_tests(TerminalImageProtocol::None);
+    }
 }

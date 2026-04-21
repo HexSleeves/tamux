@@ -251,8 +251,13 @@ impl ApprovalState {
             ApprovalAction::SetFilter(filter) => {
                 self.filter = filter;
                 match filter {
-                    ApprovalFilter::SavedRules => self.selected_approval_id = None,
-                    _ => self.selected_rule_id = None,
+                    ApprovalFilter::SavedRules => {
+                        self.selected_approval_id = None;
+                    }
+                    _ => {
+                        self.selected_rule_id = None;
+                        self.selected_approval_id = None;
+                    }
                 }
             }
 

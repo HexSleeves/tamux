@@ -6,7 +6,7 @@
 
 mod commands;
 mod config_io;
-mod conversion;
+pub(crate) mod conversion;
 mod events;
 mod input_ops;
 mod keyboard;
@@ -81,6 +81,20 @@ enum MainPaneView {
     GoalComposer,
 }
 
+#[derive(Clone, Debug, Default)]
+struct MissionControlNavigationState {
+    source_goal_target: Option<sidebar::SidebarItemTarget>,
+    return_to_goal_target: Option<sidebar::SidebarItemTarget>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum GoalSidebarSelectionAnchor {
+    Step(String),
+    Checkpoint(String),
+    Task(String),
+    File { thread_id: String, path: String },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsPickerTarget {
     Provider,
@@ -89,6 +103,8 @@ enum SettingsPickerTarget {
     AudioSttModel,
     AudioTtsProvider,
     AudioTtsModel,
+    ImageGenerationProvider,
+    ImageGenerationModel,
     BuiltinPersonaProvider,
     BuiltinPersonaModel,
     CompactionWelesProvider,
@@ -97,6 +113,7 @@ enum SettingsPickerTarget {
     CompactionCustomModel,
     SubAgentProvider,
     SubAgentModel,
+    SubAgentRole,
     SubAgentReasoningEffort,
     ConciergeProvider,
     ConciergeModel,
@@ -121,15 +138,55 @@ struct InputNotice {
 
 #[derive(Clone, Debug)]
 enum PendingConfirmAction {
-    RegenerateMessage { message_index: usize },
-    DeleteMessage { message_index: usize },
-    DeleteThread { thread_id: String, title: String },
-    StopThread { thread_id: String, title: String },
-    ResumeThread { thread_id: String, title: String },
-    DeleteGoalRun { goal_run_id: String, title: String },
-    PauseGoalRun { goal_run_id: String, title: String },
-    ResumeGoalRun { goal_run_id: String, title: String },
-    ReuseModelAsStt { model_id: String },
+    RegenerateMessage {
+        message_index: usize,
+    },
+    DeleteMessage {
+        message_index: usize,
+    },
+    DeleteThread {
+        thread_id: String,
+        title: String,
+    },
+    StopThread {
+        thread_id: String,
+        title: String,
+    },
+    ResumeThread {
+        thread_id: String,
+        title: String,
+    },
+    DeleteGoalRun {
+        goal_run_id: String,
+        title: String,
+    },
+    PauseGoalRun {
+        goal_run_id: String,
+        title: String,
+    },
+    StopGoalRun {
+        goal_run_id: String,
+        title: String,
+    },
+    ResumeGoalRun {
+        goal_run_id: String,
+        title: String,
+    },
+    RetryGoalStep {
+        goal_run_id: String,
+        goal_title: String,
+        step_index: usize,
+        step_title: String,
+    },
+    RerunGoalFromStep {
+        goal_run_id: String,
+        goal_title: String,
+        step_index: usize,
+        step_title: String,
+    },
+    ReuseModelAsStt {
+        model_id: String,
+    },
 }
 
 impl PendingConfirmAction {
@@ -156,11 +213,46 @@ impl PendingConfirmAction {
             PendingConfirmAction::PauseGoalRun { title, .. } => {
                 format!("Pause goal run \"{title}\"?")
             }
+            PendingConfirmAction::StopGoalRun { title, .. } => {
+                format!("Stop goal run \"{title}\"?")
+            }
             PendingConfirmAction::ResumeGoalRun { title, .. } => {
                 format!("Resume goal run \"{title}\"?")
             }
-            PendingConfirmAction::ReuseModelAsStt { .. } => {
-                "Selected model supports audio. Use it as the STT model too?".to_string()
+            PendingConfirmAction::RetryGoalStep {
+                goal_title,
+                step_index,
+                step_title,
+                ..
+            } => format!(
+                "Retry step {} \"{}\" in goal \"{}\"?",
+                step_index + 1,
+                step_title,
+                goal_title
+            ),
+            PendingConfirmAction::RerunGoalFromStep {
+                goal_title,
+                step_index,
+                step_title,
+                ..
+            } => format!(
+                "Rerun from step {} \"{}\" in goal \"{}\"?",
+                step_index + 1,
+                step_title,
+                goal_title
+            ),
+            PendingConfirmAction::ReuseModelAsStt { model_id } => {
+                if model_id == "__mission_control__:next_turn" {
+                    "Apply the pending Mission Control roster change on the next turn?".to_string()
+                } else if model_id == "__mission_control__:reassign_active_step" {
+                    "Reassign the active step with the pending Mission Control roster change?"
+                        .to_string()
+                } else if model_id == "__mission_control__:restart_active_step" {
+                    "Restart the active step with the pending Mission Control roster change?"
+                        .to_string()
+                } else {
+                    "Selected model supports audio. Use it as the STT model too?".to_string()
+                }
             }
         }
     }
@@ -348,12 +440,23 @@ struct OperatorProfileOnboardingState {
     warning: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingReconnectRestore {
+    thread_id: String,
+    should_resume: bool,
+}
+
 pub struct TuiModel {
     // State modules
     chat: chat::ChatState,
     input: input::InputState,
     modal: modal::ModalState,
     sidebar: sidebar::SidebarState,
+    goal_sidebar: goal_sidebar::GoalSidebarState,
+    goal_mission_control: goal_mission_control::GoalMissionControlState,
+    goal_workspace: goal_workspace::GoalWorkspaceState,
+    mission_control_navigation: MissionControlNavigationState,
+    goal_sidebar_selection_anchor: Option<GoalSidebarSelectionAnchor>,
     tasks: task::TaskState,
     config: config::ConfigState,
     approval: approval::ApprovalState,
@@ -388,6 +491,7 @@ pub struct TuiModel {
     // Agent activity state (from daemon events, not local buffers)
     agent_activity: Option<String>,
     thread_agent_activity: std::collections::HashMap<String, String>,
+    bootstrap_pending_activity_threads: std::collections::HashSet<String>,
     participant_playground_activity:
         std::collections::HashMap<String, ParticipantPlaygroundActivity>,
 
@@ -455,6 +559,8 @@ pub struct TuiModel {
 
     // Thread currently awaiting full detail from the daemon.
     thread_loading_id: Option<String>,
+    pending_reconnect_restore: Option<PendingReconnectRestore>,
+    pending_goal_hydration_refreshes: std::collections::HashSet<String>,
 
     // Ignore a stale concierge welcome that arrives after the user navigated away.
     ignore_pending_concierge_welcome: bool,
@@ -500,6 +606,12 @@ pub struct TuiModel {
     work_context_drag_current: Option<Position>,
     work_context_drag_anchor_point: Option<widgets::chat::SelectionPoint>,
     work_context_drag_current_point: Option<widgets::chat::SelectionPoint>,
+
+    // Active mouse drag selection in the goal/task detail pane
+    task_view_drag_anchor: Option<Position>,
+    task_view_drag_current: Option<Position>,
+    task_view_drag_anchor_point: Option<widgets::chat::SelectionPoint>,
+    task_view_drag_current_point: Option<widgets::chat::SelectionPoint>,
 }
 
 include!("model_impl_part1.rs");
@@ -606,4 +718,5 @@ mod tests {
     include!("tests/tests_part5.rs");
     include!("tests/tests_part6.rs");
     include!("tests/tests_part7_multithread_events.rs");
+    include!("tests/tests_part8_goal_mission_control.rs");
 }

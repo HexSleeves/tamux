@@ -1,6 +1,6 @@
 use super::*;
 use amux_shared::providers::{
-    AudioToolKind, PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_AZURE_OPENAI,
+    AudioToolKind, PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_AZURE_OPENAI, PROVIDER_ID_CHUTES,
     PROVIDER_ID_CUSTOM, PROVIDER_ID_OPENAI, PROVIDER_ID_OPENROUTER, PROVIDER_ID_QWEN,
     PROVIDER_ID_XAI,
 };
@@ -32,6 +32,123 @@ fn make_goal_run(
     }
 }
 
+fn make_goal_run_with_steps(
+    id: &str,
+    title: &str,
+    status: crate::state::task::GoalRunStatus,
+    steps: Vec<crate::state::task::GoalRunStep>,
+) -> crate::state::task::GoalRun {
+    crate::state::task::GoalRun {
+        id: id.to_string(),
+        title: title.to_string(),
+        status: Some(status),
+        goal: format!("Goal for {title}"),
+        steps,
+        ..Default::default()
+    }
+}
+
+fn seed_goal_sidebar_model() -> (
+    TuiModel,
+    tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
+) {
+    let (mut model, daemon_rx) = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Goal Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model.tasks.reduce(task::TaskAction::TaskListReceived(vec![
+        task::AgentTask {
+            id: "task-1".to_string(),
+            title: "Child Task One".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            goal_run_id: Some("goal-1".to_string()),
+            created_at: 1,
+            ..Default::default()
+        },
+        task::AgentTask {
+            id: "task-2".to_string(),
+            title: "Child Task Two".to_string(),
+            thread_id: Some("thread-2".to_string()),
+            goal_run_id: Some("goal-1".to_string()),
+            created_at: 2,
+            ..Default::default()
+        },
+    ]));
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        crate::state::task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Goal One".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            goal: "Goal for Goal One".to_string(),
+            child_task_ids: vec!["task-1".to_string(), "task-2".to_string()],
+            steps: vec![
+                crate::state::task::GoalRunStep {
+                    id: "step-1".to_string(),
+                    title: "Plan".to_string(),
+                    order: 0,
+                    ..Default::default()
+                },
+                crate::state::task::GoalRunStep {
+                    id: "step-2".to_string(),
+                    title: "Implement".to_string(),
+                    order: 1,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        },
+    ));
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunCheckpointsReceived {
+            goal_run_id: "goal-1".to_string(),
+            checkpoints: vec![
+                task::GoalRunCheckpointSummary {
+                    id: "checkpoint-1".to_string(),
+                    checkpoint_type: "plan".to_string(),
+                    step_index: Some(1),
+                    context_summary_preview: Some("Implement checkpoint".to_string()),
+                    ..Default::default()
+                },
+                task::GoalRunCheckpointSummary {
+                    id: "checkpoint-2".to_string(),
+                    checkpoint_type: "note".to_string(),
+                    context_summary_preview: Some("Loose checkpoint".to_string()),
+                    ..Default::default()
+                },
+            ],
+        });
+    model.tasks.reduce(task::TaskAction::WorkContextReceived(
+        task::ThreadWorkContext {
+            thread_id: "thread-1".to_string(),
+            entries: vec![
+                task::WorkContextEntry {
+                    path: "/tmp/first.md".to_string(),
+                    goal_run_id: Some("goal-1".to_string()),
+                    is_text: true,
+                    ..Default::default()
+                },
+                task::WorkContextEntry {
+                    path: "/tmp/second.md".to_string(),
+                    goal_run_id: Some("goal-1".to_string()),
+                    is_text: true,
+                    ..Default::default()
+                },
+            ],
+        },
+    ));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: Some("step-1".to_string()),
+    });
+    model.focus = FocusArea::Sidebar;
+    (model, daemon_rx)
+}
+
 fn render_screen(model: &mut TuiModel) -> Vec<String> {
     let backend = TestBackend::new(model.width, model.height);
     let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
@@ -59,6 +176,24 @@ fn collect_daemon_commands(
     commands
 }
 
+fn sample_subagent(id: &str, name: &str, builtin: bool) -> crate::state::SubAgentEntry {
+    crate::state::SubAgentEntry {
+        id: id.to_string(),
+        name: name.to_string(),
+        provider: "openai".to_string(),
+        model: "gpt-5.4-mini".to_string(),
+        role: Some("testing".to_string()),
+        enabled: true,
+        builtin,
+        immutable_identity: builtin,
+        disable_allowed: !builtin,
+        delete_allowed: !builtin,
+        protected_reason: builtin.then(|| "builtin".to_string()),
+        reasoning_effort: Some("medium".to_string()),
+        raw_json: None,
+    }
+}
+
 fn navigate_model_picker_to(model: &mut TuiModel, model_id: &str) {
     let index = model
         .available_model_picker_models()
@@ -69,6 +204,36 @@ fn navigate_model_picker_to(model: &mut TuiModel, model_id: &str) {
         model
             .modal
             .reduce(modal::ModalAction::Navigate(index as i32));
+    }
+}
+
+fn make_runtime_assignment(
+    role_id: &str,
+    provider: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
+) -> task::GoalAgentAssignment {
+    task::GoalAgentAssignment {
+        role_id: role_id.to_string(),
+        enabled: true,
+        provider: provider.to_string(),
+        model: model.to_string(),
+        reasoning_effort: reasoning_effort.map(str::to_string),
+        inherit_from_main: false,
+    }
+}
+
+fn make_goal_owner_profile(
+    agent_label: &str,
+    provider: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
+) -> task::GoalRuntimeOwnerProfile {
+    task::GoalRuntimeOwnerProfile {
+        agent_label: agent_label.to_string(),
+        provider: provider.to_string(),
+        model: model.to_string(),
+        reasoning_effort: reasoning_effort.map(str::to_string),
     }
 }
 
@@ -151,7 +316,15 @@ fn command_palette_tools_opens_settings_tools_tab() {
     model
         .modal
         .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
-    model.modal.reduce(modal::ModalAction::Navigate(2));
+    let tools_index = model
+        .modal
+        .command_items()
+        .iter()
+        .position(|item| item.command == "tools")
+        .expect("tools command should exist");
+    model
+        .modal
+        .reduce(modal::ModalAction::Navigate(tools_index as i32));
 
     let quit = model.handle_key_modal(
         KeyCode::Enter,
@@ -1408,6 +1581,69 @@ fn provider_picker_skips_remote_fetch_for_static_provider_catalogs() {
 }
 
 #[test]
+fn provider_picker_fetches_remote_models_for_chutes() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.auth.entries = vec![crate::state::auth::ProviderAuthEntry {
+        provider_id: PROVIDER_ID_CHUTES.to_string(),
+        provider_name: "Chutes".to_string(),
+        authenticated: true,
+        auth_source: "api_key".to_string(),
+        model: "deepseek-ai/DeepSeek-R1".to_string(),
+    }];
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "providers": {
+            PROVIDER_ID_CHUTES: {
+                "base_url": "https://llm.chutes.ai/v1",
+                "api_key": "chutes-key",
+                "auth_source": "api_key"
+            }
+        }
+    }));
+
+    let chutes_index = widgets::provider_picker::available_provider_defs(&model.auth)
+        .iter()
+        .position(|provider| provider.id == PROVIDER_ID_CHUTES)
+        .expect("chutes to exist");
+
+    model.settings_picker_target = Some(SettingsPickerTarget::Provider);
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ProviderPicker));
+    model.modal.set_picker_item_count(
+        widgets::provider_picker::available_provider_defs(&model.auth).len(),
+    );
+    if chutes_index > 0 {
+        model
+            .modal
+            .reduce(modal::ModalAction::Navigate(chutes_index as i32));
+    }
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ProviderPicker,
+    );
+
+    assert!(!quit);
+    assert_eq!(model.config.provider, PROVIDER_ID_CHUTES);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::FetchModels {
+            provider_id,
+            base_url,
+            api_key,
+            output_modalities,
+        }) => {
+            assert_eq!(provider_id, PROVIDER_ID_CHUTES);
+            assert_eq!(base_url, "https://llm.chutes.ai/v1");
+            assert_eq!(api_key, "chutes-key");
+            assert_eq!(output_modalities, None);
+        }
+        other => panic!("expected FetchModels for Chutes provider picker, got {other:?}"),
+    }
+}
+
+#[test]
 fn provider_picker_uses_chatgpt_subscription_auth_without_remote_model_fetch() {
     let (mut model, mut daemon_rx) = make_model();
     model.auth.entries = vec![crate::state::auth::ProviderAuthEntry {
@@ -1723,9 +1959,9 @@ fn selecting_audio_stt_provider_updates_audio_provider_and_opens_model_picker() 
         &model.auth,
         AudioToolKind::SpeechToText,
     )
-        .iter()
-        .position(|provider| provider.id == PROVIDER_ID_XAI)
-        .expect("provider to exist");
+    .iter()
+    .position(|provider| provider.id == PROVIDER_ID_XAI)
+    .expect("provider to exist");
 
     model.settings_picker_target = Some(SettingsPickerTarget::AudioSttProvider);
     model
@@ -1870,9 +2106,9 @@ fn selecting_audio_tts_provider_updates_audio_provider_and_opens_model_picker() 
         &model.auth,
         AudioToolKind::TextToSpeech,
     )
-        .iter()
-        .position(|provider| provider.id == PROVIDER_ID_XAI)
-        .expect("provider to exist");
+    .iter()
+    .position(|provider| provider.id == PROVIDER_ID_XAI)
+    .expect("provider to exist");
 
     model.settings_picker_target = Some(SettingsPickerTarget::AudioTtsProvider);
     model
@@ -1945,7 +2181,9 @@ fn authenticated_provider_picker_lists_xai() {
 
     let providers = widgets::provider_picker::available_provider_defs(&model.auth);
 
-    assert!(providers.iter().any(|provider| provider.id == PROVIDER_ID_XAI));
+    assert!(providers
+        .iter()
+        .any(|provider| provider.id == PROVIDER_ID_XAI));
 }
 
 #[test]
@@ -2001,6 +2239,146 @@ fn selecting_audio_tts_model_updates_audio_model() {
             .and_then(|tts| tts.get("model"))
             .and_then(|value| value.as_str()),
         Some("tts-1")
+    );
+}
+
+#[test]
+fn selecting_image_generation_provider_updates_image_provider_and_opens_model_picker() {
+    let (mut model, _daemon_rx) = make_model();
+    model.auth.entries = vec![
+        crate::state::auth::ProviderAuthEntry {
+            provider_id: PROVIDER_ID_OPENAI.to_string(),
+            provider_name: "OpenAI".to_string(),
+            authenticated: true,
+            auth_source: "api_key".to_string(),
+            model: "gpt-5.4".to_string(),
+        },
+        crate::state::auth::ProviderAuthEntry {
+            provider_id: PROVIDER_ID_OPENROUTER.to_string(),
+            provider_name: "OpenRouter".to_string(),
+            authenticated: true,
+            auth_source: "api_key".to_string(),
+            model: "openai/gpt-5.4".to_string(),
+        },
+    ];
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "image": {
+            "generation": {
+                "provider": PROVIDER_ID_OPENAI,
+                "model": "gpt-image-1"
+            }
+        }
+    }));
+
+    let target_index = widgets::provider_picker::available_provider_defs(&model.auth)
+        .iter()
+        .position(|provider| provider.id == PROVIDER_ID_OPENROUTER)
+        .expect("provider to exist");
+
+    model.settings_picker_target = Some(SettingsPickerTarget::ImageGenerationProvider);
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ProviderPicker));
+    model.modal.set_picker_item_count(
+        widgets::provider_picker::available_provider_defs(&model.auth).len(),
+    );
+    if target_index > 0 {
+        model
+            .modal
+            .reduce(modal::ModalAction::Navigate(target_index as i32));
+    }
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ProviderPicker,
+    );
+
+    assert!(!quit);
+    assert_eq!(
+        model
+            .config
+            .agent_config_raw
+            .as_ref()
+            .and_then(|raw| raw.get("image"))
+            .and_then(|image| image.get("generation"))
+            .and_then(|generation| generation.get("provider"))
+            .and_then(|value| value.as_str()),
+        Some(PROVIDER_ID_OPENROUTER)
+    );
+    assert_eq!(
+        model
+            .config
+            .agent_config_raw
+            .as_ref()
+            .and_then(|raw| raw.get("image"))
+            .and_then(|image| image.get("generation"))
+            .and_then(|generation| generation.get("model"))
+            .and_then(|value| value.as_str()),
+        Some("openai/gpt-image-1")
+    );
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+}
+
+#[test]
+fn selecting_image_generation_model_updates_image_model() {
+    let (mut model, _daemon_rx) = make_model();
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "image": {
+            "generation": {
+                "provider": PROVIDER_ID_OPENAI,
+                "model": "gpt-image-1"
+            }
+        }
+    }));
+    model
+        .config
+        .reduce(config::ConfigAction::ModelsFetched(vec![
+            crate::state::config::FetchedModel {
+                id: "openai/gpt-image-1".to_string(),
+                name: Some("OpenAI GPT Image 1".to_string()),
+                context_window: None,
+                pricing: Some(crate::state::config::FetchedModelPricing {
+                    image: Some("0.00001".to_string()),
+                    ..Default::default()
+                }),
+                metadata: Some(serde_json::json!({
+                    "output_modalities": ["image"]
+                })),
+            },
+            crate::state::config::FetchedModel {
+                id: "gpt-4o-mini".to_string(),
+                name: Some("GPT-4o Mini".to_string()),
+                context_window: Some(128_000),
+                pricing: None,
+                metadata: Some(serde_json::json!({
+                    "output_modalities": ["text"]
+                })),
+            },
+        ]));
+
+    model.settings_picker_target = Some(SettingsPickerTarget::ImageGenerationModel);
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ModelPicker,
+    );
+
+    assert!(!quit);
+    assert_eq!(
+        model
+            .config
+            .agent_config_raw
+            .as_ref()
+            .and_then(|raw| raw.get("image"))
+            .and_then(|image| image.get("generation"))
+            .and_then(|generation| generation.get("model"))
+            .and_then(|value| value.as_str()),
+        Some("gpt-image-1")
     );
 }
 
@@ -2843,8 +3221,12 @@ fn audio_model_picker_does_not_treat_nondirectional_modality_string_as_direction
         .map(|entry| entry.id)
         .collect::<Vec<_>>();
 
-    assert!(!stt_models.iter().any(|id| id == "openai/plain-modality-audio"));
-    assert!(!tts_models.iter().any(|id| id == "openai/plain-modality-audio"));
+    assert!(!stt_models
+        .iter()
+        .any(|id| id == "openai/plain-modality-audio"));
+    assert!(!tts_models
+        .iter()
+        .any(|id| id == "openai/plain-modality-audio"));
 }
 
 #[test]
@@ -2913,7 +3295,7 @@ fn audio_model_picker_render_uses_same_filtered_models_as_selection() {
 }
 
 #[test]
-fn protected_weles_editor_can_open_provider_model_and_effort_pickers() {
+fn protected_weles_editor_can_open_provider_model_role_and_effort_pickers() {
     let (mut model, _daemon_rx) = make_model();
     model.auth.entries = vec![crate::state::auth::ProviderAuthEntry {
         provider_id: PROVIDER_ID_OPENAI.to_string(),
@@ -2966,6 +3348,18 @@ fn protected_weles_editor_can_open_provider_model_and_effort_pickers() {
 
     model.close_top_modal();
     if let Some(editor) = model.subagents.editor.as_mut() {
+        editor.field = crate::state::subagents::SubAgentEditorField::Role;
+    }
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::Settings,
+    );
+    assert!(!quit);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::RolePicker));
+
+    model.close_top_modal();
+    if let Some(editor) = model.subagents.editor.as_mut() {
         editor.field = crate::state::subagents::SubAgentEditorField::ReasoningEffort;
     }
     let quit = model.handle_key_modal(
@@ -2975,6 +3369,97 @@ fn protected_weles_editor_can_open_provider_model_and_effort_pickers() {
     );
     assert!(!quit);
     assert_eq!(model.modal.top(), Some(modal::ModalKind::EffortPicker));
+}
+
+#[test]
+fn subagent_role_picker_applies_selected_role_preset() {
+    let (mut model, _daemon_rx) = make_model();
+    let mut editor = crate::state::subagents::SubAgentEditorState::new(
+        Some("worker".to_string()),
+        1,
+        PROVIDER_ID_OPENAI.to_string(),
+        "gpt-5.4-mini".to_string(),
+    );
+    editor.field = crate::state::subagents::SubAgentEditorField::Role;
+    model.subagents.editor = Some(editor);
+    model.settings_picker_target = Some(SettingsPickerTarget::SubAgentRole);
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::RolePicker));
+
+    let planning_index = crate::state::subagents::SUBAGENT_ROLE_PRESETS
+        .iter()
+        .position(|preset| preset.id == "planning")
+        .expect("planning preset should exist");
+    model
+        .modal
+        .reduce(modal::ModalAction::Navigate(planning_index as i32));
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::RolePicker,
+    );
+
+    assert!(!quit);
+    assert!(model.modal.top().is_none());
+    assert_eq!(
+        model
+            .subagents
+            .editor
+            .as_ref()
+            .map(|editor| editor.role.as_str()),
+        Some("planning")
+    );
+    assert_eq!(
+        model
+            .subagents
+            .editor
+            .as_ref()
+            .map(|editor| editor.system_prompt.as_str()),
+        crate::state::subagents::find_role_preset("planning").map(|preset| preset.system_prompt)
+    );
+    assert_eq!(model.status_line, "Sub-agent role: Planning");
+    assert!(!model.settings.is_editing());
+}
+
+#[test]
+fn subagent_role_picker_custom_option_starts_inline_edit() {
+    let (mut model, _daemon_rx) = make_model();
+    let mut editor = crate::state::subagents::SubAgentEditorState::new(
+        Some("worker".to_string()),
+        1,
+        PROVIDER_ID_OPENAI.to_string(),
+        "gpt-5.4-mini".to_string(),
+    );
+    editor.field = crate::state::subagents::SubAgentEditorField::Role;
+    editor.role = "my_custom_role".to_string();
+    model.subagents.editor = Some(editor);
+    model
+        .settings
+        .reduce(SettingsAction::SwitchTab(SettingsTab::SubAgents));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::Settings));
+    model.settings_picker_target = Some(SettingsPickerTarget::SubAgentRole);
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::RolePicker));
+    model.modal.reduce(modal::ModalAction::Navigate(
+        crate::state::subagents::SUBAGENT_ROLE_PRESETS.len() as i32,
+    ));
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::RolePicker,
+    );
+
+    assert!(!quit);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::Settings));
+    assert_eq!(model.settings.editing_field(), Some("subagent_role"));
+    assert_eq!(model.settings.edit_buffer(), "my_custom_role");
+    assert_eq!(model.status_line, "Enter sub-agent role ID");
 }
 
 #[test]
@@ -3486,6 +3971,119 @@ fn thread_picker_new_conversation_uses_selected_agent_for_first_prompt() {
 }
 
 #[test]
+fn slash_new_defaults_to_svarog_target_for_first_prompt() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.connected = true;
+
+    assert!(model.execute_slash_command_line("/new"));
+    model.submit_prompt("default me".to_string());
+
+    loop {
+        match daemon_rx.try_recv() {
+            Ok(DaemonCommand::DismissConciergeWelcome) => {}
+            Ok(DaemonCommand::SendMessage {
+                thread_id,
+                target_agent_id,
+                content,
+                ..
+            }) => {
+                assert_eq!(thread_id, None);
+                assert_eq!(
+                    target_agent_id.as_deref(),
+                    Some(amux_protocol::AGENT_ID_SWAROG)
+                );
+                assert_eq!(content, "default me");
+                break;
+            }
+            other => panic!("expected send-message command, got {:?}", other),
+        }
+    }
+}
+
+#[test]
+fn slash_new_with_custom_subagent_targets_first_prompt() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.connected = true;
+    model
+        .subagents
+        .entries
+        .push(sample_subagent("domowoj", "Domowoj", false));
+
+    assert!(model.execute_slash_command_line("/new domowoj"));
+    model.submit_prompt("inspect the workspace".to_string());
+
+    loop {
+        match daemon_rx.try_recv() {
+            Ok(DaemonCommand::DismissConciergeWelcome) => {}
+            Ok(DaemonCommand::SendMessage {
+                thread_id,
+                target_agent_id,
+                content,
+                ..
+            }) => {
+                assert_eq!(thread_id, None);
+                assert_eq!(target_agent_id.as_deref(), Some("domowoj"));
+                assert_eq!(content, "inspect the workspace");
+                break;
+            }
+            other => panic!("expected send-message command, got {:?}", other),
+        }
+    }
+}
+
+#[test]
+fn slash_thread_with_agent_preselects_matching_source() {
+    let (mut model, _daemon_rx) = make_model();
+    model
+        .subagents
+        .entries
+        .push(sample_subagent("domowoj", "Domowoj", false));
+
+    assert!(model.execute_slash_command_line("/thread domowoj"));
+
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ThreadPicker));
+    assert_eq!(
+        model.modal.thread_picker_tab(),
+        modal::ThreadPickerTab::Agent("domowoj".to_string())
+    );
+}
+
+#[test]
+fn slash_image_prompt_dispatches_generate_image_for_active_thread() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.connected = true;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    assert!(model.execute_slash_command_line("/image retro robot portrait"));
+
+    loop {
+        match daemon_rx.try_recv() {
+            Ok(DaemonCommand::DismissConciergeWelcome) => {}
+            Ok(DaemonCommand::GenerateImage { args_json }) => {
+                let payload: serde_json::Value =
+                    serde_json::from_str(&args_json).expect("image payload should parse");
+                assert_eq!(
+                    payload.get("thread_id").and_then(|v| v.as_str()),
+                    Some("thread-1")
+                );
+                assert_eq!(
+                    payload.get("prompt").and_then(|v| v.as_str()),
+                    Some("retro robot portrait")
+                );
+                break;
+            }
+            other => panic!("expected generate-image command, got {:?}", other),
+        }
+    }
+}
+
+#[test]
 fn thread_picker_delete_requires_confirmation_before_sending_delete_thread() {
     let (mut model, mut daemon_rx) = make_model();
     model.chat.reduce(chat::ChatAction::ThreadListReceived(vec![
@@ -3689,6 +4287,14 @@ fn goal_picker_ctrl_s_running_goal_requires_confirmation_before_pause() {
 
     assert!(!quit);
     assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Pause goal run \"Goal One\"?")
+    );
 
     let quit = model.handle_key_modal(
         KeyCode::Enter,
@@ -3699,9 +4305,44 @@ fn goal_picker_ctrl_s_running_goal_requires_confirmation_before_pause() {
     assert!(!quit);
     assert!(matches!(
         daemon_rx.try_recv().expect("expected control-goal command"),
-        DaemonCommand::ControlGoalRun { goal_run_id, action }
+        DaemonCommand::ControlGoalRun {
+            goal_run_id,
+            action,
+            ..
+        }
             if goal_run_id == "goal-1" && action == "pause"
     ));
+    assert_eq!(model.status_line, "Pausing goal run...");
+}
+
+#[test]
+fn goal_picker_ctrl_s_from_handle_key_routes_to_pause_confirmation() {
+    let (mut model, _daemon_rx) = make_model();
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunListReceived(vec![make_goal_run(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Running,
+        )]));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::GoalPicker));
+    model.sync_goal_picker_item_count();
+    model.modal.reduce(modal::ModalAction::Navigate(1));
+
+    let handled = model.handle_key(KeyCode::Char('s'), KeyModifiers::CONTROL);
+
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Pause goal run \"Goal One\"?")
+    );
 }
 
 #[test]
@@ -3738,8 +4379,573 @@ fn goal_picker_ctrl_s_paused_goal_requires_confirmation_before_resume() {
     assert!(!quit);
     assert!(matches!(
         daemon_rx.try_recv().expect("expected control-goal command"),
-        DaemonCommand::ControlGoalRun { goal_run_id, action }
+        DaemonCommand::ControlGoalRun {
+            goal_run_id,
+            action,
+            ..
+        }
             if goal_run_id == "goal-1" && action == "resume"
+    ));
+}
+
+#[test]
+fn goal_view_ctrl_s_paused_goal_requires_confirmation_before_resume() {
+    let (mut model, _daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(make_goal_run(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Paused,
+        )));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let handled = model.handle_key(KeyCode::Char('s'), KeyModifiers::CONTROL);
+
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Resume goal run \"Goal One\"?")
+    );
+}
+
+#[test]
+fn goal_view_action_menu_can_pause_running_goal_without_step_selection() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(make_goal_run(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Running,
+        )));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let handled = model.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(
+        model.modal.top(),
+        Some(modal::ModalKind::GoalStepActionPicker)
+    );
+
+    let handled = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::GoalStepActionPicker,
+    );
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Pause goal run \"Goal One\"?")
+    );
+
+    let handled = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ChatActionConfirm,
+    );
+    assert!(!handled);
+    assert!(matches!(
+        daemon_rx.try_recv().expect("expected control-goal command"),
+        DaemonCommand::ControlGoalRun {
+            goal_run_id,
+            action,
+            step_index: None,
+        } if goal_run_id == "goal-1" && action == "pause"
+    ));
+}
+
+#[test]
+fn goal_view_retry_uses_current_step_without_explicit_step_selection() {
+    let (mut model, _daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        make_goal_run_with_steps(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Failed,
+            vec![
+                task::GoalRunStep {
+                    id: "step-1".to_string(),
+                    title: "Plan".to_string(),
+                    order: 0,
+                    status: Some(task::GoalRunStatus::Completed),
+                    ..Default::default()
+                },
+                task::GoalRunStep {
+                    id: "step-2".to_string(),
+                    title: "Deploy".to_string(),
+                    order: 1,
+                    status: Some(task::GoalRunStatus::Failed),
+                    ..Default::default()
+                },
+            ],
+        ),
+    ));
+    if let Some(run) = model.tasks.goal_run_by_id_mut("goal-1") {
+        run.current_step_index = 1;
+        run.current_step_title = Some("Deploy".to_string());
+    }
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let handled = model.handle_key(KeyCode::Char('r'), KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Retry step 2 \"Deploy\" in goal \"Goal One\"?")
+    );
+}
+
+#[test]
+fn selected_goal_step_r_opens_retry_confirmation() {
+    let (mut model, _daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        make_goal_run_with_steps(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Failed,
+            vec![
+                task::GoalRunStep {
+                    id: "step-1".to_string(),
+                    title: "Plan".to_string(),
+                    order: 0,
+                    status: Some(task::GoalRunStatus::Completed),
+                    ..Default::default()
+                },
+                task::GoalRunStep {
+                    id: "step-2".to_string(),
+                    title: "Deploy".to_string(),
+                    order: 1,
+                    status: Some(task::GoalRunStatus::Failed),
+                    ..Default::default()
+                },
+            ],
+        ),
+    ));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: Some("step-2".to_string()),
+    });
+
+    let handled = model.handle_key(KeyCode::Char('r'), KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Retry step 2 \"Deploy\" in goal \"Goal One\"?")
+    );
+}
+
+#[test]
+fn selected_goal_step_shift_r_opens_rerun_confirmation() {
+    let (mut model, _daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        make_goal_run_with_steps(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Failed,
+            vec![
+                task::GoalRunStep {
+                    id: "step-1".to_string(),
+                    title: "Plan".to_string(),
+                    order: 0,
+                    status: Some(task::GoalRunStatus::Completed),
+                    ..Default::default()
+                },
+                task::GoalRunStep {
+                    id: "step-2".to_string(),
+                    title: "Deploy".to_string(),
+                    order: 1,
+                    status: Some(task::GoalRunStatus::Failed),
+                    ..Default::default()
+                },
+            ],
+        ),
+    ));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: Some("step-2".to_string()),
+    });
+
+    let handled = model.handle_key(KeyCode::Char('R'), KeyModifiers::SHIFT);
+
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Rerun from step 2 \"Deploy\" in goal \"Goal One\"?")
+    );
+}
+
+#[test]
+fn selected_goal_step_shift_r_lowercase_key_opens_rerun_confirmation() {
+    let (mut model, _daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        make_goal_run_with_steps(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Failed,
+            vec![
+                task::GoalRunStep {
+                    id: "step-1".to_string(),
+                    title: "Plan".to_string(),
+                    order: 0,
+                    status: Some(task::GoalRunStatus::Completed),
+                    ..Default::default()
+                },
+                task::GoalRunStep {
+                    id: "step-2".to_string(),
+                    title: "Deploy".to_string(),
+                    order: 1,
+                    status: Some(task::GoalRunStatus::Failed),
+                    ..Default::default()
+                },
+            ],
+        ),
+    ));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: Some("step-2".to_string()),
+    });
+
+    let handled = model.handle_key(KeyCode::Char('r'), KeyModifiers::SHIFT);
+
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Rerun from step 2 \"Deploy\" in goal \"Goal One\"?")
+    );
+}
+
+#[test]
+fn selected_goal_step_action_menu_can_send_retry_step() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        make_goal_run_with_steps(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Failed,
+            vec![
+                task::GoalRunStep {
+                    id: "step-1".to_string(),
+                    title: "Plan".to_string(),
+                    order: 0,
+                    status: Some(task::GoalRunStatus::Completed),
+                    ..Default::default()
+                },
+                task::GoalRunStep {
+                    id: "step-2".to_string(),
+                    title: "Deploy".to_string(),
+                    order: 1,
+                    status: Some(task::GoalRunStatus::Failed),
+                    ..Default::default()
+                },
+            ],
+        ),
+    ));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: Some("step-2".to_string()),
+    });
+
+    let handled = model.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+    assert!(!handled);
+    assert_eq!(
+        model.modal.top(),
+        Some(modal::ModalKind::GoalStepActionPicker)
+    );
+
+    let handled = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::GoalStepActionPicker,
+    );
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+
+    let handled = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ChatActionConfirm,
+    );
+    assert!(!handled);
+    assert!(matches!(
+        daemon_rx.try_recv().expect("expected control-goal command"),
+        DaemonCommand::ControlGoalRun {
+            goal_run_id,
+            action,
+            step_index: Some(1),
+        } if goal_run_id == "goal-1" && action == "retry_step"
+    ));
+}
+
+#[test]
+fn thread_picker_shift_r_requests_refresh() {
+    let (mut model, mut daemon_rx) = make_model();
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ThreadPicker));
+    model.sync_thread_picker_item_count();
+
+    let handled = model.handle_key_modal(
+        KeyCode::Char('R'),
+        KeyModifiers::SHIFT,
+        modal::ModalKind::ThreadPicker,
+    );
+
+    assert!(!handled);
+    assert!(matches!(daemon_rx.try_recv(), Ok(DaemonCommand::Refresh)));
+}
+
+#[test]
+fn thread_picker_shift_r_lowercase_key_requests_refresh() {
+    let (mut model, mut daemon_rx) = make_model();
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ThreadPicker));
+    model.sync_thread_picker_item_count();
+
+    let handled = model.handle_key_modal(
+        KeyCode::Char('r'),
+        KeyModifiers::SHIFT,
+        modal::ModalKind::ThreadPicker,
+    );
+
+    assert!(!handled);
+    assert!(matches!(daemon_rx.try_recv(), Ok(DaemonCommand::Refresh)));
+}
+
+#[test]
+fn goal_picker_shift_r_requests_refresh() {
+    let (mut model, mut daemon_rx) = make_model();
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::GoalPicker));
+    model.sync_goal_picker_item_count();
+
+    let handled = model.handle_key_modal(
+        KeyCode::Char('R'),
+        KeyModifiers::SHIFT,
+        modal::ModalKind::GoalPicker,
+    );
+
+    assert!(!handled);
+    assert!(matches!(daemon_rx.try_recv(), Ok(DaemonCommand::Refresh)));
+}
+
+#[test]
+fn goal_picker_shift_r_lowercase_key_requests_refresh() {
+    let (mut model, mut daemon_rx) = make_model();
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::GoalPicker));
+    model.sync_goal_picker_item_count();
+
+    let handled = model.handle_key_modal(
+        KeyCode::Char('r'),
+        KeyModifiers::SHIFT,
+        modal::ModalKind::GoalPicker,
+    );
+
+    assert!(!handled);
+    assert!(matches!(daemon_rx.try_recv(), Ok(DaemonCommand::Refresh)));
+}
+
+#[test]
+fn sidebar_goal_enter_opens_selected_child_task() {
+    let (mut model, _daemon_rx) = seed_goal_sidebar_model();
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.navigate(1, 2);
+
+    let handled = model.handle_goal_sidebar_enter();
+
+    assert!(handled);
+    assert_eq!(model.focus, FocusArea::Chat);
+    assert!(matches!(
+        model.main_pane_view,
+        MainPaneView::Task(SidebarItemTarget::Task { task_id }) if task_id == "task-2"
+    ));
+}
+
+#[test]
+fn sidebar_goal_enter_skips_stale_child_task_ids() {
+    let (mut model, _daemon_rx) = seed_goal_sidebar_model();
+    if let Some(run) = model.tasks.goal_run_by_id_mut("goal-1") {
+        run.child_task_ids = vec!["missing-task".to_string(), "task-1".to_string()];
+    }
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.cycle_tab_right();
+
+    let handled = model.handle_goal_sidebar_enter();
+
+    assert!(handled);
+    assert_eq!(model.focus, FocusArea::Chat);
+    assert!(matches!(
+        model.main_pane_view,
+        MainPaneView::Task(SidebarItemTarget::Task { task_id }) if task_id == "task-1"
+    ));
+}
+
+#[test]
+fn sidebar_goal_enter_opens_selected_work_context_file() {
+    let (mut model, _daemon_rx) = seed_goal_sidebar_model();
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.navigate(1, 2);
+
+    let handled = model.handle_goal_sidebar_enter();
+
+    assert!(handled);
+    assert_eq!(model.focus, FocusArea::Chat);
+    assert!(matches!(model.main_pane_view, MainPaneView::WorkContext));
+    assert_eq!(
+        model.tasks.selected_work_path("thread-1"),
+        Some("/tmp/second.md")
+    );
+}
+
+#[test]
+fn sidebar_goal_enter_checkpoint_with_step_index_selects_goal_step() {
+    let (mut model, _daemon_rx) = seed_goal_sidebar_model();
+    model.goal_sidebar.cycle_tab_right();
+
+    let handled = model.handle_goal_sidebar_enter();
+
+    assert!(handled);
+    assert_eq!(model.focus, FocusArea::Chat);
+    assert!(matches!(
+        model.main_pane_view,
+        MainPaneView::Task(SidebarItemTarget::GoalRun {
+            goal_run_id,
+            step_id: Some(step_id),
+        }) if goal_run_id == "goal-1" && step_id == "step-2"
+    ));
+}
+
+#[test]
+fn sidebar_goal_enter_checkpoint_without_step_index_is_non_destructive() {
+    let (mut model, _daemon_rx) = seed_goal_sidebar_model();
+    model.goal_sidebar.cycle_tab_right();
+    model.goal_sidebar.navigate(1, 2);
+
+    let handled = model.handle_goal_sidebar_enter();
+
+    assert!(!handled);
+    assert_eq!(model.focus, FocusArea::Sidebar);
+    assert!(matches!(
+        model.main_pane_view,
+        MainPaneView::Task(SidebarItemTarget::GoalRun {
+            goal_run_id,
+            step_id: Some(step_id),
+        }) if goal_run_id == "goal-1" && step_id == "step-1"
+    ));
+}
+
+#[test]
+fn goal_run_task_view_bracket_keys_cycle_selected_step() {
+    let (mut model, _daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model.tasks.reduce(task::TaskAction::GoalRunDetailReceived(
+        make_goal_run_with_steps(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Running,
+            vec![
+                task::GoalRunStep {
+                    id: "step-1".to_string(),
+                    title: "Plan".to_string(),
+                    order: 0,
+                    status: Some(task::GoalRunStatus::Completed),
+                    ..Default::default()
+                },
+                task::GoalRunStep {
+                    id: "step-2".to_string(),
+                    title: "Execute".to_string(),
+                    order: 1,
+                    status: Some(task::GoalRunStatus::Running),
+                    ..Default::default()
+                },
+                task::GoalRunStep {
+                    id: "step-3".to_string(),
+                    title: "Verify".to_string(),
+                    order: 2,
+                    status: Some(task::GoalRunStatus::Queued),
+                    ..Default::default()
+                },
+            ],
+        ),
+    ));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: Some("step-2".to_string()),
+    });
+
+    let handled = model.handle_key(KeyCode::Char(']'), KeyModifiers::NONE);
+    assert!(!handled);
+    assert!(matches!(
+        model.main_pane_view,
+        MainPaneView::Task(SidebarItemTarget::GoalRun {
+            ref goal_run_id,
+            step_id: Some(ref step_id),
+        }) if goal_run_id == "goal-1" && step_id == "step-3"
+    ));
+
+    let handled = model.handle_key(KeyCode::Char('['), KeyModifiers::NONE);
+    assert!(!handled);
+    assert!(matches!(
+        model.main_pane_view,
+        MainPaneView::Task(SidebarItemTarget::GoalRun {
+            ref goal_run_id,
+            step_id: Some(ref step_id),
+        }) if goal_run_id == "goal-1" && step_id == "step-2"
     ));
 }
 
@@ -3771,6 +4977,50 @@ fn thread_picker_playgrounds_new_row_is_browse_only() {
     assert_eq!(model.modal.top(), Some(modal::ModalKind::ThreadPicker));
     assert_eq!(model.chat.active_thread_id(), None);
     assert_eq!(model.status_line, "Playgrounds are created automatically");
+}
+
+#[test]
+fn thread_picker_new_conversation_uses_dynamic_agent_tab_for_first_prompt() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.connected = true;
+    model
+        .subagents
+        .entries
+        .push(sample_subagent("domowoj", "Domowoj", false));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ThreadPicker));
+    model
+        .modal
+        .set_thread_picker_tab(modal::ThreadPickerTab::Agent("domowoj".to_string()));
+    model.sync_thread_picker_item_count();
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ThreadPicker,
+    );
+    assert!(!quit);
+
+    model.submit_prompt("look around".to_string());
+
+    loop {
+        match daemon_rx.try_recv() {
+            Ok(DaemonCommand::DismissConciergeWelcome) => {}
+            Ok(DaemonCommand::SendMessage {
+                thread_id,
+                target_agent_id,
+                content,
+                ..
+            }) => {
+                assert_eq!(thread_id, None);
+                assert_eq!(target_agent_id.as_deref(), Some("domowoj"));
+                assert_eq!(content, "look around");
+                break;
+            }
+            other => panic!("expected send-message command, got {:?}", other),
+        }
+    }
 }
 
 #[test]
@@ -3856,11 +5106,15 @@ fn thread_picker_mouse_click_switches_to_rarog_tab() {
         .find_map(|row| {
             (overlay_area.x..overlay_area.x.saturating_add(overlay_area.width)).find_map(|column| {
                 let pos = Position::new(column, row);
-                if widgets::thread_picker::hit_test(overlay_area, &model.chat, &model.modal, pos)
-                    == Some(widgets::thread_picker::ThreadPickerHitTarget::Tab(
-                        modal::ThreadPickerTab::Rarog,
-                    ))
-                {
+                if widgets::thread_picker::hit_test(
+                    overlay_area,
+                    &model.chat,
+                    &model.modal,
+                    &model.subagents,
+                    pos,
+                ) == Some(widgets::thread_picker::ThreadPickerHitTarget::Tab(
+                    modal::ThreadPickerTab::Rarog,
+                )) {
                     Some(pos)
                 } else {
                     None
@@ -4402,6 +5656,62 @@ fn sample_notification(read_at: Option<i64>) -> amux_protocol::InboxNotification
 }
 
 #[test]
+fn notifications_modal_shift_r_lowercase_marks_all_read() {
+    let (mut model, _daemon_rx) = make_model();
+    let mut unread = sample_notification(None);
+    unread.id = "n-unread".to_string();
+    let mut still_read = sample_notification(Some(5));
+    still_read.id = "n-read".to_string();
+    model
+        .notifications
+        .reduce(crate::state::NotificationsAction::Replace(vec![
+            unread, still_read,
+        ]));
+    model.toggle_notifications_modal();
+
+    let handled = model.handle_key_modal(
+        KeyCode::Char('r'),
+        KeyModifiers::SHIFT,
+        modal::ModalKind::Notifications,
+    );
+
+    assert!(!handled);
+    assert_eq!(model.notifications.unread_count(), 0);
+}
+
+#[test]
+fn notifications_modal_shift_a_lowercase_archives_read() {
+    let (mut model, _daemon_rx) = make_model();
+    let mut unread = sample_notification(None);
+    unread.id = "n-unread".to_string();
+    unread.updated_at = 10;
+    let mut read = sample_notification(Some(5));
+    read.id = "n-read".to_string();
+    read.updated_at = 5;
+    model
+        .notifications
+        .reduce(crate::state::NotificationsAction::Replace(vec![
+            unread, read,
+        ]));
+    model.toggle_notifications_modal();
+
+    let handled = model.handle_key_modal(
+        KeyCode::Char('a'),
+        KeyModifiers::SHIFT,
+        modal::ModalKind::Notifications,
+    );
+
+    assert!(!handled);
+    let active_ids = model
+        .notifications
+        .active_items()
+        .into_iter()
+        .map(|item| item.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(active_ids, vec!["n-unread".to_string()]);
+}
+
+#[test]
 fn notifications_modal_uses_wider_overlay_width() {
     let (mut model, _daemon_rx) = make_model();
     model.width = 100;
@@ -4595,4 +5905,314 @@ fn pinned_budget_modal_dismiss_restores_chat_focus() {
     assert!(model.modal.top().is_none());
     assert_eq!(model.chat.selected_message(), Some(0));
     assert!(model.pending_pinned_budget_exceeded.is_none());
+}
+
+#[test]
+fn goal_view_action_menu_runtime_assignment_reassign_requires_confirmation() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model
+        .config
+        .reduce(config::ConfigAction::ModelsFetched(vec![
+            config::FetchedModel {
+                id: "gpt-5.4".to_string(),
+                name: Some("GPT-5.4".to_string()),
+                context_window: Some(128_000),
+                pricing: None,
+                metadata: None,
+            },
+            config::FetchedModel {
+                id: "gpt-5.4-mini".to_string(),
+                name: Some("GPT-5.4 Mini".to_string()),
+                context_window: Some(128_000),
+                pricing: None,
+                metadata: None,
+            },
+        ]));
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Goal One".to_string(),
+            status: Some(task::GoalRunStatus::Running),
+            goal: "Mission Control runtime edit".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            root_thread_id: Some("thread-1".to_string()),
+            active_thread_id: Some("thread-2".to_string()),
+            runtime_assignment_list: vec![
+                make_runtime_assignment(
+                    amux_protocol::AGENT_ID_SWAROG,
+                    "openai",
+                    "gpt-5.4",
+                    Some("medium"),
+                ),
+                make_runtime_assignment("reviewer", "openai", "gpt-5.4", Some("low")),
+            ],
+            launch_assignment_snapshot: vec![
+                make_runtime_assignment(
+                    amux_protocol::AGENT_ID_SWAROG,
+                    "openai",
+                    "gpt-5.4",
+                    Some("medium"),
+                ),
+                make_runtime_assignment("reviewer", "openai", "gpt-5.4", Some("low")),
+            ],
+            current_step_owner_profile: Some(make_goal_owner_profile(
+                "Swarog",
+                "openai",
+                "gpt-5.4",
+                Some("medium"),
+            )),
+            ..Default::default()
+        }));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let handled = model.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+    assert!(!handled);
+    assert_eq!(
+        model.modal.top(),
+        Some(modal::ModalKind::GoalStepActionPicker)
+    );
+
+    let model_edit_index = model
+        .goal_action_picker_items()
+        .iter()
+        .position(|item| item.label() == "Edit Runtime Model")
+        .expect("runtime model action should be available");
+    if model_edit_index > 0 {
+        model
+            .modal
+            .reduce(modal::ModalAction::Navigate(model_edit_index as i32));
+    }
+
+    let handled = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::GoalStepActionPicker,
+    );
+    assert!(!handled);
+    assert!(matches!(model.main_pane_view, MainPaneView::GoalComposer));
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+
+    navigate_model_picker_to(&mut model, "gpt-5.4-mini");
+
+    let handled = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ModelPicker,
+    );
+    assert!(!handled);
+    assert_eq!(
+        model.modal.top(),
+        Some(modal::ModalKind::GoalStepActionPicker)
+    );
+
+    let reassign_index = model
+        .goal_action_picker_items()
+        .iter()
+        .position(|item| item.label() == "Reassign Active Step")
+        .expect("reassign action should be available");
+    if reassign_index > 0 {
+        model
+            .modal
+            .reduce(modal::ModalAction::Navigate(reassign_index as i32));
+    }
+
+    let handled = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::GoalStepActionPicker,
+    );
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Reassign the active step with the pending Mission Control roster change?")
+    );
+
+    let handled = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ChatActionConfirm,
+    );
+    assert!(!handled);
+    assert!(
+        daemon_rx.try_recv().is_err(),
+        "runtime assignment edit should stay TUI-local without daemon command"
+    );
+    assert_eq!(
+        model.goal_mission_control.pending_role_assignments.as_ref(),
+        Some(&vec![
+            make_runtime_assignment(
+                amux_protocol::AGENT_ID_SWAROG,
+                "openai",
+                "gpt-5.4-mini",
+                Some("medium"),
+            ),
+            make_runtime_assignment("reviewer", "openai", "gpt-5.4", Some("low")),
+        ])
+    );
+    assert_eq!(
+        model.goal_mission_control.pending_runtime_apply_modes,
+        vec![
+            Some(goal_mission_control::RuntimeAssignmentApplyMode::ReassignActiveStep),
+            None,
+        ]
+    );
+}
+
+#[test]
+fn goal_view_action_menu_runtime_assignment_cancel_clears_pending_confirmation_state() {
+    let (mut model, mut daemon_rx_cmd) = make_model();
+    model.connected = true;
+    model.focus = FocusArea::Chat;
+    model
+        .config
+        .reduce(config::ConfigAction::ModelsFetched(vec![
+            config::FetchedModel {
+                id: "gpt-5.4".to_string(),
+                name: Some("GPT-5.4".to_string()),
+                context_window: Some(128_000),
+                pricing: None,
+                metadata: None,
+            },
+            config::FetchedModel {
+                id: "gpt-5.4-mini".to_string(),
+                name: Some("GPT-5.4 Mini".to_string()),
+                context_window: Some(128_000),
+                pricing: None,
+                metadata: None,
+            },
+        ]));
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Goal One".to_string(),
+            status: Some(task::GoalRunStatus::Running),
+            goal: "Mission Control runtime edit".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            root_thread_id: Some("thread-1".to_string()),
+            active_thread_id: Some("thread-2".to_string()),
+            runtime_assignment_list: vec![
+                make_runtime_assignment(
+                    amux_protocol::AGENT_ID_SWAROG,
+                    "openai",
+                    "gpt-5.4",
+                    Some("medium"),
+                ),
+                make_runtime_assignment("reviewer", "openai", "gpt-5.4", Some("low")),
+            ],
+            launch_assignment_snapshot: vec![
+                make_runtime_assignment(
+                    amux_protocol::AGENT_ID_SWAROG,
+                    "openai",
+                    "gpt-5.4",
+                    Some("medium"),
+                ),
+                make_runtime_assignment("reviewer", "openai", "gpt-5.4", Some("low")),
+            ],
+            current_step_owner_profile: Some(make_goal_owner_profile(
+                "Swarog",
+                "openai",
+                "gpt-5.4",
+                Some("medium"),
+            )),
+            ..Default::default()
+        }));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let handled = model.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+    assert!(!handled);
+    assert_eq!(
+        model.modal.top(),
+        Some(modal::ModalKind::GoalStepActionPicker)
+    );
+
+    let model_edit_index = model
+        .goal_action_picker_items()
+        .iter()
+        .position(|item| item.label() == "Edit Runtime Model")
+        .expect("runtime model action should be available");
+    if model_edit_index > 0 {
+        model
+            .modal
+            .reduce(modal::ModalAction::Navigate(model_edit_index as i32));
+    }
+
+    let handled = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::GoalStepActionPicker,
+    );
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+
+    navigate_model_picker_to(&mut model, "gpt-5.4-mini");
+
+    let handled = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ModelPicker,
+    );
+    assert!(!handled);
+    assert_eq!(
+        model.modal.top(),
+        Some(modal::ModalKind::GoalStepActionPicker)
+    );
+
+    let reassign_index = model
+        .goal_action_picker_items()
+        .iter()
+        .position(|item| item.label() == "Reassign Active Step")
+        .expect("reassign action should be available");
+    if reassign_index > 0 {
+        model
+            .modal
+            .reduce(modal::ModalAction::Navigate(reassign_index as i32));
+    }
+
+    let handled = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::GoalStepActionPicker,
+    );
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+
+    let handled = model.handle_key_modal(
+        KeyCode::Esc,
+        KeyModifiers::NONE,
+        modal::ModalKind::ChatActionConfirm,
+    );
+    assert!(!handled);
+    assert!(model.goal_mission_control.pending_runtime_change.is_none());
+    assert!(
+        daemon_rx_cmd.try_recv().is_err(),
+        "runtime assignment edit should stay TUI-local without daemon command"
+    );
+
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+    model.focus = FocusArea::Chat;
+
+    let labels: Vec<_> = model
+        .goal_action_picker_items()
+        .iter()
+        .map(|item| item.label())
+        .collect();
+    assert!(labels.contains(&"Edit Runtime Model"), "{labels:?}");
+    assert!(!labels.contains(&"Reassign Active Step"), "{labels:?}");
 }

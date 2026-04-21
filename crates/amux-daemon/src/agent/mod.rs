@@ -47,9 +47,11 @@ mod forge;
 mod gateway_health;
 mod gateway_loop;
 pub(crate) mod gene_pool;
+pub(crate) mod goal_dossier;
 mod goal_llm;
 mod goal_parsing;
 mod goal_planner;
+mod goal_routing;
 mod heartbeat;
 mod heartbeat_checks;
 mod honcho;
@@ -130,6 +132,7 @@ pub(crate) use config::ConfigRuntimeProjection;
 pub(crate) use explanation::*;
 pub(crate) use gateway_health::GatewayConnectionStatus as RuntimeGatewayConnectionStatus;
 use goal_parsing::*;
+use goal_routing::*;
 use honcho::*;
 use memory::*;
 use metadata::*;
@@ -164,6 +167,27 @@ use crate::session_manager::SessionManager;
 use self::llm_client::{send_completion_request, ApiContent, ApiMessage, RetryStrategy};
 use self::tool_executor::{execute_tool, get_available_tools};
 use self::types::*;
+
+fn goal_run_apply_thread_routing(goal_run: &mut GoalRun, thread_id: Option<String>) {
+    let Some(thread_id) = thread_id.map(|value| value.trim().to_string()) else {
+        return;
+    };
+    if thread_id.is_empty() {
+        return;
+    }
+    if goal_run.root_thread_id.is_none() {
+        goal_run.root_thread_id = Some(thread_id.clone());
+    }
+    if !goal_run
+        .execution_thread_ids
+        .iter()
+        .any(|id| id == &thread_id)
+    {
+        goal_run.execution_thread_ids.push(thread_id.clone());
+    }
+    goal_run.active_thread_id = Some(thread_id.clone());
+    goal_run.thread_id = Some(thread_id);
+}
 
 // Public re-exports consumed by sibling modules in this bin crate.
 #[cfg(test)]

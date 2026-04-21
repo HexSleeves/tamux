@@ -549,6 +549,7 @@ pub(super) fn apply_schema_migrations(
     ensure_column(connection, "agent_tasks", "compensation_summary", "TEXT")?;
     ensure_column(connection, "goal_runs", "client_request_id", "TEXT")?;
     ensure_column(connection, "goal_runs", "failure_cause", "TEXT")?;
+    ensure_column(connection, "goal_runs", "stopped_reason", "TEXT")?;
     ensure_column(
         connection,
         "goal_runs",
@@ -569,6 +570,7 @@ pub(super) fn apply_schema_migrations(
     ensure_column(connection, "goal_runs", "compensation_summary", "TEXT")?;
     ensure_column(connection, "goal_runs", "active_task_id", "TEXT")?;
     ensure_column(connection, "goal_runs", "duration_ms", "INTEGER")?;
+    ensure_column(connection, "goal_runs", "dossier_json", "TEXT")?;
     ensure_column(
         connection,
         "goal_runs",
@@ -589,6 +591,38 @@ pub(super) fn apply_schema_migrations(
         "TEXT NOT NULL DEFAULT 'aware'",
     )?;
     ensure_column(connection, "goal_runs", "authorship_tag", "TEXT")?;
+    ensure_column(
+        connection,
+        "goal_runs",
+        "planner_owner_profile_json",
+        "TEXT",
+    )?;
+    ensure_column(
+        connection,
+        "goal_runs",
+        "current_step_owner_profile_json",
+        "TEXT",
+    )?;
+    ensure_column(
+        connection,
+        "goal_runs",
+        "launch_assignment_snapshot_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(
+        connection,
+        "goal_runs",
+        "runtime_assignment_list_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(connection, "goal_runs", "root_thread_id", "TEXT")?;
+    ensure_column(connection, "goal_runs", "active_thread_id", "TEXT")?;
+    ensure_column(
+        connection,
+        "goal_runs",
+        "execution_thread_ids_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
     ensure_column(connection, "goal_run_events", "step_index", "INTEGER")?;
     ensure_column(connection, "goal_run_events", "todo_snapshot_json", "TEXT")?;
     // BEAT-09: user_action column for dismissal tracking in action_audit.

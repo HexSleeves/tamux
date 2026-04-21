@@ -120,6 +120,7 @@ pub(super) enum AgentBridgeCommand {
         max_bytes: Option<usize>,
     },
     GetConfig,
+    GetGatewayConfig,
     SetConfigItem {
         key_path: String,
         value_json: String,
@@ -132,6 +133,7 @@ pub(super) enum AgentBridgeCommand {
         provider_id: String,
         base_url: String,
         api_key: String,
+        output_modalities: Option<String>,
     },
     SetTargetAgentProviderModel {
         target_agent_id: String,

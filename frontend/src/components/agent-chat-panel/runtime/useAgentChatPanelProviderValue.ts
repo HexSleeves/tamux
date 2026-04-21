@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { abortThreadStream, useAgentStore } from "@/lib/agentStore";
+import { abortThreadStream, buildHydratedRemoteThread, useAgentStore } from "@/lib/agentStore";
 import { getAgentBridge, shouldUseDaemonRuntime } from "@/lib/agentDaemonConfig";
 import { fetchAgentRuns, isSubagentRun, type AgentRun } from "@/lib/agentRuns";
 import { fetchThreadTodos } from "@/lib/agentTodos";
@@ -13,6 +13,7 @@ import { useSnippetStore } from "@/lib/snippetStore";
 import { useTranscriptStore } from "@/lib/transcriptStore";
 import { useWorkspaceStore } from "@/lib/workspaceStore";
 import type { AgentThread, AgentTodoItem } from "@/lib/agentStore";
+import { isGatewayAgentThread, isInternalAgentThread } from "@/lib/agentStore";
 import type { GoalRun } from "@/lib/goalRuns";
 import type { Workspace } from "@/lib/types";
 import type { WelesHealthState } from "@/lib/agentStore/types";
@@ -52,6 +53,67 @@ const pendingSpawnedThreadHydrations = new Map<string, PendingSpawnedThreadHydra
 
 export function resetPendingSpawnedThreadHydrationsForTest(): void {
   pendingSpawnedThreadHydrations.clear();
+}
+
+function filterThreadsForSearch(
+  threads: AgentThread[],
+  searchQuery: string,
+): AgentThread[] {
+  if (!searchQuery) {
+    return threads;
+  }
+  const lower = searchQuery.toLowerCase();
+  return threads.filter(
+    (thread) =>
+      thread.title.toLowerCase().includes(lower)
+      || thread.lastMessagePreview.toLowerCase().includes(lower),
+  );
+}
+
+export function filterThreadsForBrowserView(
+  threads: AgentThread[],
+  view: AgentChatPanelView,
+): AgentThread[] {
+  switch (view) {
+    case "internal":
+      return threads.filter((thread) => isInternalAgentThread(thread));
+    case "gateway":
+      return threads.filter((thread) => isGatewayAgentThread(thread));
+    case "threads":
+    default:
+      return threads;
+  }
+}
+
+export function buildAgentChatPanelTabItems({
+  threads,
+  pinnedMessageCount,
+  scopedCognitiveEventCount,
+  usageMessageCount,
+}: {
+  threads: AgentThread[];
+  pinnedMessageCount: number;
+  scopedCognitiveEventCount: number;
+  usageMessageCount: number;
+}): Array<{ id: AgentChatPanelView; label: string; count: number | null }> {
+  const internalThreadCount = threads.filter((thread) => isInternalAgentThread(thread)).length;
+  const gatewayThreadCount = threads.filter((thread) => isGatewayAgentThread(thread)).length;
+
+  return [
+    { id: "threads", label: "Threads", count: threads.length },
+    { id: "chat", label: "Chat", count: null },
+    ...(pinnedMessageCount > 0 ? [{ id: "pinned" as const, label: "Pinned", count: pinnedMessageCount }] : []),
+    { id: "trace", label: "Trace", count: scopedCognitiveEventCount },
+    { id: "usage", label: "Usage", count: usageMessageCount },
+    { id: "context", label: "Context", count: null },
+    { id: "graph", label: "Graph", count: null },
+    { id: "coding-agents", label: "Coding Agents", count: null },
+    { id: "ai-training", label: "AI Training", count: null },
+    { id: "tasks", label: "Tasks", count: null },
+    { id: "internal", label: "Internal", count: internalThreadCount },
+    { id: "gateway", label: "Gateway", count: gatewayThreadCount },
+    { id: "subagents", label: "Subagents", count: null },
+  ];
 }
 
 function findLocalThreadByDaemonThreadId(
@@ -356,6 +418,9 @@ export function useAgentChatPanelProviderValue(): {
     goalRunsForTrace,
     latestDivergentSessionId,
     setActiveThread,
+    setDaemonTodosByThread,
+    setThreadDaemonId,
+    setThreadTodos,
     setLatestDivergentSessionId,
     setView,
   });
@@ -435,21 +500,47 @@ export function useAgentChatPanelProviderValue(): {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
 
+  const inputIsImageCommand = useMemo(() => {
+    const trimmed = input.trim();
+    return trimmed === "/image" || trimmed.startsWith("/image ");
+  }, [input]);
+
   useEffect(() => {
-    if (isOpen && activeThreadId) {
+    if (isOpen && (activeThreadId || inputIsImageCommand)) {
       setView("chat");
       setTimeout(() => inputRef.current?.focus(), 100);
     } else if (isOpen) {
       setView("threads");
     }
-  }, [activeThreadId, isOpen]);
+  }, [activeThreadId, inputIsImageCommand, isOpen]);
 
-  const filteredThreads = searchQuery
-    ? threads.filter(
-      (thread) => thread.title.toLowerCase().includes(searchQuery.toLowerCase())
-        || thread.lastMessagePreview.toLowerCase().includes(searchQuery.toLowerCase()),
-    )
-    : threads;
+  useEffect(() => {
+    const handleComposeImage = (event: Event) => {
+      const detail = event instanceof CustomEvent ? event.detail : null;
+      const prompt = detail && typeof detail.prompt === "string" ? detail.prompt.trim() : "";
+      useWorkspaceStore.setState({ agentPanelOpen: true });
+      setChatBackView("threads");
+      setView("chat");
+      setInput(prompt ? `/image ${prompt}` : "/image ");
+      window.setTimeout(() => inputRef.current?.focus(), 50);
+    };
+
+    window.addEventListener("tamux-agent-compose-image", handleComposeImage);
+    window.addEventListener("amux-agent-compose-image", handleComposeImage);
+    return () => {
+      window.removeEventListener("tamux-agent-compose-image", handleComposeImage);
+      window.removeEventListener("amux-agent-compose-image", handleComposeImage);
+    };
+  }, []);
+
+  const searchedThreads = useMemo(
+    () => filterThreadsForSearch(threads, searchQuery),
+    [threads, searchQuery],
+  );
+  const filteredThreads = useMemo(
+    () => filterThreadsForBrowserView(searchedThreads, view),
+    [searchedThreads, view],
+  );
   const isStreamingResponse = messages.some((message) => message.role === "assistant" && message.isStreaming);
   const canOpenSpawnedThread = useCallback((run: AgentRun) => {
     if (!run.thread_id) {
@@ -495,6 +586,103 @@ export function useAgentChatPanelProviderValue(): {
     threads,
     workspaces,
   ]);
+
+  const refreshThreadList = useCallback(async () => {
+    const amux = getAgentBridge();
+    if (!amux?.agentListThreads) {
+      return;
+    }
+
+    const remoteThreads = await amux.agentListThreads().catch(() => []);
+    if (!Array.isArray(remoteThreads)) {
+      return;
+    }
+
+    const agentName = useAgentStore.getState().agentSettings.agent_name;
+    useAgentStore.setState((state) => {
+      const existingByDaemonThreadId = new Map(
+        state.threads
+          .filter((thread) => typeof thread.daemonThreadId === "string" && thread.daemonThreadId)
+          .map((thread) => [thread.daemonThreadId as string, thread]),
+      );
+      const nextThreads: AgentThread[] = [];
+      const nextMessages = { ...state.messages };
+      const nextTodos = { ...state.todos };
+      const seenDaemonThreadIds = new Set<string>();
+
+      for (const remoteThread of remoteThreads) {
+        const hydrated = buildHydratedRemoteThread(remoteThread ?? {}, agentName);
+        if (!hydrated?.thread.daemonThreadId) {
+          continue;
+        }
+
+        const daemonThreadId = hydrated.thread.daemonThreadId;
+        if (seenDaemonThreadIds.has(daemonThreadId)) {
+          continue;
+        }
+        seenDaemonThreadIds.add(daemonThreadId);
+
+        const existing = existingByDaemonThreadId.get(daemonThreadId);
+        if (existing) {
+          nextThreads.push({
+            ...existing,
+            ...hydrated.thread,
+            id: existing.id,
+            workspaceId: existing.workspaceId,
+            surfaceId: existing.surfaceId,
+            paneId: existing.paneId,
+          });
+          if (!(existing.id in nextMessages)) {
+            nextMessages[existing.id] = hydrated.messages.map((message) => ({
+              ...message,
+              threadId: existing.id,
+            }));
+          }
+          if (!(existing.id in nextTodos)) {
+            nextTodos[existing.id] = [];
+          }
+          continue;
+        }
+
+        nextThreads.push(hydrated.thread);
+        nextMessages[hydrated.thread.id] = hydrated.messages;
+        nextTodos[hydrated.thread.id] = [];
+      }
+
+      for (const localThread of state.threads) {
+        if (!localThread.daemonThreadId) {
+          nextThreads.push(localThread);
+        }
+      }
+
+      nextThreads.sort((left, right) => right.updatedAt - left.updatedAt);
+      const validThreadIds = new Set(nextThreads.map((thread) => thread.id));
+
+      for (const threadId of Object.keys(nextMessages)) {
+        if (!validThreadIds.has(threadId)) {
+          delete nextMessages[threadId];
+        }
+      }
+      for (const threadId of Object.keys(nextTodos)) {
+        if (!validThreadIds.has(threadId)) {
+          delete nextTodos[threadId];
+        }
+      }
+
+      return {
+        threads: nextThreads,
+        messages: nextMessages,
+        todos: nextTodos,
+        activeThreadId:
+          state.activeThreadId && validThreadIds.has(state.activeThreadId)
+            ? state.activeThreadId
+            : null,
+        threadHistoryStack: state.threadHistoryStack.filter((threadId) =>
+          validThreadIds.has(threadId),
+        ),
+      };
+    });
+  }, []);
 
   const sendMessage = useCallback((payload: { text: string; contentBlocksJson?: string | null; localContentBlocks?: import("@/lib/agentStore/types").AgentContentBlock[] }) => {
     if (!payload.text) return;
@@ -621,19 +809,12 @@ export function useAgentChatPanelProviderValue(): {
   }, [agentSettings]);
   const pinnedOverBudget = pinnedUsageChars > pinnedBudgetChars;
 
-  const tabItems = [
-    { id: "threads", label: "Threads", count: threads.length },
-    { id: "chat", label: "Chat", count: null },
-    ...(pinnedMessages.length > 0 ? [{ id: "pinned" as const, label: "Pinned", count: pinnedMessages.length }] : []),
-    { id: "trace", label: "Trace", count: scopedCognitiveEvents.length },
-    { id: "usage", label: "Usage", count: usageMessageCount },
-    { id: "context", label: "Context", count: null },
-    { id: "graph", label: "Graph", count: null },
-    { id: "coding-agents", label: "Coding Agents", count: null },
-    { id: "ai-training", label: "AI Training", count: null },
-    { id: "tasks", label: "Tasks", count: null },
-    { id: "subagents", label: "Subagents", count: null },
-  ] satisfies Array<{ id: AgentChatPanelView; label: string; count: number | null }>;
+  const tabItems = buildAgentChatPanelTabItems({
+    threads,
+    pinnedMessageCount: pinnedMessages.length,
+    scopedCognitiveEventCount: scopedCognitiveEvents.length,
+    usageMessageCount,
+  });
 
   const value = useMemo<AgentChatPanelRuntimeValue>(() => ({
     togglePanel,
@@ -648,6 +829,7 @@ export function useAgentChatPanelProviderValue(): {
     updateAgentSetting,
     searchQuery,
     setSearchQuery,
+    refreshThreadList,
     messages,
     todos,
     daemonTodosByThread,
@@ -751,6 +933,7 @@ export function useAgentChatPanelProviderValue(): {
     searchQuery,
     canOpenSpawnedThread,
     openSpawnedThread,
+    refreshThreadList,
     setActiveThread,
     setSearchQuery,
     snippets,

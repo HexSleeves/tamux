@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -35,6 +36,9 @@ pub struct AgentMessage {
     pub role: MessageRole,
     #[serde(default)]
     pub content: String,
+
+    #[serde(default)]
+    pub content_blocks: Vec<AgentContentBlock>,
 
     #[serde(default)]
     pub reasoning: Option<String>,
@@ -87,7 +91,34 @@ pub struct AgentMessage {
     #[serde(default)]
     pub compaction_payload: Option<String>,
     #[serde(default)]
+    pub tool_output_preview_path: Option<String>,
+    #[serde(default)]
     pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentContentBlock {
+    Text {
+        #[serde(default)]
+        text: String,
+    },
+    Image {
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        data_url: Option<String>,
+        #[serde(default)]
+        mime_type: Option<String>,
+    },
+    Audio {
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        data_url: Option<String>,
+        #[serde(default)]
+        mime_type: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -229,6 +260,7 @@ pub enum TaskStatus {
     AwaitingApproval,
     Blocked,
     FailedAnalyzing,
+    BudgetExceeded,
     Completed,
     Failed,
     Cancelled,
@@ -281,6 +313,51 @@ pub enum GoalRunStatus {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct GoalRuntimeOwnerProfile {
+    pub agent_label: String,
+    pub provider: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct GoalAgentAssignment {
+    #[serde(default)]
+    pub role_id: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub inherit_from_main: bool,
+}
+
+fn deserialize_goal_binding<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(value) => Ok(value),
+        serde_json::Value::Object(map) if map.len() == 1 => {
+            let (kind, payload) = map.into_iter().next().expect("validated length");
+            let payload = payload
+                .as_str()
+                .ok_or_else(|| D::Error::custom("goal binding payload must be a string"))?;
+            Ok(format!("{kind}:{payload}"))
+        }
+        other => Err(D::Error::custom(format!(
+            "unsupported goal binding payload: {other}"
+        ))),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GoalRun {
     #[serde(default)]
@@ -290,19 +367,39 @@ pub struct GoalRun {
     #[serde(default)]
     pub thread_id: Option<String>,
     #[serde(default)]
+    pub root_thread_id: Option<String>,
+    #[serde(default)]
+    pub active_thread_id: Option<String>,
+    #[serde(default)]
+    pub execution_thread_ids: Vec<String>,
+    #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
     pub status: Option<GoalRunStatus>,
     #[serde(default)]
     pub current_step_title: Option<String>,
     #[serde(default)]
+    pub launch_assignment_snapshot: Vec<GoalAgentAssignment>,
+    #[serde(default)]
+    pub runtime_assignment_list: Vec<GoalAgentAssignment>,
+    #[serde(default)]
+    pub planner_owner_profile: Option<GoalRuntimeOwnerProfile>,
+    #[serde(default)]
+    pub current_step_owner_profile: Option<GoalRuntimeOwnerProfile>,
+    #[serde(default)]
     pub child_task_count: u32,
     #[serde(default)]
     pub approval_count: u32,
     #[serde(default)]
+    pub awaiting_approval_id: Option<String>,
+    #[serde(default)]
     pub last_error: Option<String>,
     #[serde(default)]
     pub goal: String,
+    #[serde(default)]
+    pub created_at: u64,
+    #[serde(default)]
+    pub updated_at: u64,
     #[serde(default)]
     pub current_step_index: usize,
     #[serde(default)]
@@ -329,6 +426,112 @@ pub struct GoalRun {
     pub steps: Vec<GoalRunStep>,
     #[serde(default)]
     pub events: Vec<GoalRunEvent>,
+    #[serde(default)]
+    pub dossier: Option<GoalRunDossier>,
+    #[serde(skip)]
+    pub sparse_update: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GoalEvidenceRecord {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub uri: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub captured_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GoalProofCheckRecord {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub resolved_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GoalRunReportRecord {
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub notes: Vec<String>,
+    #[serde(default)]
+    pub evidence: Vec<GoalEvidenceRecord>,
+    #[serde(default)]
+    pub proof_checks: Vec<GoalProofCheckRecord>,
+    #[serde(default)]
+    pub generated_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GoalResumeDecisionRecord {
+    #[serde(default)]
+    pub action: String,
+    #[serde(default)]
+    pub reason_code: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub details: Vec<String>,
+    #[serde(default)]
+    pub decided_at: Option<u64>,
+    #[serde(default)]
+    pub projection_state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GoalDeliveryUnitRecord {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default, deserialize_with = "deserialize_goal_binding")]
+    pub execution_binding: String,
+    #[serde(default, deserialize_with = "deserialize_goal_binding")]
+    pub verification_binding: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub proof_checks: Vec<GoalProofCheckRecord>,
+    #[serde(default)]
+    pub evidence: Vec<GoalEvidenceRecord>,
+    #[serde(default)]
+    pub report: Option<GoalRunReportRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GoalRunDossier {
+    #[serde(default)]
+    pub units: Vec<GoalDeliveryUnitRecord>,
+    #[serde(default)]
+    pub projection_state: String,
+    #[serde(default)]
+    pub latest_resume_decision: Option<GoalResumeDecisionRecord>,
+    #[serde(default)]
+    pub report: Option<GoalRunReportRecord>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub projection_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

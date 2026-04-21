@@ -83,6 +83,18 @@ pub struct FetchedModel {
     pub metadata: Option<serde_json::Value>,
 }
 
+pub fn fetched_model_feature_capabilities(
+    provider_id: &str,
+    model: &FetchedModel,
+) -> amux_shared::providers::ModelFeatureCapabilities {
+    amux_shared::providers::derive_model_feature_capabilities(
+        provider_id,
+        &model.id,
+        model.metadata.as_ref(),
+        model.pricing.as_ref().and_then(|pricing| pricing.image.as_deref()).is_some(),
+    )
+}
+
 fn json_string_field(value: Option<&serde_json::Value>) -> Option<String> {
     match value? {
         serde_json::Value::String(text) => {
@@ -153,6 +165,7 @@ pub async fn fetch_models(
     provider_id: &str,
     base_url: &str,
     api_key: &str,
+    output_modalities: Option<&str>,
 ) -> Result<Vec<FetchedModel>> {
     if provider_id == amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT {
         return get_provider_definition(provider_id)
@@ -181,15 +194,42 @@ pub async fn fetch_models(
     }
 
     let client = reqwest::Client::new();
-    let url = format!("{}/models", base_url.trim_end_matches('/'));
-
-    let mut req = client.get(&url).header("Content-Type", "application/json");
-
-    if !api_key.is_empty() {
-        req = def.auth_method.apply(req, api_key);
+    let mut url = format!("{}/models", base_url.trim_end_matches('/'));
+    if provider_id == amux_shared::providers::PROVIDER_ID_OPENROUTER {
+        if let Some(output_modalities) = output_modalities
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            url.push_str("?output_modalities=");
+            url.push_str(output_modalities);
+        }
     }
+    let send_request = |include_auth: bool| {
+        let mut req = client.get(&url).header("Content-Type", "application/json");
+        if include_auth && !api_key.is_empty() {
+            req = def.auth_method.apply(req, api_key);
+        }
+        req
+    };
 
-    let response = req.send().await?;
+    let mut response = send_request(true).send().await?;
+
+    // Chutes exposes a public model catalog. If the saved bearer token is stale,
+    // retry without auth so the picker can still populate from `/models`.
+    if provider_id == amux_shared::providers::PROVIDER_ID_CHUTES
+        && !api_key.is_empty()
+        && matches!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        )
+    {
+        tracing::info!(
+            provider_id,
+            status = %response.status(),
+            "retrying model catalog fetch without auth after auth failure"
+        );
+        response = send_request(false).send().await?;
+    }
 
     if !response.status().is_success() {
         let status = response.status();
@@ -220,7 +260,7 @@ pub async fn validate_provider_connection(
     };
 
     if provider_id == amux_shared::providers::PROVIDER_ID_AZURE_OPENAI {
-        let models = fetch_models(provider_id, &resolved_base_url, api_key).await?;
+        let models = fetch_models(provider_id, &resolved_base_url, api_key, None).await?;
         return Ok(Some(models));
     }
 

@@ -102,6 +102,64 @@ use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
     }
 
     #[test]
+    fn refresh_requests_thread_list_with_internal_threads_included() {
+        let (event_tx, _event_rx) = mpsc::channel(8);
+        let client = DaemonClient::new(event_tx);
+        let mut rx = client.request_rx.lock().unwrap().take().unwrap();
+
+        client.refresh().unwrap();
+
+        assert!(matches!(
+            drain_request(&mut rx),
+            ClientMessage::AgentListThreads {
+                limit: None,
+                offset: None,
+                include_internal: true,
+            }
+        ));
+    }
+
+    #[test]
+    fn get_config_requests_agent_config_immediately() {
+        let (event_tx, _event_rx) = mpsc::channel(8);
+        let client = DaemonClient::new(event_tx);
+        let mut rx = client.request_rx.lock().unwrap().take().unwrap();
+
+        client.get_config().unwrap();
+
+        assert!(matches!(
+            drain_request(&mut rx),
+            ClientMessage::AgentGetConfig
+        ));
+    }
+
+    #[test]
+    fn refresh_services_excludes_agent_config_request() {
+        let (event_tx, _event_rx) = mpsc::channel(8);
+        let client = DaemonClient::new(event_tx);
+        let mut rx = client.request_rx.lock().unwrap().take().unwrap();
+
+        client.refresh_services().unwrap();
+
+        assert!(matches!(drain_request(&mut rx), ClientMessage::AgentListTasks));
+        assert!(matches!(
+            drain_request(&mut rx),
+            ClientMessage::AgentListGoalRuns {
+                limit: None,
+                offset: None,
+            }
+        ));
+        assert!(matches!(
+            drain_request(&mut rx),
+            ClientMessage::AgentHeartbeatGetItems
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "refresh_services should no longer enqueue AgentGetConfig on the startup-critical lane"
+        );
+    }
+
+    #[test]
     fn oversized_send_message_is_rejected_before_queueing() {
         let (event_tx, _event_rx) = mpsc::channel(8);
         let client = DaemonClient::new(event_tx);
@@ -143,6 +201,119 @@ use amux_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
                 if approval_id == "policy-escalation-thread_abc-123"
                     && decision == "approve-session"
         ));
+    }
+
+    #[tokio::test]
+    async fn task_list_accepts_budget_exceeded_status() {
+        let (event_tx, mut event_rx) = mpsc::channel(8);
+
+        let should_continue = handle_daemon_message_for_test(
+            DaemonMessage::AgentTaskList {
+                tasks_json: serde_json::json!([{
+                    "id": "task-budget",
+                    "title": "Task budget exceeded",
+                    "status": "budget_exceeded"
+                }])
+                .to_string(),
+            },
+            &event_tx,
+        )
+        .await;
+
+        assert!(should_continue);
+        match event_rx.recv().await.expect("expected task list event") {
+            ClientEvent::TaskList(tasks) => {
+                assert_eq!(tasks.len(), 1);
+                assert_eq!(
+                    tasks[0].status,
+                    Some(crate::wire::TaskStatus::BudgetExceeded)
+                );
+            }
+            other => panic!("expected task list event, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn goal_run_detail_placeholder_payload_carries_requested_id() {
+        let (event_tx, mut event_rx) = mpsc::channel(8);
+
+        let should_continue = handle_daemon_message_for_test(
+            DaemonMessage::AgentGoalRunDetail {
+                goal_run_json: serde_json::json!({
+                    "id": "goal-1",
+                })
+                .to_string(),
+            },
+            &event_tx,
+        )
+        .await;
+
+        assert!(should_continue);
+        match event_rx.recv().await.expect("expected goal detail event") {
+            ClientEvent::GoalRunDetail(Some(goal_run)) => {
+                assert_eq!(goal_run.id, "goal-1");
+                assert!(goal_run.title.is_empty());
+                assert!(goal_run.status.is_none());
+            }
+            other => panic!("expected goal run detail event, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn goal_run_update_placeholder_payload_is_marked_sparse() {
+        let (event_tx, mut event_rx) = mpsc::channel(8);
+
+        let should_continue = handle_daemon_message_for_test(
+            DaemonMessage::AgentEvent {
+                event_json: serde_json::json!({
+                    "type": "goal_run_update",
+                    "goal_run_id": "goal-1",
+                    "message": "Goal update",
+                    "current_step_index": 4
+                })
+                .to_string(),
+            },
+            &event_tx,
+        )
+        .await;
+
+        assert!(should_continue);
+        match event_rx.recv().await.expect("expected goal update event") {
+            ClientEvent::GoalRunUpdate(goal_run) => {
+                assert_eq!(goal_run.id, "goal-1");
+                assert_eq!(goal_run.title, "Goal run update");
+                assert!(goal_run.last_error.is_none());
+                assert_eq!(goal_run.current_step_index, 4);
+                assert!(goal_run.sparse_update);
+            }
+            other => panic!("expected goal run update event, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_list_event_carries_goal_id_when_empty() {
+        let (event_tx, mut event_rx) = mpsc::channel(8);
+
+        let should_continue = handle_daemon_message_for_test(
+            DaemonMessage::AgentCheckpointList {
+                goal_run_id: "goal-1".to_string(),
+                checkpoints_json: "[]".to_string(),
+            },
+            &event_tx,
+        )
+        .await;
+
+        assert!(should_continue);
+        match event_rx.recv().await.expect("expected checkpoints event") {
+            ClientEvent::GoalRunCheckpoints {
+                goal_run_id,
+                checkpoints,
+            } => {
+                assert_eq!(goal_run_id, "goal-1");
+                assert!(checkpoints.is_empty());
+            }
+            other => panic!("expected checkpoints event, got {:?}", other),
+        }
     }
 
     #[tokio::test]

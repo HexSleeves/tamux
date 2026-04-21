@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use super::{
     AgentStatisticsWindow, ApprovalDecision, AsyncCommandCapability, ClientSurface, GatewayAck,
     GatewayCursorState, GatewayHealthState, GatewayIncomingEvent, GatewayRegistration,
-    GatewayRouteModeState, GatewaySendResult, GatewayThreadBindingState, ManagedCommandRequest,
-    SessionId, WorkspaceId,
+    GatewayRouteModeState, GatewaySendResult, GatewayThreadBindingState, GoalAgentAssignment,
+    ManagedCommandRequest, SessionId, WorkspaceId,
 };
 
 #[rustfmt::skip]
@@ -58,11 +58,11 @@ pub enum ClientMessage {
     AgentStopStream { thread_id: String },
     AgentForceCompact { thread_id: String },
     AgentRetryStreamNow { thread_id: String },
-    AgentListThreads { #[serde(default)] limit: Option<usize>, #[serde(default)] offset: Option<usize> },
+    AgentListThreads { #[serde(default)] limit: Option<usize>, #[serde(default)] offset: Option<usize>, #[serde(default)] include_internal: bool },
     AgentGetThread { thread_id: String, #[serde(default)] message_limit: Option<usize>, #[serde(default)] message_offset: Option<usize> },
     AgentDeleteThread { thread_id: String },
     AgentAddTask { title: String, description: String, priority: String, command: Option<String>, session_id: Option<String>, scheduled_at: Option<u64>, #[serde(default)] dependencies: Vec<String> },
-    AgentStartGoalRun { goal: String, title: Option<String>, thread_id: Option<String>, session_id: Option<String>, priority: Option<String>, client_request_id: Option<String>, #[serde(default)] autonomy_level: Option<String>, #[serde(default)] client_surface: Option<ClientSurface> },
+    AgentStartGoalRun { goal: String, title: Option<String>, thread_id: Option<String>, session_id: Option<String>, priority: Option<String>, client_request_id: Option<String>, #[serde(default)] launch_assignments: Vec<GoalAgentAssignment>, #[serde(default)] autonomy_level: Option<String>, #[serde(default)] client_surface: Option<ClientSurface> },
     AgentCancelTask { task_id: String },
     AgentListTasks,
     AgentListRuns,
@@ -93,7 +93,7 @@ pub enum ClientMessage {
     AgentSetConfigItem { key_path: String, value_json: String },
     AgentSetProviderModel { provider_id: String, model: String },
     AgentSetTargetAgentProviderModel { target_agent_id: String, provider_id: String, model: String },
-    AgentFetchModels { provider_id: String, base_url: String, api_key: String },
+    AgentFetchModels { provider_id: String, base_url: String, api_key: String, #[serde(default)] output_modalities: Option<String> },
     AgentHeartbeatGetItems,
     AgentHeartbeatSetItems { items_json: String },
     AgentResolveTaskApproval { approval_id: String, decision: String },
@@ -206,4 +206,6 @@ pub enum ClientMessage {
     AgentUnpinThreadMessageForCompaction { thread_id: String, message_id: String },
     AgentSpeechToText { args_json: String },
     AgentTextToSpeech { args_json: String },
+    AgentGenerateImage { args_json: String },
+    AgentGetGatewayConfig,
 }

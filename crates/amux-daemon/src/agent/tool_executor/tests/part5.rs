@@ -409,40 +409,135 @@
     }
 
     #[test]
-    fn vision_tools_are_gated_by_vision_toggle_and_audio_tools_are_available() {
+    fn generate_image_is_available_without_vision_for_image_generation_models() {
         let temp_dir = std::env::temp_dir();
 
-        let default_tools = get_available_tools(&AgentConfig::default(), &temp_dir, false);
-        assert!(default_tools
+        let mut config = AgentConfig::default();
+        config.provider = amux_shared::providers::PROVIDER_ID_OPENAI.to_string();
+        config.model = "gpt-image-1".to_string();
+        config.tools.vision = false;
+
+        let tools = get_available_tools(&config, &temp_dir, false);
+        assert!(tools
             .iter()
             .all(|tool| tool.function.name != "analyze_image"));
-        assert!(default_tools
-            .iter()
-            .all(|tool| tool.function.name != "generate_image"));
-        assert!(default_tools
-            .iter()
-            .any(|tool| tool.function.name == "speech_to_text"));
-        assert!(default_tools
-            .iter()
-            .any(|tool| tool.function.name == "text_to_speech"));
-
-        let mut config = AgentConfig::default();
-        config.tools.vision = true;
-        let vision_tools = get_available_tools(&config, &temp_dir, false);
-        assert!(vision_tools
-            .iter()
-            .any(|tool| tool.function.name == "analyze_image"));
-        assert!(vision_tools
+        assert!(tools
             .iter()
             .any(|tool| tool.function.name == "generate_image"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.function.name == "speech_to_text"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.function.name == "text_to_speech"));
+    }
+
+    #[test]
+    fn analyze_image_is_available_when_active_model_has_vision_even_if_toggle_is_off() {
+        let temp_dir = std::env::temp_dir();
+        let mut config = AgentConfig::default();
+        config.provider = amux_shared::providers::PROVIDER_ID_OPENAI.to_string();
+        config.model = "gpt-4o".to_string();
+        config.tools.vision = false;
+
+        let tools = get_available_tools(&config, &temp_dir, false);
+        assert!(tools
+            .iter()
+            .any(|tool| tool.function.name == "analyze_image"));
+    }
+
+    #[test]
+    fn generate_image_is_hidden_when_active_model_context_lacks_image_generation_capability() {
+        let temp_dir = std::env::temp_dir();
+        let mut config = AgentConfig::default();
+        config.provider = amux_shared::providers::PROVIDER_ID_XAI.to_string();
+        config.model = "grok-code-fast-1".to_string();
+        config.tools.vision = true;
+
+        let tools = get_available_tools(&config, &temp_dir, false);
+        assert!(tools
+            .iter()
+            .any(|tool| tool.function.name == "analyze_image"));
+        assert!(tools
+            .iter()
+            .all(|tool| tool.function.name != "generate_image"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.function.name == "speech_to_text"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.function.name == "text_to_speech"));
+    }
+
+    #[test]
+    fn configured_image_generation_model_keeps_generate_image_available() {
+        let temp_dir = std::env::temp_dir();
+        let mut config = AgentConfig::default();
+        config.provider = amux_shared::providers::PROVIDER_ID_XAI.to_string();
+        config.model = "grok-code-fast-1".to_string();
+        config.tools.vision = false;
+        config.extra.insert(
+            "image".to_string(),
+            serde_json::json!({
+                "generation": {
+                    "provider": amux_shared::providers::PROVIDER_ID_OPENROUTER,
+                    "model": "google/gemini-3-pro-image-preview"
+                }
+            }),
+        );
+
+        let tools = get_available_tools(&config, &temp_dir, false);
+        assert!(tools
+            .iter()
+            .any(|tool| tool.function.name == "generate_image"));
+        assert!(tools
+            .iter()
+            .all(|tool| tool.function.name != "analyze_image"));
     }
 
     #[test]
     fn media_tools_expose_expected_core_parameters() {
         let mut config = AgentConfig::default();
         config.tools.vision = true;
+        config.extra.insert(
+            "image".to_string(),
+            serde_json::json!({
+                "generation": {
+                    "provider": amux_shared::providers::PROVIDER_ID_OPENAI,
+                    "model": "gpt-image-1"
+                }
+            }),
+        );
         let temp_dir = std::env::temp_dir();
         let tools = get_available_tools(&config, &temp_dir, false);
+
+        let generate_image = tools
+            .iter()
+            .find(|tool| tool.function.name == "generate_image")
+            .expect("generate_image tool should be available when generation is configured");
+        let generate_properties = generate_image
+            .function
+            .parameters
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("generate_image schema should expose properties");
+        let generate_timeout = generate_properties
+            .get("timeout_seconds")
+            .expect("generate_image should expose timeout_seconds");
+        assert_eq!(
+            generate_timeout.get("type").and_then(|value| value.as_str()),
+            Some("integer")
+        );
+        assert_eq!(
+            generate_timeout
+                .get("maximum")
+                .and_then(|value| value.as_u64()),
+            Some(600)
+        );
+        assert!(generate_timeout
+            .get("description")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.contains("default: 600") && value.contains("max: 600")));
 
         let analyze_image = tools
             .iter()
@@ -460,11 +555,49 @@
                 "analyze_image should expose {property}"
             );
         }
+        let analyze_timeout = analyze_properties
+            .get("timeout_seconds")
+            .expect("analyze_image should expose timeout_seconds");
+        assert_eq!(
+            analyze_timeout.get("type").and_then(|value| value.as_str()),
+            Some("integer")
+        );
+        assert_eq!(
+            analyze_timeout
+                .get("maximum")
+                .and_then(|value| value.as_u64()),
+            Some(600)
+        );
+        assert!(analyze_timeout
+            .get("description")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.contains("default: 600") && value.contains("max: 600")));
 
         let speech_to_text = tools
             .iter()
             .find(|tool| tool.function.name == "speech_to_text")
             .expect("speech_to_text tool should be available");
+        let stt_properties = speech_to_text
+            .function
+            .parameters
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("speech_to_text schema should expose properties");
+        let stt_timeout = stt_properties
+            .get("timeout_seconds")
+            .expect("speech_to_text should expose timeout_seconds");
+        assert_eq!(
+            stt_timeout.get("type").and_then(|value| value.as_str()),
+            Some("integer")
+        );
+        assert_eq!(
+            stt_timeout.get("maximum").and_then(|value| value.as_u64()),
+            Some(600)
+        );
+        assert!(stt_timeout
+            .get("description")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.contains("default: 600") && value.contains("max: 600")));
         let stt_required = speech_to_text
             .function
             .parameters
@@ -478,6 +611,41 @@
             .iter()
             .find(|tool| tool.function.name == "text_to_speech")
             .expect("text_to_speech tool should be available");
+        assert!(
+            text_to_speech
+                .function
+                .description
+                .contains("say something aloud"),
+            "text_to_speech description should guide read-aloud requests"
+        );
+        assert!(
+            text_to_speech
+                .function
+                .description
+                .contains("temporary file path"),
+            "text_to_speech description should discourage path-only follow-up replies"
+        );
+        let tts_properties = text_to_speech
+            .function
+            .parameters
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("text_to_speech schema should expose properties");
+        let tts_timeout = tts_properties
+            .get("timeout_seconds")
+            .expect("text_to_speech should expose timeout_seconds");
+        assert_eq!(
+            tts_timeout.get("type").and_then(|value| value.as_str()),
+            Some("integer")
+        );
+        assert_eq!(
+            tts_timeout.get("maximum").and_then(|value| value.as_u64()),
+            Some(600)
+        );
+        assert!(tts_timeout
+            .get("description")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.contains("default: 600") && value.contains("max: 600")));
         let tts_required = text_to_speech
             .function
             .parameters

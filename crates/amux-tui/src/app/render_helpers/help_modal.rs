@@ -76,7 +76,10 @@ fn help_modal_lines(theme: &ThemeTokens) -> Vec<Line<'static>> {
         ]),
         Line::from(vec![
             Span::styled("  Ctrl+S           ", theme.fg_active),
-            Span::styled("Stop active speech playback", theme.fg_dim),
+            Span::styled(
+                "Stop active speech playback when audio is playing",
+                theme.fg_dim,
+            ),
         ]),
         Line::from(vec![
             Span::styled("  Esc              ", theme.fg_active),
@@ -95,6 +98,18 @@ fn help_modal_lines(theme: &ThemeTokens) -> Vec<Line<'static>> {
         Line::from(vec![
             Span::styled("  f                ", theme.fg_active),
             Span::styled("Toggle files section", theme.fg_dim),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+S           ", theme.fg_active),
+            Span::styled("Pause/resume selected goal run", theme.fg_dim),
+        ]),
+        Line::from(vec![
+            Span::styled("  a                ", theme.fg_active),
+            Span::styled("Open goal actions", theme.fg_dim),
+        ]),
+        Line::from(vec![
+            Span::styled("  r / Shift+R      ", theme.fg_active),
+            Span::styled("Retry or rerun from the current goal step", theme.fg_dim),
         ]),
         Line::raw(""),
         Line::from(Span::styled("  Input", theme.accent_primary)),
@@ -173,24 +188,28 @@ fn help_modal_lines(theme: &ThemeTokens) -> Vec<Line<'static>> {
             Span::styled("Set Svarog's reasoning effort", theme.fg_dim),
         ]),
         Line::from(vec![
-            Span::styled("  /thread          ", theme.fg_active),
-            Span::styled("Pick conversation thread", theme.fg_dim),
+            Span::styled("  /thread [agent]  ", theme.fg_active),
+            Span::styled("Pick a thread or preselect an agent source", theme.fg_dim),
         ]),
         Line::from(vec![
-            Span::styled("  /new             ", theme.fg_active),
-            Span::styled("New conversation", theme.fg_dim),
-        ]),
-        Line::from(vec![
-            Span::styled("  /goals           ", theme.fg_active),
-            Span::styled("Open goal picker / create goal", theme.fg_dim),
+            Span::styled("  /new [agent]     ", theme.fg_active),
+            Span::styled("New conversation (defaults to Svarog)", theme.fg_dim),
         ]),
         Line::from(vec![
             Span::styled("  /goal            ", theme.fg_active),
+            Span::styled("Open goal picker / create goal", theme.fg_dim),
+        ]),
+        Line::from(vec![
+            Span::styled("  /new-goal        ", theme.fg_active),
             Span::styled("Open new goal composer", theme.fg_dim),
         ]),
         Line::from(vec![
             Span::styled("  /attach <path>   ", theme.fg_active),
             Span::styled("Attach file to message", theme.fg_dim),
+        ]),
+        Line::from(vec![
+            Span::styled("  /image <prompt>  ", theme.fg_active),
+            Span::styled("Generate an image into the current thread", theme.fg_dim),
         ]),
         Line::from(vec![
             Span::styled("  /view            ", theme.fg_active),
@@ -316,5 +335,17 @@ mod tests {
 
         assert!(text.contains("/compact"));
         assert!(text.contains("Force compact current thread"));
+    }
+
+    #[test]
+    fn help_modal_lists_goal_command_not_goals() {
+        let text = help_modal_lines(&ThemeTokens::default())
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("/goal"));
+        assert!(!text.contains("/goals"));
     }
 }

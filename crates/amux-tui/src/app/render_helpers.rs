@@ -1,6 +1,7 @@
 use super::*;
-use ratatui::style::Modifier;
 
+#[path = "render_helpers/goal_mission_control.rs"]
+mod goal_mission_control;
 #[path = "render_helpers/help_modal.rs"]
 mod help_modal;
 #[path = "render_helpers/status_modal.rs"]
@@ -115,45 +116,19 @@ pub(super) fn render_effort_picker(
     frame.render_widget(Paragraph::new(hints), inner_chunks[1]);
 }
 
-pub(super) fn render_goal_composer(frame: &mut Frame, area: Rect, theme: &ThemeTokens) {
-    use ratatui::widgets::{Paragraph, Wrap};
-
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(1)])
-        .split(area);
-
-    let title = Paragraph::new(Line::from(Span::styled(
-        "Goal Runner",
-        theme.accent_primary.add_modifier(Modifier::BOLD),
-    )));
-    frame.render_widget(title, layout[0]);
-
-    let content = vec![
-        Line::from(Span::styled(
-            "Describe the goal in the input below and press Enter.",
-            theme.fg_active,
-        )),
-        Line::raw(""),
-        Line::from(vec![
-            Span::styled("Examples", theme.fg_dim.add_modifier(Modifier::BOLD)),
-            Span::raw(": "),
-            Span::styled(
-                "create a migration plan, implement auth, refactor a module, investigate a bug",
-                theme.fg_dim,
-            ),
-        ]),
-        Line::raw(""),
-        Line::from(vec![
-            Span::styled("Esc", theme.fg_active),
-            Span::styled(" back to conversation  ", theme.fg_dim),
-            Span::styled("Ctrl+G", theme.fg_active),
-            Span::styled(" goal picker", theme.fg_dim),
-        ]),
-    ];
-    frame.render_widget(
-        Paragraph::new(content).wrap(Wrap { trim: false }),
-        layout[1],
+pub(super) fn render_goal_mission_control_preflight(
+    frame: &mut Frame,
+    area: Rect,
+    state: &crate::state::goal_mission_control::GoalMissionControlState,
+    can_open_active_thread: bool,
+    theme: &ThemeTokens,
+) {
+    goal_mission_control::render_goal_mission_control_preflight(
+        frame,
+        area,
+        state,
+        can_open_active_thread,
+        theme,
     );
 }
 
@@ -387,6 +362,75 @@ pub(super) fn render_chat_action_confirm_modal(
         Span::styled(" [Cancel] ", cancel_style),
     ]);
     frame.render_widget(Paragraph::new(action_line).centered(), layout[1]);
+}
+
+pub(super) fn render_goal_step_action_picker_modal(
+    frame: &mut Frame,
+    area: Rect,
+    goal_title: Option<&str>,
+    step_title: Option<&str>,
+    items: &[&str],
+    cursor: usize,
+    theme: &ThemeTokens,
+) {
+    use ratatui::style::{Color, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
+
+    let block = Block::default()
+        .title(" GOAL ACTIONS ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(theme.accent_secondary);
+
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    let context = vec![
+        Line::from(goal_title.unwrap_or("Goal actions").to_string()),
+        Line::from(Span::styled(
+            format!("Current step: {}", step_title.unwrap_or("none")),
+            theme.fg_dim,
+        )),
+    ];
+    frame.render_widget(Paragraph::new(context), layout[0]);
+
+    let items = items
+        .iter()
+        .enumerate()
+        .map(|(index, label)| {
+            if index == cursor {
+                ListItem::new(Line::from(vec![Span::raw("> "), Span::raw(*label)]))
+                    .style(Style::default().bg(Color::Indexed(178)).fg(Color::Black))
+            } else {
+                ListItem::new(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(*label, theme.fg_active),
+                ]))
+            }
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(List::new(items), layout[1]);
+
+    let hints = Line::from(vec![
+        Span::styled("↑↓", theme.fg_active),
+        Span::styled(" nav  ", theme.fg_dim),
+        Span::styled("Enter", theme.fg_active),
+        Span::styled(" select  ", theme.fg_dim),
+        Span::styled("Esc", theme.fg_active),
+        Span::styled(" close", theme.fg_dim),
+    ]);
+    frame.render_widget(Paragraph::new(hints), layout[2]);
 }
 
 pub(super) fn render_pinned_budget_exceeded_modal(

@@ -1,5 +1,6 @@
 use super::*;
 use crate::state::task::{FilePreview, TaskAction, ThreadWorkContext, WorkContextEntry};
+use crate::terminal_graphics::TerminalImageProtocol;
 
 #[test]
 fn selected_text_extracts_preview_range() {
@@ -114,4 +115,37 @@ fn selection_point_tracks_document_row_after_scroll() {
         end.row > start.row,
         "same visible coordinate should resolve to a later document row after scrolling"
     );
+}
+
+#[test]
+fn terminal_image_overlay_spec_targets_work_context_preview_body() {
+    crate::terminal_graphics::set_active_protocol_for_tests(TerminalImageProtocol::Kitty);
+
+    let mut tasks = TaskState::new();
+    tasks.reduce(TaskAction::WorkContextReceived(ThreadWorkContext {
+        thread_id: "t1".into(),
+        entries: vec![WorkContextEntry {
+            path: "/tmp/a.png".into(),
+            is_text: false,
+            ..Default::default()
+        }],
+    }));
+
+    let spec = terminal_image_overlay_spec(
+        Rect::new(0, 0, 80, 30),
+        &tasks,
+        Some("t1"),
+        SidebarTab::Files,
+        0,
+        &ThemeTokens::default(),
+        0,
+    )
+    .expect("expected work context image overlay spec");
+
+    assert_eq!(spec.column, 0);
+    assert_eq!(spec.row, 7);
+    assert_eq!(spec.cols, 80);
+    assert_eq!(spec.rows, 23);
+
+    crate::terminal_graphics::set_active_protocol_for_tests(TerminalImageProtocol::None);
 }

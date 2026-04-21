@@ -4,6 +4,7 @@ import { useAgentStore } from "@/lib/agentStore";
 import type { AgentThread, AgentTodoItem } from "@/lib/agentStore";
 import type { Workspace } from "@/lib/types";
 import {
+  buildAgentChatPanelTabItems,
   deriveSpawnedAgentNavigationState,
   openSpawnedAgentThreadFromRun,
   resetPendingSpawnedThreadHydrationsForTest,
@@ -110,6 +111,36 @@ function makeWorkspace(sessionId: string): Workspace {
     ],
   };
 }
+
+describe("buildAgentChatPanelTabItems", () => {
+  it("places Internal and Gateway before Subagents with per-filter counts", () => {
+    const tabs = buildAgentChatPanelTabItems({
+      threads: [
+        makeThread("local-main", "Regular Conversation", "thread-main"),
+        makeThread("local-internal", "Internal DM · Swarog ↔ WELES", "dm:svarog:weles"),
+        makeThread("local-gateway", "slack Alice", "thread-gateway"),
+      ],
+      pinnedMessageCount: 0,
+      scopedCognitiveEventCount: 3,
+      usageMessageCount: 7,
+    });
+
+    expect(tabs.map((tab) => [tab.id, tab.count])).toEqual([
+      ["threads", 3],
+      ["chat", null],
+      ["trace", 3],
+      ["usage", 7],
+      ["context", null],
+      ["graph", null],
+      ["coding-agents", null],
+      ["ai-training", null],
+      ["tasks", null],
+      ["internal", 1],
+      ["gateway", 1],
+      ["subagents", null],
+    ]);
+  });
+});
 
 describe("deriveSpawnedAgentNavigationState", () => {
   it("derives the visible tree and back-thread hint from active thread context", () => {

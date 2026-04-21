@@ -1,4 +1,172 @@
 impl TuiModel {
+    fn send_continue_message(&mut self, thread_id: String) {
+        self.send_daemon_command(DaemonCommand::SendMessage {
+            thread_id: Some(thread_id),
+            content: "continue".to_string(),
+            content_blocks_json: None,
+            session_id: self.default_session_id.clone(),
+            target_agent_id: None,
+        });
+    }
+
+    fn capture_pending_reconnect_restore(&mut self) {
+        if self.pending_reconnect_restore.is_some() {
+            return;
+        }
+
+        let Some(thread) = self.chat.active_thread() else {
+            return;
+        };
+        if thread.id == "concierge"
+            || Self::is_internal_agent_thread(&thread.id, Some(thread.title.as_str()))
+            || Self::is_hidden_agent_thread(&thread.id, Some(thread.title.as_str()))
+        {
+            return;
+        }
+
+        self.pending_reconnect_restore = Some(PendingReconnectRestore {
+            thread_id: thread.id.clone(),
+            should_resume: self.assistant_busy(),
+        });
+    }
+
+    fn begin_pending_reconnect_restore(&mut self) -> bool {
+        let Some(pending) = self.pending_reconnect_restore.clone() else {
+            return false;
+        };
+
+        self.set_mission_control_return_to_goal_target(None);
+        self.clear_chat_drag_selection();
+        self.clear_work_context_drag_selection();
+        self.clear_task_view_drag_selection();
+        self.concierge
+            .reduce(crate::state::ConciergeAction::WelcomeDismissed);
+        self.chat.reduce(chat::ChatAction::DismissConciergeWelcome);
+        self.concierge
+            .reduce(crate::state::ConciergeAction::WelcomeLoading(false));
+        self.set_main_pane_conversation(FocusArea::Chat);
+        self.chat
+            .reduce(chat::ChatAction::SelectThread(pending.thread_id.clone()));
+        self.request_authoritative_thread_refresh(pending.thread_id.clone(), true);
+        self.status_line = "Restoring thread after reconnect...".to_string();
+        true
+    }
+
+    fn fallback_pending_reconnect_restore(&mut self) -> bool {
+        let Some(pending) = self.pending_reconnect_restore.as_ref() else {
+            return false;
+        };
+        let thread_exists = self
+            .chat
+            .threads()
+            .iter()
+            .any(|thread| thread.id == pending.thread_id);
+        if thread_exists {
+            return false;
+        }
+
+        self.pending_reconnect_restore = None;
+        if self.connected && self.agent_config_loaded {
+            self.request_concierge_welcome();
+        }
+        true
+    }
+
+    fn finish_pending_reconnect_restore(&mut self, thread_id: &str) {
+        let Some(pending) = self.pending_reconnect_restore.clone() else {
+            return;
+        };
+        if pending.thread_id != thread_id {
+            return;
+        }
+
+        self.pending_reconnect_restore = None;
+        if pending.should_resume {
+            self.send_continue_message(thread_id.to_string());
+            self.status_line = "Resuming thread after reconnect...".to_string();
+        }
+    }
+
+    fn goal_sidebar_items_for_tab(
+        &self,
+        goal_run_id: &str,
+        tab: GoalSidebarTab,
+    ) -> Vec<GoalSidebarSelectionAnchor> {
+        let Some(run) = self.tasks.goal_run_by_id(goal_run_id) else {
+            return Vec::new();
+        };
+
+        match tab {
+            GoalSidebarTab::Steps => {
+                let mut steps: Vec<_> = run.steps.iter().collect();
+                steps.sort_by_key(|step| step.order);
+                steps
+                    .into_iter()
+                    .map(|step| GoalSidebarSelectionAnchor::Step(step.id.clone()))
+                    .collect()
+            }
+            GoalSidebarTab::Checkpoints => self
+                .tasks
+                .checkpoints_for_goal_run(goal_run_id)
+                .iter()
+                .map(|checkpoint| GoalSidebarSelectionAnchor::Checkpoint(checkpoint.id.clone()))
+                .collect(),
+            GoalSidebarTab::Tasks => {
+                let tasks: Vec<_> = if !run.child_task_ids.is_empty() {
+                    run.child_task_ids
+                        .iter()
+                        .filter_map(|task_id| self.tasks.task_by_id(task_id))
+                        .collect()
+                } else {
+                    self.tasks
+                        .tasks()
+                        .iter()
+                        .filter(|task| task.goal_run_id.as_deref() == Some(goal_run_id))
+                        .collect()
+                };
+                tasks
+                    .into_iter()
+                    .map(|task| GoalSidebarSelectionAnchor::Task(task.id.clone()))
+                    .collect()
+            }
+            GoalSidebarTab::Files => {
+                let Some(thread_id) = run.thread_id.as_deref() else {
+                    return Vec::new();
+                };
+                let Some(context) = self.tasks.work_context_for_thread(thread_id) else {
+                    return Vec::new();
+                };
+                context
+                    .entries
+                    .iter()
+                    .filter(|entry| match entry.goal_run_id.as_deref() {
+                        Some(entry_goal_run_id) => entry_goal_run_id == goal_run_id,
+                        None => true,
+                    })
+                    .map(|entry| GoalSidebarSelectionAnchor::File {
+                        thread_id: thread_id.to_string(),
+                        path: entry.path.clone(),
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    fn current_goal_sidebar_selection_anchor(&self) -> Option<GoalSidebarSelectionAnchor> {
+        let goal_run_id = match &self.main_pane_view {
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) => {
+                goal_run_id.as_str()
+            }
+            _ => return None,
+        };
+        let items = self.goal_sidebar_items_for_tab(goal_run_id, self.goal_sidebar.active_tab());
+        items.get(self.goal_sidebar.selected_row()).cloned()
+    }
+
+    fn sync_goal_sidebar_selection_anchor(&mut self) {
+        self.goal_sidebar_selection_anchor = self.current_goal_sidebar_selection_anchor();
+    }
+
     fn chat_history_page_size(&self) -> usize {
         self.config.tui_chat_history_page_size.max(25) as usize
     }
@@ -40,6 +208,62 @@ impl TuiModel {
             base_limit
         };
         self.request_thread_page(thread_id, message_limit, 0, show_loading);
+    }
+
+    fn request_authoritative_goal_run_refresh(&mut self, goal_run_id: String) {
+        self.send_daemon_command(DaemonCommand::RequestGoalRunDetail(goal_run_id.clone()));
+        self.send_daemon_command(DaemonCommand::RequestGoalRunCheckpoints(goal_run_id));
+    }
+
+    pub(in crate::app) fn schedule_goal_hydration_refresh(&mut self, goal_run_id: String) {
+        if self
+            .pending_goal_hydration_refreshes
+            .insert(goal_run_id.clone())
+        {
+            self.send_daemon_command(DaemonCommand::ScheduleGoalHydrationRefresh(goal_run_id));
+        }
+    }
+
+    pub(in crate::app) fn clear_goal_hydration_refresh(&mut self, goal_run_id: &str) {
+        self.pending_goal_hydration_refreshes.remove(goal_run_id);
+    }
+
+    fn goal_sidebar_item_count_for_tab(
+        &self,
+        goal_run_id: &str,
+        tab: GoalSidebarTab,
+    ) -> usize {
+        self.goal_sidebar_items_for_tab(goal_run_id, tab).len()
+    }
+
+    pub(super) fn reconcile_goal_sidebar_selection_for_active_goal_pane(&mut self) {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+            goal_run_id,
+            step_id,
+        }) = &self.main_pane_view
+        else {
+            return;
+        };
+
+        let tab = self.goal_sidebar.active_tab();
+        let items = self.goal_sidebar_items_for_tab(goal_run_id, tab);
+        let anchored_item = match (tab, step_id.as_deref()) {
+            (GoalSidebarTab::Steps, Some(step_id)) => Some(GoalSidebarSelectionAnchor::Step(
+                step_id.to_string(),
+            )),
+            _ => self.goal_sidebar_selection_anchor.clone(),
+        };
+        let matched_anchor_row = anchored_item
+            .as_ref()
+            .and_then(|anchor| items.iter().position(|item| item == anchor));
+        let target_row = matched_anchor_row.unwrap_or_else(|| self.goal_sidebar.selected_row());
+
+        self.goal_sidebar.select_row(target_row, items.len());
+        self.goal_sidebar_selection_anchor = if matched_anchor_row.is_some() {
+            items.get(self.goal_sidebar.selected_row()).cloned()
+        } else {
+            anchored_item.or_else(|| items.get(self.goal_sidebar.selected_row()).cloned())
+        };
     }
 
     fn maybe_request_older_chat_history(&mut self) {
@@ -123,16 +347,8 @@ impl TuiModel {
         }
     }
 
-    pub(super) fn thread_picker_target_agent_id(
-        tab: modal::ThreadPickerTab,
-    ) -> Option<&'static str> {
-        match tab {
-            modal::ThreadPickerTab::Swarog => Some(amux_protocol::AGENT_ID_SWAROG),
-            modal::ThreadPickerTab::Rarog => Some(amux_protocol::AGENT_ID_RAROG),
-            modal::ThreadPickerTab::Weles => Some("weles"),
-            modal::ThreadPickerTab::Playgrounds => None,
-            modal::ThreadPickerTab::Internal => None,
-        }
+    pub(super) fn thread_picker_target_agent_id(tab: modal::ThreadPickerTab) -> Option<String> {
+        tab.agent_id().map(str::to_string)
     }
 
     fn cleanup_concierge_on_navigate(&mut self) {
@@ -142,6 +358,7 @@ impl TuiModel {
 
         self.clear_chat_drag_selection();
         self.clear_work_context_drag_selection();
+        self.clear_task_view_drag_selection();
         self.ignore_pending_concierge_welcome = true;
         self.concierge
             .reduce(crate::state::ConciergeAction::WelcomeDismissed);
@@ -160,9 +377,20 @@ impl TuiModel {
     }
 
     fn open_thread_conversation(&mut self, thread_id: String) {
+        let return_target = if matches!(self.main_pane_view, MainPaneView::GoalComposer) {
+            self.mission_control_source_goal_target()
+        } else {
+            self.current_goal_target_for_mission_control()
+        };
+        if let Some(target) = return_target {
+            self.set_mission_control_return_to_goal_target(Some(target));
+        } else {
+            self.set_mission_control_return_to_goal_target(None);
+        }
         self.cleanup_concierge_on_navigate();
         self.clear_chat_drag_selection();
         self.clear_work_context_drag_selection();
+        self.clear_task_view_drag_selection();
         self.pending_new_thread_target_agent = None;
         self.chat
             .reduce(chat::ChatAction::SelectThread(thread_id.clone()));
@@ -176,9 +404,11 @@ impl TuiModel {
     }
 
     fn start_new_thread_view_for_agent(&mut self, target_agent_id: Option<&str>) {
+        self.set_mission_control_return_to_goal_target(None);
         self.cleanup_concierge_on_navigate();
         self.clear_chat_drag_selection();
         self.clear_work_context_drag_selection();
+        self.clear_task_view_drag_selection();
         self.pending_new_thread_target_agent = target_agent_id.map(str::to_string);
         self.thread_loading_id = None;
         self.chat.reduce(chat::ChatAction::NewThread);
@@ -188,11 +418,31 @@ impl TuiModel {
             .reduce(crate::state::ConciergeAction::WelcomeLoading(false));
     }
 
-    fn request_concierge_welcome(&mut self) {
+    fn begin_concierge_welcome_request(&mut self) {
+        self.set_mission_control_return_to_goal_target(None);
+        self.pending_reconnect_restore = None;
         self.ignore_pending_concierge_welcome = false;
+        self.clear_chat_drag_selection();
+        self.clear_work_context_drag_selection();
+        self.clear_task_view_drag_selection();
+        self.thread_loading_id = None;
+        self.concierge
+            .reduce(crate::state::ConciergeAction::WelcomeDismissed);
+        self.chat.reduce(chat::ChatAction::DismissConciergeWelcome);
+        self.chat.reduce(chat::ChatAction::SelectThread(String::new()));
+        self.set_main_pane_conversation(FocusArea::Chat);
         self.concierge
             .reduce(crate::state::ConciergeAction::WelcomeLoading(true));
+    }
+
+    pub(in crate::app) fn request_concierge_welcome(&mut self) {
+        self.begin_concierge_welcome_request();
         self.send_daemon_command(DaemonCommand::RequestConciergeWelcome);
+    }
+
+    pub(in crate::app) fn retry_operator_profile_request(&mut self) {
+        self.begin_concierge_welcome_request();
+        self.send_daemon_command(DaemonCommand::RetryOperatorProfile);
     }
 
     fn set_main_pane_conversation(&mut self, focus: FocusArea) {
@@ -204,6 +454,13 @@ impl TuiModel {
     fn dismiss_active_main_pane(&mut self, focus: FocusArea) -> bool {
         match &self.main_pane_view {
             MainPaneView::Task(target) => {
+                if let sidebar::SidebarItemTarget::Task { task_id } = target {
+                    if let Some(parent_target) = self.parent_goal_target_for_task(task_id) {
+                        self.open_sidebar_target(parent_target);
+                        self.focus = focus;
+                        return true;
+                    }
+                }
                 if let Some(thread_id) = self.target_thread_id(target) {
                     if self.tasks.selected_work_path(&thread_id).is_some() {
                         self.tasks.reduce(task::TaskAction::SelectWorkPath {
@@ -214,14 +471,33 @@ impl TuiModel {
                         return true;
                     }
                 }
+                if matches!(target, sidebar::SidebarItemTarget::GoalRun { .. }) {
+                    if self.sidebar_visible() {
+                        self.focus = FocusArea::Sidebar;
+                    }
+                    return true;
+                }
                 self.set_main_pane_conversation(focus);
                 true
             }
             MainPaneView::Collaboration
             | MainPaneView::WorkContext
-            | MainPaneView::FilePreview(_)
-            | MainPaneView::GoalComposer => {
+            | MainPaneView::FilePreview(_) => {
+                if let Some(target) = self.mission_control_return_to_goal_target() {
+                    self.set_mission_control_return_to_goal_target(None);
+                    self.open_sidebar_target(target);
+                    self.focus = focus;
+                    return true;
+                }
                 self.set_main_pane_conversation(focus);
+                true
+            }
+            MainPaneView::GoalComposer => {
+                if self.sidebar_visible() {
+                    self.focus = FocusArea::Sidebar;
+                } else {
+                    self.focus = focus;
+                }
                 true
             }
             MainPaneView::Conversation => false,
@@ -406,7 +682,7 @@ impl TuiModel {
                 self.request_latest_thread_page("concierge".to_string(), false);
                 self.main_pane_view = MainPaneView::Conversation;
                 self.focus = FocusArea::Input;
-                self.set_input_text("/goal ");
+                self.set_input_text("/new-goal ");
                 self.status_line = "Describe your goal and press Enter".to_string();
             }
             "focus_chat" => {
@@ -428,7 +704,7 @@ impl TuiModel {
                 let _ = self.defer_operator_profile_question();
             }
             "operator_profile_retry" => {
-                self.send_daemon_command(DaemonCommand::RetryOperatorProfile);
+                self.retry_operator_profile_request();
                 self.status_line = "Retrying operator profile operation…".to_string();
                 self.show_input_notice(
                     "Retrying operator profile operation…",
@@ -456,6 +732,23 @@ impl TuiModel {
         self.chat_action_confirm_accept_selected = true;
         if self.modal.top() == Some(modal::ModalKind::ChatActionConfirm) {
             self.close_top_modal();
+        }
+    }
+
+    fn cancel_chat_action_confirm(&mut self) {
+        let clears_runtime_confirmation = self
+            .pending_chat_action_confirm
+            .as_ref()
+            .is_some_and(|pending| {
+                matches!(
+                    pending,
+                    PendingConfirmAction::ReuseModelAsStt { model_id }
+                        if model_id.starts_with("__mission_control__:")
+                )
+            });
+        self.close_chat_action_confirm();
+        if clears_runtime_confirmation {
+            self.goal_mission_control.clear_runtime_change();
         }
     }
 
@@ -502,13 +795,7 @@ impl TuiModel {
                 self.status_line = "Stopping thread...".to_string();
             }
             PendingConfirmAction::ResumeThread { thread_id, .. } => {
-                self.send_daemon_command(DaemonCommand::SendMessage {
-                    thread_id: Some(thread_id),
-                    content: "continue".to_string(),
-                    content_blocks_json: None,
-                    session_id: self.default_session_id.clone(),
-                    target_agent_id: None,
-                });
+                self.send_continue_message(thread_id);
                 self.status_line = "Resuming thread...".to_string();
             }
             PendingConfirmAction::DeleteGoalRun { goal_run_id, .. } => {
@@ -519,15 +806,49 @@ impl TuiModel {
                 self.send_daemon_command(DaemonCommand::ControlGoalRun {
                     goal_run_id,
                     action: "pause".to_string(),
+                    step_index: None,
                 });
                 self.status_line = "Pausing goal run...".to_string();
+            }
+            PendingConfirmAction::StopGoalRun { goal_run_id, .. } => {
+                self.send_daemon_command(DaemonCommand::ControlGoalRun {
+                    goal_run_id,
+                    action: "stop".to_string(),
+                    step_index: None,
+                });
+                self.status_line = "Stopping goal run...".to_string();
             }
             PendingConfirmAction::ResumeGoalRun { goal_run_id, .. } => {
                 self.send_daemon_command(DaemonCommand::ControlGoalRun {
                     goal_run_id,
                     action: "resume".to_string(),
+                    step_index: None,
                 });
                 self.status_line = "Resuming goal run...".to_string();
+            }
+            PendingConfirmAction::RetryGoalStep {
+                goal_run_id,
+                step_index,
+                ..
+            } => {
+                self.send_daemon_command(DaemonCommand::ControlGoalRun {
+                    goal_run_id,
+                    action: "retry_step".to_string(),
+                    step_index: Some(step_index),
+                });
+                self.status_line = "Retrying goal step...".to_string();
+            }
+            PendingConfirmAction::RerunGoalFromStep {
+                goal_run_id,
+                step_index,
+                ..
+            } => {
+                self.send_daemon_command(DaemonCommand::ControlGoalRun {
+                    goal_run_id,
+                    action: "rerun_from_step".to_string(),
+                    step_index: Some(step_index),
+                });
+                self.status_line = "Rerunning goal from step...".to_string();
             }
             PendingConfirmAction::ReuseModelAsStt { model_id } => {
                 self.set_audio_config_string("stt", "model", model_id.clone());

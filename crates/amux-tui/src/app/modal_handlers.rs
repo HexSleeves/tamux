@@ -12,6 +12,11 @@ fn is_settings_textarea_submit_key(code: KeyCode, modifiers: KeyModifiers) -> bo
         || (code == KeyCode::Char('s') && modifiers.contains(KeyModifiers::CONTROL))
 }
 
+fn matches_shift_char(code: KeyCode, modifiers: KeyModifiers, expected: char) -> bool {
+    modifiers.contains(KeyModifiers::SHIFT)
+        && matches!(code, KeyCode::Char(ch) if ch.eq_ignore_ascii_case(&expected))
+}
+
 impl TuiModel {
     pub(crate) fn begin_custom_model_edit(&mut self) {
         enter::begin_custom_model_edit(self);
@@ -116,7 +121,7 @@ impl TuiModel {
                         self.toggle_notification_expand(id);
                     }
                 }
-                KeyCode::Char('r') => {
+                KeyCode::Char('r') if !modifiers.contains(KeyModifiers::SHIFT) => {
                     if let Some(id) = self
                         .notifications
                         .selected_item()
@@ -125,7 +130,7 @@ impl TuiModel {
                         self.mark_notification_read(&id);
                     }
                 }
-                KeyCode::Char('a') => {
+                KeyCode::Char('a') if !modifiers.contains(KeyModifiers::SHIFT) => {
                     if let Some(id) = self
                         .notifications
                         .selected_item()
@@ -153,10 +158,10 @@ impl TuiModel {
                         self.execute_notification_action(&notification_id, "", Some(0));
                     }
                 }
-                KeyCode::Char('A') if modifiers.contains(KeyModifiers::SHIFT) => {
+                KeyCode::Char(ch) if matches_shift_char(KeyCode::Char(ch), modifiers, 'a') => {
                     self.archive_read_notifications();
                 }
-                KeyCode::Char('R') if modifiers.contains(KeyModifiers::SHIFT) => {
+                KeyCode::Char(ch) if matches_shift_char(KeyCode::Char(ch), modifiers, 'r') => {
                     self.mark_all_notifications_read();
                 }
                 _ => {}
@@ -501,6 +506,19 @@ impl TuiModel {
                                     editor.model = value.trim().to_string();
                                 }
                             }
+                            "mission_control_assignment_model" => {
+                                let model_id = value.trim().to_string();
+                                let updated = self.update_selected_runtime_assignment(
+                                    |assignment| {
+                                        assignment.model = model_id.clone();
+                                    },
+                                );
+                                self.goal_mission_control.clear_runtime_edit();
+                                if !updated {
+                                    self.status_line =
+                                        "Mission Control roster is unavailable".to_string();
+                                }
+                            }
                             "subagent_system_prompt" => {
                                 if let Some(editor) = self.subagents.editor.as_mut() {
                                     editor.system_prompt = value;
@@ -711,6 +729,38 @@ impl TuiModel {
                                     raw["audio"]["tts"]["voice"] = serde_json::Value::String(value);
                                 }
                             }
+                            "feat_image_generation_provider" => {
+                                self.send_daemon_command(DaemonCommand::SetConfigItem {
+                                    key_path: "/image/generation/provider".to_string(),
+                                    value_json: format!("\"{}\"", value),
+                                });
+                                if let Some(ref mut raw) = self.config.agent_config_raw {
+                                    if raw.get("image").is_none() {
+                                        raw["image"] = serde_json::json!({});
+                                    }
+                                    if raw["image"].get("generation").is_none() {
+                                        raw["image"]["generation"] = serde_json::json!({});
+                                    }
+                                    raw["image"]["generation"]["provider"] =
+                                        serde_json::Value::String(value);
+                                }
+                            }
+                            "feat_image_generation_model" => {
+                                self.send_daemon_command(DaemonCommand::SetConfigItem {
+                                    key_path: "/image/generation/model".to_string(),
+                                    value_json: format!("\"{}\"", value),
+                                });
+                                if let Some(ref mut raw) = self.config.agent_config_raw {
+                                    if raw.get("image").is_none() {
+                                        raw["image"] = serde_json::json!({});
+                                    }
+                                    if raw["image"].get("generation").is_none() {
+                                        raw["image"]["generation"] = serde_json::json!({});
+                                    }
+                                    raw["image"]["generation"]["model"] =
+                                        serde_json::Value::String(value);
+                                }
+                            }
                             _ => {}
                         }
                         self.settings.reduce(SettingsAction::ConfirmEdit);
@@ -880,7 +930,7 @@ impl TuiModel {
         if kind == modal::ModalKind::ChatActionConfirm {
             match code {
                 KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
-                    self.close_chat_action_confirm();
+                    self.cancel_chat_action_confirm();
                 }
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::Tab => {
                     self.chat_action_confirm_accept_selected =
@@ -891,13 +941,73 @@ impl TuiModel {
                         !self.chat_action_confirm_accept_selected;
                 }
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    self.confirm_pending_chat_action();
+                    if let Some(apply_mode) = self
+                        .pending_chat_action_confirm
+                        .as_ref()
+                        .and_then(|pending| match pending {
+                            PendingConfirmAction::ReuseModelAsStt { model_id }
+                                if model_id == "__mission_control__:next_turn" =>
+                            {
+                                Some(goal_mission_control::RuntimeAssignmentApplyMode::NextTurn)
+                            }
+                            PendingConfirmAction::ReuseModelAsStt { model_id }
+                                if model_id == "__mission_control__:reassign_active_step" =>
+                            {
+                                Some(
+                                    goal_mission_control::RuntimeAssignmentApplyMode::ReassignActiveStep,
+                                )
+                            }
+                            PendingConfirmAction::ReuseModelAsStt { model_id }
+                                if model_id == "__mission_control__:restart_active_step" =>
+                            {
+                                Some(
+                                    goal_mission_control::RuntimeAssignmentApplyMode::RestartActiveStep,
+                                )
+                            }
+                            _ => None,
+                        })
+                    {
+                        self.close_chat_action_confirm();
+                        let _ = self.confirm_runtime_assignment_change(apply_mode);
+                    } else {
+                        self.confirm_pending_chat_action();
+                    }
                 }
                 KeyCode::Enter | KeyCode::Char(' ') => {
                     if self.chat_action_confirm_accept_selected {
-                        self.confirm_pending_chat_action();
+                        if let Some(apply_mode) = self
+                            .pending_chat_action_confirm
+                            .as_ref()
+                            .and_then(|pending| match pending {
+                                PendingConfirmAction::ReuseModelAsStt { model_id }
+                                    if model_id == "__mission_control__:next_turn" =>
+                                {
+                                    Some(goal_mission_control::RuntimeAssignmentApplyMode::NextTurn)
+                                }
+                                PendingConfirmAction::ReuseModelAsStt { model_id }
+                                    if model_id == "__mission_control__:reassign_active_step" =>
+                                {
+                                    Some(
+                                        goal_mission_control::RuntimeAssignmentApplyMode::ReassignActiveStep,
+                                    )
+                                }
+                                PendingConfirmAction::ReuseModelAsStt { model_id }
+                                    if model_id == "__mission_control__:restart_active_step" =>
+                                {
+                                    Some(
+                                        goal_mission_control::RuntimeAssignmentApplyMode::RestartActiveStep,
+                                    )
+                                }
+                                _ => None,
+                            })
+                        {
+                            self.close_chat_action_confirm();
+                            let _ = self.confirm_runtime_assignment_change(apply_mode);
+                        } else {
+                            self.confirm_pending_chat_action();
+                        }
                     } else {
-                        self.close_chat_action_confirm();
+                        self.cancel_chat_action_confirm();
                     }
                 }
                 _ => {}
@@ -1274,12 +1384,22 @@ impl TuiModel {
                 self.input.reduce(input::InputAction::Clear);
             }
             KeyCode::Left if kind == modal::ModalKind::ThreadPicker => {
-                let previous = self.modal.thread_picker_tab().prev();
+                let previous = widgets::thread_picker::adjacent_thread_picker_tab(
+                    &self.modal.thread_picker_tab(),
+                    &self.chat,
+                    &self.subagents,
+                    -1,
+                );
                 self.modal.set_thread_picker_tab(previous);
                 self.sync_thread_picker_item_count();
             }
             KeyCode::Right if kind == modal::ModalKind::ThreadPicker => {
-                let next = self.modal.thread_picker_tab().next();
+                let next = widgets::thread_picker::adjacent_thread_picker_tab(
+                    &self.modal.thread_picker_tab(),
+                    &self.chat,
+                    &self.subagents,
+                    1,
+                );
                 self.modal.set_thread_picker_tab(next);
                 self.sync_thread_picker_item_count();
             }
@@ -1314,6 +1434,16 @@ impl TuiModel {
                 if let Some(action) = self.selected_goal_picker_toggle_action() {
                     self.open_pending_action_confirm(action);
                 }
+            }
+            KeyCode::Char(ch)
+                if matches_shift_char(KeyCode::Char(ch), modifiers, 'r')
+                    && matches!(
+                        kind,
+                        modal::ModalKind::ThreadPicker | modal::ModalKind::GoalPicker
+                    ) =>
+            {
+                self.send_daemon_command(DaemonCommand::Refresh);
+                self.status_line = "Refreshing thread and goal lists".to_string();
             }
             KeyCode::Down => self.modal.reduce(modal::ModalAction::Navigate(1)),
             KeyCode::Up => self.modal.reduce(modal::ModalAction::Navigate(-1)),

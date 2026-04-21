@@ -22,6 +22,8 @@ fn sample_goal_run() -> GoalRun {
         current_step_index: 1,
         current_step_title: None,
         current_step_kind: None,
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 1,
         max_replans: 2,
         plan_summary: Some("Plan".to_string()),
@@ -30,6 +32,7 @@ fn sample_goal_run() -> GoalRun {
         generated_skill_path: Some("/tmp/skill.md".to_string()),
         last_error: Some("child task failed".to_string()),
         failure_cause: None,
+        stopped_reason: None,
         child_task_ids: vec!["task-a".to_string(), "task-b".to_string()],
         child_task_count: 0,
         approval_count: 0,
@@ -74,11 +77,28 @@ fn sample_goal_run() -> GoalRun {
             },
         ],
         events: Vec::new(),
+        dossier: None,
         total_prompt_tokens: 0,
         total_completion_tokens: 0,
         estimated_cost_usd: None,
         autonomy_level: Default::default(),
         authorship_tag: None,
+        launch_assignment_snapshot: Vec::new(),
+        runtime_assignment_list: Vec::new(),
+        root_thread_id: None,
+        active_thread_id: None,
+        execution_thread_ids: Vec::new(),
+    }
+}
+
+fn sample_goal_assignment(role_id: &str, provider: &str, model: &str) -> GoalAgentAssignment {
+    GoalAgentAssignment {
+        role_id: role_id.to_string(),
+        enabled: true,
+        provider: provider.to_string(),
+        model: model.to_string(),
+        reasoning_effort: Some("medium".to_string()),
+        inherit_from_main: false,
     }
 }
 
@@ -286,6 +306,9 @@ fn collect_plan_issues_catches_empty_summary() {
             instructions: "Do it".to_string(),
             kind: GoalRunStepKind::Command,
             success_criteria: "Done".to_string(),
+            execution_binding: None,
+            verification_binding: None,
+            proof_checks: Vec::new(),
             session_id: None,
             llm_confidence: None,
             llm_confidence_rationale: None,
@@ -298,6 +321,7 @@ fn collect_plan_issues_catches_empty_summary() {
 
 include!("tests/skill_mesh.rs");
 include!("tests/skill_mesh_compiler.rs");
+include!("tests/goal_dossier.rs");
 
 #[test]
 fn retry_goal_run_step_resets_selected_step() {
@@ -345,6 +369,29 @@ fn project_goal_run_snapshot_derives_metrics() {
         Some("child task failed")
     );
     assert_eq!(projected.duration_ms, Some(60));
+}
+
+#[test]
+fn project_goal_run_snapshot_clears_stale_awaiting_approval_without_approval_id() {
+    let mut goal_run = sample_goal_run();
+    goal_run.status = GoalRunStatus::AwaitingApproval;
+    goal_run.awaiting_approval_id = Some("stale-approval".to_string());
+    goal_run.completed_at = None;
+    goal_run.last_error = None;
+    goal_run.failure_cause = None;
+
+    let mut task = sample_task("task-b", "goal_test");
+    task.status = TaskStatus::InProgress;
+    task.awaiting_approval_id = None;
+    task.completed_at = None;
+    task.error = None;
+    task.last_error = None;
+    task.logs.clear();
+
+    let projected = project_goal_run_snapshot(goal_run, &[task], 100);
+
+    assert_eq!(projected.status, GoalRunStatus::Running);
+    assert!(projected.awaiting_approval_id.is_none());
 }
 
 #[test]
@@ -570,6 +617,70 @@ fn refresh_task_queue_state_requeues_parent_after_subagents_finish() {
     assert_eq!(changed.len(), 1);
 }
 
+#[test]
+fn refresh_task_queue_state_requeues_stale_awaiting_approval_without_id() {
+    let mut tasks = VecDeque::from(vec![AgentTask {
+        id: "stale-approval".to_string(),
+        title: "Stale approval".to_string(),
+        description: "stuck without a live approval".to_string(),
+        status: TaskStatus::AwaitingApproval,
+        priority: TaskPriority::Normal,
+        progress: 35,
+        created_at: 1,
+        started_at: None,
+        completed_at: None,
+        error: None,
+        result: None,
+        thread_id: Some("thread-1".to_string()),
+        source: "goal_run".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: None,
+        goal_run_id: Some("goal-1".to_string()),
+        goal_run_title: Some("Investigate ingenix.ai".to_string()),
+        goal_step_id: Some("step-1".to_string()),
+        goal_step_title: Some("Review findings".to_string()),
+        parent_task_id: None,
+        parent_thread_id: None,
+        runtime: "daemon".to_string(),
+        retry_count: 0,
+        max_retries: 0,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: Some("awaiting approval".to_string()),
+        awaiting_approval_id: None,
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        lane_id: None,
+        last_error: None,
+        logs: Vec::new(),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        override_provider: None,
+        override_model: None,
+        override_system_prompt: None,
+        sub_agent_def_id: None,
+    }]);
+
+    let changed = refresh_task_queue_state(&mut tasks, 100, &[], &AgentConfig::default());
+    let task = tasks.front().expect("task should remain present");
+
+    assert_eq!(task.status, TaskStatus::Queued);
+    assert!(task.blocked_reason.is_none());
+    assert_eq!(changed.len(), 1);
+}
+
 #[tokio::test]
 async fn request_goal_replan_includes_recovery_guidance_when_present() {
     let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
@@ -792,6 +903,208 @@ async fn request_goal_plan_adapts_prompt_and_truncates_output_when_satisfaction_
     assert!(
         body.contains("Reserve kind=divergent for broader multi-perspective exploration"),
         "expected divergent guidance in the plan prompt"
+    );
+}
+
+#[tokio::test]
+async fn request_goal_plan_includes_goal_local_agent_roster_in_prompt() {
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = "openai".to_string();
+    config.base_url = spawn_goal_recording_server(
+        recorded_bodies.clone(),
+        serde_json::json!({
+            "title": "Execution plan",
+            "summary": "Use local specialists when available.",
+            "steps": [
+                {
+                    "title": "Step 1",
+                    "instructions": "Plan the work.",
+                    "kind": "command",
+                    "success_criteria": "work planned",
+                    "session_id": null,
+                    "llm_confidence": "likely",
+                    "llm_confidence_rationale": "small scope"
+                },
+                {
+                    "title": "Step 2",
+                    "instructions": "Research implementation details.",
+                    "kind": "research",
+                    "success_criteria": "details collected",
+                    "session_id": null,
+                    "llm_confidence": "likely",
+                    "llm_confidence_rationale": "straightforward"
+                }
+            ],
+            "rejected_alternatives": ["Alternative A: use only main"]
+        })
+        .to_string(),
+    )
+    .await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let mut goal_run = sample_goal_run();
+    goal_run.launch_assignment_snapshot = vec![
+        sample_goal_assignment("planning", "openai", "gpt-5.4-mini"),
+        sample_goal_assignment("research", "openai", "gpt-5.4"),
+    ];
+
+    let _ = engine
+        .request_goal_plan(&goal_run)
+        .await
+        .expect("goal plan should succeed");
+
+    let recorded = recorded_bodies.lock().expect("lock recorded bodies");
+    let body = recorded.back().expect("expected one recorded request body");
+    assert!(
+        body.contains("Goal-local agents:"),
+        "expected local roster header in the plan prompt"
+    );
+    assert!(
+        body.contains("planning"),
+        "expected planning role in the plan prompt"
+    );
+    assert!(
+        body.contains("research"),
+        "expected research role in the plan prompt"
+    );
+}
+
+#[tokio::test]
+async fn request_goal_plan_includes_goal_inventory_directories_in_prompt() {
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = "openai".to_string();
+    config.base_url = spawn_goal_recording_server(
+        recorded_bodies.clone(),
+        serde_json::json!({
+            "title": "Execution plan",
+            "summary": "Keep durable artifacts organized.",
+            "steps": [
+                {
+                    "title": "Step 1",
+                    "instructions": "Write the plan.",
+                    "kind": "command",
+                    "success_criteria": "plan written",
+                    "session_id": null,
+                    "llm_confidence": "likely",
+                    "llm_confidence_rationale": "small scope"
+                },
+                {
+                    "title": "Step 2",
+                    "instructions": "Record execution details.",
+                    "kind": "research",
+                    "success_criteria": "details captured",
+                    "session_id": null,
+                    "llm_confidence": "likely",
+                    "llm_confidence_rationale": "straightforward"
+                }
+            ],
+            "rejected_alternatives": ["Alternative A: write files to random directories"]
+        })
+        .to_string(),
+    )
+    .await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let goal_run = sample_goal_run();
+    let inventory_root =
+        crate::agent::goal_dossier::goal_inventory_dir(&engine.data_dir, &goal_run.id);
+    let specs_dir =
+        crate::agent::goal_dossier::goal_inventory_specs_dir(&engine.data_dir, &goal_run.id);
+    let plans_dir =
+        crate::agent::goal_dossier::goal_inventory_plans_dir(&engine.data_dir, &goal_run.id);
+    let execution_dir =
+        crate::agent::goal_dossier::goal_inventory_execution_dir(&engine.data_dir, &goal_run.id);
+
+    let _ = engine
+        .request_goal_plan(&goal_run)
+        .await
+        .expect("goal plan should succeed");
+
+    let recorded = recorded_bodies.lock().expect("lock recorded bodies");
+    let body = recorded.back().expect("expected one recorded request body");
+    assert!(
+        body.contains(&format!("{}/", inventory_root.display())),
+        "expected inventory root in the plan prompt"
+    );
+    assert!(
+        body.contains(&format!("{}/", specs_dir.display())),
+        "expected specs dir in the plan prompt"
+    );
+    assert!(
+        body.contains(&format!("{}/", plans_dir.display())),
+        "expected plans dir in the plan prompt"
+    );
+    assert!(
+        body.contains(&format!("{}/", execution_dir.display())),
+        "expected execution dir in the plan prompt"
+    );
+}
+
+#[tokio::test]
+async fn goal_local_resolver_uses_llm_match_when_heuristics_miss() {
+    let recorded_bodies = Arc::new(StdMutex::new(VecDeque::new()));
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = "openai".to_string();
+    config.base_url = spawn_goal_recording_server(
+        recorded_bodies.clone(),
+        serde_json::json!({
+            "selected_role_id": "planning"
+        })
+        .to_string(),
+    )
+    .await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let resolved = engine
+        .resolve_goal_local_binding_with_fallback(
+            "rollout strategist",
+            "Plan rollout",
+            "Sequence the release work",
+            &[
+                sample_goal_assignment("planning", "openai", "gpt-5.4-mini"),
+                sample_goal_assignment("research", "openai", "gpt-5.4"),
+            ],
+        )
+        .await
+        .expect("resolver should choose a local role");
+
+    assert_eq!(resolved.role_id, "planning");
+
+    let recorded = recorded_bodies.lock().expect("lock recorded bodies");
+    let body = recorded.back().expect("expected one recorded request body");
+    assert!(
+        body.contains("rollout strategist"),
+        "expected requested binding to reach the matcher prompt"
+    );
+    assert!(
+        body.contains("planning"),
+        "expected available local roles in the matcher prompt"
     );
 }
 

@@ -364,7 +364,7 @@
 
     #[tokio::test]
     async fn unsupported_provider_model_fetch_returns_empty_catalog() {
-        let models = fetch_models("featherless", "http://127.0.0.1:9", "")
+        let models = fetch_models("featherless", "http://127.0.0.1:9", "", None)
             .await
             .expect("unsupported providers should not surface a fetch error");
 
@@ -422,6 +422,7 @@
             amux_shared::providers::PROVIDER_ID_OPENROUTER,
             &format!("http://{addr}"),
             "",
+            None,
         )
         .await
         .expect("fetch models should succeed");
@@ -443,6 +444,183 @@
                 .and_then(|value| value.as_str()),
             Some("text+audio->text+audio")
         );
+    }
+
+    #[tokio::test]
+    async fn openrouter_filtered_model_fetch_requests_output_modality_query_and_preserves_metadata() {
+        let request_lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind openrouter model fetch listener");
+        let addr = listener
+            .local_addr()
+            .expect("openrouter model fetch listener addr");
+        let request_lines_for_server = std::sync::Arc::clone(&request_lines);
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("accept model fetch request");
+            let mut buf = [0_u8; 4096];
+            let size = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                tokio::io::AsyncReadExt::read(&mut stream, &mut buf),
+            )
+            .await
+            .expect("read model fetch request timed out")
+            .expect("read model fetch request");
+            let request = String::from_utf8_lossy(&buf[..size]).to_string();
+            let request_line = request.lines().next().unwrap_or_default().to_string();
+            request_lines_for_server
+                .lock()
+                .expect("lock openrouter request lines")
+                .push(request_line);
+
+            let body = serde_json::json!({
+                "data": [
+                    {
+                        "id": "openai/gpt-image",
+                        "name": "GPT Image",
+                        "context_length": 128000,
+                        "pricing": {
+                            "image": "0.00001"
+                        },
+                        "architecture": {
+                            "input_modalities": ["text"],
+                            "output_modalities": ["image"]
+                        }
+                    }
+                ]
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes())
+                .await
+                .expect("write model fetch response");
+        });
+
+        let models = fetch_models(
+            amux_shared::providers::PROVIDER_ID_OPENROUTER,
+            &format!("http://{addr}"),
+            "",
+            Some("image"),
+        )
+        .await
+        .expect("fetch models should succeed");
+
+        server.await.expect("openrouter model fetch server task");
+
+        let request_line = request_lines
+            .lock()
+            .expect("lock request lines")
+            .first()
+            .cloned()
+            .expect("request line should be recorded");
+        assert!(
+            request_line.contains("/models?output_modalities=image"),
+            "expected OpenRouter model fetch to request image output modality filter, got {request_line}"
+        );
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "openai/gpt-image");
+        assert_eq!(
+            models[0].pricing.as_ref().and_then(|pricing| pricing.image.as_deref()),
+            Some("0.00001")
+        );
+        assert_eq!(
+            models[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("architecture"))
+                .and_then(|architecture| architecture.get("output_modalities"))
+                .and_then(|value| value.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str())
+                        .collect::<Vec<_>>()
+                }),
+            Some(vec!["image"])
+        );
+    }
+
+    #[tokio::test]
+    async fn chutes_model_fetch_retries_without_auth_after_invalid_token() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind chutes model fetch listener");
+        let addr = listener.local_addr().expect("chutes model fetch listener addr");
+
+        let server = tokio::spawn(async move {
+            for attempt in 0..2 {
+                let (mut stream, _) = listener.accept().await.expect("accept model fetch request");
+                let mut buf = [0_u8; 4096];
+                let size = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    tokio::io::AsyncReadExt::read(&mut stream, &mut buf),
+                )
+                .await
+                .expect("read model fetch request timed out")
+                .expect("read model fetch request");
+                let request = String::from_utf8_lossy(&buf[..size]).to_string();
+                let has_auth = request
+                    .lines()
+                    .any(|line| line.eq_ignore_ascii_case("authorization: Bearer bad-key"));
+
+                let (status, body) = if attempt == 0 {
+                    assert!(has_auth, "first request should include bearer auth");
+                    ("401 Unauthorized", r#"{"detail":"Invalid token."}"#.to_string())
+                } else {
+                    assert!(
+                        !has_auth,
+                        "retry request should omit bearer auth for chutes catalog"
+                    );
+                    (
+                        "200 OK",
+                        serde_json::json!({
+                            "data": [
+                                {
+                                    "id": "Qwen/Qwen3-32B-TEE",
+                                    "context_length": 40960
+                                },
+                                {
+                                    "id": "deepseek-ai/DeepSeek-R1",
+                                    "context_length": 131072
+                                }
+                            ]
+                        })
+                        .to_string(),
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                tokio::io::AsyncWriteExt::write_all(&mut stream, response.as_bytes())
+                    .await
+                    .expect("write model fetch response");
+            }
+        });
+
+        let models = fetch_models(
+            amux_shared::providers::PROVIDER_ID_CHUTES,
+            &format!("http://{addr}"),
+            "bad-key",
+            None,
+        )
+        .await
+        .expect("chutes fetch should fall back to unauthenticated catalog");
+
+        server.await.expect("model fetch server task");
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "Qwen/Qwen3-32B-TEE");
+        assert_eq!(models[1].id, "deepseek-ai/DeepSeek-R1");
     }
 
     #[tokio::test]

@@ -85,6 +85,8 @@ fn render_subagents_tab<'a>(
     if let Some(editor) = subagents.editor.as_ref() {
         let name_is_editing =
             settings.is_editing() && settings.editing_field() == Some("subagent_name");
+        let model_is_editing =
+            settings.is_editing() && settings.editing_field() == Some("subagent_model");
         let role_is_editing =
             settings.is_editing() && settings.editing_field() == Some("subagent_role");
         let prompt_is_editing =
@@ -93,6 +95,11 @@ fn render_subagents_tab<'a>(
             format!("{}\u{2588}", settings.edit_buffer())
         } else {
             editor.name.clone()
+        };
+        let model_value = if model_is_editing {
+            format!("{}\u{2588}", settings.edit_buffer())
+        } else {
+            editor.model.clone()
         };
         let role_value = if role_is_editing {
             settings.edit_buffer().to_string()
@@ -161,10 +168,10 @@ fn render_subagents_tab<'a>(
                 crate::state::subagents::SubAgentEditorField::Model
             ),
             "Model",
-            if editor.model.is_empty() {
+            if model_value.is_empty() {
                 "Select model".to_string()
             } else {
-                editor.model.clone()
+                model_value
             },
         ));
         lines.push(field_line(
@@ -330,8 +337,6 @@ fn render_subagents_tab<'a>(
             Span::styled(" move  ", theme.fg_dim),
             Span::styled("Enter", theme.fg_active),
             Span::styled(" edit/open  ", theme.fg_dim),
-            Span::styled("←→", theme.fg_active),
-            Span::styled(" role preset  ", theme.fg_dim),
             Span::styled("s", theme.fg_active),
             Span::styled(" save  ", theme.fg_dim),
             Span::styled("Esc", theme.fg_active),

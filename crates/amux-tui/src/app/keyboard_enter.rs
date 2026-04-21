@@ -30,6 +30,10 @@ impl TuiModel {
             self.attach_file(args);
             return true;
         }
+        if cmd == "image" {
+            self.submit_image_prompt(args.to_string());
+            return true;
+        }
         if cmd == "prompt" {
             let requested_agent = if args.trim().is_empty() {
                 None
@@ -75,6 +79,41 @@ impl TuiModel {
             }
             return true;
         }
+        if cmd == "new" {
+            let target_agent_id = if args.trim().is_empty() {
+                Some(amux_protocol::AGENT_ID_SWAROG.to_string())
+            } else {
+                self.resolve_target_agent_id(args.trim())
+            };
+            match target_agent_id {
+                Some(target_agent_id) => {
+                    self.start_new_thread_view_for_agent(Some(target_agent_id.as_str()));
+                    self.status_line = format!(
+                        "New conversation for {}",
+                        self.participant_display_name(&target_agent_id)
+                    );
+                }
+                None => {
+                    self.status_line = format!("Unknown agent: {}", args.trim());
+                }
+            }
+            return true;
+        }
+        if cmd == "thread" && !args.trim().is_empty() {
+            let Some(tab) = widgets::thread_picker::resolve_thread_picker_tab(
+                args.trim(),
+                &self.chat,
+                &self.subagents,
+            ) else {
+                self.status_line = format!("Unknown agent: {}", args.trim());
+                return true;
+            };
+            self.modal
+                .reduce(modal::ModalAction::Push(modal::ModalKind::ThreadPicker));
+            self.modal.set_thread_picker_tab(tab);
+            self.sync_thread_picker_item_count();
+            return true;
+        }
         if self.is_builtin_command(cmd) {
             self.execute_command(cmd);
             return true;
@@ -100,6 +139,37 @@ impl TuiModel {
         {
             self.submit_selected_collaboration_vote();
             return false;
+        }
+        if self.focus == FocusArea::Chat
+            && matches!(
+                self.main_pane_view,
+                MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+            )
+        {
+            if self.goal_workspace.focused_pane()
+                == crate::state::goal_workspace::GoalWorkspacePane::Plan
+                && self.activate_goal_workspace_plan_target()
+            {
+                return false;
+            }
+            if self.goal_workspace.focused_pane()
+                == crate::state::goal_workspace::GoalWorkspacePane::CommandBar
+            {
+                self.activate_goal_workspace_command_bar();
+                return false;
+            }
+            if self.goal_workspace.focused_pane()
+                == crate::state::goal_workspace::GoalWorkspacePane::Timeline
+                && self.activate_goal_workspace_timeline_target()
+            {
+                return false;
+            }
+            if self.goal_workspace.focused_pane()
+                == crate::state::goal_workspace::GoalWorkspacePane::Details
+                && self.activate_goal_workspace_detail_target()
+            {
+                return false;
+            }
         }
         if self.focus == FocusArea::Chat {
             if let Some(sel) = self.chat.selected_message() {
@@ -151,12 +221,14 @@ impl TuiModel {
                 );
                 return false;
             }
+            if matches!(self.main_pane_view, MainPaneView::GoalComposer) {
+                self.start_goal_run_from_mission_control();
+                return false;
+            }
             if prompt.starts_with('/') {
                 if !self.execute_slash_command_line(&prompt) {
                     self.submit_prompt(prompt);
                 }
-            } else if matches!(self.main_pane_view, MainPaneView::GoalComposer) {
-                self.start_goal_run_from_prompt(prompt);
             } else {
                 self.submit_prompt(prompt);
             }

@@ -360,9 +360,9 @@ fn task_status_chip(status: Option<TaskStatus>, theme: &ThemeTokens) -> Span<'st
         None | Some(TaskStatus::Queued) => Span::styled("[ ]", theme.fg_dim),
         Some(TaskStatus::InProgress) => Span::styled("[~]", theme.accent_secondary),
         Some(TaskStatus::Completed) => Span::styled("[x]", theme.accent_success),
-        Some(TaskStatus::Failed) | Some(TaskStatus::FailedAnalyzing) => {
-            Span::styled("[!]", theme.accent_danger)
-        }
+        Some(TaskStatus::Failed)
+        | Some(TaskStatus::FailedAnalyzing)
+        | Some(TaskStatus::BudgetExceeded) => Span::styled("[!]", theme.accent_danger),
         Some(TaskStatus::Blocked) => Span::styled("[B]", theme.fg_dim),
         Some(TaskStatus::AwaitingApproval) => Span::styled("[?]", theme.accent_primary),
         Some(TaskStatus::Cancelled) => Span::styled("[C]", theme.fg_dim),
@@ -427,6 +427,7 @@ mod tests {
         let _ = task_status_chip(Some(TaskStatus::InProgress), &theme);
         let _ = task_status_chip(Some(TaskStatus::Completed), &theme);
         let _ = task_status_chip(Some(TaskStatus::Failed), &theme);
+        let _ = task_status_chip(Some(TaskStatus::BudgetExceeded), &theme);
         let _ = task_status_chip(Some(TaskStatus::Blocked), &theme);
         let _ = task_status_chip(Some(TaskStatus::AwaitingApproval), &theme);
     }

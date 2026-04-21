@@ -102,6 +102,33 @@ pub(super) fn convert_message(m: crate::wire::AgentMessage) -> chat::AgentMessag
             crate::wire::MessageRole::Unknown => chat::MessageRole::Unknown,
         },
         content: m.content,
+        content_blocks: m
+            .content_blocks
+            .into_iter()
+            .map(|block| match block {
+                crate::wire::AgentContentBlock::Text { text } => {
+                    chat::AgentContentBlock::Text { text }
+                }
+                crate::wire::AgentContentBlock::Image {
+                    url,
+                    data_url,
+                    mime_type,
+                } => chat::AgentContentBlock::Image {
+                    url,
+                    data_url,
+                    mime_type,
+                },
+                crate::wire::AgentContentBlock::Audio {
+                    url,
+                    data_url,
+                    mime_type,
+                } => chat::AgentContentBlock::Audio {
+                    url,
+                    data_url,
+                    mime_type,
+                },
+            })
+            .collect(),
         reasoning: m.reasoning,
         author_agent_id: m.author_agent_id,
         author_agent_name: m.author_agent_name,
@@ -130,6 +157,7 @@ pub(super) fn convert_message(m: crate::wire::AgentMessage) -> chat::AgentMessag
         message_kind: m.message_kind,
         compaction_strategy: m.compaction_strategy,
         compaction_payload: m.compaction_payload,
+        tool_output_preview_path: m.tool_output_preview_path,
         timestamp: m.timestamp,
         actions: Vec::new(),
         is_concierge_welcome: false,
@@ -151,6 +179,7 @@ pub(super) fn convert_task(t: crate::wire::AgentTask) -> task::AgentTask {
             crate::wire::TaskStatus::AwaitingApproval => task::TaskStatus::AwaitingApproval,
             crate::wire::TaskStatus::Blocked => task::TaskStatus::Blocked,
             crate::wire::TaskStatus::FailedAnalyzing => task::TaskStatus::FailedAnalyzing,
+            crate::wire::TaskStatus::BudgetExceeded => task::TaskStatus::BudgetExceeded,
             crate::wire::TaskStatus::Completed => task::TaskStatus::Completed,
             crate::wire::TaskStatus::Failed => task::TaskStatus::Failed,
             crate::wire::TaskStatus::Cancelled => task::TaskStatus::Cancelled,
@@ -165,11 +194,14 @@ pub(super) fn convert_task(t: crate::wire::AgentTask) -> task::AgentTask {
     }
 }
 
-pub(super) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
+pub(crate) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
     task::GoalRun {
         id: r.id,
         title: r.title,
         thread_id: r.thread_id,
+        root_thread_id: r.root_thread_id,
+        active_thread_id: r.active_thread_id,
+        execution_thread_ids: r.execution_thread_ids,
         session_id: r.session_id,
         status: r.status.map(|s| match s {
             crate::wire::GoalRunStatus::Queued => task::GoalRunStatus::Queued,
@@ -181,6 +213,22 @@ pub(super) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
             crate::wire::GoalRunStatus::Failed => task::GoalRunStatus::Failed,
             crate::wire::GoalRunStatus::Cancelled => task::GoalRunStatus::Cancelled,
         }),
+        launch_assignment_snapshot: r
+            .launch_assignment_snapshot
+            .into_iter()
+            .map(convert_goal_agent_assignment)
+            .collect(),
+        runtime_assignment_list: r
+            .runtime_assignment_list
+            .into_iter()
+            .map(convert_goal_agent_assignment)
+            .collect(),
+        planner_owner_profile: r
+            .planner_owner_profile
+            .map(convert_goal_runtime_owner_profile),
+        current_step_owner_profile: r
+            .current_step_owner_profile
+            .map(convert_goal_runtime_owner_profile),
         steps: r
             .steps
             .into_iter()
@@ -205,8 +253,11 @@ pub(super) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
         current_step_title: r.current_step_title,
         child_task_count: r.child_task_count,
         approval_count: r.approval_count,
+        awaiting_approval_id: r.awaiting_approval_id,
         last_error: r.last_error,
         goal: r.goal,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
         current_step_index: r.current_step_index,
         reflection_summary: r.reflection_summary,
         memory_updates: r.memory_updates,
@@ -218,6 +269,7 @@ pub(super) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
         loaded_event_start: r.loaded_event_start,
         loaded_event_end: r.loaded_event_end,
         total_event_count: r.total_event_count,
+        dossier: r.dossier.map(convert_goal_run_dossier),
         events: r
             .events
             .into_iter()
@@ -231,10 +283,130 @@ pub(super) fn convert_goal_run(r: crate::wire::GoalRun) -> task::GoalRun {
                 todo_snapshot: event.todo_snapshot.into_iter().map(convert_todo).collect(),
             })
             .collect(),
-        created_at: 0,
-        updated_at: 0,
         older_page_pending: false,
         older_page_request_cooldown_until_tick: None,
+        sparse_update: r.sparse_update,
+    }
+}
+
+fn convert_goal_runtime_owner_profile(
+    profile: crate::wire::GoalRuntimeOwnerProfile,
+) -> task::GoalRuntimeOwnerProfile {
+    task::GoalRuntimeOwnerProfile {
+        agent_label: profile.agent_label,
+        provider: profile.provider,
+        model: profile.model,
+        reasoning_effort: profile.reasoning_effort,
+    }
+}
+
+fn convert_goal_agent_assignment(
+    assignment: crate::wire::GoalAgentAssignment,
+) -> task::GoalAgentAssignment {
+    task::GoalAgentAssignment {
+        role_id: assignment.role_id,
+        enabled: assignment.enabled,
+        provider: assignment.provider,
+        model: assignment.model,
+        reasoning_effort: assignment.reasoning_effort,
+        inherit_from_main: assignment.inherit_from_main,
+    }
+}
+
+fn convert_goal_evidence(record: crate::wire::GoalEvidenceRecord) -> task::GoalEvidenceRecord {
+    task::GoalEvidenceRecord {
+        id: record.id,
+        title: record.title,
+        source: record.source,
+        uri: record.uri,
+        summary: record.summary,
+        captured_at: record.captured_at,
+    }
+}
+
+fn convert_goal_proof_check(
+    record: crate::wire::GoalProofCheckRecord,
+) -> task::GoalProofCheckRecord {
+    task::GoalProofCheckRecord {
+        id: record.id,
+        title: record.title,
+        state: record.state,
+        summary: record.summary,
+        evidence_ids: record.evidence_ids,
+        resolved_at: record.resolved_at,
+    }
+}
+
+fn convert_goal_run_report(record: crate::wire::GoalRunReportRecord) -> task::GoalRunReportRecord {
+    task::GoalRunReportRecord {
+        summary: record.summary,
+        state: record.state,
+        notes: record.notes,
+        evidence: record
+            .evidence
+            .into_iter()
+            .map(convert_goal_evidence)
+            .collect(),
+        proof_checks: record
+            .proof_checks
+            .into_iter()
+            .map(convert_goal_proof_check)
+            .collect(),
+        generated_at: record.generated_at,
+    }
+}
+
+fn convert_goal_resume_decision(
+    record: crate::wire::GoalResumeDecisionRecord,
+) -> task::GoalResumeDecisionRecord {
+    task::GoalResumeDecisionRecord {
+        action: record.action,
+        reason_code: record.reason_code,
+        reason: record.reason,
+        details: record.details,
+        decided_at: record.decided_at,
+        projection_state: record.projection_state,
+    }
+}
+
+fn convert_goal_delivery_unit(
+    record: crate::wire::GoalDeliveryUnitRecord,
+) -> task::GoalDeliveryUnitRecord {
+    task::GoalDeliveryUnitRecord {
+        id: record.id,
+        title: record.title,
+        status: record.status,
+        execution_binding: record.execution_binding,
+        verification_binding: record.verification_binding,
+        summary: record.summary,
+        proof_checks: record
+            .proof_checks
+            .into_iter()
+            .map(convert_goal_proof_check)
+            .collect(),
+        evidence: record
+            .evidence
+            .into_iter()
+            .map(convert_goal_evidence)
+            .collect(),
+        report: record.report.map(convert_goal_run_report),
+    }
+}
+
+fn convert_goal_run_dossier(record: crate::wire::GoalRunDossier) -> task::GoalRunDossier {
+    task::GoalRunDossier {
+        units: record
+            .units
+            .into_iter()
+            .map(convert_goal_delivery_unit)
+            .collect(),
+        projection_state: record.projection_state,
+        latest_resume_decision: record
+            .latest_resume_decision
+            .map(convert_goal_resume_decision),
+        report: record.report.map(convert_goal_run_report),
+        summary: record.summary,
+        projection_error: record.projection_error,
     }
 }
 
@@ -402,6 +574,37 @@ mod tests {
         assert!(message.is_operator_question);
         assert_eq!(message.operator_question_id.as_deref(), Some("oq-1"));
         assert_eq!(message.operator_question_answer.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn convert_thread_preserves_image_content_blocks() {
+        let thread = crate::wire::AgentThread {
+            id: "thread-1".into(),
+            title: "Thread".into(),
+            messages: vec![crate::wire::AgentMessage {
+                role: crate::wire::MessageRole::Assistant,
+                content: "Generated image.".into(),
+                content_blocks: vec![crate::wire::AgentContentBlock::Image {
+                    url: Some("file:///tmp/thread-files/generated.png".into()),
+                    data_url: None,
+                    mime_type: Some("image/png".into()),
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let converted = convert_thread(thread);
+        let message = &converted.messages[0];
+
+        assert!(matches!(
+            message.content_blocks.first(),
+            Some(chat::AgentContentBlock::Image {
+                url: Some(url),
+                mime_type: Some(mime_type),
+                ..
+            }) if url == "file:///tmp/thread-files/generated.png" && mime_type == "image/png"
+        ));
     }
 
     #[test]

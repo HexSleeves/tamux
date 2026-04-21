@@ -1,19 +1,20 @@
 use super::*;
 
 mod events_activity;
+mod events_audio;
 mod events_connection;
 mod events_integrations;
 mod events_status;
 mod events_tasks;
 
 impl TuiModel {
-    fn is_internal_agent_thread(thread_id: &str, title: Option<&str>) -> bool {
+    pub(in crate::app) fn is_internal_agent_thread(thread_id: &str, title: Option<&str>) -> bool {
         let normalized_id = thread_id.trim().to_ascii_lowercase();
         let normalized_title = title.unwrap_or_default().trim().to_ascii_lowercase();
         normalized_id.starts_with("dm:") || normalized_title.starts_with("internal dm")
     }
 
-    fn is_hidden_agent_thread(thread_id: &str, title: Option<&str>) -> bool {
+    pub(in crate::app) fn is_hidden_agent_thread(thread_id: &str, title: Option<&str>) -> bool {
         let normalized_id = thread_id.trim().to_ascii_lowercase();
         let normalized_title = title.unwrap_or_default().trim().to_ascii_lowercase();
         normalized_id.starts_with("handoff:")
@@ -29,10 +30,28 @@ impl TuiModel {
             && self.chat.active_thread_id() != Some(thread_id)
     }
 
-    pub fn pump_daemon_events(&mut self) {
-        while let Ok(event) = self.daemon_events_rx.try_recv() {
-            self.handle_client_event(event);
+    fn sync_open_thread_picker(&mut self) {
+        if self.modal.top() == Some(modal::ModalKind::ThreadPicker) {
+            self.sync_thread_picker_item_count();
         }
+    }
+
+    pub fn pump_daemon_events_budgeted(&mut self, limit: usize) -> usize {
+        let mut processed = 0;
+        while processed < limit {
+            match self.daemon_events_rx.try_recv() {
+                Ok(event) => {
+                    self.handle_client_event(event);
+                    processed += 1;
+                }
+                Err(_) => break,
+            }
+        }
+        processed
+    }
+
+    pub fn pump_daemon_events(&mut self) {
+        let _ = self.pump_daemon_events_budgeted(usize::MAX);
     }
 
     pub fn on_tick(&mut self) {
@@ -152,7 +171,9 @@ impl TuiModel {
             ClientEvent::ThreadDetail(Some(thread)) => {
                 self.handle_thread_detail_event(thread);
             }
-            ClientEvent::ThreadDetail(None) => {}
+            ClientEvent::ThreadDetail(None) => {
+                let _ = self.fallback_pending_reconnect_restore();
+            }
             ClientEvent::ThreadCreated {
                 thread_id,
                 title,
@@ -165,9 +186,7 @@ impl TuiModel {
                     self.chat.reduce(chat::ChatAction::ThreadDeleted {
                         thread_id: thread_id.clone(),
                     });
-                    if self.modal.top() == Some(modal::ModalKind::ThreadPicker) {
-                        self.sync_thread_picker_item_count();
-                    }
+                    self.sync_open_thread_picker();
                     self.status_line = "Thread deleted".to_string();
                 } else {
                     self.status_line = "Thread delete failed".to_string();
@@ -228,7 +247,12 @@ impl TuiModel {
                 self.handle_goal_run_started_event(run);
             }
             ClientEvent::GoalRunDetail(Some(run)) => {
-                self.handle_goal_run_detail_event(run);
+                if self.is_placeholder_goal_run_detail(&run) {
+                    self.clear_goal_hydration_refresh(&run.id);
+                } else {
+                    self.clear_goal_hydration_refresh(&run.id);
+                    self.handle_goal_run_detail_event(run);
+                }
             }
             ClientEvent::GoalRunDetail(None) => {}
             ClientEvent::GoalRunUpdate(run) => {
@@ -239,6 +263,10 @@ impl TuiModel {
                 deleted,
             } => {
                 if deleted {
+                    let cleared_approval_id = self
+                        .tasks
+                        .goal_run_by_id(&goal_run_id)
+                        .and_then(|run| run.awaiting_approval_id.clone());
                     let viewing_deleted_goal = if let MainPaneView::Task(target) =
                         &self.main_pane_view
                     {
@@ -246,8 +274,14 @@ impl TuiModel {
                     } else {
                         false
                     };
+                    let deleted_goal_run_id = goal_run_id.clone();
                     self.tasks
                         .reduce(task::TaskAction::GoalRunDeleted { goal_run_id });
+                    self.clear_goal_hydration_refresh(&deleted_goal_run_id);
+                    if let Some(approval_id) = cleared_approval_id {
+                        self.approval
+                            .reduce(crate::state::ApprovalAction::ClearResolved(approval_id));
+                    }
                     if self.modal.top() == Some(modal::ModalKind::GoalPicker) {
                         self.sync_goal_picker_item_count();
                     }
@@ -264,6 +298,9 @@ impl TuiModel {
                 checkpoints,
             } => {
                 self.handle_goal_run_checkpoints_event(goal_run_id, checkpoints);
+            }
+            ClientEvent::GoalHydrationScheduleFailed { goal_run_id } => {
+                self.clear_goal_hydration_refresh(&goal_run_id);
             }
             ClientEvent::ThreadTodos { thread_id, items } => {
                 self.handle_thread_todos_event(thread_id, items);
@@ -365,6 +402,50 @@ impl TuiModel {
                         70,
                         true,
                     );
+                }
+            }
+            ClientEvent::GenerateImageResult { content } => {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+                        self.status_line = format!("Image generation failed: {error}");
+                        self.show_input_notice(
+                            "Image generation failed (see status/error)",
+                            InputNoticeKind::Warning,
+                            80,
+                            true,
+                        );
+                        self.last_error = Some(format!("Image generation failed: {error}"));
+                        self.error_active = true;
+                        self.error_tick = self.tick_counter;
+                        return;
+                    }
+
+                    let thread_id = value
+                        .get("thread_id")
+                        .and_then(|entry| entry.as_str())
+                        .map(str::to_string);
+                    let status_target = value
+                        .get("path")
+                        .and_then(|entry| entry.as_str())
+                        .or_else(|| value.get("url").and_then(|entry| entry.as_str()))
+                        .or_else(|| value.get("file_url").and_then(|entry| entry.as_str()));
+
+                    if let Some(thread_id) = thread_id {
+                        if self.chat.active_thread_id() == Some(thread_id.as_str()) {
+                            self.request_authoritative_thread_refresh(thread_id.clone(), false);
+                        } else {
+                            self.open_thread_conversation(thread_id.clone());
+                        }
+                        self.send_daemon_command(DaemonCommand::RequestThreadWorkContext(
+                            thread_id,
+                        ));
+                    }
+
+                    self.status_line = status_target
+                        .map(|target| format!("Image generated: {target}"))
+                        .unwrap_or_else(|| "Image generated".to_string());
+                } else {
+                    self.status_line = "Image generated".to_string();
                 }
             }
             ClientEvent::ModelsFetched(models) => {

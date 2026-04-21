@@ -1,5 +1,6 @@
 use amux_shared::providers::{
-    PROVIDER_ID_ARCEE, PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_NVIDIA, PROVIDER_ID_XAI,
+    PROVIDER_ID_ARCEE, PROVIDER_ID_CHUTES, PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_NVIDIA,
+    PROVIDER_ID_XAI,
 };
 
     #[test]
@@ -560,6 +561,28 @@ use amux_shared::providers::{
     }
 
     #[test]
+    fn chutes_provider_exposes_fetchable_openai_defaults() {
+        let provider = get_provider_definition(PROVIDER_ID_CHUTES).expect("chutes provider");
+        assert_eq!(provider.default_base_url, "https://llm.chutes.ai/v1");
+        assert_eq!(provider.default_model, "deepseek-ai/DeepSeek-R1");
+        assert_eq!(provider.api_type, ApiType::OpenAI);
+        assert_eq!(provider.auth_method, AuthMethod::Bearer);
+        assert!(provider.supports_model_fetch);
+        assert_eq!(provider.default_transport, ApiTransport::ChatCompletions);
+        assert_eq!(provider.models.len(), 1);
+        assert_eq!(provider.models[0].id, "deepseek-ai/DeepSeek-R1");
+        assert_eq!(provider.models[0].context_window, 128_000);
+        assert_eq!(
+            get_provider_api_type(
+                PROVIDER_ID_CHUTES,
+                "deepseek-ai/DeepSeek-R1",
+                "https://llm.chutes.ai/v1"
+            ),
+            ApiType::OpenAI
+        );
+    }
+
+    #[test]
     fn xai_provider_exposes_fetchable_responses_defaults() {
         let provider = get_provider_definition(PROVIDER_ID_XAI).expect("xai provider");
         assert_eq!(provider.default_base_url, "https://api.x.ai/v1");
@@ -660,5 +683,119 @@ use amux_shared::providers::{
                 "https://api.anthropic.com"
             ),
             ApiType::Anthropic
+        );
+    }
+
+    #[test]
+    fn goal_dossier_serializes_into_goal_run_state() {
+        let goal_run = GoalRun {
+            id: "goal-run-1".to_string(),
+            title: "Ship dossier projection".to_string(),
+            goal: "Add dossier support to the daemon goal state".to_string(),
+            client_request_id: None,
+            status: GoalRunStatus::Paused,
+            priority: TaskPriority::Normal,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_100,
+            started_at: Some(1_700_000_010),
+            completed_at: None,
+            thread_id: Some("thread-1".to_string()),
+            root_thread_id: Some("thread-1".to_string()),
+            active_thread_id: Some("thread-1".to_string()),
+            execution_thread_ids: vec!["thread-1".to_string()],
+            session_id: Some("session-1".to_string()),
+            current_step_index: 0,
+            current_step_title: Some("Draft dossier types".to_string()),
+            current_step_kind: Some(GoalRunStepKind::Reason),
+            launch_assignment_snapshot: Vec::new(),
+            runtime_assignment_list: Vec::new(),
+            planner_owner_profile: None,
+            current_step_owner_profile: None,
+            replan_count: 0,
+            max_replans: 3,
+            plan_summary: Some("Design a compact dossier layer".to_string()),
+            reflection_summary: None,
+            memory_updates: vec![],
+            generated_skill_path: None,
+            last_error: None,
+            failure_cause: None,
+            child_task_ids: vec![],
+            child_task_count: 0,
+            approval_count: 0,
+            awaiting_approval_id: None,
+            policy_fingerprint: None,
+            approval_expires_at: None,
+            containment_scope: None,
+            compensation_status: None,
+            compensation_summary: None,
+            active_task_id: None,
+            duration_ms: None,
+            steps: vec![],
+            events: vec![],
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            estimated_cost_usd: None,
+            autonomy_level: AutonomyLevel::default(),
+            authorship_tag: None,
+            dossier: Some(GoalRunDossier {
+                units: vec![GoalDeliveryUnit {
+                    id: "delivery-unit-1".to_string(),
+                    title: "Verify dossier plumbing".to_string(),
+                    status: GoalProjectionState::Pending,
+                    execution_binding: GoalRoleBinding::Builtin("swarog".to_string()),
+                    verification_binding: GoalRoleBinding::Subagent(
+                        "android-verifier".to_string(),
+                    ),
+                    ..Default::default()
+                }],
+                latest_resume_decision: Some(GoalResumeDecision {
+                    action: GoalResumeAction::Advance,
+                    reason_code: "proof_complete".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            stopped_reason: Some("manual stop after proof capture".to_string()),
+        };
+
+        let json = serde_json::to_string(&goal_run).unwrap();
+        assert!(json.contains("\"dossier\""));
+        assert!(json.contains("android-verifier"));
+        assert!(json.contains("\"stopped_reason\":\"manual stop after proof capture\""));
+    }
+
+    #[test]
+    fn goal_dossier_deserializes_sparse_payloads_with_defaults() {
+        let dossier: GoalRunDossier = serde_json::from_str(
+            r#"{
+                "units": [
+                    {
+                        "status": "completed",
+                        "proof_checks": [{}],
+                        "evidence": [{}],
+                        "report": {
+                            "proof_checks": [{}],
+                            "evidence": [{}]
+                        }
+                    }
+                ],
+                "latest_resume_decision": {
+                    "action": "pause"
+                }
+            }"#,
+        )
+        .expect("sparse dossier payload should deserialize");
+
+        assert_eq!(dossier.units.len(), 1);
+        assert_eq!(dossier.units[0].id, "");
+        assert_eq!(dossier.units[0].title, "");
+        assert_eq!(dossier.units[0].proof_checks[0].id, "");
+        assert_eq!(dossier.units[0].evidence[0].title, "");
+        assert_eq!(
+            dossier
+                .latest_resume_decision
+                .expect("resume decision should exist")
+                .reason_code,
+            ""
         );
     }

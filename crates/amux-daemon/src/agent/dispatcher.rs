@@ -34,7 +34,7 @@ impl AgentEngine {
                 if let Err(error) = result {
                     tracing::error!(goal_run_id = %goal_run_id, error = %error, "goal run advancement failed");
                     engine
-                        .fail_goal_run(&goal_run_id, &error.to_string(), "goal-run")
+                        .fail_goal_run(&goal_run_id, &error.to_string(), "goal-run", None)
                         .await;
                 }
                 engine.finish_goal_run_work(&goal_run_id).await;
@@ -138,6 +138,11 @@ impl AgentEngine {
                 drop(tasks);
                 if !changed_before_start.is_empty() {
                     self.persist_tasks().await;
+                    for task in &changed_before_start {
+                        if let Some(goal_run_id) = task.goal_run_id.as_deref() {
+                            self.sync_goal_run_with_task(goal_run_id, task).await;
+                        }
+                    }
                     for task in changed_before_start {
                         self.emit_task_update(&task, Some(status_message(&task).into()));
                     }
@@ -168,6 +173,11 @@ impl AgentEngine {
         };
 
         self.persist_tasks().await;
+        for changed in &changed_before_start {
+            if let Some(goal_run_id) = changed.goal_run_id.as_deref() {
+                self.sync_goal_run_with_task(goal_run_id, changed).await;
+            }
+        }
         for changed in changed_before_start {
             self.emit_task_update(&changed, Some(status_message(&changed).into()));
         }

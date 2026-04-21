@@ -1,10 +1,7 @@
 #[test]
 fn collaboration_sessions_inspect_field_requests_collaboration_snapshot() {
     let (mut model, mut daemon_rx) = make_model();
-    model
-        .settings
-        .reduce(SettingsAction::SwitchTab(SettingsTab::Chat));
-    model.settings.reduce(SettingsAction::NavigateField(24));
+    focus_settings_field(&mut model, SettingsTab::Chat, "collaboration_sessions_inspect");
     assert_eq!(model.settings.current_field_name(), "collaboration_sessions_inspect");
 
     model.activate_settings_field();
@@ -21,10 +18,7 @@ fn collaboration_sessions_inspect_field_requests_collaboration_snapshot() {
 #[test]
 fn generated_tools_inspect_field_requests_generated_tools_snapshot() {
     let (mut model, mut daemon_rx) = make_model();
-    model
-        .settings
-        .reduce(SettingsAction::SwitchTab(SettingsTab::Chat));
-    model.settings.reduce(SettingsAction::NavigateField(25));
+    focus_settings_field(&mut model, SettingsTab::Chat, "generated_tools_inspect");
     assert_eq!(model.settings.current_field_name(), "generated_tools_inspect");
 
     model.activate_settings_field();

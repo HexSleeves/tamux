@@ -7,12 +7,163 @@ mod finalization_impl;
 #[path = "goal_planner/progress.rs"]
 mod progress_impl;
 
+fn parse_goal_role_binding(raw: Option<&str>, fallback: GoalRoleBinding) -> GoalRoleBinding {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return fallback;
+    };
+    if let Some(value) = raw.strip_prefix("builtin:") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return GoalRoleBinding::Builtin(value.to_string());
+        }
+    }
+    if let Some(value) = raw.strip_prefix("subagent:") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return GoalRoleBinding::Subagent(value.to_string());
+        }
+    }
+    fallback
+}
+
+fn default_execution_binding(kind: &GoalRunStepKind) -> GoalRoleBinding {
+    match kind {
+        GoalRunStepKind::Specialist(role) if !role.trim().is_empty() => {
+            GoalRoleBinding::Subagent(role.clone())
+        }
+        _ => GoalRoleBinding::Builtin(crate::agent::agent_identity::MAIN_AGENT_ID.to_string()),
+    }
+}
+
+fn default_verification_binding() -> GoalRoleBinding {
+    GoalRoleBinding::Builtin(crate::agent::agent_identity::MAIN_AGENT_ID.to_string())
+}
+
+fn goal_runtime_owner_profile(
+    agent_label: String,
+    provider: String,
+    model: String,
+    reasoning_effort: Option<String>,
+) -> GoalRuntimeOwnerProfile {
+    GoalRuntimeOwnerProfile {
+        agent_label,
+        provider,
+        model,
+        reasoning_effort,
+    }
+}
+
+fn goal_agent_assignment(
+    role_id: String,
+    enabled: bool,
+    provider: String,
+    model: String,
+    reasoning_effort: Option<String>,
+    inherit_from_main: bool,
+) -> GoalAgentAssignment {
+    GoalAgentAssignment {
+        role_id,
+        enabled,
+        provider,
+        model,
+        reasoning_effort,
+        inherit_from_main,
+    }
+}
+
+fn sub_agent_matches_identifier(def: &SubAgentDefinition, identifier: &str) -> bool {
+    def.id.eq_ignore_ascii_case(identifier)
+        || def.name.eq_ignore_ascii_case(identifier)
+        || def
+            .id
+            .strip_suffix("_builtin")
+            .is_some_and(|value| value.eq_ignore_ascii_case(identifier))
+}
+
 impl AgentEngine {
+    pub(crate) async fn goal_launch_assignment_snapshot(&self) -> Vec<GoalAgentAssignment> {
+        let config = self.config.read().await;
+        let resolved = resolve_active_provider_config(&config).unwrap_or_else(|_| ProviderConfig {
+            base_url: config.base_url.clone(),
+            model: config.model.clone(),
+            api_key: config.api_key.clone(),
+            assistant_id: config.assistant_id.clone(),
+            auth_source: config.auth_source,
+            api_transport: config.api_transport,
+            reasoning_effort: config.reasoning_effort.clone(),
+            context_window_tokens: config.context_window_tokens,
+            response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
+        });
+        vec![goal_agent_assignment(
+            crate::agent::agent_identity::MAIN_AGENT_ID.to_string(),
+            true,
+            config.provider.clone(),
+            resolved.model,
+            Some(resolved.reasoning_effort),
+            false,
+        )]
+    }
+
+    async fn planner_owner_profile(&self) -> GoalRuntimeOwnerProfile {
+        let config = self.config.read().await;
+        goal_runtime_owner_profile(
+            crate::agent::agent_identity::MAIN_AGENT_NAME.to_string(),
+            config.provider.clone(),
+            config.model.clone(),
+            Some(config.reasoning_effort.clone()),
+        )
+    }
+
+    pub(crate) async fn current_step_owner_profile_for_task(
+        &self,
+        task: &AgentTask,
+    ) -> GoalRuntimeOwnerProfile {
+        if let Some(identifier) = task.sub_agent_def_id.as_deref() {
+            let sub_agents = self.list_sub_agents().await;
+            if let Some(def) = sub_agents
+                .iter()
+                .find(|definition| sub_agent_matches_identifier(definition, identifier))
+            {
+                return goal_runtime_owner_profile(
+                    def.name.clone(),
+                    def.provider.clone(),
+                    def.model.clone(),
+                    def.reasoning_effort.clone(),
+                );
+            }
+        }
+
+        let config = self.config.read().await;
+        goal_runtime_owner_profile(
+            crate::agent::agent_identity::MAIN_AGENT_NAME.to_string(),
+            task.override_provider
+                .clone()
+                .unwrap_or_else(|| config.provider.clone()),
+            task.override_model
+                .clone()
+                .unwrap_or_else(|| config.model.clone()),
+            Some(config.reasoning_effort.clone()),
+        )
+    }
+
     pub(super) async fn plan_goal_run(&self, goal_run_id: &str) -> Result<()> {
         let goal_run = self
             .get_goal_run(goal_run_id)
             .await
             .context("goal run missing during planning")?;
+        let planner_owner_profile = self.planner_owner_profile().await;
 
         let queued = {
             let mut goal_runs = self.goal_runs.lock().await;
@@ -22,6 +173,8 @@ impl AgentEngine {
             current.status = GoalRunStatus::Planning;
             current.started_at.get_or_insert(now_millis());
             current.updated_at = now_millis();
+            current.planner_owner_profile = Some(planner_owner_profile.clone());
+            current.current_step_owner_profile = None;
             current.events.push(make_goal_run_event(
                 "planning",
                 "building execution plan",
@@ -50,12 +203,33 @@ impl AgentEngine {
                 current.title = title.trim().to_string();
             }
             current.plan_summary = Some(plan.summary.clone());
+            let planned_units = plan
+                .steps
+                .iter()
+                .enumerate()
+                .map(|(_position, step)| GoalDeliveryUnit {
+                    id: format!("goal_step_{}", Uuid::new_v4()),
+                    title: step.title.clone(),
+                    status: GoalProjectionState::Pending,
+                    execution_binding: parse_goal_role_binding(
+                        step.execution_binding.as_deref(),
+                        default_execution_binding(&step.kind),
+                    ),
+                    verification_binding: parse_goal_role_binding(
+                        step.verification_binding.as_deref(),
+                        default_verification_binding(),
+                    ),
+                    summary: Some(step.success_criteria.clone()),
+                    proof_checks: step.proof_checks.clone(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>();
             current.steps = plan
                 .steps
                 .into_iter()
                 .enumerate()
                 .map(|(position, step)| GoalRunStep {
-                    id: format!("goal_step_{}", Uuid::new_v4()),
+                    id: planned_units[position].id.clone(),
                     position,
                     title: step.title,
                     instructions: step.instructions,
@@ -73,12 +247,20 @@ impl AgentEngine {
             current.current_step_index = 0;
             current.current_step_title = current.steps.first().map(|step| step.title.clone());
             current.current_step_kind = current.steps.first().map(|step| step.kind.clone());
+            current.planner_owner_profile = Some(planner_owner_profile.clone());
+            current.current_step_owner_profile = None;
             current.status = GoalRunStatus::Running;
             current.updated_at = now;
             current.last_error = None;
             current.failure_cause = None;
             current.awaiting_approval_id = None;
             current.active_task_id = None;
+            let mut dossier = current.dossier.clone().unwrap_or_default();
+            dossier.units = planned_units;
+            dossier.summary = current.plan_summary.clone();
+            dossier.projection_state = GoalProjectionState::InProgress;
+            dossier.projection_error = None;
+            current.dossier = Some(dossier);
             current.events.push(make_goal_run_event(
                 "planning",
                 "goal plan generated",
@@ -281,13 +463,14 @@ impl AgentEngine {
         }
 
         let step = snapshot.steps[snapshot.current_step_index].clone();
+        let resolved_execution_target = self.resolve_goal_execution_target(&snapshot, &step).await;
 
         // If this is a Specialist step, route through the handoff broker
         // instead of the normal task enqueue path.
         let task = if let GoalRunStepKind::Specialist(ref role) = step.kind {
             let thread_id = snapshot.thread_id.clone().unwrap_or_default();
             match self
-                .route_handoff(
+                .route_handoff_to_target(
                     &step.instructions,
                     &[role.clone()],
                     None, // parent_task_id
@@ -295,6 +478,7 @@ impl AgentEngine {
                     &thread_id,
                     &step.success_criteria,
                     0, // depth starts at 0 for goal-originated handoffs
+                    resolved_execution_target.as_ref(),
                 )
                 .await
             {
@@ -477,6 +661,13 @@ impl AgentEngine {
             )
             .await
         };
+        let task = self
+            .apply_goal_resolved_target_to_task(
+                task.id.as_str(),
+                resolved_execution_target.as_ref(),
+            )
+            .await
+            .unwrap_or(task);
 
         let requires_ack = super::autonomy::requires_acknowledgment(snapshot.autonomy_level);
         let autonomy_acknowledgment_id = requires_ack.then(|| {
@@ -485,28 +676,39 @@ impl AgentEngine {
                 snapshot.id, snapshot.current_step_index, step.id
             )
         });
+        let current_task_snapshot = {
+            let mut tasks = self.tasks.lock().await;
+            let Some(current_task) = tasks.iter_mut().find(|entry| entry.id == task.id) else {
+                anyhow::bail!("goal step task disappeared after enqueue");
+            };
+            current_task.goal_run_title = Some(snapshot.title.clone());
+            current_task.goal_step_id = Some(step.id.clone());
+            current_task.goal_step_title = Some(step.title.clone());
+            if let Some(ack_id) = autonomy_acknowledgment_id.as_ref() {
+                current_task.status = TaskStatus::AwaitingApproval;
+                current_task.awaiting_approval_id = Some(ack_id.clone());
+                current_task.blocked_reason =
+                    Some("awaiting supervised step acknowledgment".to_string());
+                current_task.started_at = None;
+                current_task.logs.push(make_task_log_entry(
+                    current_task.retry_count,
+                    TaskLogLevel::Info,
+                    "autonomy_acknowledgment",
+                    "supervised step queued and gated pending explicit acknowledgment",
+                    Some(ack_id.clone()),
+                ));
+            }
+            current_task.clone()
+        };
+        let current_step_owner_profile = Some(
+            self.goal_owner_profile_for_task_target(
+                &current_task_snapshot,
+                resolved_execution_target.as_ref(),
+            )
+            .await,
+        );
         let updated = {
             let mut goal_runs = self.goal_runs.lock().await;
-            let mut tasks = self.tasks.lock().await;
-            if let Some(current_task) = tasks.iter_mut().find(|entry| entry.id == task.id) {
-                current_task.goal_run_title = Some(snapshot.title.clone());
-                current_task.goal_step_id = Some(step.id.clone());
-                current_task.goal_step_title = Some(step.title.clone());
-                if let Some(ack_id) = autonomy_acknowledgment_id.as_ref() {
-                    current_task.status = TaskStatus::AwaitingApproval;
-                    current_task.awaiting_approval_id = Some(ack_id.clone());
-                    current_task.blocked_reason =
-                        Some("awaiting supervised step acknowledgment".to_string());
-                    current_task.started_at = None;
-                    current_task.logs.push(make_task_log_entry(
-                        current_task.retry_count,
-                        TaskLogLevel::Info,
-                        "autonomy_acknowledgment",
-                        "supervised step queued and gated pending explicit acknowledgment",
-                        Some(ack_id.clone()),
-                    ));
-                }
-            }
             let Some(goal_run) = goal_runs.iter_mut().find(|item| item.id == goal_run_id) else {
                 anyhow::bail!("goal run disappeared after task enqueue");
             };
@@ -528,6 +730,7 @@ impl AgentEngine {
             goal_run.current_step_title = Some(step.title.clone());
             goal_run.current_step_kind = Some(step.kind.clone());
             goal_run.active_task_id = Some(task.id.clone());
+            goal_run.current_step_owner_profile = current_step_owner_profile;
             goal_run.awaiting_approval_id = autonomy_acknowledgment_id.clone();
             goal_run.events.push(make_goal_run_event(
                 "execution",
@@ -584,3 +787,7 @@ fn collect_low_confidence_plan_steps(goal_run: &GoalRun) -> Vec<String> {
 #[cfg(test)]
 #[path = "tests/goal_planner.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/goal_planner_structured_fallback.rs"]
+mod structured_fallback_tests;

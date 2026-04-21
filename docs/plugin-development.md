@@ -78,7 +78,7 @@ Minimal example:
 ```json
 {
   "name": "tamux-plugin-example",
-  "version": "0.5.11",
+  "version": "0.6.0",
   "tamuxPlugin": {
     "entry": "dist/tamux-plugin.js",
     "format": "script"
@@ -105,7 +105,7 @@ import ExamplePanel from "./ExamplePanel";
 export const examplePlugin: Plugin = {
   id: "example",
   name: "Example Plugin",
-  version: "0.5.11",
+  version: "0.6.0",
   components: {
     ExamplePanel,
   },
@@ -188,6 +188,40 @@ Example:
   props:
     label: "Refresh"
 ```
+
+For runtime-installed `plugin.json` plugins, commands can now be backed by either:
+
+- `action`: route the slash command to a declared plugin API endpoint.
+- `python`: describe a Python command that the agent should execute through the shell tools.
+
+The `python` block is available both at the top level for shared defaults and inside individual commands for the actual runnable command:
+
+```json
+{
+  "python": {
+    "run_path": "workspace",
+    "source": "https://example.com/tool.py",
+    "env": true,
+    "dependencies": ["requests>=2.32"]
+  },
+  "commands": {
+    "sync": {
+      "description": "Run sync",
+      "python": {
+        "command": "python sync.py --full"
+      }
+    }
+  }
+}
+```
+
+Python manifest rules:
+
+- `commands.<name>.python.command` is required.
+- `run_path`, `source`, `env`, and `dependencies` can be inherited from the top-level `python` block.
+- `source` must be an `http(s)` URL or an absolute path.
+- `env` can be either a string path to an activation script or a boolean.
+- `env: true` tells tamux to prefer `uv` for `.venv` creation and fall back to `python -m venv`.
 
 ## Plugin Views
 

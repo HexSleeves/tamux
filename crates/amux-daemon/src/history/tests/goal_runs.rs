@@ -1,5 +1,25 @@
 use super::*;
+use crate::agent::types::{
+    GoalAgentAssignment, GoalDeliveryUnit, GoalProjectionState, GoalResumeAction,
+    GoalResumeDecision, GoalRoleBinding, GoalRunDossier, GoalRuntimeOwnerProfile,
+};
 use crate::history::schema_helpers::table_has_column;
+
+fn sample_assignment(
+    role_id: &str,
+    provider: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
+) -> GoalAgentAssignment {
+    GoalAgentAssignment {
+        role_id: role_id.to_string(),
+        enabled: true,
+        provider: provider.to_string(),
+        model: model.to_string(),
+        reasoning_effort: reasoning_effort.map(str::to_string),
+        inherit_from_main: false,
+    }
+}
 
 #[tokio::test]
 async fn init_schema_migrates_legacy_agent_tasks_before_goal_run_index() -> Result<()> {
@@ -246,6 +266,8 @@ async fn goal_run_event_todo_snapshot_round_trips() -> Result<()> {
         current_step_index: 0,
         current_step_title: Some("Inspect".to_string()),
         current_step_kind: Some(GoalRunStepKind::Research),
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 0,
         max_replans: 2,
         plan_summary: Some("Plan".to_string()),
@@ -254,6 +276,8 @@ async fn goal_run_event_todo_snapshot_round_trips() -> Result<()> {
         generated_skill_path: None,
         last_error: None,
         failure_cause: None,
+        dossier: None,
+        stopped_reason: None,
         child_task_ids: Vec::new(),
         child_task_count: 0,
         approval_count: 0,
@@ -302,6 +326,11 @@ async fn goal_run_event_todo_snapshot_round_trips() -> Result<()> {
         estimated_cost_usd: None,
         autonomy_level: Default::default(),
         authorship_tag: None,
+        launch_assignment_snapshot: Vec::new(),
+        runtime_assignment_list: Vec::new(),
+        root_thread_id: None,
+        active_thread_id: None,
+        execution_thread_ids: Vec::new(),
     };
 
     store.upsert_goal_run(&goal_run).await?;
@@ -339,6 +368,18 @@ async fn goal_run_extended_metadata_round_trips() -> Result<()> {
         current_step_index: 0,
         current_step_title: Some("Execute safely".to_string()),
         current_step_kind: Some(GoalRunStepKind::Command),
+        planner_owner_profile: Some(GoalRuntimeOwnerProfile {
+            agent_label: "Swarog".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+            reasoning_effort: Some("high".to_string()),
+        }),
+        current_step_owner_profile: Some(GoalRuntimeOwnerProfile {
+            agent_label: "Android Verifier".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            reasoning_effort: None,
+        }),
         replan_count: 1,
         max_replans: 3,
         plan_summary: Some("Plan summary".to_string()),
@@ -347,6 +388,7 @@ async fn goal_run_extended_metadata_round_trips() -> Result<()> {
         generated_skill_path: Some("skills/generated/goal-meta.md".to_string()),
         last_error: Some("waiting for approval".to_string()),
         failure_cause: Some("policy gate".to_string()),
+        stopped_reason: Some("operator requested stop".to_string()),
         child_task_ids: vec!["task-1".to_string(), "task-2".to_string()],
         child_task_count: 2,
         approval_count: 1,
@@ -358,6 +400,23 @@ async fn goal_run_extended_metadata_round_trips() -> Result<()> {
         compensation_summary: Some("rollback pending".to_string()),
         active_task_id: Some("task-2".to_string()),
         duration_ms: Some(888),
+        launch_assignment_snapshot: vec![
+            sample_assignment("planner", "openai", "gpt-5.4", Some("high")),
+            sample_assignment("executor", "anthropic", "claude-sonnet-4", None),
+        ],
+        runtime_assignment_list: vec![sample_assignment(
+            "executor",
+            "anthropic",
+            "claude-sonnet-4",
+            None,
+        )],
+        root_thread_id: Some("thread-root".to_string()),
+        active_thread_id: Some("thread-active".to_string()),
+        execution_thread_ids: vec![
+            "thread-root".to_string(),
+            "thread-active".to_string(),
+            "thread-followup".to_string(),
+        ],
         steps: vec![GoalRunStep {
             id: "step-meta".to_string(),
             position: 0,
@@ -374,6 +433,24 @@ async fn goal_run_extended_metadata_round_trips() -> Result<()> {
             completed_at: None,
         }],
         events: vec![],
+        dossier: Some(GoalRunDossier {
+            units: vec![GoalDeliveryUnit {
+                id: "unit-1".to_string(),
+                title: "Implement guarded command".to_string(),
+                status: GoalProjectionState::Completed,
+                execution_binding: GoalRoleBinding::Builtin("swarog".to_string()),
+                verification_binding: GoalRoleBinding::Subagent("android-verifier".to_string()),
+                ..Default::default()
+            }],
+            latest_resume_decision: Some(GoalResumeDecision {
+                action: GoalResumeAction::Stop,
+                reason_code: "operator_stop".to_string(),
+                projection_state: GoalProjectionState::Completed,
+                ..Default::default()
+            }),
+            summary: Some("One unit completed and verified".to_string()),
+            ..Default::default()
+        }),
         total_prompt_tokens: 123,
         total_completion_tokens: 456,
         estimated_cost_usd: Some(0.42),
@@ -405,6 +482,24 @@ async fn goal_run_extended_metadata_round_trips() -> Result<()> {
     );
     assert_eq!(loaded.active_task_id.as_deref(), Some("task-2"));
     assert_eq!(loaded.duration_ms, Some(888));
+    assert_eq!(
+        loaded.stopped_reason.as_deref(),
+        Some("operator requested stop")
+    );
+    let dossier = loaded.dossier.expect("dossier should round-trip");
+    assert_eq!(dossier.units.len(), 1);
+    assert_eq!(dossier.units[0].id, "unit-1");
+    assert_eq!(
+        dossier.units[0].verification_binding,
+        GoalRoleBinding::Subagent("android-verifier".to_string())
+    );
+    assert_eq!(
+        dossier
+            .latest_resume_decision
+            .expect("resume decision should round-trip")
+            .reason_code,
+        "operator_stop"
+    );
     assert_eq!(loaded.total_prompt_tokens, 123);
     assert_eq!(loaded.total_completion_tokens, 456);
     assert_eq!(loaded.estimated_cost_usd, Some(0.42));
@@ -415,6 +510,50 @@ async fn goal_run_extended_metadata_round_trips() -> Result<()> {
     assert_eq!(
         loaded.authorship_tag,
         Some(crate::agent::AuthorshipTag::Joint)
+    );
+    assert_eq!(
+        loaded.planner_owner_profile,
+        Some(GoalRuntimeOwnerProfile {
+            agent_label: "Swarog".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+            reasoning_effort: Some("high".to_string()),
+        })
+    );
+    assert_eq!(
+        loaded.current_step_owner_profile,
+        Some(GoalRuntimeOwnerProfile {
+            agent_label: "Android Verifier".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            reasoning_effort: None,
+        })
+    );
+    assert_eq!(
+        loaded.launch_assignment_snapshot,
+        vec![
+            sample_assignment("planner", "openai", "gpt-5.4", Some("high")),
+            sample_assignment("executor", "anthropic", "claude-sonnet-4", None),
+        ]
+    );
+    assert_eq!(
+        loaded.runtime_assignment_list,
+        vec![sample_assignment(
+            "executor",
+            "anthropic",
+            "claude-sonnet-4",
+            None,
+        )]
+    );
+    assert_eq!(loaded.root_thread_id.as_deref(), Some("thread-root"));
+    assert_eq!(loaded.active_thread_id.as_deref(), Some("thread-active"));
+    assert_eq!(
+        loaded.execution_thread_ids,
+        vec![
+            "thread-root".to_string(),
+            "thread-active".to_string(),
+            "thread-followup".to_string(),
+        ]
     );
 
     fs::remove_dir_all(root)?;
@@ -456,6 +595,56 @@ async fn init_schema_migrates_legacy_goal_runs_metadata_columns() -> Result<()> 
             CREATE INDEX IF NOT EXISTS idx_goal_runs_status ON goal_runs(status, updated_at DESC);
             ",
             )?;
+            conn.execute(
+                "INSERT INTO goal_runs (
+                    id,
+                    title,
+                    goal,
+                    client_request_id,
+                    status,
+                    priority,
+                    created_at,
+                    updated_at,
+                    started_at,
+                    completed_at,
+                    thread_id,
+                    session_id,
+                    current_step_index,
+                    replan_count,
+                    max_replans,
+                    plan_summary,
+                    reflection_summary,
+                    memory_updates_json,
+                    generated_skill_path,
+                    last_error,
+                    child_task_ids_json
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
+                )",
+                rusqlite::params![
+                    "goal-legacy",
+                    "legacy title",
+                    "legacy goal",
+                    Option::<String>::None,
+                    "running",
+                    "normal",
+                    10_i64,
+                    20_i64,
+                    Option::<i64>::None,
+                    Option::<i64>::None,
+                    Some("thread-legacy"),
+                    Option::<String>::None,
+                    0_i64,
+                    0_i64,
+                    2_i64,
+                    Option::<String>::None,
+                    Option::<String>::None,
+                    "[]",
+                    Option::<String>::None,
+                    Option::<String>::None,
+                    "[]",
+                ],
+            )?;
             Ok(())
         })
         .await
@@ -468,6 +657,7 @@ async fn init_schema_migrates_legacy_goal_runs_metadata_columns() -> Result<()> 
         .call(|conn| {
             Ok((
                 table_has_column(conn, "goal_runs", "failure_cause")?,
+                table_has_column(conn, "goal_runs", "stopped_reason")?,
                 table_has_column(conn, "goal_runs", "child_task_count")?,
                 table_has_column(conn, "goal_runs", "approval_count")?,
                 table_has_column(conn, "goal_runs", "awaiting_approval_id")?,
@@ -478,11 +668,19 @@ async fn init_schema_migrates_legacy_goal_runs_metadata_columns() -> Result<()> 
                 table_has_column(conn, "goal_runs", "compensation_summary")?,
                 table_has_column(conn, "goal_runs", "active_task_id")?,
                 table_has_column(conn, "goal_runs", "duration_ms")?,
+                table_has_column(conn, "goal_runs", "dossier_json")?,
                 table_has_column(conn, "goal_runs", "total_prompt_tokens")?,
                 table_has_column(conn, "goal_runs", "total_completion_tokens")?,
                 table_has_column(conn, "goal_runs", "estimated_cost_usd")?,
                 table_has_column(conn, "goal_runs", "autonomy_level")?,
                 table_has_column(conn, "goal_runs", "authorship_tag")?,
+                table_has_column(conn, "goal_runs", "planner_owner_profile_json")?,
+                table_has_column(conn, "goal_runs", "current_step_owner_profile_json")?,
+                table_has_column(conn, "goal_runs", "launch_assignment_snapshot_json")?,
+                table_has_column(conn, "goal_runs", "runtime_assignment_list_json")?,
+                table_has_column(conn, "goal_runs", "root_thread_id")?,
+                table_has_column(conn, "goal_runs", "active_thread_id")?,
+                table_has_column(conn, "goal_runs", "execution_thread_ids_json")?,
             ))
         })
         .await
@@ -504,6 +702,31 @@ async fn init_schema_migrates_legacy_goal_runs_metadata_columns() -> Result<()> 
     assert!(cols.13);
     assert!(cols.14);
     assert!(cols.15);
+    assert!(cols.16);
+    assert!(cols.17);
+    assert!(cols.18);
+    assert!(cols.19);
+    assert!(cols.20);
+    assert!(cols.21);
+    assert!(cols.22);
+    assert!(cols.23);
+    assert!(cols.24);
+
+    let legacy_goal = store
+        .list_goal_runs()
+        .await?
+        .into_iter()
+        .find(|goal_run| goal_run.id == "goal-legacy")
+        .expect("legacy goal should remain readable after migration");
+    assert_eq!(legacy_goal.root_thread_id.as_deref(), Some("thread-legacy"));
+    assert_eq!(
+        legacy_goal.active_thread_id.as_deref(),
+        Some("thread-legacy")
+    );
+    assert_eq!(
+        legacy_goal.execution_thread_ids,
+        vec!["thread-legacy".to_string()]
+    );
 
     fs::remove_dir_all(root)?;
     Ok(())

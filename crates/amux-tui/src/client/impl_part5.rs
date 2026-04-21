@@ -166,11 +166,16 @@ impl DaemonClient {
         })
     }
 
-    pub fn control_goal_run(&self, goal_run_id: String, action: String) -> Result<()> {
+    pub fn control_goal_run(
+        &self,
+        goal_run_id: String,
+        action: String,
+        step_index: Option<usize>,
+    ) -> Result<()> {
         self.send(ClientMessage::AgentControlGoalRun {
             goal_run_id,
             action,
-            step_index: None,
+            step_index,
         })
     }
 
@@ -183,11 +188,13 @@ impl DaemonClient {
         provider_id: String,
         base_url: String,
         api_key: String,
+        output_modalities: Option<String>,
     ) -> Result<()> {
         self.send(ClientMessage::AgentFetchModels {
             provider_id,
             base_url,
             api_key,
+            output_modalities,
         })
     }
 
@@ -390,6 +397,10 @@ impl DaemonClient {
 
     pub fn text_to_speech(&self, args_json: String) -> Result<()> {
         self.send(ClientMessage::AgentTextToSpeech { args_json })
+    }
+
+    pub fn generate_image(&self, args_json: String) -> Result<()> {
+        self.send(ClientMessage::AgentGenerateImage { args_json })
     }
 
     pub fn set_operator_profile_consent(&self, consent_key: String, granted: bool) -> Result<()> {

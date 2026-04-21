@@ -31,18 +31,56 @@ impl TuiModel {
         self.work_context_drag_current_point = None;
     }
 
+    pub(in super::super) fn clear_task_view_drag_selection(&mut self) {
+        self.task_view_drag_anchor = None;
+        self.task_view_drag_current = None;
+        self.task_view_drag_anchor_point = None;
+        self.task_view_drag_current_point = None;
+    }
+
     pub(in crate::app) fn current_detail_view_max_scroll(&self) -> usize {
         let area = self.pane_layout().chat;
         match &self.main_pane_view {
-            MainPaneView::Task(target) => widgets::task_view::max_scroll(
-                area,
-                &self.tasks,
-                target,
-                &self.theme,
-                self.task_show_live_todos,
-                self.task_show_timeline,
-                self.task_show_files,
-            ),
+            MainPaneView::Task(target) => match target {
+                sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. } => {
+                    match self.goal_workspace.focused_pane() {
+                        crate::state::goal_workspace::GoalWorkspacePane::Plan
+                        | crate::state::goal_workspace::GoalWorkspacePane::CommandBar => {
+                            widgets::goal_workspace::max_plan_scroll(
+                                area,
+                                &self.tasks,
+                                goal_run_id,
+                                &self.goal_workspace,
+                            )
+                        }
+                        crate::state::goal_workspace::GoalWorkspacePane::Timeline => {
+                            widgets::goal_workspace::max_timeline_scroll(
+                                area,
+                                &self.tasks,
+                                goal_run_id,
+                                &self.goal_workspace,
+                            )
+                        }
+                        crate::state::goal_workspace::GoalWorkspacePane::Details => {
+                            widgets::goal_workspace::max_detail_scroll(
+                                area,
+                                &self.tasks,
+                                goal_run_id,
+                                &self.goal_workspace,
+                            )
+                        }
+                    }
+                }
+                _ => widgets::task_view::max_scroll(
+                    area,
+                    &self.tasks,
+                    target,
+                    &self.theme,
+                    self.task_show_live_todos,
+                    self.task_show_timeline,
+                    self.task_show_files,
+                ),
+            },
             MainPaneView::WorkContext => widgets::work_context_view::max_scroll(
                 area,
                 &self.tasks,
@@ -59,29 +97,204 @@ impl TuiModel {
     }
 
     pub(in super::super) fn clamp_detail_view_scroll(&mut self) {
-        self.task_view_scroll = self
-            .task_view_scroll
-            .min(self.current_detail_view_max_scroll());
+        let max_scroll = self.current_detail_view_max_scroll();
+        if matches!(
+            self.main_pane_view,
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+        ) {
+            match self.goal_workspace.focused_pane() {
+                crate::state::goal_workspace::GoalWorkspacePane::Plan
+                | crate::state::goal_workspace::GoalWorkspacePane::CommandBar => self
+                    .goal_workspace
+                    .set_plan_scroll(self.goal_workspace.plan_scroll().min(max_scroll)),
+                crate::state::goal_workspace::GoalWorkspacePane::Timeline => self
+                    .goal_workspace
+                    .set_timeline_scroll(self.goal_workspace.timeline_scroll().min(max_scroll)),
+                crate::state::goal_workspace::GoalWorkspacePane::Details => self
+                    .goal_workspace
+                    .set_detail_scroll(self.goal_workspace.detail_scroll().min(max_scroll)),
+            }
+        } else {
+            self.task_view_scroll = self.task_view_scroll.min(max_scroll);
+        }
     }
 
     pub(in super::super) fn step_detail_view_scroll(&mut self, delta: i32) {
         let max_scroll = self.current_detail_view_max_scroll();
-        if delta >= 0 {
-            self.task_view_scroll = self
-                .task_view_scroll
-                .saturating_add(delta as usize)
-                .min(max_scroll);
+        if matches!(
+            self.main_pane_view,
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+        ) {
+            match self.goal_workspace.focused_pane() {
+                crate::state::goal_workspace::GoalWorkspacePane::Plan
+                | crate::state::goal_workspace::GoalWorkspacePane::CommandBar => {
+                    let next = if delta >= 0 {
+                        self.goal_workspace
+                            .plan_scroll()
+                            .saturating_add(delta as usize)
+                            .min(max_scroll)
+                    } else {
+                        self.goal_workspace
+                            .plan_scroll()
+                            .saturating_sub((-delta) as usize)
+                    };
+                    self.goal_workspace.set_plan_scroll(next);
+                }
+                crate::state::goal_workspace::GoalWorkspacePane::Timeline => {
+                    let next = if delta >= 0 {
+                        self.goal_workspace
+                            .timeline_scroll()
+                            .saturating_add(delta as usize)
+                            .min(max_scroll)
+                    } else {
+                        self.goal_workspace
+                            .timeline_scroll()
+                            .saturating_sub((-delta) as usize)
+                    };
+                    self.goal_workspace.set_timeline_scroll(next);
+                }
+                crate::state::goal_workspace::GoalWorkspacePane::Details => {
+                    let next = if delta >= 0 {
+                        self.goal_workspace
+                            .detail_scroll()
+                            .saturating_add(delta as usize)
+                            .min(max_scroll)
+                    } else {
+                        self.goal_workspace
+                            .detail_scroll()
+                            .saturating_sub((-delta) as usize)
+                    };
+                    self.goal_workspace.set_detail_scroll(next);
+                }
+            }
         } else {
-            self.task_view_scroll = self.task_view_scroll.saturating_sub((-delta) as usize);
+            if delta >= 0 {
+                self.task_view_scroll = self
+                    .task_view_scroll
+                    .saturating_add(delta as usize)
+                    .min(max_scroll);
+            } else {
+                self.task_view_scroll = self.task_view_scroll.saturating_sub((-delta) as usize);
+            }
         }
     }
 
     pub(in super::super) fn scroll_detail_view_to_top(&mut self) {
-        self.task_view_scroll = 0;
+        if matches!(
+            self.main_pane_view,
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+        ) {
+            match self.goal_workspace.focused_pane() {
+                crate::state::goal_workspace::GoalWorkspacePane::Plan
+                | crate::state::goal_workspace::GoalWorkspacePane::CommandBar => {
+                    self.goal_workspace.set_plan_scroll(0)
+                }
+                crate::state::goal_workspace::GoalWorkspacePane::Timeline => {
+                    self.goal_workspace.set_timeline_scroll(0)
+                }
+                crate::state::goal_workspace::GoalWorkspacePane::Details => {
+                    self.goal_workspace.set_detail_scroll(0)
+                }
+            }
+        } else {
+            self.task_view_scroll = 0;
+        }
     }
 
     pub(in super::super) fn scroll_detail_view_to_bottom(&mut self) {
-        self.task_view_scroll = self.current_detail_view_max_scroll();
+        let max_scroll = self.current_detail_view_max_scroll();
+        if matches!(
+            self.main_pane_view,
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+        ) {
+            match self.goal_workspace.focused_pane() {
+                crate::state::goal_workspace::GoalWorkspacePane::Plan
+                | crate::state::goal_workspace::GoalWorkspacePane::CommandBar => {
+                    self.goal_workspace.set_plan_scroll(max_scroll)
+                }
+                crate::state::goal_workspace::GoalWorkspacePane::Timeline => {
+                    self.goal_workspace.set_timeline_scroll(max_scroll)
+                }
+                crate::state::goal_workspace::GoalWorkspacePane::Details => {
+                    self.goal_workspace.set_detail_scroll(max_scroll)
+                }
+            }
+        } else {
+            self.task_view_scroll = max_scroll;
+        }
+    }
+
+    pub(in super::super) fn step_goal_workspace_pane_scroll(
+        &mut self,
+        pane: crate::state::goal_workspace::GoalWorkspacePane,
+        delta: i32,
+    ) {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return;
+        };
+        let area = self.pane_layout().chat;
+        match pane {
+            crate::state::goal_workspace::GoalWorkspacePane::Plan
+            | crate::state::goal_workspace::GoalWorkspacePane::CommandBar => {
+                let max_scroll = widgets::goal_workspace::max_plan_scroll(
+                    area,
+                    &self.tasks,
+                    goal_run_id,
+                    &self.goal_workspace,
+                );
+                let next = if delta >= 0 {
+                    self.goal_workspace
+                        .plan_scroll()
+                        .saturating_add(delta as usize)
+                        .min(max_scroll)
+                } else {
+                    self.goal_workspace
+                        .plan_scroll()
+                        .saturating_sub((-delta) as usize)
+                };
+                self.goal_workspace.set_plan_scroll(next);
+            }
+            crate::state::goal_workspace::GoalWorkspacePane::Timeline => {
+                let max_scroll = widgets::goal_workspace::max_timeline_scroll(
+                    area,
+                    &self.tasks,
+                    goal_run_id,
+                    &self.goal_workspace,
+                );
+                let next = if delta >= 0 {
+                    self.goal_workspace
+                        .timeline_scroll()
+                        .saturating_add(delta as usize)
+                        .min(max_scroll)
+                } else {
+                    self.goal_workspace
+                        .timeline_scroll()
+                        .saturating_sub((-delta) as usize)
+                };
+                self.goal_workspace.set_timeline_scroll(next);
+            }
+            crate::state::goal_workspace::GoalWorkspacePane::Details => {
+                let max_scroll = widgets::goal_workspace::max_detail_scroll(
+                    area,
+                    &self.tasks,
+                    goal_run_id,
+                    &self.goal_workspace,
+                );
+                let next = if delta >= 0 {
+                    self.goal_workspace
+                        .detail_scroll()
+                        .saturating_add(delta as usize)
+                        .min(max_scroll)
+                } else {
+                    self.goal_workspace
+                        .detail_scroll()
+                        .saturating_sub((-delta) as usize)
+                };
+                self.goal_workspace.set_detail_scroll(next);
+            }
+        }
     }
 
     fn byte_offset_for_display_col(text: &str, target_col: usize) -> usize {
@@ -153,6 +366,10 @@ impl TuiModel {
                 self.chat.select_message(Some(message_index));
                 self.open_chat_tool_file_preview(message_index);
             }
+            Some(chat::ChatHitTarget::MessageImage { message_index }) => {
+                self.chat.select_message(Some(message_index));
+                self.open_chat_message_image_preview(message_index);
+            }
             Some(chat::ChatHitTarget::RetryStartNow) => {
                 if let Some(thread_id) = self.chat.active_thread_id().map(str::to_string) {
                     self.retry_wait_start_selected = true;
@@ -210,6 +427,218 @@ impl TuiModel {
         }
     }
 
+    pub(super) fn handle_task_view_click(&mut self, chat_area: Rect, mouse: Position) {
+        let MainPaneView::Task(target) = &self.main_pane_view else {
+            return;
+        };
+        if let sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. } = target {
+            if let Some(pane) = widgets::goal_workspace::pane_at(chat_area, mouse) {
+                self.goal_workspace.set_focused_pane(pane);
+                self.focus = FocusArea::Chat;
+            }
+            let Some(hit) = widgets::goal_workspace::hit_test(
+                chat_area,
+                &self.tasks,
+                goal_run_id,
+                &self.goal_workspace,
+                mouse,
+            ) else {
+                return;
+            };
+            match hit {
+                widgets::goal_workspace::GoalWorkspaceHitTarget::ModeTab(mode) => {
+                    let _ = self.set_goal_workspace_mode(mode);
+                }
+                widgets::goal_workspace::GoalWorkspaceHitTarget::PlanPromptToggle => {
+                    let _ = self.select_goal_workspace_plan_item(
+                        crate::state::goal_workspace::GoalPlanSelection::PromptToggle,
+                    );
+                    let _ = self.activate_goal_workspace_plan_target();
+                }
+                widgets::goal_workspace::GoalWorkspaceHitTarget::PlanMainThread(thread_id) => {
+                    let _ = self.select_goal_workspace_plan_item(
+                        crate::state::goal_workspace::GoalPlanSelection::MainThread {
+                            thread_id: thread_id.clone(),
+                        },
+                    );
+                    let _ = self.activate_goal_workspace_plan_target();
+                }
+                widgets::goal_workspace::GoalWorkspaceHitTarget::PlanStep(step_id) => {
+                    let _ = self.select_goal_workspace_plan_item(
+                        crate::state::goal_workspace::GoalPlanSelection::Step { step_id },
+                    );
+                }
+                widgets::goal_workspace::GoalWorkspaceHitTarget::PlanTodo { step_id, todo_id } => {
+                    let _ = self.select_goal_workspace_plan_item(
+                        crate::state::goal_workspace::GoalPlanSelection::Todo { step_id, todo_id },
+                    );
+                }
+                widgets::goal_workspace::GoalWorkspaceHitTarget::TimelineRow(row) => {
+                    self.goal_workspace.set_selected_timeline_row(row);
+                }
+                widgets::goal_workspace::GoalWorkspaceHitTarget::ThreadRow(thread_id) => {
+                    if let Some((row, _)) = widgets::goal_workspace::timeline_targets(
+                        &self.tasks,
+                        goal_run_id,
+                        &self.goal_workspace,
+                    )
+                    .into_iter()
+                    .find(|(_, target)| {
+                        *target
+                            == widgets::goal_workspace::GoalWorkspaceHitTarget::ThreadRow(
+                                thread_id.clone(),
+                            )
+                    }) {
+                        self.goal_workspace.set_selected_timeline_row(row);
+                    }
+                    let _ = self.activate_goal_workspace_timeline_target();
+                }
+                widgets::goal_workspace::GoalWorkspaceHitTarget::DetailFile(path) => {
+                    if let Some(row) = widgets::goal_workspace::detail_row_for_target(
+                        &self.tasks,
+                        goal_run_id,
+                        &self.goal_workspace,
+                        &widgets::goal_workspace::GoalWorkspaceHitTarget::DetailFile(
+                            path.clone(),
+                        ),
+                    ) {
+                        self.goal_workspace.set_selected_detail_row(row);
+                    }
+                    let _ = self.activate_goal_workspace_detail_target();
+                }
+                widgets::goal_workspace::GoalWorkspaceHitTarget::DetailCheckpoint(id) => {
+                    let target_row = widgets::goal_workspace::detail_row_for_target(
+                        &self.tasks,
+                        goal_run_id,
+                        &self.goal_workspace,
+                        &widgets::goal_workspace::GoalWorkspaceHitTarget::DetailCheckpoint(id),
+                    );
+                    if let Some(row) = target_row {
+                        self.goal_workspace.set_selected_detail_row(row);
+                    }
+                }
+                widgets::goal_workspace::GoalWorkspaceHitTarget::DetailTask(task_id) => {
+                    if let Some(row) = widgets::goal_workspace::detail_row_for_target(
+                        &self.tasks,
+                        goal_run_id,
+                        &self.goal_workspace,
+                        &widgets::goal_workspace::GoalWorkspaceHitTarget::DetailTask(task_id),
+                    ) {
+                        self.goal_workspace.set_selected_detail_row(row);
+                    }
+                    let _ = self.activate_goal_workspace_detail_target();
+                }
+                widgets::goal_workspace::GoalWorkspaceHitTarget::DetailThread(thread_id) => {
+                    if let Some(row) = widgets::goal_workspace::detail_row_for_target(
+                        &self.tasks,
+                        goal_run_id,
+                        &self.goal_workspace,
+                        &widgets::goal_workspace::GoalWorkspaceHitTarget::DetailThread(thread_id),
+                    ) {
+                        self.goal_workspace.set_selected_detail_row(row);
+                    }
+                    let _ = self.activate_goal_workspace_detail_target();
+                }
+                widgets::goal_workspace::GoalWorkspaceHitTarget::DetailAction(action) => {
+                    if let Some(row) = widgets::goal_workspace::detail_row_for_target(
+                        &self.tasks,
+                        goal_run_id,
+                        &self.goal_workspace,
+                        &widgets::goal_workspace::GoalWorkspaceHitTarget::DetailAction(action),
+                    ) {
+                        self.goal_workspace.set_selected_detail_row(row);
+                    }
+                    let _ = self.activate_goal_workspace_detail_target();
+                }
+                widgets::goal_workspace::GoalWorkspaceHitTarget::FooterAction(action) => {
+                    let _ = self.activate_goal_workspace_action(action);
+                }
+                widgets::goal_workspace::GoalWorkspaceHitTarget::DetailTimelineDetails(index) => {
+                    if let Some(row) = widgets::goal_workspace::detail_row_for_target(
+                        &self.tasks,
+                        goal_run_id,
+                        &self.goal_workspace,
+                        &widgets::goal_workspace::GoalWorkspaceHitTarget::DetailTimelineDetails(
+                            index,
+                        ),
+                    ) {
+                        self.goal_workspace.set_selected_detail_row(row);
+                    }
+                    let _ = self.activate_goal_workspace_detail_target();
+                }
+            }
+            return;
+        }
+
+        let Some(hit) = widgets::task_view::hit_test(
+            chat_area,
+            &self.tasks,
+            target,
+            &self.theme,
+            self.task_view_scroll,
+            self.task_show_live_todos,
+            self.task_show_timeline,
+            self.task_show_files,
+            mouse,
+        ) else {
+            return;
+        };
+        match hit {
+            widgets::task_view::TaskViewHitTarget::BackToGoal => {
+                let sidebar::SidebarItemTarget::Task { task_id } = target else {
+                    return;
+                };
+                let Some(parent_target) = self.parent_goal_target_for_task(task_id) else {
+                    return;
+                };
+                self.open_sidebar_target(parent_target);
+                self.focus = FocusArea::Chat;
+            }
+            widgets::task_view::TaskViewHitTarget::GoalStep(step_id) => {
+                let _ = self.select_goal_step_in_active_run(step_id);
+            }
+            widgets::task_view::TaskViewHitTarget::WorkPath(path) => {
+                let Some(thread_id) = self.target_thread_id(target) else {
+                    return;
+                };
+                self.tasks.reduce(task::TaskAction::SelectWorkPath {
+                    thread_id: thread_id.clone(),
+                    path: Some(path),
+                });
+                self.request_preview_for_selected_path(&thread_id);
+            }
+            widgets::task_view::TaskViewHitTarget::ClosePreview => {
+                let Some(thread_id) = self.target_thread_id(target) else {
+                    return;
+                };
+                self.tasks.reduce(task::TaskAction::SelectWorkPath {
+                    thread_id,
+                    path: None,
+                });
+            }
+        }
+    }
+
+    pub(in super::super) fn goal_sidebar_hit_test(
+        &self,
+        sidebar_area: Rect,
+        mouse: MouseEvent,
+    ) -> Option<widgets::goal_sidebar::GoalSidebarHitTarget> {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return None;
+        };
+
+        widgets::goal_sidebar::hit_test(
+            sidebar_area,
+            &self.tasks,
+            goal_run_id,
+            &self.goal_sidebar,
+            Position::new(mouse.column, mouse.row),
+        )
+    }
+
     pub(super) fn modal_navigate_to(&mut self, target: usize) {
         let current = self.modal.picker_cursor();
         self.modal
@@ -243,6 +672,7 @@ impl TuiModel {
                 | modal::ModalKind::QueuedPrompts
                 | modal::ModalKind::ProviderPicker
                 | modal::ModalKind::ModelPicker
+                | modal::ModalKind::RolePicker
                 | modal::ModalKind::OpenAIAuth
                 | modal::ModalKind::EffortPicker => {
                     self.modal.reduce(modal::ModalAction::Navigate(-1));
@@ -285,6 +715,7 @@ impl TuiModel {
                 | modal::ModalKind::QueuedPrompts
                 | modal::ModalKind::ProviderPicker
                 | modal::ModalKind::ModelPicker
+                | modal::ModalKind::RolePicker
                 | modal::ModalKind::OpenAIAuth
                 | modal::ModalKind::EffortPicker => {
                     self.modal.reduce(modal::ModalAction::Navigate(1));
@@ -330,6 +761,7 @@ impl TuiModel {
                         | modal::ModalKind::QueuedPrompts
                         | modal::ModalKind::ProviderPicker
                         | modal::ModalKind::ModelPicker
+                        | modal::ModalKind::RolePicker
                         | modal::ModalKind::OpenAIAuth
                         | modal::ModalKind::ErrorViewer
                         | modal::ModalKind::Notifications
@@ -639,6 +1071,7 @@ impl TuiModel {
                         overlay_area,
                         &self.chat,
                         &self.modal,
+                        &self.subagents,
                         Position::new(mouse.column, mouse.row),
                     ) {
                         Some(widgets::thread_picker::ThreadPickerHitTarget::Tab(tab)) => {
@@ -748,6 +1181,21 @@ impl TuiModel {
                     {
                         let idx = mouse.row.saturating_sub(inner.y) as usize;
                         if idx <= self.available_model_picker_models().len() {
+                            self.modal_navigate_to(idx);
+                            self.handle_modal_enter(kind);
+                        }
+                    }
+                }
+                modal::ModalKind::RolePicker => {
+                    let inner = Block::default()
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Double)
+                        .inner(overlay_area);
+                    if mouse.row >= inner.y
+                        && mouse.row < inner.y.saturating_add(inner.height.saturating_sub(1))
+                    {
+                        let idx = mouse.row.saturating_sub(inner.y) as usize;
+                        if idx <= crate::state::subagents::SUBAGENT_ROLE_PRESETS.len() {
                             self.modal_navigate_to(idx);
                             self.handle_modal_enter(kind);
                         }

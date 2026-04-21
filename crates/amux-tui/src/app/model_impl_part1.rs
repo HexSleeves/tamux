@@ -8,6 +8,11 @@ impl TuiModel {
             input: input::InputState::new(),
             modal: modal::ModalState::new(),
             sidebar: sidebar::SidebarState::new(),
+            goal_sidebar: goal_sidebar::GoalSidebarState::new(),
+            goal_mission_control: goal_mission_control::GoalMissionControlState::new(),
+            goal_workspace: goal_workspace::GoalWorkspaceState::new(),
+            mission_control_navigation: MissionControlNavigationState::default(),
+            goal_sidebar_selection_anchor: None,
             tasks: task::TaskState::new(),
             config: config::ConfigState::new(),
             approval: approval::ApprovalState::new(),
@@ -34,6 +39,7 @@ impl TuiModel {
             tick_counter: 0,
             agent_activity: None,
             thread_agent_activity: std::collections::HashMap::new(),
+            bootstrap_pending_activity_threads: std::collections::HashSet::new(),
             participant_playground_activity: std::collections::HashMap::new(),
             last_error: None,
             error_active: false,
@@ -75,6 +81,8 @@ impl TuiModel {
             pending_new_thread_target_agent: None,
             pending_builtin_persona_setup: None,
             thread_loading_id: None,
+            pending_reconnect_restore: None,
+            pending_goal_hydration_refreshes: std::collections::HashSet::new(),
             ignore_pending_concierge_welcome: false,
             gateway_statuses: Vec::new(),
             weles_health: None,
@@ -109,6 +117,10 @@ impl TuiModel {
             work_context_drag_current: None,
             work_context_drag_anchor_point: None,
             work_context_drag_current_point: None,
+            task_view_drag_anchor: None,
+            task_view_drag_current: None,
+            task_view_drag_anchor_point: None,
+            task_view_drag_current_point: None,
         }
     }
 
@@ -903,6 +915,25 @@ impl TuiModel {
         self.set_agent_activity_for(self.chat.active_thread_id().map(str::to_string), activity);
     }
 
+    fn mark_bootstrap_pending_activity_thread(&mut self, thread_id: impl Into<String>) {
+        self.bootstrap_pending_activity_threads
+            .insert(thread_id.into());
+    }
+
+    fn clear_bootstrap_pending_activity_thread(&mut self, thread_id: &str) {
+        self.bootstrap_pending_activity_threads.remove(thread_id);
+    }
+
+    fn should_preserve_bootstrap_activity_on_reload(&self, thread_id: &str) -> bool {
+        self.bootstrap_pending_activity_threads.contains(thread_id)
+            && self
+                .thread_agent_activity
+                .get(thread_id)
+                .map(String::as_str)
+                == Some("thinking")
+            && !self.chat.is_streaming()
+    }
+
     fn clear_agent_activity_for(&mut self, thread_id: Option<&str>) {
         if let Some(thread_id) = thread_id {
             self.thread_agent_activity.remove(thread_id);
@@ -971,8 +1002,17 @@ impl TuiModel {
         self.concierge.loading || !self.chat.active_actions().is_empty()
     }
 
+    fn should_show_daemon_connection_loading(&self) -> bool {
+        (!self.connected || !self.agent_config_loaded)
+            && matches!(self.main_pane_view, MainPaneView::Conversation)
+            && !self.should_show_operator_profile_onboarding()
+            && !self.should_show_provider_onboarding()
+    }
+
     fn should_show_local_landing(&self) -> bool {
-        matches!(self.main_pane_view, MainPaneView::Conversation)
+        self.connected
+            && self.agent_config_loaded
+            && matches!(self.main_pane_view, MainPaneView::Conversation)
             && self.chat.active_thread().is_none()
             && !self.chat.is_streaming()
             && !self.concierge.loading
@@ -1247,6 +1287,7 @@ impl TuiModel {
             self.input.reduce(input::InputAction::InsertChar(ch));
         }
         self.input.set_mode(input::InputMode::Insert);
+        self.sync_goal_mission_control_prompt_from_input();
     }
 
     fn close_top_modal(&mut self) {

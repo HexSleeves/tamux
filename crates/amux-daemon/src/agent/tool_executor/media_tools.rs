@@ -15,6 +15,14 @@ const OPENROUTER_ATTRIBUTION_URL: &str = "https://tamux.app";
 const OPENROUTER_ATTRIBUTION_TITLE: &str = "tamux";
 const OPENROUTER_ATTRIBUTION_CATEGORIES: &str = "cli-agent";
 
+fn media_tool_timeout(tool_name: &str, args: &serde_json::Value) -> std::time::Duration {
+    std::time::Duration::from_secs(daemon_tool_timeout_seconds(tool_name, args))
+}
+
+fn fresh_media_http_client(tool_name: &str, args: &serde_json::Value) -> reqwest::Client {
+    crate::agent::build_fresh_agent_http_client(media_tool_timeout(tool_name, args))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MediaKind {
     Image,
@@ -28,6 +36,12 @@ enum AudioToolRoute {
     OpenRouterTts,
     XaiStt,
     XaiTts,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageGenerationRoute {
+    OpenAiCompatibleDirect,
+    OpenRouterChatCompletions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +64,46 @@ enum MediaInputSource {
         base64_data: String,
         data_url: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MediaEndpoint {
+    ImageGeneration,
+    SpeechToText,
+    TextToSpeech,
+}
+
+impl MediaEndpoint {
+    fn default_model(self) -> &'static str {
+        match self {
+            Self::ImageGeneration => DEFAULT_IMAGE_GENERATION_MODEL,
+            Self::SpeechToText => DEFAULT_STT_MODEL,
+            Self::TextToSpeech => DEFAULT_TTS_MODEL,
+        }
+    }
+
+    fn nested_root(self) -> &'static str {
+        match self {
+            Self::ImageGeneration => "image",
+            Self::SpeechToText | Self::TextToSpeech => "audio",
+        }
+    }
+
+    fn nested_group(self) -> &'static [&'static str] {
+        match self {
+            Self::ImageGeneration => &["generation"],
+            Self::SpeechToText => &["stt"],
+            Self::TextToSpeech => &["tts"],
+        }
+    }
+
+    fn legacy_prefix(self) -> &'static str {
+        match self {
+            Self::ImageGeneration => "image_generation",
+            Self::SpeechToText => "audio_stt",
+            Self::TextToSpeech => "audio_tts",
+        }
+    }
 }
 
 fn media_input_source_arg_count(args: &serde_json::Value) -> usize {
@@ -117,6 +171,155 @@ fn file_extension_for_generated_mime(mime_type: &str, fallback: &str) -> String 
         _ => fallback,
     }
     .to_string()
+}
+
+fn image_generation_route(provider_id: &str) -> ImageGenerationRoute {
+    if provider_id == amux_shared::providers::PROVIDER_ID_OPENROUTER {
+        ImageGenerationRoute::OpenRouterChatCompletions
+    } else {
+        ImageGenerationRoute::OpenAiCompatibleDirect
+    }
+}
+
+fn openrouter_image_generation_modalities(model: &str) -> &'static [&'static str] {
+    let normalized = model.trim().to_ascii_lowercase();
+    let image_only = [
+        "flux",
+        "sourceful",
+        "recraft",
+        "stable-diffusion",
+        "sdxl",
+        "imagen",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle));
+
+    if image_only {
+        &["image"]
+    } else {
+        &["image", "text"]
+    }
+}
+
+fn openrouter_image_aspect_ratio(size: &str) -> Option<&'static str> {
+    match size.trim() {
+        "1024x1024" | "512x512" | "2048x2048" | "4096x4096" => Some("1:1"),
+        "832x1248" => Some("2:3"),
+        "1248x832" => Some("3:2"),
+        "864x1184" => Some("3:4"),
+        "1184x864" => Some("4:3"),
+        "896x1152" => Some("4:5"),
+        "1152x896" => Some("5:4"),
+        "768x1344" => Some("9:16"),
+        "1344x768" => Some("16:9"),
+        "1536x672" => Some("21:9"),
+        _ => None,
+    }
+}
+
+fn openrouter_image_size_bucket(size: &str) -> Option<&'static str> {
+    let (width, height) = size.trim().split_once('x')?;
+    let width: u32 = width.parse().ok()?;
+    let height: u32 = height.parse().ok()?;
+    let max_dimension = width.max(height);
+    if max_dimension <= 512 {
+        Some("0.5K")
+    } else if max_dimension <= 1536 {
+        Some("1K")
+    } else if max_dimension <= 3072 {
+        Some("2K")
+    } else {
+        Some("4K")
+    }
+}
+
+fn build_openrouter_image_generation_body(
+    args: &serde_json::Value,
+    provider_config: &crate::agent::types::ProviderConfig,
+    prompt: &str,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "model": provider_config.model,
+        "messages": [{
+            "role": "user",
+            "content": prompt,
+        }],
+        "modalities": openrouter_image_generation_modalities(&provider_config.model),
+        "stream": false,
+    });
+
+    let mut image_config = serde_json::Map::new();
+    if let Some(size) = args
+        .get("size")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(aspect_ratio) = openrouter_image_aspect_ratio(size) {
+            image_config.insert(
+                "aspect_ratio".to_string(),
+                serde_json::Value::String(aspect_ratio.to_string()),
+            );
+        }
+        if let Some(image_size) = openrouter_image_size_bucket(size) {
+            image_config.insert(
+                "image_size".to_string(),
+                serde_json::Value::String(image_size.to_string()),
+            );
+        }
+    }
+
+    if !image_config.is_empty() {
+        body["image_config"] = serde_json::Value::Object(image_config);
+    }
+
+    body
+}
+
+fn extract_openrouter_generated_image(payload: &serde_json::Value) -> Result<String> {
+    let first = payload
+        .get("choices")
+        .and_then(|value| value.as_array())
+        .and_then(|items| items.first())
+        .and_then(|value| value.get("message"))
+        .and_then(|value| value.get("images"))
+        .and_then(|value| value.as_array())
+        .and_then(|items| items.first())
+        .ok_or_else(|| anyhow::anyhow!("image generation returned no image payload"))?;
+
+    let image_value = first
+        .get("image_url")
+        .or_else(|| first.get("imageUrl"))
+        .ok_or_else(|| anyhow::anyhow!("image generation returned no image URL"))?;
+
+    image_value
+        .get("url")
+        .and_then(|value| value.as_str())
+        .or_else(|| image_value.as_str())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("image generation returned no image URL"))
+}
+
+fn generated_image_response_from_data_url(
+    provider_id: &str,
+    provider_config: &crate::agent::types::ProviderConfig,
+    data_url: &str,
+) -> Result<String> {
+    let (mime_type, base64_data) = parse_data_url(data_url)?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_data)
+        .map_err(|error| anyhow::anyhow!("invalid image base64 payload: {error}"))?;
+    let extension = file_extension_for_generated_mime(&mime_type, DEFAULT_IMAGE_OUTPUT_FORMAT);
+    let output_path = temp_output_path("image", &extension);
+    std::fs::write(&output_path, &bytes)?;
+    serde_json::to_string_pretty(&serde_json::json!({
+        "provider": provider_id,
+        "model": provider_config.model,
+        "path": output_path,
+        "mime_type": mime_type,
+        "bytes": bytes.len(),
+    }))
+    .map_err(Into::into)
 }
 
 fn data_url_from_base64(mime_type: &str, base64_data: &str) -> String {
@@ -276,12 +479,13 @@ fn select_media_provider_config(
 
 fn media_setting_string(
     config: &AgentConfig,
+    nested_root: &str,
     nested_path: &[&str],
     legacy_flat_key: &str,
 ) -> Option<String> {
     config
         .extra
-        .get("audio")
+        .get(nested_root)
         .and_then(|value| {
             nested_path
                 .iter()
@@ -304,17 +508,34 @@ fn media_setting_string(
 
 fn media_persisted_provider_model(
     config: &AgentConfig,
-    endpoint: &str,
+    endpoint: MediaEndpoint,
 ) -> (Option<String>, Option<String>) {
-    let provider = media_setting_string(config, &[endpoint, "provider"], &format!("audio_{endpoint}_provider"));
-    let model = media_setting_string(config, &[endpoint, "model"], &format!("audio_{endpoint}_model"));
+    let nested_root = endpoint.nested_root();
+    let nested_group = endpoint.nested_group();
+    let legacy_prefix = endpoint.legacy_prefix();
+    let mut provider_path = nested_group.to_vec();
+    provider_path.push("provider");
+    let mut model_path = nested_group.to_vec();
+    model_path.push("model");
+    let provider = media_setting_string(
+        config,
+        nested_root,
+        &provider_path,
+        &format!("{legacy_prefix}_provider"),
+    );
+    let model = media_setting_string(
+        config,
+        nested_root,
+        &model_path,
+        &format!("{legacy_prefix}_model"),
+    );
     (provider, model)
 }
 
 async fn resolve_media_provider_config(
     agent: &AgentEngine,
     args: &serde_json::Value,
-    default_model: Option<&str>,
+    endpoint: Option<MediaEndpoint>,
 ) -> Result<(String, crate::agent::types::ProviderConfig)> {
     let config = agent.get_config().await;
     let explicit_provider = args
@@ -327,16 +548,12 @@ async fn resolve_media_provider_config(
         .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let endpoint = match default_model {
-        Some(model) if model == DEFAULT_STT_MODEL => Some("stt"),
-        Some(model) if model == DEFAULT_TTS_MODEL => Some("tts"),
-        _ => None,
-    };
     let (persisted_provider, persisted_model) = endpoint
         .map(|endpoint| media_persisted_provider_model(&config, endpoint))
         .unwrap_or((None, None));
     let selected_provider = explicit_provider.or(persisted_provider.as_deref());
     let selected_model = explicit_model.or(persisted_model.as_deref());
+    let default_model = endpoint.map(MediaEndpoint::default_model);
 
     if let Some(provider_id) = selected_provider {
         let provider_config = agent.resolve_sub_agent_provider_config(&config, provider_id)?;
@@ -961,12 +1178,198 @@ fn temp_output_path(prefix: &str, extension: &str) -> PathBuf {
     ))
 }
 
+fn thread_media_output_path(
+    agent_data_dir: &Path,
+    thread_id: &str,
+    prefix: &str,
+    extension: &str,
+) -> PathBuf {
+    agent_data_dir
+        .join("thread-files")
+        .join(thread_id)
+        .join(format!(
+            "{prefix}-{}.{}",
+            now_millis(),
+            extension.trim_start_matches('.')
+        ))
+}
+
+fn file_url_for_path(path: &Path) -> String {
+    format!("file://{}", path.display())
+}
+
+async fn move_generated_media_file(source: &Path, destination: &Path) -> Result<()> {
+    if let Some(parent) = destination.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    match tokio::fs::rename(source, destination).await {
+        Ok(_) => Ok(()),
+        Err(_) => {
+            tokio::fs::copy(source, destination).await?;
+            tokio::fs::remove_file(source).await.ok();
+            Ok(())
+        }
+    }
+}
+
+async fn persist_generated_image_for_thread(
+    agent: &AgentEngine,
+    thread_id: &str,
+    prompt: &str,
+    result_json: &str,
+    include_prompt_message: bool,
+) -> Result<String> {
+    let payload: serde_json::Value = serde_json::from_str(result_json)?;
+    let provider = payload
+        .get("provider")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let model = payload
+        .get("model")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let revised_prompt = payload
+        .get("revised_prompt")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let mime_type = payload
+        .get("mime_type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("image/png")
+        .to_string();
+
+    let persisted_path = if let Some(path) = payload
+        .get("path")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let source = PathBuf::from(path);
+        let extension = source
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_string)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| file_extension_for_generated_mime(&mime_type, DEFAULT_IMAGE_OUTPUT_FORMAT));
+        let destination =
+            thread_media_output_path(&agent.data_dir, thread_id, "image", &extension);
+        move_generated_media_file(&source, &destination).await?;
+        Some(destination)
+    } else {
+        None
+    };
+
+    let image_url = persisted_path
+        .as_deref()
+        .map(file_url_for_path)
+        .or_else(|| {
+            payload
+                .get("url")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        });
+
+    let assistant_content = revised_prompt
+        .as_deref()
+        .filter(|value| value.trim() != prompt.trim())
+        .map(|value| format!("Generated image.\nRevised prompt: {value}"))
+        .unwrap_or_else(|| "Generated image.".to_string());
+
+    {
+        let mut threads = agent.threads.write().await;
+        let Some(thread) = threads.get_mut(thread_id) else {
+            anyhow::bail!("thread not found while persisting generated image");
+        };
+
+        if include_prompt_message {
+            thread.messages.push(AgentMessage::user(
+                format!("🖼 {}", prompt.trim()),
+                now_millis(),
+            ));
+        }
+        thread.messages.push(AgentMessage {
+            id: generate_message_id(),
+            role: MessageRole::Assistant,
+            content: assistant_content,
+            content_blocks: image_url
+                .clone()
+                .map(|url| {
+                    vec![AgentContentBlock::Image {
+                        url: Some(url),
+                        data_url: None,
+                        mime_type: Some(mime_type.clone()),
+                    }]
+                })
+                .unwrap_or_default(),
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_arguments: None,
+            tool_status: None,
+            weles_review: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost: None,
+            provider: Some(provider.clone()),
+            model: Some(model.clone()),
+            api_transport: None,
+            response_id: None,
+            upstream_message: None,
+            provider_final_result: None,
+            author_agent_id: Some(current_agent_scope_id()),
+            author_agent_name: Some("assistant".to_string()),
+            reasoning: None,
+            message_kind: AgentMessageKind::Normal,
+            compaction_strategy: None,
+            compaction_payload: None,
+            offloaded_payload_id: None,
+            tool_output_preview_path: None,
+            structural_refs: Vec::new(),
+            pinned_for_compaction: false,
+            timestamp: now_millis(),
+        });
+        thread.updated_at = now_millis();
+    }
+    agent.persist_thread_by_id(thread_id).await;
+
+    if let Some(path) = persisted_path.as_deref() {
+        agent.record_file_work_context(
+            thread_id,
+            None,
+            "generate_image",
+            &path.to_string_lossy(),
+        )
+        .await;
+    }
+
+    serde_json::to_string_pretty(&serde_json::json!({
+        "ok": true,
+        "thread_id": thread_id,
+        "provider": provider,
+        "model": model,
+        "mime_type": mime_type,
+        "path": persisted_path.as_ref().map(|path| path.to_string_lossy().to_string()),
+        "file_url": persisted_path.as_deref().map(file_url_for_path),
+        "url": payload.get("url").and_then(|value| value.as_str()),
+        "revised_prompt": revised_prompt,
+    }))
+    .map_err(Into::into)
+}
+
 async fn execute_analyze_image(
     args: &serde_json::Value,
     agent: &AgentEngine,
-    http_client: &reqwest::Client,
+    _http_client: &reqwest::Client,
 ) -> Result<String> {
-    let (provider_id, provider_config) = resolve_media_provider_config(agent, args, None).await?;
+    let media_http_client = fresh_media_http_client("analyze_image", args);
+    let (provider_id, provider_config) =
+        resolve_media_provider_config(agent, args, None).await?;
     if !crate::agent::types::model_supports(
         &provider_id,
         &provider_config.model,
@@ -992,7 +1395,7 @@ async fn execute_analyze_image(
     }];
 
     let stream = crate::agent::llm_client::send_completion_request(
-        http_client,
+        &media_http_client,
         &provider_id,
         &provider_config,
         "",
@@ -1039,8 +1442,10 @@ async fn execute_analyze_image(
 async fn execute_generate_image(
     args: &serde_json::Value,
     agent: &AgentEngine,
-    http_client: &reqwest::Client,
+    _http_client: &reqwest::Client,
+    thread_id: Option<&str>,
 ) -> Result<String> {
+    let media_http_client = fresh_media_http_client("generate_image", args);
     let prompt = args
         .get("prompt")
         .and_then(|value| value.as_str())
@@ -1048,7 +1453,54 @@ async fn execute_generate_image(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("missing 'prompt' argument"))?;
     let (provider_id, provider_config) =
-        resolve_media_provider_config(agent, args, Some(DEFAULT_IMAGE_GENERATION_MODEL)).await?;
+        resolve_media_provider_config(agent, args, Some(MediaEndpoint::ImageGeneration)).await?;
+    let route = image_generation_route(&provider_id);
+
+    if route == ImageGenerationRoute::OpenRouterChatCompletions {
+        let url = openai_like_endpoint(&provider_config.base_url, "chat/completions");
+        let body = build_openrouter_image_generation_body(args, &provider_config, prompt);
+        let request =
+            apply_media_auth_headers(media_http_client.post(&url), &provider_id, &provider_config)?;
+        let response = request.json(&body).send().await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!("image generation failed: HTTP {status} {text}");
+        }
+
+        let payload: serde_json::Value = response.json().await?;
+        let image_url = extract_openrouter_generated_image(&payload)?;
+        if image_url.starts_with("data:") {
+            let generated = generated_image_response_from_data_url(
+                &provider_id,
+                &provider_config,
+                &image_url,
+            )?;
+            if let Some(thread_id) = thread_id {
+                return persist_generated_image_for_thread(
+                    agent,
+                    thread_id,
+                    prompt,
+                    &generated,
+                    false,
+                )
+                .await;
+            }
+            return Ok(generated);
+        }
+
+        let generated = serde_json::to_string_pretty(&serde_json::json!({
+            "provider": provider_id,
+            "model": provider_config.model,
+            "url": image_url,
+        }))?;
+        if let Some(thread_id) = thread_id {
+            return persist_generated_image_for_thread(agent, thread_id, prompt, &generated, false)
+                .await;
+        }
+        return Ok(generated);
+    }
+
     ensure_openai_like_media_endpoint(&provider_id, &provider_config)?;
 
     let output_format = args
@@ -1097,7 +1549,8 @@ async fn execute_generate_image(
     }
     body["output_format"] = serde_json::Value::String(output_format.to_string());
 
-    let request = apply_media_auth_headers(http_client.post(&url), &provider_id, &provider_config)?;
+    let request =
+        apply_media_auth_headers(media_http_client.post(&url), &provider_id, &provider_config)?;
     let response = request.json(&body).send().await?;
     if !response.status().is_success() {
         let status = response.status();
@@ -1130,35 +1583,80 @@ async fn execute_generate_image(
         let extension = file_extension_for_generated_mime(mime_type, output_format);
         let output_path = temp_output_path("image", &extension);
         tokio::fs::write(&output_path, &bytes).await?;
-        return serde_json::to_string_pretty(&serde_json::json!({
+        let generated = serde_json::to_string_pretty(&serde_json::json!({
             "provider": provider_id,
             "model": provider_config.model,
             "path": output_path,
             "mime_type": mime_type,
             "bytes": bytes.len(),
             "revised_prompt": revised_prompt,
-        }))
-        .map_err(Into::into);
+        }))?;
+        if let Some(thread_id) = thread_id {
+            return persist_generated_image_for_thread(agent, thread_id, prompt, &generated, false)
+                .await;
+        }
+        return Ok(generated);
     }
 
     if let Some(url) = first.get("url").and_then(|value| value.as_str()) {
-        return serde_json::to_string_pretty(&serde_json::json!({
+        let generated = serde_json::to_string_pretty(&serde_json::json!({
             "provider": provider_id,
             "model": provider_config.model,
             "url": url,
             "revised_prompt": revised_prompt,
-        }))
-        .map_err(Into::into);
+        }))?;
+        if let Some(thread_id) = thread_id {
+            return persist_generated_image_for_thread(agent, thread_id, prompt, &generated, false)
+                .await;
+        }
+        return Ok(generated);
     }
 
     anyhow::bail!("image generation returned neither 'b64_json' nor 'url'")
 }
 
+pub(crate) async fn execute_generate_image_for_ipc(
+    args: &serde_json::Value,
+    agent: &AgentEngine,
+) -> Result<String> {
+    let prompt = args
+        .get("prompt")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing 'prompt' argument"))?
+        .to_string();
+    let requested_thread_id = args
+        .get("thread_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let (thread_id, is_new_thread) = agent
+        .get_or_create_thread(requested_thread_id, &prompt)
+        .await;
+    agent.ensure_thread_messages_loaded(&thread_id).await;
+
+    let upstream_result = execute_generate_image(args, agent, &agent.http_client, None).await?;
+    let persisted = persist_generated_image_for_thread(
+        agent,
+        &thread_id,
+        &prompt,
+        &upstream_result,
+        true,
+    )
+    .await?;
+    agent
+        .record_operator_message(&thread_id, &format!("🖼 {}", prompt), is_new_thread)
+        .await?;
+    Ok(persisted)
+}
+
 async fn execute_speech_to_text(
     args: &serde_json::Value,
     agent: &AgentEngine,
-    http_client: &reqwest::Client,
+    _http_client: &reqwest::Client,
 ) -> Result<String> {
+    let media_http_client = fresh_media_http_client("speech_to_text", args);
     let path = args
         .get("path")
         .and_then(|value| value.as_str())
@@ -1180,8 +1678,12 @@ async fn execute_speech_to_text(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| infer_media_mime(&resolved, MediaKind::Audio).to_string());
-    let (provider_id, provider_config) =
-        resolve_media_provider_config(agent, args, Some(DEFAULT_STT_MODEL)).await?;
+    let (provider_id, provider_config) = resolve_media_provider_config(
+        agent,
+        args,
+        Some(MediaEndpoint::SpeechToText),
+    )
+    .await?;
     let route = resolve_audio_tool_route(
         &provider_id,
         &provider_config,
@@ -1191,7 +1693,7 @@ async fn execute_speech_to_text(
     if route == AudioToolRoute::ProviderMultimodalCompletion {
         return execute_multimodal_speech_to_text(
             args,
-            http_client,
+            &media_http_client,
             &provider_id,
             &provider_config,
             &mime_type,
@@ -1236,7 +1738,8 @@ async fn execute_speech_to_text(
         form.text("response_format", response_format.to_string())
     };
 
-    let request = apply_media_auth_headers(http_client.post(&url), &provider_id, &provider_config)?;
+    let request =
+        apply_media_auth_headers(media_http_client.post(&url), &provider_id, &provider_config)?;
     let response = request.multipart(form).send().await?;
     if !response.status().is_success() {
         let status = response.status();
@@ -1257,16 +1760,21 @@ async fn execute_speech_to_text(
 async fn execute_text_to_speech(
     args: &serde_json::Value,
     agent: &AgentEngine,
-    http_client: &reqwest::Client,
+    _http_client: &reqwest::Client,
 ) -> Result<String> {
+    let media_http_client = fresh_media_http_client("text_to_speech", args);
     let input = args
         .get("input")
         .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("missing 'input' argument"))?;
-    let (provider_id, provider_config) =
-        resolve_media_provider_config(agent, args, Some(DEFAULT_TTS_MODEL)).await?;
+    let (provider_id, provider_config) = resolve_media_provider_config(
+        agent,
+        args,
+        Some(MediaEndpoint::TextToSpeech),
+    )
+    .await?;
     let route = resolve_audio_tool_route(
         &provider_id,
         &provider_config,
@@ -1300,7 +1808,8 @@ async fn execute_text_to_speech(
         })
     };
 
-    let request = apply_media_auth_headers(http_client.post(&url), &provider_id, &provider_config)?;
+    let request =
+        apply_media_auth_headers(media_http_client.post(&url), &provider_id, &provider_config)?;
     let response = request.json(&body).send().await?;
     if !response.status().is_success() {
         let status = response.status();
@@ -1620,9 +2129,13 @@ mod media_tools_tests {
 
         let engine = AgentEngine::new_test(manager, config, root.path()).await;
         let (provider_id, provider_config) =
-            resolve_media_provider_config(&engine, &serde_json::json!({}), Some(DEFAULT_TTS_MODEL))
-                .await
-                .expect("audio TTS settings should resolve");
+            resolve_media_provider_config(
+                &engine,
+                &serde_json::json!({}),
+                Some(MediaEndpoint::TextToSpeech),
+            )
+            .await
+            .expect("audio TTS settings should resolve");
 
         assert_eq!(provider_id, "custom");
         assert_eq!(provider_config.model, "sonic-voice");
@@ -1674,12 +2187,280 @@ mod media_tools_tests {
 
         let engine = AgentEngine::new_test(manager, config, root.path()).await;
         let (provider_id, provider_config) =
-            resolve_media_provider_config(&engine, &serde_json::json!({}), Some(DEFAULT_STT_MODEL))
-                .await
-                .expect("legacy STT settings should resolve");
+            resolve_media_provider_config(
+                &engine,
+                &serde_json::json!({}),
+                Some(MediaEndpoint::SpeechToText),
+            )
+            .await
+            .expect("legacy STT settings should resolve");
 
         assert_eq!(provider_id, "custom");
         assert_eq!(provider_config.model, "whisper-legacy");
         assert_eq!(provider_config.base_url, "https://audio.example/v1");
+    }
+
+    #[tokio::test]
+    async fn resolve_media_provider_config_uses_nested_image_generation_settings() {
+        let root = tempfile::tempdir().expect("tempdir should succeed");
+        let manager = crate::session_manager::SessionManager::new_test(root.path()).await;
+        let mut config = AgentConfig::default();
+        config.provider = "openai".to_string();
+        config.model = "gpt-5.4".to_string();
+        config.api_key = "sk-active".to_string();
+        config.extra.insert(
+            "image".to_string(),
+            serde_json::json!({
+                "generation": {
+                    "provider": "custom",
+                    "model": "flux-pro"
+                }
+            }),
+        );
+        config.providers.insert(
+            "custom".to_string(),
+            crate::agent::types::ProviderConfig {
+                base_url: "https://images.example/v1".to_string(),
+                model: "fallback-model".to_string(),
+                api_key: "sk-image".to_string(),
+                assistant_id: String::new(),
+                auth_source: crate::agent::types::AuthSource::ApiKey,
+                api_transport: crate::agent::types::ApiTransport::Responses,
+                reasoning_effort: "medium".to_string(),
+                context_window_tokens: 128_000,
+                response_schema: None,
+                stop_sequences: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                metadata: None,
+                service_tier: None,
+                container: None,
+                inference_geo: None,
+                cache_control: None,
+                max_tokens: None,
+                anthropic_tool_choice: None,
+                output_effort: None,
+            },
+        );
+
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
+        let (provider_id, provider_config) = resolve_media_provider_config(
+            &engine,
+            &serde_json::json!({}),
+            Some(MediaEndpoint::ImageGeneration),
+        )
+        .await
+        .expect("image generation settings should resolve");
+
+        assert_eq!(provider_id, "custom");
+        assert_eq!(provider_config.model, "flux-pro");
+        assert_eq!(provider_config.base_url, "https://images.example/v1");
+    }
+
+    #[tokio::test]
+    async fn persist_generated_image_for_thread_records_messages_and_work_context() {
+        let root = tempfile::tempdir().expect("tempdir should succeed");
+        let manager = crate::session_manager::SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let (thread_id, _) = engine.get_or_create_thread(None, "retro robot").await;
+
+        let temp_source = root.path().join("upstream-image.png");
+        tokio::fs::write(&temp_source, b"png-bytes")
+            .await
+            .expect("temp image should write");
+
+        let persisted = persist_generated_image_for_thread(
+            &engine,
+            &thread_id,
+            "retro robot",
+            &serde_json::json!({
+                "provider": "openai",
+                "model": "gpt-image-1",
+                "path": temp_source.to_string_lossy(),
+                "mime_type": "image/png",
+                "revised_prompt": "retro robot"
+            })
+            .to_string(),
+            true,
+        )
+        .await
+        .expect("generated image should persist");
+        let persisted_value: serde_json::Value =
+            serde_json::from_str(&persisted).expect("result should deserialize");
+        let persisted_path = persisted_value
+            .get("path")
+            .and_then(|value| value.as_str())
+            .expect("persisted result should include final path");
+        assert!(
+            persisted_path.contains("/thread-files/"),
+            "expected generated image to move into thread files, got {persisted_path}"
+        );
+        assert!(
+            tokio::fs::metadata(persisted_path).await.is_ok(),
+            "persisted thread image should exist on disk"
+        );
+
+        let thread = engine
+            .get_thread_filtered(&thread_id, true, None, 0)
+            .await
+            .expect("thread should exist");
+        assert_eq!(thread.thread.messages.len(), 2);
+        assert_eq!(thread.thread.messages[0].role, MessageRole::User);
+        assert_eq!(thread.thread.messages[0].content, "🖼 retro robot");
+        assert_eq!(thread.thread.messages[1].role, MessageRole::Assistant);
+        assert_eq!(thread.thread.messages[1].provider.as_deref(), Some("openai"));
+        assert_eq!(thread.thread.messages[1].model.as_deref(), Some("gpt-image-1"));
+        assert!(matches!(
+            thread.thread.messages[1].content_blocks.first(),
+            Some(AgentContentBlock::Image { url: Some(url), mime_type: Some(mime_type), .. })
+                if url.starts_with("file://") && mime_type == "image/png"
+        ));
+
+        let context = engine
+            .thread_work_contexts
+            .read()
+            .await
+            .get(&thread_id)
+            .cloned()
+            .expect("work context should be recorded");
+        assert_eq!(context.entries.len(), 1);
+        assert_eq!(context.entries[0].source, "generate_image");
+    }
+
+    #[tokio::test]
+    async fn persist_generated_image_for_tool_call_skips_synthetic_prompt_message() {
+        let root = tempfile::tempdir().expect("tempdir should succeed");
+        let manager = crate::session_manager::SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let (thread_id, _) = engine.get_or_create_thread(None, "retro robot").await;
+
+        let temp_source = root.path().join("tool-image.png");
+        tokio::fs::write(&temp_source, b"png-bytes")
+            .await
+            .expect("temp image should write");
+
+        persist_generated_image_for_thread(
+            &engine,
+            &thread_id,
+            "retro robot",
+            &serde_json::json!({
+                "provider": "openai",
+                "model": "gpt-image-1",
+                "path": temp_source.to_string_lossy(),
+                "mime_type": "image/png",
+            })
+            .to_string(),
+            false,
+        )
+        .await
+        .expect("generated image should persist");
+
+        let thread = engine
+            .get_thread_filtered(&thread_id, true, None, 0)
+            .await
+            .expect("thread should exist");
+        assert_eq!(thread.thread.messages.len(), 1);
+        assert_eq!(thread.thread.messages[0].role, MessageRole::Assistant);
+        assert!(matches!(
+            thread.thread.messages[0].content_blocks.first(),
+            Some(AgentContentBlock::Image { .. })
+        ));
+    }
+
+    #[test]
+    fn image_generation_route_prefers_openrouter_chat_completions() {
+        assert_eq!(
+            image_generation_route(amux_shared::providers::PROVIDER_ID_OPENROUTER),
+            ImageGenerationRoute::OpenRouterChatCompletions
+        );
+        assert_eq!(
+            image_generation_route(amux_shared::providers::PROVIDER_ID_OPENAI),
+            ImageGenerationRoute::OpenAiCompatibleDirect
+        );
+    }
+
+    #[test]
+    fn build_openrouter_image_generation_body_maps_size_into_image_config() {
+        let provider_config = crate::agent::types::ProviderConfig {
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            model: "google/gemini-3-pro-image-preview".to_string(),
+            api_key: "sk-openrouter".to_string(),
+            assistant_id: String::new(),
+            auth_source: crate::agent::types::AuthSource::ApiKey,
+            api_transport: crate::agent::types::ApiTransport::Responses,
+            reasoning_effort: "medium".to_string(),
+            context_window_tokens: 128_000,
+            response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
+        };
+
+        let body = build_openrouter_image_generation_body(
+            &serde_json::json!({
+                "prompt": "forge a mythic icon",
+                "size": "1024x1024",
+                "quality": "high",
+                "output_format": "png"
+            }),
+            &provider_config,
+            "forge a mythic icon",
+        );
+
+        assert_eq!(
+            body.get("model").and_then(|value| value.as_str()),
+            Some("google/gemini-3-pro-image-preview")
+        );
+        assert_eq!(
+            body.get("modalities").and_then(|value| value.as_array()).map(|items| items.len()),
+            Some(2)
+        );
+        assert_eq!(
+            body.pointer("/image_config/aspect_ratio")
+                .and_then(|value| value.as_str()),
+            Some("1:1")
+        );
+        assert_eq!(
+            body.pointer("/image_config/image_size")
+                .and_then(|value| value.as_str()),
+            Some("1K")
+        );
+        assert_eq!(
+            body.get("messages")
+                .and_then(|value| value.as_array())
+                .and_then(|items| items.first())
+                .and_then(|value| value.get("content"))
+                .and_then(|value| value.as_str()),
+            Some("forge a mythic icon")
+        );
+    }
+
+    #[test]
+    fn extract_openrouter_image_output_accepts_snake_case_image_urls() {
+        let payload = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "images": [{
+                        "image_url": {
+                            "url": "data:image/png;base64,aGVsbG8="
+                        }
+                    }]
+                }
+            }]
+        });
+
+        let extracted =
+            extract_openrouter_generated_image(&payload).expect("image should be extracted");
+        assert_eq!(extracted, "data:image/png;base64,aGVsbG8=");
     }
 }

@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn goal_plan_json_schema_marks_every_step_and_proof_check_field_as_required() {
+    let schema = goal_plan_json_schema();
+    let step_items = &schema["properties"]["steps"]["items"];
+    let step_required = step_items["required"]
+        .as_array()
+        .expect("step items should declare required fields")
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let step_properties = step_items["properties"]
+        .as_object()
+        .expect("step items should declare properties")
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+
+    assert_eq!(step_required, step_properties);
+
+    let proof_items = &step_items["properties"]["proof_checks"]["items"];
+    let proof_required = proof_items["required"]
+        .as_array()
+        .expect("proof check items should declare required fields")
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let proof_properties = proof_items["properties"]
+        .as_object()
+        .expect("proof check items should declare properties")
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+
+    assert_eq!(proof_required, proof_properties);
+}
+
+#[test]
 fn parse_json_block_preserves_optional_llm_confidence_fields() {
     let json = r#"
     {
@@ -63,6 +99,9 @@ fn goal_plan_response_with_rejected_alternatives_round_trips() {
             instructions: "Do work".to_string(),
             kind: GoalRunStepKind::Command,
             success_criteria: "Done".to_string(),
+            execution_binding: None,
+            verification_binding: None,
+            proof_checks: Vec::new(),
             session_id: None,
             llm_confidence: Some("0.5".to_string()),
             llm_confidence_rationale: Some("moderate confidence".to_string()),
@@ -107,6 +146,13 @@ fn apply_plan_defaults_truncates_and_normalizes_plan_fields() {
                 } else {
                     format!(" Done {} ", index + 1)
                 },
+                execution_binding: Some("  builtin:swarog  ".to_string()),
+                verification_binding: Some("  subagent:android-verifier  ".to_string()),
+                proof_checks: vec![GoalProofCheck {
+                    id: "   ".to_string(),
+                    title: "   ".to_string(),
+                    ..Default::default()
+                }],
                 session_id: Some("  session-1  ".to_string()),
                 llm_confidence: Some("  LIKELY  ".to_string()),
                 llm_confidence_rationale: Some("  deterministic fix path  ".to_string()),
@@ -138,6 +184,16 @@ fn apply_plan_defaults_truncates_and_normalizes_plan_fields() {
         "Step completed successfully"
     );
     assert_eq!(plan.steps[0].kind, GoalRunStepKind::Command);
+    assert_eq!(
+        plan.steps[0].execution_binding.as_deref(),
+        Some("builtin:swarog")
+    );
+    assert_eq!(
+        plan.steps[0].verification_binding.as_deref(),
+        Some("subagent:android-verifier")
+    );
+    assert_eq!(plan.steps[0].proof_checks[0].id, "proof-1-1");
+    assert_eq!(plan.steps[0].proof_checks[0].title, "Proof check 1");
     assert_eq!(plan.steps[0].session_id.as_deref(), Some("session-1"));
     assert_eq!(plan.steps[0].llm_confidence.as_deref(), Some("likely"));
     assert_eq!(

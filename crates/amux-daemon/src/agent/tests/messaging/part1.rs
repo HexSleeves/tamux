@@ -335,6 +335,62 @@ async fn get_or_create_thread_with_target_sets_requested_initial_responder() {
 }
 
 #[tokio::test]
+async fn get_or_create_thread_with_target_preserves_user_defined_subagent_identity() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.sub_agents.push(SubAgentDefinition {
+        id: "dola".to_string(),
+        name: "Dola".to_string(),
+        provider: "openai".to_string(),
+        model: "gpt-5.4-mini".to_string(),
+        role: Some("specialist".to_string()),
+        system_prompt: Some("Handle delegated work.".to_string()),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        enabled: true,
+        builtin: false,
+        immutable_identity: false,
+        disable_allowed: true,
+        delete_allowed: true,
+        protected_reason: None,
+        reasoning_effort: Some("medium".to_string()),
+        created_at: 1,
+    });
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let (thread_id, created) = engine
+        .get_or_create_thread_with_target(None, "Talk to Dola", Some("dola"))
+        .await;
+
+    assert!(created, "new target-scoped thread should be created");
+    let thread = engine
+        .threads
+        .read()
+        .await
+        .get(&thread_id)
+        .cloned()
+        .expect("thread should exist");
+    assert_eq!(thread.agent_name.as_deref(), Some("Dola"));
+
+    let handoff_state = engine
+        .thread_handoff_state(&thread_id)
+        .await
+        .expect("handoff state should exist");
+    assert_eq!(handoff_state.active_agent_id, "dola");
+    assert_eq!(
+        handoff_state
+            .responder_stack
+            .last()
+            .map(|frame| frame.agent_name.as_str()),
+        Some("Dola")
+    );
+}
+
+#[tokio::test]
 async fn thread_client_surface_persists_with_thread_metadata() {
     let root = tempdir().unwrap();
     let manager = SessionManager::new_test(root.path()).await;
@@ -627,6 +683,7 @@ async fn handoff_activation_clears_thread_continuation_state_for_new_responder_s
                         compaction_strategy: None,
                         compaction_payload: None,
                         offloaded_payload_id: None,
+                        tool_output_preview_path: None,
                         structural_refs: Vec::new(),
                         pinned_for_compaction: false,
                         timestamp: 2,
@@ -787,6 +844,7 @@ async fn delete_thread_messages_rehydrates_and_clears_invalid_continuation() {
                         compaction_strategy: None,
                         compaction_payload: None,
                         offloaded_payload_id: None,
+                        tool_output_preview_path: None,
                         structural_refs: Vec::new(),
                         pinned_for_compaction: false,
                         timestamp: 2,
@@ -909,6 +967,7 @@ async fn delete_thread_messages_removes_orphaned_tool_results_during_rebuild() {
                         compaction_strategy: None,
                         compaction_payload: None,
                         offloaded_payload_id: None,
+                        tool_output_preview_path: None,
                         structural_refs: Vec::new(),
                         pinned_for_compaction: false,
                         timestamp: 2,
@@ -940,6 +999,7 @@ async fn delete_thread_messages_removes_orphaned_tool_results_during_rebuild() {
                         compaction_strategy: None,
                         compaction_payload: None,
                         offloaded_payload_id: None,
+                        tool_output_preview_path: None,
                         structural_refs: Vec::new(),
                         pinned_for_compaction: false,
                         timestamp: 3,
@@ -971,6 +1031,7 @@ async fn delete_thread_messages_removes_orphaned_tool_results_during_rebuild() {
                         compaction_strategy: None,
                         compaction_payload: None,
                         offloaded_payload_id: None,
+                        tool_output_preview_path: None,
                         structural_refs: Vec::new(),
                         pinned_for_compaction: false,
                         timestamp: 4,
@@ -1004,6 +1065,7 @@ async fn delete_thread_messages_removes_orphaned_tool_results_during_rebuild() {
                         compaction_strategy: None,
                         compaction_payload: None,
                         offloaded_payload_id: None,
+                        tool_output_preview_path: None,
                         structural_refs: Vec::new(),
                         pinned_for_compaction: false,
                         timestamp: 5,

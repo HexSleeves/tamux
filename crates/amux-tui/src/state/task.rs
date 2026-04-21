@@ -11,6 +11,7 @@ pub enum TaskStatus {
     AwaitingApproval,
     Blocked,
     FailedAnalyzing,
+    BudgetExceeded,
     Completed,
     Failed,
     Cancelled,
@@ -71,16 +72,42 @@ pub struct GoalRunEvent {
     pub todo_snapshot: Vec<TodoItem>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GoalRuntimeOwnerProfile {
+    pub agent_label: String,
+    pub provider: String,
+    pub model: String,
+    pub reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GoalAgentAssignment {
+    pub role_id: String,
+    pub enabled: bool,
+    pub provider: String,
+    pub model: String,
+    pub reasoning_effort: Option<String>,
+    pub inherit_from_main: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GoalRun {
     pub id: String,
     pub title: String,
     pub thread_id: Option<String>,
+    pub root_thread_id: Option<String>,
+    pub active_thread_id: Option<String>,
+    pub execution_thread_ids: Vec<String>,
     pub session_id: Option<String>,
     pub status: Option<GoalRunStatus>,
     pub current_step_title: Option<String>,
+    pub launch_assignment_snapshot: Vec<GoalAgentAssignment>,
+    pub runtime_assignment_list: Vec<GoalAgentAssignment>,
+    pub planner_owner_profile: Option<GoalRuntimeOwnerProfile>,
+    pub current_step_owner_profile: Option<GoalRuntimeOwnerProfile>,
     pub child_task_count: u32,
     pub approval_count: u32,
+    pub awaiting_approval_id: Option<String>,
     pub last_error: Option<String>,
     pub goal: String,
     pub current_step_index: usize,
@@ -96,10 +123,75 @@ pub struct GoalRun {
     pub total_event_count: usize,
     pub older_page_pending: bool,
     pub older_page_request_cooldown_until_tick: Option<u64>,
+    pub sparse_update: bool,
     pub steps: Vec<GoalRunStep>,
     pub events: Vec<GoalRunEvent>,
+    pub dossier: Option<GoalRunDossier>,
     pub created_at: u64,
     pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GoalEvidenceRecord {
+    pub id: String,
+    pub title: String,
+    pub source: Option<String>,
+    pub uri: Option<String>,
+    pub summary: Option<String>,
+    pub captured_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GoalProofCheckRecord {
+    pub id: String,
+    pub title: String,
+    pub state: String,
+    pub summary: Option<String>,
+    pub evidence_ids: Vec<String>,
+    pub resolved_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GoalRunReportRecord {
+    pub summary: String,
+    pub state: String,
+    pub notes: Vec<String>,
+    pub evidence: Vec<GoalEvidenceRecord>,
+    pub proof_checks: Vec<GoalProofCheckRecord>,
+    pub generated_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GoalResumeDecisionRecord {
+    pub action: String,
+    pub reason_code: String,
+    pub reason: Option<String>,
+    pub details: Vec<String>,
+    pub decided_at: Option<u64>,
+    pub projection_state: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GoalDeliveryUnitRecord {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub execution_binding: String,
+    pub verification_binding: String,
+    pub summary: Option<String>,
+    pub proof_checks: Vec<GoalProofCheckRecord>,
+    pub evidence: Vec<GoalEvidenceRecord>,
+    pub report: Option<GoalRunReportRecord>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GoalRunDossier {
+    pub units: Vec<GoalDeliveryUnitRecord>,
+    pub projection_state: String,
+    pub latest_resume_decision: Option<GoalResumeDecisionRecord>,
+    pub report: Option<GoalRunReportRecord>,
+    pub summary: Option<String>,
+    pub projection_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -331,6 +423,91 @@ impl TaskState {
             .unwrap_or(&[])
     }
 
+    pub fn goal_steps_in_display_order(&self, goal_run_id: &str) -> Vec<&GoalRunStep> {
+        let Some(run) = self.goal_run_by_id(goal_run_id) else {
+            return Vec::new();
+        };
+
+        let mut steps: Vec<_> = run.steps.iter().collect();
+        steps.sort_by_key(|step| step.order);
+        steps
+    }
+
+    pub fn goal_step_todos(&self, goal_run_id: &str, step_index: usize) -> Vec<TodoItem> {
+        let Some(run) = self.goal_run_by_id(goal_run_id) else {
+            return Vec::new();
+        };
+
+        let latest_snapshot = run
+            .events
+            .iter()
+            .rev()
+            .find(|event| {
+                event.step_index == Some(step_index)
+                    && event
+                        .todo_snapshot
+                        .iter()
+                        .any(|todo| todo.step_index == Some(step_index))
+            })
+            .map(|event| {
+                let mut todos: Vec<_> = event
+                    .todo_snapshot
+                    .iter()
+                    .filter(|todo| todo.step_index == Some(step_index))
+                    .cloned()
+                    .collect();
+                todos.sort_by_key(|todo| todo.position);
+                todos
+            });
+        if let Some(todos) = latest_snapshot {
+            return todos;
+        }
+
+        let Some(thread_id) = run.thread_id.as_deref() else {
+            return Vec::new();
+        };
+
+        let mut todos: Vec<_> = self
+            .todos_for_thread(thread_id)
+            .iter()
+            .filter(|todo| todo.step_index == Some(step_index))
+            .cloned()
+            .collect();
+        todos.sort_by_key(|todo| todo.position);
+        todos
+    }
+
+    pub fn goal_step_checkpoints(
+        &self,
+        goal_run_id: &str,
+        step_index: usize,
+    ) -> Vec<&GoalRunCheckpointSummary> {
+        self.checkpoints_for_goal_run(goal_run_id)
+            .iter()
+            .filter(|checkpoint| checkpoint.step_index == Some(step_index))
+            .collect()
+    }
+
+    pub fn goal_step_files(
+        &self,
+        goal_run_id: &str,
+        thread_id: &str,
+        step_index: usize,
+    ) -> Vec<&WorkContextEntry> {
+        let Some(context) = self.work_context_for_thread(thread_id) else {
+            return Vec::new();
+        };
+
+        context
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.goal_run_id.as_deref() == Some(goal_run_id)
+                    && entry.step_index == Some(step_index)
+            })
+            .collect()
+    }
+
     pub fn goal_run_next_page_request(
         &self,
         goal_run_id: &str,
@@ -403,12 +580,21 @@ impl TaskState {
                 self.goal_runs = runs.into_iter().map(normalize_goal_run_ranges).collect();
             }
 
-            TaskAction::GoalRunDetailReceived(run) | TaskAction::GoalRunUpdate(run) => {
+            TaskAction::GoalRunDetailReceived(run) => {
                 let run = normalize_goal_run_ranges(run);
                 if let Some(existing) = self.goal_runs.iter_mut().find(|r| r.id == run.id) {
-                    merge_goal_run(existing, run);
+                    merge_goal_run(existing, run, false);
                 } else {
-                    self.goal_runs.push(run);
+                    self.goal_runs.insert(0, run);
+                }
+            }
+
+            TaskAction::GoalRunUpdate(run) => {
+                let run = normalize_goal_run_ranges(run);
+                if let Some(existing) = self.goal_runs.iter_mut().find(|r| r.id == run.id) {
+                    merge_goal_run(existing, run, true);
+                } else {
+                    self.goal_runs.insert(0, run);
                 }
             }
 
@@ -621,29 +807,188 @@ fn merge_range_vec<T: Clone>(
     (union_start, union_end, merged)
 }
 
-fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun) {
+fn merge_optional_field<T>(existing: &mut Option<T>, incoming: Option<T>, preserve_existing: bool) {
+    if preserve_existing {
+        if incoming.is_some() {
+            *existing = incoming;
+        }
+    } else {
+        *existing = incoming;
+    }
+}
+
+fn merge_vec_field<T>(existing: &mut Vec<T>, incoming: Vec<T>, preserve_existing_when_empty: bool) {
+    if preserve_existing_when_empty && incoming.is_empty() {
+        return;
+    }
+    *existing = incoming;
+}
+
+fn merge_string_field(existing: &mut String, incoming: String, preserve_existing_when_empty: bool) {
+    if preserve_existing_when_empty && incoming.is_empty() {
+        return;
+    }
+    *existing = incoming;
+}
+
+fn merge_u32_field(existing: &mut u32, incoming: u32, preserve_existing_when_zero: bool) {
+    if preserve_existing_when_zero && incoming == 0 && *existing != 0 {
+        return;
+    }
+    *existing = incoming;
+}
+
+fn merge_u64_field(existing: &mut u64, incoming: u64, preserve_existing_when_zero: bool) {
+    if preserve_existing_when_zero && incoming == 0 && *existing != 0 {
+        return;
+    }
+    *existing = incoming;
+}
+
+fn merge_usize_field(existing: &mut usize, incoming: usize, preserve_existing_when_zero: bool) {
+    if preserve_existing_when_zero && incoming == 0 && *existing != 0 {
+        return;
+    }
+    *existing = incoming;
+}
+
+fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun, preserve_owner_metadata: bool) {
+    let preserve_sparse_fields = preserve_owner_metadata && incoming.sparse_update;
     let older_page_request_cooldown_until_tick = existing
         .older_page_request_cooldown_until_tick
         .max(incoming.older_page_request_cooldown_until_tick);
 
-    existing.title = incoming.title;
-    existing.thread_id = incoming.thread_id;
-    existing.session_id = incoming.session_id;
-    existing.status = incoming.status;
-    existing.current_step_title = incoming.current_step_title;
-    existing.child_task_count = incoming.child_task_count;
-    existing.approval_count = incoming.approval_count;
-    existing.last_error = incoming.last_error;
-    existing.goal = incoming.goal;
-    existing.current_step_index = incoming.current_step_index;
-    existing.reflection_summary = incoming.reflection_summary;
-    existing.memory_updates = incoming.memory_updates;
-    existing.generated_skill_path = incoming.generated_skill_path;
-    existing.child_task_ids = incoming.child_task_ids;
-    existing.created_at = incoming.created_at;
-    existing.updated_at = incoming.updated_at;
-    existing.total_step_count = existing.total_step_count.max(incoming.total_step_count);
-    existing.total_event_count = existing.total_event_count.max(incoming.total_event_count);
+    if preserve_sparse_fields {
+        if existing.title.is_empty() {
+            existing.title = incoming.title;
+        }
+    } else {
+        existing.title = incoming.title;
+    }
+    merge_optional_field(
+        &mut existing.thread_id,
+        incoming.thread_id,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.session_id,
+        incoming.session_id,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.status,
+        incoming.status,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.current_step_title,
+        incoming.current_step_title,
+        preserve_sparse_fields,
+    );
+    merge_vec_field(
+        &mut existing.launch_assignment_snapshot,
+        incoming.launch_assignment_snapshot,
+        preserve_sparse_fields,
+    );
+    merge_vec_field(
+        &mut existing.runtime_assignment_list,
+        incoming.runtime_assignment_list,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.root_thread_id,
+        incoming.root_thread_id,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.active_thread_id,
+        incoming.active_thread_id,
+        preserve_sparse_fields,
+    );
+    merge_vec_field(
+        &mut existing.execution_thread_ids,
+        incoming.execution_thread_ids,
+        preserve_sparse_fields,
+    );
+    if preserve_sparse_fields {
+        existing.planner_owner_profile = incoming
+            .planner_owner_profile
+            .or(existing.planner_owner_profile.take());
+        existing.current_step_owner_profile = incoming
+            .current_step_owner_profile
+            .or(existing.current_step_owner_profile.take());
+    } else {
+        existing.planner_owner_profile = incoming.planner_owner_profile;
+        existing.current_step_owner_profile = incoming.current_step_owner_profile;
+    }
+    merge_u32_field(
+        &mut existing.child_task_count,
+        incoming.child_task_count,
+        preserve_sparse_fields,
+    );
+    merge_u32_field(
+        &mut existing.approval_count,
+        incoming.approval_count,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.awaiting_approval_id,
+        incoming.awaiting_approval_id,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.last_error,
+        incoming.last_error,
+        preserve_sparse_fields,
+    );
+    merge_string_field(&mut existing.goal, incoming.goal, preserve_sparse_fields);
+    merge_usize_field(
+        &mut existing.current_step_index,
+        incoming.current_step_index,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.reflection_summary,
+        incoming.reflection_summary,
+        preserve_sparse_fields,
+    );
+    merge_vec_field(
+        &mut existing.memory_updates,
+        incoming.memory_updates,
+        preserve_sparse_fields,
+    );
+    merge_optional_field(
+        &mut existing.generated_skill_path,
+        incoming.generated_skill_path,
+        preserve_sparse_fields,
+    );
+    merge_vec_field(
+        &mut existing.child_task_ids,
+        incoming.child_task_ids,
+        preserve_sparse_fields,
+    );
+    existing.dossier = merge_goal_run_dossier(
+        existing.dossier.take(),
+        incoming.dossier,
+        preserve_sparse_fields,
+    );
+    merge_u64_field(
+        &mut existing.created_at,
+        incoming.created_at,
+        preserve_sparse_fields,
+    );
+    merge_u64_field(
+        &mut existing.updated_at,
+        incoming.updated_at,
+        preserve_sparse_fields,
+    );
+    if preserve_sparse_fields {
+        existing.total_step_count = existing.total_step_count.max(incoming.total_step_count);
+        existing.total_event_count = existing.total_event_count.max(incoming.total_event_count);
+    } else {
+        existing.total_step_count = incoming.total_step_count;
+        existing.total_event_count = incoming.total_event_count;
+    }
 
     let (loaded_step_start, loaded_step_end, steps) = merge_range_vec(
         existing.loaded_step_start,
@@ -671,6 +1016,41 @@ fn merge_goal_run(existing: &mut GoalRun, incoming: GoalRun) {
 
     existing.older_page_pending = false;
     existing.older_page_request_cooldown_until_tick = older_page_request_cooldown_until_tick;
+    existing.sparse_update = false;
+}
+
+fn merge_goal_run_dossier(
+    existing: Option<GoalRunDossier>,
+    incoming: Option<GoalRunDossier>,
+    preserve_existing_when_missing: bool,
+) -> Option<GoalRunDossier> {
+    if !preserve_existing_when_missing {
+        return incoming;
+    }
+    match (existing, incoming) {
+        (None, dossier) | (dossier, None) => dossier,
+        (Some(existing), Some(mut incoming)) => {
+            if incoming.units.is_empty() {
+                incoming.units = existing.units;
+            }
+            if incoming.projection_state.is_empty() {
+                incoming.projection_state = existing.projection_state;
+            }
+            if incoming.latest_resume_decision.is_none() {
+                incoming.latest_resume_decision = existing.latest_resume_decision;
+            }
+            if incoming.report.is_none() {
+                incoming.report = existing.report;
+            }
+            if incoming.summary.is_none() {
+                incoming.summary = existing.summary;
+            }
+            if incoming.projection_error.is_none() {
+                incoming.projection_error = existing.projection_error;
+            }
+            Some(incoming)
+        }
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

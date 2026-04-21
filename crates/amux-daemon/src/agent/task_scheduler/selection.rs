@@ -28,6 +28,22 @@ pub(in crate::agent) fn refresh_task_queue_state(
     let max_weles_reviews = crate::agent::config::resolve_weles_max_concurrent_reviews(
         &config.builtin_sub_agents.weles,
     );
+    let mut changed = Vec::new();
+    for task in tasks.iter_mut() {
+        if task.status == TaskStatus::AwaitingApproval && task.awaiting_approval_id.is_none() {
+            task.status = TaskStatus::Queued;
+            task.started_at = None;
+            task.blocked_reason = None;
+            task.logs.push(make_task_log_entry(
+                task.retry_count,
+                TaskLogLevel::Warn,
+                "approval",
+                "stale approval state cleared; task returned to queue",
+                None,
+            ));
+            changed.push(task.clone());
+        }
+    }
     let completed: HashSet<String> = tasks
         .iter()
         .filter(|task| task.status == TaskStatus::Completed)
@@ -80,8 +96,6 @@ pub(in crate::agent) fn refresh_task_queue_state(
                 grouped
             },
         );
-    let mut changed = Vec::new();
-
     for task in tasks.iter_mut() {
         let unresolved = task
             .dependencies

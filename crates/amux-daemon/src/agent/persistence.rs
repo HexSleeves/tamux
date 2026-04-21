@@ -228,9 +228,20 @@ impl AgentEngine {
                         thread_id.clone(),
                         AgentThread {
                             id: thread_id.clone(),
-                            agent_name: Some(
-                                canonical_agent_name(&handoff_state.active_agent_id).to_string(),
-                            ),
+                            agent_name: thread_row
+                                .agent_name
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                                .map(str::to_string)
+                                .or_else(|| {
+                                    handoff_state
+                                        .responder_stack
+                                        .last()
+                                        .map(|frame| frame.agent_name.trim())
+                                        .filter(|value| !value.is_empty())
+                                        .map(str::to_string)
+                                }),
                             title: thread_title,
                             messages: Vec::new(),
                             pinned: false,
@@ -273,6 +284,16 @@ impl AgentEngine {
                 *self.thread_memory_injection_state_map().write().await =
                     thread_memory_injection_states;
                 *self.thread_structural_memories.write().await = thread_structural_memories;
+                let hydrated_thread_ids = self
+                    .thread_message_hydration_pending
+                    .read()
+                    .await
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for thread_id in hydrated_thread_ids {
+                    self.ensure_thread_messages_loaded(&thread_id).await;
+                }
                 let trimmed_playground_threads = self
                     .trim_persisted_participant_playground_threads_on_hydrate()
                     .await;
@@ -375,8 +396,8 @@ impl AgentEngine {
                 }
 
                 *self.goal_runs.lock().await = runs;
-                // Persist the paused status back to SQLite immediately
-                self.persist_goal_runs().await;
+                // Startup should not wait on goal projection writes before the daemon becomes usable.
+                self.persist_goal_runs_in_background();
             }
             Ok(_) => {
                 let goal_runs_path = self.data_dir.join("goal-runs.json");
@@ -385,7 +406,7 @@ impl AgentEngine {
                         Ok(raw) => {
                             if let Ok(goal_runs) = serde_json::from_str::<VecDeque<GoalRun>>(&raw) {
                                 *self.goal_runs.lock().await = goal_runs;
-                                self.persist_goal_runs().await;
+                                self.persist_goal_runs_in_background();
                             }
                         }
                         Err(e) => tracing::warn!("failed to migrate legacy goal runs: {e}"),

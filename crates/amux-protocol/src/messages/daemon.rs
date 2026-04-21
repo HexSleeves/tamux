@@ -82,7 +82,7 @@ pub enum DaemonMessage {
     AgentHeartbeatItems { items_json: String },
     AgentSubagentMetrics { metrics_json: String },
     AgentSubsystemMetrics { metrics_json: String },
-    AgentCheckpointList { checkpoints_json: String },
+    AgentCheckpointList { goal_run_id: String, checkpoints_json: String },
     AgentCheckpointRestored { outcome_json: String },
     AgentHealthStatus { status_json: String },
     AgentHealthLog { entries_json: String },
@@ -161,4 +161,6 @@ pub enum DaemonMessage {
     AgentThreadControlled { thread_id: String, action: String, ok: bool },
     AgentSpeechToTextResult { content: String },
     AgentTextToSpeechResult { content: String },
+    AgentGenerateImageResult { content: String },
+    AgentGatewayConfig { config_json: String },
 }

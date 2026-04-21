@@ -70,7 +70,7 @@ const internalThread = buildHydratedRemoteThread(
   },
   "Svarog",
 );
-expect(internalThread === null, "internal daemon threads should not hydrate into visible frontend chat state");
+expect(internalThread?.thread.daemonThreadId === "dm:svarog:weles", "internal daemon threads should hydrate into the React internal thread browser");
 
 const hiddenHandoffThread = buildHydratedRemoteThread(
   {

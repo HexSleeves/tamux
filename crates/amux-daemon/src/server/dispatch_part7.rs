@@ -362,16 +362,12 @@ if matches!(
                             (done, t)
                         };
 
-                        let recent_history_thread_ids = agent
+                        let recent_history_threads = agent
                             .concierge
-                            .recent_persisted_history_thread_ids(&agent.session_manager, 5)
+                            .recent_persisted_history_threads(&agent.session_manager, 5)
                             .await;
-                        for thread_id in &recent_history_thread_ids {
-                            agent.ensure_thread_messages_loaded(thread_id).await;
-                        }
-
                         let should_deliver_onboarding =
-                            !onboarding_done && recent_history_thread_ids.is_empty();
+                            !onboarding_done && recent_history_threads.is_empty();
 
                         if !onboarding_done && !should_deliver_onboarding {
                             let mut cfg = agent.config.write().await;
@@ -402,7 +398,12 @@ if matches!(
 
                         agent
                             .concierge
-                            .on_client_connected(&agent.threads, &agent.tasks)
+                            .on_client_connected_with_persisted_threads(
+                                &agent.threads,
+                                &agent.tasks,
+                                &agent.goal_runs,
+                                &recent_history_threads,
+                            )
                             .await;
                         agent
                             .persist_thread_by_id(crate::agent::concierge::CONCIERGE_THREAD_ID)

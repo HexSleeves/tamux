@@ -1,7 +1,9 @@
 use crate::state::sidebar::SidebarTab;
 use crate::state::task::{TaskState, TodoStatus, WorkContextEntryKind};
+use crate::terminal_graphics::{active_protocol, TerminalImageOverlaySpec, TerminalImageProtocol};
 use crate::theme::ThemeTokens;
 use crate::widgets::chat::SelectionPoint;
+use crate::widgets::image_preview;
 use crate::widgets::message::{render_markdown_pub, wrap_text};
 use ratatui::prelude::*;
 use ratatui::style::{Color, Modifier, Style};
@@ -14,6 +16,8 @@ mod selection;
 use selection::{display_slice, highlight_line_range, line_display_width, line_plain_text};
 
 const SCROLLBAR_WIDTH: u16 = 1;
+const WORK_CONTEXT_IMAGE_HEADER_LINES: u16 = 6;
+const TERMINAL_IMAGE_HEADER_LINES: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct WorkContextScrollbarLayout {
@@ -135,6 +139,35 @@ fn push_preview_content(
     }
 }
 
+fn uses_terminal_graphics(
+    entry_path: &str,
+    repo_root: Option<&str>,
+    active_tab: SidebarTab,
+    scroll: usize,
+) -> bool {
+    active_tab == SidebarTab::Files
+        && scroll == 0
+        && repo_root.is_none()
+        && active_protocol() != TerminalImageProtocol::None
+        && image_preview::resolve_local_image_path(entry_path)
+            .as_deref()
+            .is_some_and(image_preview::is_previewable_image_path)
+}
+
+fn push_terminal_graphics_placeholder(
+    lines: &mut Vec<Line<'static>>,
+    image_preview_height: usize,
+    theme: &ThemeTokens,
+) {
+    lines.push(Line::from(vec![
+        Span::styled("Image: ", theme.fg_dim),
+        Span::styled("high-quality terminal preview", theme.fg_active),
+    ]));
+    for _ in 1..image_preview_height {
+        lines.push(Line::raw(""));
+    }
+}
+
 fn build_lines(
     area: Rect,
     tasks: &TaskState,
@@ -142,6 +175,7 @@ fn build_lines(
     active_tab: SidebarTab,
     selected_index: usize,
     theme: &ThemeTokens,
+    scroll: usize,
 ) -> Vec<RenderedWorkLine> {
     if area.width == 0 || area.height == 0 {
         return Vec::new();
@@ -229,6 +263,10 @@ fn build_lines(
             }
 
             section(&mut lines, "Preview", theme);
+            let image_preview_height =
+                area.height.saturating_sub(lines.len() as u16).max(1) as usize;
+            let use_terminal_image =
+                uses_terminal_graphics(&entry.path, entry.repo_root.as_deref(), active_tab, scroll);
             if let Some(repo_root) = entry.repo_root.as_deref() {
                 if let Some(diff) = tasks.diff_for_path(repo_root, &entry.path) {
                     if diff.trim().is_empty() {
@@ -248,6 +286,15 @@ fn build_lines(
             } else if let Some(preview) = tasks.preview_for_path(&entry.path) {
                 if preview.is_text {
                     push_preview_content(&mut lines, &entry.path, &preview.content, width, theme);
+                } else if use_terminal_image {
+                    push_terminal_graphics_placeholder(&mut lines, image_preview_height, theme);
+                } else if image_preview::is_previewable_image_path(&entry.path) {
+                    lines.extend(image_preview::render_image_preview_lines(
+                        &entry.path,
+                        width,
+                        14,
+                        theme,
+                    ));
                 } else {
                     push_wrapped(
                         &mut lines,
@@ -258,7 +305,20 @@ fn build_lines(
                     );
                 }
             } else {
-                push_wrapped(&mut lines, "Loading preview...", theme.fg_dim, width, 0);
+                if image_preview::is_previewable_image_path(&entry.path) {
+                    if use_terminal_image {
+                        push_terminal_graphics_placeholder(&mut lines, image_preview_height, theme);
+                    } else {
+                        lines.extend(image_preview::render_image_preview_lines(
+                            &entry.path,
+                            width,
+                            14,
+                            theme,
+                        ));
+                    }
+                } else {
+                    push_wrapped(&mut lines, "Loading preview...", theme.fg_dim, width, 0);
+                }
             }
         }
         SidebarTab::Todos => {
@@ -401,7 +461,15 @@ fn selection_snapshot(
     );
     let content = layout.map(|layout| layout.content).unwrap_or(area);
     let resolved_scroll = layout.map(|layout| layout.scroll).unwrap_or(scroll);
-    let all_lines = build_lines(content, tasks, thread_id, active_tab, selected_index, theme);
+    let all_lines = build_lines(
+        content,
+        tasks,
+        thread_id,
+        active_tab,
+        selected_index,
+        theme,
+        resolved_scroll,
+    );
     if all_lines.is_empty() || content.width == 0 || content.height == 0 {
         return None;
     }
@@ -567,15 +635,23 @@ pub fn hit_test(
         .map(|layout| layout.scroll)
         .unwrap_or(scroll)
         .saturating_add(mouse.y.saturating_sub(content.y) as usize);
-    build_lines(content, tasks, thread_id, active_tab, selected_index, theme)
-        .get(row_index)
-        .and_then(|line| {
-            if line.close_preview {
-                Some(WorkContextHitTarget::ClosePreview)
-            } else {
-                None
-            }
-        })
+    build_lines(
+        content,
+        tasks,
+        thread_id,
+        active_tab,
+        selected_index,
+        theme,
+        scroll,
+    )
+    .get(row_index)
+    .and_then(|line| {
+        if line.close_preview {
+            Some(WorkContextHitTarget::ClosePreview)
+        } else {
+            None
+        }
+    })
 }
 
 pub fn render(
@@ -604,7 +680,15 @@ pub fn render(
     );
     let content = layout.map(|layout| layout.content).unwrap_or(area);
     let resolved_scroll = layout.map(|layout| layout.scroll).unwrap_or(scroll);
-    let mut all_lines = build_lines(content, tasks, thread_id, active_tab, selected_index, theme);
+    let mut all_lines = build_lines(
+        content,
+        tasks,
+        thread_id,
+        active_tab,
+        selected_index,
+        theme,
+        resolved_scroll,
+    );
 
     if let Some((start, end)) = mouse_selection {
         let (start_point, end_point) =
@@ -676,7 +760,7 @@ pub fn max_scroll(
     scrollbar_layout(area, tasks, thread_id, active_tab, selected_index, theme, 0)
         .map(|layout| layout.max_scroll)
         .unwrap_or_else(|| {
-            build_lines(area, tasks, thread_id, active_tab, selected_index, theme)
+            build_lines(area, tasks, thread_id, active_tab, selected_index, theme, 0)
                 .len()
                 .saturating_sub(area.height as usize)
         })
@@ -695,7 +779,15 @@ fn scrollbar_layout(
         return None;
     }
 
-    let full_lines = build_lines(area, tasks, thread_id, active_tab, selected_index, theme);
+    let full_lines = build_lines(
+        area,
+        tasks,
+        thread_id,
+        active_tab,
+        selected_index,
+        theme,
+        scroll,
+    );
     if full_lines.len() <= area.height as usize {
         return None;
     }
@@ -706,8 +798,69 @@ fn scrollbar_layout(
         area.width.saturating_sub(SCROLLBAR_WIDTH),
         area.height,
     );
-    let all_lines = build_lines(content, tasks, thread_id, active_tab, selected_index, theme);
+    let all_lines = build_lines(
+        content,
+        tasks,
+        thread_id,
+        active_tab,
+        selected_index,
+        theme,
+        scroll,
+    );
     scrollbar_layout_from_metrics(area, all_lines.len(), scroll)
+}
+
+pub fn terminal_image_overlay_spec(
+    area: Rect,
+    tasks: &TaskState,
+    thread_id: Option<&str>,
+    active_tab: SidebarTab,
+    selected_index: usize,
+    theme: &ThemeTokens,
+    scroll: usize,
+) -> Option<TerminalImageOverlaySpec> {
+    if active_tab != SidebarTab::Files || scroll != 0 {
+        return None;
+    }
+
+    let thread_id = thread_id?;
+    let context = tasks.work_context_for_thread(thread_id)?;
+    let entry = context.entries.get(selected_index)?;
+    if !uses_terminal_graphics(&entry.path, entry.repo_root.as_deref(), active_tab, scroll) {
+        return None;
+    }
+
+    let content = scrollbar_layout(
+        area,
+        tasks,
+        Some(thread_id),
+        active_tab,
+        selected_index,
+        theme,
+        scroll,
+    )
+    .map(|layout| layout.content)
+    .unwrap_or(area);
+    let path = image_preview::resolve_local_image_path(&entry.path)?;
+    let image_row = content
+        .y
+        .saturating_add(WORK_CONTEXT_IMAGE_HEADER_LINES)
+        .saturating_add(TERMINAL_IMAGE_HEADER_LINES);
+    let image_rows = content
+        .height
+        .saturating_sub(WORK_CONTEXT_IMAGE_HEADER_LINES)
+        .saturating_sub(TERMINAL_IMAGE_HEADER_LINES);
+    if content.width == 0 || image_rows == 0 {
+        return None;
+    }
+
+    Some(TerminalImageOverlaySpec {
+        path,
+        column: content.x,
+        row: image_row,
+        cols: content.width,
+        rows: image_rows,
+    })
 }
 
 #[cfg(test)]

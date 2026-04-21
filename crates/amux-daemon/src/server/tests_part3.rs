@@ -70,6 +70,337 @@ async fn gateway_send_results_use_canonical_discord_dm_channel_keys() {
 }
 
 #[tokio::test]
+async fn agent_resolve_task_approval_keeps_connection_alive_for_goal_plan_reviews() {
+    let mut conn = spawn_test_connection().await;
+    let approval_id = "goal-plan-approval-test";
+    let goal_run_id = "goal-plan-review";
+    let now = 1_735_000_000_000u64;
+
+    conn.agent.goal_runs.lock().await.push_back(crate::agent::types::GoalRun {
+        id: goal_run_id.to_string(),
+        title: "Goal plan review".to_string(),
+        goal: "Ship a reviewed execution plan".to_string(),
+        client_request_id: None,
+        status: crate::agent::types::GoalRunStatus::AwaitingApproval,
+        priority: crate::agent::types::TaskPriority::Normal,
+        created_at: now,
+        updated_at: now,
+        started_at: Some(now),
+        completed_at: None,
+        thread_id: Some("thread-goal-plan-review".to_string()),
+        session_id: None,
+        current_step_index: 0,
+        current_step_title: Some("review plan".to_string()),
+        current_step_kind: Some(crate::agent::types::GoalRunStepKind::Research),
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
+        replan_count: 0,
+        max_replans: 2,
+        plan_summary: Some("plan".to_string()),
+        reflection_summary: None,
+        memory_updates: Vec::new(),
+        generated_skill_path: None,
+        last_error: None,
+        failure_cause: None,
+        stopped_reason: None,
+        child_task_ids: vec!["goal-plan-approval-task".to_string()],
+        child_task_count: 1,
+        approval_count: 1,
+        awaiting_approval_id: Some(approval_id.to_string()),
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        active_task_id: Some("goal-plan-approval-task".to_string()),
+        duration_ms: None,
+        steps: vec![crate::agent::types::GoalRunStep {
+            id: "step-1".to_string(),
+            position: 0,
+            title: "review plan".to_string(),
+            instructions: "review plan".to_string(),
+            kind: crate::agent::types::GoalRunStepKind::Research,
+            success_criteria: "approved".to_string(),
+            session_id: None,
+            status: crate::agent::types::GoalRunStepStatus::Pending,
+            task_id: Some("goal-plan-approval-task".to_string()),
+            summary: None,
+            error: None,
+            started_at: None,
+            completed_at: None,
+        }],
+        events: Vec::new(),
+        dossier: None,
+        total_prompt_tokens: 0,
+        total_completion_tokens: 0,
+        estimated_cost_usd: None,
+        autonomy_level: crate::agent::AutonomyLevel::Aware,
+        authorship_tag: None,
+        launch_assignment_snapshot: Vec::new(),
+        runtime_assignment_list: Vec::new(),
+        root_thread_id: None,
+        active_thread_id: None,
+        execution_thread_ids: Vec::new(),
+    });
+
+    conn.agent.tasks.lock().await.push_back(crate::agent::types::AgentTask {
+        id: "goal-plan-approval-task".to_string(),
+        title: "Review low-confidence goal plan".to_string(),
+        description: "Review low-confidence goal plan".to_string(),
+        status: crate::agent::types::TaskStatus::AwaitingApproval,
+        priority: crate::agent::types::TaskPriority::Normal,
+        progress: 0,
+        created_at: now,
+        started_at: None,
+        completed_at: None,
+        error: None,
+        result: None,
+        thread_id: Some("thread-goal-plan-review".to_string()),
+        source: "goal_plan_approval".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: None,
+        goal_run_id: Some(goal_run_id.to_string()),
+        goal_run_title: Some("Goal plan review".to_string()),
+        goal_step_id: Some("step-1".to_string()),
+        goal_step_title: Some("review plan".to_string()),
+        parent_task_id: None,
+        parent_thread_id: None,
+        runtime: "daemon".to_string(),
+        retry_count: 0,
+        max_retries: 0,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: Some("awaiting approval".to_string()),
+        awaiting_approval_id: Some(approval_id.to_string()),
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        lane_id: None,
+        last_error: None,
+        override_provider: None,
+        override_model: None,
+        override_system_prompt: None,
+        sub_agent_def_id: None,
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        logs: Vec::new(),
+    });
+
+    conn.framed
+        .send(ClientMessage::AgentResolveTaskApproval {
+            approval_id: approval_id.to_string(),
+            decision: "approve-once".to_string(),
+        })
+        .await
+        .expect("send approval resolution");
+
+    match conn.recv().await {
+        DaemonMessage::ApprovalResolved { approval_id: got, .. } => {
+            assert_eq!(got, approval_id);
+        }
+        other => panic!("expected ApprovalResolved, got {other:?}"),
+    }
+
+    conn.framed
+        .send(ClientMessage::Ping)
+        .await
+        .expect("send ping after approval resolution");
+
+    match conn.recv().await {
+        DaemonMessage::Pong => {}
+        other => panic!("expected Pong after approval resolution, got {other:?}"),
+    }
+
+    conn.shutdown().await;
+}
+
+#[tokio::test]
+async fn agent_resolve_task_approval_keeps_subscribed_connection_alive_for_goal_plan_reviews() {
+    let mut conn = spawn_test_connection().await;
+    let approval_id = "goal-plan-approval-subscribed";
+    let goal_run_id = "goal-plan-review-subscribed";
+    let now = 1_735_000_000_000u64;
+
+    conn.agent.goal_runs.lock().await.push_back(crate::agent::types::GoalRun {
+        id: goal_run_id.to_string(),
+        title: "Goal plan review".to_string(),
+        goal: "Ship a reviewed execution plan".to_string(),
+        client_request_id: None,
+        status: crate::agent::types::GoalRunStatus::AwaitingApproval,
+        priority: crate::agent::types::TaskPriority::Normal,
+        created_at: now,
+        updated_at: now,
+        started_at: Some(now),
+        completed_at: None,
+        thread_id: Some("thread-goal-plan-review-subscribed".to_string()),
+        session_id: None,
+        current_step_index: 0,
+        current_step_title: Some("review plan".to_string()),
+        current_step_kind: Some(crate::agent::types::GoalRunStepKind::Research),
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
+        replan_count: 0,
+        max_replans: 2,
+        plan_summary: Some("plan".to_string()),
+        reflection_summary: None,
+        memory_updates: Vec::new(),
+        generated_skill_path: None,
+        last_error: None,
+        failure_cause: None,
+        stopped_reason: None,
+        child_task_ids: vec!["goal-plan-approval-task-subscribed".to_string()],
+        child_task_count: 1,
+        approval_count: 1,
+        awaiting_approval_id: Some(approval_id.to_string()),
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        active_task_id: Some("goal-plan-approval-task-subscribed".to_string()),
+        duration_ms: None,
+        steps: vec![crate::agent::types::GoalRunStep {
+            id: "step-1".to_string(),
+            position: 0,
+            title: "review plan".to_string(),
+            instructions: "review plan".to_string(),
+            kind: crate::agent::types::GoalRunStepKind::Research,
+            success_criteria: "approved".to_string(),
+            session_id: None,
+            status: crate::agent::types::GoalRunStepStatus::Pending,
+            task_id: Some("goal-plan-approval-task-subscribed".to_string()),
+            summary: None,
+            error: None,
+            started_at: None,
+            completed_at: None,
+        }],
+        events: Vec::new(),
+        dossier: None,
+        total_prompt_tokens: 0,
+        total_completion_tokens: 0,
+        estimated_cost_usd: None,
+        autonomy_level: crate::agent::AutonomyLevel::Aware,
+        authorship_tag: None,
+        launch_assignment_snapshot: Vec::new(),
+        runtime_assignment_list: Vec::new(),
+        root_thread_id: None,
+        active_thread_id: None,
+        execution_thread_ids: Vec::new(),
+    });
+
+    conn.agent.tasks.lock().await.push_back(crate::agent::types::AgentTask {
+        id: "goal-plan-approval-task-subscribed".to_string(),
+        title: "Review low-confidence goal plan".to_string(),
+        description: "Review low-confidence goal plan".to_string(),
+        status: crate::agent::types::TaskStatus::AwaitingApproval,
+        priority: crate::agent::types::TaskPriority::Normal,
+        progress: 0,
+        created_at: now,
+        started_at: None,
+        completed_at: None,
+        error: None,
+        result: None,
+        thread_id: Some("thread-goal-plan-review-subscribed".to_string()),
+        source: "goal_plan_approval".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: None,
+        goal_run_id: Some(goal_run_id.to_string()),
+        goal_run_title: Some("Goal plan review".to_string()),
+        goal_step_id: Some("step-1".to_string()),
+        goal_step_title: Some("review plan".to_string()),
+        parent_task_id: None,
+        parent_thread_id: None,
+        runtime: "daemon".to_string(),
+        retry_count: 0,
+        max_retries: 0,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: Some("awaiting approval".to_string()),
+        awaiting_approval_id: Some(approval_id.to_string()),
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        lane_id: None,
+        last_error: None,
+        override_provider: None,
+        override_model: None,
+        override_system_prompt: None,
+        sub_agent_def_id: None,
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        logs: Vec::new(),
+    });
+
+    conn.framed
+        .send(ClientMessage::AgentSubscribe)
+        .await
+        .expect("subscribe to agent events");
+
+    conn.framed
+        .send(ClientMessage::AgentResolveTaskApproval {
+            approval_id: approval_id.to_string(),
+            decision: "approve-once".to_string(),
+        })
+        .await
+        .expect("send approval resolution");
+
+    let approval_resolved = timeout(Duration::from_secs(1), async {
+        loop {
+            match conn.recv().await {
+                DaemonMessage::ApprovalResolved { approval_id: got, .. } => return got,
+                DaemonMessage::AgentEvent { .. } => continue,
+                other => panic!("expected ApprovalResolved, got {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("approval resolution should keep subscribed connection open");
+    assert_eq!(approval_resolved, approval_id);
+
+    conn.framed
+        .send(ClientMessage::Ping)
+        .await
+        .expect("send ping after approval resolution");
+
+    let pong_received = timeout(Duration::from_secs(1), async {
+        loop {
+            match conn.recv().await {
+                DaemonMessage::Pong => return true,
+                DaemonMessage::AgentEvent { .. } => continue,
+                other => panic!("expected Pong after approval resolution, got {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("subscribed connection should remain usable after approval resolution");
+    assert!(pong_received);
+
+    conn.shutdown().await;
+}
+
+#[tokio::test]
 async fn whatsapp_link_start_status_stop_send_status_responses() {
     let mut conn = spawn_test_connection().await;
 
@@ -477,33 +808,6 @@ async fn divergent_ipc_get_session_returns_completion_payload() {
     conn.shutdown().await;
 }
 
-struct EnvGuard {
-    vars: Vec<(&'static str, Option<String>)>,
-}
-
-impl EnvGuard {
-    fn new(names: &[&'static str]) -> Self {
-        Self {
-            vars: names
-                .iter()
-                .map(|name| (*name, std::env::var(name).ok()))
-                .collect(),
-        }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        for (name, value) in self.vars.drain(..) {
-            if let Some(value) = value {
-                std::env::set_var(name, value);
-            } else {
-                std::env::remove_var(name);
-            }
-        }
-    }
-}
-
 fn prepare_server_openai_codex_auth_test(root: &std::path::Path) {
     std::env::set_var("TAMUX_PROVIDER_AUTH_DB_PATH", root.join("provider-auth.db"));
     std::env::set_var(
@@ -513,9 +817,12 @@ fn prepare_server_openai_codex_auth_test(root: &std::path::Path) {
     crate::agent::openai_codex_auth::clear_openai_codex_auth_test_state();
 }
 
-fn setup_server_openai_codex_auth_test() -> (tempfile::TempDir, EnvGuard) {
+fn setup_server_openai_codex_auth_test() -> (tempfile::TempDir, crate::test_support::EnvGuard) {
     let temp_dir = tempfile::tempdir().expect("tempdir should succeed");
-    let env_guard = EnvGuard::new(&["TAMUX_PROVIDER_AUTH_DB_PATH", "TAMUX_CODEX_CLI_AUTH_PATH"]);
+    let env_guard = crate::test_support::EnvGuard::new(&[
+        "TAMUX_PROVIDER_AUTH_DB_PATH",
+        "TAMUX_CODEX_CLI_AUTH_PATH",
+    ]);
     prepare_server_openai_codex_auth_test(temp_dir.path());
     (temp_dir, env_guard)
 }
@@ -811,6 +1118,7 @@ async fn thread_list_subscription_registers_threads_for_live_agent_events() {
         .send(ClientMessage::AgentListThreads {
             limit: None,
             offset: None,
+            include_internal: false,
         })
         .await
         .expect("request thread list");
@@ -858,6 +1166,50 @@ async fn thread_list_subscription_registers_threads_for_live_agent_events() {
 }
 
 #[tokio::test]
+async fn thread_list_include_internal_reveals_playground_threads() {
+    let mut conn = spawn_test_connection().await;
+    let playground_thread_id = "playground:domowoj:thread-user";
+
+    conn.agent.threads.write().await.insert(
+        playground_thread_id.to_string(),
+        AgentThread {
+            id: playground_thread_id.to_string(),
+            agent_name: Some("Domowoj".to_string()),
+            title: "Participant Playground · Domowoj @ thread-user".to_string(),
+            messages: vec![AgentMessage::user("Hidden draft", 1)],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            created_at: 1,
+            updated_at: 1,
+        },
+    );
+
+    conn.framed
+        .send(ClientMessage::AgentListThreads {
+            limit: None,
+            offset: None,
+            include_internal: true,
+        })
+        .await
+        .expect("request inclusive thread list");
+
+    let DaemonMessage::AgentThreadList { threads_json } = conn.recv().await else {
+        panic!("expected thread list response");
+    };
+
+    assert!(
+        threads_json.contains(playground_thread_id),
+        "include_internal thread list should surface playground summaries"
+    );
+}
+
+#[tokio::test]
 async fn openai_codex_auth_status_request_returns_status_payload() {
     let _lock = crate::agent::provider_auth_test_env_lock();
     let (_temp_dir, _env_guard) = setup_server_openai_codex_auth_test();
@@ -888,7 +1240,7 @@ async fn openai_codex_auth_status_request_returns_status_payload() {
 async fn github_copilot_login_provider_without_token_uses_browser_auth_flow() {
     let _lock = crate::agent::provider_auth_test_env_lock();
     let temp_dir = tempfile::tempdir().expect("tempdir should succeed");
-    let _env_guard = EnvGuard::new(&[
+    let _env_guard = crate::test_support::EnvGuard::new(&[
         "PATH",
         "TAMUX_PROVIDER_AUTH_DB_PATH",
         "TAMUX_GITHUB_COPILOT_DISABLE_GH_CLI",

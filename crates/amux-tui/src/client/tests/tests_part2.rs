@@ -57,3 +57,39 @@ fn bootstrap_rearms_after_successful_connection_cycle() {
         "once bootstrap already ran in the current disconnected cycle, it should not rerun immediately"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn daemon_bootstrap_command_detaches_child_session_on_unix() {
+    let parent_sid = unsafe { libc::getsid(0) };
+    assert!(parent_sid > 0, "parent session id should be available");
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build runtime");
+
+    let child_sid = runtime.block_on(async {
+        let mut command = tokio::process::Command::new("sh");
+        command
+            .arg("-c")
+            .arg("ps -o sid= -p $$")
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped());
+        DaemonClient::configure_daemon_bootstrap_command(&mut command);
+
+        let output = command.output().await.expect("spawn detached child");
+        assert!(output.status.success(), "child should exit cleanly");
+
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<libc::pid_t>()
+            .expect("parse child session id")
+    });
+
+    assert_ne!(
+        child_sid, parent_sid,
+        "daemon bootstrap child should run in a detached session"
+    );
+}

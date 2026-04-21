@@ -197,6 +197,70 @@ fn work_context_drag_selection_copies_beyond_visible_window() {
 }
 
 #[test]
+fn goal_view_drag_selection_copies_beyond_visible_window() {
+    let mut model = build_model();
+    model.show_sidebar_override = Some(false);
+    model.focus = FocusArea::Chat;
+    model.task_show_live_todos = false;
+    model.task_show_timeline = false;
+    model.task_show_files = false;
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Large Goal".to_string(),
+            steps: (1..=80)
+                .map(|idx| task::GoalRunStep {
+                    id: format!("step-{idx}"),
+                    title: format!("Step {idx}"),
+                    order: idx - 1,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let chat_area = rendered_chat_area(&model);
+    let start_row = chat_area.y.saturating_add(6);
+    let start_col = chat_area.x.saturating_add(4);
+
+    super::conversion::reset_last_copied_text();
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: start_col,
+        row: start_row,
+        modifiers: KeyModifiers::NONE,
+    });
+    for _ in 0..4 {
+        model.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: start_col,
+            row: start_row,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: start_col,
+        row: start_row,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    let copied = super::conversion::last_copied_text()
+        .expect("dragging across goal view content should copy selected text");
+    assert!(
+        copied.contains("Step"),
+        "expected goal selection to include goal text, got: {copied:?}"
+    );
+    assert_eq!(model.status_line, "Copied selection to clipboard");
+}
+
+#[test]
 fn esc_closes_work_context_even_from_input_focus() {
     let mut model = build_model();
     model.focus = FocusArea::Input;
@@ -614,6 +678,90 @@ fn clicking_chat_file_chip_requests_file_preview() {
             assert_eq!(max_bytes, Some(65_536));
         }
         other => panic!("expected file preview request, got {:?}", other),
+    }
+    assert!(matches!(model.main_pane_view, MainPaneView::FilePreview(_)));
+}
+
+#[test]
+fn clicking_chat_image_attachment_requests_file_preview() {
+    use base64::Engine as _;
+
+    let (_daemon_tx, daemon_rx) = mpsc::channel();
+    let (cmd_tx, mut cmd_rx) = unbounded_channel();
+    let mut model = TuiModel::new(daemon_rx, cmd_tx);
+    model.show_sidebar_override = Some(false);
+    model.focus = FocusArea::Chat;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    let temp_path =
+        std::env::temp_dir().join(format!("tamux-chat-image-{}.png", uuid::Uuid::new_v4()));
+    std::fs::write(
+        &temp_path,
+        base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO0pGfcAAAAASUVORK5CYII=")
+            .expect("fixture PNG should decode"),
+    )
+    .expect("fixture PNG should write");
+    model.chat.reduce(chat::ChatAction::AppendMessage {
+        thread_id: "thread-1".to_string(),
+        message: chat::AgentMessage {
+            role: chat::MessageRole::Assistant,
+            content_blocks: vec![chat::AgentContentBlock::Image {
+                url: Some(format!("file://{}", temp_path.display())),
+                data_url: None,
+                mime_type: Some("image/png".to_string()),
+            }],
+            ..Default::default()
+        },
+    });
+
+    let input_start_row = model.height.saturating_sub(model.input_height() + 1);
+    let chat_area = Rect::new(0, 3, model.width, input_start_row.saturating_sub(3));
+    let image_pos = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+        .find_map(|row| {
+            (chat_area.x..chat_area.x.saturating_add(chat_area.width)).find_map(|column| {
+                let pos = Position::new(column, row);
+                if widgets::chat::hit_test(
+                    chat_area,
+                    &model.chat,
+                    &model.theme,
+                    model.tick_counter,
+                    pos,
+                ) == Some(chat::ChatHitTarget::MessageImage { message_index: 0 })
+                {
+                    Some(pos)
+                } else {
+                    None
+                }
+            })
+        })
+        .expect("assistant image attachment should be clickable");
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: image_pos.x,
+        row: image_pos.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: image_pos.x,
+        row: image_pos.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    match cmd_rx.try_recv() {
+        Ok(DaemonCommand::RequestFilePreview { path, max_bytes }) => {
+            assert_eq!(path, temp_path.display().to_string());
+            assert_eq!(max_bytes, Some(65_536));
+        }
+        other => panic!("expected image preview request, got {:?}", other),
     }
     assert!(matches!(model.main_pane_view, MainPaneView::FilePreview(_)));
 }
@@ -1148,6 +1296,87 @@ fn clicking_read_skill_chip_requests_plain_preview() {
 }
 
 #[test]
+fn clicking_tool_file_path_metadata_requests_plain_preview() {
+    let (_daemon_tx, daemon_rx) = mpsc::channel();
+    let (cmd_tx, mut cmd_rx) = unbounded_channel();
+    let mut model = TuiModel::new(daemon_rx, cmd_tx);
+    model.show_sidebar_override = Some(false);
+    model.focus = FocusArea::Chat;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+
+    let preview_path = "/home/mkurman/gitlab/it/cmux-next/.tamux/.cache/tools/thread-thread-1/bash_command-1700000123.txt";
+    model.chat.reduce(chat::ChatAction::AppendMessage {
+        thread_id: "thread-1".to_string(),
+        message: chat::AgentMessage {
+            role: chat::MessageRole::Tool,
+            tool_name: Some("bash_command".to_string()),
+            tool_status: Some("done".to_string()),
+            tool_output_preview_path: Some(preview_path.to_string()),
+            content: "Tool result saved to preview file\n- tool: bash_command".to_string(),
+            ..Default::default()
+        },
+    });
+
+    let input_start_row = model.height.saturating_sub(model.input_height() + 1);
+    let chat_area = Rect::new(0, 3, model.width, input_start_row.saturating_sub(3));
+    let chip_pos = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+        .find_map(|row| {
+            (chat_area.x..chat_area.x.saturating_add(chat_area.width)).find_map(|column| {
+                let pos = Position::new(column, row);
+                if widgets::chat::hit_test(
+                    chat_area,
+                    &model.chat,
+                    &model.theme,
+                    model.tick_counter,
+                    pos,
+                ) == Some(chat::ChatHitTarget::ToolFilePath { message_index: 0 })
+                {
+                    Some(pos)
+                } else {
+                    None
+                }
+            })
+        })
+        .expect("preview-backed tool row should expose a clickable file chip");
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: chip_pos.x,
+        row: chip_pos.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: chip_pos.x,
+        row: chip_pos.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    match cmd_rx.try_recv() {
+        Ok(DaemonCommand::RequestFilePreview { path, max_bytes }) => {
+            assert_eq!(path, preview_path);
+            assert_eq!(max_bytes, Some(65_536));
+        }
+        other => panic!("expected plain file preview request, got {:?}", other),
+    }
+
+    match &model.main_pane_view {
+        MainPaneView::FilePreview(target) => {
+            assert_eq!(target.path, preview_path);
+            assert!(target.repo_root.is_none());
+            assert!(target.repo_relative_path.is_none());
+        }
+        other => panic!("expected file preview pane, got {:?}", other),
+    }
+}
+
+#[test]
 fn closing_chat_file_preview_returns_to_conversation() {
     let mut model = build_model();
     model.focus = FocusArea::Chat;
@@ -1162,6 +1391,455 @@ fn closing_chat_file_preview_returns_to_conversation() {
     assert!(!handled);
     assert!(matches!(model.main_pane_view, MainPaneView::Conversation));
     assert_eq!(model.focus, FocusArea::Chat);
+}
+
+#[test]
+fn goal_view_renders_goal_run_dossier_sections() {
+    fn render_task_view(model: &mut TuiModel) -> String {
+        let backend = TestBackend::new(model.width, model.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("task view render should succeed");
+
+        let chat_area = rendered_chat_area(model);
+        let buffer = terminal.backend().buffer();
+        (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .map(|y| {
+                (chat_area.x..chat_area.x.saturating_add(chat_area.width))
+                    .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    let mut model = build_model();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+    model.task_show_live_todos = false;
+    model.task_show_timeline = false;
+    model.task_show_files = false;
+
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Instrument Titan".to_string(),
+            goal: "Ship the first dossier-aware goal view.".to_string(),
+            steps: vec![task::GoalRunStep {
+                id: "step-1".to_string(),
+                title: "Phone logging flow".to_string(),
+                order: 0,
+                ..Default::default()
+            }],
+            dossier: Some(task::GoalRunDossier {
+                projection_state: "in_progress".to_string(),
+                summary: Some("Execution is split into build and verification units.".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let plain = render_task_view(&mut model);
+
+    assert!(plain.contains("Goal Mission Control"), "{plain}");
+    assert!(plain.contains("Plan"), "{plain}");
+    assert!(plain.contains("Run timeline"), "{plain}");
+    assert!(plain.contains("Goal"), "{plain}");
+    assert!(plain.contains("Prompt"), "{plain}");
+    assert!(plain.contains("Ship the first dossier-aware"), "{plain}");
+    assert!(plain.contains("Phone logging flow"), "{plain}");
+    assert!(!plain.contains("Execution Dossier"), "{plain}");
+}
+
+#[test]
+fn goal_view_renders_goal_control_hints() {
+    fn render_task_view(model: &mut TuiModel) -> String {
+        let backend = TestBackend::new(model.width, model.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("task view render should succeed");
+
+        let chat_area = rendered_chat_area(model);
+        let buffer = terminal.backend().buffer();
+        (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .map(|y| {
+                (chat_area.x..chat_area.x.saturating_add(chat_area.width))
+                    .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    let mut model = build_model();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+    model.task_show_live_todos = false;
+    model.task_show_timeline = false;
+    model.task_show_files = false;
+
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Paused Goal".to_string(),
+            status: Some(task::GoalRunStatus::Paused),
+            current_step_index: 1,
+            current_step_title: Some("Implement".to_string()),
+            steps: vec![
+                task::GoalRunStep {
+                    id: "step-1".to_string(),
+                    title: "Plan".to_string(),
+                    order: 0,
+                    ..Default::default()
+                },
+                task::GoalRunStep {
+                    id: "step-2".to_string(),
+                    title: "Implement".to_string(),
+                    order: 1,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let plain = render_task_view(&mut model);
+
+    assert!(plain.contains("Goal Mission Control"), "{plain}");
+    assert!(plain.contains("Goal"), "{plain}");
+    assert!(plain.contains("Progress"), "{plain}");
+    assert!(plain.contains("Active agent"), "{plain}");
+    assert!(plain.contains("Needs attention"), "{plain}");
+}
+
+#[test]
+fn goal_view_renders_visual_status_banner_and_control_chips() {
+    fn render_task_view(model: &mut TuiModel) -> String {
+        let backend = TestBackend::new(model.width, model.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("task view render should succeed");
+
+        let chat_area = rendered_chat_area(model);
+        let buffer = terminal.backend().buffer();
+        (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .map(|y| {
+                (chat_area.x..chat_area.x.saturating_add(chat_area.width))
+                    .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    let mut model = build_model();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+    model.task_show_live_todos = false;
+    model.task_show_timeline = false;
+    model.task_show_files = false;
+    model.tick_counter = 12;
+
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Paused Goal".to_string(),
+            status: Some(task::GoalRunStatus::Paused),
+            current_step_index: 1,
+            current_step_title: Some("Implement".to_string()),
+            steps: vec![
+                task::GoalRunStep {
+                    id: "step-1".to_string(),
+                    title: "Plan".to_string(),
+                    order: 0,
+                    ..Default::default()
+                },
+                task::GoalRunStep {
+                    id: "step-2".to_string(),
+                    title: "Implement".to_string(),
+                    order: 1,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let plain = render_task_view(&mut model);
+
+    assert!(plain.contains("Goal Mission Control"), "{plain}");
+    assert!(plain.contains("Plan"), "{plain}");
+    assert!(plain.contains("Implement"), "{plain}");
+    assert!(!plain.contains("Run Status"), "{plain}");
+    assert!(!plain.contains("Controls"), "{plain}");
+}
+
+#[test]
+fn goal_view_renders_live_activity_with_tools_files_and_todos() {
+    fn render_task_view(model: &mut TuiModel) -> String {
+        let backend = TestBackend::new(model.width, model.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("task view render should succeed");
+
+        let chat_area = rendered_chat_area(model);
+        let buffer = terminal.backend().buffer();
+        (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .map(|y| {
+                (chat_area.x..chat_area.x.saturating_add(chat_area.width))
+                    .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    let mut model = build_model();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+    model.task_show_live_todos = false;
+    model.task_show_timeline = false;
+    model.task_show_files = false;
+    model.tick_counter = 21;
+
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Live Goal".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            status: Some(task::GoalRunStatus::Running),
+            current_step_index: 0,
+            current_step_title: Some("Patch UI".to_string()),
+            steps: vec![task::GoalRunStep {
+                id: "step-1".to_string(),
+                title: "Patch UI".to_string(),
+                order: 0,
+                ..Default::default()
+            }],
+            events: vec![
+                task::GoalRunEvent {
+                    id: "event-1".to_string(),
+                    phase: "tool".to_string(),
+                    message: "apply_patch updated goal view".to_string(),
+                    details: Some("Added status hero and activity cards".to_string()),
+                    step_index: Some(0),
+                    ..Default::default()
+                },
+                task::GoalRunEvent {
+                    id: "event-2".to_string(),
+                    phase: "todo".to_string(),
+                    message: "goal todo updated".to_string(),
+                    step_index: Some(0),
+                    todo_snapshot: vec![task::TodoItem {
+                        id: "todo-1".to_string(),
+                        content: "Inspect failing test".to_string(),
+                        status: Some(task::TodoStatus::InProgress),
+                        position: 0,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }));
+    model.tasks.reduce(task::TaskAction::WorkContextReceived(
+        task::ThreadWorkContext {
+            thread_id: "thread-1".to_string(),
+            entries: vec![task::WorkContextEntry {
+                path: "crates/amux-tui/src/widgets/task_view.rs".to_string(),
+                source: "apply_patch".to_string(),
+                change_kind: Some("diff".to_string()),
+                goal_run_id: Some("goal-1".to_string()),
+                step_index: Some(0),
+                is_text: true,
+                ..Default::default()
+            }],
+        },
+    ));
+    model.tasks.reduce(task::TaskAction::ThreadTodosReceived {
+        thread_id: "thread-1".to_string(),
+        items: vec![task::TodoItem {
+            id: "todo-1".to_string(),
+            content: "Inspect failing test".to_string(),
+            status: Some(task::TodoStatus::InProgress),
+            step_index: Some(0),
+            position: 0,
+            ..Default::default()
+        }],
+    });
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+    model.goal_workspace.set_step_expanded("step-1", true);
+
+    let plain = render_task_view(&mut model);
+
+    assert!(plain.contains("Run timeline"), "{plain}");
+    assert!(plain.contains("apply_patch updated goal view"), "{plain}");
+    assert!(plain.contains("goal todo updated"), "{plain}");
+    assert!(plain.contains("Inspect failing test"), "{plain}");
+    assert!(plain.contains("crates/amux-tui/src/widgets/task"), "{plain}");
+}
+
+#[test]
+fn goal_view_related_tasks_use_status_checkbox_without_duplicate_status_text() {
+    fn render_task_view(model: &mut TuiModel) -> String {
+        let backend = TestBackend::new(model.width, model.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("task view render should succeed");
+
+        let chat_area = rendered_chat_area(model);
+        let buffer = terminal.backend().buffer();
+        (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .map(|y| {
+                (chat_area.x..chat_area.x.saturating_add(chat_area.width))
+                    .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    let mut model = build_model();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+    model.task_show_live_todos = false;
+    model.task_show_timeline = false;
+    model.task_show_files = false;
+
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Goal".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            steps: vec![task::GoalRunStep {
+                id: "step-1".to_string(),
+                title: "Step".to_string(),
+                order: 0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+    model.tasks.reduce(task::TaskAction::ThreadTodosReceived {
+        thread_id: "thread-1".to_string(),
+        items: vec![
+            task::TodoItem {
+                id: "todo-1".to_string(),
+                content: "Collect and index sources".to_string(),
+                status: Some(task::TodoStatus::InProgress),
+                step_index: Some(0),
+                position: 0,
+                ..Default::default()
+            },
+            task::TodoItem {
+                id: "todo-2".to_string(),
+                content: "Ground the user's background".to_string(),
+                status: Some(task::TodoStatus::Completed),
+                step_index: Some(0),
+                position: 1,
+                ..Default::default()
+            },
+            task::TodoItem {
+                id: "todo-3".to_string(),
+                content: "Review plan".to_string(),
+                status: Some(task::TodoStatus::Blocked),
+                step_index: Some(0),
+                position: 2,
+                ..Default::default()
+            },
+        ],
+    });
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+    model.goal_workspace.set_step_expanded("step-1", true);
+
+    let plain = render_task_view(&mut model);
+
+    assert!(plain.contains("[~] Collect and index sources"), "{plain}");
+    assert!(plain.contains("[x] Ground the user's background"), "{plain}");
+    assert!(plain.contains("[!] Review plan"), "{plain}");
+    assert!(!plain.contains("Collect and index sources running"), "{plain}");
+    assert!(!plain.contains("Ground the user's background done"), "{plain}");
+    assert!(!plain.contains("Review plan blocked"), "{plain}");
+}
+
+#[test]
+fn goal_view_paused_restart_renders_review_guidance() {
+    fn render_task_view(model: &mut TuiModel) -> String {
+        let backend = TestBackend::new(model.width, model.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal
+            .draw(|frame| model.render(frame))
+            .expect("task view render should succeed");
+
+        let chat_area = rendered_chat_area(model);
+        let buffer = terminal.backend().buffer();
+        (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+            .map(|y| {
+                (chat_area.x..chat_area.x.saturating_add(chat_area.width))
+                    .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    let mut model = build_model();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+    model.task_show_live_todos = false;
+    model.task_show_timeline = false;
+    model.task_show_files = false;
+
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(task::GoalRun {
+            id: "goal-1".to_string(),
+            title: "Paused Goal".to_string(),
+            status: Some(task::GoalRunStatus::Paused),
+            current_step_title: Some("Implement".to_string()),
+            events: vec![task::GoalRunEvent {
+                id: "event-1".to_string(),
+                phase: "restart".to_string(),
+                message: "Daemon restarted; goal run paused for operator review.".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let plain = render_task_view(&mut model);
+
+    assert!(plain.contains("Run timeline"), "{plain}");
+    assert!(plain.contains("Daemon restarted; goal run paused"), "{plain}");
+    assert!(plain.contains("operator review."), "{plain}");
 }
 
 #[test]
@@ -1419,4 +2097,276 @@ fn file_preview_view_renders_visible_scrollbar_when_preview_overflows() {
         plain.contains("│") || plain.contains("█"),
         "expected visible scrollbar in file preview view, got: {plain:?}"
     );
+}
+
+#[test]
+fn file_preview_view_renders_image_preview_instead_of_binary_placeholder() {
+    use base64::Engine as _;
+
+    let mut model = build_model();
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+
+    let image_path =
+        std::env::temp_dir().join(format!("tamux-preview-image-{}.png", uuid::Uuid::new_v4()));
+    std::fs::write(
+        &image_path,
+        base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO0pGfcAAAAASUVORK5CYII=")
+            .expect("fixture PNG should decode"),
+    )
+    .expect("fixture PNG should write");
+
+    model
+        .tasks
+        .reduce(task::TaskAction::FilePreviewReceived(task::FilePreview {
+            path: image_path.display().to_string(),
+            content: String::new(),
+            truncated: false,
+            is_text: false,
+        }));
+    model.main_pane_view = MainPaneView::FilePreview(ChatFilePreviewTarget {
+        path: image_path.display().to_string(),
+        repo_root: None,
+        repo_relative_path: None,
+    });
+
+    let backend = TestBackend::new(model.width, model.height);
+    let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+    terminal
+        .draw(|frame| model.render(frame))
+        .expect("file preview render should succeed");
+
+    let chat_area = rendered_chat_area(&model);
+    let buffer = terminal.backend().buffer();
+    let plain = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+        .flat_map(|y| {
+            (chat_area.x..chat_area.x.saturating_add(chat_area.width))
+                .filter_map(move |x| buffer.cell((x, y)).map(|cell| cell.symbol().to_string()))
+        })
+        .collect::<String>();
+
+    assert!(
+        plain.contains("Image:"),
+        "expected image preview header, got: {plain:?}"
+    );
+    assert!(
+        !plain.contains("Binary file preview is not available."),
+        "expected image preview instead of binary placeholder, got: {plain:?}"
+    );
+}
+
+#[test]
+fn file_preview_view_uses_available_height_for_image_preview() {
+    let mut model = build_model();
+    model.width = 100;
+    model.height = 40;
+    model.focus = FocusArea::Chat;
+    model.show_sidebar_override = Some(false);
+
+    let image_path =
+        std::env::temp_dir().join(format!("tamux-preview-image-{}.png", uuid::Uuid::new_v4()));
+    image::RgbaImage::from_fn(1024, 1024, |x, y| {
+        image::Rgba([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8, 255])
+    })
+    .save(&image_path)
+    .expect("fixture PNG should write");
+
+    model
+        .tasks
+        .reduce(task::TaskAction::FilePreviewReceived(task::FilePreview {
+            path: image_path.display().to_string(),
+            content: String::new(),
+            truncated: false,
+            is_text: false,
+        }));
+    model.main_pane_view = MainPaneView::FilePreview(ChatFilePreviewTarget {
+        path: image_path.display().to_string(),
+        repo_root: None,
+        repo_relative_path: None,
+    });
+
+    let backend = TestBackend::new(model.width, model.height);
+    let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+    terminal
+        .draw(|frame| model.render(frame))
+        .expect("file preview render should succeed");
+    assert!(
+        crate::widgets::image_preview::process_preview_jobs_for_path_until_stable_for_tests(
+            &image_path.display().to_string(),
+        ),
+        "expected initial file preview render to queue and complete image preview work",
+    );
+    terminal
+        .draw(|frame| model.render(frame))
+        .expect("file preview rerender should use cached image preview");
+    assert!(
+        crate::widgets::image_preview::process_preview_jobs_for_path_until_stable_for_tests(
+            &image_path.display().to_string(),
+        ),
+        "expected rerendered file preview to settle any resized image preview work",
+    );
+    terminal
+        .draw(|frame| model.render(frame))
+        .expect("file preview final render should use settled image preview");
+
+    let chat_area = rendered_chat_area(&model);
+    let buffer = terminal.backend().buffer();
+    let image_rows = (chat_area.y..chat_area.y.saturating_add(chat_area.height))
+        .filter(|&y| {
+            (chat_area.x..chat_area.x.saturating_add(chat_area.width)).any(|x| {
+                buffer
+                    .cell((x, y))
+                    .map(|cell| cell.symbol() == "▀")
+                    .unwrap_or(false)
+            })
+        })
+        .count();
+
+    assert!(
+        image_rows > 20,
+        "expected image preview to use more than the old 20-row cap, got {image_rows} rows"
+    );
+}
+
+#[test]
+fn goal_composer_mission_control_preflight_renders_stable_sections() {
+    let mut model = build_model();
+    model.width = 100;
+    model.height = 40;
+    model.open_new_goal_view();
+    model.goal_mission_control.prompt_text = "Ship the next release".to_string();
+    model.goal_mission_control.preset_source_label = "Previous goal snapshot".to_string();
+    model.goal_mission_control.save_as_default_pending = true;
+
+    let backend = TestBackend::new(model.width, model.height);
+    let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+    terminal
+        .draw(|frame| model.render(frame))
+        .expect("goal mission control preflight render should succeed");
+
+    let buffer = terminal.backend().buffer();
+    let rendered = (0..model.height)
+        .map(|y| {
+            (0..model.width)
+                .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        rendered.contains("MISSION CONTROL"),
+        "preflight should render the Mission Control title"
+    );
+    assert!(
+        rendered.contains("Goal prompt"),
+        "preflight should render a prompt section"
+    );
+    assert!(
+        rendered.contains("Main model"),
+        "preflight should render the selected main model section"
+    );
+    assert!(
+        rendered.contains("Agent roster"),
+        "preflight should render the goal agent roster section"
+    );
+    assert!(
+        rendered.contains("Preset source"),
+        "preflight should render the preset source label"
+    );
+    assert!(
+        rendered.contains("Save as default"),
+        "preflight should render the save-as-default toggle state"
+    );
+    assert!(
+        rendered.contains("Ship the next release"),
+        "preflight should include the current goal prompt"
+    );
+    assert!(
+        !rendered.contains("Describe the goal in the input below"),
+        "old composer helper text should no longer be rendered"
+    );
+}
+
+#[test]
+fn mission_control_roster_render_shows_live_now_and_pending_next_turn_labels() {
+    let mut model = build_model();
+    model.width = 100;
+    model.height = 40;
+    model.main_pane_view = MainPaneView::GoalComposer;
+    model.goal_mission_control = goal_mission_control::GoalMissionControlState::from_main_assignment(
+        task::GoalAgentAssignment {
+            role_id: amux_protocol::AGENT_ID_SWAROG.to_string(),
+            enabled: true,
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+            reasoning_effort: Some("medium".to_string()),
+            inherit_from_main: false,
+        },
+        vec![
+            task::GoalAgentAssignment {
+                role_id: amux_protocol::AGENT_ID_SWAROG.to_string(),
+                enabled: true,
+                provider: "openai".to_string(),
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: Some("medium".to_string()),
+                inherit_from_main: false,
+            },
+            task::GoalAgentAssignment {
+                role_id: "reviewer".to_string(),
+                enabled: true,
+                provider: "openai".to_string(),
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: Some("low".to_string()),
+                inherit_from_main: false,
+            },
+        ],
+        "Goal runtime roster",
+    );
+    model.goal_mission_control.runtime_goal_run_id = Some("goal-1".to_string());
+    model.goal_mission_control.active_runtime_assignment_index = Some(0);
+    model.goal_mission_control.pending_role_assignments = Some(vec![
+        task::GoalAgentAssignment {
+            role_id: amux_protocol::AGENT_ID_SWAROG.to_string(),
+            enabled: true,
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+            reasoning_effort: Some("medium".to_string()),
+            inherit_from_main: false,
+        },
+        task::GoalAgentAssignment {
+            role_id: "reviewer".to_string(),
+            enabled: true,
+            provider: "openai".to_string(),
+            model: "gpt-5.4-mini".to_string(),
+            reasoning_effort: Some("low".to_string()),
+            inherit_from_main: false,
+        },
+    ]);
+    model.goal_mission_control.pending_runtime_apply_modes = vec![
+        None,
+        Some(goal_mission_control::RuntimeAssignmentApplyMode::NextTurn),
+    ];
+
+    let backend = TestBackend::new(model.width, model.height);
+    let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+    terminal
+        .draw(|frame| model.render(frame))
+        .expect("mission control roster render should succeed");
+
+    let buffer = terminal.backend().buffer();
+    let rendered = (0..model.height)
+        .map(|y| {
+            (0..model.width)
+                .filter_map(|x| buffer.cell((x, y)).map(|cell| cell.symbol()))
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("live now"), "{rendered}");
+    assert!(rendered.contains("pending next turn"), "{rendered}");
+    assert!(rendered.contains("reviewer"), "{rendered}");
+    assert!(rendered.contains("gpt-5.4-mini"), "{rendered}");
 }

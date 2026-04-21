@@ -1,6 +1,6 @@
 use amux_shared::providers::{
-    PROVIDER_ID_ANTHROPIC, PROVIDER_ID_CUSTOM, PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_GROQ,
-    PROVIDER_ID_OPENAI, PROVIDER_ID_OPENROUTER, PROVIDER_ID_XAI,
+    PROVIDER_ID_ANTHROPIC, PROVIDER_ID_CHUTES, PROVIDER_ID_CUSTOM, PROVIDER_ID_GITHUB_COPILOT,
+    PROVIDER_ID_GROQ, PROVIDER_ID_OPENAI, PROVIDER_ID_OPENROUTER, PROVIDER_ID_XAI,
 };
 
 #[test]
@@ -388,10 +388,12 @@ fn activating_audio_stt_model_fetches_remote_models_for_audio_provider() {
             provider_id,
             base_url,
             api_key,
+            output_modalities,
         }) => {
             assert_eq!(provider_id, PROVIDER_ID_OPENROUTER);
             assert_eq!(base_url, "https://openrouter.ai/api/v1");
             assert_eq!(api_key, "router-key");
+            assert_eq!(output_modalities, None);
         }
         other => panic!("expected FetchModels for audio STT picker, got {other:?}"),
     }
@@ -425,12 +427,151 @@ fn activating_audio_tts_model_fetches_remote_models_for_audio_provider() {
             provider_id,
             base_url,
             api_key,
+            output_modalities,
         }) => {
             assert_eq!(provider_id, PROVIDER_ID_OPENAI);
             assert_eq!(base_url, "https://api.openai.com/v1");
             assert_eq!(api_key, "openai-key");
+            assert_eq!(output_modalities, None);
         }
         other => panic!("expected FetchModels for audio TTS picker, got {other:?}"),
+    }
+}
+
+#[test]
+fn activating_openrouter_audio_tts_model_requests_audio_output_filter() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "providers": {
+            PROVIDER_ID_OPENROUTER: {
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key": "router-key",
+                "auth_source": "api_key"
+            }
+        },
+        "audio": {
+            "tts": {
+                "provider": PROVIDER_ID_OPENROUTER,
+                "model": "openai/gpt-4o-mini-tts"
+            }
+        }
+    }));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::Settings));
+    focus_settings_field(&mut model, SettingsTab::Features, "feat_audio_tts_model");
+
+    model.activate_settings_field();
+
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::FetchModels {
+            provider_id,
+            base_url,
+            api_key,
+            output_modalities,
+        }) => {
+            assert_eq!(provider_id, PROVIDER_ID_OPENROUTER);
+            assert_eq!(base_url, "https://openrouter.ai/api/v1");
+            assert_eq!(api_key, "router-key");
+            assert_eq!(output_modalities.as_deref(), Some("audio"));
+        }
+        other => panic!("expected filtered FetchModels for OpenRouter audio TTS picker, got {other:?}"),
+    }
+}
+
+#[test]
+fn activating_openrouter_image_generation_model_requests_image_output_filter() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "providers": {
+            PROVIDER_ID_OPENROUTER: {
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key": "router-key",
+                "auth_source": "api_key"
+            }
+        },
+        "image": {
+            "generation": {
+                "provider": PROVIDER_ID_OPENROUTER,
+                "model": "openai/gpt-image-1"
+            }
+        }
+    }));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::Settings));
+    focus_settings_field(&mut model, SettingsTab::Features, "feat_image_generation_model");
+
+    model.activate_settings_field();
+
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::FetchModels {
+            provider_id,
+            base_url,
+            api_key,
+            output_modalities,
+        }) => {
+            assert_eq!(provider_id, PROVIDER_ID_OPENROUTER);
+            assert_eq!(base_url, "https://openrouter.ai/api/v1");
+            assert_eq!(api_key, "router-key");
+            assert_eq!(output_modalities.as_deref(), Some("image"));
+        }
+        other => panic!(
+            "expected filtered FetchModels for OpenRouter image picker, got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn activating_subagent_model_fetches_remote_models_for_fetchable_provider() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "providers": {
+            PROVIDER_ID_CHUTES: {
+                "base_url": "https://llm.chutes.ai/v1",
+                "api_key": "chutes-key",
+                "auth_source": "api_key"
+            }
+        }
+    }));
+    let mut editor = crate::state::subagents::SubAgentEditorState::new(
+        Some("worker".to_string()),
+        1,
+        PROVIDER_ID_CHUTES.to_string(),
+        "deepseek-ai/DeepSeek-R1".to_string(),
+    );
+    editor.field = crate::state::subagents::SubAgentEditorField::Model;
+    model.subagents.editor = Some(editor);
+    model
+        .settings
+        .reduce(SettingsAction::SwitchTab(SettingsTab::SubAgents));
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::Settings));
+
+    let quit = model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::Settings,
+    );
+
+    assert!(!quit);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::FetchModels {
+            provider_id,
+            base_url,
+            api_key,
+            output_modalities,
+        }) => {
+            assert_eq!(provider_id, PROVIDER_ID_CHUTES);
+            assert_eq!(base_url, "https://llm.chutes.ai/v1");
+            assert_eq!(api_key, "chutes-key");
+            assert_eq!(output_modalities, None);
+        }
+        other => panic!("expected FetchModels for sub-agent model picker, got {other:?}"),
     }
 }
 
@@ -505,10 +646,12 @@ fn activating_audio_stt_model_prefills_groq_static_models_and_fetches_remote_cat
             provider_id,
             base_url,
             api_key,
+            output_modalities,
         }) => {
             assert_eq!(provider_id, PROVIDER_ID_GROQ);
             assert_eq!(base_url, "https://api.groq.com/openai/v1");
             assert_eq!(api_key, "groq-key");
+            assert_eq!(output_modalities, None);
         }
         other => panic!("expected FetchModels for Groq audio STT picker, got {other:?}"),
     }
@@ -566,7 +709,7 @@ fn xai_audio_catalog_uses_provider_native_defaults_for_both_endpoints() {
 #[test]
 fn audio_default_model_is_empty_when_provider_has_no_static_audio_catalog() {
     assert_eq!(
-        TuiModel::default_audio_model_for("tts", PROVIDER_ID_GROQ),
+        TuiModel::default_audio_model_for("tts", PROVIDER_ID_OPENROUTER),
         ""
     );
 }
@@ -1306,41 +1449,6 @@ fn feat_skill_recommendation_numeric_fields_write_new_daemon_paths() {
             "/skill_recommendation/suggest_global_enable_after_approvals",
             "6",
         ),
-        (
-            "feat_audio_stt_provider",
-            serde_json::json!({"audio": {"stt": {"provider": "openai"}}}),
-            "openai",
-            "/audio/stt/provider",
-            "\"openai\"",
-        ),
-        (
-            "feat_audio_stt_model",
-            serde_json::json!({"audio": {"stt": {"model": "whisper-1"}}}),
-            "whisper-1",
-            "/audio/stt/model",
-            "\"whisper-1\"",
-        ),
-        (
-            "feat_audio_tts_provider",
-            serde_json::json!({"audio": {"tts": {"provider": "openai"}}}),
-            "openai",
-            "/audio/tts/provider",
-            "\"openai\"",
-        ),
-        (
-            "feat_audio_tts_model",
-            serde_json::json!({"audio": {"tts": {"model": "gpt-4o-mini-tts"}}}),
-            "gpt-4o-mini-tts",
-            "/audio/tts/model",
-            "\"gpt-4o-mini-tts\"",
-        ),
-        (
-            "feat_audio_tts_voice",
-            serde_json::json!({"audio": {"tts": {"voice": "alloy"}}}),
-            "alloy",
-            "/audio/tts/voice",
-            "\"alloy\"",
-        ),
     ];
 
     for (field, raw, expected_buffer, expected_key_path, expected_value_json) in cases {
@@ -1463,6 +1571,16 @@ fn concierge_settings_fields_dispatch_expected_actions() {
     model.close_top_modal();
 
     focus_settings_field(&mut model, SettingsTab::Concierge, "concierge_model");
+    model.concierge.provider = Some(PROVIDER_ID_CHUTES.to_string());
+    model.config.agent_config_raw = Some(serde_json::json!({
+        "providers": {
+            PROVIDER_ID_CHUTES: {
+                "base_url": "https://llm.chutes.ai/v1",
+                "api_key": "chutes-key",
+                "auth_source": "api_key"
+            }
+        }
+    }));
     let quit = model.handle_key_modal(
         KeyCode::Enter,
         KeyModifiers::NONE,
@@ -1470,6 +1588,20 @@ fn concierge_settings_fields_dispatch_expected_actions() {
     );
     assert!(!quit);
     assert_eq!(model.modal.top(), Some(modal::ModalKind::ModelPicker));
+    match daemon_rx.try_recv() {
+        Ok(DaemonCommand::FetchModels {
+            provider_id,
+            base_url,
+            api_key,
+            output_modalities,
+        }) => {
+            assert_eq!(provider_id, PROVIDER_ID_CHUTES);
+            assert_eq!(base_url, "https://llm.chutes.ai/v1");
+            assert_eq!(api_key, "chutes-key");
+            assert_eq!(output_modalities, None);
+        }
+        other => panic!("expected concierge model fetch command, got {other:?}"),
+    }
     model.close_top_modal();
 
     focus_settings_field(

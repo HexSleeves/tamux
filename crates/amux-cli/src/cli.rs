@@ -512,7 +512,31 @@ pub(crate) enum GoalAction {
         #[arg(long)]
         json: bool,
     },
-    /// Stop one goal run by pausing it.
+    /// Show the structured dossier projection for one goal run.
+    Dossier {
+        /// Goal run ID to fetch.
+        goal_run_id: String,
+        /// Emit raw JSON instead of human-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show proof checks and evidence for one goal run.
+    Proof {
+        /// Goal run ID to fetch.
+        goal_run_id: String,
+        /// Emit raw JSON instead of human-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show implementation and verification reports for one goal run.
+    Reports {
+        /// Goal run ID to fetch.
+        goal_run_id: String,
+        /// Emit raw JSON instead of human-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop one goal run.
     Stop {
         /// Goal run ID to stop.
         goal_run_id: String,
@@ -520,6 +544,11 @@ pub(crate) enum GoalAction {
     /// Resume one paused goal run.
     Resume {
         /// Goal run ID to resume.
+        goal_run_id: String,
+    },
+    /// Retry the latest failed step in one goal run.
+    Retry {
+        /// Goal run ID to retry.
         goal_run_id: String,
     },
     /// Delete one goal run.
@@ -756,6 +785,51 @@ mod tests {
     }
 
     #[test]
+    fn goal_dossier_subcommand_parses() {
+        let cli = Cli::try_parse_from(["tamux", "goal", "dossier", "goal-123"])
+            .expect("goal dossier subcommand should parse");
+        match cli.command {
+            Some(Commands::Goal {
+                action: GoalAction::Dossier { goal_run_id, json },
+            }) => {
+                assert_eq!(goal_run_id, "goal-123");
+                assert!(!json);
+            }
+            other => panic!("expected goal dossier command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn goal_proof_subcommand_parses() {
+        let cli = Cli::try_parse_from(["tamux", "goal", "proof", "goal-123"])
+            .expect("goal proof subcommand should parse");
+        match cli.command {
+            Some(Commands::Goal {
+                action: GoalAction::Proof { goal_run_id, json },
+            }) => {
+                assert_eq!(goal_run_id, "goal-123");
+                assert!(!json);
+            }
+            other => panic!("expected goal proof command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn goal_reports_subcommand_parses() {
+        let cli = Cli::try_parse_from(["tamux", "goal", "reports", "goal-123"])
+            .expect("goal reports subcommand should parse");
+        match cli.command {
+            Some(Commands::Goal {
+                action: GoalAction::Reports { goal_run_id, json },
+            }) => {
+                assert_eq!(goal_run_id, "goal-123");
+                assert!(!json);
+            }
+            other => panic!("expected goal reports command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn goal_resume_subcommand_parses() {
         let cli = Cli::try_parse_from(["tamux", "goal", "resume", "goal-123"])
             .expect("goal resume subcommand should parse");
@@ -766,6 +840,20 @@ mod tests {
                 assert_eq!(goal_run_id, "goal-123");
             }
             other => panic!("expected goal resume command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn goal_retry_subcommand_parses() {
+        let cli = Cli::try_parse_from(["tamux", "goal", "retry", "goal-123"])
+            .expect("goal retry subcommand should parse");
+        match cli.command {
+            Some(Commands::Goal {
+                action: GoalAction::Retry { goal_run_id },
+            }) => {
+                assert_eq!(goal_run_id, "goal-123");
+            }
+            other => panic!("expected goal retry command, got {other:?}"),
         }
     }
 

@@ -23,6 +23,7 @@ if matches!(
         ClientMessage::AgentListTools{ .. } |
         ClientMessage::AgentSearchTools{ .. } |
         ClientMessage::AgentGetConfig |
+        ClientMessage::AgentGetGatewayConfig |
         ClientMessage::AgentGetEffectiveConfigState |
         ClientMessage::AgentListTaskApprovalRules |
         ClientMessage::AgentCreateTaskApprovalRule{ .. } |
@@ -67,14 +68,25 @@ if matches!(
                     }
                 }
 
-                ClientMessage::AgentListThreads { limit, offset } => {
-                    let threads = agent.list_threads_paginated(limit, offset.unwrap_or(0)).await;
+                ClientMessage::AgentListThreads {
+                    limit,
+                    offset,
+                    include_internal,
+                } => {
+                    let threads = agent
+                        .list_threads_paginated(limit, offset.unwrap_or(0), include_internal)
+                        .await;
                     let (threads, truncated) = cap_agent_thread_list_for_ipc(threads);
                     client_agent_threads.extend(threads.iter().map(|thread| thread.id.clone()));
                     if truncated {
                         tracing::warn!("truncated agent thread list to fit IPC frame limit");
                     }
                     let json = serde_json::to_string(&threads).unwrap_or_default();
+                    tracing::debug!(
+                        thread_count = threads.len(),
+                        payload_bytes = json.len(),
+                        "sending agent thread list to client"
+                    );
                     framed
                         .send(DaemonMessage::AgentThreadList { threads_json: json })
                         .await?;
@@ -215,6 +227,7 @@ if matches!(
                     session_id,
                     priority,
                     client_request_id,
+                    launch_assignments,
                     autonomy_level,
                     client_surface,
                 } => {
@@ -228,6 +241,23 @@ if matches!(
                             client_request_id,
                             autonomy_level,
                             client_surface,
+                            if launch_assignments.is_empty() {
+                                None
+                            } else {
+                                Some(
+                                    launch_assignments
+                                        .into_iter()
+                                        .map(|assignment| crate::agent::types::GoalAgentAssignment {
+                                            role_id: assignment.role_id,
+                                            enabled: assignment.enabled,
+                                            provider: assignment.provider,
+                                            model: assignment.model,
+                                            reasoning_effort: assignment.reasoning_effort,
+                                            inherit_from_main: assignment.inherit_from_main,
+                                        })
+                                        .collect(),
+                                )
+                            },
                         )
                         .await;
                     if let Some(thread_id) = goal_run.thread_id.clone() {
@@ -268,7 +298,12 @@ if matches!(
                     }
                     let json = detail
                         .map(|(goal_run_json, _)| goal_run_json)
-                        .unwrap_or_else(|| "null".to_string());
+                        .unwrap_or_else(|| {
+                            serde_json::json!({
+                                "id": goal_run_id.clone(),
+                            })
+                            .to_string()
+                        });
                     framed
                         .send(DaemonMessage::AgentGoalRunDetail {
                             goal_run_json: json,
@@ -300,7 +335,12 @@ if matches!(
                     }
                     let json = detail
                         .map(|(goal_run_json, _)| goal_run_json)
-                        .unwrap_or_else(|| "null".to_string());
+                        .unwrap_or_else(|| {
+                            serde_json::json!({
+                                "id": goal_run_id.clone(),
+                            })
+                            .to_string()
+                        });
                     framed
                         .send(DaemonMessage::AgentGoalRunDetail {
                             goal_run_json: json,
@@ -421,6 +461,14 @@ if matches!(
                     let json = serde_json::to_string(&config).unwrap_or_default();
                     framed
                         .send(DaemonMessage::AgentConfigResponse { config_json: json })
+                        .await?;
+                }
+
+                ClientMessage::AgentGetGatewayConfig => {
+                    let gateway = agent.get_config().await.gateway;
+                    let json = serde_json::to_string(&gateway).unwrap_or_default();
+                    framed
+                        .send(DaemonMessage::AgentGatewayConfig { config_json: json })
                         .await?;
                 }
 
@@ -651,6 +699,7 @@ if matches!(
                     provider_id,
                     base_url,
                     api_key,
+                    output_modalities,
                 } => {
                     if !background_daemon_pending.has_capacity(BackgroundSubsystem::ProviderIo) {
                         background_daemon_pending.note_rejection(BackgroundSubsystem::ProviderIo);
@@ -664,7 +713,11 @@ if matches!(
 
                     let operation = operation_registry().accept_operation(
                         OPERATION_KIND_FETCH_MODELS,
-                        Some(fetch_models_dedup_key(&agent, &provider_id)),
+                        Some(fetch_models_dedup_key(
+                            &agent,
+                            &provider_id,
+                            output_modalities.as_deref(),
+                        )),
                     );
 
                     framed
@@ -690,6 +743,7 @@ if matches!(
                                 &provider_id,
                                 &base_url,
                                 &api_key,
+                                output_modalities.as_deref(),
                             )
                             .await;
 
@@ -734,6 +788,10 @@ if matches!(
 
                 ClientMessage::AgentListTaskApprovalRules => {
                     let rules = agent.list_task_approval_rules().await;
+                    tracing::debug!(
+                        rule_count = rules.len(),
+                        "sending task approval rules to client"
+                    );
                     framed
                         .send(DaemonMessage::AgentTaskApprovalRules { rules })
                         .await?;
@@ -743,6 +801,10 @@ if matches!(
                     match agent.create_task_approval_rule_from_pending(&approval_id).await {
                         Ok(Some(_)) => {
                             let rules = agent.list_task_approval_rules().await;
+                            tracing::debug!(
+                                rule_count = rules.len(),
+                                "sending task approval rules to client after create"
+                            );
                             framed
                                 .send(DaemonMessage::AgentTaskApprovalRules { rules })
                                 .await?;
@@ -779,6 +841,10 @@ if matches!(
                             .await?;
                     }
                     let rules = agent.list_task_approval_rules().await;
+                    tracing::debug!(
+                        rule_count = rules.len(),
+                        "sending task approval rules to client after revoke"
+                    );
                     framed
                         .send(DaemonMessage::AgentTaskApprovalRules { rules })
                         .await?;
@@ -928,7 +994,10 @@ if matches!(
                         }
                     };
                     framed
-                        .send(DaemonMessage::AgentCheckpointList { checkpoints_json })
+                        .send(DaemonMessage::AgentCheckpointList {
+                            goal_run_id,
+                            checkpoints_json,
+                        })
                         .await
                         .ok();
                 }

@@ -239,9 +239,9 @@ pub struct ScanReportPublic {
 pub struct PluginInfo {
     pub name: String,
     pub version: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub author: Option<String>,
     pub enabled: bool,
     pub install_source: String,
@@ -407,7 +407,7 @@ pub struct TaskApprovalRule {
     pub id: String,
     pub command: String,
     pub created_at: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub last_used_at: Option<u64>,
     #[serde(default)]
     pub use_count: u64,

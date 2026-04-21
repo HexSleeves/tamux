@@ -4,7 +4,1003 @@ use std::path::{Path, PathBuf};
 #[path = "commands_goal_targets.rs"]
 mod goal_targets;
 
+#[derive(Debug, Clone)]
+enum GoalSidebarCommandItem {
+    Step { step_id: String },
+    Checkpoint { step_id: Option<String> },
+    Task { target: sidebar::SidebarItemTarget },
+    File { thread_id: String, path: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GoalActionPickerItem {
+    PauseGoal,
+    ResumeGoal,
+    StopGoal,
+    RetryStep,
+    RerunFromStep,
+    CycleRuntimeAssignment,
+    EditRuntimeProvider,
+    EditRuntimeModel,
+    EditRuntimeReasoning,
+    EditRuntimeRole,
+    ToggleRuntimeEnabled,
+    ToggleRuntimeInherit,
+    ApplyRuntimeNextTurn,
+    ApplyRuntimeReassignActiveStep,
+    ApplyRuntimeRestartActiveStep,
+}
+
+impl GoalActionPickerItem {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::PauseGoal => "Pause Goal",
+            Self::ResumeGoal => "Resume Goal",
+            Self::StopGoal => "Stop Goal",
+            Self::RetryStep => "Retry Step",
+            Self::RerunFromStep => "Rerun From Step",
+            Self::CycleRuntimeAssignment => "Select Next Runtime Agent",
+            Self::EditRuntimeProvider => "Edit Runtime Provider",
+            Self::EditRuntimeModel => "Edit Runtime Model",
+            Self::EditRuntimeReasoning => "Edit Runtime Reasoning",
+            Self::EditRuntimeRole => "Edit Runtime Role",
+            Self::ToggleRuntimeEnabled => "Toggle Runtime Enabled",
+            Self::ToggleRuntimeInherit => "Toggle Runtime Inherit",
+            Self::ApplyRuntimeNextTurn => "Apply Next Turn",
+            Self::ApplyRuntimeReassignActiveStep => "Reassign Active Step",
+            Self::ApplyRuntimeRestartActiveStep => "Restart Active Step",
+        }
+    }
+}
+
 impl TuiModel {
+    pub(super) fn mission_control_navigation_state(&self) -> MissionControlNavigationState {
+        self.mission_control_navigation.clone()
+    }
+
+    pub(super) fn update_mission_control_navigation_state(
+        &mut self,
+        update: impl FnOnce(&mut MissionControlNavigationState),
+    ) {
+        update(&mut self.mission_control_navigation);
+    }
+
+    pub(super) fn mission_control_source_goal_target(&self) -> Option<sidebar::SidebarItemTarget> {
+        self.mission_control_navigation_state().source_goal_target
+    }
+
+    pub(super) fn set_mission_control_source_goal_target(
+        &mut self,
+        target: Option<sidebar::SidebarItemTarget>,
+    ) {
+        self.update_mission_control_navigation_state(|state| {
+            state.source_goal_target = target;
+        });
+    }
+
+    pub(super) fn mission_control_return_to_goal_target(
+        &self,
+    ) -> Option<sidebar::SidebarItemTarget> {
+        self.mission_control_navigation_state()
+            .return_to_goal_target
+    }
+
+    pub(super) fn set_mission_control_return_to_goal_target(
+        &mut self,
+        target: Option<sidebar::SidebarItemTarget>,
+    ) {
+        self.update_mission_control_navigation_state(|state| {
+            state.return_to_goal_target = target;
+        });
+    }
+
+    pub(super) fn current_goal_target_for_mission_control(
+        &self,
+    ) -> Option<sidebar::SidebarItemTarget> {
+        match &self.main_pane_view {
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+                goal_run_id,
+                step_id,
+            }) => Some(sidebar::SidebarItemTarget::GoalRun {
+                goal_run_id: goal_run_id.clone(),
+                step_id: step_id.clone(),
+            }),
+            MainPaneView::Task(sidebar::SidebarItemTarget::Task { task_id }) => {
+                self.parent_goal_target_for_task(task_id)
+            }
+            _ => None,
+        }
+    }
+
+    fn mission_control_goal_run(&self) -> Option<&task::GoalRun> {
+        let target = self.mission_control_source_goal_target()?;
+        let goal_run_id = target_goal_run_id(self, &target)?;
+        self.tasks.goal_run_by_id(&goal_run_id)
+    }
+
+    fn mission_control_thread_target(&self) -> Option<(String, bool)> {
+        let run = self.mission_control_goal_run()?;
+        run.active_thread_id
+            .clone()
+            .map(|thread_id| (thread_id, false))
+            .or_else(|| {
+                run.root_thread_id
+                    .clone()
+                    .map(|thread_id| (thread_id, true))
+            })
+    }
+
+    fn goal_prompt_thread_target(&self) -> Option<(sidebar::SidebarItemTarget, String)> {
+        let target = self.current_goal_target_for_mission_control()?;
+        let goal_run_id = target_goal_run_id(self, &target)?;
+        let run = self.tasks.goal_run_by_id(&goal_run_id)?;
+        let thread_id = run
+            .active_thread_id
+            .clone()
+            .or_else(|| run.root_thread_id.clone())
+            .or_else(|| run.thread_id.clone())?;
+        Some((target, thread_id))
+    }
+
+    pub(super) fn mission_control_has_thread_target(&self) -> bool {
+        self.mission_control_thread_target().is_some()
+    }
+
+    fn runtime_assignments_for_goal_run(
+        &self,
+        run: &task::GoalRun,
+    ) -> (Vec<task::GoalAgentAssignment>, bool) {
+        if !run.runtime_assignment_list.is_empty() {
+            (run.runtime_assignment_list.clone(), false)
+        } else if !run.launch_assignment_snapshot.is_empty() {
+            (run.launch_assignment_snapshot.clone(), true)
+        } else {
+            let fallback_profile = self.current_conversation_agent_profile();
+            (
+                vec![task::GoalAgentAssignment {
+                    role_id: amux_protocol::AGENT_ID_SWAROG.to_string(),
+                    enabled: true,
+                    provider: fallback_profile.provider,
+                    model: fallback_profile.model,
+                    reasoning_effort: fallback_profile.reasoning_effort,
+                    inherit_from_main: false,
+                }],
+                true,
+            )
+        }
+    }
+
+    fn runtime_assignment_matches_owner(
+        assignment: &task::GoalAgentAssignment,
+        owner: &task::GoalRuntimeOwnerProfile,
+    ) -> bool {
+        assignment.provider == owner.provider
+            && assignment.model == owner.model
+            && assignment.reasoning_effort == owner.reasoning_effort
+    }
+
+    fn active_runtime_assignment_index_for_run(
+        &self,
+        run: &task::GoalRun,
+        assignments: &[task::GoalAgentAssignment],
+    ) -> Option<usize> {
+        run.current_step_owner_profile
+            .as_ref()
+            .or(run.planner_owner_profile.as_ref())
+            .and_then(|owner| {
+                assignments.iter().position(|assignment| {
+                    Self::runtime_assignment_matches_owner(assignment, owner)
+                })
+            })
+    }
+
+    fn sync_goal_mission_control_from_run(&mut self, run: &task::GoalRun, preserve_pending: bool) {
+        let (assignments, uses_fallback) = self.runtime_assignments_for_goal_run(run);
+        let active_index = self.active_runtime_assignment_index_for_run(run, &assignments);
+        let preserved_pending = preserve_pending
+            && self.goal_mission_control.runtime_goal_run_id.as_deref() == Some(run.id.as_str())
+            && self.goal_mission_control.pending_role_assignments.is_some();
+        let preserved_overlay = preserved_pending
+            .then(|| self.goal_mission_control.pending_role_assignments.clone())
+            .flatten();
+        let preserved_modes = preserved_pending
+            .then(|| {
+                self.goal_mission_control
+                    .pending_runtime_apply_modes
+                    .clone()
+            })
+            .unwrap_or_default();
+        let preserved_selection = preserved_pending
+            .then_some(self.goal_mission_control.selected_runtime_assignment_index);
+
+        self.goal_mission_control.configure_runtime_assignments(
+            run.id.clone(),
+            assignments,
+            active_index,
+            uses_fallback,
+        );
+        if let Some(overlay) = preserved_overlay {
+            self.goal_mission_control.pending_role_assignments = Some(overlay);
+            self.goal_mission_control.pending_runtime_apply_modes = preserved_modes;
+        }
+        if let Some(selection) = preserved_selection {
+            self.goal_mission_control
+                .set_selected_runtime_assignment_index(selection);
+        }
+    }
+
+    fn sync_goal_mission_control_from_selected_goal_run(&mut self) -> bool {
+        let Some(run) = self.selected_goal_run().cloned() else {
+            return false;
+        };
+        self.set_mission_control_source_goal_target(self.current_goal_target_for_mission_control());
+        self.sync_goal_mission_control_from_run(&run, true);
+        true
+    }
+
+    pub(super) fn sidebar_uses_goal_sidebar(&self) -> bool {
+        matches!(
+            self.main_pane_view,
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+        ) && self.sidebar_visible()
+    }
+
+    fn active_goal_sidebar_goal_run(&self) -> Option<&str> {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return None;
+        };
+        Some(goal_run_id.as_str())
+    }
+
+    pub(super) fn goal_sidebar_item_count(&self) -> usize {
+        self.active_goal_sidebar_goal_run()
+            .map(|goal_run_id| {
+                self.goal_sidebar_item_count_for_tab(goal_run_id, self.goal_sidebar.active_tab())
+            })
+            .unwrap_or(0)
+    }
+
+    pub(super) fn goal_workspace_plan_items(
+        &self,
+    ) -> Vec<crate::state::goal_workspace::GoalPlanSelection> {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return Vec::new();
+        };
+        widgets::goal_workspace::plan_selection_rows(&self.tasks, goal_run_id, &self.goal_workspace)
+            .into_iter()
+            .map(|(_, selection)| selection)
+            .collect()
+    }
+
+    pub(super) fn sync_goal_workspace_selection_for_active_goal_pane(&mut self) {
+        let items = self.goal_workspace_plan_items();
+        if items.is_empty() {
+            self.goal_workspace.set_selected_plan_row(0);
+            self.goal_workspace.set_selected_plan_item(None);
+            self.goal_workspace.set_plan_scroll(0);
+            return;
+        }
+
+        let current_step_selection = match &self.main_pane_view {
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+                step_id: Some(step_id),
+                ..
+            }) => Some(crate::state::goal_workspace::GoalPlanSelection::Step {
+                step_id: step_id.clone(),
+            }),
+            _ => None,
+        };
+
+        let target = self
+            .goal_workspace
+            .selected_plan_item()
+            .cloned()
+            .filter(|item| items.contains(item))
+            .or_else(|| current_step_selection.filter(|item| items.contains(item)))
+            .unwrap_or_else(|| items[0].clone());
+
+        let row = items.iter().position(|item| *item == target).unwrap_or(0);
+        self.goal_workspace.set_selected_plan_row(row);
+        self.goal_workspace.set_selected_plan_item(Some(target));
+        self.clamp_goal_workspace_plan_scroll_to_selection();
+    }
+
+    pub(super) fn select_goal_workspace_plan_item(
+        &mut self,
+        item: crate::state::goal_workspace::GoalPlanSelection,
+    ) -> bool {
+        let changed = match &item {
+            crate::state::goal_workspace::GoalPlanSelection::Step { step_id }
+            | crate::state::goal_workspace::GoalPlanSelection::Todo { step_id, .. } => {
+                self.select_goal_step_in_active_run(step_id.clone())
+            }
+            crate::state::goal_workspace::GoalPlanSelection::PromptToggle
+            | crate::state::goal_workspace::GoalPlanSelection::MainThread { .. } => false,
+        };
+        let items = self.goal_workspace_plan_items();
+        let row = items
+            .iter()
+            .position(|candidate| candidate == &item)
+            .unwrap_or(0);
+        self.goal_workspace.set_selected_plan_row(row);
+        self.goal_workspace.set_selected_plan_item(Some(item));
+        self.clamp_goal_workspace_plan_scroll_to_selection();
+        changed
+    }
+
+    pub(super) fn clamp_goal_workspace_plan_scroll_to_selection(&mut self) {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return;
+        };
+
+        let area = self.pane_layout().chat;
+        let viewport_height = {
+            let layout = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(4), Constraint::Min(1)])
+                .split(area);
+            let columns = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(40),
+                    Constraint::Percentage(32),
+                    Constraint::Min(24),
+                ])
+                .split(layout[1]);
+            Block::default()
+                .borders(Borders::ALL)
+                .inner(columns[0])
+                .height as usize
+        };
+        if viewport_height == 0 {
+            self.goal_workspace.set_plan_scroll(0);
+            return;
+        }
+
+        let max_scroll = widgets::goal_workspace::max_plan_scroll(
+            area,
+            &self.tasks,
+            goal_run_id,
+            &self.goal_workspace,
+        );
+        let selected_row = widgets::goal_workspace::plan_visual_row_for_selection(
+            &self.tasks,
+            goal_run_id,
+            &self.goal_workspace,
+        )
+        .unwrap_or(0);
+        let current_scroll = self.goal_workspace.plan_scroll().min(max_scroll);
+        let next_scroll = if selected_row < current_scroll {
+            selected_row
+        } else if selected_row >= current_scroll.saturating_add(viewport_height) {
+            selected_row
+                .saturating_add(1)
+                .saturating_sub(viewport_height)
+        } else {
+            current_scroll
+        };
+        self.goal_workspace
+            .set_plan_scroll(next_scroll.min(max_scroll));
+    }
+
+    pub(super) fn step_goal_workspace_plan_selection(&mut self, delta: i32) -> bool {
+        self.sync_goal_workspace_selection_for_active_goal_pane();
+        let items = self.goal_workspace_plan_items();
+        if items.is_empty() {
+            return false;
+        }
+        let current = self.goal_workspace.selected_plan_row().min(items.len() - 1);
+        let next = if delta >= 0 {
+            (current + delta as usize).min(items.len() - 1)
+        } else {
+            current.saturating_sub((-delta) as usize)
+        };
+        self.select_goal_workspace_plan_item(items[next].clone())
+    }
+
+    pub(super) fn activate_goal_workspace_plan_target(&mut self) -> bool {
+        let Some(selection) = self.goal_workspace.selected_plan_item().cloned() else {
+            return false;
+        };
+        match selection {
+            crate::state::goal_workspace::GoalPlanSelection::PromptToggle => {
+                self.goal_workspace.toggle_prompt_expanded();
+                self.sync_goal_workspace_selection_for_active_goal_pane();
+                self.clamp_goal_workspace_plan_scroll_to_selection();
+                true
+            }
+            crate::state::goal_workspace::GoalPlanSelection::MainThread { thread_id } => {
+                self.open_thread_conversation(thread_id);
+                true
+            }
+            crate::state::goal_workspace::GoalPlanSelection::Step { .. }
+            | crate::state::goal_workspace::GoalPlanSelection::Todo { .. } => false,
+        }
+    }
+
+    pub(super) fn expand_selected_goal_workspace_step(&mut self) -> bool {
+        self.sync_goal_workspace_selection_for_active_goal_pane();
+        let Some(selection) = self.goal_workspace.selected_plan_item().cloned() else {
+            return false;
+        };
+        let crate::state::goal_workspace::GoalPlanSelection::Step { step_id } = selection else {
+            return false;
+        };
+        self.goal_workspace.set_step_expanded(step_id, true);
+        self.sync_goal_workspace_selection_for_active_goal_pane();
+        true
+    }
+
+    pub(super) fn collapse_goal_workspace_selection(&mut self) -> bool {
+        self.sync_goal_workspace_selection_for_active_goal_pane();
+        let Some(selection) = self.goal_workspace.selected_plan_item().cloned() else {
+            return false;
+        };
+        match selection {
+            crate::state::goal_workspace::GoalPlanSelection::PromptToggle
+            | crate::state::goal_workspace::GoalPlanSelection::MainThread { .. } => false,
+            crate::state::goal_workspace::GoalPlanSelection::Step { step_id } => {
+                if self.goal_workspace.is_step_expanded(&step_id) {
+                    self.goal_workspace.set_step_expanded(step_id, false);
+                    self.sync_goal_workspace_selection_for_active_goal_pane();
+                    true
+                } else {
+                    false
+                }
+            }
+            crate::state::goal_workspace::GoalPlanSelection::Todo { step_id, .. } => self
+                .select_goal_workspace_plan_item(
+                    crate::state::goal_workspace::GoalPlanSelection::Step { step_id },
+                ),
+        }
+    }
+
+    pub(super) fn focus_next_goal_workspace_pane(&mut self) -> bool {
+        if !matches!(
+            self.main_pane_view,
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+        ) || self.focus != FocusArea::Chat
+        {
+            return false;
+        }
+
+        match self.goal_workspace.focused_pane() {
+            crate::state::goal_workspace::GoalWorkspacePane::CommandBar => false,
+            crate::state::goal_workspace::GoalWorkspacePane::Plan => {
+                self.goal_workspace
+                    .set_focused_pane(crate::state::goal_workspace::GoalWorkspacePane::Timeline);
+                true
+            }
+            crate::state::goal_workspace::GoalWorkspacePane::Timeline => {
+                self.goal_workspace
+                    .set_focused_pane(crate::state::goal_workspace::GoalWorkspacePane::Details);
+                true
+            }
+            crate::state::goal_workspace::GoalWorkspacePane::Details => {
+                self.goal_workspace
+                    .set_focused_pane(crate::state::goal_workspace::GoalWorkspacePane::CommandBar);
+                true
+            }
+        }
+    }
+
+    pub(super) fn focus_prev_goal_workspace_pane(&mut self) -> bool {
+        if !matches!(
+            self.main_pane_view,
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+        ) || self.focus != FocusArea::Chat
+        {
+            return false;
+        }
+
+        match self.goal_workspace.focused_pane() {
+            crate::state::goal_workspace::GoalWorkspacePane::Plan => {
+                self.goal_workspace
+                    .set_focused_pane(crate::state::goal_workspace::GoalWorkspacePane::CommandBar);
+                true
+            }
+            crate::state::goal_workspace::GoalWorkspacePane::Timeline => {
+                self.goal_workspace
+                    .set_focused_pane(crate::state::goal_workspace::GoalWorkspacePane::Plan);
+                true
+            }
+            crate::state::goal_workspace::GoalWorkspacePane::Details => {
+                self.goal_workspace
+                    .set_focused_pane(crate::state::goal_workspace::GoalWorkspacePane::Timeline);
+                true
+            }
+            crate::state::goal_workspace::GoalWorkspacePane::CommandBar => {
+                self.goal_workspace
+                    .set_focused_pane(crate::state::goal_workspace::GoalWorkspacePane::Details);
+                true
+            }
+        }
+    }
+
+    pub(super) fn set_goal_workspace_mode(
+        &mut self,
+        mode: crate::state::goal_workspace::GoalWorkspaceMode,
+    ) -> bool {
+        if !matches!(
+            self.main_pane_view,
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+        ) {
+            return false;
+        }
+        let changed = self.goal_workspace.mode() != mode;
+        self.goal_workspace.set_mode(mode);
+        self.goal_workspace.set_selected_timeline_row(0);
+        self.goal_workspace.set_selected_detail_row(0);
+        self.goal_workspace.set_timeline_scroll(0);
+        self.goal_workspace.set_detail_scroll(0);
+        changed
+    }
+
+    pub(super) fn cycle_goal_workspace_mode(&mut self, delta: i32) -> bool {
+        let modes = [
+            crate::state::goal_workspace::GoalWorkspaceMode::Goal,
+            crate::state::goal_workspace::GoalWorkspaceMode::Progress,
+            crate::state::goal_workspace::GoalWorkspaceMode::ActiveAgent,
+            crate::state::goal_workspace::GoalWorkspaceMode::Threads,
+            crate::state::goal_workspace::GoalWorkspaceMode::NeedsAttention,
+        ];
+        let current = modes
+            .iter()
+            .position(|mode| *mode == self.goal_workspace.mode())
+            .unwrap_or(0);
+        let next = if delta >= 0 {
+            (current + delta as usize).min(modes.len() - 1)
+        } else {
+            current.saturating_sub((-delta) as usize)
+        };
+        self.set_goal_workspace_mode(modes[next])
+    }
+
+    pub(super) fn activate_goal_workspace_command_bar(&mut self) -> bool {
+        if self.goal_workspace.focused_pane()
+            != crate::state::goal_workspace::GoalWorkspacePane::CommandBar
+        {
+            return false;
+        }
+        self.goal_workspace
+            .set_focused_pane(crate::state::goal_workspace::GoalWorkspacePane::Plan);
+        true
+    }
+
+    pub(super) fn step_goal_workspace_timeline_selection(&mut self, delta: i32) -> bool {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return false;
+        };
+        let row_count =
+            widgets::goal_workspace::timeline_row_count(&self.tasks, goal_run_id, &self.goal_workspace);
+        if row_count == 0 {
+            self.goal_workspace.set_selected_timeline_row(0);
+            return false;
+        }
+        let current = self.goal_workspace.selected_timeline_row().min(row_count - 1);
+        let next = if delta >= 0 {
+            (current + delta as usize).min(row_count - 1)
+        } else {
+            current.saturating_sub((-delta) as usize)
+        };
+        let changed = next != current;
+        self.goal_workspace.set_selected_timeline_row(next);
+        self.clamp_goal_workspace_timeline_scroll_to_selection();
+        changed
+    }
+
+    pub(super) fn selected_goal_workspace_timeline_target(
+        &self,
+    ) -> Option<crate::widgets::goal_workspace::GoalWorkspaceHitTarget> {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return None;
+        };
+        crate::widgets::goal_workspace::timeline_targets(
+            &self.tasks,
+            goal_run_id,
+            &self.goal_workspace,
+        )
+        .into_iter()
+        .find_map(|(index, target)| {
+            (index == self.goal_workspace.selected_timeline_row()).then_some(target)
+        })
+    }
+
+    pub(super) fn activate_goal_workspace_timeline_target(&mut self) -> bool {
+        let Some(target) = self.selected_goal_workspace_timeline_target() else {
+            return false;
+        };
+        match target {
+            crate::widgets::goal_workspace::GoalWorkspaceHitTarget::ThreadRow(thread_id) => {
+                self.open_thread_conversation(thread_id);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn step_goal_workspace_detail_selection(&mut self, delta: i32) -> bool {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return false;
+        };
+        let row_count =
+            widgets::goal_workspace::detail_target_count(&self.tasks, goal_run_id, &self.goal_workspace);
+        if row_count == 0 {
+            self.goal_workspace.set_selected_detail_row(0);
+            return false;
+        }
+        let current = self.goal_workspace.selected_detail_row().min(row_count - 1);
+        let next = if delta >= 0 {
+            (current + delta as usize).min(row_count - 1)
+        } else {
+            current.saturating_sub((-delta) as usize)
+        };
+        let changed = next != current;
+        self.goal_workspace.set_selected_detail_row(next);
+        self.clamp_goal_workspace_detail_scroll_to_selection();
+        changed
+    }
+
+    pub(super) fn clamp_goal_workspace_timeline_scroll_to_selection(&mut self) {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return;
+        };
+        let area = self.pane_layout().chat;
+        let viewport_height = widgets::goal_workspace::timeline_viewport_height(area);
+        if viewport_height == 0 {
+            self.goal_workspace.set_timeline_scroll(0);
+            return;
+        }
+        let max_scroll = widgets::goal_workspace::max_timeline_scroll(
+            area,
+            &self.tasks,
+            goal_run_id,
+            &self.goal_workspace,
+        );
+        let Some(selected_row) = widgets::goal_workspace::timeline_visual_row_for_selection(
+            &self.tasks,
+            goal_run_id,
+            &self.goal_workspace,
+        ) else {
+            self.goal_workspace.set_timeline_scroll(0);
+            return;
+        };
+        let current_scroll = self.goal_workspace.timeline_scroll().min(max_scroll);
+        let next_scroll = if selected_row < current_scroll {
+            selected_row
+        } else if selected_row >= current_scroll.saturating_add(viewport_height) {
+            selected_row
+                .saturating_add(1)
+                .saturating_sub(viewport_height)
+        } else {
+            current_scroll
+        };
+        self.goal_workspace
+            .set_timeline_scroll(next_scroll.min(max_scroll));
+    }
+
+    pub(super) fn clamp_goal_workspace_detail_scroll_to_selection(&mut self) {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return;
+        };
+        let area = self.pane_layout().chat;
+        let viewport_height = widgets::goal_workspace::detail_viewport_height(area);
+        if viewport_height == 0 {
+            self.goal_workspace.set_detail_scroll(0);
+            return;
+        }
+        let max_scroll = widgets::goal_workspace::max_detail_scroll(
+            area,
+            &self.tasks,
+            goal_run_id,
+            &self.goal_workspace,
+        );
+        let Some(selected_row) = widgets::goal_workspace::detail_visual_row_for_selection(
+            &self.tasks,
+            goal_run_id,
+            &self.goal_workspace,
+        ) else {
+            self.goal_workspace.set_detail_scroll(0);
+            return;
+        };
+        let current_scroll = self.goal_workspace.detail_scroll().min(max_scroll);
+        let next_scroll = if selected_row < current_scroll {
+            selected_row
+        } else if selected_row >= current_scroll.saturating_add(viewport_height) {
+            selected_row
+                .saturating_add(1)
+                .saturating_sub(viewport_height)
+        } else {
+            current_scroll
+        };
+        self.goal_workspace
+            .set_detail_scroll(next_scroll.min(max_scroll));
+    }
+
+    pub(super) fn selected_goal_workspace_detail_target(
+        &self,
+    ) -> Option<crate::widgets::goal_workspace::GoalWorkspaceHitTarget> {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return None;
+        };
+        crate::widgets::goal_workspace::detail_targets(
+            &self.tasks,
+            goal_run_id,
+            &self.goal_workspace,
+        )
+        .into_iter()
+        .find_map(|(index, target)| {
+            (index == self.goal_workspace.selected_detail_row()).then_some(target)
+        })
+    }
+
+    pub(super) fn activate_goal_workspace_detail_target(&mut self) -> bool {
+        let Some(target) = self.selected_goal_workspace_detail_target() else {
+            return false;
+        };
+        match target {
+            crate::widgets::goal_workspace::GoalWorkspaceHitTarget::DetailFile(path) => {
+                if let Some(target) = self.current_goal_target_for_mission_control() {
+                    self.set_mission_control_return_to_goal_target(Some(target));
+                }
+                let Some(run) = self.selected_goal_run() else {
+                    return false;
+                };
+                let Some(thread_id) = run.thread_id.clone() else {
+                    return false;
+                };
+                self.tasks.reduce(task::TaskAction::SelectWorkPath {
+                    thread_id: thread_id.clone(),
+                    path: Some(path.clone()),
+                });
+                self.main_pane_view = MainPaneView::WorkContext;
+                self.task_view_scroll = 0;
+                self.focus = FocusArea::Chat;
+                self.request_preview_for_selected_path(&thread_id);
+                self.status_line = path;
+                true
+            }
+            crate::widgets::goal_workspace::GoalWorkspaceHitTarget::DetailTask(task_id) => {
+                self.open_sidebar_target(sidebar::SidebarItemTarget::Task { task_id });
+                self.focus = FocusArea::Chat;
+                true
+            }
+            crate::widgets::goal_workspace::GoalWorkspaceHitTarget::DetailThread(thread_id) => {
+                self.open_thread_conversation(thread_id);
+                true
+            }
+            crate::widgets::goal_workspace::GoalWorkspaceHitTarget::DetailAction(action) => {
+                self.activate_goal_workspace_action(action)
+            }
+            crate::widgets::goal_workspace::GoalWorkspaceHitTarget::DetailTimelineDetails(_) => {
+                self.status_line = "Timeline details are shown in the right pane".to_string();
+                true
+            }
+            crate::widgets::goal_workspace::GoalWorkspaceHitTarget::FooterAction(_) => false,
+            crate::widgets::goal_workspace::GoalWorkspaceHitTarget::DetailCheckpoint(_)
+            | crate::widgets::goal_workspace::GoalWorkspaceHitTarget::ThreadRow(_)
+            | crate::widgets::goal_workspace::GoalWorkspaceHitTarget::TimelineRow(_)
+            | crate::widgets::goal_workspace::GoalWorkspaceHitTarget::PlanPromptToggle
+            | crate::widgets::goal_workspace::GoalWorkspaceHitTarget::PlanMainThread(_)
+            | crate::widgets::goal_workspace::GoalWorkspaceHitTarget::PlanStep(_)
+            | crate::widgets::goal_workspace::GoalWorkspaceHitTarget::PlanTodo { .. }
+            | crate::widgets::goal_workspace::GoalWorkspaceHitTarget::ModeTab(_) => false,
+        }
+    }
+
+    pub(super) fn activate_goal_workspace_action(
+        &mut self,
+        action: crate::widgets::goal_workspace::GoalWorkspaceAction,
+    ) -> bool {
+        match action {
+            crate::widgets::goal_workspace::GoalWorkspaceAction::ToggleGoalRun => {
+                self.request_selected_goal_run_toggle_confirmation()
+            }
+            crate::widgets::goal_workspace::GoalWorkspaceAction::OpenActions => {
+                self.open_goal_step_action_picker()
+            }
+            crate::widgets::goal_workspace::GoalWorkspaceAction::RetryStep => {
+                self.request_selected_goal_step_retry_confirmation()
+            }
+            crate::widgets::goal_workspace::GoalWorkspaceAction::RerunFromStep => {
+                self.request_selected_goal_step_rerun_confirmation()
+            }
+        }
+    }
+
+    pub(super) fn step_goal_sidebar_tab(&mut self, delta: i32) {
+        if delta < 0 {
+            self.goal_sidebar.cycle_tab_left();
+        } else if delta > 0 {
+            self.goal_sidebar.cycle_tab_right();
+        }
+        self.reconcile_goal_sidebar_selection_for_active_goal_pane();
+    }
+
+    pub(super) fn activate_goal_sidebar_tab(&mut self, tab: GoalSidebarTab) {
+        while self.goal_sidebar.active_tab() != tab {
+            match (self.goal_sidebar.active_tab(), tab) {
+                (GoalSidebarTab::Steps, GoalSidebarTab::Checkpoints)
+                | (GoalSidebarTab::Steps, GoalSidebarTab::Tasks)
+                | (GoalSidebarTab::Steps, GoalSidebarTab::Files)
+                | (GoalSidebarTab::Checkpoints, GoalSidebarTab::Tasks)
+                | (GoalSidebarTab::Checkpoints, GoalSidebarTab::Files)
+                | (GoalSidebarTab::Tasks, GoalSidebarTab::Files) => self.step_goal_sidebar_tab(1),
+                _ => self.step_goal_sidebar_tab(-1),
+            }
+        }
+    }
+
+    pub(super) fn navigate_goal_sidebar(&mut self, delta: i32) {
+        self.goal_sidebar
+            .navigate(delta, self.goal_sidebar_item_count());
+        self.sync_goal_sidebar_selection_anchor();
+    }
+
+    pub(super) fn select_goal_sidebar_row(&mut self, index: usize) {
+        self.goal_sidebar
+            .select_row(index, self.goal_sidebar_item_count());
+        self.sync_goal_sidebar_selection_anchor();
+    }
+
+    fn active_goal_sidebar_item(&self) -> Option<GoalSidebarCommandItem> {
+        let goal_run_id = self.active_goal_sidebar_goal_run()?;
+        let run = self.tasks.goal_run_by_id(goal_run_id)?;
+        let selected_row = self.goal_sidebar.selected_row();
+
+        match self.goal_sidebar.active_tab() {
+            GoalSidebarTab::Steps => {
+                let mut steps = run.steps.clone();
+                steps.sort_by_key(|step| step.order);
+                let step = steps.get(selected_row)?;
+                Some(GoalSidebarCommandItem::Step {
+                    step_id: step.id.clone(),
+                })
+            }
+            GoalSidebarTab::Checkpoints => {
+                let checkpoint = self
+                    .tasks
+                    .checkpoints_for_goal_run(goal_run_id)
+                    .get(selected_row)?;
+                let step_id = checkpoint.step_index.and_then(|step_index| {
+                    run.steps
+                        .iter()
+                        .find(|step| step.order as usize == step_index)
+                        .map(|step| step.id.clone())
+                });
+                Some(GoalSidebarCommandItem::Checkpoint { step_id })
+            }
+            GoalSidebarTab::Tasks => {
+                let tasks: Vec<_> = if !run.child_task_ids.is_empty() {
+                    run.child_task_ids
+                        .iter()
+                        .filter_map(|task_id| self.tasks.task_by_id(task_id))
+                        .collect()
+                } else {
+                    self.tasks
+                        .tasks()
+                        .iter()
+                        .filter(|task| task.goal_run_id.as_deref() == Some(goal_run_id))
+                        .collect()
+                };
+                let task = *tasks.get(selected_row)?;
+                Some(GoalSidebarCommandItem::Task {
+                    target: sidebar::SidebarItemTarget::Task {
+                        task_id: task.id.clone(),
+                    },
+                })
+            }
+            GoalSidebarTab::Files => {
+                let thread_id = run.thread_id.clone()?;
+                let context = self.tasks.work_context_for_thread(&thread_id)?;
+                let entry = context
+                    .entries
+                    .iter()
+                    .filter(|entry| match entry.goal_run_id.as_deref() {
+                        Some(entry_goal_run_id) => entry_goal_run_id == goal_run_id,
+                        None => true,
+                    })
+                    .nth(selected_row)?;
+                Some(GoalSidebarCommandItem::File {
+                    thread_id,
+                    path: entry.path.clone(),
+                })
+            }
+        }
+    }
+
+    pub(super) fn handle_goal_sidebar_enter(&mut self) -> bool {
+        let Some(item) = self.active_goal_sidebar_item() else {
+            return false;
+        };
+
+        match item {
+            GoalSidebarCommandItem::Step { step_id } => {
+                if self.select_goal_step_in_active_run(step_id) {
+                    self.focus = FocusArea::Chat;
+                    return true;
+                }
+            }
+            GoalSidebarCommandItem::Checkpoint { step_id } => {
+                let Some(step_id) = step_id else {
+                    self.status_line = "Checkpoint has no linked step".to_string();
+                    return false;
+                };
+                if self.select_goal_step_in_active_run(step_id) {
+                    self.focus = FocusArea::Chat;
+                    return true;
+                }
+            }
+            GoalSidebarCommandItem::Task { target } => {
+                self.open_sidebar_target(target);
+                self.focus = FocusArea::Chat;
+                return true;
+            }
+            GoalSidebarCommandItem::File { thread_id, path } => {
+                self.tasks.reduce(task::TaskAction::SelectWorkPath {
+                    thread_id: thread_id.clone(),
+                    path: Some(path.clone()),
+                });
+                self.main_pane_view = MainPaneView::WorkContext;
+                self.task_view_scroll = 0;
+                self.focus = FocusArea::Chat;
+                self.request_preview_for_selected_path(&thread_id);
+                self.status_line = path;
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub(super) fn resolve_target_agent_id(&self, agent_alias: &str) -> Option<String> {
+        match agent_alias.trim().to_ascii_lowercase().as_str() {
+            "" => None,
+            "svarog" | "swarog" | "main" => Some(amux_protocol::AGENT_ID_SWAROG.to_string()),
+            "rarog" | "concierge" => Some(amux_protocol::AGENT_ID_RAROG.to_string()),
+            "weles" => Some("weles".to_string()),
+            "swarozyc" | "radogost" | "domowoj" | "swietowit" | "perun" | "mokosh" | "dazhbog"
+            | "rod" => Some(agent_alias.trim().to_ascii_lowercase()),
+            _ => self.subagents.entries.iter().find_map(|entry| {
+                if entry.id.eq_ignore_ascii_case(agent_alias)
+                    || entry.name.eq_ignore_ascii_case(agent_alias)
+                    || entry
+                        .id
+                        .strip_suffix("_builtin")
+                        .is_some_and(|alias| alias.eq_ignore_ascii_case(agent_alias))
+                {
+                    Some(
+                        entry
+                            .id
+                            .strip_suffix("_builtin")
+                            .unwrap_or(entry.id.as_str())
+                            .to_ascii_lowercase(),
+                    )
+                } else {
+                    None
+                }
+            }),
+        }
+    }
+
     fn voice_lookup_string(raw: Option<&serde_json::Value>, path: &[&str]) -> Option<String> {
         raw.and_then(|value| {
             path.iter()
@@ -206,7 +1202,7 @@ impl TuiModel {
         aliases
     }
 
-    fn participant_display_name(&self, agent_alias: &str) -> String {
+    pub(super) fn participant_display_name(&self, agent_alias: &str) -> String {
         if let Some(display_name) = builtin_participant_display_name(agent_alias) {
             return display_name;
         }
@@ -339,7 +1335,11 @@ impl TuiModel {
         };
 
         let resolved_path = Self::resolve_preview_path(&chip.path);
-        let show_plain_preview = matches!(chip.tool_name.as_str(), "read_file" | "read_skill");
+        let show_plain_preview = message.tool_output_preview_path.is_some()
+            || matches!(
+                chip.tool_name.as_str(),
+                "read_file" | "read_skill" | "generate_image"
+            );
         let repo_root = if show_plain_preview {
             None
         } else {
@@ -376,6 +1376,32 @@ impl TuiModel {
         self.focus = FocusArea::Chat;
     }
 
+    pub(super) fn open_chat_message_image_preview(&mut self, message_index: usize) {
+        let Some(message) = self
+            .chat
+            .active_thread()
+            .and_then(|thread| thread.messages.get(message_index))
+        else {
+            return;
+        };
+        let Some(path) = widgets::chat::message_image_preview_path(message) else {
+            return;
+        };
+
+        let target = ChatFilePreviewTarget {
+            path,
+            repo_root: None,
+            repo_relative_path: None,
+        };
+        self.send_daemon_command(DaemonCommand::RequestFilePreview {
+            path: target.path.clone(),
+            max_bytes: Some(65_536),
+        });
+        self.main_pane_view = MainPaneView::FilePreview(target);
+        self.task_view_scroll = 0;
+        self.focus = FocusArea::Chat;
+    }
+
     pub(super) fn filtered_goal_runs(&self) -> Vec<&task::GoalRun> {
         let query = self.modal.command_query().to_lowercase();
         self.tasks
@@ -394,7 +1420,7 @@ impl TuiModel {
         if cursor == 0 {
             return None;
         }
-        widgets::thread_picker::filtered_threads(&self.chat, &self.modal)
+        widgets::thread_picker::filtered_threads(&self.chat, &self.modal, &self.subagents)
             .get(cursor - 1)
             .copied()
     }
@@ -461,6 +1487,386 @@ impl TuiModel {
             }
             _ => None,
         }
+    }
+
+    pub(super) fn selected_goal_run(&self) -> Option<&task::GoalRun> {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return None;
+        };
+        self.tasks.goal_run_by_id(goal_run_id)
+    }
+
+    fn selected_goal_run_id(&self) -> Option<String> {
+        self.selected_goal_run()
+            .map(|run| run.id.clone())
+            .or_else(|| self.goal_mission_control.runtime_goal_run_id.clone())
+    }
+
+    pub(super) fn open_mission_control_runtime_editor(&mut self) -> bool {
+        if matches!(self.main_pane_view, MainPaneView::GoalComposer)
+            && self.goal_mission_control.runtime_mode()
+        {
+            if let Some(run) = self.mission_control_goal_run().cloned() {
+                let preserve_pending = self.goal_mission_control.pending_role_assignments.is_some();
+                self.sync_goal_mission_control_from_run(&run, preserve_pending);
+            }
+        } else if !self.sync_goal_mission_control_from_selected_goal_run() {
+            return false;
+        }
+        if let Some(target) = self.current_goal_target_for_mission_control() {
+            self.set_mission_control_return_to_goal_target(Some(target));
+        }
+        self.main_pane_view = MainPaneView::GoalComposer;
+        self.focus = FocusArea::Chat;
+        self.task_view_scroll = 0;
+        true
+    }
+
+    pub(super) fn cancel_goal_mission_control(&mut self) -> bool {
+        if !matches!(self.main_pane_view, MainPaneView::GoalComposer) {
+            return false;
+        }
+
+        let fallback_target =
+            self.goal_mission_control
+                .runtime_goal_run_id
+                .as_ref()
+                .map(|goal_run_id| sidebar::SidebarItemTarget::GoalRun {
+                    goal_run_id: goal_run_id.clone(),
+                    step_id: None,
+                });
+        let target = self
+            .mission_control_source_goal_target()
+            .or(fallback_target);
+
+        if let Some(target) = target {
+            self.open_sidebar_target(target);
+            self.focus = FocusArea::Chat;
+            self.status_line = "Closed Mission Control".to_string();
+        } else {
+            self.set_main_pane_conversation(FocusArea::Chat);
+            self.status_line = "Cancelled new goal".to_string();
+        }
+        true
+    }
+
+    fn selected_runtime_assignment_preview(&self) -> Option<(usize, task::GoalAgentAssignment)> {
+        let index = self.goal_mission_control.selected_runtime_assignment_index;
+        self.goal_mission_control
+            .selected_runtime_assignment()
+            .cloned()
+            .map(|assignment| (index, assignment))
+    }
+
+    pub(super) fn stage_mission_control_assignment_modal_edit(
+        &mut self,
+        field: goal_mission_control::RuntimeAssignmentEditField,
+    ) -> bool {
+        if matches!(self.main_pane_view, MainPaneView::GoalComposer) {
+            if self
+                .goal_mission_control
+                .display_role_assignments()
+                .is_empty()
+            {
+                return false;
+            }
+        } else if !self.open_mission_control_runtime_editor() {
+            return false;
+        }
+        let Some((row_index, _)) = self.selected_runtime_assignment_preview() else {
+            return false;
+        };
+        self.goal_mission_control
+            .stage_runtime_edit(row_index, field);
+        match field {
+            goal_mission_control::RuntimeAssignmentEditField::Provider => {
+                self.settings_picker_target = Some(SettingsPickerTarget::Provider);
+                self.modal
+                    .reduce(modal::ModalAction::Push(modal::ModalKind::ProviderPicker));
+                let item_count =
+                    widgets::provider_picker::available_provider_defs(&self.auth).len();
+                self.modal.set_picker_item_count(item_count);
+            }
+            goal_mission_control::RuntimeAssignmentEditField::Model => {
+                if !self.open_mission_control_assignment_model_picker() {
+                    self.goal_mission_control.clear_runtime_edit();
+                    return false;
+                }
+            }
+            goal_mission_control::RuntimeAssignmentEditField::ReasoningEffort => {
+                self.settings_picker_target = Some(SettingsPickerTarget::SubAgentReasoningEffort);
+                self.modal
+                    .reduce(modal::ModalAction::Push(modal::ModalKind::EffortPicker));
+                self.modal.set_picker_item_count(6);
+            }
+            goal_mission_control::RuntimeAssignmentEditField::Role => {
+                self.settings_picker_target = Some(SettingsPickerTarget::SubAgentRole);
+                self.modal
+                    .reduce(modal::ModalAction::Push(modal::ModalKind::RolePicker));
+                self.modal.set_picker_item_count(
+                    crate::state::subagents::SUBAGENT_ROLE_PRESETS.len() + 1,
+                );
+            }
+            goal_mission_control::RuntimeAssignmentEditField::Enabled
+            | goal_mission_control::RuntimeAssignmentEditField::InheritFromMain => {}
+        }
+        true
+    }
+
+    pub(super) fn update_selected_runtime_assignment(
+        &mut self,
+        update: impl FnOnce(&mut task::GoalAgentAssignment),
+    ) -> bool {
+        if matches!(self.main_pane_view, MainPaneView::GoalComposer)
+            && !self.goal_mission_control.runtime_mode()
+        {
+            let updated = self
+                .goal_mission_control
+                .update_selected_preflight_assignment(update);
+            if updated {
+                self.status_line = "Mission Control preflight roster updated".to_string();
+            }
+            return updated;
+        }
+        let Some(goal_run_id) = self.selected_goal_run_id() else {
+            return false;
+        };
+        if !self.open_mission_control_runtime_editor() {
+            return false;
+        }
+        let Some((row_index, mut assignment)) = self.selected_runtime_assignment_preview() else {
+            return false;
+        };
+        update(&mut assignment);
+        let apply_mode = if self
+            .goal_mission_control
+            .selected_assignment_matches_active_step()
+        {
+            self.goal_mission_control.stage_runtime_change(
+                goal_run_id,
+                row_index,
+                assignment,
+                goal_mission_control::RuntimeAssignmentApplyMode::NextTurn,
+            );
+            self.modal.reduce(modal::ModalAction::Push(
+                modal::ModalKind::GoalStepActionPicker,
+            ));
+            self.modal.set_picker_item_count(3);
+            self.status_line =
+                "Choose how the active step should adopt the pending roster change".to_string();
+            return true;
+        } else {
+            goal_mission_control::RuntimeAssignmentApplyMode::NextTurn
+        };
+        self.goal_mission_control.stage_runtime_change(
+            goal_run_id,
+            row_index,
+            assignment,
+            apply_mode,
+        );
+        self.goal_mission_control
+            .apply_runtime_assignment_change(row_index, apply_mode);
+        self.status_line = "Mission Control roster updated for the next turn".to_string();
+        true
+    }
+
+    pub(super) fn cycle_selected_runtime_assignment(&mut self) -> bool {
+        if !self.open_mission_control_runtime_editor() {
+            return false;
+        }
+        if !self
+            .goal_mission_control
+            .cycle_selected_runtime_assignment(1)
+        {
+            return false;
+        }
+        let role_label = self
+            .goal_mission_control
+            .selected_runtime_row_label()
+            .unwrap_or("runtime assignment");
+        self.status_line = format!("Mission Control selected {role_label}");
+        true
+    }
+
+    fn runtime_assignment_confirmation_items(&self) -> Vec<GoalActionPickerItem> {
+        if self.goal_mission_control.pending_runtime_change.is_some() {
+            vec![
+                GoalActionPickerItem::ApplyRuntimeNextTurn,
+                GoalActionPickerItem::ApplyRuntimeReassignActiveStep,
+                GoalActionPickerItem::ApplyRuntimeRestartActiveStep,
+            ]
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub(super) fn mission_control_role_picker_value(&self) -> String {
+        self.goal_mission_control
+            .pending_runtime_edit
+            .as_ref()
+            .filter(|edit| edit.field == goal_mission_control::RuntimeAssignmentEditField::Role)
+            .and_then(|edit| {
+                self.goal_mission_control
+                    .display_role_assignments()
+                    .get(edit.row_index)
+            })
+            .map(|assignment| assignment.role_id.clone())
+            .or_else(|| {
+                self.subagents
+                    .editor
+                    .as_ref()
+                    .map(|editor| editor.role.clone())
+            })
+            .unwrap_or_default()
+    }
+
+    pub(super) fn mission_control_effort_picker_value(&self) -> Option<String> {
+        self.goal_mission_control
+            .pending_runtime_edit
+            .as_ref()
+            .filter(|edit| {
+                edit.field == goal_mission_control::RuntimeAssignmentEditField::ReasoningEffort
+            })
+            .and_then(|edit| {
+                self.goal_mission_control
+                    .display_role_assignments()
+                    .get(edit.row_index)
+            })
+            .and_then(|assignment| assignment.reasoning_effort.clone())
+    }
+
+    pub(super) fn runtime_model_picker_current_selection(
+        &self,
+    ) -> Option<(String, Option<String>)> {
+        self.goal_mission_control
+            .pending_runtime_edit
+            .as_ref()
+            .filter(|edit| edit.field == goal_mission_control::RuntimeAssignmentEditField::Model)
+            .and_then(|edit| {
+                self.goal_mission_control
+                    .display_role_assignments()
+                    .get(edit.row_index)
+            })
+            .map(|assignment| (assignment.model.clone(), None))
+    }
+
+    pub(super) fn open_mission_control_assignment_model_picker(&mut self) -> bool {
+        let Some((_, assignment)) = self.selected_runtime_assignment_preview() else {
+            return false;
+        };
+        let provider_id = assignment.provider.clone();
+        let (base_url, api_key, auth_source) = self.provider_auth_snapshot(&provider_id);
+        let models = providers::known_models_for_provider_auth(&provider_id, &auth_source);
+        self.config.reduce(config::ConfigAction::ModelsFetched(models));
+        if self.should_fetch_remote_models(&provider_id, &auth_source) {
+            self.send_daemon_command(DaemonCommand::FetchModels {
+                provider_id,
+                base_url,
+                api_key,
+                output_modalities: None,
+            });
+        }
+        self.settings_picker_target = Some(SettingsPickerTarget::Model);
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
+        self.sync_model_picker_item_count();
+        true
+    }
+
+    pub(super) fn begin_mission_control_custom_model_edit(&mut self) {
+        let Some((_, assignment)) = self.selected_runtime_assignment_preview() else {
+            self.status_line = "Mission Control roster is unavailable".to_string();
+            return;
+        };
+        if self.modal.top() != Some(modal::ModalKind::Settings) {
+            self.modal
+                .reduce(modal::ModalAction::Push(modal::ModalKind::Settings));
+        }
+        self.settings
+            .start_editing("mission_control_assignment_model", &assignment.model);
+        self.status_line = "Enter mission control model ID".to_string();
+    }
+
+    pub(super) fn available_runtime_assignment_models(
+        &self,
+    ) -> Vec<crate::state::config::FetchedModel> {
+        if let Some((current_model, custom_model_name)) =
+            self.runtime_model_picker_current_selection()
+        {
+            widgets::model_picker::available_models_for(
+                &self.config,
+                &current_model,
+                custom_model_name.as_deref(),
+            )
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub(super) fn confirm_runtime_assignment_change(
+        &mut self,
+        apply_mode: goal_mission_control::RuntimeAssignmentApplyMode,
+    ) -> bool {
+        let Some(change) = self.goal_mission_control.pending_runtime_change.clone() else {
+            return false;
+        };
+        self.goal_mission_control
+            .apply_runtime_assignment_change(change.row_index, apply_mode);
+        self.status_line = format!(
+            "Mission Control roster updated: {}",
+            apply_mode.roster_status_label()
+        );
+        true
+    }
+
+    pub(super) fn selected_goal_run_toggle_action(&self) -> Option<PendingConfirmAction> {
+        let run = self.selected_goal_run()?;
+        let title = run.title.clone();
+        match run.status {
+            Some(task::GoalRunStatus::Paused) => Some(PendingConfirmAction::ResumeGoalRun {
+                goal_run_id: run.id.clone(),
+                title,
+            }),
+            Some(task::GoalRunStatus::Queued)
+            | Some(task::GoalRunStatus::Planning)
+            | Some(task::GoalRunStatus::Running)
+            | Some(task::GoalRunStatus::AwaitingApproval) => {
+                Some(PendingConfirmAction::PauseGoalRun {
+                    goal_run_id: run.id.clone(),
+                    title,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn request_selected_goal_run_toggle_confirmation(&mut self) -> bool {
+        let Some(action) = self.selected_goal_run_toggle_action() else {
+            return false;
+        };
+        self.open_pending_action_confirm(action);
+        true
+    }
+
+    pub(super) fn request_selected_goal_run_stop_confirmation(&mut self) -> bool {
+        let Some(run) = self.selected_goal_run() else {
+            return false;
+        };
+        if matches!(
+            run.status,
+            Some(task::GoalRunStatus::Completed)
+                | Some(task::GoalRunStatus::Failed)
+                | Some(task::GoalRunStatus::Cancelled)
+        ) {
+            return false;
+        }
+        self.open_pending_action_confirm(PendingConfirmAction::StopGoalRun {
+            goal_run_id: run.id.clone(),
+            title: run.title.clone(),
+        });
+        true
     }
 
     pub(super) fn request_preview_for_selected_path(&mut self, thread_id: &str) {
@@ -553,6 +1959,7 @@ impl TuiModel {
         self.cleanup_concierge_on_navigate();
         self.clear_chat_drag_selection();
         self.clear_work_context_drag_selection();
+        self.clear_task_view_drag_selection();
         self.pending_new_thread_target_agent = None;
 
         if !self
@@ -575,9 +1982,11 @@ impl TuiModel {
             return;
         }
 
+        self.set_mission_control_return_to_goal_target(None);
         self.cleanup_concierge_on_navigate();
         self.clear_chat_drag_selection();
         self.clear_work_context_drag_selection();
+        self.clear_task_view_drag_selection();
         self.pending_new_thread_target_agent = None;
 
         let Some(thread_id) = self.chat.go_back_thread() else {
@@ -593,26 +2002,207 @@ impl TuiModel {
     }
 
     pub(super) fn open_sidebar_target(&mut self, target: sidebar::SidebarItemTarget) {
+        self.set_mission_control_return_to_goal_target(None);
         self.cleanup_concierge_on_navigate();
+        self.clear_task_view_drag_selection();
         if let sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. } = &target {
-            self.send_daemon_command(DaemonCommand::RequestGoalRunDetail(goal_run_id.clone()));
-            self.send_daemon_command(DaemonCommand::RequestGoalRunCheckpoints(
-                goal_run_id.clone(),
-            ));
+            self.request_authoritative_goal_run_refresh(goal_run_id.clone());
+            self.goal_workspace.set_plan_scroll(0);
         }
         self.request_task_view_context(&target);
         self.main_pane_view = MainPaneView::Task(target);
+        self.reconcile_goal_sidebar_selection_for_active_goal_pane();
+        self.sync_goal_workspace_selection_for_active_goal_pane();
         self.task_view_scroll = 0;
     }
 
     pub(super) fn sync_thread_picker_item_count(&mut self) {
-        let count = widgets::thread_picker::filtered_threads(&self.chat, &self.modal).len() + 1;
+        let count =
+            widgets::thread_picker::filtered_threads(&self.chat, &self.modal, &self.subagents)
+                .len()
+                + 1;
         self.modal.set_picker_item_count(count);
     }
 
     pub(super) fn sync_goal_picker_item_count(&mut self) {
         self.modal
             .set_picker_item_count(self.filtered_goal_runs().len() + 1);
+    }
+
+    pub(super) fn selected_goal_step_context(
+        &self,
+    ) -> Option<(String, String, usize, crate::state::task::GoalRunStep)> {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+            goal_run_id,
+            step_id,
+        }) = &self.main_pane_view
+        else {
+            return None;
+        };
+        let run = self.tasks.goal_run_by_id(goal_run_id)?;
+        let step = if let Some(step_id) = step_id {
+            run.steps.iter().find(|step| step.id == *step_id)?.clone()
+        } else {
+            run.steps
+                .iter()
+                .find(|step| {
+                    step.order as usize == run.current_step_index
+                        || Some(step.title.as_str()) == run.current_step_title.as_deref()
+                })
+                .or_else(|| run.steps.iter().min_by_key(|step| step.order))
+                .cloned()?
+        };
+        Some((run.id.clone(), run.title.clone(), step.order as usize, step))
+    }
+
+    pub(super) fn select_goal_step_in_active_run(&mut self, step_id: String) -> bool {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return false;
+        };
+        let Some(run) = self.tasks.goal_run_by_id(goal_run_id) else {
+            return false;
+        };
+        let Some(step) = run.steps.iter().find(|step| step.id == step_id) else {
+            return false;
+        };
+        let step_title = step.title.clone();
+        let step_order = step.order;
+
+        self.main_pane_view = MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+            goal_run_id: goal_run_id.clone(),
+            step_id: Some(step.id.clone()),
+        });
+        self.reconcile_goal_sidebar_selection_for_active_goal_pane();
+        self.sync_goal_workspace_selection_for_active_goal_pane();
+        self.status_line = format!("Selected step {}: {}", step_order + 1, step_title);
+        true
+    }
+
+    pub(super) fn step_goal_step_selection(&mut self, delta: i32) -> bool {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+            goal_run_id,
+            step_id,
+        }) = &self.main_pane_view
+        else {
+            return false;
+        };
+        let Some(run) = self.tasks.goal_run_by_id(goal_run_id) else {
+            return false;
+        };
+        let mut steps = run.steps.clone();
+        steps.sort_by_key(|step| step.order);
+        if steps.is_empty() {
+            return false;
+        }
+
+        let current_index = step_id
+            .as_ref()
+            .and_then(|selected| steps.iter().position(|step| step.id == *selected))
+            .or_else(|| {
+                steps.iter().position(|step| {
+                    step.order as usize == run.current_step_index
+                        || Some(step.title.as_str()) == run.current_step_title.as_deref()
+                })
+            })
+            .unwrap_or(0);
+        let next_index = if delta > 0 {
+            current_index
+                .saturating_add(delta as usize)
+                .min(steps.len().saturating_sub(1))
+        } else {
+            current_index.saturating_sub((-delta) as usize)
+        };
+        let next_step = &steps[next_index];
+        let step_title = next_step.title.clone();
+        let step_order = next_step.order;
+        self.main_pane_view = MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+            goal_run_id: goal_run_id.clone(),
+            step_id: Some(next_step.id.clone()),
+        });
+        self.reconcile_goal_sidebar_selection_for_active_goal_pane();
+        self.status_line = format!("Selected step {}: {}", step_order + 1, step_title);
+        true
+    }
+
+    pub(super) fn request_selected_goal_step_retry_confirmation(&mut self) -> bool {
+        let Some((goal_run_id, goal_title, step_index, step)) = self.selected_goal_step_context()
+        else {
+            return false;
+        };
+        self.open_pending_action_confirm(PendingConfirmAction::RetryGoalStep {
+            goal_run_id,
+            goal_title,
+            step_index,
+            step_title: step.title,
+        });
+        true
+    }
+
+    pub(super) fn request_selected_goal_step_rerun_confirmation(&mut self) -> bool {
+        let Some((goal_run_id, goal_title, step_index, step)) = self.selected_goal_step_context()
+        else {
+            return false;
+        };
+        self.open_pending_action_confirm(PendingConfirmAction::RerunGoalFromStep {
+            goal_run_id,
+            goal_title,
+            step_index,
+            step_title: step.title,
+        });
+        true
+    }
+
+    pub(super) fn goal_action_picker_items(&self) -> Vec<GoalActionPickerItem> {
+        let confirmation_items = self.runtime_assignment_confirmation_items();
+        if !confirmation_items.is_empty() {
+            return confirmation_items;
+        }
+
+        let mut items = Vec::new();
+        if let Some(run) = self.selected_goal_run() {
+            match run.status {
+                Some(task::GoalRunStatus::Paused) => items.push(GoalActionPickerItem::ResumeGoal),
+                Some(task::GoalRunStatus::Queued)
+                | Some(task::GoalRunStatus::Planning)
+                | Some(task::GoalRunStatus::Running)
+                | Some(task::GoalRunStatus::AwaitingApproval) => {
+                    items.push(GoalActionPickerItem::PauseGoal);
+                    items.push(GoalActionPickerItem::StopGoal);
+                }
+                _ => {}
+            }
+            if !run.runtime_assignment_list.is_empty() || !run.launch_assignment_snapshot.is_empty()
+            {
+                items.push(GoalActionPickerItem::CycleRuntimeAssignment);
+                items.push(GoalActionPickerItem::EditRuntimeProvider);
+                items.push(GoalActionPickerItem::EditRuntimeModel);
+                items.push(GoalActionPickerItem::EditRuntimeReasoning);
+                items.push(GoalActionPickerItem::EditRuntimeRole);
+                items.push(GoalActionPickerItem::ToggleRuntimeEnabled);
+                items.push(GoalActionPickerItem::ToggleRuntimeInherit);
+            }
+        }
+
+        if self.selected_goal_step_context().is_some() {
+            items.push(GoalActionPickerItem::RetryStep);
+            items.push(GoalActionPickerItem::RerunFromStep);
+        }
+
+        items
+    }
+
+    pub(super) fn open_goal_step_action_picker(&mut self) -> bool {
+        let items = self.goal_action_picker_items();
+        if items.is_empty() {
+            return false;
+        }
+        self.modal.reduce(modal::ModalAction::Push(
+            modal::ModalKind::GoalStepActionPicker,
+        ));
+        self.modal.set_picker_item_count(items.len());
+        true
     }
 
     pub(crate) fn open_queued_prompts_modal(&mut self) {
@@ -792,27 +2382,180 @@ impl TuiModel {
     }
 
     pub(super) fn open_new_goal_view(&mut self) {
+        let current_goal_target = self.current_goal_target_for_mission_control();
+        self.set_mission_control_source_goal_target(current_goal_target.clone());
+        self.set_mission_control_return_to_goal_target(None);
         self.cleanup_concierge_on_navigate();
+        let fallback_profile = self.current_conversation_agent_profile();
+        let fallback_main_assignment = task::GoalAgentAssignment {
+            role_id: amux_protocol::AGENT_ID_SWAROG.to_string(),
+            enabled: true,
+            provider: fallback_profile.provider,
+            model: fallback_profile.model,
+            reasoning_effort: fallback_profile.reasoning_effort,
+            inherit_from_main: false,
+        };
+        let preferred_goal_snapshot = current_goal_target
+            .as_ref()
+            .and_then(|target| target_goal_run_id(self, target))
+            .and_then(|goal_run_id| self.tasks.goal_run_by_id(&goal_run_id).cloned())
+            .and_then(|run| {
+                if !run.launch_assignment_snapshot.is_empty() {
+                    Some(run.launch_assignment_snapshot)
+                } else if !run.runtime_assignment_list.is_empty() {
+                    Some(run.runtime_assignment_list)
+                } else {
+                    None
+                }
+            });
+        let latest_goal_snapshot = self
+            .tasks
+            .goal_runs()
+            .iter()
+            .max_by_key(|run| run.updated_at)
+            .and_then(|run| {
+                if !run.launch_assignment_snapshot.is_empty() {
+                    Some(run.launch_assignment_snapshot.clone())
+                } else if !run.runtime_assignment_list.is_empty() {
+                    Some(run.runtime_assignment_list.clone())
+                } else {
+                    None
+                }
+            });
+        self.goal_mission_control = match preferred_goal_snapshot.or(latest_goal_snapshot) {
+            Some(snapshot) => goal_mission_control::GoalMissionControlState::from_goal_snapshot(
+                snapshot,
+                fallback_main_assignment,
+                "Previous goal snapshot",
+            ),
+            None => goal_mission_control::GoalMissionControlState::from_main_assignment(
+                fallback_main_assignment.clone(),
+                vec![fallback_main_assignment],
+                "Main agent inheritance",
+            ),
+        };
+        self.goal_mission_control.set_prompt_text(String::new());
+        self.goal_mission_control.set_save_as_default_pending(false);
         self.main_pane_view = MainPaneView::GoalComposer;
         self.task_view_scroll = 0;
         self.focus = FocusArea::Input;
-        self.input.reduce(input::InputAction::Clear);
+        self.set_input_text("");
         self.attachments.clear();
-        self.status_line = "Describe the goal in the input and press Enter".to_string();
+        self.status_line = "Mission Control preflight is ready".to_string();
+    }
+
+    pub(super) fn open_mission_control_goal_thread(&mut self) -> bool {
+        let Some((thread_id, used_root_fallback)) = self.mission_control_thread_target() else {
+            self.status_line = if self.mission_control_source_goal_target().is_some() {
+                "Mission Control source goal has no active or root thread".to_string()
+            } else {
+                "Mission Control has no source goal thread to open".to_string()
+            };
+            return false;
+        };
+
+        self.open_thread_conversation(thread_id.clone());
+        self.status_line = if used_root_fallback {
+            "Opened root goal thread as fallback because no active goal thread was available"
+                .to_string()
+        } else {
+            format!("Opened active goal thread {thread_id}")
+        };
+        true
+    }
+
+    pub(super) fn return_to_goal_from_mission_control(&mut self) -> bool {
+        let Some(target) = self.mission_control_return_to_goal_target() else {
+            return false;
+        };
+
+        self.set_mission_control_return_to_goal_target(None);
+        self.open_sidebar_target(target);
+        self.focus = FocusArea::Chat;
+        self.status_line = "Returned to goal".to_string();
+        true
     }
 
     pub(super) fn start_goal_run_from_prompt(&mut self, goal: String) {
+        self.goal_mission_control.set_prompt_text(goal);
+        self.start_goal_run_from_mission_control();
+    }
+
+    fn consume_attachments_for_text_prompt(
+        &mut self,
+        prompt: String,
+    ) -> (String, Vec<serde_json::Value>) {
+        let drained_attachments = self.attachments.drain(..).collect::<Vec<_>>();
+        let mut content_blocks = Vec::new();
+        let content_with_attachments = if drained_attachments.is_empty() {
+            prompt
+        } else {
+            let mut parts: Vec<String> = Vec::new();
+            for att in drained_attachments {
+                match att.payload {
+                    AttachmentPayload::Text(content) => parts.push(format!(
+                        "<attached_file name=\"{}\">\n{}\n</attached_file>",
+                        att.filename, content
+                    )),
+                    AttachmentPayload::ContentBlock(block) => content_blocks.push(block),
+                }
+            }
+            parts.push(prompt);
+            parts.join("\n\n")
+        };
+        (content_with_attachments, content_blocks)
+    }
+
+    pub(super) fn start_goal_run_from_mission_control(&mut self) {
         if !self.connected {
             self.status_line = "Not connected to daemon".to_string();
             return;
         }
+        let raw_goal = self.goal_mission_control.prompt_text().trim().to_string();
+        if raw_goal.is_empty() {
+            self.status_line = "Enter a goal before launching".to_string();
+            return;
+        }
         self.cleanup_concierge_on_navigate();
+        let (goal_with_attachments, _content_blocks) =
+            self.consume_attachments_for_text_prompt(raw_goal);
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let goal = input_refs::append_referenced_files_footer(&goal_with_attachments, &cwd);
+        let launch_assignments = if self
+            .goal_mission_control
+            .display_role_assignments()
+            .is_empty()
+        {
+            let fallback_profile = self.current_conversation_agent_profile();
+            vec![task::GoalAgentAssignment {
+                role_id: amux_protocol::AGENT_ID_SWAROG.to_string(),
+                enabled: true,
+                provider: fallback_profile.provider,
+                model: fallback_profile.model,
+                reasoning_effort: fallback_profile.reasoning_effort,
+                inherit_from_main: false,
+            }]
+        } else {
+            self.goal_mission_control
+                .display_role_assignments()
+                .to_vec()
+        };
         self.send_daemon_command(DaemonCommand::StartGoalRun {
             goal,
             thread_id: None,
             session_id: None,
+            launch_assignments,
         });
         self.status_line = "Starting goal run...".to_string();
+    }
+
+    pub(super) fn sync_goal_mission_control_prompt_from_input(&mut self) {
+        if matches!(self.main_pane_view, MainPaneView::GoalComposer)
+            && self.focus == FocusArea::Input
+        {
+            self.goal_mission_control
+                .set_prompt_text(self.input.buffer().to_string());
+        }
     }
 
     pub(super) fn is_builtin_command(&self, command: &str) -> bool {
@@ -820,11 +2563,12 @@ impl TuiModel {
             command,
             "provider"
                 | "model"
+                | "image"
                 | "tools"
                 | "effort"
                 | "thread"
                 | "new"
-                | "goals"
+                | "goal"
                 | "tasks"
                 | "conversation"
                 | "chat"
@@ -839,7 +2583,7 @@ impl TuiModel {
                 | "compact"
                 | "quit"
                 | "prompt"
-                | "goal"
+                | "new-goal"
                 | "attach"
                 | "plugins install"
                 | "skills install"
@@ -860,25 +2604,21 @@ impl TuiModel {
                 );
             }
             "model" => {
-                let models = providers::known_models_for_provider_auth(
-                    &self.config.provider,
-                    &self.config.auth_source,
+                let target = self
+                    .settings_picker_target
+                    .unwrap_or(SettingsPickerTarget::Model);
+                self.open_provider_backed_model_picker(
+                    target,
+                    self.config.provider.clone(),
+                    self.config.base_url.clone(),
+                    self.config.api_key.clone(),
+                    self.config.auth_source.clone(),
                 );
-                if !models.is_empty() {
-                    self.config
-                        .reduce(config::ConfigAction::ModelsFetched(models));
-                }
-                if self.should_fetch_remote_models(&self.config.provider, &self.config.auth_source)
-                {
-                    self.send_daemon_command(DaemonCommand::FetchModels {
-                        provider_id: self.config.provider.clone(),
-                        base_url: self.config.base_url.clone(),
-                        api_key: self.config.api_key.clone(),
-                    });
-                }
-                self.modal
-                    .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
-                self.sync_model_picker_item_count();
+            }
+            "image" => {
+                self.input.set_text("/image ");
+                self.focus = FocusArea::Input;
+                self.status_line = "Describe the image and press Enter".to_string();
             }
             "tools" => {
                 self.open_settings_tab(SettingsTab::Tools);
@@ -893,13 +2633,13 @@ impl TuiModel {
                     .reduce(modal::ModalAction::Push(modal::ModalKind::ThreadPicker));
                 self.sync_thread_picker_item_count();
             }
-            "goals" => {
+            "goal" => {
                 self.modal
                     .reduce(modal::ModalAction::Push(modal::ModalKind::GoalPicker));
                 self.sync_goal_picker_item_count();
             }
             "new" => {
-                self.start_new_thread_view();
+                self.start_new_thread_view_for_agent(Some(amux_protocol::AGENT_ID_SWAROG));
             }
             "tasks" => {
                 self.modal
@@ -953,7 +2693,7 @@ impl TuiModel {
             "prompt" => {
                 self.request_prompt_inspection(None);
             }
-            "goal" => {
+            "new-goal" => {
                 self.open_new_goal_view();
             }
             "attach" => {
@@ -1013,6 +2753,35 @@ impl TuiModel {
         }
     }
 
+    pub(super) fn submit_image_prompt(&mut self, prompt: String) {
+        if !self.connected {
+            self.status_line = "Not connected to daemon".to_string();
+            return;
+        }
+
+        let trimmed = prompt.trim();
+        if trimmed.is_empty() {
+            self.execute_command("image");
+            return;
+        }
+
+        self.cleanup_concierge_on_navigate();
+        self.attachments.clear();
+
+        let args_json = serde_json::json!({
+            "thread_id": self.chat.active_thread_id().map(str::to_string),
+            "prompt": trimmed,
+        })
+        .to_string();
+        self.send_daemon_command(DaemonCommand::GenerateImage { args_json });
+
+        self.main_pane_view = MainPaneView::Conversation;
+        self.focus = FocusArea::Chat;
+        self.input.set_mode(input::InputMode::Insert);
+        self.status_line = "Generating image...".to_string();
+        self.error_active = false;
+    }
+
     pub(super) fn submit_prompt(&mut self, prompt: String) {
         if !self.connected {
             self.status_line = "Not connected to daemon".to_string();
@@ -1025,24 +2794,8 @@ impl TuiModel {
 
         self.cleanup_concierge_on_navigate();
 
-        let drained_attachments = self.attachments.drain(..).collect::<Vec<_>>();
-        let mut content_blocks = Vec::new();
-        let content_with_attachments = if drained_attachments.is_empty() {
-            prompt.clone()
-        } else {
-            let mut parts: Vec<String> = Vec::new();
-            for att in drained_attachments {
-                match att.payload {
-                    AttachmentPayload::Text(content) => parts.push(format!(
-                        "<attached_file name=\"{}\">\n{}\n</attached_file>",
-                        att.filename, content
-                    )),
-                    AttachmentPayload::ContentBlock(block) => content_blocks.push(block),
-                }
-            }
-            parts.push(prompt.clone());
-            parts.join("\n\n")
-        };
+        let (content_with_attachments, mut content_blocks) =
+            self.consume_attachments_for_text_prompt(prompt.clone());
         if !content_blocks.is_empty() {
             content_blocks.insert(
                 0,
@@ -1168,24 +2921,43 @@ impl TuiModel {
         let final_content =
             input_refs::append_referenced_files_footer(&content_with_attachments, &cwd);
 
-        let thread_id = self.chat.active_thread_id().map(String::from);
+        let goal_target = self.current_goal_target_for_mission_control();
+        let goal_thread_target = self.goal_prompt_thread_target();
+        if goal_target.is_some() && goal_thread_target.is_none() {
+            self.input.set_text(&prompt);
+            self.status_line =
+                "Goal input accepts only slash commands until an active goal thread is available"
+                    .to_string();
+            self.show_input_notice(
+                "Goal input needs an active step thread before it can send a prompt".to_string(),
+                InputNoticeKind::Warning,
+                120,
+                false,
+            );
+            return;
+        }
+
+        let thread_id = goal_thread_target
+            .as_ref()
+            .map(|(_, thread_id)| thread_id.clone())
+            .or_else(|| self.chat.active_thread_id().map(String::from));
         let target_agent_id = if thread_id.is_none() {
-            self.pending_new_thread_target_agent.take()
+            self.pending_new_thread_target_agent.clone()
         } else {
             None
         };
-        let local_target_agent_name =
-            target_agent_id
-                .as_deref()
-                .and_then(|agent_id| match agent_id {
-                    amux_protocol::AGENT_ID_RAROG => {
-                        Some(amux_protocol::AGENT_NAME_RAROG.to_string())
-                    }
-                    "weles" => Some("Weles".to_string()),
-                    _ => None,
-                });
+        let local_target_agent_name = target_agent_id
+            .as_deref()
+            .map(|agent_id| self.participant_display_name(agent_id));
         if thread_id.as_deref() == self.cancelled_thread_id.as_deref() {
             self.cancelled_thread_id = None;
+        }
+        if let Some((target, thread_id)) = &goal_thread_target {
+            self.set_mission_control_return_to_goal_target(Some(target.clone()));
+            if self.chat.active_thread_id() != Some(thread_id.as_str()) {
+                self.chat
+                    .reduce(chat::ChatAction::SelectThread(thread_id.clone()));
+            }
         }
         if thread_id.is_none() {
             let local_thread_id = format!("local-{}", self.tick_counter);
@@ -1209,12 +2981,12 @@ impl TuiModel {
             }
         }
 
-        if let Some(thread_id) = self.chat.active_thread_id().map(str::to_string) {
+        if let Some(thread_id) = thread_id.as_ref() {
             let active_thread_id = thread_id.clone();
             self.reduce_chat_for_thread(
                 Some(active_thread_id.as_str()),
                 chat::ChatAction::AppendMessage {
-                    thread_id,
+                    thread_id: active_thread_id.clone(),
                     message: chat::AgentMessage {
                         role: chat::MessageRole::User,
                         content: final_content.clone(),
@@ -1240,7 +3012,10 @@ impl TuiModel {
         self.focus = FocusArea::Chat;
         self.input.set_mode(input::InputMode::Insert);
         self.status_line = "Prompt sent".to_string();
-        self.set_agent_activity_for(thread_id.clone(), "thinking");
+        let activity_thread_id = thread_id
+            .clone()
+            .or_else(|| self.chat.active_thread_id().map(String::from));
+        self.set_agent_activity_for(activity_thread_id, "thinking");
         self.error_active = false;
     }
 
@@ -1261,6 +3036,11 @@ impl TuiModel {
                 }
                 FocusArea::Sidebar => self.focus = FocusArea::Input,
             }
+            self.input.set_mode(input::InputMode::Insert);
+            return;
+        }
+
+        if self.focus_next_goal_workspace_pane() {
             self.input.set_mode(input::InputMode::Insert);
             return;
         }
@@ -1306,6 +3086,23 @@ impl TuiModel {
             return;
         }
 
+        if self.focus == FocusArea::Input
+            && matches!(
+                self.main_pane_view,
+                MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+            )
+        {
+            self.focus = FocusArea::Chat;
+            self.goal_workspace
+                .set_focused_pane(crate::state::goal_workspace::GoalWorkspacePane::CommandBar);
+            self.input.set_mode(input::InputMode::Insert);
+            return;
+        }
+        if self.focus_prev_goal_workspace_pane() {
+            self.input.set_mode(input::InputMode::Insert);
+            return;
+        }
+
         self.focus = if self.sidebar_visible() {
             match self.focus {
                 FocusArea::Chat => FocusArea::Input,
@@ -1322,6 +3119,11 @@ impl TuiModel {
     }
 
     pub(super) fn handle_sidebar_enter(&mut self) {
+        if self.sidebar_uses_goal_sidebar() {
+            let _ = self.handle_goal_sidebar_enter();
+            return;
+        }
+
         let Some(thread_id) = self.chat.active_thread_id().map(str::to_string) else {
             return;
         };
@@ -1648,6 +3450,9 @@ impl TuiModel {
 
 fn builtin_participant_display_name(agent_alias: &str) -> Option<String> {
     let normalized = agent_alias.trim().to_ascii_lowercase();
+    if normalized == amux_protocol::AGENT_ID_SWAROG {
+        return Some("Swarog".to_string());
+    }
     if normalized == amux_protocol::AGENT_ID_RAROG {
         return Some(amux_protocol::AGENT_NAME_RAROG.to_string());
     }

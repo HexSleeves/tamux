@@ -7,6 +7,9 @@ pub mod chat;
 pub mod collaboration;
 pub mod concierge;
 pub mod config;
+pub mod goal_mission_control;
+pub mod goal_sidebar;
+pub mod goal_workspace;
 pub mod input;
 pub mod input_refs;
 pub mod modal;
@@ -34,6 +37,7 @@ pub enum FocusArea {
 #[derive(Debug, Clone)]
 pub enum DaemonCommand {
     Refresh,
+    GetConfig,
     RefreshServices,
     RequestThread {
         thread_id: String,
@@ -59,10 +63,12 @@ pub enum DaemonCommand {
         event_limit: Option<usize>,
     },
     RequestGoalRunCheckpoints(String),
+    ScheduleGoalHydrationRefresh(String),
     StartGoalRun {
         goal: String,
         thread_id: Option<String>,
         session_id: Option<String>,
+        launch_assignments: Vec<crate::state::task::GoalAgentAssignment>,
     },
     ExplainAction {
         action_id: String,
@@ -132,6 +138,7 @@ pub enum DaemonCommand {
         provider_id: String,
         base_url: String,
         api_key: String,
+        output_modalities: Option<String>,
     },
     SetConfigItem {
         key_path: String,
@@ -149,6 +156,7 @@ pub enum DaemonCommand {
     ControlGoalRun {
         goal_run_id: String,
         action: String,
+        step_index: Option<usize>,
     },
     DeleteGoalRun {
         goal_run_id: String,
@@ -230,6 +238,9 @@ pub enum DaemonCommand {
     TextToSpeech {
         args_json: String,
     },
+    GenerateImage {
+        args_json: String,
+    },
     SetOperatorProfileConsent {
         consent_key: String,
         granted: bool,
@@ -298,6 +309,8 @@ pub use collaboration::{
 pub use concierge::{ConciergeAction, ConciergeActionVm, ConciergeState};
 #[allow(unused_imports)]
 pub use config::{ConfigAction, ConfigState};
+#[allow(unused_imports)]
+pub use goal_sidebar::{GoalSidebarState, GoalSidebarTab};
 #[allow(unused_imports)]
 pub use input::{InputAction, InputMode, InputState};
 #[allow(unused_imports)]

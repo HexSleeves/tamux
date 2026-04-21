@@ -82,10 +82,7 @@ fn hit_test_reasoning_header_body_selects_message_instead_of_toggling() {
         })
         .expect("reasoning header should be visible");
     let hit_line = &visible[header_row];
-    let (plain, content_start, _) = rendered_line_content_bounds(hit_line);
-    let label_offset = plain
-        .find("Reasoning")
-        .expect("reasoning label should be rendered");
+    let (_, content_start, _) = rendered_line_content_bounds(hit_line);
 
     let hit = hit_test(
         area,
@@ -93,7 +90,7 @@ fn hit_test_reasoning_header_body_selects_message_instead_of_toggling() {
         &ThemeTokens::default(),
         0,
         Position::new(
-            inner.x + (content_start + label_offset + 1) as u16,
+            inner.x + (content_start + 3) as u16,
             inner.y + header_row as u16,
         ),
     );
@@ -328,6 +325,43 @@ fn read_skill_file_chip_falls_back_to_daemon_result_header() {
             .to_string()
     );
     assert_eq!(chip.label, "SKILL.md");
+}
+
+#[test]
+fn tool_file_path_chip_prefers_tool_output_preview_path_metadata() {
+    let preview_path = std::env::temp_dir()
+        .join(format!("bash_command-preview-{}.txt", uuid::Uuid::new_v4()));
+    let message = AgentMessage {
+        role: MessageRole::Tool,
+        tool_name: Some("bash_command".into()),
+        tool_status: Some("done".into()),
+        tool_output_preview_path: Some(preview_path.display().to_string()),
+        content: "Tool result saved to preview file\n- tool: bash_command".into(),
+        ..Default::default()
+    };
+
+    let chip = tool_file_chip(&message).expect("preview-backed tool result should expose a chip");
+    assert_eq!(chip.path, preview_path.display().to_string());
+    assert_eq!(
+        chip.label,
+        preview_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("preview file should have a basename")
+    );
+
+    let chat = chat_with_messages(vec![message]);
+    let (lines, _) = build_rendered_lines(&chat, &ThemeTokens::default(), 100, 0, false);
+    let tool_line = lines
+        .iter()
+        .find(|line| {
+            line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ToolToggle)
+        })
+        .expect("tool row should be rendered");
+    let text = rendered_line_plain_text(tool_line);
+
+    assert!(text.contains("bash_command"));
+    assert!(text.contains(&format!("[{}]", chip.label)));
 }
 
 #[test]
@@ -609,6 +643,95 @@ fn hit_test_returns_tool_file_path_target_for_read_skill() {
         chip_hit,
         Some(ChatHitTarget::ToolFilePath { message_index: 0 })
     );
+}
+
+#[test]
+fn hit_test_returns_tool_file_path_target_for_tool_output_preview_metadata() {
+    let preview_path = std::env::temp_dir()
+        .join(format!("web_search-preview-{}.txt", uuid::Uuid::new_v4()));
+    let chat = chat_with_messages(vec![AgentMessage {
+        role: MessageRole::Tool,
+        tool_name: Some("web_search".into()),
+        tool_status: Some("done".into()),
+        tool_output_preview_path: Some(preview_path.display().to_string()),
+        content: "Tool result saved to preview file\n- tool: web_search".into(),
+        ..Default::default()
+    }]);
+
+    let area = Rect::new(0, 0, 120, 6);
+    let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0, false)
+        .expect("chat should produce visible lines");
+    let tool_row = visible
+        .iter()
+        .position(|line| {
+            line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ToolToggle)
+        })
+        .expect("tool row should be visible");
+    let hit_line = &visible[tool_row];
+    let (plain, _, _) = rendered_line_content_bounds(hit_line);
+    let chip_col = plain
+        .find('[')
+        .expect("preview path chip should be rendered on the tool row");
+
+    let chip_hit = hit_test(
+        area,
+        &chat,
+        &ThemeTokens::default(),
+        0,
+        Position::new(inner.x + chip_col as u16 + 1, inner.y + tool_row as u16),
+    );
+
+    assert_eq!(
+        chip_hit,
+        Some(ChatHitTarget::ToolFilePath { message_index: 0 })
+    );
+}
+
+#[test]
+fn hit_test_returns_message_image_target_for_assistant_image_attachment() {
+    use base64::Engine as _;
+
+    let image_path = std::env::temp_dir().join(format!(
+        "tamux-inline-image-{}.png",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(
+        &image_path,
+        base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO0pGfcAAAAASUVORK5CYII=")
+            .expect("fixture PNG should decode"),
+    )
+    .expect("fixture PNG should write");
+
+    let chat = chat_with_messages(vec![AgentMessage {
+        role: MessageRole::Assistant,
+        content_blocks: vec![crate::state::chat::AgentContentBlock::Image {
+            url: Some(format!("file://{}", image_path.display())),
+            data_url: None,
+            mime_type: Some("image/png".into()),
+        }],
+        ..Default::default()
+    }]);
+
+    let area = Rect::new(0, 0, 100, 12);
+    let (inner, visible) = visible_rendered_lines(area, &chat, &ThemeTokens::default(), 0, false)
+        .expect("chat should produce visible lines");
+    let image_row = visible
+        .iter()
+        .position(|line| {
+            line.message_index == Some(0) && matches!(line.kind, RenderedLineKind::ImageAttachment)
+        })
+        .expect("image attachment row should be visible");
+
+    let hit = hit_test(
+        area,
+        &chat,
+        &ThemeTokens::default(),
+        0,
+        Position::new(inner.x.saturating_add(2), inner.y + image_row as u16),
+    );
+
+    assert_eq!(hit, Some(ChatHitTarget::MessageImage { message_index: 0 }));
 }
 
 #[test]

@@ -24,6 +24,12 @@ pub const ALIBABA_CODING_MODELS: &[ModelDefinition] = &[
         modalities: TEXT_IMAGE,
     },
     ModelDefinition {
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        context_window: 262144,
+        modalities: TEXT_ONLY,
+    },
+    ModelDefinition {
         id: "kimi-k2.5",
         name: "Kimi K2.5",
         context_window: 262144,
@@ -210,6 +216,12 @@ pub const OPENCODE_ZEN_MODELS: &[ModelDefinition] = &[
         modalities: TEXT_ONLY,
     },
     ModelDefinition {
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        context_window: 262144,
+        modalities: TEXT_ONLY,
+    },
+    ModelDefinition {
         id: "kimi-k2.5",
         name: "Kimi K2.5",
         context_window: 262144,
@@ -368,8 +380,8 @@ pub const OLLAMA_MODELS: &[ModelDefinition] = &[
 ];
 
 pub const CHUTES_MODELS: &[ModelDefinition] = &[ModelDefinition {
-    id: "deepseek-ai/DeepSeek-V3",
-    name: "DeepSeek V3",
+    id: "deepseek-ai/DeepSeek-R1",
+    name: "DeepSeek R1",
     context_window: 128000,
     modalities: TEXT_ONLY,
 }];

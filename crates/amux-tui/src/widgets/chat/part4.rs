@@ -78,7 +78,12 @@ pub fn hit_test(
     };
     let hit = snapshot.all_lines.get(resolved_row)?;
 
-    if matches!(hit.kind, RenderedLineKind::ToolToggle | RenderedLineKind::MessageBody) {
+    if matches!(
+        hit.kind,
+        RenderedLineKind::ToolToggle
+            | RenderedLineKind::MessageBody
+            | RenderedLineKind::ImageAttachment
+    ) {
         if let Some(message_index) = hit.message_index {
             let message = chat
                 .active_thread()
@@ -100,6 +105,10 @@ pub fn hit_test(
                         }
                     }
                 }
+            } else if matches!(hit.kind, RenderedLineKind::ImageAttachment)
+                && crate::widgets::chat::message_image_preview_path(message).is_some()
+            {
+                return Some(ChatHitTarget::MessageImage { message_index });
             }
         }
     }
@@ -169,6 +178,7 @@ pub fn hit_test(
             )
         }
         RenderedLineKind::MessageBody
+        | RenderedLineKind::ImageAttachment
         | RenderedLineKind::ReasoningContent
         | RenderedLineKind::ToolDetail => Some(ChatHitTarget::Message(hit.message_index?)),
         RenderedLineKind::Padding

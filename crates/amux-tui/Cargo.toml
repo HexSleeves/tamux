@@ -37,6 +37,7 @@ url = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 chrono = "0.4"
 libc = "0.2"
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
 
 [dev-dependencies]
 tempfile = "3"

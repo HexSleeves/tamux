@@ -92,7 +92,7 @@ impl AgentEngine {
         let mut prompt = format!(
             "You are planning a durable autonomous goal runner inside tamux.\n\
              Produce strict JSON only with the shape:\n\
-             {{\"title\":\"...\",\"summary\":\"...\",\"steps\":[{{\"title\":\"...\",\"instructions\":\"...\",\"kind\":\"reason|command|research|memory|skill|divergent|debate\",\"success_criteria\":\"...\",\"session_id\":null,\"llm_confidence\":\"confident|likely|uncertain|guessing\",\"llm_confidence_rationale\":\"...\"}}],\"rejected_alternatives\":[\"...\"]}}\n\
+             {{\"title\":\"...\",\"summary\":\"...\",\"steps\":[{{\"title\":\"...\",\"instructions\":\"...\",\"kind\":\"reason|command|research|memory|skill|divergent|debate\",\"success_criteria\":\"...\",\"execution_binding\":null,\"verification_binding\":null,\"proof_checks\":[{{\"id\":\"...\",\"title\":\"...\",\"summary\":null}}],\"session_id\":null,\"llm_confidence\":\"confident|likely|uncertain|guessing\",\"llm_confidence_rationale\":\"...\"}}],\"rejected_alternatives\":[\"...\"]}}\n\
              Requirements:\n\
              - 2 to {max_steps} steps.\n\
              - Keep each step actionable and narrow.\n\
@@ -103,11 +103,19 @@ impl AgentEngine {
              - Prefer one terminal session unless the goal clearly requires otherwise.\n\
              - All work should be done inside the workspace directory. Do not cd above it.\n\
              - For each step, include `llm_confidence` and `llm_confidence_rationale` based on your own self-assessment.\n\
+             - If execution routing is already clear, set `execution_binding` to `builtin:<id>` or `subagent:<id>`.\n\
+             - If verification routing is already clear, set `verification_binding` to `builtin:<id>` or `subagent:<id>`.\n\
+             - Add `proof_checks` only for concrete validation targets. Keep each one compact with `id`, `title`, and optional `summary`.\n\
              - Also include \"rejected_alternatives\": a list of 1-{max_rejected} alternative approaches you considered but rejected, each with a brief reason why it was not chosen.\n\
              Goal title: {}\n\
              Goal:\n{}",
             goal_run.title, goal_run.goal
         );
+        prompt.push_str("\n\n");
+        prompt.push_str(&crate::agent::goal_dossier::goal_inventory_prompt_block(
+            &self.data_dir,
+            &goal_run.id,
+        ));
 
         match adaptation_mode {
             SatisfactionAdaptationMode::Minimal => prompt.push_str(
@@ -133,6 +141,14 @@ impl AgentEngine {
                 "- Repeated fallback patterns show these tools recovered better than the earlier failing path: {}. Prefer them earlier when they fit, and justify the switch explicitly.\n",
                 preferred_fallback_tools.join(", ")
             ));
+        }
+        let goal_local_agents = goal_local_agent_prompt_block(&goal_run.launch_assignment_snapshot);
+        if !goal_local_agents.is_empty() {
+            prompt.push_str("\nGoal-local agents:\n");
+            prompt.push_str(&goal_local_agents);
+            prompt.push_str(
+                "\nPrefer these goal-local roles when they fit the task. If no local role fits, global subagents may still be used.\n",
+            );
         }
 
         if !episodic_context.is_empty() {
@@ -425,10 +441,12 @@ impl AgentEngine {
         let mut prompt = format!(
             "You are replanning a tamux goal runner after a failed step.\n\
              Produce strict JSON only with the shape:\n\
-             {{\"title\":\"...\",\"summary\":\"...\",\"steps\":[{{\"title\":\"...\",\"instructions\":\"...\",\"kind\":\"reason|command|research|memory|skill|divergent\",\"success_criteria\":\"...\",\"session_id\":null,\"llm_confidence\":\"confident|likely|uncertain|guessing\",\"llm_confidence_rationale\":\"...\"}}],\"rejected_alternatives\":[\"...\"]}}\n\
+             {{\"title\":\"...\",\"summary\":\"...\",\"steps\":[{{\"title\":\"...\",\"instructions\":\"...\",\"kind\":\"reason|command|research|memory|skill|divergent\",\"success_criteria\":\"...\",\"execution_binding\":null,\"verification_binding\":null,\"proof_checks\":[{{\"id\":\"...\",\"title\":\"...\",\"summary\":null}}],\"session_id\":null,\"llm_confidence\":\"confident|likely|uncertain|guessing\",\"llm_confidence_rationale\":\"...\"}}],\"rejected_alternatives\":[\"...\"]}}\n\
              Return only the revised remaining steps, not the full history.\n\
              Limit the revised plan to {max_steps} remaining steps and at most {max_rejected} rejected alternatives.\n\
              For each step, include `llm_confidence` and `llm_confidence_rationale` based on your own self-assessment.\n\
+             Use `execution_binding` / `verification_binding` only when the routing is clear, with `builtin:<id>` or `subagent:<id>`.\n\
+             Include `proof_checks` only for concrete validation targets that should travel with the revised steps.\n\
              Goal: {}\n\
              Failure: {}\n\
              Completed / attempted steps:\n{}\n",

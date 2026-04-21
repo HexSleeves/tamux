@@ -73,6 +73,7 @@ pub struct AgentMessage {
     pub id: Option<String>,
     pub role: MessageRole,
     pub content: String,
+    pub content_blocks: Vec<AgentContentBlock>,
     pub reasoning: Option<String>,
     pub author_agent_id: Option<String>,
     pub author_agent_name: Option<String>,
@@ -95,9 +96,35 @@ pub struct AgentMessage {
     pub message_kind: String,
     pub compaction_strategy: Option<String>,
     pub compaction_payload: Option<String>,
+    pub tool_output_preview_path: Option<String>,
     pub timestamp: u64,
     pub actions: Vec<MessageAction>,
     pub is_concierge_welcome: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum AgentContentBlock {
+    Text {
+        text: String,
+    },
+    Image {
+        url: Option<String>,
+        data_url: Option<String>,
+        mime_type: Option<String>,
+    },
+    Audio {
+        url: Option<String>,
+        data_url: Option<String>,
+        mime_type: Option<String>,
+    },
+}
+
+impl Default for AgentContentBlock {
+    fn default() -> Self {
+        Self::Text {
+            text: String::new(),
+        }
+    }
 }
 
 pub type WelesReviewMetaVm = crate::client::WelesReviewMetaVm;
@@ -140,6 +167,9 @@ pub enum ChatHitTarget {
     ReasoningToggle(usize),
     ToolToggle(usize),
     ToolFilePath {
+        message_index: usize,
+    },
+    MessageImage {
         message_index: usize,
     },
     RetryStartNow,

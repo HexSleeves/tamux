@@ -6,11 +6,13 @@ mod client;
 mod projection;
 mod providers;
 mod state;
+mod terminal_graphics;
 mod theme;
 mod update;
 mod widgets;
 mod wire;
 
+use std::collections::{HashSet, VecDeque};
 use std::io;
 use std::io::Write;
 use std::panic::{self, AssertUnwindSafe};
@@ -38,6 +40,7 @@ use crate::state::DaemonCommand;
 
 const MAX_TRANSIENT_TERMINAL_ERRORS: usize = 5;
 const TERMINAL_ERROR_RETRY_DELAY_MS: u64 = 150;
+const MAX_DAEMON_EVENTS_PER_FRAME: usize = 32;
 
 fn build_log_filter(
     tui_log: Option<&str>,
@@ -191,11 +194,37 @@ fn forward_bridge_command_result(
     result: Result<()>,
 ) {
     if let Err(err) = result {
-        tracing::error!(action, error = %err, "daemon bridge command failed");
-        let _ = daemon_event_tx.send(client::ClientEvent::Error(format!(
-            "daemon bridge command failed ({action}): {err}"
-        )));
-        let _ = daemon_event_tx.send(client::ClientEvent::Disconnected);
+        emit_bridge_command_failure(daemon_event_tx, action, err);
+    }
+}
+
+fn emit_bridge_command_failure(
+    daemon_event_tx: &mpsc::Sender<client::ClientEvent>,
+    action: &str,
+    err: anyhow::Error,
+) {
+    tracing::error!(action, error = %err, "daemon bridge command failed");
+    let _ = daemon_event_tx.send(client::ClientEvent::Error(format!(
+        "daemon bridge command failed ({action}): {err}"
+    )));
+    let _ = daemon_event_tx.send(client::ClientEvent::Disconnected);
+}
+
+async fn dispatch_background_goal_hydration(
+    client: &DaemonClient,
+    daemon_event_tx: &mpsc::Sender<client::ClientEvent>,
+    goal_run_id: String,
+) {
+    let detail_result = client.request_goal_run(goal_run_id.clone());
+    let checkpoints_result = client.list_checkpoints(goal_run_id.clone());
+    if detail_result.is_err() || checkpoints_result.is_err() {
+        let err = detail_result
+            .err()
+            .or_else(|| checkpoints_result.err())
+            .expect("one background hydration send must have failed");
+        emit_bridge_command_failure(daemon_event_tx, "request background goal hydration", err);
+        let _ =
+            daemon_event_tx.send(client::ClientEvent::GoalHydrationScheduleFailed { goal_run_id });
     }
 }
 
@@ -252,10 +281,13 @@ fn main() -> Result<()> {
         // Create model
         let mut model = TuiModel::new(daemon_event_rx, daemon_cmd_tx);
         model.load_saved_settings();
+        let protocol = crate::terminal_graphics::configure_detected_protocol();
+        let mut graphics_renderer =
+            crate::terminal_graphics::TerminalGraphicsRenderer::new(protocol);
 
         // Main loop
         let tick_rate = Duration::from_millis(crate::app::TUI_TICK_RATE_MS);
-        run_loop(&mut terminal, &mut model, tick_rate)
+        run_loop(&mut terminal, &mut model, &mut graphics_renderer, tick_rate)
     }));
 
     let restore_result = restore_terminal(&mut terminal, supports_keyboard_enhancement);
@@ -287,6 +319,7 @@ fn main() -> Result<()> {
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     model: &mut TuiModel,
+    graphics_renderer: &mut crate::terminal_graphics::TerminalGraphicsRenderer,
     tick_rate: Duration,
 ) -> Result<()> {
     let mut next_tick = Instant::now() + tick_rate;
@@ -299,7 +332,7 @@ fn run_loop(
             next_tick = now + tick_rate;
         }
 
-        model.pump_daemon_events();
+        let _ = model.pump_daemon_events_budgeted(MAX_DAEMON_EVENTS_PER_FRAME);
 
         match terminal.draw(|frame| {
             model.render(frame);
@@ -319,6 +352,8 @@ fn run_loop(
                 return Err(err.into());
             }
         }
+
+        graphics_renderer.render(terminal, model.terminal_image_overlay_spec())?;
 
         let now = Instant::now();
         let until_tick = next_tick.saturating_duration_since(now);
@@ -410,6 +445,8 @@ fn start_daemon_bridge(
         runtime.block_on(async move {
             let (client_event_tx, mut client_event_rx) = tokio_mpsc::channel(512);
             let client = DaemonClient::new(client_event_tx);
+            let mut queued_goal_hydrations: VecDeque<String> = VecDeque::new();
+            let mut queued_goal_hydration_ids: HashSet<String> = HashSet::new();
 
             if let Err(err) = client.connect().await {
                 let _ = daemon_event_tx.send(client::ClientEvent::Error(format!(
@@ -439,6 +476,13 @@ fn start_daemon_bridge(
                                     &daemon_event_tx,
                                     "refresh",
                                     client.refresh(),
+                                );
+                            }
+                            DaemonCommand::GetConfig => {
+                                forward_bridge_command_result(
+                                    &daemon_event_tx,
+                                    "get config",
+                                    client.get_config(),
                                 );
                             }
                             DaemonCommand::RefreshServices => {
@@ -536,12 +580,23 @@ fn start_daemon_bridge(
                                     client.list_checkpoints(goal_run_id),
                                 );
                             }
+                            DaemonCommand::ScheduleGoalHydrationRefresh(goal_run_id) => {
+                                if queued_goal_hydration_ids.insert(goal_run_id.clone()) {
+                                    queued_goal_hydrations.push_back(goal_run_id);
+                                }
+                            }
                             DaemonCommand::StartGoalRun {
                                 goal,
                                 thread_id,
                                 session_id,
+                                launch_assignments,
                             } => {
-                                let _ = client.start_goal_run(goal, thread_id, session_id);
+                                let _ = client.start_goal_run(
+                                    goal,
+                                    thread_id,
+                                    session_id,
+                                    launch_assignments,
+                                );
                             }
                             DaemonCommand::ExplainAction {
                                 action_id,
@@ -672,8 +727,14 @@ fn start_daemon_bridge(
                                 provider_id,
                                 base_url,
                                 api_key,
+                                output_modalities,
                             } => {
-                                let _ = client.fetch_models(provider_id, base_url, api_key);
+                                let _ = client.fetch_models(
+                                    provider_id,
+                                    base_url,
+                                    api_key,
+                                    output_modalities,
+                                );
                             }
                             DaemonCommand::SetConfigItem { key_path, value_json } => {
                                 let _ = client.set_config_item_json(key_path, value_json);
@@ -692,8 +753,12 @@ fn start_daemon_bridge(
                                     model,
                                 );
                             }
-                            DaemonCommand::ControlGoalRun { goal_run_id, action } => {
-                                let _ = client.control_goal_run(goal_run_id, action);
+                            DaemonCommand::ControlGoalRun {
+                                goal_run_id,
+                                action,
+                                step_index,
+                            } => {
+                                let _ = client.control_goal_run(goal_run_id, action, step_index);
                             }
                             DaemonCommand::DeleteGoalRun { goal_run_id } => {
                                 let _ = client.delete_goal_run(goal_run_id);
@@ -827,6 +892,9 @@ fn start_daemon_bridge(
                             DaemonCommand::TextToSpeech { args_json } => {
                                 let _ = client.text_to_speech(args_json);
                             }
+                            DaemonCommand::GenerateImage { args_json } => {
+                                let _ = client.generate_image(args_json);
+                            }
                             DaemonCommand::SetOperatorProfileConsent {
                                 consent_key,
                                 granted,
@@ -911,6 +979,18 @@ fn start_daemon_bridge(
                         }
                     }
                 }
+
+                if daemon_cmd_rx.is_empty() {
+                    if let Some(goal_run_id) = queued_goal_hydrations.pop_front() {
+                        queued_goal_hydration_ids.remove(&goal_run_id);
+                        dispatch_background_goal_hydration(
+                            &client,
+                            &daemon_event_tx,
+                            goal_run_id,
+                        )
+                        .await;
+                    }
+                }
             }
         });
     });
@@ -970,6 +1050,7 @@ mod tests {
                 provider_id: amux_shared::providers::PROVIDER_ID_GITHUB_COPILOT.to_string(),
                 base_url: format!("http://{addr}"),
                 api_key: "test-key".to_string(),
+                output_modalities: None,
             })
             .expect("queue fetch models command");
 
@@ -1033,6 +1114,44 @@ mod tests {
         {
             client::ClientEvent::Disconnected => {}
             other => panic!("expected disconnected event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn background_goal_hydration_send_failure_emits_clear_event() {
+        let (daemon_event_tx, daemon_event_rx) = mpsc::channel();
+        let (client_event_tx, _client_event_rx) = tokio_mpsc::channel(8);
+        let client = DaemonClient::new(client_event_tx);
+        client.close_request_queue_for_test();
+
+        dispatch_background_goal_hydration(&client, &daemon_event_tx, "goal-1".to_string()).await;
+
+        match daemon_event_rx
+            .recv()
+            .expect("background failure should emit an error event")
+        {
+            client::ClientEvent::Error(message) => {
+                assert!(message.contains("background goal hydration"));
+            }
+            other => panic!("expected error event, got {other:?}"),
+        }
+
+        match daemon_event_rx
+            .recv()
+            .expect("background failure should emit a disconnect event")
+        {
+            client::ClientEvent::Disconnected => {}
+            other => panic!("expected disconnected event, got {other:?}"),
+        }
+
+        match daemon_event_rx
+            .recv()
+            .expect("background failure should emit a cleanup event")
+        {
+            client::ClientEvent::GoalHydrationScheduleFailed { goal_run_id } => {
+                assert_eq!(goal_run_id, "goal-1");
+            }
+            other => panic!("expected goal hydration failure event, got {other:?}"),
         }
     }
 

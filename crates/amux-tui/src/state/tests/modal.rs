@@ -122,6 +122,24 @@ fn command_palette_seeds_include_compact_command() {
 }
 
 #[test]
+fn command_palette_seeds_include_goal_and_new_goal_commands() {
+    let state = ModalState::new();
+
+    assert!(state
+        .command_items()
+        .iter()
+        .any(|item| item.command == "new-goal"));
+    assert!(state
+        .command_items()
+        .iter()
+        .any(|item| item.command == "goal"));
+    assert!(!state
+        .command_items()
+        .iter()
+        .any(|item| item.command == "goals"));
+}
+
+#[test]
 fn navigation_clamps_to_bounds() {
     let mut state = ModalState::new();
     state.reduce(ModalAction::Navigate(-1));
@@ -135,7 +153,12 @@ fn navigation_clamps_to_bounds() {
 #[test]
 fn selected_command_returns_correct_item() {
     let mut state = ModalState::new();
-    state.reduce(ModalAction::Navigate(2));
+    let tools_index = state
+        .command_items()
+        .iter()
+        .position(|item| item.command == "tools")
+        .expect("tools command should exist");
+    state.reduce(ModalAction::Navigate(tools_index as i32));
     let selected = state.selected_command().unwrap();
     assert_eq!(selected.command, "tools");
 }

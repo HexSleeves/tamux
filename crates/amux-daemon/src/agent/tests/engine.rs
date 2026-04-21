@@ -209,6 +209,62 @@ async fn hydrate_keeps_persisted_thread_messages_lazy_until_thread_detail_is_req
 }
 
 #[tokio::test]
+async fn hydrate_restores_user_defined_subagent_thread_identity() {
+    let mut config = AgentConfig::default();
+    config.sub_agents.push(SubAgentDefinition {
+        id: "dola".to_string(),
+        name: "Dola".to_string(),
+        provider: PROVIDER_ID_OPENAI.to_string(),
+        model: "gpt-5.4-mini".to_string(),
+        role: Some("review specialist".to_string()),
+        system_prompt: Some("Review code carefully.".to_string()),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        enabled: true,
+        builtin: false,
+        immutable_identity: false,
+        disable_allowed: true,
+        delete_allowed: true,
+        protected_reason: None,
+        reasoning_effort: Some("medium".to_string()),
+        created_at: 1,
+    });
+    let (engine, temp_dir) = make_test_engine(config.clone()).await;
+    let thread_id = "thread-hydrate-dola";
+
+    let (created_thread_id, _created) = engine
+        .get_or_create_thread_with_target(Some(thread_id), "Review this", Some("dola"))
+        .await;
+    assert_eq!(created_thread_id, thread_id);
+    engine.persist_thread_by_id(thread_id).await;
+
+    let rehydrated = AgentEngine::new_test(
+        SessionManager::new_test(temp_dir.path()).await,
+        config,
+        temp_dir.path(),
+    )
+    .await;
+    rehydrated.hydrate().await.expect("hydrate should succeed");
+
+    let thread = rehydrated
+        .get_thread(thread_id)
+        .await
+        .expect("thread should be restored after hydrate");
+    assert_eq!(thread.agent_name.as_deref(), Some("Dola"));
+
+    let listed = rehydrated.list_threads().await;
+    assert!(
+        listed
+            .iter()
+            .any(|thread| thread.id == thread_id && thread.agent_name.as_deref() == Some("Dola")),
+        "thread list should preserve user-defined subagent identity after hydrate"
+    );
+}
+
+#[tokio::test]
 async fn persist_thread_by_id_preserves_lazy_hydrated_thread_history() {
     let (engine, temp_dir) = make_test_engine(AgentConfig::default()).await;
     let thread_id = "thread-lazy-persist-safe";
@@ -301,6 +357,7 @@ async fn hydrate_restores_thread_token_totals_from_persisted_history() {
         compaction_strategy: None,
         compaction_payload: None,
         offloaded_payload_id: None,
+        tool_output_preview_path: None,
         structural_refs: Vec::new(),
         pinned_for_compaction: false,
         timestamp: 1_001,
@@ -461,6 +518,8 @@ async fn hydrate_restores_full_persisted_goal_run_event_history() {
         current_step_index: 0,
         current_step_title: None,
         current_step_kind: None,
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
         replan_count: 0,
         max_replans: 0,
         plan_summary: None,
@@ -469,6 +528,7 @@ async fn hydrate_restores_full_persisted_goal_run_event_history() {
         generated_skill_path: None,
         last_error: None,
         failure_cause: None,
+        stopped_reason: None,
         child_task_ids: Vec::new(),
         child_task_count: 0,
         approval_count: 0,
@@ -492,11 +552,17 @@ async fn hydrate_restores_full_persisted_goal_run_event_history() {
                 todo_snapshot: Vec::new(),
             })
             .collect(),
+        dossier: None,
         total_prompt_tokens: 0,
         total_completion_tokens: 0,
         estimated_cost_usd: None,
         autonomy_level: crate::agent::AutonomyLevel::Supervised,
         authorship_tag: None,
+        launch_assignment_snapshot: Vec::new(),
+        runtime_assignment_list: Vec::new(),
+        root_thread_id: None,
+        active_thread_id: None,
+        execution_thread_ids: Vec::new(),
     });
     engine.persist_goal_runs().await;
 
@@ -606,6 +672,10 @@ async fn provider_alternative_includes_configured_healthy_provider() {
 #[tokio::test]
 async fn provider_alternative_excludes_openai_subscription_without_auth() {
     let _env_guard = crate::agent::provider_auth_store::provider_auth_test_env_lock();
+    let _saved_env = crate::test_support::EnvGuard::new(&[
+        "TAMUX_PROVIDER_AUTH_DB_PATH",
+        "TAMUX_CODEX_CLI_AUTH_PATH",
+    ]);
     let temp_dir = TempDir::new().expect("temp dir");
     let db_path = temp_dir.path().join("provider-auth.db");
     std::env::set_var("TAMUX_PROVIDER_AUTH_DB_PATH", &db_path);
@@ -628,9 +698,6 @@ async fn provider_alternative_excludes_openai_subscription_without_auth() {
     let (engine, _temp_dir) = make_test_engine(config).await;
 
     let suggestion = engine.suggest_alternative_provider(PROVIDER_ID_GROQ).await;
-
-    std::env::remove_var("TAMUX_PROVIDER_AUTH_DB_PATH");
-    std::env::remove_var("TAMUX_CODEX_CLI_AUTH_PATH");
     assert!(
         suggestion.is_none(),
         "OpenAI subscription auth must be present before suggesting it as an alternative"
@@ -640,6 +707,10 @@ async fn provider_alternative_excludes_openai_subscription_without_auth() {
 #[tokio::test]
 async fn provider_alternative_uses_candidate_default_model_for_empty_named_model() {
     let _env_guard = crate::agent::provider_auth_store::provider_auth_test_env_lock();
+    let _saved_env = crate::test_support::EnvGuard::new(&[
+        "TAMUX_PROVIDER_AUTH_DB_PATH",
+        "TAMUX_CODEX_CLI_AUTH_PATH",
+    ]);
     let temp_dir = TempDir::new().expect("temp dir");
     let db_path = temp_dir.path().join("provider-auth.db");
     std::env::set_var("TAMUX_PROVIDER_AUTH_DB_PATH", &db_path);
@@ -666,9 +737,6 @@ async fn provider_alternative_uses_candidate_default_model_for_empty_named_model
     let suggestion = engine
         .suggest_alternative_provider(PROVIDER_ID_OPENAI)
         .await;
-
-    std::env::remove_var("TAMUX_PROVIDER_AUTH_DB_PATH");
-    std::env::remove_var("TAMUX_CODEX_CLI_AUTH_PATH");
     assert_eq!(resolved.model, "llama-3.3-70b-versatile");
     assert!(
         suggestion
