@@ -291,6 +291,7 @@ impl TuiModel {
         if items.is_empty() {
             self.goal_workspace.set_selected_plan_row(0);
             self.goal_workspace.set_selected_plan_item(None);
+            self.goal_workspace.set_plan_scroll(0);
             return;
         }
 
@@ -315,6 +316,7 @@ impl TuiModel {
         let row = items.iter().position(|item| *item == target).unwrap_or(0);
         self.goal_workspace.set_selected_plan_row(row);
         self.goal_workspace.set_selected_plan_item(Some(target));
+        self.clamp_goal_workspace_plan_scroll_to_selection();
     }
 
     pub(super) fn select_goal_workspace_plan_item(
@@ -332,7 +334,57 @@ impl TuiModel {
         let row = items.iter().position(|candidate| candidate == &item).unwrap_or(0);
         self.goal_workspace.set_selected_plan_row(row);
         self.goal_workspace.set_selected_plan_item(Some(item));
+        self.clamp_goal_workspace_plan_scroll_to_selection();
         changed
+    }
+
+    pub(super) fn clamp_goal_workspace_plan_scroll_to_selection(&mut self) {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return;
+        };
+
+        let area = self.pane_layout().chat;
+        let viewport_height = {
+            let layout = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(4), Constraint::Min(1)])
+                .split(area);
+            let columns = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(40),
+                    Constraint::Percentage(32),
+                    Constraint::Min(24),
+                ])
+                .split(layout[1]);
+            Block::default().borders(Borders::ALL).inner(columns[0]).height as usize
+        };
+        if viewport_height == 0 {
+            self.goal_workspace.set_plan_scroll(0);
+            return;
+        }
+
+        let max_scroll = widgets::goal_workspace::max_plan_scroll(
+            area,
+            &self.tasks,
+            goal_run_id,
+            &self.goal_workspace,
+        );
+        let selected_row = self.goal_workspace.selected_plan_row();
+        let current_scroll = self.goal_workspace.plan_scroll().min(max_scroll);
+        let next_scroll = if selected_row < current_scroll {
+            selected_row
+        } else if selected_row >= current_scroll.saturating_add(viewport_height) {
+            selected_row
+                .saturating_add(1)
+                .saturating_sub(viewport_height)
+        } else {
+            current_scroll
+        };
+        self.goal_workspace
+            .set_plan_scroll(next_scroll.min(max_scroll));
     }
 
     pub(super) fn step_goal_workspace_plan_selection(&mut self, delta: i32) -> bool {
@@ -1530,6 +1582,7 @@ impl TuiModel {
         self.clear_task_view_drag_selection();
         if let sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. } = &target {
             self.request_authoritative_goal_run_refresh(goal_run_id.clone());
+            self.goal_workspace.set_plan_scroll(0);
         }
         self.request_task_view_context(&target);
         self.main_pane_view = MainPaneView::Task(target);

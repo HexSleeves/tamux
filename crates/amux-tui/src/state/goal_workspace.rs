@@ -19,6 +19,7 @@ pub enum GoalPlanSelection {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GoalWorkspaceState {
     focused_pane: GoalWorkspacePane,
+    plan_scroll: usize,
     selected_plan_row: usize,
     expanded_step_ids: BTreeSet<String>,
     selected_timeline_row: usize,
@@ -30,6 +31,7 @@ impl GoalWorkspaceState {
     pub fn new() -> Self {
         Self {
             focused_pane: GoalWorkspacePane::Plan,
+            plan_scroll: 0,
             selected_plan_row: 0,
             expanded_step_ids: BTreeSet::new(),
             selected_timeline_row: 0,
@@ -52,6 +54,14 @@ impl GoalWorkspaceState {
 
     pub fn set_selected_plan_row(&mut self, row: usize) {
         self.selected_plan_row = row;
+    }
+
+    pub fn plan_scroll(&self) -> usize {
+        self.plan_scroll
+    }
+
+    pub fn set_plan_scroll(&mut self, scroll: usize) {
+        self.plan_scroll = scroll;
     }
 
     pub fn selected_timeline_row(&self) -> usize {

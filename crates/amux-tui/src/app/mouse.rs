@@ -118,19 +118,27 @@ impl TuiModel {
                             let pos = Position::new(mouse.column, mouse.row);
                             self.task_view_drag_current = Some(pos);
                             self.task_view_drag_current_point = match &self.main_pane_view {
-                                MainPaneView::Task(target) => {
-                                    widgets::task_view::selection_point_from_mouse(
-                                        chat_area,
-                                        &self.tasks,
-                                        target,
-                                        &self.theme,
-                                        self.task_view_scroll,
-                                        self.task_show_live_todos,
-                                        self.task_show_timeline,
-                                        self.task_show_files,
-                                        pos,
-                                    )
-                                }
+                                MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+                                    goal_run_id,
+                                    ..
+                                }) => widgets::goal_workspace::selection_point_from_mouse(
+                                    chat_area,
+                                    &self.tasks,
+                                    goal_run_id,
+                                    &self.goal_workspace,
+                                    pos,
+                                ),
+                                MainPaneView::Task(target) => widgets::task_view::selection_point_from_mouse(
+                                    chat_area,
+                                    &self.tasks,
+                                    target,
+                                    &self.theme,
+                                    self.task_view_scroll,
+                                    self.task_show_live_todos,
+                                    self.task_show_timeline,
+                                    self.task_show_files,
+                                    pos,
+                                ),
                                 _ => None,
                             };
                         }
@@ -203,19 +211,27 @@ impl TuiModel {
                             let pos = Position::new(mouse.column, mouse.row);
                             self.task_view_drag_current = Some(pos);
                             self.task_view_drag_current_point = match &self.main_pane_view {
-                                MainPaneView::Task(target) => {
-                                    widgets::task_view::selection_point_from_mouse(
-                                        chat_area,
-                                        &self.tasks,
-                                        target,
-                                        &self.theme,
-                                        self.task_view_scroll,
-                                        self.task_show_live_todos,
-                                        self.task_show_timeline,
-                                        self.task_show_files,
-                                        pos,
-                                    )
-                                }
+                                MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+                                    goal_run_id,
+                                    ..
+                                }) => widgets::goal_workspace::selection_point_from_mouse(
+                                    chat_area,
+                                    &self.tasks,
+                                    goal_run_id,
+                                    &self.goal_workspace,
+                                    pos,
+                                ),
+                                MainPaneView::Task(target) => widgets::task_view::selection_point_from_mouse(
+                                    chat_area,
+                                    &self.tasks,
+                                    target,
+                                    &self.theme,
+                                    self.task_view_scroll,
+                                    self.task_show_live_todos,
+                                    self.task_show_timeline,
+                                    self.task_show_files,
+                                    pos,
+                                ),
                                 _ => None,
                             };
                         }
@@ -510,14 +526,29 @@ impl TuiModel {
                             self.status_line = "Closed preview".to_string();
                             return;
                         }
-                    } else if let MainPaneView::Task(target) = &self.main_pane_view {
+                    } else if let MainPaneView::Task(target) = self.main_pane_view.clone() {
                         let pos = Position::new(mouse.column, mouse.row);
                         if matches!(target, sidebar::SidebarItemTarget::GoalRun { .. }) {
                             self.focus = FocusArea::Chat;
                             self.clear_chat_drag_selection();
                             self.clear_work_context_drag_selection();
                             self.clear_task_view_drag_selection();
-                            self.handle_task_view_click(chat_area, pos);
+                            self.task_view_drag_anchor = Some(pos);
+                            self.task_view_drag_current = Some(pos);
+                            let point = match &target {
+                                sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. } => {
+                                    widgets::goal_workspace::selection_point_from_mouse(
+                                        chat_area,
+                                        &self.tasks,
+                                        goal_run_id,
+                                        &self.goal_workspace,
+                                        pos,
+                                    )
+                                }
+                                _ => None,
+                            };
+                            self.task_view_drag_anchor_point = point;
+                            self.task_view_drag_current_point = point;
                             return;
                         }
                         self.task_view_drag_anchor = Some(pos);
@@ -525,7 +556,7 @@ impl TuiModel {
                         let point = widgets::task_view::selection_point_from_mouse(
                             chat_area,
                             &self.tasks,
-                            target,
+                            &target,
                             &self.theme,
                             self.task_view_scroll,
                             self.task_show_live_todos,
@@ -708,19 +739,27 @@ impl TuiModel {
                     let pos = Position::new(mouse.column, mouse.row);
                     self.task_view_drag_current = Some(pos);
                     self.task_view_drag_current_point = match &self.main_pane_view {
-                        MainPaneView::Task(target) => {
-                            widgets::task_view::selection_point_from_mouse(
-                                chat_area,
-                                &self.tasks,
-                                target,
-                                &self.theme,
-                                self.task_view_scroll,
-                                self.task_show_live_todos,
-                                self.task_show_timeline,
-                                self.task_show_files,
-                                pos,
-                            )
-                        }
+                        MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+                            goal_run_id,
+                            ..
+                        }) => widgets::goal_workspace::selection_point_from_mouse(
+                            chat_area,
+                            &self.tasks,
+                            goal_run_id,
+                            &self.goal_workspace,
+                            pos,
+                        ),
+                        MainPaneView::Task(target) => widgets::task_view::selection_point_from_mouse(
+                            chat_area,
+                            &self.tasks,
+                            target,
+                            &self.theme,
+                            self.task_view_scroll,
+                            self.task_show_live_todos,
+                            self.task_show_timeline,
+                            self.task_show_files,
+                            pos,
+                        ),
                         _ => None,
                     };
                 }
@@ -774,6 +813,16 @@ impl TuiModel {
                         .unwrap_or(Position::new(mouse.column, mouse.row));
                     let anchor_point = self.task_view_drag_anchor_point.take().or_else(|| {
                         match &self.main_pane_view {
+                            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+                                goal_run_id,
+                                ..
+                            }) => widgets::goal_workspace::selection_point_from_mouse(
+                                chat_area,
+                                &self.tasks,
+                                goal_run_id,
+                                &self.goal_workspace,
+                                anchor,
+                            ),
                             MainPaneView::Task(target) => {
                                 widgets::task_view::selection_point_from_mouse(
                                     chat_area,
@@ -792,6 +841,16 @@ impl TuiModel {
                     });
                     let current_point = self.task_view_drag_current_point.take().or_else(|| {
                         match &self.main_pane_view {
+                            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+                                goal_run_id,
+                                ..
+                            }) => widgets::goal_workspace::selection_point_from_mouse(
+                                chat_area,
+                                &self.tasks,
+                                goal_run_id,
+                                &self.goal_workspace,
+                                current,
+                            ),
                             MainPaneView::Task(target) => {
                                 widgets::task_view::selection_point_from_mouse(
                                     chat_area,
@@ -815,18 +874,31 @@ impl TuiModel {
 
                     if anchor_point != current_point {
                         if let MainPaneView::Task(target) = &self.main_pane_view {
-                            if let Some(text) = widgets::task_view::selected_text(
-                                chat_area,
-                                &self.tasks,
-                                target,
-                                &self.theme,
-                                self.task_view_scroll,
-                                self.task_show_live_todos,
-                                self.task_show_timeline,
-                                self.task_show_files,
-                                anchor_point,
-                                current_point,
-                            ) {
+                            let text = match target {
+                                sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. } => {
+                                    widgets::goal_workspace::selected_text(
+                                        chat_area,
+                                        &self.tasks,
+                                        goal_run_id,
+                                        &self.goal_workspace,
+                                        anchor_point,
+                                        current_point,
+                                    )
+                                }
+                                _ => widgets::task_view::selected_text(
+                                    chat_area,
+                                    &self.tasks,
+                                    target,
+                                    &self.theme,
+                                    self.task_view_scroll,
+                                    self.task_show_live_todos,
+                                    self.task_show_timeline,
+                                    self.task_show_files,
+                                    anchor_point,
+                                    current_point,
+                                ),
+                            };
+                            if let Some(text) = text {
                                 conversion::copy_to_clipboard(&text);
                                 self.status_line = "Copied selection to clipboard".to_string();
                             }

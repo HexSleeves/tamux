@@ -41,15 +41,25 @@ impl TuiModel {
     pub(in crate::app) fn current_detail_view_max_scroll(&self) -> usize {
         let area = self.pane_layout().chat;
         match &self.main_pane_view {
-            MainPaneView::Task(target) => widgets::task_view::max_scroll(
-                area,
-                &self.tasks,
-                target,
-                &self.theme,
-                self.task_show_live_todos,
-                self.task_show_timeline,
-                self.task_show_files,
-            ),
+            MainPaneView::Task(target) => match target {
+                sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. } => {
+                    widgets::goal_workspace::max_plan_scroll(
+                        area,
+                        &self.tasks,
+                        goal_run_id,
+                        &self.goal_workspace,
+                    )
+                }
+                _ => widgets::task_view::max_scroll(
+                    area,
+                    &self.tasks,
+                    target,
+                    &self.theme,
+                    self.task_show_live_todos,
+                    self.task_show_timeline,
+                    self.task_show_files,
+                ),
+            },
             MainPaneView::WorkContext => widgets::work_context_view::max_scroll(
                 area,
                 &self.tasks,
@@ -66,29 +76,68 @@ impl TuiModel {
     }
 
     pub(in super::super) fn clamp_detail_view_scroll(&mut self) {
-        self.task_view_scroll = self
-            .task_view_scroll
-            .min(self.current_detail_view_max_scroll());
+        let max_scroll = self.current_detail_view_max_scroll();
+        if matches!(
+            self.main_pane_view,
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+        ) {
+            self.goal_workspace
+                .set_plan_scroll(self.goal_workspace.plan_scroll().min(max_scroll));
+        } else {
+            self.task_view_scroll = self.task_view_scroll.min(max_scroll);
+        }
     }
 
     pub(in super::super) fn step_detail_view_scroll(&mut self, delta: i32) {
         let max_scroll = self.current_detail_view_max_scroll();
-        if delta >= 0 {
-            self.task_view_scroll = self
-                .task_view_scroll
-                .saturating_add(delta as usize)
-                .min(max_scroll);
+        if matches!(
+            self.main_pane_view,
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+        ) {
+            let next = if delta >= 0 {
+                self.goal_workspace
+                    .plan_scroll()
+                    .saturating_add(delta as usize)
+                    .min(max_scroll)
+            } else {
+                self.goal_workspace
+                    .plan_scroll()
+                    .saturating_sub((-delta) as usize)
+            };
+            self.goal_workspace.set_plan_scroll(next);
         } else {
-            self.task_view_scroll = self.task_view_scroll.saturating_sub((-delta) as usize);
+            if delta >= 0 {
+                self.task_view_scroll = self
+                    .task_view_scroll
+                    .saturating_add(delta as usize)
+                    .min(max_scroll);
+            } else {
+                self.task_view_scroll = self.task_view_scroll.saturating_sub((-delta) as usize);
+            }
         }
     }
 
     pub(in super::super) fn scroll_detail_view_to_top(&mut self) {
-        self.task_view_scroll = 0;
+        if matches!(
+            self.main_pane_view,
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+        ) {
+            self.goal_workspace.set_plan_scroll(0);
+        } else {
+            self.task_view_scroll = 0;
+        }
     }
 
     pub(in super::super) fn scroll_detail_view_to_bottom(&mut self) {
-        self.task_view_scroll = self.current_detail_view_max_scroll();
+        let max_scroll = self.current_detail_view_max_scroll();
+        if matches!(
+            self.main_pane_view,
+            MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+        ) {
+            self.goal_workspace.set_plan_scroll(max_scroll);
+        } else {
+            self.task_view_scroll = max_scroll;
+        }
     }
 
     fn byte_offset_for_display_col(text: &str, target_col: usize) -> usize {

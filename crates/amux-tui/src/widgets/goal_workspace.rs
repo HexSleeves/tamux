@@ -3,10 +3,12 @@
 use crate::state::goal_workspace::GoalWorkspaceState;
 use crate::state::task::TaskState;
 use crate::theme::ThemeTokens;
+use crate::widgets::chat::SelectionPoint;
 use ratatui::prelude::*;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use unicode_width::UnicodeWidthChar;
 
 #[path = "goal_workspace_plan.rs"]
 mod plan;
@@ -100,8 +102,99 @@ pub fn hit_test(
     }
 
     let rows = plan::build_rows(tasks, goal_run_id, state);
-    let row_index = mouse.y.saturating_sub(inner.y) as usize;
+    let row_index = resolved_plan_scroll(rows.len(), inner.height as usize, state)
+        .saturating_add(mouse.y.saturating_sub(inner.y) as usize);
     rows.get(row_index).and_then(|row| row.target.clone())
+}
+
+pub fn max_plan_scroll(
+    area: Rect,
+    tasks: &TaskState,
+    goal_run_id: &str,
+    state: &GoalWorkspaceState,
+) -> usize {
+    if area.width < 3 || area.height < 6 {
+        return 0;
+    }
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(4), Constraint::Min(1)])
+        .split(area);
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(40),
+            Constraint::Percentage(32),
+            Constraint::Min(24),
+        ])
+        .split(layout[1]);
+    let inner = Block::default().borders(Borders::ALL).inner(columns[0]);
+    let rows = plan::build_rows(tasks, goal_run_id, state);
+    rows.len().saturating_sub(inner.height as usize)
+}
+
+pub fn selection_point_from_mouse(
+    area: Rect,
+    tasks: &TaskState,
+    goal_run_id: &str,
+    state: &GoalWorkspaceState,
+    mouse: Position,
+) -> Option<SelectionPoint> {
+    let (inner, row_index) = plan_inner_row_index(area, tasks, goal_run_id, state, mouse)?;
+    let rows = plan::build_rows(tasks, goal_run_id, state);
+    let line = &rows.get(row_index)?.line;
+    let width = line_display_width(line);
+    let col = mouse.x.saturating_sub(inner.x) as usize;
+    Some(SelectionPoint {
+        row: row_index,
+        col: col.min(width),
+    })
+}
+
+pub fn selected_text(
+    _area: Rect,
+    tasks: &TaskState,
+    goal_run_id: &str,
+    state: &GoalWorkspaceState,
+    start: SelectionPoint,
+    end: SelectionPoint,
+) -> Option<String> {
+    let rows = plan::build_rows(tasks, goal_run_id, state);
+    let (start_point, end_point) =
+        if start.row <= end.row || (start.row == end.row && start.col <= end.col) {
+            (start, end)
+        } else {
+            (end, start)
+        };
+    if start_point == end_point {
+        return None;
+    }
+
+    let mut lines = Vec::new();
+    for row in start_point.row..=end_point.row {
+        let line = &rows.get(row)?.line;
+        let plain = line_plain_text(line);
+        let width = line_display_width(line);
+        let from = if row == start_point.row {
+            start_point.col.min(width)
+        } else {
+            0
+        };
+        let to = if row == end_point.row {
+            end_point.col.min(width).max(from)
+        } else {
+            width
+        };
+        lines.push(display_slice(&plain, from, to));
+    }
+
+    let text = lines.join("\n");
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 fn render_summary(frame: &mut Frame, area: Rect, theme: &ThemeTokens) {
@@ -139,7 +232,13 @@ fn render_plan(
             }
         })
         .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    let scroll = resolved_plan_scroll(lines.len(), inner.height as usize, state);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll.min(u16::MAX as usize) as u16, 0)),
+        inner,
+    );
 }
 
 fn render_placeholder(
@@ -261,6 +360,113 @@ fn render_details(
         )));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn resolved_plan_scroll(
+    row_count: usize,
+    viewport_height: usize,
+    state: &GoalWorkspaceState,
+) -> usize {
+    row_count
+        .saturating_sub(viewport_height)
+        .min(state.plan_scroll())
+}
+
+fn plan_inner_row_index(
+    area: Rect,
+    tasks: &TaskState,
+    goal_run_id: &str,
+    state: &GoalWorkspaceState,
+    mouse: Position,
+) -> Option<(Rect, usize)> {
+    if area.width < 3
+        || area.height < 6
+        || mouse.x < area.x
+        || mouse.x >= area.x.saturating_add(area.width)
+        || mouse.y < area.y
+        || mouse.y >= area.y.saturating_add(area.height)
+    {
+        return None;
+    }
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(4), Constraint::Min(1)])
+        .split(area);
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(40),
+            Constraint::Percentage(32),
+            Constraint::Min(24),
+        ])
+        .split(layout[1]);
+
+    let plan_area = columns[0];
+    if mouse.x < plan_area.x
+        || mouse.x >= plan_area.x.saturating_add(plan_area.width)
+        || mouse.y < plan_area.y
+        || mouse.y >= plan_area.y.saturating_add(plan_area.height)
+    {
+        return None;
+    }
+
+    let inner = Block::default().borders(Borders::ALL).inner(plan_area);
+    if mouse.x < inner.x
+        || mouse.x >= inner.x.saturating_add(inner.width)
+        || mouse.y < inner.y
+        || mouse.y >= inner.y.saturating_add(inner.height)
+    {
+        return None;
+    }
+
+    let rows = plan::build_rows(tasks, goal_run_id, state);
+    let row_index = resolved_plan_scroll(rows.len(), inner.height as usize, state)
+        .saturating_add(mouse.y.saturating_sub(inner.y) as usize);
+    if row_index >= rows.len() {
+        return None;
+    }
+    Some((inner, row_index))
+}
+
+fn line_plain_text(line: &Line<'static>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+fn line_display_width(line: &Line<'static>) -> usize {
+    line_plain_text(line)
+        .chars()
+        .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0))
+        .sum()
+}
+
+fn display_slice(text: &str, start_col: usize, end_col: usize) -> String {
+    if start_col >= end_col {
+        return String::new();
+    }
+
+    let mut result = String::new();
+    let mut col = 0usize;
+    for ch in text.chars() {
+        let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        let next = col + width;
+        let overlaps = if width == 0 {
+            col >= start_col && col < end_col
+        } else {
+            next > start_col && col < end_col
+        };
+        if overlaps {
+            result.push(ch);
+        }
+        col = next;
+        if col >= end_col {
+            break;
+        }
+    }
+    result
 }
 
 #[cfg(test)]
