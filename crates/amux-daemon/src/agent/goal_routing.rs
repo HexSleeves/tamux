@@ -66,9 +66,7 @@ fn heuristic_role_aliases(normalized: &str) -> &'static [&'static str] {
         "plan" | "planner" | "planning" | "strategist" | "strategy" => {
             &["planning", "planner", "plan", "strategy", "strategist"]
         }
-        "research" | "researcher" | "investigator" => {
-            &["research", "researcher", "investigator"]
-        }
+        "research" | "researcher" | "investigator" => &["research", "researcher", "investigator"],
         "verify" | "verifier" | "review" | "reviewer" | "qa" => {
             &["verifier", "verify", "review", "reviewer", "qa"]
         }
@@ -96,9 +94,7 @@ fn goal_local_agent_label(role_id: &str) -> String {
         .map(|part| {
             let mut chars = part.chars();
             match chars.next() {
-                Some(first) => {
-                    first.to_ascii_uppercase().to_string() + chars.as_str()
-                }
+                Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
                 None => String::new(),
             }
         })
@@ -112,7 +108,9 @@ fn exact_goal_local_match(
 ) -> Option<GoalResolvedAgentTarget> {
     assignments
         .iter()
-        .find(|assignment| assignment.enabled && assignment.role_id.eq_ignore_ascii_case(identifier))
+        .find(|assignment| {
+            assignment.enabled && assignment.role_id.eq_ignore_ascii_case(identifier)
+        })
         .map(|assignment| {
             GoalResolvedAgentTarget::GoalLocal(ResolvedGoalLocalAgent {
                 role_id: assignment.role_id.clone(),
@@ -181,7 +179,9 @@ pub(crate) fn resolve_goal_binding_candidate(
         .or_else(|| {
             global_subagents
                 .iter()
-                .find(|definition| definition.enabled && matches_global_subagent(definition, identifier))
+                .find(|definition| {
+                    definition.enabled && matches_global_subagent(definition, identifier)
+                })
                 .cloned()
                 .map(GoalResolvedAgentTarget::GlobalSubagent)
         })
@@ -265,7 +265,10 @@ impl AgentEngine {
             identifier, step_title, step_instructions, available_roles
         );
 
-        let selection = self.run_goal_structured::<GoalLocalRoleMatch>(&prompt).await.ok()?;
+        let selection = self
+            .run_goal_structured::<GoalLocalRoleMatch>(&prompt)
+            .await
+            .ok()?;
         let selected_role_id = selection
             .selected_role_id
             .as_deref()
@@ -274,7 +277,9 @@ impl AgentEngine {
 
         assignments
             .iter()
-            .find(|assignment| assignment.enabled && assignment.role_id.eq_ignore_ascii_case(selected_role_id))
+            .find(|assignment| {
+                assignment.enabled && assignment.role_id.eq_ignore_ascii_case(selected_role_id)
+            })
             .map(|assignment| assignment.role_id.clone())
     }
 
@@ -320,7 +325,9 @@ impl AgentEngine {
         let global_subagents = self.list_sub_agents().await;
         global_subagents
             .iter()
-            .find(|definition| definition.enabled && matches_global_subagent(definition, identifier))
+            .find(|definition| {
+                definition.enabled && matches_global_subagent(definition, identifier)
+            })
             .cloned()
             .map(GoalResolvedAgentTarget::GlobalSubagent)
     }
@@ -330,12 +337,13 @@ impl AgentEngine {
         goal_run: &GoalRun,
         step: &GoalRunStep,
     ) -> Option<GoalResolvedAgentTarget> {
-        let binding = goal_run_step_execution_binding(goal_run, step).or_else(|| match &step.kind {
-            GoalRunStepKind::Specialist(role) if !role.trim().is_empty() => {
-                Some(GoalRoleBinding::Subagent(role.clone()))
-            }
-            _ => None,
-        })?;
+        let binding =
+            goal_run_step_execution_binding(goal_run, step).or_else(|| match &step.kind {
+                GoalRunStepKind::Specialist(role) if !role.trim().is_empty() => {
+                    Some(GoalRoleBinding::Subagent(role.clone()))
+                }
+                _ => None,
+            })?;
         self.resolve_goal_target_for_binding(goal_run, step, &binding)
             .await
     }
@@ -482,7 +490,11 @@ mod tests {
     #[test]
     fn goal_local_agent_prompt_block_omits_main_and_lists_enabled_local_roles() {
         let block = goal_local_agent_prompt_block(&[
-            sample_assignment(crate::agent::agent_identity::MAIN_AGENT_ID, "openai", "gpt-5.4"),
+            sample_assignment(
+                crate::agent::agent_identity::MAIN_AGENT_ID,
+                "openai",
+                "gpt-5.4",
+            ),
             sample_assignment("planning", "openai", "gpt-5.4-mini"),
             GoalAgentAssignment {
                 enabled: false,

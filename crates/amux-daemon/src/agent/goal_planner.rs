@@ -662,7 +662,10 @@ impl AgentEngine {
             .await
         };
         let task = self
-            .apply_goal_resolved_target_to_task(task.id.as_str(), resolved_execution_target.as_ref())
+            .apply_goal_resolved_target_to_task(
+                task.id.as_str(),
+                resolved_execution_target.as_ref(),
+            )
             .await
             .unwrap_or(task);
 

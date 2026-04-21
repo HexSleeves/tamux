@@ -116,6 +116,17 @@ impl ConciergeEngine {
         tasks: &tokio::sync::Mutex<std::collections::VecDeque<AgentTask>>,
         goal_runs: &tokio::sync::Mutex<std::collections::VecDeque<GoalRun>>,
     ) {
+        self.on_client_connected_with_persisted_threads(threads, tasks, goal_runs, &[])
+            .await;
+    }
+
+    pub(crate) async fn on_client_connected_with_persisted_threads(
+        &self,
+        threads: &RwLock<std::collections::HashMap<String, AgentThread>>,
+        tasks: &tokio::sync::Mutex<std::collections::VecDeque<AgentTask>>,
+        goal_runs: &tokio::sync::Mutex<std::collections::VecDeque<GoalRun>>,
+        persisted_recent_threads: &[ThreadSummary],
+    ) {
         tracing::info!("concierge: on_client_connected called");
         let config = self.config.read().await;
         if !config.concierge.enabled {
@@ -127,7 +138,15 @@ impl ConciergeEngine {
         tracing::info!("concierge: gathering context at level {:?}", detail_level);
         drop(config);
 
-        let context = self.gather_context(threads, tasks, goal_runs, detail_level).await;
+        let context = self
+            .gather_context(
+                threads,
+                tasks,
+                goal_runs,
+                detail_level,
+                persisted_recent_threads,
+            )
+            .await;
         tracing::info!(
             "concierge: gathered {} threads, latest_goal={}, running_goals={}, paused_goals={}",
             context.recent_threads.len(),
@@ -178,7 +197,9 @@ impl ConciergeEngine {
         let detail_level = config.concierge.detail_level;
         drop(config);
 
-        let context = self.gather_context(threads, tasks, goal_runs, detail_level).await;
+        let context = self
+            .gather_context(threads, tasks, goal_runs, detail_level, &[])
+            .await;
         let (content, actions) = if let Some(existing) = self
             .reuse_welcome_from_history(threads, detail_level, &context)
             .await

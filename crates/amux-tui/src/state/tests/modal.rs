@@ -122,17 +122,21 @@ fn command_palette_seeds_include_compact_command() {
 }
 
 #[test]
-fn command_palette_seeds_include_new_goal_but_not_goal() {
+fn command_palette_seeds_include_goal_and_new_goal_commands() {
     let state = ModalState::new();
 
     assert!(state
         .command_items()
         .iter()
         .any(|item| item.command == "new-goal"));
-    assert!(!state
+    assert!(state
         .command_items()
         .iter()
         .any(|item| item.command == "goal"));
+    assert!(!state
+        .command_items()
+        .iter()
+        .any(|item| item.command == "goals"));
 }
 
 #[test]

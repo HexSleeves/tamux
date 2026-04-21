@@ -374,7 +374,10 @@ impl Default for GoalMissionControlState {
 
 fn next_preflight_role_id(assignments: &[GoalAgentAssignment]) -> String {
     for preset in crate::state::subagents::SUBAGENT_ROLE_PRESETS {
-        if assignments.iter().all(|assignment| assignment.role_id != preset.id) {
+        if assignments
+            .iter()
+            .all(|assignment| assignment.role_id != preset.id)
+        {
             return preset.id.to_string();
         }
     }

@@ -196,7 +196,10 @@ async fn start_goal_run_uses_provided_launch_assignment_snapshot_when_present() 
         .await;
 
     assert_eq!(goal_run.launch_assignment_snapshot, launch_assignments);
-    assert_eq!(goal_run.runtime_assignment_list, goal_run.launch_assignment_snapshot);
+    assert_eq!(
+        goal_run.runtime_assignment_list,
+        goal_run.launch_assignment_snapshot
+    );
 }
 
 #[tokio::test]
@@ -1522,8 +1525,14 @@ async fn verification_binding_uses_goal_local_assignment_overrides() {
         .cloned()
         .expect("verification task should exist");
 
-    assert_eq!(verification_task.override_provider.as_deref(), Some("openai"));
-    assert_eq!(verification_task.override_model.as_deref(), Some("gpt-5.4-mini"));
+    assert_eq!(
+        verification_task.override_provider.as_deref(),
+        Some("openai")
+    );
+    assert_eq!(
+        verification_task.override_model.as_deref(),
+        Some("gpt-5.4-mini")
+    );
     assert!(verification_task.sub_agent_def_id.is_none());
 }
 

@@ -529,3 +529,117 @@ async fn concierge_welcome_skips_onboarding_when_hydrated_history_exists() {
 
     conn.shutdown().await;
 }
+
+#[tokio::test]
+async fn concierge_welcome_uses_persisted_history_without_preloading_messages() {
+    let mut config = AgentConfig::default();
+    config.concierge.detail_level = crate::agent::types::ConciergeDetailLevel::Minimal;
+
+    let mut conn = spawn_test_connection_with_config(config).await;
+    let now = 1_735_000_000_000i64;
+
+    conn.agent
+        .history
+        .create_thread(&amux_protocol::AgentDbThread {
+            id: "persisted-thread".to_string(),
+            workspace_id: None,
+            surface_id: None,
+            pane_id: None,
+            agent_name: Some(crate::agent::agent_identity::MAIN_AGENT_NAME.to_string()),
+            title: "Persisted Thread".to_string(),
+            created_at: now - 10_000,
+            updated_at: now - 5_000,
+            message_count: 2,
+            total_tokens: 42,
+            last_preview: "last persisted answer".to_string(),
+            metadata_json: None,
+        })
+        .await
+        .expect("persist thread row");
+    conn.agent
+        .history
+        .add_message(&amux_protocol::AgentDbMessage {
+            id: "persisted-user".to_string(),
+            thread_id: "persisted-thread".to_string(),
+            created_at: now - 10_000,
+            role: "user".to_string(),
+            content: "resume the work".to_string(),
+            provider: None,
+            model: None,
+            input_tokens: None,
+            output_tokens: None,
+            total_tokens: None,
+            cost_usd: None,
+            reasoning: None,
+            tool_calls_json: None,
+            metadata_json: None,
+        })
+        .await
+        .expect("persist user message");
+    conn.agent
+        .history
+        .add_message(&amux_protocol::AgentDbMessage {
+            id: "persisted-assistant".to_string(),
+            thread_id: "persisted-thread".to_string(),
+            created_at: now - 5_000,
+            role: "assistant".to_string(),
+            content: "last persisted answer".to_string(),
+            provider: None,
+            model: None,
+            input_tokens: None,
+            output_tokens: None,
+            total_tokens: None,
+            cost_usd: None,
+            reasoning: None,
+            tool_calls_json: None,
+            metadata_json: None,
+        })
+        .await
+        .expect("persist assistant message");
+
+    conn.framed
+        .send(ClientMessage::AgentSubscribe)
+        .await
+        .expect("subscribe to agent events");
+    conn.framed
+        .send(ClientMessage::AgentRequestConciergeWelcome)
+        .await
+        .expect("request concierge welcome");
+
+    let event = timeout(Duration::from_secs(2), async {
+        loop {
+            match conn.recv().await {
+                DaemonMessage::AgentEvent { event_json } => {
+                    let parsed: serde_json::Value =
+                        serde_json::from_str(&event_json).expect("parse concierge welcome");
+                    if parsed.get("type").and_then(|value| value.as_str())
+                        == Some("concierge_welcome")
+                    {
+                        return parsed;
+                    }
+                }
+                DaemonMessage::OperationAccepted { kind, .. } => {
+                    assert_eq!(kind, "concierge_welcome");
+                }
+                other => panic!("expected concierge welcome event, got {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("persisted history should produce concierge welcome");
+
+    let content = event
+        .get("content")
+        .and_then(|value| value.as_str())
+        .expect("concierge welcome content");
+    assert!(
+        content.contains("Persisted Thread"),
+        "welcome should summarize persisted work without preloading messages, got: {content}"
+    );
+    assert!(
+        !content.contains("first session"),
+        "welcome should not describe persisted work as a first session, got: {content}"
+    );
+
+    conn.shutdown().await;
+}

@@ -69,6 +69,8 @@ Requires a running amux daemon (connects via Unix socket or TCP).
 | /effort | Set Svarog's reasoning effort |
 | /thread \[agent\] | Pick thread or open the picker on a specific agent/source |
 | /new \[agent\] | New conversation, defaulting to Svarog |
+| /goal | Open goal picker |
+| /new-goal | Open new goal composer |
 | /attach \<path\> | Attach file |
 | /view | Cycle transcript mode |
 | /help | Show keyboard shortcuts |

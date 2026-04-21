@@ -801,11 +801,16 @@
     }
 
     #[test]
-    fn builtin_goal_command_is_renamed_to_new_goal() {
+    fn builtin_goal_commands_support_goal_picker_and_new_goal_composer() {
         let mut model = build_model();
 
         assert!(model.is_builtin_command("new-goal"));
-        assert!(!model.is_builtin_command("goal"));
+        assert!(model.is_builtin_command("goal"));
+        assert!(!model.is_builtin_command("goals"));
+
+        model.execute_command("goal");
+
+        assert_eq!(model.modal.top(), Some(modal::ModalKind::GoalPicker));
 
         model.execute_command("new-goal");
 

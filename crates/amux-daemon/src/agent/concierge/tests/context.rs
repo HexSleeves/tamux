@@ -158,7 +158,13 @@ async fn context_summary_gathers_recent_messages_and_goal_snapshot() {
     ]));
 
     let context = engine
-        .gather_context(&threads, &tasks, &goal_runs, ConciergeDetailLevel::ContextSummary)
+        .gather_context(
+            &threads,
+            &tasks,
+            &goal_runs,
+            ConciergeDetailLevel::ContextSummary,
+            &[],
+        )
         .await;
 
     assert_eq!(context.recent_threads.len(), 1);
@@ -219,11 +225,20 @@ async fn context_summary_picks_latest_goal_by_updated_at() {
     ]));
 
     let context = engine
-        .gather_context(&threads, &tasks, &goal_runs, ConciergeDetailLevel::ContextSummary)
+        .gather_context(
+            &threads,
+            &tasks,
+            &goal_runs,
+            ConciergeDetailLevel::ContextSummary,
+            &[],
+        )
         .await;
 
     assert_eq!(
-        context.latest_goal_run.as_ref().map(|goal| goal.label.as_str()),
+        context
+            .latest_goal_run
+            .as_ref()
+            .map(|goal| goal.label.as_str()),
         Some("Newer goal")
     );
 }
@@ -264,7 +279,13 @@ async fn context_summary_ignores_assistant_only_concierge_like_threads() {
     let goal_runs = Mutex::new(std::collections::VecDeque::new());
 
     let context = engine
-        .gather_context(&threads, &tasks, &goal_runs, ConciergeDetailLevel::ContextSummary)
+        .gather_context(
+            &threads,
+            &tasks,
+            &goal_runs,
+            ConciergeDetailLevel::ContextSummary,
+            &[],
+        )
         .await;
 
     assert_eq!(context.recent_threads.len(), 1);
@@ -316,7 +337,13 @@ async fn context_summary_excludes_structured_heartbeat_threads() {
     let goal_runs = Mutex::new(std::collections::VecDeque::new());
 
     let context = engine
-        .gather_context(&threads, &tasks, &goal_runs, ConciergeDetailLevel::ContextSummary)
+        .gather_context(
+            &threads,
+            &tasks,
+            &goal_runs,
+            ConciergeDetailLevel::ContextSummary,
+            &[],
+        )
         .await;
 
     assert_eq!(context.recent_threads.len(), 1);
@@ -365,7 +392,13 @@ async fn context_summary_hides_weles_internal_threads() {
     let goal_runs = Mutex::new(std::collections::VecDeque::new());
 
     let context = engine
-        .gather_context(&threads, &tasks, &goal_runs, ConciergeDetailLevel::ContextSummary)
+        .gather_context(
+            &threads,
+            &tasks,
+            &goal_runs,
+            ConciergeDetailLevel::ContextSummary,
+            &[],
+        )
         .await;
 
     assert_eq!(context.recent_threads.len(), 1);
@@ -415,7 +448,13 @@ async fn context_summary_excludes_internal_dm_threads() {
     let goal_runs = Mutex::new(std::collections::VecDeque::new());
 
     let context = engine
-        .gather_context(&threads, &tasks, &goal_runs, ConciergeDetailLevel::ContextSummary)
+        .gather_context(
+            &threads,
+            &tasks,
+            &goal_runs,
+            ConciergeDetailLevel::ContextSummary,
+            &[],
+        )
         .await;
 
     assert_eq!(context.recent_threads.len(), 1);
@@ -463,7 +502,13 @@ async fn context_summary_excludes_participant_playground_threads() {
     let goal_runs = Mutex::new(std::collections::VecDeque::new());
 
     let context = engine
-        .gather_context(&threads, &tasks, &goal_runs, ConciergeDetailLevel::ContextSummary)
+        .gather_context(
+            &threads,
+            &tasks,
+            &goal_runs,
+            ConciergeDetailLevel::ContextSummary,
+            &[],
+        )
         .await;
 
     assert_eq!(context.recent_threads.len(), 1);

@@ -1886,7 +1886,11 @@ impl TuiModel {
             return;
         }
         self.cleanup_concierge_on_navigate();
-        let launch_assignments = if self.goal_mission_control.display_role_assignments().is_empty() {
+        let launch_assignments = if self
+            .goal_mission_control
+            .display_role_assignments()
+            .is_empty()
+        {
             let fallback_profile = self.current_conversation_agent_profile();
             vec![task::GoalAgentAssignment {
                 role_id: amux_protocol::AGENT_ID_SWAROG.to_string(),
@@ -1897,7 +1901,9 @@ impl TuiModel {
                 inherit_from_main: false,
             }]
         } else {
-            self.goal_mission_control.display_role_assignments().to_vec()
+            self.goal_mission_control
+                .display_role_assignments()
+                .to_vec()
         };
         self.send_daemon_command(DaemonCommand::StartGoalRun {
             goal,
@@ -1927,7 +1933,7 @@ impl TuiModel {
                 | "effort"
                 | "thread"
                 | "new"
-                | "goals"
+                | "goal"
                 | "tasks"
                 | "conversation"
                 | "chat"
@@ -1992,7 +1998,7 @@ impl TuiModel {
                     .reduce(modal::ModalAction::Push(modal::ModalKind::ThreadPicker));
                 self.sync_thread_picker_item_count();
             }
-            "goals" => {
+            "goal" => {
                 self.modal
                     .reduce(modal::ModalAction::Push(modal::ModalKind::GoalPicker));
                 self.sync_goal_picker_item_count();
@@ -2304,8 +2310,7 @@ impl TuiModel {
                 "Goal input accepts only slash commands until an active goal thread is available"
                     .to_string();
             self.show_input_notice(
-                "Goal input needs an active step thread before it can send a prompt"
-                    .to_string(),
+                "Goal input needs an active step thread before it can send a prompt".to_string(),
                 InputNoticeKind::Warning,
                 120,
                 false,

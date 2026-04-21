@@ -2,17 +2,20 @@ use super::*;
 use crate::session_manager::SessionManager;
 
 impl ConciergeEngine {
-    pub(crate) async fn recent_persisted_history_thread_ids(
+    pub(crate) async fn recent_persisted_history_threads(
         &self,
         session_manager: &Arc<SessionManager>,
         limit: usize,
-    ) -> Vec<String> {
+    ) -> Vec<ThreadSummary> {
         match session_manager.list_agent_threads().await {
             Ok(mut threads) => {
                 threads.retain(|thread| include_persisted_thread_in_concierge_context(thread));
                 threads.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
                 threads.truncate(limit.max(1));
-                threads.into_iter().map(|thread| thread.id).collect()
+                threads
+                    .into_iter()
+                    .map(thread_summary_from_persisted_thread)
+                    .collect()
             }
             Err(error) => {
                 tracing::warn!("concierge: failed to inspect persisted thread history: {error}");
@@ -27,6 +30,7 @@ impl ConciergeEngine {
         _tasks: &tokio::sync::Mutex<std::collections::VecDeque<AgentTask>>,
         goal_runs: &tokio::sync::Mutex<std::collections::VecDeque<GoalRun>>,
         detail_level: ConciergeDetailLevel,
+        persisted_recent_threads: &[ThreadSummary],
     ) -> WelcomeContext {
         let threads_guard = threads.read().await;
         let thread_limit = match detail_level {
@@ -77,6 +81,21 @@ impl ConciergeEngine {
                 }
             })
             .collect();
+        recent_threads.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        if recent_threads.len() < thread_limit {
+            let missing_count = thread_limit - recent_threads.len();
+            let present_thread_ids: std::collections::HashSet<String> = recent_threads
+                .iter()
+                .map(|thread| thread.id.clone())
+                .collect();
+            recent_threads.extend(
+                persisted_recent_threads
+                    .iter()
+                    .filter(|thread| !present_thread_ids.contains(&thread.id))
+                    .take(missing_count)
+                    .cloned(),
+            );
+        }
         recent_threads.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         recent_threads.truncate(thread_limit);
         drop(threads_guard);
@@ -186,6 +205,17 @@ fn include_persisted_thread_in_concierge_context(thread: &amux_protocol::AgentDb
         && !thread.title.starts_with("HEARTBEAT SYNTHESIS")
         && !thread.title.starts_with("Heartbeat check:")
         && thread.message_count > 0
+}
+
+fn thread_summary_from_persisted_thread(thread: amux_protocol::AgentDbThread) -> ThreadSummary {
+    ThreadSummary {
+        id: thread.id,
+        title: thread.title,
+        updated_at: thread.updated_at.max(0) as u64,
+        message_count: thread.message_count.max(0) as usize,
+        opening_message: None,
+        last_messages: Vec::new(),
+    }
 }
 
 fn format_message_snippet(message: &AgentMessage) -> String {

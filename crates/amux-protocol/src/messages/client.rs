@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentStatisticsWindow, ApprovalDecision, AsyncCommandCapability, ClientSurface,
-    GatewayAck, GatewayCursorState, GatewayHealthState, GatewayIncomingEvent,
-    GatewayRegistration, GatewayRouteModeState, GatewaySendResult,
-    GatewayThreadBindingState, GoalAgentAssignment, ManagedCommandRequest, SessionId,
-    WorkspaceId,
+    AgentStatisticsWindow, ApprovalDecision, AsyncCommandCapability, ClientSurface, GatewayAck,
+    GatewayCursorState, GatewayHealthState, GatewayIncomingEvent, GatewayRegistration,
+    GatewayRouteModeState, GatewaySendResult, GatewayThreadBindingState, GoalAgentAssignment,
+    ManagedCommandRequest, SessionId, WorkspaceId,
 };
 
 #[rustfmt::skip]

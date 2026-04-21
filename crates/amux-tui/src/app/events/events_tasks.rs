@@ -152,7 +152,9 @@ impl TuiModel {
                     task_title: existing
                         .as_ref()
                         .and_then(|approval| approval.task_title.clone())
-                        .or_else(|| Some(run.title.clone()).filter(|title| !title.trim().is_empty())),
+                        .or_else(|| {
+                            Some(run.title.clone()).filter(|title| !title.trim().is_empty())
+                        }),
                     thread_id: run.thread_id.clone(),
                     thread_title: existing
                         .as_ref()

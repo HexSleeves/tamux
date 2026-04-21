@@ -196,7 +196,7 @@ fn help_modal_lines(theme: &ThemeTokens) -> Vec<Line<'static>> {
             Span::styled("New conversation (defaults to Svarog)", theme.fg_dim),
         ]),
         Line::from(vec![
-            Span::styled("  /goals           ", theme.fg_active),
+            Span::styled("  /goal            ", theme.fg_active),
             Span::styled("Open goal picker / create goal", theme.fg_dim),
         ]),
         Line::from(vec![
@@ -335,5 +335,17 @@ mod tests {
 
         assert!(text.contains("/compact"));
         assert!(text.contains("Force compact current thread"));
+    }
+
+    #[test]
+    fn help_modal_lists_goal_command_not_goals() {
+        let text = help_modal_lines(&ThemeTokens::default())
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("/goal"));
+        assert!(!text.contains("/goals"));
     }
 }

@@ -184,10 +184,17 @@ fn new_goal_run_updates_are_inserted_first() {
         make_goal_run("g2", "Goal Two"),
     ]));
 
-    state.reduce(TaskAction::GoalRunUpdate(make_goal_run("g3", "Newest Goal")));
+    state.reduce(TaskAction::GoalRunUpdate(make_goal_run(
+        "g3",
+        "Newest Goal",
+    )));
 
     assert_eq!(
-        state.goal_runs().iter().map(|run| run.id.as_str()).collect::<Vec<_>>(),
+        state
+            .goal_runs()
+            .iter()
+            .map(|run| run.id.as_str())
+            .collect::<Vec<_>>(),
         vec!["g3", "g1", "g2"]
     );
 }

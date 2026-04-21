@@ -409,11 +409,11 @@ fn default_command_items() -> Vec<CommandItem> {
         },
         CommandItem {
             command: "new-goal".into(),
-            description: "Open Goal Runner view".into(),
+            description: "Open new goal composer".into(),
         },
         CommandItem {
-            command: "goals".into(),
-            description: "Open Goal Runner view".into(),
+            command: "goal".into(),
+            description: "Open goal picker".into(),
         },
         CommandItem {
             command: "conversation".into(),

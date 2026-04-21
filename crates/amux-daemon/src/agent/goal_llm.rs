@@ -141,8 +141,7 @@ impl AgentEngine {
                 preferred_fallback_tools.join(", ")
             ));
         }
-        let goal_local_agents =
-            goal_local_agent_prompt_block(&goal_run.launch_assignment_snapshot);
+        let goal_local_agents = goal_local_agent_prompt_block(&goal_run.launch_assignment_snapshot);
         if !goal_local_agents.is_empty() {
             prompt.push_str("\nGoal-local agents:\n");
             prompt.push_str(&goal_local_agents);

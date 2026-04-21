@@ -63,6 +63,18 @@ fn daemon_marks_startup_ready_before_scheduling_participant_observer_restore() {
     );
 }
 
+#[test]
+fn concierge_welcome_starts_before_persisted_history_hydration() {
+    let root = repo_root();
+    let source = fs::read_to_string(root.join("crates/amux-daemon/src/server/dispatch_part7.rs"))
+        .expect("read concierge dispatch source");
+
+    assert!(
+        !source.contains("agent.ensure_thread_messages_loaded(thread_id).await;"),
+        "concierge welcome must not synchronously hydrate persisted thread messages"
+    );
+}
+
 use crate::agent::types::SubAgentDefinition;
 
 struct TestConnection {

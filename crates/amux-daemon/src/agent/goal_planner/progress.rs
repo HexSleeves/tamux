@@ -112,7 +112,7 @@ impl AgentEngine {
                 &updated_task,
                 resolved_verification_target.as_ref(),
             )
-                .await,
+            .await,
         );
         self.persist_tasks().await;
         self.emit_task_update(&updated_task, Some(status_message(&updated_task).into()));

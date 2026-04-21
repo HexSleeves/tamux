@@ -18,7 +18,8 @@ pub(super) struct WelcomeCacheEntry {
     pub(super) created_at: std::time::Instant,
 }
 
-pub(super) struct ThreadSummary {
+#[derive(Clone)]
+pub(crate) struct ThreadSummary {
     pub(super) id: String,
     pub(super) title: String,
     pub(super) updated_at: u64,
