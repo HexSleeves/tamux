@@ -37,6 +37,7 @@ pub enum ThreadPickerTab {
     Weles,
     Playgrounds,
     Internal,
+    Gateway,
     Agent(String),
 }
 
@@ -57,7 +58,7 @@ impl ThreadPickerTab {
             Self::Rarog => Some(amux_protocol::AGENT_ID_RAROG),
             Self::Weles => Some("weles"),
             Self::Agent(agent_id) => Some(agent_id.as_str()),
-            Self::Playgrounds | Self::Internal => None,
+            Self::Playgrounds | Self::Internal | Self::Gateway => None,
         }
     }
 }

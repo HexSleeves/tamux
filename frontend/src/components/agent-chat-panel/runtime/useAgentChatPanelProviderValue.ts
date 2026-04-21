@@ -13,6 +13,7 @@ import { useSnippetStore } from "@/lib/snippetStore";
 import { useTranscriptStore } from "@/lib/transcriptStore";
 import { useWorkspaceStore } from "@/lib/workspaceStore";
 import type { AgentThread, AgentTodoItem } from "@/lib/agentStore";
+import { isGatewayAgentThread, isInternalAgentThread } from "@/lib/agentStore";
 import type { GoalRun } from "@/lib/goalRuns";
 import type { Workspace } from "@/lib/types";
 import type { WelesHealthState } from "@/lib/agentStore/types";
@@ -52,6 +53,67 @@ const pendingSpawnedThreadHydrations = new Map<string, PendingSpawnedThreadHydra
 
 export function resetPendingSpawnedThreadHydrationsForTest(): void {
   pendingSpawnedThreadHydrations.clear();
+}
+
+function filterThreadsForSearch(
+  threads: AgentThread[],
+  searchQuery: string,
+): AgentThread[] {
+  if (!searchQuery) {
+    return threads;
+  }
+  const lower = searchQuery.toLowerCase();
+  return threads.filter(
+    (thread) =>
+      thread.title.toLowerCase().includes(lower)
+      || thread.lastMessagePreview.toLowerCase().includes(lower),
+  );
+}
+
+export function filterThreadsForBrowserView(
+  threads: AgentThread[],
+  view: AgentChatPanelView,
+): AgentThread[] {
+  switch (view) {
+    case "internal":
+      return threads.filter((thread) => isInternalAgentThread(thread));
+    case "gateway":
+      return threads.filter((thread) => isGatewayAgentThread(thread));
+    case "threads":
+    default:
+      return threads;
+  }
+}
+
+export function buildAgentChatPanelTabItems({
+  threads,
+  pinnedMessageCount,
+  scopedCognitiveEventCount,
+  usageMessageCount,
+}: {
+  threads: AgentThread[];
+  pinnedMessageCount: number;
+  scopedCognitiveEventCount: number;
+  usageMessageCount: number;
+}): Array<{ id: AgentChatPanelView; label: string; count: number | null }> {
+  const internalThreadCount = threads.filter((thread) => isInternalAgentThread(thread)).length;
+  const gatewayThreadCount = threads.filter((thread) => isGatewayAgentThread(thread)).length;
+
+  return [
+    { id: "threads", label: "Threads", count: threads.length },
+    { id: "chat", label: "Chat", count: null },
+    ...(pinnedMessageCount > 0 ? [{ id: "pinned" as const, label: "Pinned", count: pinnedMessageCount }] : []),
+    { id: "trace", label: "Trace", count: scopedCognitiveEventCount },
+    { id: "usage", label: "Usage", count: usageMessageCount },
+    { id: "context", label: "Context", count: null },
+    { id: "graph", label: "Graph", count: null },
+    { id: "coding-agents", label: "Coding Agents", count: null },
+    { id: "ai-training", label: "AI Training", count: null },
+    { id: "tasks", label: "Tasks", count: null },
+    { id: "internal", label: "Internal", count: internalThreadCount },
+    { id: "gateway", label: "Gateway", count: gatewayThreadCount },
+    { id: "subagents", label: "Subagents", count: null },
+  ];
 }
 
 function findLocalThreadByDaemonThreadId(
@@ -471,12 +533,14 @@ export function useAgentChatPanelProviderValue(): {
     };
   }, []);
 
-  const filteredThreads = searchQuery
-    ? threads.filter(
-      (thread) => thread.title.toLowerCase().includes(searchQuery.toLowerCase())
-        || thread.lastMessagePreview.toLowerCase().includes(searchQuery.toLowerCase()),
-    )
-    : threads;
+  const searchedThreads = useMemo(
+    () => filterThreadsForSearch(threads, searchQuery),
+    [threads, searchQuery],
+  );
+  const filteredThreads = useMemo(
+    () => filterThreadsForBrowserView(searchedThreads, view),
+    [searchedThreads, view],
+  );
   const isStreamingResponse = messages.some((message) => message.role === "assistant" && message.isStreaming);
   const canOpenSpawnedThread = useCallback((run: AgentRun) => {
     if (!run.thread_id) {
@@ -648,19 +712,12 @@ export function useAgentChatPanelProviderValue(): {
   }, [agentSettings]);
   const pinnedOverBudget = pinnedUsageChars > pinnedBudgetChars;
 
-  const tabItems = [
-    { id: "threads", label: "Threads", count: threads.length },
-    { id: "chat", label: "Chat", count: null },
-    ...(pinnedMessages.length > 0 ? [{ id: "pinned" as const, label: "Pinned", count: pinnedMessages.length }] : []),
-    { id: "trace", label: "Trace", count: scopedCognitiveEvents.length },
-    { id: "usage", label: "Usage", count: usageMessageCount },
-    { id: "context", label: "Context", count: null },
-    { id: "graph", label: "Graph", count: null },
-    { id: "coding-agents", label: "Coding Agents", count: null },
-    { id: "ai-training", label: "AI Training", count: null },
-    { id: "tasks", label: "Tasks", count: null },
-    { id: "subagents", label: "Subagents", count: null },
-  ] satisfies Array<{ id: AgentChatPanelView; label: string; count: number | null }>;
+  const tabItems = buildAgentChatPanelTabItems({
+    threads,
+    pinnedMessageCount: pinnedMessages.length,
+    scopedCognitiveEventCount: scopedCognitiveEvents.length,
+    usageMessageCount,
+  });
 
   const value = useMemo<AgentChatPanelRuntimeValue>(() => ({
     togglePanel,

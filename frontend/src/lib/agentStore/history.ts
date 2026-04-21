@@ -119,12 +119,42 @@ export type RemoteAgentThreadRecord = {
   }>;
 };
 
-export function isHiddenAgentThread(thread: Pick<RemoteAgentThreadRecord, "id" | "title">): boolean {
-  const id = typeof thread.id === "string" ? thread.id.trim().toLowerCase() : "";
+type ThreadIdentityLike = {
+  id?: string | null;
+  daemonThreadId?: string | null;
+  title?: string | null;
+  lastMessagePreview?: string | null;
+};
+
+const GATEWAY_THREAD_PREFIXES = ["slack ", "discord ", "telegram ", "whatsapp "] as const;
+
+function normalizedThreadIdentity(thread: ThreadIdentityLike): string {
+  if (typeof thread.daemonThreadId === "string" && thread.daemonThreadId.trim()) {
+    return thread.daemonThreadId.trim().toLowerCase();
+  }
+  return typeof thread.id === "string" ? thread.id.trim().toLowerCase() : "";
+}
+
+export function isInternalAgentThread(thread: ThreadIdentityLike): boolean {
+  const id = normalizedThreadIdentity(thread);
   const title = typeof thread.title === "string" ? thread.title.trim().toLowerCase() : "";
-  return id.startsWith("dm:")
-    || id.startsWith("handoff:")
-    || title.startsWith("internal dm")
+  return id.startsWith("dm:") || title.startsWith("internal dm");
+}
+
+export function isGatewayAgentThread(thread: ThreadIdentityLike): boolean {
+  const title = typeof thread.title === "string" ? thread.title.trim().toLowerCase() : "";
+  const preview = typeof thread.lastMessagePreview === "string"
+    ? thread.lastMessagePreview.trim().toLowerCase()
+    : "";
+  return GATEWAY_THREAD_PREFIXES.some((prefix) => title.startsWith(prefix))
+    || GATEWAY_THREAD_PREFIXES.some((prefix) => preview.startsWith(`[${prefix.trim()} `))
+    || GATEWAY_THREAD_PREFIXES.some((prefix) => preview.startsWith(`[${prefix.trim()} —`));
+}
+
+export function isHiddenAgentThread(thread: Pick<RemoteAgentThreadRecord, "id" | "title">): boolean {
+  const id = normalizedThreadIdentity(thread);
+  const title = typeof thread.title === "string" ? thread.title.trim().toLowerCase() : "";
+  return id.startsWith("handoff:")
     || title.startsWith("handoff ")
     || title === "weles"
     || title.startsWith("weles ");

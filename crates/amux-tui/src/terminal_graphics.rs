@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::io::{self, Write};
 use std::sync::{Mutex, OnceLock};
 
@@ -74,6 +76,12 @@ pub(crate) fn configure_detected_protocol() -> TerminalImageProtocol {
 }
 
 pub(crate) fn active_protocol() -> TerminalImageProtocol {
+    #[cfg(test)]
+    {
+        return test_protocol_override().unwrap_or(TerminalImageProtocol::None);
+    }
+
+    #[cfg(not(test))]
     *protocol_cell()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -96,6 +104,16 @@ fn inside_tmux() -> bool {
 fn protocol_cell() -> &'static Mutex<TerminalImageProtocol> {
     static ACTIVE_PROTOCOL: OnceLock<Mutex<TerminalImageProtocol>> = OnceLock::new();
     ACTIVE_PROTOCOL.get_or_init(|| Mutex::new(TerminalImageProtocol::None))
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PROTOCOL_OVERRIDE: Cell<Option<TerminalImageProtocol>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+fn test_protocol_override() -> Option<TerminalImageProtocol> {
+    TEST_PROTOCOL_OVERRIDE.with(Cell::get)
 }
 
 fn detect_protocol_from_env<I, K, V>(env: I) -> TerminalImageProtocol
@@ -188,7 +206,7 @@ fn build_kitty_display_sequence(spec: &TerminalImageOverlaySpec, clear_previous:
 
 #[cfg(test)]
 pub(crate) fn set_active_protocol_for_tests(protocol: TerminalImageProtocol) {
-    set_active_protocol(protocol);
+    TEST_PROTOCOL_OVERRIDE.with(|cell| cell.set(Some(protocol)));
 }
 
 #[cfg(test)]

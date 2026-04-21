@@ -1789,66 +1789,53 @@ impl TuiModel {
             reasoning_effort: fallback_profile.reasoning_effort,
             inherit_from_main: false,
         };
-        if let Some(goal_run_target) = current_goal_target
+        let preferred_goal_snapshot = current_goal_target
             .as_ref()
             .and_then(|target| target_goal_run_id(self, target))
             .and_then(|goal_run_id| self.tasks.goal_run_by_id(&goal_run_id).cloned())
-        {
-            let preserve_pending = self.goal_mission_control.runtime_goal_run_id.as_deref()
-                == Some(goal_run_target.id.as_str());
-            self.goal_mission_control =
-                goal_mission_control::GoalMissionControlState::from_goal_snapshot(
-                    self.runtime_assignments_for_goal_run(&goal_run_target).0,
-                    fallback_main_assignment.clone(),
-                    "Goal runtime roster",
-                );
-            self.sync_goal_mission_control_from_run(&goal_run_target, preserve_pending);
-        } else {
-            let latest_goal_snapshot = self
-                .tasks
-                .goal_runs()
-                .iter()
-                .max_by_key(|run| run.updated_at)
-                .and_then(|run| {
-                    if !run.launch_assignment_snapshot.is_empty() {
-                        Some(run.launch_assignment_snapshot.clone())
-                    } else if !run.runtime_assignment_list.is_empty() {
-                        Some(run.runtime_assignment_list.clone())
-                    } else {
-                        None
-                    }
-                });
-            self.goal_mission_control = match latest_goal_snapshot {
-                Some(snapshot) => {
-                    goal_mission_control::GoalMissionControlState::from_goal_snapshot(
-                        snapshot,
-                        fallback_main_assignment,
-                        "Previous goal snapshot",
-                    )
+            .and_then(|run| {
+                if !run.launch_assignment_snapshot.is_empty() {
+                    Some(run.launch_assignment_snapshot)
+                } else if !run.runtime_assignment_list.is_empty() {
+                    Some(run.runtime_assignment_list)
+                } else {
+                    None
                 }
-                None => goal_mission_control::GoalMissionControlState::from_main_assignment(
-                    fallback_main_assignment.clone(),
-                    vec![fallback_main_assignment],
-                    "Main agent inheritance",
-                ),
-            };
-        }
+            });
+        let latest_goal_snapshot = self
+            .tasks
+            .goal_runs()
+            .iter()
+            .max_by_key(|run| run.updated_at)
+            .and_then(|run| {
+                if !run.launch_assignment_snapshot.is_empty() {
+                    Some(run.launch_assignment_snapshot.clone())
+                } else if !run.runtime_assignment_list.is_empty() {
+                    Some(run.runtime_assignment_list.clone())
+                } else {
+                    None
+                }
+            });
+        self.goal_mission_control = match preferred_goal_snapshot.or(latest_goal_snapshot) {
+            Some(snapshot) => goal_mission_control::GoalMissionControlState::from_goal_snapshot(
+                snapshot,
+                fallback_main_assignment,
+                "Previous goal snapshot",
+            ),
+            None => goal_mission_control::GoalMissionControlState::from_main_assignment(
+                fallback_main_assignment.clone(),
+                vec![fallback_main_assignment],
+                "Main agent inheritance",
+            ),
+        };
         self.goal_mission_control.set_prompt_text(String::new());
         self.goal_mission_control.set_save_as_default_pending(false);
         self.main_pane_view = MainPaneView::GoalComposer;
         self.task_view_scroll = 0;
-        self.focus = if self.goal_mission_control.runtime_mode() {
-            FocusArea::Chat
-        } else {
-            FocusArea::Input
-        };
+        self.focus = FocusArea::Input;
         self.set_input_text("");
         self.attachments.clear();
-        self.status_line = if self.goal_mission_control.runtime_mode() {
-            "Mission Control runtime editor is ready".to_string()
-        } else {
-            "Mission Control preflight is ready".to_string()
-        };
+        self.status_line = "Mission Control preflight is ready".to_string();
     }
 
     pub(super) fn open_mission_control_goal_thread(&mut self) -> bool {
@@ -2401,7 +2388,10 @@ impl TuiModel {
         self.focus = FocusArea::Chat;
         self.input.set_mode(input::InputMode::Insert);
         self.status_line = "Prompt sent".to_string();
-        self.set_agent_activity_for(thread_id.clone(), "thinking");
+        let activity_thread_id = thread_id
+            .clone()
+            .or_else(|| self.chat.active_thread_id().map(String::from));
+        self.set_agent_activity_for(activity_thread_id, "thinking");
         self.error_active = false;
     }
 

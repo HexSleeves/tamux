@@ -8,8 +8,8 @@ use amux_shared::providers::{
 };
 
 #[test]
-fn provider_count_is_27() {
-    assert_eq!(PROVIDERS.len(), 27);
+fn provider_count_is_28() {
+    assert_eq!(PROVIDERS.len(), 28);
 }
 
 #[test]

@@ -18,6 +18,7 @@ const HIDDEN_HANDOFF_THREAD_PREFIX: &str = "handoff:";
 const PLAYGROUND_THREAD_PREFIX: &str = "playground:";
 const PLAYGROUND_THREAD_TITLE_PREFIX: &str = "Participant Playground";
 const WELES_THREAD_TITLE: &str = "WELES";
+const GATEWAY_THREAD_TITLE_PREFIXES: [&str; 4] = ["slack ", "discord ", "telegram ", "whatsapp "];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThreadPickerHitTarget {
@@ -74,6 +75,10 @@ fn fixed_tab_specs() -> Vec<ThreadPickerTabSpec> {
             tab: ThreadPickerTab::Internal,
             label: "[Internal]".to_string(),
         },
+        ThreadPickerTabSpec {
+            tab: ThreadPickerTab::Gateway,
+            label: "[Gateway]".to_string(),
+        },
     ]
 }
 
@@ -129,6 +134,7 @@ pub(crate) fn tab_specs(chat: &ChatState, subagents: &SubAgentsState) -> Vec<Thr
     for thread in chat.threads() {
         if is_hidden_handoff_thread(thread)
             || is_internal_thread(thread)
+            || is_gateway_thread(thread)
             || is_playground_thread(thread)
             || is_rarog_thread(thread)
             || is_weles_thread(thread)
@@ -164,6 +170,7 @@ fn thread_matches_agent_tab(
 ) -> bool {
     if is_hidden_handoff_thread(thread)
         || is_internal_thread(thread)
+        || is_gateway_thread(thread)
         || is_playground_thread(thread)
         || is_rarog_thread(thread)
         || is_weles_thread(thread)
@@ -198,6 +205,7 @@ pub(crate) fn resolve_thread_picker_tab(
         "weles" => Some(ThreadPickerTab::Weles),
         "playgrounds" | "playground" => Some(ThreadPickerTab::Playgrounds),
         "internal" => Some(ThreadPickerTab::Internal),
+        "gateway" => Some(ThreadPickerTab::Gateway),
         _ => None,
     };
     if fixed.is_some() {
@@ -280,6 +288,13 @@ pub(crate) fn is_internal_thread(thread: &AgentThread) -> bool {
         || thread.title.starts_with(INTERNAL_DM_TITLE_PREFIX)
 }
 
+pub(crate) fn is_gateway_thread(thread: &AgentThread) -> bool {
+    !is_internal_thread(thread)
+        && GATEWAY_THREAD_TITLE_PREFIXES
+            .iter()
+            .any(|prefix| thread.title.trim().to_ascii_lowercase().starts_with(prefix))
+}
+
 pub(crate) fn is_playground_thread(thread: &AgentThread) -> bool {
     thread.id.starts_with(PLAYGROUND_THREAD_PREFIX)
         || thread.title.starts_with(PLAYGROUND_THREAD_TITLE_PREFIX)
@@ -338,6 +353,7 @@ pub(crate) fn filtered_threads<'a>(
             ThreadPickerTab::Swarog => {
                 !is_rarog_thread(thread)
                     && !is_internal_thread(thread)
+                    && !is_gateway_thread(thread)
                     && !is_weles_thread(thread)
                     && !is_playground_thread(thread)
             }
@@ -345,6 +361,7 @@ pub(crate) fn filtered_threads<'a>(
             ThreadPickerTab::Weles => !is_playground_thread(thread) && is_weles_thread(thread),
             ThreadPickerTab::Playgrounds => is_playground_thread(thread),
             ThreadPickerTab::Internal => is_internal_thread(thread),
+            ThreadPickerTab::Gateway => is_gateway_thread(thread),
             ThreadPickerTab::Agent(agent_id) => {
                 thread_matches_agent_tab(thread, &agent_id, subagents)
             }
@@ -455,6 +472,7 @@ pub(crate) fn visible_window(
 fn synthetic_row_label(tab: ThreadPickerTab) -> &'static str {
     match tab {
         ThreadPickerTab::Playgrounds => "Playgrounds are created automatically",
+        ThreadPickerTab::Gateway => "Gateway threads are created automatically",
         ThreadPickerTab::Agent(_) => "+ New conversation",
         _ => "+ New conversation",
     }
@@ -836,7 +854,7 @@ mod tests {
         let subagents = make_subagents(Vec::new());
         let tabs = tab_specs(&chat, &subagents);
 
-        assert_eq!(tabs.len(), 5);
+        assert_eq!(tabs.len(), 6);
         assert!(
             tabs.iter()
                 .any(|spec| spec.label.as_str() == "[Playgrounds]"),
@@ -892,6 +910,35 @@ mod tests {
         let tabs = tab_specs(&chat, &subagents);
 
         assert!(tabs.iter().any(|spec| spec.label == "[Perun]"));
+    }
+
+    #[test]
+    fn gateway_tab_is_inserted_after_internal_and_before_subagents() {
+        let chat = make_chat(vec![AgentThread {
+            id: "thread-domowoj".into(),
+            agent_name: Some("Domowoj".into()),
+            title: "Domowoj triage".into(),
+            ..Default::default()
+        }]);
+        let subagents = make_subagents(vec![sample_subagent("domowoj", "Domowoj", false)]);
+
+        let labels = tab_specs(&chat, &subagents)
+            .into_iter()
+            .map(|spec| spec.label)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            labels,
+            vec![
+                "[Svarog]".to_string(),
+                "[Rarog]".to_string(),
+                "[Weles]".to_string(),
+                "[Playgrounds]".to_string(),
+                "[Internal]".to_string(),
+                "[Gateway]".to_string(),
+                "[Domowoj]".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -1142,6 +1189,34 @@ mod tests {
 
         assert_eq!(threads.len(), 1);
         assert_eq!(threads[0].id, "dm:svarog:weles");
+    }
+
+    #[test]
+    fn gateway_tab_filters_gateway_threads() {
+        let chat = make_chat(vec![
+            AgentThread {
+                id: "regular-thread".into(),
+                title: "Regular work".into(),
+                ..Default::default()
+            },
+            AgentThread {
+                id: "thread-slack-alice".into(),
+                title: "slack Alice".into(),
+                ..Default::default()
+            },
+            AgentThread {
+                id: "dm:svarog:weles".into(),
+                title: "Internal DM · Svarog ↔ Weles".into(),
+                ..Default::default()
+            },
+        ]);
+        let mut modal = ModalState::new();
+        modal.set_thread_picker_tab(ThreadPickerTab::Gateway);
+
+        let threads = filtered_threads(&chat, &modal, &make_subagents(Vec::new()));
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, "thread-slack-alice");
     }
 
     #[test]

@@ -2129,12 +2129,23 @@ fn file_preview_view_uses_available_height_for_image_preview() {
         .draw(|frame| model.render(frame))
         .expect("file preview render should succeed");
     assert!(
-        crate::widgets::image_preview::process_pending_preview_jobs_for_tests(),
-        "expected initial file preview render to queue image preview work"
+        crate::widgets::image_preview::process_preview_jobs_for_path_until_stable_for_tests(
+            &image_path.display().to_string(),
+        ),
+        "expected initial file preview render to queue and complete image preview work",
     );
     terminal
         .draw(|frame| model.render(frame))
         .expect("file preview rerender should use cached image preview");
+    assert!(
+        crate::widgets::image_preview::process_preview_jobs_for_path_until_stable_for_tests(
+            &image_path.display().to_string(),
+        ),
+        "expected rerendered file preview to settle any resized image preview work",
+    );
+    terminal
+        .draw(|frame| model.render(frame))
+        .expect("file preview final render should use settled image preview");
 
     let chat_area = rendered_chat_area(&model);
     let buffer = terminal.backend().buffer();

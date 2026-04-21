@@ -199,6 +199,8 @@ export function AgentChatPanelCurrentSurface() {
   const { view, setView, setChatBackView } = useAgentChatPanelRuntime();
 
   if (view === "threads") return <AgentChatPanelThreadsSurface />;
+  if (view === "internal") return <AgentChatPanelInternalSurface />;
+  if (view === "gateway") return <AgentChatPanelGatewaySurface />;
   if (view === "chat") return <AgentChatPanelChatSurface />;
   if (view === "pinned") return <AgentChatPanelPinnedSurface />;
   if (view === "trace") return <AgentChatPanelTraceSurface />;
@@ -211,7 +213,11 @@ export function AgentChatPanelCurrentSurface() {
   return <AgentChatPanelGraphSurface />;
 }
 
-export function AgentChatPanelThreadsSurface() {
+function AgentChatPanelThreadBrowserSurface({
+  browserView,
+}: {
+  browserView: "threads" | "internal" | "gateway";
+}) {
   const { filteredThreads, searchQuery, setSearchQuery, setActiveThread, setView, setChatBackView, deleteThread } = useAgentChatPanelRuntime();
 
   return (
@@ -221,12 +227,24 @@ export function AgentChatPanelThreadsSurface() {
       onSearch={setSearchQuery}
       onSelect={(thread) => {
         setActiveThread(thread.id);
-        setChatBackView("threads");
+        setChatBackView(browserView);
         setView("chat");
       }}
       onDelete={deleteThread}
     />
   );
+}
+
+export function AgentChatPanelThreadsSurface() {
+  return <AgentChatPanelThreadBrowserSurface browserView="threads" />;
+}
+
+export function AgentChatPanelInternalSurface() {
+  return <AgentChatPanelThreadBrowserSurface browserView="internal" />;
+}
+
+export function AgentChatPanelGatewaySurface() {
+  return <AgentChatPanelThreadBrowserSurface browserView="gateway" />;
 }
 
 export function AgentChatPanelChatSurface() {

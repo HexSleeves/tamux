@@ -316,7 +316,15 @@ fn command_palette_tools_opens_settings_tools_tab() {
     model
         .modal
         .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
-    model.modal.reduce(modal::ModalAction::Navigate(2));
+    let tools_index = model
+        .modal
+        .command_items()
+        .iter()
+        .position(|item| item.command == "tools")
+        .expect("tools command should exist");
+    model
+        .modal
+        .reduce(modal::ModalAction::Navigate(tools_index as i32));
 
     let quit = model.handle_key_modal(
         KeyCode::Enter,

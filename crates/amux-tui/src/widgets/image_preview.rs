@@ -371,8 +371,42 @@ pub(crate) fn render_image_preview_lines(
 }
 
 #[cfg(test)]
-pub(crate) fn process_pending_preview_jobs_for_tests() -> bool {
-    preview_runtime().process_next_job_for_tests()
+pub(crate) fn process_preview_jobs_for_path_until_stable_for_tests(raw_path: &str) -> bool {
+    let Some(path) = resolve_local_image_path(raw_path) else {
+        return false;
+    };
+    let runtime = preview_runtime();
+
+    loop {
+        let (saw_entry, has_pending, has_ready) = {
+            let store = lock_store(&runtime.inner.store);
+            let mut saw_entry = false;
+            let mut has_pending = false;
+            let mut has_ready = false;
+            for (key, entry) in &store.entries {
+                if key.path != path {
+                    continue;
+                }
+                saw_entry = true;
+                match entry {
+                    PreviewCacheEntry::Pending => has_pending = true,
+                    PreviewCacheEntry::Ready(_) => has_ready = true,
+                    PreviewCacheEntry::Failed(_) => {}
+                }
+            }
+            (saw_entry, has_pending, has_ready)
+        };
+
+        if !saw_entry {
+            return false;
+        }
+        if !has_pending {
+            return has_ready;
+        }
+        if !runtime.process_next_job_for_tests() {
+            return false;
+        }
+    }
 }
 
 #[cfg(test)]

@@ -13,6 +13,8 @@ import type { AgentContentBlock } from "@/lib/agentStore/types";
 
 export type AgentChatPanelView =
   | "threads"
+  | "internal"
+  | "gateway"
   | "chat"
   | "pinned"
   | "trace"

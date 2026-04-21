@@ -161,6 +161,10 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                     model.status_line = "Playgrounds are created automatically".to_string();
                     return;
                 }
+                if thread_picker_tab == modal::ThreadPickerTab::Gateway {
+                    model.status_line = "Gateway threads are created automatically".to_string();
+                    return;
+                }
                 model.close_top_modal();
                 model.input.reduce(input::InputAction::Clear);
                 let target_agent_id = TuiModel::thread_picker_target_agent_id(thread_picker_tab);

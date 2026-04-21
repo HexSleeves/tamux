@@ -128,11 +128,7 @@ fn retry_status_replaces_previous_status_for_active_thread() {
 
 #[test]
 fn copied_message_feedback_expires_after_deadline() {
-    let mut state = ChatState::new();
-    state.reduce(ChatAction::ThreadCreated {
-        thread_id: "t1".into(),
-        title: "Test".into(),
-    });
+    let mut state = state_with_messages(1);
     state.mark_message_copied(0, 25);
 
     assert!(state.is_message_recently_copied(0, 24));
@@ -1829,7 +1825,7 @@ fn toggle_message_selection_clears_when_same_message_clicked() {
 
 #[test]
 fn toggle_tool_expansion() {
-    let mut state = ChatState::new();
+    let mut state = state_with_messages(1);
     assert!(!state.expanded_tools().contains(&0));
     state.toggle_tool_expansion(0);
     assert!(state.expanded_tools().contains(&0));
@@ -1839,7 +1835,7 @@ fn toggle_tool_expansion() {
 
 #[test]
 fn toggle_tool_expansion_independent() {
-    let mut state = ChatState::new();
+    let mut state = state_with_messages(2);
     state.toggle_tool_expansion(0);
     state.toggle_tool_expansion(1);
     assert!(state.expanded_tools().contains(&0));

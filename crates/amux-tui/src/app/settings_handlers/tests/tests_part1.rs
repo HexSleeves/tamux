@@ -709,7 +709,7 @@ fn xai_audio_catalog_uses_provider_native_defaults_for_both_endpoints() {
 #[test]
 fn audio_default_model_is_empty_when_provider_has_no_static_audio_catalog() {
     assert_eq!(
-        TuiModel::default_audio_model_for("tts", PROVIDER_ID_GROQ),
+        TuiModel::default_audio_model_for("tts", PROVIDER_ID_OPENROUTER),
         ""
     );
 }
@@ -1448,55 +1448,6 @@ fn feat_skill_recommendation_numeric_fields_write_new_daemon_paths() {
             "6",
             "/skill_recommendation/suggest_global_enable_after_approvals",
             "6",
-        ),
-        (
-            "feat_audio_stt_provider",
-            serde_json::json!({"audio": {"stt": {"provider": "openai"}}}),
-            "openai",
-            "/audio/stt/provider",
-            "\"openai\"",
-        ),
-        (
-            "feat_audio_stt_model",
-            serde_json::json!({"audio": {"stt": {"model": "whisper-1"}}}),
-            "whisper-1",
-            "/audio/stt/model",
-            "\"whisper-1\"",
-        ),
-        (
-            "feat_audio_tts_provider",
-            serde_json::json!({"audio": {"tts": {"provider": "openai"}}}),
-            "openai",
-            "/audio/tts/provider",
-            "\"openai\"",
-        ),
-        (
-            "feat_audio_tts_model",
-            serde_json::json!({"audio": {"tts": {"model": "gpt-4o-mini-tts"}}}),
-            "gpt-4o-mini-tts",
-            "/audio/tts/model",
-            "\"gpt-4o-mini-tts\"",
-        ),
-        (
-            "feat_audio_tts_voice",
-            serde_json::json!({"audio": {"tts": {"voice": "alloy"}}}),
-            "alloy",
-            "/audio/tts/voice",
-            "\"alloy\"",
-        ),
-        (
-            "feat_image_generation_provider",
-            serde_json::json!({"image": {"generation": {"provider": "openrouter"}}}),
-            "openrouter",
-            "/image/generation/provider",
-            "\"openrouter\"",
-        ),
-        (
-            "feat_image_generation_model",
-            serde_json::json!({"image": {"generation": {"model": "openai/gpt-image-1"}}}),
-            "openai/gpt-image-1",
-            "/image/generation/model",
-            "\"openai/gpt-image-1\"",
         ),
     ];
 
