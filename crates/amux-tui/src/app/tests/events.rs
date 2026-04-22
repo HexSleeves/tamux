@@ -2268,6 +2268,47 @@ fn task_list_clears_approval_when_same_task_no_longer_waits_for_it() {
 }
 
 #[test]
+fn task_update_clearing_approval_does_not_rehydrate_on_later_sync() {
+    let mut model = make_model();
+
+    model.handle_task_list_event(vec![crate::wire::AgentTask {
+        id: "task-1".to_string(),
+        title: "Hydrated approval".to_string(),
+        thread_id: Some("thread-1".to_string()),
+        status: Some(crate::wire::TaskStatus::AwaitingApproval),
+        awaiting_approval_id: Some("approval-1".to_string()),
+        blocked_reason: Some("waiting for operator approval".to_string()),
+        ..Default::default()
+    }]);
+    assert!(model.approval.approval_by_id("approval-1").is_some());
+
+    model.handle_task_update_event(crate::wire::AgentTask {
+        id: "task-1".to_string(),
+        title: "Hydrated approval".to_string(),
+        thread_id: Some("thread-1".to_string()),
+        status: Some(crate::wire::TaskStatus::Queued),
+        awaiting_approval_id: None,
+        ..Default::default()
+    });
+
+    assert!(
+        model.approval.approval_by_id("approval-1").is_none(),
+        "task update should clear the pending approval immediately"
+    );
+
+    model.handle_thread_list_event(vec![crate::wire::AgentThread {
+        id: "thread-1".to_string(),
+        title: "Thread".to_string(),
+        ..Default::default()
+    }]);
+
+    assert!(
+        model.approval.approval_by_id("approval-1").is_none(),
+        "later thread sync should not resurrect approvals that the task already cleared"
+    );
+}
+
+#[test]
 fn task_list_hydrates_policy_escalation_rationale_from_thread_messages() {
     let mut model = make_model();
     model.handle_thread_detail_event(crate::wire::AgentThread {

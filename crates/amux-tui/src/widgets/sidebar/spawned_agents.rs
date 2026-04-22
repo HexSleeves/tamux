@@ -79,10 +79,17 @@ pub(super) fn selected_thread_id(
     selected_index: usize,
     thread_id: Option<&str>,
 ) -> Option<String> {
-    flattened_items(tasks, thread_id)
+    let items = flattened_items(tasks, thread_id);
+    items
         .get(selected_index)
         .filter(|item| item.openable)
         .and_then(|item| item.thread_id.clone())
+        .or_else(|| {
+            items
+                .into_iter()
+                .find(|item| item.openable)
+                .and_then(|item| item.thread_id)
+        })
 }
 
 pub(super) fn first_openable_index(tasks: &TaskState, thread_id: Option<&str>) -> Option<usize> {

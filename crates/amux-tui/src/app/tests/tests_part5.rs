@@ -942,6 +942,40 @@ fn spawned_thread_navigation_preserves_pending_child_open_across_thread_list_ref
 }
 
 #[test]
+fn spawned_thread_navigation_enter_on_anchor_opens_first_openable_child() {
+    let mut model = seed_spawned_thread_navigation_model_with_loaded_child(false);
+    model.focus = FocusArea::Sidebar;
+    model.set_mission_control_return_targets(
+        Some(SidebarItemTarget::GoalRun {
+            goal_run_id: "goal-1".to_string(),
+            step_id: Some("step-1".to_string()),
+        }),
+        None,
+    );
+    model.activate_sidebar_tab(SidebarTab::Spawned);
+    model.sidebar.select(0, model.sidebar_item_count());
+
+    let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(model.chat.active_thread_id(), Some("thread-child"));
+    assert_eq!(
+        model.chat.thread_history_stack(),
+        &["thread-root".to_string()]
+    );
+    assert!(matches!(model.main_pane_view, MainPaneView::Conversation));
+    assert_eq!(model.focus, FocusArea::Chat);
+    assert_eq!(model.thread_loading_id.as_deref(), Some("thread-child"));
+    assert!(matches!(
+        model.mission_control_return_to_goal_target(),
+        Some(SidebarItemTarget::GoalRun {
+            ref goal_run_id,
+            step_id: Some(ref step_id),
+        }) if goal_run_id == "goal-1" && step_id == "step-1"
+    ));
+}
+
+#[test]
 fn spawned_thread_navigation_mouse_click_opens_unloaded_child_thread() {
     let mut model = seed_spawned_thread_navigation_model_with_loaded_child(false);
     let sidebar_area = model
@@ -975,6 +1009,53 @@ fn spawned_thread_navigation_mouse_click_opens_unloaded_child_thread() {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: child_pos.x,
         row: child_pos.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(model.chat.active_thread_id(), Some("thread-child"));
+    assert_eq!(
+        model.chat.thread_history_stack(),
+        &["thread-root".to_string()]
+    );
+    assert!(matches!(model.main_pane_view, MainPaneView::Conversation));
+    assert_eq!(model.focus, FocusArea::Chat);
+    assert_eq!(model.thread_loading_id.as_deref(), Some("thread-child"));
+}
+
+#[test]
+fn spawned_thread_navigation_mouse_click_anchor_opens_first_openable_child() {
+    let mut model = seed_spawned_thread_navigation_model_with_loaded_child(false);
+    let sidebar_area = model
+        .pane_layout()
+        .sidebar
+        .expect("default layout should include a sidebar");
+    model.activate_sidebar_tab(SidebarTab::Spawned);
+
+    let anchor_pos = (sidebar_area.y..sidebar_area.y.saturating_add(sidebar_area.height))
+        .find_map(|row| {
+            (sidebar_area.x..sidebar_area.x.saturating_add(sidebar_area.width)).find_map(|column| {
+                let pos = Position::new(column, row);
+                if widgets::sidebar::hit_test(
+                    sidebar_area,
+                    &model.chat,
+                    &model.sidebar,
+                    &model.tasks,
+                    model.chat.active_thread_id(),
+                    pos,
+                ) == Some(widgets::sidebar::SidebarHitTarget::Spawned(0))
+                {
+                    Some(pos)
+                } else {
+                    None
+                }
+            })
+        })
+        .expect("spawned sidebar should expose a clickable anchor row");
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: anchor_pos.x,
+        row: anchor_pos.y,
         modifiers: KeyModifiers::NONE,
     });
 

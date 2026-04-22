@@ -790,7 +790,10 @@ fn merge_task_update(existing: &AgentTask, mut updated: AgentTask) -> AgentTask 
     if updated.command.is_none() {
         updated.command = existing.command.clone();
     }
-    if updated.awaiting_approval_id.is_none() {
+    let effective_status = updated.status.or(existing.status);
+    if updated.awaiting_approval_id.is_none()
+        && matches!(effective_status, Some(TaskStatus::AwaitingApproval))
+    {
         updated.awaiting_approval_id = existing.awaiting_approval_id.clone();
     }
     if updated.blocked_reason.is_none() {

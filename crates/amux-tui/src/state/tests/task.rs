@@ -902,6 +902,35 @@ fn goal_run_update_preserves_owner_profiles_when_incremental_payload_omits_them(
 }
 
 #[test]
+fn task_update_drops_stale_awaiting_approval_id_when_status_advances() {
+    let mut state = TaskState::new();
+    state.reduce(TaskAction::TaskListReceived(vec![AgentTask {
+        id: "task-1".into(),
+        title: "Hydrated approval".into(),
+        thread_id: Some("thread-1".into()),
+        status: Some(TaskStatus::AwaitingApproval),
+        awaiting_approval_id: Some("approval-1".into()),
+        ..Default::default()
+    }]));
+
+    state.reduce(TaskAction::TaskUpdate(AgentTask {
+        id: "task-1".into(),
+        title: "Hydrated approval".into(),
+        thread_id: Some("thread-1".into()),
+        status: Some(TaskStatus::Queued),
+        awaiting_approval_id: None,
+        ..Default::default()
+    }));
+
+    let task = state.task_by_id("task-1").expect("task should exist");
+    assert_eq!(task.status, Some(TaskStatus::Queued));
+    assert!(
+        task.awaiting_approval_id.is_none(),
+        "non-awaiting task updates should clear stale approval IDs instead of preserving them"
+    );
+}
+
+#[test]
 fn goal_run_update_preserves_planner_fallback_when_current_step_owner_is_absent() {
     let mut state = TaskState::new();
     state.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
