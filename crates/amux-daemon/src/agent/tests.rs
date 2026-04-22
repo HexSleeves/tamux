@@ -354,6 +354,51 @@ fn rerun_goal_run_from_step_resets_following_steps_and_skill_output() {
 }
 
 #[test]
+fn retry_goal_run_step_without_steps_requeues_planning() {
+    let mut goal_run = sample_goal_run();
+    goal_run.steps.clear();
+    goal_run.current_step_index = 0;
+    goal_run.current_step_title = None;
+    goal_run.current_step_kind = None;
+
+    retry_goal_run_step(&mut goal_run, None).expect("retry should succeed");
+
+    assert_eq!(goal_run.status, GoalRunStatus::Queued);
+    assert!(goal_run.completed_at.is_none());
+    assert!(goal_run.last_error.is_none());
+    assert!(goal_run.failure_cause.is_none());
+    assert!(goal_run.awaiting_approval_id.is_none());
+    assert!(goal_run.active_task_id.is_none());
+    assert_eq!(goal_run.current_step_index, 0);
+    assert!(goal_run.current_step_title.is_none());
+    assert!(goal_run.current_step_kind.is_none());
+}
+
+#[test]
+fn rerun_goal_run_from_step_without_steps_requeues_planning_and_clears_outputs() {
+    let mut goal_run = sample_goal_run();
+    goal_run.steps.clear();
+    goal_run.current_step_index = 0;
+    goal_run.current_step_title = None;
+    goal_run.current_step_kind = None;
+    goal_run.reflection_summary = Some("reflection".to_string());
+
+    rerun_goal_run_from_step(&mut goal_run, None).expect("rerun should succeed");
+
+    assert_eq!(goal_run.status, GoalRunStatus::Queued);
+    assert!(goal_run.completed_at.is_none());
+    assert!(goal_run.last_error.is_none());
+    assert!(goal_run.failure_cause.is_none());
+    assert!(goal_run.awaiting_approval_id.is_none());
+    assert!(goal_run.active_task_id.is_none());
+    assert_eq!(goal_run.current_step_index, 0);
+    assert!(goal_run.current_step_title.is_none());
+    assert!(goal_run.current_step_kind.is_none());
+    assert!(goal_run.generated_skill_path.is_none());
+    assert!(goal_run.reflection_summary.is_none());
+}
+
+#[test]
 fn project_goal_run_snapshot_derives_metrics() {
     let goal_run = sample_goal_run();
     let tasks = vec![sample_task("task-b", "goal_test")];

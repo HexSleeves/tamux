@@ -762,35 +762,48 @@ fn footer_segments(
     theme: &ThemeTokens,
 ) -> Vec<FooterSegment> {
     let mut segments = Vec::new();
-    let Some(step) = selected_goal_step(tasks, goal_run_id, state) else {
-        return segments;
-    };
-
-    segments.push(FooterSegment {
-        text: format!("{}.", step.order + 1),
-        style: theme.fg_dim,
-        target: None,
-    });
-    let (confidence, cleaned_title) = split_goal_step_title(&step.title);
-    segments.push(FooterSegment {
-        text: format!(" {}", cleaned_title),
-        style: theme.fg_active,
-        target: None,
-    });
-    if let Some(confidence) = confidence {
+    let run = tasks.goal_run_by_id(goal_run_id);
+    let selected_step = selected_goal_step(tasks, goal_run_id, state);
+    if let Some(step) = selected_step {
         segments.push(FooterSegment {
-            text: format!(" {}", confidence.symbol()),
-            style: confidence.style(theme),
+            text: format!("{}.", step.order + 1),
+            style: theme.fg_dim,
             target: None,
         });
+        let (confidence, cleaned_title) = split_goal_step_title(&step.title);
+        segments.push(FooterSegment {
+            text: format!(" {}", cleaned_title),
+            style: theme.fg_active,
+            target: None,
+        });
+        if let Some(confidence) = confidence {
+            segments.push(FooterSegment {
+                text: format!(" {}", confidence.symbol()),
+                style: confidence.style(theme),
+                target: None,
+            });
+        }
+        segments.push(FooterSegment {
+            text: "  ".to_string(),
+            style: theme.fg_dim,
+            target: None,
+        });
+    } else if run.is_some() {
+        segments.push(FooterSegment {
+            text: "Goal Prompt".to_string(),
+            style: theme.fg_active,
+            target: None,
+        });
+        segments.push(FooterSegment {
+            text: "  ".to_string(),
+            style: theme.fg_dim,
+            target: None,
+        });
+    } else {
+        return segments;
     }
-    segments.push(FooterSegment {
-        text: "  ".to_string(),
-        style: theme.fg_dim,
-        target: None,
-    });
 
-    if let Some(run) = tasks.goal_run_by_id(goal_run_id) {
+    if let Some(run) = run {
         if let Some((label, style)) = goal_toggle_action_label(run, theme) {
             segments.push(FooterSegment {
                 text: format!("[{label}] Ctrl+S"),

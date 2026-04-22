@@ -636,6 +636,13 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                             model.config.context_window_tokens =
                                 model_context_window.unwrap_or(128_000);
                         }
+                        let previous_transport = model.config.api_transport.clone();
+                        model.config.api_transport = model.provider_transport_snapshot(
+                            &model.config.provider,
+                            &model.config.auth_source,
+                            &model.config.model,
+                            &model.config.api_transport,
+                        );
                         model.status_line = format!("Model: {}", model_id);
                         if let Ok(value_json) =
                             serde_json::to_string(&serde_json::Value::String(model_id.clone()))
@@ -652,6 +659,26 @@ pub(super) fn handle_modal_enter(model: &mut TuiModel, kind: modal::ModalKind) {
                                 key_path: format!("/{}/model", model.config.provider),
                                 value_json,
                             });
+                        }
+                        if previous_transport != model.config.api_transport {
+                            let transport_json = serde_json::json!(model.config.api_transport);
+                            if let Ok(value_json) = serde_json::to_string(&transport_json) {
+                                model.send_daemon_command(DaemonCommand::SetConfigItem {
+                                    key_path: "/api_transport".to_string(),
+                                    value_json: value_json.clone(),
+                                });
+                                model.send_daemon_command(DaemonCommand::SetConfigItem {
+                                    key_path: format!(
+                                        "/providers/{}/api_transport",
+                                        model.config.provider
+                                    ),
+                                    value_json: value_json.clone(),
+                                });
+                                model.send_daemon_command(DaemonCommand::SetConfigItem {
+                                    key_path: format!("/{}/api_transport", model.config.provider),
+                                    value_json,
+                                });
+                            }
                         }
                         if selected_model_supports_image_input(model_entry)
                             && !model.config.tool_vision

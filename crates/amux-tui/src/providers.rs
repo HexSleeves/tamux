@@ -434,6 +434,10 @@ pub fn default_transport_for(provider: &str) -> &'static str {
         .unwrap_or("chat_completions")
 }
 
+pub fn fixed_transport_for_model(provider: &str, model: &str) -> Option<&'static str> {
+    amux_shared::providers::fixed_api_transport_for_model(provider, model)
+}
+
 pub fn uses_fixed_anthropic_messages(provider: &str, model: &str) -> bool {
     matches!(
         provider,

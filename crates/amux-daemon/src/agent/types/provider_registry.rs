@@ -483,6 +483,16 @@ pub fn default_api_transport_for_provider(provider_id: &str) -> ApiTransport {
         .unwrap_or(ApiTransport::ChatCompletions)
 }
 
+pub fn fixed_api_transport_for_model(provider_id: &str, model: &str) -> Option<ApiTransport> {
+    match amux_shared::providers::fixed_api_transport_for_model(provider_id, model) {
+        Some("native_assistant") => Some(ApiTransport::NativeAssistant),
+        Some("responses") => Some(ApiTransport::Responses),
+        Some("anthropic_messages") => Some(ApiTransport::AnthropicMessages),
+        Some("chat_completions") => Some(ApiTransport::ChatCompletions),
+        Some(_) | None => None,
+    }
+}
+
 pub fn provider_uses_configurable_base_url(provider_id: &str) -> bool {
     matches!(provider_id, PROVIDER_ID_CUSTOM | PROVIDER_ID_AZURE_OPENAI)
 }

@@ -1396,6 +1396,104 @@ async fn internal_delegate_does_not_register_participant() {
 }
 
 #[tokio::test]
+async fn internal_delegate_rejects_budget_exceeded_thread() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let thread_id = "thread-budget";
+
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        AgentThread {
+            id: thread_id.to_string(),
+            agent_name: Some("Dazhbog".to_string()),
+            title: "Budget exceeded".to_string(),
+            messages: vec![AgentMessage::user("continue", 1)],
+            pinned: false,
+            upstream_thread_id: None,
+            upstream_transport: None,
+            upstream_provider: None,
+            upstream_model: None,
+            upstream_assistant_id: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            created_at: 1,
+            updated_at: 1,
+        },
+    );
+    engine.tasks.lock().await.push_back(AgentTask {
+        id: "task-budget".to_string(),
+        title: "Budget exceeded child".to_string(),
+        description: "Child exhausted its budget".to_string(),
+        status: TaskStatus::BudgetExceeded,
+        priority: TaskPriority::Normal,
+        progress: 100,
+        created_at: 1,
+        started_at: Some(1),
+        completed_at: Some(2),
+        error: Some("execution budget exceeded for this thread".to_string()),
+        result: None,
+        thread_id: Some(thread_id.to_string()),
+        source: "subagent".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: None,
+        goal_run_id: None,
+        goal_run_title: None,
+        goal_step_id: None,
+        goal_step_title: None,
+        parent_task_id: Some("task-parent".to_string()),
+        parent_thread_id: Some("thread-parent".to_string()),
+        runtime: "daemon".to_string(),
+        retry_count: 0,
+        max_retries: 0,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: Some("execution budget exceeded for this thread".to_string()),
+        awaiting_approval_id: None,
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        lane_id: None,
+        last_error: Some("execution budget exceeded for this thread".to_string()),
+        logs: Vec::new(),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        override_provider: None,
+        override_model: None,
+        override_system_prompt: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        sub_agent_def_id: None,
+    });
+
+    let error = engine
+        .send_internal_delegate_message(
+            Some(thread_id),
+            "weles",
+            None,
+            "check the thread and continue the work there",
+        )
+        .await
+        .expect_err("budget exceeded thread should reject internal delegate sends");
+
+    assert!(
+        error
+            .to_string()
+            .contains("locked because task task-budget exhausted its execution budget"),
+        "unexpected error: {error}"
+    );
+}
+
+#[tokio::test]
 async fn upserting_builtin_alias_stores_canonical_agent_name() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;

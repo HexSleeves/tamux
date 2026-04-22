@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Overview · tamux docs</title>
-  <meta name="description" content="Overview of tamux: features, clients, architecture, and why the daemon-first model matters." />
+  <title>tamux · Daemon-first AI Environment</title>
+  <meta name="description" content="tamux is a daemon-first terminal multiplexer with durable agent runtime, goal runners, and governed execution." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -12,12 +12,14 @@
 </head>
 <body data-page="index.html">
   <a class="skip-link" href="#main">Skip to content</a>
+  
   <header class="site-header">
     <div class="container header-inner">
       <a class="brand" href="index.html">
         <img src="assets/tamux-slavic.jpg" alt="tamux" class="brand-logo-img" />
         <span class="brand-text">
           <strong>tamux</strong>
+          <small>daemon-first runtime</small>
         </span>
       </a>
       <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
@@ -27,84 +29,106 @@
   <main id="main" class="container page-shell">
     <aside class="page-sidebar">
       <div class="sidebar-card">
-        <p class="eyebrow">Docs map</p>
-        <ul class="side-links"><li><a href="index.html" data-nav="index.html">Overview</a></li><li><a href="pages/guides.html" data-nav="guides.html">Guides</a></li><li><a href="pages/why-tamux.html" data-nav="why-tamux.html">Why tamux</a></li><li><a href="pages/architecture.html" data-nav="architecture.html">Architecture</a></li><li><a href="pages/mission-control.html" data-nav="mission-control.html">Mission Control</a></li><li><a href="pages/goal-runners.html" data-nav="goal-runners.html">Goal Runners</a></li><li><a href="pages/task-queue-subagents.html" data-nav="task-queue-subagents.html">Tasks & Subagents</a></li><li><a href="pages/multi-agent.html" data-nav="multi-agent.html">Multi-Agent</a></li><li><a href="pages/threads-handoffs.html" data-nav="threads-handoffs.html">Threads & Handoffs</a></li><li><a href="pages/continuity-provenance.html" data-nav="continuity-provenance.html">Continuity</a></li><li><a href="pages/liveness-recovery.html" data-nav="liveness-recovery.html">Liveness</a></li><li><a href="pages/governance.html" data-nav="governance.html">Governance</a></li><li><a href="pages/memory-security.html" data-nav="memory-security.html">Memory & Security</a></li><li><a href="pages/tui.html" data-nav="tui.html">TUI</a></li><li><a href="pages/gateway-mcp.html" data-nav="gateway-mcp.html">Gateway & MCP</a></li><li><a href="pages/semantic-learning.html" data-nav="semantic-learning.html">Semantic & Learning</a></li><li><a href="pages/moats-intelligence.html" data-nav="moats-intelligence.html">Moats & Intelligence</a></li><li><a href="pages/plugins.html" data-nav="plugins.html">Plugins</a></li><li><a href="pages/reference.html" data-nav="reference.html">Reference</a></li></ul>
+        <p class="eyebrow">Navigate</p>
+        <ul class="side-links">
+          <li><a href="index.html" data-nav="index.html">Overview</a></li>
+          <li><a href="pages/guides.html" data-nav="guides.html">Guides</a></li>
+          <li><a href="pages/why-tamux.html" data-nav="why-tamux.html">Why tamux</a></li>
+          <li><a href="pages/architecture.html" data-nav="architecture.html">Architecture</a></li>
+          <li><a href="pages/mission-control.html" data-nav="mission-control.html">Mission Control</a></li>
+          <li><a href="pages/goal-runners.html" data-nav="goal-runners.html">Goal Runners</a></li>
+          <li><a href="pages/task-queue-subagents.html" data-nav="task-queue-subagents.html">Tasks & Subagents</a></li>
+          <li><a href="pages/multi-agent.html" data-nav="multi-agent.html">Multi-Agent</a></li>
+          <li><a href="pages/threads-handoffs.html" data-nav="threads-handoffs.html">Threads & Handoffs</a></li>
+          <li><a href="pages/continuity-provenance.html" data-nav="continuity-provenance.html">Continuity</a></li>
+          <li><a href="pages/liveness-recovery.html" data-nav="liveness-recovery.html">Liveness</a></li>
+          <li><a href="pages/governance.html" data-nav="governance.html">Governance</a></li>
+          <li><a href="pages/memory-security.html" data-nav="memory-security.html">Memory & Security</a></li>
+          <li><a href="pages/tui.html" data-nav="tui.html">TUI</a></li>
+          <li><a href="pages/gateway-mcp.html" data-nav="gateway-mcp.html">Gateway & MCP</a></li>
+          <li><a href="pages/semantic-learning.html" data-nav="semantic-learning.html">Semantic & Learning</a></li>
+          <li><a href="pages/moats-intelligence.html" data-nav="moats-intelligence.html">Moats & Intelligence</a></li>
+          <li><a href="pages/plugins.html" data-nav="plugins.html">Plugins</a></li>
+          <li><a href="pages/reference.html" data-nav="reference.html">Reference</a></li>
+        </ul>
       </div>
       <div class="sidebar-card compact">
         <p class="eyebrow">Static site</p>
-        <p>No build step required. Open locally or publish through GitHub Pages.</p>
+        <p>Open locally or publish through GitHub Pages.</p>
       </div>
     </aside>
 
     <article class="page-content">
       <section class="hero">
-    <h1>Daemon-first AI environment</h1>
-    <div class="hero-actions">
-      <a class="button primary" href="pages/guides.html">Get started</a>
-      <a class="button" href="pages/architecture.html">Architecture</a>
-    </div>
-    <div class="hero-grid">
-      <div class="stat-card"><strong>Daemon-first</strong><span>State lives in the daemon, not the UI.</span></div>
-      <div class="stat-card"><strong>Goal runners</strong><span>Durable autonomy for multi-step work.</span></div>
-      <div class="stat-card"><strong>Governed execution</strong><span>Approvals and provenance built in.</span></div>
-    </div>
-  </section>
+        <p class="eyebrow">Agentic Terminal Runtime</p>
+        <h1>Daemon-first AI environment</h1>
+        <p class="lead">A terminal multiplexer where the daemon owns all state. Sessions, goals, and memory persist beyond any client connection.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="pages/guides.html">Get started</a>
+          <a class="button" href="pages/architecture.html">Architecture</a>
+        </div>
+        <div class="hero-grid">
+          <div class="stat-card"><strong>Daemon-first</strong><span>State lives in the daemon, not the UI.</span></div>
+          <div class="stat-card"><strong>Goal runners</strong><span>Durable autonomy for multi-step work.</span></div>
+          <div class="stat-card"><strong>Governed execution</strong><span>Approvals and provenance built in.</span></div>
+        </div>
+      </section>
 
-  <section>
-    <h2>What it is</h2>
-    <p>tamux is not just a terminal multiplexer with an LLM bolted on. It is a shared execution environment where the daemon owns terminal sessions, agent threads, task queue state, goal-run state, approvals, memory, and telemetry. Electron, the TUI, the CLI, MCP clients, and chat gateways all reconnect to the same durable runtime.</p>
-    <div class="callout info">
-      <strong>Mental model:</strong> think of tamux as an autonomous operating environment with terminal surfaces, not as a disposable prompt window.
-    </div>
-  </section>
+      <section>
+        <h2>What it is</h2>
+        <p>tamux is a shared execution environment where the daemon owns terminal sessions, agent threads, task queue state, goal-run state, approvals, memory, and telemetry. Electron, the TUI, the CLI, MCP clients, and chat gateways all reconnect to the same durable runtime.</p>
+        <div class="callout info">
+          <strong>Mental model:</strong> an autonomous operating environment with terminal surfaces, not a disposable prompt window.
+        </div>
+      </section>
 
-  <section>
-    <h2>Capabilities</h2>
-    <div class="card-grid feature-grid" data-filter-grid>
-      <article class="card" data-tags="daemon architecture persistence">
-        <h3>Daemon as source of truth</h3>
-        <p>The daemon owns sessions, threads, tasks, approvals, goal runs, transcripts, memory, and operational state. Clients are views into that state, not the owners of it.</p>
-      </article>
-      <article class="card" data-tags="goals autonomy planning">
-        <h3>Durable goal runners</h3>
-        <p>Goal runs accept long-running objectives, create plans, dispatch child tasks, survive disconnects, and record reflections, memory updates, and reusable skills.</p>
-      </article>
-      <article class="card" data-tags="terminals pty execution">
-        <h3>PTY and workspace control</h3>
-        <p>tamux manages panes, surfaces, terminals, command history, transcripts, and terminal-native execution while keeping agent actions visible and recoverable.</p>
-      </article>
-      <article class="card" data-tags="memory provenance learning">
-        <h3>Layered memory</h3>
-        <p>Identity, durable facts, operator profile, structured runtime state, recall, skills, and provenance-backed memory are all part of the system’s persistence model.</p>
-      </article>
-      <article class="card" data-tags="security governance approvals critique">
-        <h3>Governed autonomy</h3>
-        <p>Risk is evaluated structurally, approvals are scope-bound and can go stale, and risky actions can be critiqued and constrained before execution.</p>
-      </article>
-      <article class="card" data-tags="plugins extensibility ui">
-        <h3>Runtime plugin system</h3>
-        <p>Plugins can add components, commands, YAML views, assistant tools, and executors, turning tamux into a host for domain-specific vertical workflows.</p>
-      </article>
-      <article class="card" data-tags="multi-client electron tui cli mcp gateway">
-        <h3>Multiple operator surfaces</h3>
-        <p>Use Electron for the broadest desktop surface currently available, the TUI for SSH-friendly control, the CLI for automation, MCP for external agents, and gateways for chat platforms. Surface depth varies, but they reconnect to the same daemon state.</p>
-      </article>
-      <article class="card" data-tags="self-orchestration subagents health">
-        <h3>Self-orchestrating agent runtime</h3>
-        <p>The daemon agent can delegate, checkpoint, detect stuck states, recover, learn from traces, and escalate when work gets blocked or risky.</p>
-      </article>
-    </div>
-  </section>
+      <section>
+        <h2>Capabilities</h2>
+        <div class="card-grid feature-grid">
+          <article class="card">
+            <h3>Daemon as source of truth</h3>
+            <p>The daemon owns sessions, threads, tasks, approvals, goal runs, transcripts, memory, and operational state. Clients are views into that state.</p>
+          </article>
+          <article class="card">
+            <h3>Durable goal runners</h3>
+            <p>Goal runs accept long-running objectives, create plans, dispatch child tasks, survive disconnects, and record reflections and reusable skills.</p>
+          </article>
+          <article class="card">
+            <h3>PTY and workspace control</h3>
+            <p>Manages panes, surfaces, terminals, command history, transcripts, and terminal-native execution while keeping agent actions visible.</p>
+          </article>
+          <article class="card">
+            <h3>Layered memory</h3>
+            <p>Identity, durable facts, operator profile, structured runtime state, recall, skills, and provenance-backed memory.</p>
+          </article>
+          <article class="card">
+            <h3>Governed autonomy</h3>
+            <p>Risk is evaluated structurally. Approvals are scope-bound and can go stale. Risky actions are critiqued before execution.</p>
+          </article>
+          <article class="card">
+            <h3>Runtime plugin system</h3>
+            <p>Plugins add components, commands, YAML views, assistant tools, and executors for domain-specific workflows.</p>
+          </article>
+          <article class="card">
+            <h3>Multiple operator surfaces</h3>
+            <p>Electron for desktop, TUI for SSH, CLI for automation, MCP for external agents, gateways for chat platforms.</p>
+          </article>
+          <article class="card">
+            <h3>Self-orchestrating runtime</h3>
+            <p>The daemon delegates, checkpoints, detects stuck states, recovers, learns from traces, and escalates when blocked.</p>
+          </article>
+        </div>
+      </section>
 
-  <section>
-    <div class="callout info">
-      <strong>Reality check:</strong> the daemon/runtime is the most complete layer today. Public clients already expose meaningful goal, approval, and inspection workflows, but some richer desktop Mission Control-style shells are still evolving on top of the shipped backend.
-    </div>
-  </section>
+      <section>
+        <div class="callout info">
+          <strong>Note:</strong> The daemon/runtime is the most complete layer today. Public clients expose goal, approval, and inspection workflows.
+        </div>
+      </section>
 
-  <section>
-    <h2>Architecture</h2>
-    <pre class="diagram"><code>Operator
+      <section>
+        <h2>Architecture</h2>
+        <pre class="diagram"><code>Operator
 |
 +--&gt; Electron / React UI
 +--&gt; TUI
@@ -121,56 +145,56 @@
          +--&gt; Goal runners
          +--&gt; Approval flow
          +--&gt; Persistence + telemetry</code></pre>
-    <p>This is the fundamental boundary to understand. Once the daemon is running, the rest of the platform becomes interchangeable surfaces over the same long-lived state.</p>
-  </section>
+        <p>The fundamental boundary: once the daemon is running, the rest of the platform becomes interchangeable surfaces over the same long-lived state.</p>
+      </section>
 
-  <section>
-    <h2>Next steps</h2>
-    <div class="doc-grid">
-      <a class="doc-card" href="pages/guides.html">
-        <h3>Operator guides</h3>
-        <p>Installation, first-run flow, daily habits, and scenario-based workflows.</p>
-      </a>
-      <a class="doc-card" href="pages/architecture.html">
-        <h3>Technical deep dive</h3>
-        <p>Daemon ownership, task queue, self-orchestration layers, and component breakdowns.</p>
-      </a>
-      <a class="doc-card" href="pages/goal-runners.html">
-        <h3>Goal runners</h3>
-        <p>How durable autonomy works, when to use it, and how it fits Mission Control.</p>
-      </a>
-      <a class="doc-card" href="pages/memory-security.html">
-        <h3>Memory and security</h3>
-        <p>Layered memory, provenance, critique, approvals, and governance semantics.</p>
-      </a>
-      <a class="doc-card" href="pages/plugins.html">
-        <h3>Plugins</h3>
-        <p>How tamux is extended through runtime-installed or in-tree plugins.</p>
-      </a>
-      <a class="doc-card" href="pages/reference.html">
-        <h3>Reference</h3>
-        <p>Paths, providers, build/run commands, packaging, notifications, and publishing notes.</p>
-      </a>
-    </div>
-  </section>
+      <section>
+        <h2>Next steps</h2>
+        <div class="doc-grid">
+          <a class="doc-card" href="pages/guides.html">
+            <h3>Operator guides</h3>
+            <p>Installation, first-run flow, daily habits, and scenario-based workflows.</p>
+          </a>
+          <a class="doc-card" href="pages/architecture.html">
+            <h3>Technical deep dive</h3>
+            <p>Daemon ownership, task queue, self-orchestration layers, and component breakdowns.</p>
+          </a>
+          <a class="doc-card" href="pages/goal-runners.html">
+            <h3>Goal runners</h3>
+            <p>How durable autonomy works, when to use it, and how it fits Mission Control.</p>
+          </a>
+          <a class="doc-card" href="pages/memory-security.html">
+            <h3>Memory and security</h3>
+            <p>Layered memory, provenance, critique, approvals, and governance semantics.</p>
+          </a>
+          <a class="doc-card" href="pages/plugins.html">
+            <h3>Plugins</h3>
+            <p>How tamux is extended through runtime-installed or in-tree plugins.</p>
+          </a>
+          <a class="doc-card" href="pages/reference.html">
+            <h3>Reference</h3>
+            <p>Paths, providers, build/run commands, packaging, notifications, and publishing.</p>
+          </a>
+        </div>
+      </section>
 
-  <section>
-    <h2>Who it's for</h2>
-    <ul class="check-list">
-      <li>Developers who want long-running AI work to survive closing the UI.</li>
-      <li>Operators who need a visible, governed control plane rather than invisible automation.</li>
-      <li>Teams exploring multi-agent workflows, plugins, background tasks, and domain-specific mission layers.</li>
-      <li>People who want terminal-native workspaces but do not want to give up modern orchestration and memory.</li>
-    </ul>
-  </section>
+      <section>
+        <h2>Who it's for</h2>
+        <ul class="check-list">
+          <li>Developers who want long-running AI work to survive closing the UI.</li>
+          <li>Operators who need a visible, governed control plane rather than invisible automation.</li>
+          <li>Teams exploring multi-agent workflows, plugins, background tasks, and domain-specific mission layers.</li>
+          <li>People who want terminal-native workspaces but do not want to give up modern orchestration and memory.</li>
+        </ul>
+      </section>
 
-  <section>
-    <h2>Hosting</h2>
-    <p>This docs site is plain HTML, CSS, and JavaScript. There is no mandatory docs generator and no build step. You can open <code>index.html</code> locally, serve the folder with a static HTTP server, or publish it through GitHub Pages.</p>
-    <div class="callout success">
-      <strong>Recommended path:</strong> keep the site in <code>github-docs/</code> during authoring, then publish that folder through a Pages branch or copy it into a Pages-served directory such as <code>/docs</code> when you are ready to ship.
-    </div>
-  </section>
+      <section>
+        <h2>Hosting</h2>
+        <p>This docs site is plain HTML, CSS, and JavaScript. No mandatory docs generator. No build step. Open <code>index.html</code> locally, serve the folder with a static HTTP server, or publish through GitHub Pages.</p>
+        <div class="callout success">
+          <strong>Recommended:</strong> keep the site in <code>github-docs/</code> during authoring, then publish through Pages.
+        </div>
+      </section>
     </article>
   </main>
 

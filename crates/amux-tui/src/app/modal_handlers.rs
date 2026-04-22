@@ -329,6 +329,12 @@ impl TuiModel {
                                         self.config.context_window_tokens =
                                             resolved_context_window.unwrap_or(128_000);
                                     }
+                                    self.config.api_transport = self.provider_transport_snapshot(
+                                        &self.config.provider,
+                                        &self.config.auth_source,
+                                        &self.config.model,
+                                        &self.config.api_transport,
+                                    );
                                 }
                             }
                             "gateway_prefix" => self.config.gateway_prefix = value,
@@ -1461,6 +1467,11 @@ impl TuiModel {
                     return true;
                 }
             }
+            KeyCode::Backspace if kind == modal::ModalKind::CommandPalette => {
+                let mut query = self.modal.command_query().to_string();
+                query.pop();
+                self.modal.reduce(modal::ModalAction::SetQuery(query));
+            }
             KeyCode::Backspace if is_searchable => {
                 self.input.reduce(input::InputAction::Backspace);
                 self.modal.reduce(modal::ModalAction::SetQuery(
@@ -1476,14 +1487,20 @@ impl TuiModel {
                 if is_searchable
                     && !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
-                self.input.reduce(input::InputAction::InsertChar(c));
-                self.modal.reduce(modal::ModalAction::SetQuery(
-                    self.input.buffer().to_string(),
-                ));
-                if kind == modal::ModalKind::ThreadPicker {
-                    self.sync_thread_picker_item_count();
-                } else if kind == modal::ModalKind::GoalPicker {
-                    self.sync_goal_picker_item_count();
+                if kind == modal::ModalKind::CommandPalette {
+                    let mut query = self.modal.command_query().to_string();
+                    query.push(c);
+                    self.modal.reduce(modal::ModalAction::SetQuery(query));
+                } else {
+                    self.input.reduce(input::InputAction::InsertChar(c));
+                    self.modal.reduce(modal::ModalAction::SetQuery(
+                        self.input.buffer().to_string(),
+                    ));
+                    if kind == modal::ModalKind::ThreadPicker {
+                        self.sync_thread_picker_item_count();
+                    } else if kind == modal::ModalKind::GoalPicker {
+                        self.sync_goal_picker_item_count();
+                    }
                 }
             }
             _ => {}

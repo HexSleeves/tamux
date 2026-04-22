@@ -32,6 +32,9 @@ fn finalize_resolved_provider(
     {
         resolved.api_transport = ApiTransport::Responses;
     }
+    if let Some(fixed_transport) = fixed_api_transport_for_model(provider_id, &resolved.model) {
+        resolved.api_transport = fixed_transport;
+    }
     resolved
 }
 
@@ -71,6 +74,10 @@ pub(super) fn apply_provider_model_override(
         && provider_config.auth_source == AuthSource::ChatgptSubscription
     {
         provider_config.api_transport = ApiTransport::Responses;
+    }
+    if let Some(fixed_transport) = fixed_api_transport_for_model(provider_id, &provider_config.model)
+    {
+        provider_config.api_transport = fixed_transport;
     }
 }
 
@@ -234,6 +241,9 @@ pub(super) fn resolve_provider_model_switch(
         } else {
             def.default_transport
         };
+        if let Some(fixed_transport) = fixed_api_transport_for_model(provider_id, model) {
+            api_transport = fixed_transport;
+        }
         if let Some(model_def) = def.models.iter().find(|entry| entry.id == model) {
             context_window_tokens = model_def.context_window;
         }
@@ -287,8 +297,8 @@ pub(super) fn resolve_provider_model_switch(
 mod tests {
     use super::*;
     use amux_shared::providers::{
-        PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_AZURE_OPENAI, PROVIDER_ID_GROQ,
-        PROVIDER_ID_OPENAI,
+        PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_AZURE_OPENAI, PROVIDER_ID_GITHUB_COPILOT,
+        PROVIDER_ID_GROQ, PROVIDER_ID_OPENAI,
     };
 
     #[test]
@@ -567,5 +577,46 @@ mod tests {
             "https://my-resource.openai.azure.com/openai/v1"
         );
         assert_eq!(resolved.model, "my-deployment");
+    }
+
+    #[test]
+    fn github_copilot_gemini_31_forces_chat_completions_transport() {
+        let mut config = AgentConfig::default();
+        config.provider = PROVIDER_ID_GITHUB_COPILOT.to_string();
+        config.base_url = "https://api.githubcopilot.com".to_string();
+        config.model = "gemini-3.1-pro-preview".to_string();
+        config.auth_source = AuthSource::GithubCopilot;
+        config.api_transport = ApiTransport::Responses;
+        config.providers.insert(
+            PROVIDER_ID_GITHUB_COPILOT.to_string(),
+            ProviderConfig {
+                base_url: "https://api.githubcopilot.com".to_string(),
+                model: "gemini-3.1-pro-preview".to_string(),
+                api_key: String::new(),
+                assistant_id: String::new(),
+                auth_source: AuthSource::GithubCopilot,
+                api_transport: ApiTransport::Responses,
+                context_window_tokens: 173_000,
+                reasoning_effort: String::new(),
+                response_schema: None,
+                stop_sequences: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                metadata: None,
+                service_tier: None,
+                container: None,
+                inference_geo: None,
+                cache_control: None,
+                max_tokens: None,
+                anthropic_tool_choice: None,
+                output_effort: None,
+            },
+        );
+
+        let resolved = resolve_active_provider_config(&config).expect("copilot provider resolves");
+
+        assert_eq!(resolved.model, "gemini-3.1-pro-preview");
+        assert_eq!(resolved.api_transport, ApiTransport::ChatCompletions);
     }
 }

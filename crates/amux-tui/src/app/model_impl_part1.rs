@@ -37,6 +37,7 @@ impl TuiModel {
             status_line: "Starting...".to_string(),
             default_session_id: None,
             tick_counter: 0,
+            next_spawned_sidebar_task_refresh_tick: 0,
             agent_activity: None,
             thread_agent_activity: std::collections::HashMap::new(),
             bootstrap_pending_activity_threads: std::collections::HashSet::new(),

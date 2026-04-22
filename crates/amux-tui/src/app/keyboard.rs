@@ -4,6 +4,14 @@ use super::*;
 mod enter;
 
 impl TuiModel {
+    fn open_command_palette(&mut self, seed_query: Option<String>) {
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
+        if let Some(query) = seed_query {
+            self.modal.reduce(modal::ModalAction::SetQuery(query));
+        }
+    }
+
     fn matches_shift_char(code: KeyCode, modifiers: KeyModifiers, expected: char) -> bool {
         modifiers.contains(KeyModifiers::SHIFT)
             && matches!(code, KeyCode::Char(ch) if ch.eq_ignore_ascii_case(&expected))
@@ -434,9 +442,9 @@ impl TuiModel {
         }
 
         match code {
-            KeyCode::Char('p') if ctrl && self.focus != FocusArea::Chat => self
-                .modal
-                .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette)),
+            KeyCode::Char('p') if ctrl && self.focus != FocusArea::Chat => {
+                self.open_command_palette(None)
+            }
             KeyCode::Char('t') if ctrl => {
                 self.modal
                     .reduce(modal::ModalAction::Push(modal::ModalKind::ThreadPicker));
@@ -1103,8 +1111,7 @@ impl TuiModel {
                 self.input.reduce(input::InputAction::InsertChar('/'));
                 self.input.set_mode(input::InputMode::Insert);
                 self.focus = FocusArea::Input;
-                self.modal
-                    .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
+                self.open_command_palette(Some("/".to_string()));
             }
             KeyCode::Char('w') if ctrl && self.focus == FocusArea::Input => {
                 self.input.reduce(input::InputAction::DeleteWord);
@@ -1128,8 +1135,7 @@ impl TuiModel {
                         && self.input.buffer() == "/"
                         && self.modal.top() != Some(modal::ModalKind::CommandPalette)
                     {
-                        self.modal
-                            .reduce(modal::ModalAction::Push(modal::ModalKind::CommandPalette));
+                        self.open_command_palette(Some(self.input.buffer().to_string()));
                     }
                     if self.modal.top() == Some(modal::ModalKind::CommandPalette) {
                         self.modal.reduce(modal::ModalAction::SetQuery(

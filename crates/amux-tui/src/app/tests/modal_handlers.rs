@@ -1072,7 +1072,7 @@ fn command_palette_enter_prefers_highlighted_command_over_partial_query() {
             .map(|item| item.command.as_str()),
         Some("new-goal")
     );
-    assert_eq!(model.input.buffer(), "/new");
+    assert_eq!(model.input.buffer(), "/");
     assert_eq!(model.modal.command_display_query(), "/new");
     assert!(model.modal.command_palette_has_explicit_selection());
 
@@ -1096,9 +1096,29 @@ fn command_palette_typing_does_not_preview_first_match_before_navigation() {
         assert!(!quit);
     }
 
-    assert_eq!(model.input.buffer(), "/new-g");
+    assert_eq!(model.input.buffer(), "/");
     assert_eq!(model.modal.command_display_query(), "/new-g");
     assert!(!model.modal.command_palette_has_explicit_selection());
+}
+
+#[test]
+fn goal_composer_command_palette_typing_keeps_goal_draft_intact() {
+    let (mut model, _daemon_rx) = make_model();
+    model.main_pane_view = MainPaneView::GoalComposer;
+    model.focus = FocusArea::Input;
+    model.input.set_text("Ship release");
+    model.goal_mission_control.set_prompt_text("Ship release".to_string());
+
+    let quit = model.handle_key(KeyCode::Char('p'), KeyModifiers::CONTROL);
+    assert!(!quit);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::CommandPalette));
+
+    let quit = model.handle_key(KeyCode::Char('n'), KeyModifiers::NONE);
+    assert!(!quit);
+
+    assert_eq!(model.modal.command_display_query(), "n");
+    assert_eq!(model.input.buffer(), "Ship release");
+    assert_eq!(model.goal_mission_control.prompt_text(), "Ship release");
 }
 
 #[test]
@@ -1113,7 +1133,7 @@ fn command_palette_enter_runs_first_match_without_navigation() {
         assert!(!quit);
     }
 
-    assert_eq!(model.input.buffer(), "/new-g");
+    assert_eq!(model.input.buffer(), "/");
     assert_eq!(model.modal.command_display_query(), "/new-g");
 
     let quit = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
@@ -1144,7 +1164,7 @@ fn command_palette_mouse_selection_executes_selected_command_without_rewriting_q
             .map(|item| item.command.as_str()),
         Some("new-goal")
     );
-    assert_eq!(model.input.buffer(), "/new");
+    assert_eq!(model.input.buffer(), "/");
     assert_eq!(model.modal.command_display_query(), "/new");
     assert!(model.modal.command_palette_has_explicit_selection());
 
@@ -4810,6 +4830,66 @@ fn goal_view_retry_uses_current_step_without_explicit_step_selection() {
             .map(PendingConfirmAction::modal_body)
             .as_deref(),
         Some("Retry step 2 \"Deploy\" in goal \"Goal One\"?")
+    );
+}
+
+#[test]
+fn goal_view_retry_from_prompt_without_steps_opens_confirmation() {
+    let (mut model, _daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(make_goal_run(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Failed,
+        )));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let handled = model.handle_key(KeyCode::Char('r'), KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Retry goal \"Goal One\" from the current prompt?")
+    );
+}
+
+#[test]
+fn goal_view_rerun_from_prompt_without_steps_opens_confirmation() {
+    let (mut model, _daemon_rx) = make_model();
+    model.focus = FocusArea::Chat;
+    model
+        .tasks
+        .reduce(task::TaskAction::GoalRunDetailReceived(make_goal_run(
+            "goal-1",
+            "Goal One",
+            task::GoalRunStatus::Failed,
+        )));
+    model.main_pane_view = MainPaneView::Task(SidebarItemTarget::GoalRun {
+        goal_run_id: "goal-1".to_string(),
+        step_id: None,
+    });
+
+    let handled = model.handle_key(KeyCode::Char('R'), KeyModifiers::SHIFT);
+
+    assert!(!handled);
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::ChatActionConfirm));
+    assert_eq!(
+        model
+            .pending_chat_action_confirm
+            .as_ref()
+            .map(PendingConfirmAction::modal_body)
+            .as_deref(),
+        Some("Rerun goal \"Goal One\" from the current prompt?")
     );
 }
 

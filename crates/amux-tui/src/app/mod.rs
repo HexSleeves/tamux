@@ -33,6 +33,7 @@ use crate::theme::ThemeTokens;
 use crate::widgets;
 
 pub(crate) const TUI_TICK_RATE_MS: u64 = 50;
+const SPAWNED_SIDEBAR_TASK_REFRESH_TICKS: u64 = 20;
 
 /// A file attached to the next outgoing message.
 #[derive(Debug, Clone)]
@@ -127,6 +128,7 @@ enum SettingsPickerTarget {
 enum InputNoticeKind {
     Warning,
     Success,
+    Error,
 }
 
 #[derive(Clone, Debug)]
@@ -179,11 +181,19 @@ enum PendingConfirmAction {
         step_index: usize,
         step_title: String,
     },
+    RetryGoalPrompt {
+        goal_run_id: String,
+        goal_title: String,
+    },
     RerunGoalFromStep {
         goal_run_id: String,
         goal_title: String,
         step_index: usize,
         step_title: String,
+    },
+    RerunGoalPrompt {
+        goal_run_id: String,
+        goal_title: String,
     },
     ReuseModelAsStt {
         model_id: String,
@@ -231,6 +241,9 @@ impl PendingConfirmAction {
                 step_title,
                 goal_title
             ),
+            PendingConfirmAction::RetryGoalPrompt { goal_title, .. } => {
+                format!("Retry goal \"{goal_title}\" from the current prompt?")
+            }
             PendingConfirmAction::RerunGoalFromStep {
                 goal_title,
                 step_index,
@@ -242,6 +255,9 @@ impl PendingConfirmAction {
                 step_title,
                 goal_title
             ),
+            PendingConfirmAction::RerunGoalPrompt { goal_title, .. } => {
+                format!("Rerun goal \"{goal_title}\" from the current prompt?")
+            }
             PendingConfirmAction::ReuseModelAsStt { model_id } => {
                 if model_id == "__mission_control__:next_turn" {
                     "Apply the pending Mission Control roster change on the next turn?".to_string()
@@ -497,6 +513,7 @@ pub struct TuiModel {
     status_line: String,
     default_session_id: Option<String>,
     tick_counter: u64,
+    next_spawned_sidebar_task_refresh_tick: u64,
 
     // Agent activity state (from daemon events, not local buffers)
     agent_activity: Option<String>,

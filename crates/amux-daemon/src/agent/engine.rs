@@ -115,6 +115,8 @@ pub struct AgentEngine {
     pub threads: RwLock<HashMap<String, AgentThread>>,
     pub(super) thread_message_hydration_pending: RwLock<HashSet<String>>,
     pub(super) thread_message_hydration_lock: Mutex<()>,
+    #[cfg(test)]
+    pub(super) thread_message_hydration_test_delay: Mutex<Option<Duration>>,
     pub thread_handoff_states: RwLock<HashMap<String, ThreadHandoffState>>,
     pub thread_participants: RwLock<HashMap<String, Vec<ThreadParticipantState>>>,
     pub thread_participant_suggestions: RwLock<HashMap<String, Vec<ThreadParticipantSuggestion>>>,
@@ -332,6 +334,8 @@ impl AgentEngine {
             threads: RwLock::new(HashMap::new()),
             thread_message_hydration_pending: RwLock::new(HashSet::new()),
             thread_message_hydration_lock: Mutex::new(()),
+            #[cfg(test)]
+            thread_message_hydration_test_delay: Mutex::new(None),
             thread_handoff_states: RwLock::new(HashMap::new()),
             thread_participants: RwLock::new(HashMap::new()),
             thread_participant_suggestions: RwLock::new(HashMap::new()),

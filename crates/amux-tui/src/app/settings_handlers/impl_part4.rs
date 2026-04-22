@@ -44,6 +44,19 @@ impl TuiModel {
                 self.sync_config_to_daemon();
             }
             "api_transport" => {
+                if let Some(fixed_transport) =
+                    providers::fixed_transport_for_model(&self.config.provider, &self.config.model)
+                {
+                    let transport_label = match fixed_transport {
+                        "native_assistant" => "native assistant",
+                        "anthropic_messages" => "anthropic messages",
+                        "responses" => "responses",
+                        _ => "chat completions",
+                    };
+                    self.status_line =
+                        format!("This model uses {transport_label} only.");
+                    return;
+                }
                 if providers::uses_fixed_anthropic_messages(
                     &self.config.provider,
                     &self.config.model,

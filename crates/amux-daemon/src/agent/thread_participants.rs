@@ -1485,6 +1485,27 @@ impl AgentEngine {
                     "internal delegate continuation requires a visible operator thread, not an internal thread"
                 );
             }
+            let budget_exceeded_task = {
+                let tasks = self.tasks.lock().await;
+                tasks
+                    .iter()
+                    .filter(|task| {
+                        task.thread_id.as_deref() == Some(thread_id)
+                            && task.status == TaskStatus::BudgetExceeded
+                    })
+                    .max_by_key(|task| {
+                        task.completed_at
+                            .or(task.started_at)
+                            .unwrap_or(task.created_at)
+                    })
+                    .cloned()
+            };
+            if let Some(task) = budget_exceeded_task {
+                anyhow::bail!(
+                    "thread {thread_id} is locked because task {} exhausted its execution budget",
+                    task.id
+                );
+            }
         }
         let (resolved_target_id, _) = self
             .resolve_thread_participant_target(target_agent_id)

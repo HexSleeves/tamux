@@ -1,4 +1,5 @@
 use super::*;
+use ratatui::style::{Color, Style};
 
 const MIN_HEADER_CONTEXT_TARGET_TOKENS: u32 = 1_024;
 
@@ -1635,6 +1636,11 @@ impl TuiModel {
         }
 
         let footer_activity = self.footer_activity_text();
+        let thread_budget_notice = self.active_thread_budget_exceeded_notice();
+        let footer_notice = thread_budget_notice
+            .as_deref()
+            .map(|notice| (notice, Style::default().fg(Color::Indexed(203))))
+            .or_else(|| self.input_notice_style());
         widgets::footer::render_input(
             frame,
             chunks[4],
@@ -1645,7 +1651,7 @@ impl TuiModel {
             &self.attachments,
             self.tick_counter,
             footer_activity.as_deref(),
-            self.input_notice_style(),
+            footer_notice,
         );
         widgets::footer::render_status_bar(
             frame,

@@ -239,6 +239,11 @@ pub(super) fn prepare_llm_request_with_reused_user_message(
     if uses_chatgpt_subscription_responses {
         selected_transport = ApiTransport::Responses;
     }
+    if let Some(fixed_transport) =
+        fixed_api_transport_for_model(&config.provider, &provider_config.model)
+    {
+        selected_transport = fixed_transport;
+    }
     let messages = &thread.messages;
     let compacted = compact_messages_for_request(messages, config, provider_config);
     let compaction_active =
@@ -1632,6 +1637,11 @@ fn select_compaction_transport(
     } else {
         default_api_transport_for_provider(provider_id)
     };
+
+    if let Some(fixed_transport) = fixed_api_transport_for_model(provider_id, &provider_config.model)
+    {
+        return fixed_transport;
+    }
 
     match selected {
         ApiTransport::NativeAssistant => {

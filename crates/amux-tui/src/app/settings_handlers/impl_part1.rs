@@ -782,6 +782,9 @@ impl TuiModel {
         if provider_id == PROVIDER_ID_OPENAI && auth_source == "chatgpt_subscription" {
             return "responses".to_string();
         }
+        if let Some(fixed_transport) = providers::fixed_transport_for_model(provider_id, model) {
+            return fixed_transport.to_string();
+        }
         if providers::uses_fixed_anthropic_messages(provider_id, model) {
             return "chat_completions".to_string();
         }
@@ -948,6 +951,13 @@ impl TuiModel {
             self.config.api_transport = "responses".to_string();
             self.refresh_openai_auth_status();
         }
+
+        self.config.api_transport = self.normalize_provider_transport_for_state(
+            &self.config.provider,
+            &self.config.auth_source,
+            &self.config.model,
+            &self.config.api_transport,
+        );
 
         self.refresh_provider_models_for_current_auth();
         if providers::known_models_for_provider_auth(

@@ -221,6 +221,12 @@ fn select_memory_flush_transport(
         default_api_transport_for_provider(&config.provider)
     };
 
+    if let Some(fixed_transport) =
+        fixed_api_transport_for_model(&config.provider, &provider_config.model)
+    {
+        return fixed_transport;
+    }
+
     match selected {
         ApiTransport::NativeAssistant => {
             if provider_supports_transport(&config.provider, ApiTransport::Responses) {

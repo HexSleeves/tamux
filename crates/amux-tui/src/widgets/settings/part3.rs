@@ -39,9 +39,17 @@ fn render_provider_tab<'a>(
         "github_copilot" => "GitHub browser login".to_string(),
         _ => "API key".to_string(),
     };
+    let fixed_transport = providers::fixed_transport_for_model(&config.provider, &config.model);
     let uses_fixed_anthropic_messages =
         providers::uses_fixed_anthropic_messages(&config.provider, &config.model);
-    let transport_val = if uses_fixed_anthropic_messages {
+    let transport_val = if let Some(fixed_transport) = fixed_transport {
+        match fixed_transport {
+            "native_assistant" => "native assistant".to_string(),
+            "anthropic_messages" => "anthropic messages".to_string(),
+            "responses" => "responses".to_string(),
+            _ => "chat completions".to_string(),
+        }
+    } else if uses_fixed_anthropic_messages {
         "anthropic messages".to_string()
     } else if config.api_transport().is_empty() {
         providers::default_transport_for(&config.provider).to_string()
@@ -76,7 +84,7 @@ use amux_shared::providers::PROVIDER_ID_CUSTOM;
     } else {
         ""
     };
-    let transport_hint = if uses_fixed_anthropic_messages {
+    let transport_hint = if fixed_transport.is_some() || uses_fixed_anthropic_messages {
         ""
     } else if providers::supported_transports_for(&config.provider).len() <= 1 {
         match providers::supported_transports_for(&config.provider)

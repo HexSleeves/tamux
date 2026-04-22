@@ -273,9 +273,23 @@ pub(super) fn reset_goal_run_step(step: &mut GoalRunStep) {
     step.completed_at = None;
 }
 
+fn reset_goal_run_for_replanning(goal_run: &mut GoalRun) {
+    goal_run.current_step_index = 0;
+    goal_run.completed_at = None;
+    goal_run.status = GoalRunStatus::Queued;
+    goal_run.last_error = None;
+    goal_run.failure_cause = None;
+    goal_run.current_step_title = None;
+    goal_run.current_step_kind = None;
+    goal_run.current_step_owner_profile = None;
+    goal_run.awaiting_approval_id = None;
+    goal_run.active_task_id = None;
+}
+
 pub(super) fn retry_goal_run_step(goal_run: &mut GoalRun, step_index: Option<usize>) -> Result<()> {
     if goal_run.steps.is_empty() {
-        anyhow::bail!("goal run has no steps to retry");
+        reset_goal_run_for_replanning(goal_run);
+        return Ok(());
     }
 
     let target_index = resolve_goal_run_control_step(goal_run, step_index);
@@ -307,7 +321,10 @@ pub(super) fn rerun_goal_run_from_step(
     step_index: Option<usize>,
 ) -> Result<()> {
     if goal_run.steps.is_empty() {
-        anyhow::bail!("goal run has no steps to rerun");
+        reset_goal_run_for_replanning(goal_run);
+        goal_run.reflection_summary = None;
+        goal_run.generated_skill_path = None;
+        return Ok(());
     }
 
     let target_index = resolve_goal_run_control_step(goal_run, step_index);

@@ -167,6 +167,8 @@ impl AgentEngine {
             Err(error) => tracing::warn!("failed to read agent config items from sqlite: {error}"),
         }
 
+        let mut most_recent_thread_context_hint: Option<(String, String, u64)> = None;
+
         // Load threads
         match self.history.list_threads().await {
             Ok(thread_rows) if !thread_rows.is_empty() => {
@@ -224,6 +226,18 @@ impl AgentEngine {
                     let total_tokens = thread_row.total_tokens.max(0) as u64;
                     if thread_row.message_count > 0 {
                         thread_message_hydration_pending.insert(thread_id.clone());
+                        let preview = thread_row.last_preview.trim();
+                        if !preview.is_empty()
+                            && most_recent_thread_context_hint.as_ref().is_none_or(
+                                |(_, _, updated_at)| thread_row.updated_at as u64 > *updated_at,
+                            )
+                        {
+                            most_recent_thread_context_hint = Some((
+                                thread_id.clone(),
+                                preview.to_string(),
+                                thread_row.updated_at as u64,
+                            ));
+                        }
                     }
 
                     threads.insert(
@@ -287,16 +301,6 @@ impl AgentEngine {
                 *self.thread_memory_injection_state_map().write().await =
                     thread_memory_injection_states;
                 *self.thread_structural_memories.write().await = thread_structural_memories;
-                let hydrated_thread_ids = self
-                    .thread_message_hydration_pending
-                    .read()
-                    .await
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>();
-                for thread_id in hydrated_thread_ids {
-                    self.ensure_thread_messages_loaded(&thread_id).await;
-                }
                 let trimmed_playground_threads = self
                     .trim_persisted_participant_playground_threads_on_hydrate()
                     .await;
@@ -681,103 +685,74 @@ impl AgentEngine {
         }
 
         // D-10: Restore context for the most recent active thread.
+        if let Some((ref thread_id, ref last_topic, _updated_at)) = most_recent_thread_context_hint
         {
-            let threads = self.threads.read().await;
-            let most_recent = threads
-                .values()
-                .filter(|t| !t.messages.is_empty())
-                .max_by_key(|t| t.messages.last().map(|m| m.timestamp).unwrap_or(0));
+            // Try FTS5 archive restoration
+            match self
+                .history
+                .list_context_archive_entries(&thread_id, 20)
+                .await
+            {
+                Ok(rows) if !rows.is_empty() => {
+                    let entries: Vec<super::context::archive::ArchiveEntry> = rows
+                        .into_iter()
+                        .map(|row| super::context::archive::ArchiveEntry {
+                            id: row.id,
+                            thread_id: row.thread_id,
+                            original_role: row.original_role,
+                            compressed_content: row.compressed_content,
+                            summary: row.summary,
+                            relevance_score: row.relevance_score,
+                            token_count_original: row.token_count_original as u32,
+                            token_count_compressed: row.token_count_compressed as u32,
+                            metadata: row
+                                .metadata_json
+                                .and_then(|j| serde_json::from_str(&j).ok()),
+                            archived_at: row.archived_at as u64,
+                            last_accessed_at: row.last_accessed_at.map(|v| v as u64),
+                        })
+                        .collect();
 
-            if let Some(thread) = most_recent {
-                let thread_id = thread.id.clone();
-                let last_topic = thread
-                    .messages
-                    .iter()
-                    .rev()
-                    .find(|m| matches!(m.role, MessageRole::User))
-                    .map(|m| {
-                        let content: String = m.content.chars().take(100).collect();
-                        if m.content.len() > 100 {
-                            format!("{}...", content)
-                        } else {
-                            content
-                        }
-                    })
-                    .unwrap_or_else(|| "previous session".to_string());
-                drop(threads);
-
-                // Try FTS5 archive restoration
-                match self
-                    .history
-                    .list_context_archive_entries(&thread_id, 20)
-                    .await
-                {
-                    Ok(rows) if !rows.is_empty() => {
-                        let entries: Vec<super::context::archive::ArchiveEntry> = rows
-                            .into_iter()
-                            .map(|row| super::context::archive::ArchiveEntry {
-                                id: row.id,
-                                thread_id: row.thread_id,
-                                original_role: row.original_role,
-                                compressed_content: row.compressed_content,
-                                summary: row.summary,
-                                relevance_score: row.relevance_score,
-                                token_count_original: row.token_count_original as u32,
-                                token_count_compressed: row.token_count_compressed as u32,
-                                metadata: row
-                                    .metadata_json
-                                    .and_then(|j| serde_json::from_str(&j).ok()),
-                                archived_at: row.archived_at as u64,
-                                last_accessed_at: row.last_accessed_at.map(|v| v as u64),
-                            })
-                            .collect();
-
-                        let request = super::context::restoration::RestorationRequest {
-                            thread_id: thread_id.clone(),
-                            query: Some(last_topic.clone()),
-                            max_items: 10,
-                            max_tokens: 2000,
-                        };
-                        let restored =
-                            super::context::restoration::rank_and_select(&entries, &request);
-                        if !restored.is_empty() {
-                            tracing::info!(
-                                thread_id = %thread_id,
-                                items = restored.len(),
-                                "restored context for most recent thread (D-10)"
-                            );
-
-                            // Store a continuity flag -- the next agent message in this thread
-                            // should acknowledge the context restoration.
-                            self.history
-                                .set_consolidation_state(
-                                    "continuity_thread_id",
-                                    &thread_id,
-                                    now_millis(),
-                                )
-                                .await
-                                .ok();
-                            self.history
-                                .set_consolidation_state(
-                                    "continuity_topic",
-                                    &last_topic,
-                                    now_millis(),
-                                )
-                                .await
-                                .ok();
-                        }
-                    }
-                    Ok(_) => {
-                        tracing::debug!(
-                            "no archive entries for most recent thread, skipping context restoration"
+                    let request = super::context::restoration::RestorationRequest {
+                        thread_id: thread_id.clone(),
+                        query: Some(last_topic.clone()),
+                        max_items: 10,
+                        max_tokens: 2000,
+                    };
+                    let restored = super::context::restoration::rank_and_select(&entries, &request);
+                    if !restored.is_empty() {
+                        tracing::info!(
+                            thread_id = %thread_id,
+                            items = restored.len(),
+                            "restored context for most recent thread (D-10)"
                         );
+
+                        // Store a continuity flag -- the next agent message in this thread
+                        // should acknowledge the context restoration.
+                        self.history
+                            .set_consolidation_state(
+                                "continuity_thread_id",
+                                &thread_id,
+                                now_millis(),
+                            )
+                            .await
+                            .ok();
+                        self.history
+                            .set_consolidation_state("continuity_topic", &last_topic, now_millis())
+                            .await
+                            .ok();
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "failed to list archive entries for context restoration"
-                        );
-                    }
+                }
+                Ok(_) => {
+                    tracing::debug!(
+                        "no archive entries for most recent thread, skipping context restoration"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "failed to list archive entries for context restoration"
+                    );
                 }
             }
         }

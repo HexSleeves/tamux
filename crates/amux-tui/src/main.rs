@@ -494,6 +494,13 @@ fn start_daemon_bridge(
                                     client.refresh_services(),
                                 );
                             }
+                            DaemonCommand::ListTasks => {
+                                forward_bridge_command_result(
+                                    &daemon_event_tx,
+                                    "list tasks",
+                                    client.list_tasks(),
+                                );
+                            }
                             DaemonCommand::RequestThread {
                                 thread_id,
                                 message_limit,
