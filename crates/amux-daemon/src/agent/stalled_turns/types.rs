@@ -6,6 +6,8 @@ pub(crate) enum StalledTurnClass {
     PromiseWithoutAction,
     PostToolResultNoFollowThrough,
     ActiveStreamIdle,
+    ToolCallLoop,
+    NoProgress,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

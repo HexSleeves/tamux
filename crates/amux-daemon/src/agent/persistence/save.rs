@@ -66,6 +66,12 @@ async fn persist_weles_runtime_context(engine: &AgentEngine, task: &AgentTask) {
 impl AgentEngine {
     async fn persist_thread_snapshot(&self, thread: &AgentThread) {
         let client_surface = self.get_thread_client_surface(&thread.id).await;
+        let execution_profile = self
+            .thread_execution_profiles
+            .read()
+            .await
+            .get(&thread.id)
+            .cloned();
         let handoff_state = self.thread_handoff_state(&thread.id).await;
         let thread_participants = self
             .thread_participants
@@ -106,6 +112,7 @@ impl AgentEngine {
             metadata_json: build_thread_metadata_json(
                 thread,
                 client_surface,
+                execution_profile.as_ref(),
                 handoff_state.as_ref(),
                 &thread_participants,
                 &thread_participant_suggestions,

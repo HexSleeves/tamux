@@ -580,6 +580,11 @@ fn effective_multimodal_transport(
     provider_id: &str,
     provider_config: &crate::agent::types::ProviderConfig,
 ) -> ApiTransport {
+    if let Some(fixed_transport) =
+        crate::agent::types::fixed_api_transport_for_model(provider_id, &provider_config.model)
+    {
+        return fixed_transport;
+    }
     let mut transport = if crate::agent::types::provider_supports_transport(
         provider_id,
         provider_config.api_transport,

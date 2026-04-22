@@ -84,6 +84,8 @@ impl StalledTurnClass {
             Self::PromiseWithoutAction => "promise_without_action",
             Self::PostToolResultNoFollowThrough => "post_tool_result_no_follow_through",
             Self::ActiveStreamIdle => "active_stream_idle",
+            Self::ToolCallLoop => "tool_call_loop",
+            Self::NoProgress => "no_progress",
         }
     }
 }
@@ -91,6 +93,16 @@ impl StalledTurnClass {
 impl AgentEngine {
     pub(in crate::agent) async fn supervise_stalled_turns(&self) -> Result<()> {
         let observations = self.collect_stalled_turn_observations().await;
+        if !observations.is_empty() {
+            tracing::info!(
+                observation_count = observations.len(),
+                thread_ids = ?observations
+                    .iter()
+                    .map(|observation| observation.thread_id.as_str())
+                    .collect::<Vec<_>>(),
+                "stalled-turn supervision found candidate threads"
+            );
+        }
         let observed_ids = observations
             .iter()
             .map(|observation| observation.thread_id.clone())
@@ -116,6 +128,12 @@ impl AgentEngine {
         else {
             anyhow::bail!("background safety worker returned unexpected response");
         };
+        if !decisions.is_empty() {
+            tracing::info!(
+                decision_count = decisions.len(),
+                "stalled-turn supervision produced recovery decisions"
+            );
+        }
 
         self.apply_safety_worker_decisions(decisions, observed_ids, now)
             .await?;

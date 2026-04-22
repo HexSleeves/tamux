@@ -1758,6 +1758,145 @@ async fn spawn_subagent_does_not_require_todo_bootstrap_for_chat_threads() {
 }
 
 #[tokio::test]
+async fn spawn_subagent_reserves_thread_id_immediately() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+    let thread_id = "thread-parent";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            crate::agent::types::AgentThread {
+                id: thread_id.to_string(),
+                agent_name: None,
+                title: "Parent".to_string(),
+                messages: vec![crate::agent::types::AgentMessage::user(
+                    "Delegate this to a child agent.",
+                    1,
+                )],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        );
+    }
+
+    let result = super::execute_spawn_subagent(
+        &serde_json::json!({
+            "title": "Reserved child thread",
+            "description": "Reserve the child thread immediately."
+        }),
+        &engine,
+        thread_id,
+        None,
+        &manager,
+        None,
+        &event_tx,
+    )
+    .await
+    .expect("spawn_subagent should succeed");
+
+    let tasks = engine.list_tasks().await;
+    assert_eq!(tasks.len(), 1);
+    let reserved_thread_id = tasks[0]
+        .thread_id
+        .clone()
+        .expect("spawn_subagent should reserve a thread id immediately");
+    assert!(
+        reserved_thread_id.starts_with("thread_"),
+        "reserved thread id should use the standard thread prefix"
+    );
+    assert!(
+        result.contains(&reserved_thread_id),
+        "spawn_subagent result should surface the reserved thread id"
+    );
+}
+
+#[tokio::test]
+async fn spawn_subagent_seeds_reserved_thread_with_spawned_persona_identity() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let result = super::execute_spawn_subagent(
+        &serde_json::json!({
+            "title": "Persona seeded thread",
+            "description": "Reserve a child thread with the spawned persona identity."
+        }),
+        &engine,
+        "thread-parent",
+        None,
+        &manager,
+        None,
+        &event_tx,
+    )
+    .await
+    .expect("spawn_subagent should succeed");
+
+    let task = engine
+        .list_tasks()
+        .await
+        .into_iter()
+        .find(|task| result.contains(&task.id))
+        .expect("spawned subagent should exist");
+    let reserved_thread_id = task
+        .thread_id
+        .clone()
+        .expect("spawned subagent should reserve a thread id");
+    let persona_prompt = task
+        .override_system_prompt
+        .as_deref()
+        .expect("spawned subagent should carry a persona prompt");
+    let persona_name = persona_prompt
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("Agent persona:")
+                .map(str::trim)
+                .map(str::to_string)
+        })
+        .expect("persona prompt should expose the persona name");
+    let persona_id = persona_prompt
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("Agent persona id:")
+                .map(str::trim)
+                .map(str::to_string)
+        })
+        .expect("persona prompt should expose the persona id");
+
+    let thread = engine
+        .get_thread(&reserved_thread_id)
+        .await
+        .expect("reserved child thread should be created immediately");
+    assert_eq!(thread.agent_name.as_deref(), Some(persona_name.as_str()));
+
+    let handoff_state = engine
+        .thread_handoff_state(&reserved_thread_id)
+        .await
+        .expect("reserved child thread should seed handoff state");
+    assert_eq!(handoff_state.active_agent_id, persona_id);
+    assert_eq!(handoff_state.responder_stack.len(), 1);
+    assert_eq!(
+        handoff_state.responder_stack[0].agent_name,
+        persona_name,
+        "reserved child thread should keep the seeded responder name"
+    );
+}
+
+#[tokio::test]
 async fn read_peer_memory_honors_explicit_parent_task_id_without_current_task() {
     let root = tempdir().expect("tempdir should succeed");
     let manager = SessionManager::new_test(root.path()).await;
@@ -2926,6 +3065,205 @@ async fn spawn_subagent_persists_explicit_provider_and_model_override() {
 }
 
 #[tokio::test]
+async fn spawn_subagent_derives_budget_from_effective_subagent_provider_window() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.provider = amux_shared::providers::PROVIDER_ID_OPENAI.to_string();
+    config.model = "gpt-5.4".to_string();
+    config.api_key = "test-key".to_string();
+    config.context_window_tokens = 1_000_000;
+    config.providers.insert(
+        amux_shared::providers::PROVIDER_ID_GROQ.to_string(),
+        crate::agent::types::ProviderConfig {
+            base_url: String::new(),
+            model: "llama-3.3-70b-versatile".to_string(),
+            api_key: "groq-key".to_string(),
+            assistant_id: String::new(),
+            auth_source: crate::agent::types::AuthSource::ApiKey,
+            api_transport: crate::agent::types::ApiTransport::default(),
+            reasoning_effort: "medium".to_string(),
+            context_window_tokens: 205_000,
+            response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
+        },
+    );
+    config.sub_agents.push(crate::agent::SubAgentDefinition {
+        id: "reviewer".to_string(),
+        name: "Reviewer".to_string(),
+        provider: amux_shared::providers::PROVIDER_ID_GROQ.to_string(),
+        model: "llama-3.3-70b-versatile".to_string(),
+        role: Some("Reviewer".to_string()),
+        system_prompt: Some("Review code carefully.".to_string()),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        enabled: true,
+        builtin: false,
+        immutable_identity: false,
+        disable_allowed: true,
+        delete_allowed: true,
+        protected_reason: None,
+        reasoning_effort: Some("medium".to_string()),
+        created_at: 0,
+    });
+    let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let result = super::execute_spawn_subagent(
+        &serde_json::json!({
+            "title": "Reviewer",
+            "description": "Review the diff and report problems."
+        }),
+        &engine,
+        "thread-parent",
+        None,
+        &manager,
+        None,
+        &event_tx,
+    )
+    .await
+    .expect("spawn_subagent should succeed");
+
+    let task = engine
+        .list_tasks()
+        .await
+        .into_iter()
+        .find(|task| result.contains(&task.id))
+        .expect("spawned subagent should exist");
+    assert_eq!(
+        task.context_budget_tokens,
+        Some(128_000),
+        "derived context budget should use the effective subagent provider/model window, not the parent config"
+    );
+}
+
+#[tokio::test]
+async fn spawn_subagent_reserved_thread_detail_includes_execution_profile_metadata() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.providers.insert(
+        amux_shared::providers::PROVIDER_ID_GROQ.to_string(),
+        crate::agent::types::ProviderConfig {
+            base_url: String::new(),
+            model: "llama-3.3-70b-versatile".to_string(),
+            api_key: "groq-key".to_string(),
+            assistant_id: String::new(),
+            auth_source: crate::agent::types::AuthSource::ApiKey,
+            api_transport: crate::agent::types::ApiTransport::default(),
+            reasoning_effort: "high".to_string(),
+            context_window_tokens: 205_000,
+            response_schema: None,
+            stop_sequences: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            service_tier: None,
+            container: None,
+            inference_geo: None,
+            cache_control: None,
+            max_tokens: None,
+            anthropic_tool_choice: None,
+            output_effort: None,
+        },
+    );
+    config.sub_agents.push(crate::agent::SubAgentDefinition {
+        id: "dazhbog".to_string(),
+        name: "Dazhbog".to_string(),
+        provider: amux_shared::providers::PROVIDER_ID_GROQ.to_string(),
+        model: "llama-3.3-70b-versatile".to_string(),
+        role: Some("Designer".to_string()),
+        system_prompt: Some("Refactor the design only.".to_string()),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        context_budget_tokens: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        enabled: true,
+        builtin: false,
+        immutable_identity: false,
+        disable_allowed: true,
+        delete_allowed: true,
+        protected_reason: None,
+        reasoning_effort: Some("high".to_string()),
+        created_at: 0,
+    });
+    let engine = AgentEngine::new_test(manager.clone(), config, root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let result = super::execute_spawn_subagent(
+        &serde_json::json!({
+            "title": "Dazhbog",
+            "description": "Refactor docs design without semantic changes."
+        }),
+        &engine,
+        "thread-parent",
+        None,
+        &manager,
+        None,
+        &event_tx,
+    )
+    .await
+    .expect("spawn_subagent should succeed");
+
+    let task = engine
+        .list_tasks()
+        .await
+        .into_iter()
+        .find(|task| result.contains(&task.id))
+        .expect("spawned subagent should exist");
+    let reserved_thread_id = task
+        .thread_id
+        .clone()
+        .expect("spawned subagent should reserve a thread id");
+
+    let detail_json = engine
+        .agent_thread_detail_json(&reserved_thread_id, None, None)
+        .await;
+    let detail: serde_json::Value =
+        serde_json::from_str(&detail_json).expect("thread detail json should parse");
+
+    assert_eq!(detail.get("agent_name").and_then(|value| value.as_str()), Some("Dazhbog"));
+    assert_eq!(
+        detail
+            .get("profile_provider")
+            .and_then(|value| value.as_str()),
+        Some(amux_shared::providers::PROVIDER_ID_GROQ)
+    );
+    assert_eq!(
+        detail.get("profile_model").and_then(|value| value.as_str()),
+        Some("llama-3.3-70b-versatile")
+    );
+    assert_eq!(
+        detail
+            .get("profile_reasoning_effort")
+            .and_then(|value| value.as_str()),
+        Some("high")
+    );
+    assert_eq!(
+        detail
+            .get("profile_context_window_tokens")
+            .and_then(|value| value.as_u64()),
+        Some(128_000)
+    );
+}
+
+#[tokio::test]
 async fn spawn_subagent_bootstraps_todos_for_goal_run_tasks() {
     let root = tempdir().expect("tempdir should succeed");
     let manager = SessionManager::new_test(root.path()).await;
@@ -3664,6 +4002,102 @@ async fn list_subagents_parent_task_tree_excludes_unrelated_same_thread_subagent
     assert!(
         !returned_ids.contains(unrelated.id.as_str()),
         "parent task tree should not include unrelated same-thread subagents"
+    );
+}
+
+#[tokio::test]
+async fn list_subagents_from_child_task_uses_parent_scope_by_default() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+
+    let parent = engine
+        .enqueue_task(
+            "Parent coordinator".to_string(),
+            "Coordinate the child work".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "user",
+            None,
+            None,
+            Some("thread-parent".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+
+    let mut child_a = engine
+        .enqueue_task(
+            "Child A".to_string(),
+            "Inspect deployment risks".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "subagent",
+            None,
+            Some(parent.id.clone()),
+            Some("thread-parent".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+
+    let mut child_b = engine
+        .enqueue_task(
+            "Child B".to_string(),
+            "Inspect auth risks".to_string(),
+            "normal",
+            None,
+            None,
+            Vec::new(),
+            None,
+            "subagent",
+            None,
+            Some(parent.id.clone()),
+            Some("thread-parent".to_string()),
+            Some("daemon".to_string()),
+        )
+        .await;
+    child_a.status = crate::agent::types::TaskStatus::InProgress;
+    child_b.status = crate::agent::types::TaskStatus::InProgress;
+    {
+        let mut tasks = engine.tasks.lock().await;
+        if let Some(existing) = tasks.iter_mut().find(|task| task.id == child_a.id) {
+            *existing = child_a.clone();
+        }
+        if let Some(existing) = tasks.iter_mut().find(|task| task.id == child_b.id) {
+            *existing = child_b.clone();
+        }
+    }
+
+    let result = super::execute_list_subagents(
+        &serde_json::json!({ "status": "in_progress" }),
+        &engine,
+        "thread-parent",
+        Some(child_a.id.as_str()),
+    )
+    .await
+    .expect("list_subagents should succeed");
+
+    let payload: serde_json::Value = serde_json::from_str(&result).expect("valid JSON payload");
+    let items = payload
+        .as_array()
+        .expect("list_subagents should return an array");
+    let returned_ids = items
+        .iter()
+        .filter_map(|item| item.get("id").and_then(|value| value.as_str()))
+        .collect::<std::collections::HashSet<_>>();
+
+    assert!(
+        returned_ids.contains(child_a.id.as_str()),
+        "child scope should include the current subagent via its parent tree"
+    );
+    assert!(
+        returned_ids.contains(child_b.id.as_str()),
+        "child scope should include sibling subagents under the same parent task"
     );
 }
 

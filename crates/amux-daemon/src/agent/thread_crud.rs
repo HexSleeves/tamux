@@ -66,6 +66,63 @@ fn thread_detail_frame_fits_ipc(thread: &Option<AgentThread>) -> bool {
 }
 
 impl AgentEngine {
+    pub(super) async fn append_system_thread_message(
+        &self,
+        thread_id: &str,
+        content: impl Into<String>,
+    ) -> bool {
+        let content = content.into();
+        let appended = {
+            let mut threads = self.threads.write().await;
+            let Some(thread) = threads.get_mut(thread_id) else {
+                return false;
+            };
+            thread.messages.push(AgentMessage {
+                id: generate_message_id(),
+                role: MessageRole::System,
+                content,
+                content_blocks: Vec::new(),
+                tool_calls: None,
+                tool_call_id: None,
+                tool_name: None,
+                tool_arguments: None,
+                tool_status: None,
+                weles_review: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                cost: None,
+                provider: None,
+                model: None,
+                api_transport: None,
+                response_id: None,
+                upstream_message: None,
+                provider_final_result: None,
+                author_agent_id: None,
+                author_agent_name: None,
+                reasoning: None,
+                message_kind: crate::agent::types::AgentMessageKind::Normal,
+                compaction_strategy: None,
+                compaction_payload: None,
+                offloaded_payload_id: None,
+                tool_output_preview_path: None,
+                structural_refs: Vec::new(),
+                pinned_for_compaction: false,
+                timestamp: now_millis(),
+            });
+            thread.updated_at = now_millis();
+            true
+        };
+
+        if appended {
+            self.persist_thread_by_id(thread_id).await;
+            let _ = self.event_tx.send(AgentEvent::ThreadReloadRequired {
+                thread_id: thread_id.to_string(),
+            });
+        }
+
+        appended
+    }
+
     pub(crate) async fn pin_thread_message_for_compaction(
         &self,
         thread_id: &str,

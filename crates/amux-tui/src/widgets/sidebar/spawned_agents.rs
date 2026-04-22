@@ -11,10 +11,25 @@ use super::{SidebarHitTarget, SidebarRow};
 struct SpawnedSidebarItem {
     depth: usize,
     title: String,
-    thread_id: Option<String>,
+    target_thread_id: Option<String>,
     is_active: bool,
     openable: bool,
     live: bool,
+}
+
+fn branch_target_thread_id(
+    node: &SpawnedAgentTreeNode<AgentTask>,
+    active_thread_id: &str,
+) -> Option<String> {
+    if node.item.thread_id.as_deref() != Some(active_thread_id) {
+        if let Some(thread_id) = node.item.thread_id.clone() {
+            return Some(thread_id);
+        }
+    }
+
+    node.children
+        .iter()
+        .find_map(|child| branch_target_thread_id(child, active_thread_id))
 }
 
 fn push_node_rows(
@@ -26,7 +41,7 @@ fn push_node_rows(
     rows.push(SpawnedSidebarItem {
         depth,
         title: node.item.title.clone(),
-        thread_id: node.item.thread_id.clone(),
+        target_thread_id: branch_target_thread_id(node, active_thread_id),
         is_active: node.item.thread_id.as_deref() == Some(active_thread_id),
         openable: node.openable && node.item.thread_id.as_deref() != Some(active_thread_id),
         live: node.live,
@@ -79,17 +94,9 @@ pub(super) fn selected_thread_id(
     selected_index: usize,
     thread_id: Option<&str>,
 ) -> Option<String> {
-    let items = flattened_items(tasks, thread_id);
-    items
+    flattened_items(tasks, thread_id)
         .get(selected_index)
-        .filter(|item| item.openable)
-        .and_then(|item| item.thread_id.clone())
-        .or_else(|| {
-            items
-                .into_iter()
-                .find(|item| item.openable)
-                .and_then(|item| item.thread_id)
-        })
+        .and_then(|item| item.target_thread_id.clone())
 }
 
 pub(super) fn first_openable_index(tasks: &TaskState, thread_id: Option<&str>) -> Option<usize> {
@@ -135,6 +142,11 @@ pub(super) fn rows(
                 .saturating_sub(indent.chars().count())
                 .saturating_sub(12)
                 .max(8);
+            let title_style = if item.target_thread_id.is_none() && !item.is_active {
+                theme.fg_dim
+            } else {
+                theme.fg_active
+            };
             let line = Line::from(vec![
                 Span::styled(
                     if idx == selected_index { "> " } else { "  " },
@@ -143,7 +155,7 @@ pub(super) fn rows(
                 Span::raw(indent),
                 Span::styled(format!("[{marker}]"), theme.fg_dim),
                 Span::raw(" "),
-                Span::styled(truncated_title(&item.title, max_len), theme.fg_active),
+                Span::styled(truncated_title(&item.title, max_len), title_style),
                 Span::styled(format!(" [{status}]"), theme.fg_dim),
             ]);
 

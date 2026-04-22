@@ -115,6 +115,8 @@ pub struct AgentEngine {
     pub threads: RwLock<HashMap<String, AgentThread>>,
     pub(super) thread_message_hydration_pending: RwLock<HashSet<String>>,
     pub(super) thread_message_hydration_lock: Mutex<()>,
+    #[cfg(test)]
+    pub(super) thread_message_hydration_test_delay: Mutex<Option<Duration>>,
     pub thread_handoff_states: RwLock<HashMap<String, ThreadHandoffState>>,
     pub thread_participants: RwLock<HashMap<String, Vec<ThreadParticipantState>>>,
     pub thread_participant_suggestions: RwLock<HashMap<String, Vec<ThreadParticipantSuggestion>>>,
@@ -123,6 +125,7 @@ pub struct AgentEngine {
     pub(super) active_visible_thread_continuation_flushes: Mutex<HashSet<String>>,
     pub(super) active_thread_participant_suggestion_drains: Mutex<HashSet<String>>,
     pub thread_client_surfaces: RwLock<HashMap<String, amux_protocol::ClientSurface>>,
+    pub thread_execution_profiles: RwLock<HashMap<String, ThreadExecutionProfile>>,
     pub thread_skill_discovery_states: RwLock<HashMap<String, LatestSkillDiscoveryState>>,
     pub thread_memory_injection_states: RwLock<HashMap<String, PromptMemoryInjectionState>>,
     pub thread_structural_memories:
@@ -149,7 +152,10 @@ pub struct AgentEngine {
     pub data_dir: PathBuf,
     pub workspace_root: Option<PathBuf>,
     pub gateway_process: Mutex<Option<tokio::process::Child>>,
+    pub(super) gateway_init_lock: Mutex<()>,
     pub gateway_state: Mutex<Option<gateway::GatewayState>>,
+    #[cfg(test)]
+    pub(super) gateway_init_test_delay: Mutex<Option<Duration>>,
     pub gateway_ipc_sender: Mutex<Option<mpsc::UnboundedSender<amux_protocol::DaemonMessage>>>,
     pub gateway_pending_send_results:
         Mutex<HashMap<String, tokio::sync::oneshot::Sender<amux_protocol::GatewaySendResult>>>,
@@ -328,6 +334,8 @@ impl AgentEngine {
             threads: RwLock::new(HashMap::new()),
             thread_message_hydration_pending: RwLock::new(HashSet::new()),
             thread_message_hydration_lock: Mutex::new(()),
+            #[cfg(test)]
+            thread_message_hydration_test_delay: Mutex::new(None),
             thread_handoff_states: RwLock::new(HashMap::new()),
             thread_participants: RwLock::new(HashMap::new()),
             thread_participant_suggestions: RwLock::new(HashMap::new()),
@@ -335,6 +343,7 @@ impl AgentEngine {
             active_visible_thread_continuation_flushes: Mutex::new(HashSet::new()),
             active_thread_participant_suggestion_drains: Mutex::new(HashSet::new()),
             thread_client_surfaces: RwLock::new(HashMap::new()),
+            thread_execution_profiles: RwLock::new(HashMap::new()),
             thread_skill_discovery_states: RwLock::new(HashMap::new()),
             thread_memory_injection_states: RwLock::new(HashMap::new()),
             thread_structural_memories: RwLock::new(HashMap::new()),
@@ -360,7 +369,10 @@ impl AgentEngine {
             data_dir,
             workspace_root,
             gateway_process: Mutex::new(None),
+            gateway_init_lock: Mutex::new(()),
             gateway_state: Mutex::new(None),
+            #[cfg(test)]
+            gateway_init_test_delay: Mutex::new(None),
             gateway_ipc_sender: Mutex::new(None),
             gateway_pending_send_results: Mutex::new(HashMap::new()),
             gateway_restart_attempts: Mutex::new(0),

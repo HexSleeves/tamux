@@ -850,6 +850,14 @@ impl TuiModel {
                 });
                 self.status_line = "Retrying goal step...".to_string();
             }
+            PendingConfirmAction::RetryGoalPrompt { goal_run_id, .. } => {
+                self.send_daemon_command(DaemonCommand::ControlGoalRun {
+                    goal_run_id,
+                    action: "retry_step".to_string(),
+                    step_index: None,
+                });
+                self.status_line = "Retrying goal prompt...".to_string();
+            }
             PendingConfirmAction::RerunGoalFromStep {
                 goal_run_id,
                 step_index,
@@ -861,6 +869,14 @@ impl TuiModel {
                     step_index: Some(step_index),
                 });
                 self.status_line = "Rerunning goal from step...".to_string();
+            }
+            PendingConfirmAction::RerunGoalPrompt { goal_run_id, .. } => {
+                self.send_daemon_command(DaemonCommand::ControlGoalRun {
+                    goal_run_id,
+                    action: "rerun_from_step".to_string(),
+                    step_index: None,
+                });
+                self.status_line = "Rerunning goal from prompt...".to_string();
             }
             PendingConfirmAction::ReuseModelAsStt { model_id } => {
                 self.set_audio_config_string("stt", "model", model_id.clone());
@@ -972,9 +988,50 @@ impl TuiModel {
             let style = match notice.kind {
                 InputNoticeKind::Warning => Style::default().fg(Color::Indexed(214)),
                 InputNoticeKind::Success => Style::default().fg(Color::Indexed(114)),
+                InputNoticeKind::Error => Style::default().fg(Color::Indexed(203)),
             };
             (notice.text.as_str(), style)
         })
+    }
+
+    fn budget_exceeded_task_for_thread(
+        &self,
+        thread_id: &str,
+    ) -> Option<&crate::state::task::AgentTask> {
+        self.tasks
+            .tasks()
+            .iter()
+            .filter(|task| {
+                task.thread_id.as_deref() == Some(thread_id)
+                    && task.status == Some(crate::state::task::TaskStatus::BudgetExceeded)
+            })
+            .max_by_key(|task| task.created_at)
+    }
+
+    fn thread_budget_exceeded_notice(&self, thread_id: &str) -> Option<String> {
+        self.budget_exceeded_task_for_thread(thread_id)?;
+        Some(format!(
+            "Thread budget exceeded for {thread_id}. Review completed work here; continue from the parent thread or respawn with a larger child budget."
+        ))
+    }
+
+    fn restore_prompt_and_show_budget_exceeded_notice(
+        &mut self,
+        thread_id: &str,
+        prompt: &str,
+    ) -> bool {
+        let Some(notice) = self.thread_budget_exceeded_notice(thread_id) else {
+            return false;
+        };
+        self.input.set_text(prompt);
+        self.status_line = notice.clone();
+        self.show_input_notice(notice, InputNoticeKind::Error, 120, false);
+        true
+    }
+
+    fn active_thread_budget_exceeded_notice(&self) -> Option<String> {
+        let thread_id = self.chat.active_thread_id()?;
+        self.thread_budget_exceeded_notice(thread_id)
     }
 
     fn toggle_notifications_modal(&mut self) {

@@ -179,6 +179,18 @@ pub fn derive_model_feature_capabilities(
     }
 }
 
+pub fn fixed_api_transport_for_model(provider_id: &str, model_id: &str) -> Option<&'static str> {
+    let model_id = model_id.trim();
+    if model_id.is_empty() {
+        return None;
+    }
+
+    match (provider_id, model_id) {
+        (PROVIDER_ID_GITHUB_COPILOT, "gemini-3.1-pro-preview") => Some("chat_completions"),
+        _ => None,
+    }
+}
+
 pub fn provider_supports_audio_tool(provider_id: &str, _kind: AudioToolKind) -> bool {
     matches!(
         provider_id,
@@ -272,5 +284,20 @@ mod tests {
         assert!(features.image_generation);
         assert!(!features.stt);
         assert!(!features.tts);
+    }
+
+    #[test]
+    fn github_copilot_gemini_31_is_forced_to_chat_completions() {
+        assert_eq!(
+            fixed_api_transport_for_model(
+                PROVIDER_ID_GITHUB_COPILOT,
+                "gemini-3.1-pro-preview",
+            ),
+            Some("chat_completions")
+        );
+        assert_eq!(
+            fixed_api_transport_for_model(PROVIDER_ID_GITHUB_COPILOT, "gpt-5.4"),
+            None
+        );
     }
 }

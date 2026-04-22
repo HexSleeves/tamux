@@ -2,6 +2,10 @@
 pub struct AgentThread {
     pub id: String,
     pub agent_name: Option<String>,
+    pub profile_provider: Option<String>,
+    pub profile_model: Option<String>,
+    pub profile_reasoning_effort: Option<String>,
+    pub profile_context_window_tokens: Option<u32>,
     pub title: String,
     pub created_at: u64,
     pub updated_at: u64,

@@ -837,6 +837,51 @@ fn seed_spawned_thread_navigation_model() -> TuiModel {
     seed_spawned_thread_navigation_model_with_loaded_child(true)
 }
 
+fn seed_spawned_thread_navigation_model_with_disabled_row() -> TuiModel {
+    let mut model = build_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-root".to_string(),
+        title: "Root".to_string(),
+    });
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-other".to_string(),
+        title: "Other".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-root".to_string()));
+    model.tasks.reduce(task::TaskAction::TaskListReceived(vec![
+        spawned_thread_navigation_task(
+            "root-task",
+            "Root worker",
+            30,
+            Some("thread-root"),
+            None,
+            None,
+            Some(task::TaskStatus::InProgress),
+        ),
+        spawned_thread_navigation_task(
+            "other-task",
+            "Other worker",
+            20,
+            Some("thread-other"),
+            None,
+            Some("thread-root"),
+            Some(task::TaskStatus::InProgress),
+        ),
+        spawned_thread_navigation_task(
+            "disabled-task",
+            "Dormant worker",
+            10,
+            None,
+            Some("root-task"),
+            Some("thread-root"),
+            Some(task::TaskStatus::Completed),
+        ),
+    ]));
+    model
+}
+
 #[test]
 fn spawned_thread_navigation_enter_switches_to_child_thread_and_pushes_history() {
     let mut model = seed_spawned_thread_navigation_model();
@@ -973,6 +1018,35 @@ fn spawned_thread_navigation_enter_on_anchor_opens_first_openable_child() {
             step_id: Some(ref step_id),
         }) if goal_run_id == "goal-1" && step_id == "step-1"
     ));
+}
+
+#[test]
+fn spawned_thread_navigation_enter_on_disabled_row_does_nothing() {
+    let mut model = seed_spawned_thread_navigation_model_with_disabled_row();
+    model.focus = FocusArea::Sidebar;
+    model.activate_sidebar_tab(SidebarTab::Spawned);
+    let disabled_index = (0..model.sidebar_item_count())
+        .find(|index| {
+            model.sidebar.select(*index, model.sidebar_item_count());
+            widgets::sidebar::selected_spawned_thread_id(
+                &model.tasks,
+                &model.sidebar,
+                model.chat.active_thread_id(),
+            )
+            .is_none()
+        })
+        .expect("disabled row should map to a spawned sidebar index");
+    model.sidebar.select(disabled_index, model.sidebar_item_count());
+
+    let handled = model.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+    assert!(!handled);
+    assert_eq!(model.chat.active_thread_id(), Some("thread-root"));
+    assert!(
+        model.chat.thread_history_stack().is_empty(),
+        "disabled rows should not mutate spawned-thread history"
+    );
+    assert_eq!(model.thread_loading_id, None);
 }
 
 #[test]

@@ -128,6 +128,14 @@ pub struct AgentThread {
     #[serde(default)]
     pub agent_name: Option<String>,
     #[serde(default)]
+    pub profile_provider: Option<String>,
+    #[serde(default)]
+    pub profile_model: Option<String>,
+    #[serde(default)]
+    pub profile_reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub profile_context_window_tokens: Option<u32>,
+    #[serde(default)]
     pub title: String,
 
     #[serde(default)]

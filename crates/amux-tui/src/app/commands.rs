@@ -2345,29 +2345,45 @@ impl TuiModel {
     }
 
     pub(super) fn request_selected_goal_step_retry_confirmation(&mut self) -> bool {
-        let Some((goal_run_id, goal_title, step_index, step)) = self.selected_goal_step_context()
-        else {
+        if let Some((goal_run_id, goal_title, step_index, step)) = self.selected_goal_step_context()
+        {
+            self.open_pending_action_confirm(PendingConfirmAction::RetryGoalStep {
+                goal_run_id,
+                goal_title,
+                step_index,
+                step_title: step.title,
+            });
+            return true;
+        }
+
+        let Some((goal_run_id, goal_title)) = self.selected_goal_prompt_context() else {
             return false;
         };
-        self.open_pending_action_confirm(PendingConfirmAction::RetryGoalStep {
+        self.open_pending_action_confirm(PendingConfirmAction::RetryGoalPrompt {
             goal_run_id,
             goal_title,
-            step_index,
-            step_title: step.title,
         });
         true
     }
 
     pub(super) fn request_selected_goal_step_rerun_confirmation(&mut self) -> bool {
-        let Some((goal_run_id, goal_title, step_index, step)) = self.selected_goal_step_context()
-        else {
+        if let Some((goal_run_id, goal_title, step_index, step)) = self.selected_goal_step_context()
+        {
+            self.open_pending_action_confirm(PendingConfirmAction::RerunGoalFromStep {
+                goal_run_id,
+                goal_title,
+                step_index,
+                step_title: step.title,
+            });
+            return true;
+        }
+
+        let Some((goal_run_id, goal_title)) = self.selected_goal_prompt_context() else {
             return false;
         };
-        self.open_pending_action_confirm(PendingConfirmAction::RerunGoalFromStep {
+        self.open_pending_action_confirm(PendingConfirmAction::RerunGoalPrompt {
             goal_run_id,
             goal_title,
-            step_index,
-            step_title: step.title,
         });
         true
     }
@@ -2403,12 +2419,25 @@ impl TuiModel {
             }
         }
 
-        if self.selected_goal_step_context().is_some() {
+        if self.selected_goal_step_context().is_some() || self.selected_goal_prompt_context().is_some()
+        {
             items.push(GoalActionPickerItem::RetryStep);
             items.push(GoalActionPickerItem::RerunFromStep);
         }
 
         items
+    }
+
+    fn selected_goal_prompt_context(&self) -> Option<(String, String)> {
+        let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+            &self.main_pane_view
+        else {
+            return None;
+        };
+        let run = self.tasks.goal_run_by_id(goal_run_id)?;
+        run.steps
+            .is_empty()
+            .then(|| (run.id.clone(), run.title.clone()))
     }
 
     pub(super) fn open_goal_step_action_picker(&mut self) -> bool {
@@ -3068,6 +3097,14 @@ impl TuiModel {
                 input_refs::append_referenced_files_footer(&directive.body, &cwd);
             match directive.kind {
                 input_refs::LeadingAgentDirectiveKind::InternalDelegate => {
+                    if let Some(thread_id) = self.chat.active_thread_id().map(String::from) {
+                        if self.restore_prompt_and_show_budget_exceeded_notice(
+                            &thread_id,
+                            &prompt,
+                        ) {
+                            return;
+                        }
+                    }
                     self.send_daemon_command(DaemonCommand::InternalDelegate {
                         thread_id: self.chat.active_thread_id().map(String::from),
                         target_agent_id: directive.agent_alias.clone(),
@@ -3097,6 +3134,9 @@ impl TuiModel {
                         );
                         return;
                     };
+                    if self.restore_prompt_and_show_budget_exceeded_notice(&thread_id, &prompt) {
+                        return;
+                    }
                     self.send_daemon_command(DaemonCommand::ThreadParticipantCommand {
                         thread_id,
                         target_agent_id: directive.agent_alias.clone(),
@@ -3133,6 +3173,9 @@ impl TuiModel {
                         );
                         return;
                     };
+                    if self.restore_prompt_and_show_budget_exceeded_notice(&thread_id, &prompt) {
+                        return;
+                    }
                     self.send_daemon_command(DaemonCommand::ThreadParticipantCommand {
                         thread_id,
                         target_agent_id: directive.agent_alias.clone(),
@@ -3180,6 +3223,11 @@ impl TuiModel {
             .as_ref()
             .map(|(_, thread_id)| thread_id.clone())
             .or_else(|| self.chat.active_thread_id().map(String::from));
+        if let Some(thread_id) = thread_id.as_deref() {
+            if self.restore_prompt_and_show_budget_exceeded_notice(thread_id, &prompt) {
+                return;
+            }
+        }
         let target_agent_id = if thread_id.is_none() {
             self.pending_new_thread_target_agent.clone()
         } else {

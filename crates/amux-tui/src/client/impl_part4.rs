@@ -522,6 +522,10 @@ impl DaemonClient {
         Ok(())
     }
 
+    pub fn list_tasks(&self) -> Result<()> {
+        self.send(ClientMessage::AgentListTasks)
+    }
+
     pub fn request_goal_run(&self, goal_run_id: impl Into<String>) -> Result<()> {
         self.send(ClientMessage::AgentGetGoalRun {
             goal_run_id: goal_run_id.into(),

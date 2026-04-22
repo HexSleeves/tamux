@@ -4,7 +4,7 @@ use amux_shared::providers::{
     PROVIDER_ID_CHATGPT_SUBSCRIPTION, PROVIDER_ID_CUSTOM, PROVIDER_ID_GROQ, PROVIDER_ID_OPENAI,
 };
 use tempfile::TempDir;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 async fn make_test_engine(config: AgentConfig) -> (Arc<AgentEngine>, TempDir) {
@@ -765,6 +765,187 @@ async fn spawn_hung_http_server() -> String {
         }
     });
     format!("http://{addr}/v1")
+}
+
+async fn read_http_request_body(socket: &mut tokio::net::TcpStream) -> std::io::Result<String> {
+    let mut buffer = Vec::with_capacity(65536);
+    let mut temp = [0u8; 4096];
+    let headers_end = loop {
+        let read = socket.read(&mut temp).await?;
+        if read == 0 {
+            return Ok(String::new());
+        }
+        buffer.extend_from_slice(&temp[..read]);
+        if let Some(index) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+            break index + 4;
+        }
+    };
+
+    let headers = String::from_utf8_lossy(&buffer[..headers_end]);
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let mut parts = line.splitn(2, ':');
+            let name = parts.next()?.trim();
+            let value = parts.next()?.trim();
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+
+    while buffer.len().saturating_sub(headers_end) < content_length {
+        let read = socket.read(&mut temp).await?;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&temp[..read]);
+    }
+
+    let available = buffer.len().saturating_sub(headers_end).min(content_length);
+    Ok(String::from_utf8_lossy(&buffer[headers_end..headers_end + available]).to_string())
+}
+
+#[tokio::test]
+async fn force_compact_reuses_task_provider_override_for_builtin_persona_threads() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind compaction replay server");
+    let addr = listener
+        .local_addr()
+        .expect("compaction replay server addr");
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept replay request");
+        let _ = read_http_request_body(&mut socket)
+            .await
+            .expect("read replay request");
+        let response_body = concat!(
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_compact_task_builtin\"}}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Compaction replay ok\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_compact_task_builtin\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":6,\"output_tokens\":3},\"error\":null}}\n\n"
+        );
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("write replay response");
+    });
+
+    let mut config = AgentConfig::default();
+    config.provider = PROVIDER_ID_OPENAI.to_string();
+    config.base_url = format!("http://{addr}/v1");
+    config.model = "gpt-5.4-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.auth_source = AuthSource::ApiKey;
+    config.api_transport = ApiTransport::Responses;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    let (engine, _temp_dir) = make_test_engine(config).await;
+    let thread_id = "thread-force-compact-task-builtin";
+
+    let (created_thread_id, _created) = engine
+        .get_or_create_thread_with_target(Some(thread_id), "Continue this task", Some("dazhbog"))
+        .await;
+    assert_eq!(created_thread_id, thread_id);
+
+    {
+        let mut threads = engine.threads.write().await;
+        let thread = threads
+            .get_mut(thread_id)
+            .expect("task-owned builtin thread should exist");
+        thread
+            .messages
+            .push(AgentMessage::user("Continue this task", 1));
+        thread.updated_at = 1;
+    }
+
+    engine
+        .tasks
+        .lock()
+        .await
+        .push_back(crate::agent::types::AgentTask {
+            id: "task-force-compact-dazhbog".to_string(),
+            title: "Task-owned builtin thread".to_string(),
+            description:
+                "Regression coverage for manual compaction on builtin persona task threads."
+                    .to_string(),
+            status: crate::agent::types::TaskStatus::Queued,
+            priority: crate::agent::types::TaskPriority::Normal,
+            progress: 0,
+            created_at: 1,
+            started_at: None,
+            completed_at: None,
+            error: None,
+            result: None,
+            thread_id: Some(thread_id.to_string()),
+            source: "subagent".to_string(),
+            notify_on_complete: false,
+            notify_channels: Vec::new(),
+            dependencies: Vec::new(),
+            command: None,
+            session_id: None,
+            goal_run_id: None,
+            goal_run_title: None,
+            goal_step_id: None,
+            goal_step_title: None,
+            parent_task_id: None,
+            parent_thread_id: None,
+            runtime: "daemon".to_string(),
+            retry_count: 0,
+            max_retries: 0,
+            next_retry_at: None,
+            scheduled_at: None,
+            blocked_reason: None,
+            awaiting_approval_id: None,
+            policy_fingerprint: None,
+            approval_expires_at: None,
+            containment_scope: None,
+            compensation_status: None,
+            compensation_summary: None,
+            lane_id: None,
+            last_error: None,
+            logs: Vec::new(),
+            tool_whitelist: None,
+            tool_blacklist: None,
+            context_budget_tokens: None,
+            context_overflow_action: None,
+            termination_conditions: None,
+            success_criteria: None,
+            max_duration_secs: None,
+            supervisor_config: None,
+            override_provider: Some(PROVIDER_ID_OPENAI.to_string()),
+            override_model: Some("gpt-5.4-mini".to_string()),
+            override_system_prompt: Some(
+                "Agent persona: Dazhbog\nAgent persona id: dazhbog\nTask-owned builtin persona."
+                    .to_string(),
+            ),
+            sub_agent_def_id: Some("dazhbog".to_string()),
+        });
+
+    let compacted = engine
+        .force_compact_and_continue(thread_id)
+        .await
+        .expect("manual compaction should reuse task override provider");
+    assert!(compacted);
+
+    let thread = engine
+        .get_thread(thread_id)
+        .await
+        .expect("thread should remain available after manual compaction");
+    assert!(
+        thread
+            .messages
+            .iter()
+            .any(|message| message.role == MessageRole::Assistant
+                && message.content.contains("Compaction replay ok")),
+        "manual compaction should continue the task-owned builtin thread via the task override"
+    );
 }
 
 #[tokio::test]

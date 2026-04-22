@@ -89,6 +89,68 @@ fn merge_tool_call_limit(existing: Option<String>, max_tool_calls: Option<u32>) 
     }
 }
 
+async fn reserve_subagent_thread_id(agent: &AgentEngine) -> String {
+    loop {
+        let candidate = format!("thread_{}", uuid::Uuid::new_v4());
+        let task_conflict = {
+            let tasks = agent.tasks.lock().await;
+            tasks.iter()
+                .any(|task| task.thread_id.as_deref() == Some(candidate.as_str()))
+        };
+        if task_conflict {
+            continue;
+        }
+
+        let thread_conflict = agent.threads.read().await.contains_key(&candidate);
+        if thread_conflict {
+            continue;
+        }
+
+        let history_conflict = agent.history.get_thread(&candidate).await.ok().flatten().is_some();
+        if history_conflict {
+            continue;
+        }
+
+        return candidate;
+    }
+}
+
+async fn resolve_effective_subagent_provider_config(
+    agent: &AgentEngine,
+    task: &AgentTask,
+) -> Result<crate::agent::types::ProviderConfig> {
+    let config = agent.config.read().await.clone();
+    if let Some(provider_id) = task.override_provider.as_deref() {
+        let mut provider_config = agent.resolve_sub_agent_provider_config(&config, provider_id)?;
+        if let Some(model) = task.override_model.as_deref() {
+            crate::agent::provider_resolution::apply_provider_model_override(
+                provider_id,
+                &mut provider_config,
+                model,
+            );
+        }
+        return Ok(provider_config);
+    }
+
+    agent.resolve_provider_config(&config)
+}
+
+async fn seed_reserved_subagent_thread(
+    agent: &AgentEngine,
+    thread_id: &str,
+    title: &str,
+    target_agent_id: Option<&str>,
+    execution_profile: ThreadExecutionProfile,
+) {
+    let _ = agent
+        .get_or_create_thread_with_target(Some(thread_id), title, target_agent_id)
+        .await;
+    agent
+        .set_thread_execution_profile(thread_id, Some(execution_profile))
+        .await;
+    agent.persist_thread_by_id(thread_id).await;
+}
+
 fn parse_requested_subagent_budget(
     args: &serde_json::Value,
 ) -> Result<Option<RequestedSubagentBudget>> {
@@ -345,14 +407,20 @@ async fn execute_spawn_subagent(
         .map(|value| value.min(u8::MAX as u64) as u8);
     let requested_budget = parse_requested_subagent_budget(args)?;
     let scheduled_at = parse_scheduled_at(args)?;
-    let default_context_window_tokens = agent.config.read().await.context_window_tokens;
-    let derived_limits = derive_subagent_limits(
-        task_snapshot.as_ref(),
-        &existing_tasks,
-        requested_max_depth,
-        requested_budget,
-        default_context_window_tokens,
-    )?;
+    let effective_sub_agents = agent.list_sub_agents().await;
+    let matched_def = effective_sub_agents
+        .iter()
+        .find(|sa| sa.enabled && sa.matches_spawn_request(&title))
+        .cloned();
+    if let Some(def) = matched_def.as_ref() {
+        if let Some(reason) = def.protected_reason.as_deref() {
+            anyhow::bail!(
+                "protected sub-agent '{}' is reserved and cannot be spawned via spawn_subagent: {}",
+                def.name,
+                reason
+            );
+        }
+    }
 
     let mut chosen_session = args
         .get("session")
@@ -413,57 +481,39 @@ async fn execute_spawn_subagent(
         subagent.override_model = model_override.clone();
     }
 
-    // Look up a matching SubAgentDefinition by title/name and apply overrides.
-    {
-        let effective_sub_agents = agent.list_sub_agents().await;
-        let matched_def = effective_sub_agents
-            .iter()
-            .find(|sa| sa.enabled && sa.matches_spawn_request(&title));
-        if let Some(def) = matched_def {
-            if let Some(reason) = def.protected_reason.as_deref() {
-                anyhow::bail!(
-                    "protected sub-agent '{}' is reserved and cannot be spawned via spawn_subagent: {}",
-                    def.name,
-                    reason
-                );
-            }
-        }
-        if let Some(def) = matched_def {
-            subagent.override_provider = Some(def.provider.clone());
-            subagent.override_model = Some(def.model.clone());
-            subagent.override_system_prompt = def.system_prompt.clone();
-            subagent.sub_agent_def_id = Some(def.id.clone());
+    if let Some(def) = matched_def.as_ref() {
+        subagent.override_provider = Some(def.provider.clone());
+        subagent.override_model = Some(def.model.clone());
+        subagent.override_system_prompt = def.system_prompt.clone();
+        subagent.sub_agent_def_id = Some(def.id.clone());
 
-            if def.tool_whitelist.is_some() {
-                subagent.tool_whitelist = def.tool_whitelist.clone();
-            }
-            if def.tool_blacklist.is_some() {
-                subagent.tool_blacklist = def.tool_blacklist.clone();
-            }
-            if def.context_budget_tokens.is_some() {
-                subagent.context_budget_tokens = def.context_budget_tokens;
-            }
-            if def.max_duration_secs.is_some() {
-                subagent.max_duration_secs = def.max_duration_secs;
-            }
-            if def.supervisor_config.is_some() {
-                subagent.supervisor_config = def.supervisor_config.clone();
-            }
-            crate::agent::task_crud::enforce_goal_task_autonomy_tool_blacklist(&mut subagent);
-            // Persist the updated task fields.
-            let mut tasks = agent.tasks.lock().await;
-            if let Some(existing) = tasks.iter_mut().find(|t| t.id == subagent.id) {
-                *existing = subagent.clone();
-            }
-            drop(tasks);
-            agent.persist_tasks().await;
+        if def.tool_whitelist.is_some() {
+            subagent.tool_whitelist = def.tool_whitelist.clone();
         }
+        if def.tool_blacklist.is_some() {
+            subagent.tool_blacklist = def.tool_blacklist.clone();
+        }
+        if def.context_budget_tokens.is_some() {
+            subagent.context_budget_tokens = def.context_budget_tokens;
+        }
+        if def.max_duration_secs.is_some() {
+            subagent.max_duration_secs = def.max_duration_secs;
+        }
+        if def.supervisor_config.is_some() {
+            subagent.supervisor_config = def.supervisor_config.clone();
+        }
+        crate::agent::task_crud::enforce_goal_task_autonomy_tool_blacklist(&mut subagent);
     }
-    if let Some(parent_task_id) = task_id {
-        agent
-            .register_subagent_collaboration(parent_task_id, &subagent)
-            .await;
-    }
+
+    let effective_provider_config =
+        resolve_effective_subagent_provider_config(agent, &subagent).await?;
+    let derived_limits = derive_subagent_limits(
+        task_snapshot.as_ref(),
+        &existing_tasks,
+        requested_max_depth,
+        requested_budget,
+        effective_provider_config.context_window_tokens,
+    )?;
 
     subagent.containment_scope = Some(format_subagent_containment_scope(
         derived_limits.child_depth,
@@ -489,6 +539,11 @@ async fn execute_spawn_subagent(
             .map(|(scope, _, _)| scope)
             .unwrap_or_else(|| crate::agent::agent_identity::WELES_GOVERNANCE_SCOPE.to_string());
         crate::agent::agent_identity::build_weles_persona_prompt(&scope)
+    } else if let Some(def) = matched_def.as_ref().filter(|def| !def.builtin) {
+        crate::agent::agent_identity::build_user_subagent_persona_prompt(def)
+    } else if let Some(def) = matched_def.as_ref() {
+        let resolved_scope = def.id.strip_suffix("_builtin").unwrap_or(def.id.as_str());
+        build_spawned_persona_prompt(resolved_scope)
     } else {
         build_spawned_persona_prompt(&subagent.id)
     };
@@ -498,6 +553,38 @@ async fn execute_spawn_subagent(
         }
         _ => persona_prompt.clone(),
     });
+    let reserved_thread_id = reserve_subagent_thread_id(agent).await;
+    subagent.thread_id = Some(reserved_thread_id.clone());
+    let default_provider_id = agent.config.read().await.provider.clone();
+    let reserved_thread_provider = subagent
+        .override_provider
+        .clone()
+        .or_else(|| Some(default_provider_id));
+    let reserved_thread_profile = ThreadExecutionProfile {
+        provider: reserved_thread_provider,
+        model: Some(effective_provider_config.model.clone()),
+        reasoning_effort: (!effective_provider_config.reasoning_effort.trim().is_empty())
+            .then(|| effective_provider_config.reasoning_effort.clone()),
+        context_window_tokens: Some(effective_provider_config.context_window_tokens),
+    };
+    let reserved_thread_target = matched_def
+        .as_ref()
+        .map(|def| def.id.as_str())
+        .map(str::to_string)
+        .or_else(|| crate::agent::agent_identity::extract_persona_id(subagent.override_system_prompt.as_deref()));
+    seed_reserved_subagent_thread(
+        agent,
+        &reserved_thread_id,
+        &title,
+        reserved_thread_target.as_deref(),
+        reserved_thread_profile,
+    )
+    .await;
+    if let Some(parent_task_id) = task_id {
+        agent
+            .register_subagent_collaboration(parent_task_id, &subagent)
+            .await;
+    }
     {
         let mut tasks = agent.tasks.lock().await;
         if let Some(existing) = tasks.iter_mut().find(|t| t.id == subagent.id) {
@@ -509,6 +596,7 @@ async fn execute_spawn_subagent(
         trusted.insert(subagent.id.clone());
     }
     agent.persist_tasks().await;
+    agent.emit_task_update(&subagent, Some("Reserved child thread".into()));
 
     let lane_suffix = allocated_lane_summary
         .map(|value| format!("\nDedicated lane: {value}"))
@@ -531,8 +619,9 @@ async fn execute_spawn_subagent(
         derived_limits.max_duration_secs.unwrap_or(0),
         derived_limits.max_tool_calls.unwrap_or(0)
     );
+    let thread_suffix = format!("\nReserved thread: {reserved_thread_id}");
     Ok(format!(
-        "Spawned subagent {} with runtime {}.{}{}{}{budget_suffix}{def_suffix}\nDo not busy-wait on child status. Use `list_subagents` only for occasional snapshots; if no other useful work remains, send a progress update and stop so tamux can resume you when the child reports back.",
+        "Spawned subagent {} with runtime {}.{}{}{}{thread_suffix}{budget_suffix}{def_suffix}\nDo not busy-wait on child status. Use `list_subagents` only for occasional snapshots; if no other useful work remains, send a progress update and stop so tamux can resume you when the child reports back.",
         subagent.id, runtime, lane_suffix, persona_suffix, depth_suffix
     ))
 }

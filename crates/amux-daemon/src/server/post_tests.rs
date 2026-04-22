@@ -2,6 +2,17 @@ fn should_forward_agent_event(
     event: &crate::agent::types::AgentEvent,
     client_threads: &HashSet<String>,
 ) -> bool {
+    if let crate::agent::types::AgentEvent::TaskUpdate {
+        task: Some(task), ..
+    } = event
+    {
+        return task
+            .thread_id
+            .iter()
+            .chain(task.parent_thread_id.iter())
+            .any(|thread_id| client_threads.contains(thread_id));
+    }
+
     match agent_event_thread_id(event) {
         Some(thread_id) => client_threads.contains(thread_id),
         None => matches!(

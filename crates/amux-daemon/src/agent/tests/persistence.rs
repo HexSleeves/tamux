@@ -206,6 +206,108 @@ async fn hydrate_async_syncs_seeded_builtin_skills_into_catalog() {
 }
 
 #[tokio::test]
+async fn hydrate_returns_before_background_gateway_init_finishes() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.gateway.enabled = true;
+    config.gateway.telegram_token = "telegram-token".to_string();
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .set_gateway_init_test_delay(std::time::Duration::from_millis(300))
+        .await;
+
+    tokio::time::timeout(std::time::Duration::from_millis(100), engine.hydrate())
+        .await
+        .expect("hydrate should not block on gateway init")
+        .expect("hydrate should succeed");
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if engine.gateway_state.lock().await.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("background gateway init should eventually complete");
+}
+
+#[tokio::test]
+async fn hydrate_does_not_wait_for_non_playground_thread_message_hydration() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+    let thread_id = "thread-hydrate-lazy-messages";
+    let thread_row = amux_protocol::AgentDbThread {
+        id: thread_id.to_string(),
+        workspace_id: None,
+        surface_id: None,
+        pane_id: None,
+        agent_name: Some("Rarog".to_string()),
+        title: "Hydrate lazy thread".to_string(),
+        created_at: 1_000,
+        updated_at: 2_000,
+        message_count: 1,
+        total_tokens: 0,
+        last_preview: "hello from hydrate".to_string(),
+        metadata_json: None,
+    };
+    let message_row = amux_protocol::AgentDbMessage {
+        id: "msg-hydrate-lazy".to_string(),
+        thread_id: thread_id.to_string(),
+        created_at: 2_000,
+        role: "user".to_string(),
+        content: "hello from hydrate".to_string(),
+        provider: None,
+        model: None,
+        input_tokens: None,
+        output_tokens: None,
+        total_tokens: None,
+        cost_usd: None,
+        reasoning: None,
+        tool_calls_json: None,
+        metadata_json: None,
+    };
+    engine
+        .history
+        .reconcile_thread_snapshot(&thread_row, &[message_row])
+        .await
+        .expect("persist thread snapshot");
+    engine
+        .set_thread_message_hydration_test_delay(std::time::Duration::from_millis(300))
+        .await;
+
+    tokio::time::timeout(std::time::Duration::from_millis(100), engine.hydrate())
+        .await
+        .expect("hydrate should not wait on non-playground thread message hydration")
+        .expect("hydrate should succeed");
+
+    assert!(
+        engine
+            .thread_message_hydration_pending
+            .read()
+            .await
+            .contains(thread_id),
+        "non-playground thread messages should remain lazily hydrated after startup"
+    );
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        engine.ensure_thread_messages_loaded(thread_id).await;
+    })
+    .await
+    .expect("explicit thread hydration should still work on demand");
+
+    let threads = engine.threads.read().await;
+    let thread = threads.get(thread_id).expect("thread should exist");
+    assert_eq!(thread.messages.len(), 1);
+    assert_eq!(thread.messages[0].content, "hello from hydrate");
+}
+
+#[tokio::test]
 async fn hydrate_does_not_wait_for_goal_run_projection_persistence() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;

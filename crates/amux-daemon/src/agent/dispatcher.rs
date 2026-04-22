@@ -248,6 +248,8 @@ impl AgentEngine {
                         .collect::<Vec<_>>();
                     if let Some(current) = tasks.iter_mut().find(|entry| entry.id == task.id) {
                         let waiting_for_subagents = !active_child_ids.is_empty();
+                        let budget_exceeded_reason =
+                            "execution budget exceeded for this thread".to_string();
                         current.status = if outcome.terminated_for_budget {
                             TaskStatus::BudgetExceeded
                         } else if waiting_for_subagents {
@@ -267,7 +269,9 @@ impl AgentEngine {
                         };
                         current.thread_id = Some(outcome.thread_id);
                         current.lane_id = None;
-                        current.blocked_reason = if waiting_for_subagents {
+                        current.blocked_reason = if outcome.terminated_for_budget {
+                            Some(budget_exceeded_reason.clone())
+                        } else if waiting_for_subagents {
                             Some(format!(
                                 "waiting for subagents: {}",
                                 active_child_ids.join(", ")
@@ -276,8 +280,16 @@ impl AgentEngine {
                             None
                         };
                         current.awaiting_approval_id = None;
-                        current.error = None;
-                        current.last_error = None;
+                        current.error = if outcome.terminated_for_budget {
+                            Some(budget_exceeded_reason.clone())
+                        } else {
+                            None
+                        };
+                        current.last_error = if outcome.terminated_for_budget {
+                            Some(budget_exceeded_reason.clone())
+                        } else {
+                            None
+                        };
                         current.next_retry_at = None;
                         current.logs.push(make_task_log_entry(
                             current.retry_count,
@@ -289,6 +301,8 @@ impl AgentEngine {
                             },
                             if waiting_for_subagents {
                                 "task waiting for spawned subagents to finish"
+                            } else if outcome.terminated_for_budget {
+                                "task stopped after exhausting execution budget"
                             } else if current.retry_count > 0 {
                                 "task self-healed and completed"
                             } else {
@@ -325,43 +339,69 @@ impl AgentEngine {
                         "Task completed".into()
                     }),
                 );
-                if matches!(
-                    updated.status,
-                    TaskStatus::Completed | TaskStatus::BudgetExceeded
-                ) {
-                    self.settle_task_skill_consultations(&updated, "success")
-                        .await;
-                    if updated.source == "divergent" {
-                        if let Err(error) = self
-                            .record_divergent_contribution_on_task_completion(&updated)
-                            .await
-                        {
-                            tracing::warn!(
-                                task_id = %updated.id,
-                                "failed to process divergent contribution completion hook: {error}"
-                            );
+                match updated.status {
+                    TaskStatus::Completed => {
+                        self.settle_task_skill_consultations(&updated, "success")
+                            .await;
+                        if updated.source == "divergent" {
+                            if let Err(error) = self
+                                .record_divergent_contribution_on_task_completion(&updated)
+                                .await
+                            {
+                                tracing::warn!(
+                                    task_id = %updated.id,
+                                    "failed to process divergent contribution completion hook: {error}"
+                                );
+                            }
+                        }
+                        if updated.source == "handoff" {
+                            if let Err(error) =
+                                self.record_handoff_task_outcome(&updated, "success").await
+                            {
+                                tracing::warn!(
+                                    task_id = %updated.id,
+                                    "failed to record handoff success outcome: {error}"
+                                );
+                            }
+                        }
+                        if updated.source == "subagent" {
+                            self.record_collaboration_outcome(&updated, "success").await;
+                            self.record_subagent_outcome_on_parent(
+                                &updated,
+                                TaskLogLevel::Info,
+                                "subagent completed",
+                                updated.blocked_reason.clone(),
+                            )
+                            .await;
                         }
                     }
-                    if updated.source == "handoff" {
-                        if let Err(error) =
-                            self.record_handoff_task_outcome(&updated, "success").await
-                        {
-                            tracing::warn!(
-                                task_id = %updated.id,
-                                "failed to record handoff success outcome: {error}"
-                            );
+                    TaskStatus::BudgetExceeded => {
+                        self.handle_budget_exceeded_task_terminal_state(&updated)
+                            .await;
+                        self.settle_task_skill_consultations(&updated, "failure")
+                            .await;
+                        if updated.source == "handoff" {
+                            if let Err(error) =
+                                self.record_handoff_task_outcome(&updated, "failure").await
+                            {
+                                tracing::warn!(
+                                    task_id = %updated.id,
+                                    "failed to record handoff failure outcome: {error}"
+                                );
+                            }
+                        }
+                        if updated.source == "subagent" {
+                            self.record_collaboration_outcome(&updated, "failure").await;
+                            self.record_subagent_outcome_on_parent(
+                                &updated,
+                                TaskLogLevel::Warn,
+                                "subagent budget exceeded",
+                                updated.blocked_reason.clone(),
+                            )
+                            .await;
                         }
                     }
-                }
-                if updated.source == "subagent" {
-                    self.record_collaboration_outcome(&updated, "success").await;
-                    self.record_subagent_outcome_on_parent(
-                        &updated,
-                        TaskLogLevel::Info,
-                        "subagent completed",
-                        updated.blocked_reason.clone(),
-                    )
-                    .await;
+                    _ => {}
                 }
                 Ok(())
             }
@@ -465,6 +505,32 @@ impl AgentEngine {
         }
     }
 
+    async fn handle_budget_exceeded_task_terminal_state(&self, task: &AgentTask) {
+        let Some(thread_id) = task.thread_id.as_deref() else {
+            return;
+        };
+
+        let message = format!(
+            "Task budget exceeded for this thread.\n\nThread `{thread_id}` exhausted its execution budget and is now locked for further operator messages. Review the completed work in this thread. If more work is needed, continue from the parent thread and respawn from the last completed point with a larger child budget."
+        );
+        if self.append_system_thread_message(thread_id, message).await {
+            self.emit_workflow_notice(
+                thread_id,
+                "thread-budget-exceeded",
+                "Thread budget exceeded. Further sends are blocked for this thread.",
+                Some(
+                    serde_json::json!({
+                        "task_id": task.id,
+                        "thread_id": thread_id,
+                        "parent_task_id": task.parent_task_id,
+                        "parent_thread_id": task.parent_thread_id,
+                    })
+                    .to_string(),
+                ),
+            );
+        }
+    }
+
     async fn record_subagent_outcome_on_parent(
         &self,
         child_task: &AgentTask,
@@ -508,6 +574,39 @@ impl AgentEngine {
         if let Some(parent) = updated_parent {
             self.persist_tasks().await;
             self.emit_task_update(&parent, Some("Subagent update received".into()));
+            if child_task.status == TaskStatus::BudgetExceeded {
+                let parent_thread_id = parent
+                    .thread_id
+                    .clone()
+                    .or_else(|| child_task.parent_thread_id.clone());
+                if let Some(parent_thread_id) = parent_thread_id {
+                    let child_thread_id =
+                        child_task.thread_id.as_deref().unwrap_or("<unknown-child-thread>");
+                    let parent_message = format!(
+                        "Spawned thread `{child_thread_id}` exhausted its execution budget.\n\nReview what was completed in that child thread. If the result is sufficient, keep it. Otherwise respawn from the last completed point with a larger budget."
+                    );
+                    if self
+                        .append_system_thread_message(&parent_thread_id, parent_message)
+                        .await
+                    {
+                        self.emit_workflow_notice(
+                            &parent_thread_id,
+                            "child-thread-budget-exceeded",
+                            format!(
+                                "Spawned thread {child_thread_id} exhausted its budget."
+                            ),
+                            Some(
+                                serde_json::json!({
+                                    "child_task_id": child_task.id,
+                                    "child_thread_id": child_task.thread_id,
+                                    "parent_task_id": parent.id,
+                                })
+                                .to_string(),
+                            ),
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -564,5 +663,209 @@ impl AgentEngine {
         .await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn budget_exceeded_subagent_notifies_child_and_parent_threads() {
+        let root = tempdir().expect("tempdir");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+
+        let parent_thread_id = "thread-parent";
+        let child_thread_id = "thread-child";
+        let parent_task_id = "task-parent";
+        let child_task_id = "task-child";
+
+        {
+            let mut threads = engine.threads.write().await;
+            threads.insert(
+                parent_thread_id.to_string(),
+                AgentThread {
+                    id: parent_thread_id.to_string(),
+                    agent_name: Some("Svarog".to_string()),
+                    title: "Parent".to_string(),
+                    messages: vec![AgentMessage::user("Continue until done", 1)],
+                    pinned: false,
+                    upstream_thread_id: None,
+                    upstream_transport: None,
+                    upstream_provider: None,
+                    upstream_model: None,
+                    upstream_assistant_id: None,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    created_at: 1,
+                    updated_at: 1,
+                },
+            );
+            threads.insert(
+                child_thread_id.to_string(),
+                AgentThread {
+                    id: child_thread_id.to_string(),
+                    agent_name: Some("Dazhbog".to_string()),
+                    title: "Child".to_string(),
+                    messages: vec![AgentMessage::user("Do the refactor", 2)],
+                    pinned: false,
+                    upstream_thread_id: None,
+                    upstream_transport: None,
+                    upstream_provider: None,
+                    upstream_model: None,
+                    upstream_assistant_id: None,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    created_at: 2,
+                    updated_at: 2,
+                },
+            );
+        }
+
+        let parent_task = AgentTask {
+            id: parent_task_id.to_string(),
+            title: "Parent".to_string(),
+            description: "Wait for child".to_string(),
+            status: TaskStatus::Blocked,
+            priority: TaskPriority::Normal,
+            progress: 90,
+            created_at: 1,
+            started_at: Some(1),
+            completed_at: None,
+            error: None,
+            result: None,
+            thread_id: Some(parent_thread_id.to_string()),
+            source: "user".to_string(),
+            notify_on_complete: false,
+            notify_channels: Vec::new(),
+            dependencies: Vec::new(),
+            command: None,
+            session_id: None,
+            goal_run_id: None,
+            goal_run_title: None,
+            goal_step_id: None,
+            goal_step_title: None,
+            parent_task_id: None,
+            parent_thread_id: None,
+            runtime: "daemon".to_string(),
+            retry_count: 0,
+            max_retries: 0,
+            next_retry_at: None,
+            scheduled_at: None,
+            blocked_reason: Some(format!("waiting for subagents: {child_task_id}")),
+            awaiting_approval_id: None,
+            policy_fingerprint: None,
+            approval_expires_at: None,
+            containment_scope: None,
+            compensation_status: None,
+            compensation_summary: None,
+            lane_id: None,
+            last_error: None,
+            logs: Vec::new(),
+            tool_whitelist: None,
+            tool_blacklist: None,
+            override_provider: None,
+            override_model: None,
+            override_system_prompt: None,
+            context_budget_tokens: None,
+            context_overflow_action: None,
+            termination_conditions: None,
+            success_criteria: None,
+            max_duration_secs: None,
+            supervisor_config: None,
+            sub_agent_def_id: None,
+        };
+        let child_task = AgentTask {
+            id: child_task_id.to_string(),
+            title: "Child".to_string(),
+            description: "Refactor everything".to_string(),
+            status: TaskStatus::BudgetExceeded,
+            priority: TaskPriority::Normal,
+            progress: 100,
+            created_at: 2,
+            started_at: Some(2),
+            completed_at: Some(3),
+            error: Some("execution budget exceeded for this thread".to_string()),
+            result: None,
+            thread_id: Some(child_thread_id.to_string()),
+            source: "subagent".to_string(),
+            notify_on_complete: false,
+            notify_channels: Vec::new(),
+            dependencies: Vec::new(),
+            command: None,
+            session_id: None,
+            goal_run_id: None,
+            goal_run_title: None,
+            goal_step_id: None,
+            goal_step_title: None,
+            parent_task_id: Some(parent_task_id.to_string()),
+            parent_thread_id: Some(parent_thread_id.to_string()),
+            runtime: "daemon".to_string(),
+            retry_count: 0,
+            max_retries: 0,
+            next_retry_at: None,
+            scheduled_at: None,
+            blocked_reason: Some("execution budget exceeded for this thread".to_string()),
+            awaiting_approval_id: None,
+            policy_fingerprint: None,
+            approval_expires_at: None,
+            containment_scope: None,
+            compensation_status: None,
+            compensation_summary: None,
+            lane_id: None,
+            last_error: Some("execution budget exceeded for this thread".to_string()),
+            logs: Vec::new(),
+            tool_whitelist: None,
+            tool_blacklist: None,
+            override_provider: None,
+            override_model: None,
+            override_system_prompt: None,
+            context_budget_tokens: None,
+            context_overflow_action: None,
+            termination_conditions: None,
+            success_criteria: None,
+            max_duration_secs: None,
+            supervisor_config: None,
+            sub_agent_def_id: None,
+        };
+
+        {
+            let mut tasks = engine.tasks.lock().await;
+            tasks.push_back(parent_task);
+            tasks.push_back(child_task.clone());
+        }
+
+        engine
+            .handle_budget_exceeded_task_terminal_state(&child_task)
+            .await;
+        engine
+            .record_subagent_outcome_on_parent(
+                &child_task,
+                TaskLogLevel::Warn,
+                "subagent budget exceeded",
+                child_task.blocked_reason.clone(),
+            )
+            .await;
+
+        let threads = engine.threads.read().await;
+        let child_thread = threads
+            .get(child_thread_id)
+            .expect("child thread should exist");
+        assert!(child_thread.messages.iter().any(|message| {
+            message.role == MessageRole::System
+                && message.content.contains("Task budget exceeded for this thread")
+                && message.content.contains("locked for further operator messages")
+        }));
+
+        let parent_thread = threads
+            .get(parent_thread_id)
+            .expect("parent thread should exist");
+        assert!(parent_thread.messages.iter().any(|message| {
+            message.role == MessageRole::System
+                && message.content.contains(child_thread_id)
+                && message.content.contains("respawn from the last completed point")
+        }));
     }
 }

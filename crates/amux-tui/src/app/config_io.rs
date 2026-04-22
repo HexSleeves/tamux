@@ -200,6 +200,12 @@ impl TuiModel {
                 } else {
                     providers::default_transport_for(provider_id).to_string()
                 };
+            self.config.api_transport = self.provider_transport_snapshot(
+                provider_id,
+                &self.config.auth_source,
+                &self.config.model,
+                &self.config.api_transport,
+            );
             self.config.custom_context_window_tokens = custom_context_window_tokens;
             self.config.context_window_tokens = json
                 .get("context_window_tokens")

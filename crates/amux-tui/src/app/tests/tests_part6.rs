@@ -985,6 +985,48 @@ fn goal_workspace_step_footer_actions_are_clickable() {
 }
 
 #[test]
+fn goal_workspace_prompt_footer_actions_are_clickable_when_goal_has_no_steps() {
+    let mut model = goal_sidebar_model();
+    if let Some(run) = model.tasks.goal_run_by_id_mut("goal-1") {
+        run.status = Some(task::GoalRunStatus::Failed);
+        run.steps.clear();
+        run.current_step_title = None;
+        run.current_step_owner_profile = None;
+        run.active_thread_id = None;
+        run.execution_thread_ids.clear();
+    }
+    model.goal_workspace.set_selected_plan_row(0);
+    model
+        .goal_workspace
+        .set_selected_plan_item(Some(goal_workspace::GoalPlanSelection::PromptToggle));
+
+    let click = find_goal_workspace_hit_position(
+        &model,
+        widgets::goal_workspace::GoalWorkspaceHitTarget::FooterAction(
+            widgets::goal_workspace::GoalWorkspaceAction::OpenActions,
+        ),
+    );
+
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: click.x,
+        row: click.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    model.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: click.x,
+        row: click.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(model.modal.top(), Some(modal::ModalKind::GoalStepActionPicker));
+    let items = model.goal_action_picker_items();
+    assert!(items.contains(&crate::app::commands::GoalActionPickerItem::RetryStep));
+    assert!(items.contains(&crate::app::commands::GoalActionPickerItem::RerunFromStep));
+}
+
+#[test]
 fn goal_workspace_progress_mode_restores_checkpoint_and_dossier_views() {
     let mut model = goal_sidebar_model();
     model.goal_workspace

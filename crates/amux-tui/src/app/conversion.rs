@@ -22,6 +22,10 @@ pub(super) fn convert_thread(t: crate::wire::AgentThread) -> chat::AgentThread {
     chat::AgentThread {
         id: t.id,
         agent_name: t.agent_name,
+        profile_provider: t.profile_provider,
+        profile_model: t.profile_model,
+        profile_reasoning_effort: t.profile_reasoning_effort,
+        profile_context_window_tokens: t.profile_context_window_tokens,
         title: t.title,
         created_at: t.created_at,
         updated_at: t.updated_at,

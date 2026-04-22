@@ -39,6 +39,7 @@ pub enum DaemonCommand {
     Refresh,
     GetConfig,
     RefreshServices,
+    ListTasks,
     RequestThread {
         thread_id: String,
         message_limit: Option<usize>,

@@ -160,9 +160,15 @@ impl TuiModel {
                     }
                     return;
                 }
-                modal::ModalKind::CommandPalette
-                | modal::ModalKind::ThreadPicker
-                | modal::ModalKind::GoalPicker => {
+                modal::ModalKind::CommandPalette => {
+                    let query = text
+                        .chars()
+                        .filter(|ch| !matches!(ch, '\r' | '\n'))
+                        .collect::<String>();
+                    self.modal.reduce(modal::ModalAction::SetQuery(query));
+                    return;
+                }
+                modal::ModalKind::ThreadPicker | modal::ModalKind::GoalPicker => {
                     self.input.reduce(input::InputAction::Clear);
                     for ch in text.chars() {
                         match ch {

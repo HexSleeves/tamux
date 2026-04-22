@@ -264,6 +264,15 @@ impl TuiModel {
     ) {
         let active_thread_id = self.chat.active_thread_id().map(str::to_string);
         let pending_loading_thread_id = self.thread_loading_id.clone();
+        let preserve_missing_active_thread = active_thread_id.as_ref().and_then(|thread_id| {
+            let active_thread = self.chat.active_thread()?;
+            let is_missing_from_refresh = !threads.iter().any(|thread| thread.id == *thread_id);
+            let should_preserve = is_missing_from_refresh
+                && (thread_id.starts_with("local-")
+                    || pending_loading_thread_id.as_deref() == Some(thread_id.as_str())
+                    || self.assistant_busy());
+            should_preserve.then(|| active_thread.clone())
+        });
         let should_refresh_active_thread = active_thread_id.as_ref().is_some_and(|thread_id| {
             threads.iter().any(|thread| {
                 thread.id == *thread_id
@@ -275,7 +284,7 @@ impl TuiModel {
                         .starts_with("handoff ")
             })
         });
-        let threads = threads
+        let mut threads = threads
             .into_iter()
             .filter(|thread| {
                 let is_internal =
@@ -289,7 +298,12 @@ impl TuiModel {
                         .starts_with("handoff ")
             })
             .map(conversion::convert_thread)
-            .collect();
+            .collect::<Vec<_>>();
+        if let Some(active_thread) = preserve_missing_active_thread {
+            if !threads.iter().any(|thread| thread.id == active_thread.id) {
+                threads.push(active_thread);
+            }
+        }
         self.chat
             .reduce(chat::ChatAction::ThreadListReceived(threads));
         self.sync_open_thread_picker();
@@ -521,7 +535,7 @@ impl TuiModel {
         // Reload is the authoritative replacement for any live stream state that was
         // truncated or otherwise downgraded before reaching the TUI.
         self.chat.reduce(chat::ChatAction::ResetStreaming);
-        if !self.should_preserve_bootstrap_activity_on_reload(thread_id.as_str()) {
+        if !self.should_preserve_pending_thinking_activity_on_reload(thread_id.as_str()) {
             self.clear_agent_activity_for(Some(thread_id.as_str()));
         }
         self.clear_pending_stop();

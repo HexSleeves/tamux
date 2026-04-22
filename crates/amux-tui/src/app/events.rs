@@ -59,6 +59,7 @@ impl TuiModel {
         self.chat.clear_expired_copy_feedback(self.tick_counter);
         self.maybe_request_older_chat_history();
         self.maybe_request_older_goal_run_history();
+        self.maybe_refresh_spawned_sidebar_tasks();
         self.maybe_schedule_chat_history_collapse();
         self.chat.maybe_collapse_history(self.tick_counter);
         self.clear_expired_queued_prompt_copy_feedback();
@@ -101,6 +102,29 @@ impl TuiModel {
             self.input_notice = None;
         }
         self.publish_attention_surface_if_changed();
+    }
+
+    fn maybe_refresh_spawned_sidebar_tasks(&mut self) {
+        let Some(active_thread_id) = self.chat.active_thread_id() else {
+            return;
+        };
+        if self.thread_loading_id.is_some() {
+            return;
+        }
+        if self.sidebar.active_tab() != sidebar::SidebarTab::Spawned {
+            return;
+        }
+        if !widgets::sidebar::has_spawned_tab(&self.tasks, &self.chat, Some(active_thread_id)) {
+            return;
+        }
+        if self.tick_counter < self.next_spawned_sidebar_task_refresh_tick {
+            return;
+        }
+
+        self.send_daemon_command(DaemonCommand::ListTasks);
+        self.next_spawned_sidebar_task_refresh_tick = self
+            .tick_counter
+            .saturating_add(SPAWNED_SIDEBAR_TASK_REFRESH_TICKS);
     }
 
     pub(crate) fn handle_client_event(&mut self, event: ClientEvent) {

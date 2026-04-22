@@ -2,28 +2,21 @@ use super::*;
 use amux_protocol::AGENT_ID_SWAROG;
 
 #[test]
-fn hydrate_initializes_gateway_after_config_load_and_before_thread_restore() {
+fn hydrate_defers_gateway_start_until_after_thread_restore() {
     let persistence_source =
         fs::read_to_string(repo_root().join("crates/amux-daemon/src/agent/persistence.rs"))
             .expect("read persistence.rs");
 
-    let config_idx = persistence_source
-        .find("self.persist_sanitized_config(cfg, collisions).await;")
-        .expect("hydrate should persist config before gateway init");
-    let init_gateway_idx = persistence_source
-        .find("self.init_gateway().await;")
-        .expect("hydrate should initialize gateway during startup restore");
     let list_threads_idx = persistence_source
         .find("match self.history.list_threads().await {")
         .expect("hydrate should restore threads");
+    let gateway_start_idx = persistence_source
+        .find("self.schedule_gateway_startup();")
+        .expect("hydrate should schedule gateway startup");
 
     assert!(
-        config_idx < init_gateway_idx,
-        "hydrate should initialize gateway after loading config items"
-    );
-    assert!(
-        init_gateway_idx < list_threads_idx,
-        "hydrate should initialize gateway before thread restore work"
+        list_threads_idx < gateway_start_idx,
+        "hydrate should defer gateway startup until after thread restore work"
     );
 }
 

@@ -70,6 +70,27 @@ fn thread_message_token_totals(messages: &[AgentMessage]) -> (u64, u64) {
 }
 
 impl AgentEngine {
+    pub(super) async fn budget_exceeded_task_for_thread(&self, thread_id: &str) -> Option<AgentTask> {
+        let tasks = self.tasks.lock().await;
+        tasks
+            .iter()
+            .filter(|task| {
+                task.thread_id.as_deref() == Some(thread_id)
+                    && task.status == TaskStatus::BudgetExceeded
+            })
+            .max_by_key(|task| {
+                task.completed_at
+                    .or(task.started_at)
+                    .unwrap_or(task.created_at)
+            })
+            .cloned()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn set_thread_message_hydration_test_delay(&self, delay: Duration) {
+        *self.thread_message_hydration_test_delay.lock().await = Some(delay);
+    }
+
     pub(super) async fn clear_thread_message_hydration_pending(&self, thread_id: &str) {
         self.thread_message_hydration_pending
             .write()
@@ -95,6 +116,11 @@ impl AgentEngine {
             .contains(thread_id);
         if !still_needs_hydration {
             return self.threads.read().await.contains_key(thread_id);
+        }
+
+        #[cfg(test)]
+        if let Some(delay) = *self.thread_message_hydration_test_delay.lock().await {
+            tokio::time::sleep(delay).await;
         }
 
         let Some(db_messages) = self.history.list_messages(thread_id, None).await.ok() else {
@@ -453,6 +479,20 @@ impl AgentEngine {
                 .await
                 .insert(thread_id.to_string(), client_surface);
         }
+        match thread_metadata.execution_profile {
+            Some(execution_profile) => {
+                self.thread_execution_profiles
+                    .write()
+                    .await
+                    .insert(thread_id.to_string(), execution_profile);
+            }
+            None => {
+                self.thread_execution_profiles
+                    .write()
+                    .await
+                    .remove(thread_id);
+            }
+        }
         match thread_metadata.prompt_memory_injection_state {
             Some(prompt_memory_injection_state) => {
                 self.thread_memory_injection_state_map()
@@ -610,6 +650,14 @@ impl AgentEngine {
         content_blocks_json: Option<&str>,
         client_surface: Option<amux_protocol::ClientSurface>,
     ) -> Result<String> {
+        if let Some(thread_id) = thread_id {
+            if let Some(task) = self.budget_exceeded_task_for_thread(thread_id).await {
+                anyhow::bail!(
+                    "thread {thread_id} is locked because task {} exhausted its execution budget",
+                    task.id
+                );
+            }
+        }
         let outcome = Box::pin(self.send_message_inner(
             thread_id,
             content,

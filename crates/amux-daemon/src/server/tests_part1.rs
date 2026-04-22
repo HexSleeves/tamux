@@ -111,6 +111,75 @@ fn gateway_incoming_events_forward_without_thread_subscription() {
 }
 
 #[test]
+fn spawned_task_update_forwards_to_parent_thread_subscription() {
+    let event = AgentEvent::TaskUpdate {
+        task_id: "task-child".to_string(),
+        status: crate::agent::types::TaskStatus::Completed,
+        progress: 100,
+        message: Some("Task completed".to_string()),
+        task: Some(crate::agent::types::AgentTask {
+            id: "task-child".to_string(),
+            title: "Spawned child".to_string(),
+            description: "Spawned child task".to_string(),
+            status: crate::agent::types::TaskStatus::Completed,
+            priority: crate::agent::types::TaskPriority::Normal,
+            progress: 100,
+            created_at: 1,
+            started_at: None,
+            completed_at: Some(2),
+            error: None,
+            result: None,
+            thread_id: Some("thread-child".to_string()),
+            source: "subagent".to_string(),
+            notify_on_complete: false,
+            notify_channels: Vec::new(),
+            dependencies: Vec::new(),
+            command: None,
+            session_id: None,
+            goal_run_id: None,
+            goal_run_title: None,
+            goal_step_id: None,
+            goal_step_title: None,
+            parent_task_id: Some("task-parent".to_string()),
+            parent_thread_id: Some("thread-parent".to_string()),
+            runtime: "daemon".to_string(),
+            retry_count: 0,
+            max_retries: 0,
+            next_retry_at: None,
+            scheduled_at: None,
+            blocked_reason: None,
+            awaiting_approval_id: None,
+            policy_fingerprint: None,
+            approval_expires_at: None,
+            containment_scope: None,
+            compensation_status: None,
+            compensation_summary: None,
+            lane_id: None,
+            last_error: None,
+            logs: Vec::new(),
+            tool_whitelist: None,
+            tool_blacklist: None,
+            context_budget_tokens: None,
+            context_overflow_action: None,
+            termination_conditions: None,
+            success_criteria: None,
+            max_duration_secs: None,
+            supervisor_config: None,
+            override_provider: None,
+            override_model: None,
+            override_system_prompt: None,
+            sub_agent_def_id: None,
+        }),
+    };
+
+    let client_threads = HashSet::from(["thread-parent".to_string()]);
+    assert!(
+        super::should_forward_agent_event(&event, &client_threads),
+        "spawned task updates should forward to the subscribed parent thread so the parent sidebar can refresh"
+    );
+}
+
+#[test]
 fn oversized_thread_agent_event_downgrades_to_reload_required() {
     let event = AgentEvent::Delta {
         thread_id: "thread-big".to_string(),

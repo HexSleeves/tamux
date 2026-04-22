@@ -1047,6 +1047,28 @@ fn github_copilot_preserves_explicit_anthropic_transport_when_loaded_from_saved_
 }
 
 #[test]
+fn github_copilot_gemini_31_forces_chat_completions_when_loaded_from_saved_config() {
+    let (mut model, _daemon_rx) = make_model();
+    model.apply_config_json(&serde_json::json!({
+        "provider": PROVIDER_ID_GITHUB_COPILOT,
+        "providers": {
+            "github-copilot": {
+                "base_url": "https://api.githubcopilot.com",
+                "model": "gemini-3.1-pro-preview",
+                "api_transport": "responses",
+                "auth_source": "github_copilot"
+            }
+        }
+    }));
+
+    model.apply_provider_selection(PROVIDER_ID_GITHUB_COPILOT);
+
+    assert_eq!(model.config.provider, PROVIDER_ID_GITHUB_COPILOT);
+    assert_eq!(model.config.model, "gemini-3.1-pro-preview");
+    assert_eq!(model.config.api_transport, "chat_completions");
+}
+
+#[test]
 fn commit_subagent_editor_persists_existing_provider_model_and_effort_changes() {
     let (mut model, mut daemon_rx) = make_model();
     model.subagents.entries = vec![crate::state::SubAgentEntry {

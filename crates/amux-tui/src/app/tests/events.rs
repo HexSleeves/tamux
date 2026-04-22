@@ -38,6 +38,17 @@ fn next_thread_request(
     None
 }
 
+fn saw_list_tasks_command(
+    daemon_rx: &mut tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
+) -> bool {
+    while let Ok(command) = daemon_rx.try_recv() {
+        if matches!(command, DaemonCommand::ListTasks) {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(unix)]
 fn with_fake_mpv_in_path<F: FnOnce()>(test: F) {
     static PATH_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -2213,6 +2224,86 @@ fn fallback_task_update_preserves_spawned_tree_metadata() {
 }
 
 #[test]
+fn budget_exceeded_active_thread_surfaces_persistent_footer_notice() {
+    let mut model = make_model();
+    model.handle_thread_detail_event(crate::wire::AgentThread {
+        id: "thread-child".to_string(),
+        title: "Child thread".to_string(),
+        ..Default::default()
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-child".to_string()));
+
+    model.handle_task_update_event(crate::wire::AgentTask {
+        id: "task-child".to_string(),
+        title: "Child task".to_string(),
+        thread_id: Some("thread-child".to_string()),
+        status: Some(crate::wire::TaskStatus::BudgetExceeded),
+        blocked_reason: Some("execution budget exceeded for this thread".to_string()),
+        created_at: 42,
+        ..Default::default()
+    });
+
+    let notice = model
+        .active_thread_budget_exceeded_notice()
+        .expect("budget exceeded thread should surface footer notice");
+    assert!(
+        notice.contains("Thread budget exceeded"),
+        "expected budget notice, got: {notice}"
+    );
+    assert!(
+        notice.contains("thread-child"),
+        "expected thread id in notice, got: {notice}"
+    );
+}
+
+#[test]
+fn submit_prompt_blocks_budget_exceeded_active_thread() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+    model.handle_thread_detail_event(crate::wire::AgentThread {
+        id: "thread-child".to_string(),
+        title: "Child thread".to_string(),
+        ..Default::default()
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-child".to_string()));
+    model.handle_task_update_event(crate::wire::AgentTask {
+        id: "task-child".to_string(),
+        title: "Child task".to_string(),
+        thread_id: Some("thread-child".to_string()),
+        status: Some(crate::wire::TaskStatus::BudgetExceeded),
+        blocked_reason: Some("execution budget exceeded for this thread".to_string()),
+        created_at: 42,
+        ..Default::default()
+    });
+    while daemon_rx.try_recv().is_ok() {}
+
+    model.submit_prompt("continue from here".to_string());
+
+    assert_eq!(
+        model.input.buffer(),
+        "continue from here",
+        "blocked submit should preserve operator text in the input"
+    );
+    let (notice, _) = model
+        .input_notice_style()
+        .expect("blocked submit should surface an input notice");
+    assert!(
+        notice.contains("Thread budget exceeded"),
+        "expected budget exceeded notice, got: {notice}"
+    );
+    while let Ok(command) = daemon_rx.try_recv() {
+        assert!(
+            !matches!(command, DaemonCommand::SendMessage { .. }),
+            "budget-exceeded thread should not emit a send command: {command:?}"
+        );
+    }
+}
+
+#[test]
 fn unrelated_sync_does_not_clear_event_backed_pending_approval() {
     let mut model = make_model();
 
@@ -2909,6 +3000,45 @@ fn mission_control_header_falls_back_to_root_thread_runtime_when_active_thread_m
     assert_eq!(usage.total_thread_tokens, 30);
     assert_eq!(usage.total_cost_usd, Some(0.5));
     assert_eq!(usage.context_window_tokens, 205_000);
+}
+
+#[test]
+fn header_uses_thread_profile_metadata_before_runtime_metadata_arrives() {
+    let mut model = make_model();
+    model.config.provider = PROVIDER_ID_GITHUB_COPILOT.to_string();
+    model.config.auth_source = "github_copilot".to_string();
+    model.config.model = "gpt-5.4".to_string();
+    model.config.context_window_tokens = 400_000;
+
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-dazhbog-profile".to_string(),
+        title: "Spawned thread".to_string(),
+        agent_name: Some("Dazhbog".to_string()),
+    });
+    model.handle_thread_detail_event(crate::wire::AgentThread {
+        id: "thread-dazhbog-profile".to_string(),
+        agent_name: Some("Dazhbog".to_string()),
+        profile_provider: Some("alibaba-coding-plan".to_string()),
+        profile_model: Some("kimi-k2.5".to_string()),
+        profile_reasoning_effort: Some("high".to_string()),
+        profile_context_window_tokens: Some(240_000),
+        title: "Spawned thread".to_string(),
+        created_at: 1,
+        updated_at: 1,
+        ..Default::default()
+    });
+    model.chat.reduce(chat::ChatAction::SelectThread(
+        "thread-dazhbog-profile".to_string(),
+    ));
+
+    let profile = model.current_header_agent_profile();
+    assert_eq!(profile.agent_label, "Dazhbog");
+    assert_eq!(profile.provider, "alibaba-coding-plan");
+    assert_eq!(profile.model, "kimi-k2.5");
+    assert_eq!(profile.reasoning_effort.as_deref(), Some("high"));
+
+    let usage = model.current_header_usage_summary();
+    assert_eq!(usage.context_window_tokens, 240_000);
 }
 
 #[test]
@@ -3982,6 +4112,107 @@ fn on_tick_requests_next_older_thread_page_when_scrolled_to_top_of_loaded_window
         }
         other => panic!("expected older-page request, got {other:?}"),
     }
+}
+
+#[test]
+fn on_tick_refreshes_spawned_sidebar_tasks_on_cooldown() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.chat.reduce(chat::ChatAction::ThreadDetailReceived(
+        crate::state::chat::AgentThread {
+            id: "thread-parent".to_string(),
+            title: "Parent Thread".to_string(),
+            ..Default::default()
+        },
+    ));
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-parent".to_string()));
+    model.tasks.reduce(task::TaskAction::TaskListReceived(vec![
+        task::AgentTask {
+            id: "task-child".to_string(),
+            title: "Spawned child".to_string(),
+            description: "Spawned child task".to_string(),
+            thread_id: Some("thread-child".to_string()),
+            parent_task_id: Some("task-parent".to_string()),
+            parent_thread_id: Some("thread-parent".to_string()),
+            created_at: 1,
+            status: Some(task::TaskStatus::InProgress),
+            progress: 30,
+            session_id: None,
+            goal_run_id: None,
+            goal_step_title: None,
+            command: None,
+            awaiting_approval_id: None,
+            blocked_reason: None,
+        },
+    ]));
+    model.activate_sidebar_tab(SidebarTab::Spawned);
+
+    model.on_tick();
+    assert!(
+        saw_list_tasks_command(&mut daemon_rx),
+        "spawned sidebar should refresh as soon as the cooldown is eligible"
+    );
+
+    for _ in 0..19 {
+        model.on_tick();
+    }
+
+    assert!(
+        !saw_list_tasks_command(&mut daemon_rx),
+        "spawned sidebar should not refresh again before the cooldown elapses"
+    );
+
+    model.on_tick();
+    assert!(
+        saw_list_tasks_command(&mut daemon_rx),
+        "spawned sidebar should request another task refresh once the cooldown elapses"
+    );
+}
+
+#[test]
+fn on_tick_does_not_refresh_spawned_sidebar_tasks_while_thread_is_loading() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.chat.reduce(chat::ChatAction::ThreadDetailReceived(
+        crate::state::chat::AgentThread {
+            id: "thread-parent".to_string(),
+            title: "Parent Thread".to_string(),
+            ..Default::default()
+        },
+    ));
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-parent".to_string()));
+    model.tasks.reduce(task::TaskAction::TaskListReceived(vec![
+        task::AgentTask {
+            id: "task-child".to_string(),
+            title: "Spawned child".to_string(),
+            description: "Spawned child task".to_string(),
+            thread_id: Some("thread-child".to_string()),
+            parent_task_id: Some("task-parent".to_string()),
+            parent_thread_id: Some("thread-parent".to_string()),
+            created_at: 1,
+            status: Some(task::TaskStatus::InProgress),
+            progress: 30,
+            session_id: None,
+            goal_run_id: None,
+            goal_step_title: None,
+            command: None,
+            awaiting_approval_id: None,
+            blocked_reason: None,
+        },
+    ]));
+    model.activate_sidebar_tab(SidebarTab::Spawned);
+    model.thread_loading_id = Some("thread-parent".to_string());
+
+    for _ in 0..25 {
+        model.on_tick();
+    }
+
+    assert!(
+        !saw_list_tasks_command(&mut daemon_rx),
+        "spawned sidebar refresh should stay idle while the active thread is still loading"
+    );
 }
 
 #[test]
@@ -5307,6 +5538,63 @@ fn thread_footer_activity_remains_scoped_when_switching_between_busy_threads() {
 }
 
 #[test]
+fn optimistic_new_thread_keeps_thinking_during_stale_thread_list_refresh() {
+    let (mut model, _daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+
+    model.submit_prompt("investigate the auth regression".to_string());
+    let optimistic_thread_id = model
+        .chat
+        .active_thread_id()
+        .map(str::to_string)
+        .expect("submit should create an optimistic thread");
+    assert!(optimistic_thread_id.starts_with("local-"));
+    assert_eq!(model.footer_activity_text().as_deref(), Some("thinking"));
+
+    model.handle_client_event(ClientEvent::ThreadList(vec![]));
+
+    assert_eq!(model.chat.active_thread_id(), Some(optimistic_thread_id.as_str()));
+    assert_eq!(
+        model.footer_activity_text().as_deref(),
+        Some("thinking"),
+        "stale thread list refresh should not clear pending thinking on an optimistic thread"
+    );
+}
+
+#[test]
+fn reopened_thread_keeps_thinking_during_stale_thread_list_refresh() {
+    let (mut model, _daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-user".to_string(),
+        title: "User Thread".to_string(),
+    });
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-other".to_string(),
+        title: "Other Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-user".to_string()));
+
+    model.submit_prompt("investigate the auth regression".to_string());
+    assert_eq!(model.footer_activity_text().as_deref(), Some("thinking"));
+
+    model.handle_client_event(ClientEvent::ThreadList(vec![crate::wire::AgentThread {
+        id: "thread-other".to_string(),
+        title: "Other Thread".to_string(),
+        ..Default::default()
+    }]));
+
+    assert_eq!(model.chat.active_thread_id(), Some("thread-user"));
+    assert_eq!(
+        model.footer_activity_text().as_deref(),
+        Some("thinking"),
+        "stale thread list refresh should not clear pending thinking on a reopened thread"
+    );
+}
+
+#[test]
 fn participant_playground_activity_surfaces_only_for_active_parent_thread() {
     let mut model = make_model();
     model.handle_client_event(ClientEvent::ThreadCreated {
@@ -6466,6 +6754,52 @@ fn leading_internal_delegate_prompt_routes_to_internal_command() {
             .is_empty(),
         "internal delegation should not append a visible user turn"
     );
+}
+
+#[test]
+fn leading_internal_delegate_prompt_is_blocked_for_budget_exceeded_thread() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+    model.concierge.auto_cleanup_on_navigate = false;
+    model.handle_thread_detail_event(crate::wire::AgentThread {
+        id: "thread-budget".to_string(),
+        title: "Budget exceeded".to_string(),
+        ..Default::default()
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-budget".to_string()));
+    model.handle_task_update_event(crate::wire::AgentTask {
+        id: "task-budget".to_string(),
+        title: "Budget exceeded child".to_string(),
+        thread_id: Some("thread-budget".to_string()),
+        status: Some(crate::wire::TaskStatus::BudgetExceeded),
+        blocked_reason: Some("execution budget exceeded for this thread".to_string()),
+        created_at: 42,
+        ..Default::default()
+    });
+    while daemon_rx.try_recv().is_ok() {}
+
+    model.submit_prompt("!weles verify the auth regression".to_string());
+
+    assert_eq!(
+        model.input.buffer(),
+        "!weles verify the auth regression",
+        "blocked internal delegate should preserve operator text in the input"
+    );
+    let (notice, _) = model
+        .input_notice_style()
+        .expect("blocked internal delegate should surface an input notice");
+    assert!(
+        notice.contains("Thread budget exceeded"),
+        "expected budget exceeded notice, got: {notice}"
+    );
+    while let Ok(command) = daemon_rx.try_recv() {
+        assert!(
+            !matches!(command, DaemonCommand::InternalDelegate { .. }),
+            "budget-exceeded thread should not emit an internal delegate command: {command:?}"
+        );
+    }
 }
 
 #[test]

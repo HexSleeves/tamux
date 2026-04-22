@@ -95,8 +95,17 @@ impl AgentEngine {
             ),
         );
 
-        self.resend_existing_user_message(&candidate.thread_id, &prior_user_message)
+        if let Some(task_id) = candidate.task_id.as_deref() {
+            self.resend_existing_user_message_for_task(
+                &candidate.thread_id,
+                &prior_user_message,
+                task_id,
+            )
             .await?;
+        } else {
+            self.resend_existing_user_message(&candidate.thread_id, &prior_user_message)
+                .await?;
+        }
         Ok(())
     }
 
@@ -149,30 +158,58 @@ impl AgentEngine {
 }
 
 fn stalled_turn_system_message(candidate: &StalledTurnCandidate, attempt: u32) -> String {
-    if candidate.class == StalledTurnClass::ActiveStreamIdle {
-        return match attempt {
-            1 => "WELES stalled-turn recovery: Your stream went idle before completion. Resume the unfinished turn now.".to_string(),
-            2 => format!(
+    match attempt {
+        1 => match candidate.class {
+            StalledTurnClass::ActiveStreamIdle => {
+                "WELES stalled-turn recovery: Your stream went idle before completion. Resume the unfinished turn now.".to_string()
+            }
+            StalledTurnClass::ToolCallLoop => format!(
+                "WELES stalled-turn recovery: This thread appears stuck in a tool loop ({}). Stop repeating the same tool cycle. Re-orient from the current thread state and continue.",
+                candidate.last_message_excerpt
+            ),
+            StalledTurnClass::NoProgress => format!(
+                "WELES stalled-turn recovery: This thread appears stalled with no progress ({}). Resume from the current thread state now.",
+                candidate.last_message_excerpt
+            ),
+            _ => "WELES stalled-turn recovery: Continue from your last unfinished action."
+                .to_string(),
+        },
+        2 => match candidate.class {
+            StalledTurnClass::ActiveStreamIdle => format!(
                 "WELES stalled-turn recovery: Your stream went idle after partial output (\"{}\"). Continue the unfinished turn now.",
                 candidate.last_message_excerpt
             ),
+            StalledTurnClass::ToolCallLoop => format!(
+                "WELES stalled-turn recovery: The thread is still looping on the same tool pattern ({}). Break the loop, re-orient, and continue with concrete progress now.",
+                candidate.last_message_excerpt
+            ),
+            StalledTurnClass::NoProgress => format!(
+                "WELES stalled-turn recovery: The thread is still showing no progress ({}). Resume with concrete progress now.",
+                candidate.last_message_excerpt
+            ),
             _ => format!(
+                "WELES stalled-turn recovery: You said \"{}\" but no concrete follow-through happened. Continue with that unfinished work now.",
+                candidate.last_message_excerpt
+            ),
+        },
+        _ => match candidate.class {
+            StalledTurnClass::ActiveStreamIdle => format!(
                 "WELES stalled-turn recovery: The stream kept stalling before completion. Resume immediately from this unfinished point: {}",
                 candidate.last_message_excerpt
             ),
-        };
-    }
-
-    match attempt {
-        1 => "WELES stalled-turn recovery: Continue from your last unfinished action.".to_string(),
-        2 => format!(
-            "WELES stalled-turn recovery: You said \"{}\" but no concrete follow-through happened. Continue with that unfinished work now.",
-            candidate.last_message_excerpt
-        ),
-        _ => format!(
-            "WELES stalled-turn recovery: Your previous turn stopped after promising work but before taking action. Resume immediately from this unfinished step: {}",
-            candidate.last_message_excerpt
-        ),
+            StalledTurnClass::ToolCallLoop => format!(
+                "WELES stalled-turn recovery: The thread kept repeating the same tool loop. Resume immediately from this stuck point and take a different action: {}",
+                candidate.last_message_excerpt
+            ),
+            StalledTurnClass::NoProgress => format!(
+                "WELES stalled-turn recovery: The thread remained stalled with no progress. Resume immediately from this stuck point: {}",
+                candidate.last_message_excerpt
+            ),
+            _ => format!(
+                "WELES stalled-turn recovery: Your previous turn stopped after promising work but before taking action. Resume immediately from this unfinished step: {}",
+                candidate.last_message_excerpt
+            ),
+        },
     }
 }
 
@@ -186,6 +223,14 @@ fn stalled_turn_internal_dm_message(
     match candidate.class {
         StalledTurnClass::ActiveStreamIdle => format!(
             "WELES stalled-turn recovery for thread `{}`.\nAttempt {attempt}/3.\nYou are the active responder ({responder_name}). Your stream went idle before completion after partial output: \"{}\"\nResume the original operator request immediately: {}",
+            candidate.thread_id, candidate.last_message_excerpt, prior_user_message,
+        ),
+        StalledTurnClass::ToolCallLoop => format!(
+            "WELES stalled-turn recovery for thread `{}`.\nAttempt {attempt}/3.\nYou are the active responder ({responder_name}). The thread appears stuck in a tool loop: \"{}\"\nStop repeating the same tool cycle and continue the original operator request immediately: {}",
+            candidate.thread_id, candidate.last_message_excerpt, prior_user_message,
+        ),
+        StalledTurnClass::NoProgress => format!(
+            "WELES stalled-turn recovery for thread `{}`.\nAttempt {attempt}/3.\nYou are the active responder ({responder_name}). The thread appears stalled with no progress: \"{}\"\nResume the original operator request immediately and make concrete progress: {}",
             candidate.thread_id, candidate.last_message_excerpt, prior_user_message,
         ),
         _ => format!(

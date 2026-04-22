@@ -18,6 +18,16 @@ async fn execute_list_subagents(
         false
     }
 
+    let all_tasks = agent.list_tasks().await;
+    let fallback_parent_task_id = if let Some(task_id) = task_id {
+        all_tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .and_then(|task| task.parent_task_id.clone().or_else(|| Some(task.id.clone())))
+    } else {
+        None
+    };
+
     let status_filter = args
         .get("status")
         .and_then(|value| value.as_str())
@@ -28,7 +38,7 @@ async fn execute_list_subagents(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-        .or_else(|| task_id.map(ToOwned::to_owned));
+        .or(fallback_parent_task_id);
     let parent_thread_id = args
         .get("parent_thread_id")
         .and_then(|value| value.as_str())
@@ -42,7 +52,6 @@ async fn execute_list_subagents(
         .map(|value| value as usize)
         .unwrap_or(20);
 
-    let all_tasks = agent.list_tasks().await;
     let mut subagents = all_tasks
         .clone()
         .into_iter()
