@@ -1108,6 +1108,158 @@ async fn tui_bash_command_wait_false_returns_immediate_operation_handle() {
 }
 
 #[tokio::test]
+async fn tui_bash_command_falls_back_to_goal_run_surface_when_thread_surface_is_missing() {
+    let root = tempdir().expect("tempdir should succeed");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+    let thread_id = "thread-tui-goal-surface-fallback";
+    let task_id = "task-tui-goal-surface-fallback";
+
+    let goal_run = engine
+        .start_goal_run_with_surface(
+            "Verify TUI shell routing".to_string(),
+            None,
+            Some(thread_id.to_string()),
+            None,
+            None,
+            None,
+            None,
+            Some(amux_protocol::ClientSurface::Tui),
+            None,
+        )
+        .await;
+    engine.clear_thread_client_surface(thread_id).await;
+
+    {
+        let mut tasks = engine.tasks.lock().await;
+        tasks.push_back(crate::agent::types::AgentTask {
+            id: task_id.to_string(),
+            title: "Run routed shell command".to_string(),
+            description: "Exercise TUI fallback shell routing".to_string(),
+            status: crate::agent::types::TaskStatus::InProgress,
+            priority: crate::agent::types::TaskPriority::Normal,
+            progress: 0,
+            created_at: 0,
+            started_at: None,
+            completed_at: None,
+            error: None,
+            result: None,
+            thread_id: Some(thread_id.to_string()),
+            source: "test".to_string(),
+            notify_on_complete: false,
+            notify_channels: Vec::new(),
+            dependencies: Vec::new(),
+            command: None,
+            session_id: None,
+            goal_run_id: Some(goal_run.id.clone()),
+            goal_run_title: Some(goal_run.title.clone()),
+            goal_step_id: None,
+            goal_step_title: None,
+            parent_task_id: None,
+            parent_thread_id: None,
+            runtime: "foreground".to_string(),
+            retry_count: 0,
+            max_retries: 0,
+            next_retry_at: None,
+            scheduled_at: None,
+            blocked_reason: None,
+            awaiting_approval_id: None,
+            policy_fingerprint: None,
+            approval_expires_at: None,
+            containment_scope: None,
+            compensation_status: None,
+            compensation_summary: None,
+            lane_id: None,
+            last_error: None,
+            logs: Vec::new(),
+            tool_whitelist: None,
+            tool_blacklist: None,
+            context_budget_tokens: None,
+            context_overflow_action: None,
+            termination_conditions: None,
+            success_criteria: None,
+            max_duration_secs: None,
+            supervisor_config: None,
+            override_provider: None,
+            override_model: None,
+            override_system_prompt: None,
+            sub_agent_def_id: None,
+        });
+    }
+
+    let plan_call = ToolCall::with_default_weles_review(
+        "tool-tui-goal-surface-plan".to_string(),
+        ToolFunction {
+            name: "update_todo".to_string(),
+            arguments: serde_json::json!({
+                "items": [
+                    { "content": "Verify shell routing stays headless", "status": "in_progress" }
+                ]
+            })
+            .to_string(),
+        },
+    );
+
+    let plan_result = execute_tool(
+        &plan_call,
+        &engine,
+        thread_id,
+        Some(task_id),
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(
+        !plan_result.is_error,
+        "update_todo should establish plan mode before shell execution: {}",
+        plan_result.content
+    );
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-tui-goal-surface-fallback".to_string(),
+        ToolFunction {
+            name: "bash_command".to_string(),
+            arguments: serde_json::json!({
+                "command": "printf routed-via-goal-surface",
+                "sandbox_enabled": true,
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        thread_id,
+        Some(task_id),
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(
+        !result.is_error,
+        "TUI goal-run surface should keep bash_command headless: {}",
+        result.content
+    );
+    assert!(
+        result.content.contains("routed-via-goal-surface"),
+        "headless execution should return command output: {}",
+        result.content
+    );
+}
+
+#[tokio::test]
 async fn tui_bash_command_wait_false_exposes_failure_payload_via_operation_status() {
     let root = tempdir().expect("tempdir should succeed");
     let manager = SessionManager::new_test(root.path()).await;

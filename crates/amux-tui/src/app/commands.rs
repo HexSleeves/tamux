@@ -98,10 +98,7 @@ impl TuiModel {
         self.mission_control_navigation_state().return_to_thread_id
     }
 
-    pub(super) fn set_mission_control_return_to_thread_id(
-        &mut self,
-        thread_id: Option<String>,
-    ) {
+    pub(super) fn set_mission_control_return_to_thread_id(&mut self, thread_id: Option<String>) {
         self.update_mission_control_navigation_state(|state| {
             state.return_to_thread_id = thread_id;
         });
@@ -485,8 +482,13 @@ impl TuiModel {
                 self.open_thread_conversation(thread_id);
                 true
             }
-            crate::state::goal_workspace::GoalPlanSelection::Step { .. }
-            | crate::state::goal_workspace::GoalPlanSelection::Todo { .. } => false,
+            crate::state::goal_workspace::GoalPlanSelection::Step { step_id } => {
+                self.goal_workspace.toggle_step_expanded(step_id);
+                self.sync_goal_workspace_selection_for_active_goal_pane();
+                self.clamp_goal_workspace_plan_scroll_to_selection();
+                true
+            }
+            crate::state::goal_workspace::GoalPlanSelection::Todo { .. } => false,
         }
     }
 
@@ -2185,7 +2187,9 @@ impl TuiModel {
             return;
         };
 
-        self.set_mission_control_return_to_thread_id(self.chat.thread_history_stack().last().cloned());
+        self.set_mission_control_return_to_thread_id(
+            self.chat.thread_history_stack().last().cloned(),
+        );
         self.request_latest_thread_page(thread_id.clone(), true);
         self.main_pane_view = MainPaneView::Conversation;
         self.task_view_scroll = 0;
@@ -2199,6 +2203,17 @@ impl TuiModel {
         self.clear_task_view_drag_selection();
         if let sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. } = &target {
             self.request_authoritative_goal_run_refresh(goal_run_id.clone());
+            if self.tasks.goal_run_by_id(goal_run_id).is_some_and(|run| {
+                matches!(
+                    run.status,
+                    Some(task::GoalRunStatus::Queued)
+                        | Some(task::GoalRunStatus::Planning)
+                        | Some(task::GoalRunStatus::Running)
+                        | Some(task::GoalRunStatus::AwaitingApproval)
+                )
+            }) {
+                self.schedule_goal_hydration_refresh(goal_run_id.clone());
+            }
             self.goal_workspace.set_plan_scroll(0);
         }
         self.request_task_view_context(&target);
@@ -2206,6 +2221,7 @@ impl TuiModel {
         self.reconcile_goal_sidebar_selection_for_active_goal_pane();
         self.sync_goal_workspace_selection_for_active_goal_pane();
         self.task_view_scroll = 0;
+        self.sync_contextual_approval_overlay();
     }
 
     pub(super) fn sync_thread_picker_item_count(&mut self) {

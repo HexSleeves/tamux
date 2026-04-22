@@ -105,10 +105,23 @@ impl AgentEngine {
         let mut goal_run_id = None;
         let mut step_index = None;
         if let Some(task_id) = task_id {
-            goal_run_update = self.record_goal_run_todo_snapshot(task_id, &items).await;
-            if let Some(goal_run) = goal_run_update.as_ref() {
-                goal_run_id = Some(goal_run.id.clone());
-                step_index = Some(goal_run.current_step_index);
+            if let Some(context) = self.goal_todo_context_for_task(task_id).await {
+                if context.authoritative {
+                    normalize_goal_todo_items(
+                        &mut items,
+                        context.current_step_index,
+                        context.total_steps,
+                    );
+                    {
+                        let mut todos = self.thread_todos.write().await;
+                        todos.insert(thread_id.to_string(), items.clone());
+                    }
+                    self.persist_todos().await;
+
+                    goal_run_update = self.record_goal_run_todo_snapshot(task_id, &items).await;
+                    goal_run_id = Some(context.goal_run_id);
+                    step_index = Some(context.current_step_index);
+                }
             }
         }
 
@@ -268,6 +281,28 @@ impl AgentEngine {
                 .clone()
                 .or_else(|| goal_run.and_then(|item| item.session_id)),
         )
+    }
+
+    async fn goal_todo_context_for_task(&self, task_id: &str) -> Option<GoalTodoContext> {
+        let task = {
+            let tasks = self.tasks.lock().await;
+            tasks.iter().find(|task| task.id == task_id).cloned()
+        }?;
+        let goal_run_id = task.goal_run_id.clone()?;
+        let goal_run = {
+            let goal_runs = self.goal_runs.lock().await;
+            goal_runs
+                .iter()
+                .find(|goal_run| goal_run.id == goal_run_id)
+                .cloned()
+        }?;
+
+        Some(GoalTodoContext {
+            goal_run_id,
+            current_step_index: goal_run.current_step_index,
+            total_steps: goal_run.steps.len(),
+            authoritative: task.source == "goal_run" && task.parent_task_id.is_none(),
+        })
     }
 
     pub(super) async fn resolve_thread_repo_root(
@@ -580,5 +615,41 @@ impl AgentEngine {
 
         self.persist_tasks().await;
         self.emit_task_update(&updated, Some("Task awaiting approval".into()));
+    }
+}
+
+#[derive(Debug, Clone)]
+struct GoalTodoContext {
+    goal_run_id: String,
+    current_step_index: usize,
+    total_steps: usize,
+    authoritative: bool,
+}
+
+fn normalize_goal_todo_items(
+    items: &mut [TodoItem],
+    current_step_index: usize,
+    total_steps: usize,
+) {
+    let explicit_step_indexes = items
+        .iter()
+        .filter_map(|item| item.step_index)
+        .collect::<Vec<_>>();
+    let looks_one_based = !explicit_step_indexes.is_empty()
+        && total_steps > 0
+        && explicit_step_indexes
+            .iter()
+            .all(|step_index| *step_index > 0 && *step_index <= total_steps)
+        && !explicit_step_indexes.contains(&0);
+
+    for item in items {
+        if looks_one_based {
+            item.step_index = item
+                .step_index
+                .map(|step_index| step_index.saturating_sub(1));
+        }
+        if item.step_index.is_none() {
+            item.step_index = Some(current_step_index);
+        }
     }
 }

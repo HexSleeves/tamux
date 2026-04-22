@@ -17,6 +17,7 @@ pub enum ModalKind {
     ErrorViewer,
     QueuedPrompts,
     ApprovalOverlay,
+    GoalApprovalRejectPrompt,
     ApprovalCenter,
     OperatorQuestionOverlay,
     ChatActionConfirm,
@@ -83,6 +84,7 @@ pub enum ModalAction {
 pub struct ModalState {
     stack: Vec<ModalKind>,
     command_query: String,
+    command_preview: Option<String>,
     command_items: Vec<CommandItem>,
     filtered_indices: Vec<usize>,
     picker_cursor: usize,
@@ -132,6 +134,7 @@ impl ModalState {
         Self {
             stack: Vec::new(),
             command_query: String::new(),
+            command_preview: None,
             command_items: items,
             filtered_indices: filtered,
             picker_cursor: 0,
@@ -150,6 +153,17 @@ impl ModalState {
     }
     pub fn command_query(&self) -> &str {
         &self.command_query
+    }
+    pub fn command_display_query(&self) -> &str {
+        self.command_preview
+            .as_deref()
+            .unwrap_or(&self.command_query)
+    }
+    pub fn command_preview(&self) -> Option<&str> {
+        self.command_preview.as_deref()
+    }
+    pub fn set_command_preview(&mut self, preview: Option<String>) {
+        self.command_preview = preview;
     }
     pub fn command_items(&self) -> &[CommandItem] {
         &self.command_items
@@ -281,6 +295,7 @@ impl ModalState {
             ModalAction::Push(kind) => {
                 self.stack.push(kind);
                 self.command_query.clear();
+                self.command_preview = None;
                 self.picker_cursor = 0;
                 self.picker_item_count = None;
                 if kind == ModalKind::ThreadPicker {
@@ -291,17 +306,20 @@ impl ModalState {
             ModalAction::Pop => {
                 self.stack.pop();
                 self.command_query.clear();
+                self.command_preview = None;
                 self.picker_cursor = 0;
                 self.refilter();
             }
             ModalAction::RemoveAll(kind) => {
                 self.stack.retain(|entry| *entry != kind);
                 self.command_query.clear();
+                self.command_preview = None;
                 self.picker_cursor = 0;
                 self.refilter();
             }
             ModalAction::SetQuery(query) => {
                 self.command_query = query;
+                self.command_preview = None;
                 self.refilter();
                 self.picker_cursor = 0;
             }

@@ -45,7 +45,7 @@ pub fn render(frame: &mut Frame, area: Rect, modal: &ModalState, theme: &ThemeTo
         .split(inner);
 
     // Search input
-    let query = modal.command_query();
+    let query = modal.command_display_query();
     let input_line = Line::from(vec![
         Span::raw(" "),
         Span::styled(if query.is_empty() { "/" } else { query }, theme.fg_active),
