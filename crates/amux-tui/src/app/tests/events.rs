@@ -2912,6 +2912,45 @@ fn mission_control_header_falls_back_to_root_thread_runtime_when_active_thread_m
 }
 
 #[test]
+fn header_uses_thread_profile_metadata_before_runtime_metadata_arrives() {
+    let mut model = make_model();
+    model.config.provider = PROVIDER_ID_GITHUB_COPILOT.to_string();
+    model.config.auth_source = "github_copilot".to_string();
+    model.config.model = "gpt-5.4".to_string();
+    model.config.context_window_tokens = 400_000;
+
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-dazhbog-profile".to_string(),
+        title: "Spawned thread".to_string(),
+        agent_name: Some("Dazhbog".to_string()),
+    });
+    model.handle_thread_detail_event(crate::wire::AgentThread {
+        id: "thread-dazhbog-profile".to_string(),
+        agent_name: Some("Dazhbog".to_string()),
+        profile_provider: Some("alibaba-coding-plan".to_string()),
+        profile_model: Some("kimi-k2.5".to_string()),
+        profile_reasoning_effort: Some("high".to_string()),
+        profile_context_window_tokens: Some(240_000),
+        title: "Spawned thread".to_string(),
+        created_at: 1,
+        updated_at: 1,
+        ..Default::default()
+    });
+    model.chat.reduce(chat::ChatAction::SelectThread(
+        "thread-dazhbog-profile".to_string(),
+    ));
+
+    let profile = model.current_header_agent_profile();
+    assert_eq!(profile.agent_label, "Dazhbog");
+    assert_eq!(profile.provider, "alibaba-coding-plan");
+    assert_eq!(profile.model, "kimi-k2.5");
+    assert_eq!(profile.reasoning_effort.as_deref(), Some("high"));
+
+    let usage = model.current_header_usage_summary();
+    assert_eq!(usage.context_window_tokens, 240_000);
+}
+
+#[test]
 fn mission_control_header_context_window_tracks_active_execution_thread_changes() {
     let mut model = make_model();
     model.config.provider = PROVIDER_ID_GITHUB_COPILOT.to_string();

@@ -453,6 +453,20 @@ impl AgentEngine {
                 .await
                 .insert(thread_id.to_string(), client_surface);
         }
+        match thread_metadata.execution_profile {
+            Some(execution_profile) => {
+                self.thread_execution_profiles
+                    .write()
+                    .await
+                    .insert(thread_id.to_string(), execution_profile);
+            }
+            None => {
+                self.thread_execution_profiles
+                    .write()
+                    .await
+                    .remove(thread_id);
+            }
+        }
         match thread_metadata.prompt_memory_injection_state {
             Some(prompt_memory_injection_state) => {
                 self.thread_memory_injection_state_map()

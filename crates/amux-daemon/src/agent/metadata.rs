@@ -26,6 +26,7 @@ pub(super) struct ParsedMessageMetadata {
 
 pub(super) struct ParsedThreadMetadata {
     pub client_surface: Option<amux_protocol::ClientSurface>,
+    pub execution_profile: Option<ThreadExecutionProfile>,
     pub upstream_thread_id: Option<String>,
     pub upstream_transport: Option<ApiTransport>,
     pub upstream_provider: Option<String>,
@@ -162,9 +163,19 @@ pub(super) fn parse_thread_metadata(metadata_json: Option<&str>) -> ParsedThread
         .and_then(|value| {
             serde_json::from_value::<amux_protocol::ClientSurface>(value.clone()).ok()
         });
+    let execution_profile = metadata
+        .as_ref()
+        .and_then(|value| value.get("execution_profile"))
+        .or_else(|| {
+            metadata
+                .as_ref()
+                .and_then(|value| value.get("thread_profile"))
+        })
+        .and_then(|value| serde_json::from_value::<ThreadExecutionProfile>(value.clone()).ok());
 
     ParsedThreadMetadata {
         client_surface,
+        execution_profile,
         upstream_thread_id: get_str("upstream_thread_id"),
         upstream_transport,
         upstream_provider: get_str("upstream_provider"),
@@ -264,6 +275,7 @@ pub(super) fn build_message_metadata_json(message: &AgentMessage) -> Option<Stri
 pub(super) fn build_thread_metadata_json(
     thread: &AgentThread,
     client_surface: Option<amux_protocol::ClientSurface>,
+    execution_profile: Option<&ThreadExecutionProfile>,
     handoff_state: Option<&ThreadHandoffState>,
     thread_participants: &[ThreadParticipantState],
     thread_participant_suggestions: &[ThreadParticipantSuggestion],
@@ -273,6 +285,8 @@ pub(super) fn build_thread_metadata_json(
     serde_json::to_string(&serde_json::json!({
         "client_surface": client_surface,
         "clientSurface": client_surface,
+        "execution_profile": execution_profile,
+        "thread_profile": execution_profile,
         "upstream_thread_id": thread.upstream_thread_id,
         "upstreamThreadId": thread.upstream_thread_id,
         "upstream_transport": thread.upstream_transport,
@@ -294,4 +308,22 @@ pub(super) fn build_thread_metadata_json(
         "prompt_memory_injection_state": prompt_memory_injection_state,
     }))
     .ok()
+}
+
+impl AgentEngine {
+    pub(super) async fn set_thread_execution_profile(
+        &self,
+        thread_id: &str,
+        profile: Option<ThreadExecutionProfile>,
+    ) {
+        let mut profiles = self.thread_execution_profiles.write().await;
+        match profile {
+            Some(profile) => {
+                profiles.insert(thread_id.to_string(), profile);
+            }
+            None => {
+                profiles.remove(thread_id);
+            }
+        }
+    }
 }

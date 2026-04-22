@@ -8,6 +8,7 @@ pub(crate) struct ConversationAgentProfile {
     pub(crate) provider: String,
     pub(crate) model: String,
     pub(crate) reasoning_effort: Option<String>,
+    pub(crate) context_window_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -203,7 +204,9 @@ impl TuiModel {
         }
         .max(1);
 
-        providers::known_context_window_for(&profile.provider, &profile.model)
+        profile
+            .context_window_tokens
+            .or_else(|| providers::known_context_window_for(&profile.provider, &profile.model))
             .unwrap_or(fallback)
             .max(1)
     }
@@ -485,7 +488,39 @@ impl TuiModel {
                 .reasoning_effort
                 .clone()
                 .filter(|value| !value.is_empty()),
+            context_window_tokens: providers::known_context_window_for(
+                &entry.provider,
+                &entry.model,
+            ),
         })
+    }
+
+    fn thread_profile(thread: &chat::AgentThread) -> Option<ConversationAgentProfile> {
+        let provider = thread.profile_provider.as_deref()?.trim();
+        let model = thread.profile_model.as_deref()?.trim();
+        if provider.is_empty() || model.is_empty() {
+            return None;
+        }
+
+        Some(ConversationAgentProfile {
+            agent_label: thread
+                .agent_name
+                .as_deref()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or("Swarog")
+                .to_string(),
+            provider: provider.to_string(),
+            model: model.to_string(),
+            reasoning_effort: thread
+                .profile_reasoning_effort
+                .clone()
+                .filter(|value| !value.trim().is_empty()),
+            context_window_tokens: thread.profile_context_window_tokens,
+        })
+    }
+
+    fn active_thread_profile(&self) -> Option<ConversationAgentProfile> {
+        self.chat.active_thread().and_then(Self::thread_profile)
     }
 
     fn svarog_profile(&self) -> ConversationAgentProfile {
@@ -495,6 +530,7 @@ impl TuiModel {
             model: Self::configured_model_label(&self.config.model, &self.config.custom_model_name),
             reasoning_effort: (!self.config.reasoning_effort.trim().is_empty())
                 .then(|| self.config.reasoning_effort.clone()),
+            context_window_tokens: Some(self.effective_primary_context_window_tokens()),
         }
     }
 
@@ -521,6 +557,7 @@ impl TuiModel {
                     .reasoning_effort
                     .clone()
                     .filter(|value| !value.is_empty()),
+                context_window_tokens: providers::known_context_window_for(provider, model),
             }
         } else {
             ConversationAgentProfile {
@@ -532,6 +569,7 @@ impl TuiModel {
                 ),
                 reasoning_effort: (!self.config.reasoning_effort.trim().is_empty())
                     .then(|| self.config.reasoning_effort.clone()),
+                context_window_tokens: Some(self.effective_primary_context_window_tokens()),
             }
         }
     }
@@ -567,6 +605,10 @@ impl TuiModel {
                     .reasoning_effort
                     .clone()
                     .filter(|value| !value.is_empty()),
+                context_window_tokens: providers::known_context_window_for(
+                    &entry.provider,
+                    &entry.model,
+                ),
             };
         }
 
@@ -602,6 +644,13 @@ impl TuiModel {
                     .is_empty())
                 .then(|| self.config.compaction_weles_reasoning_effort.clone())
             });
+        let context_window_tokens =
+            providers::known_context_window_for(&provider, &model).or_else(|| {
+                match self.config.compaction_strategy.as_str() {
+                    "custom_model" => Some(self.config.compaction_custom_context_window_tokens),
+                    _ => Some(self.config.context_window_tokens),
+                }
+            });
 
         ConversationAgentProfile {
             agent_label: "Weles".to_string(),
@@ -612,10 +661,14 @@ impl TuiModel {
                 model
             },
             reasoning_effort,
+            context_window_tokens,
         }
     }
 
     pub(crate) fn current_conversation_agent_profile(&self) -> ConversationAgentProfile {
+        if let Some(profile) = self.active_thread_profile() {
+            return profile;
+        }
         if let Some(profile) = self.active_thread_responder_profile() {
             return profile;
         }
@@ -664,6 +717,7 @@ impl TuiModel {
                 .reasoning_effort
                 .clone()
                 .filter(|value| !value.trim().is_empty()),
+            context_window_tokens: providers::known_context_window_for(provider, model),
         })
     }
 
@@ -707,7 +761,16 @@ impl TuiModel {
                 .reasoning_effort
                 .clone()
                 .filter(|value| !value.trim().is_empty()),
+            context_window_tokens: providers::known_context_window_for(provider, model),
         })
+    }
+
+    fn goal_run_reserved_thread_profile(
+        &self,
+        run: &task::GoalRun,
+    ) -> Option<ConversationAgentProfile> {
+        self.goal_run_header_thread(run)
+            .and_then(Self::thread_profile)
     }
 
     fn goal_run_header_run(&self) -> Option<&task::GoalRun> {
@@ -790,6 +853,7 @@ impl TuiModel {
                 .runtime_reasoning_effort
                 .clone()
                 .or(fallback.reasoning_effort),
+            context_window_tokens: fallback.context_window_tokens,
         })
     }
 
@@ -798,6 +862,7 @@ impl TuiModel {
 
         Some(
             self.goal_run_runtime_thread_profile(run)
+                .or_else(|| self.goal_run_reserved_thread_profile(run))
                 .or_else(|| self.goal_run_owner_header_profile(run))
                 .or_else(|| self.goal_run_launch_header_profile(run))
                 .unwrap_or_else(|| self.svarog_profile()),
@@ -838,6 +903,7 @@ impl TuiModel {
                 provider: runtime.provider.unwrap_or(fallback.provider),
                 model: runtime.model.unwrap_or(fallback.model),
                 reasoning_effort: runtime.reasoning_effort.or(fallback.reasoning_effort),
+                context_window_tokens: fallback.context_window_tokens,
             };
         }
 

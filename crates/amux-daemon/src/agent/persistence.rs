@@ -167,8 +167,6 @@ impl AgentEngine {
             Err(error) => tracing::warn!("failed to read agent config items from sqlite: {error}"),
         }
 
-        self.init_gateway().await;
-
         // Load threads
         match self.history.list_threads().await {
             Ok(thread_rows) if !thread_rows.is_empty() => {
@@ -178,6 +176,7 @@ impl AgentEngine {
                 let mut thread_participants = HashMap::new();
                 let mut thread_participant_suggestions = HashMap::new();
                 let mut thread_client_surfaces = HashMap::new();
+                let mut thread_execution_profiles = HashMap::new();
                 let mut thread_skill_discovery_states = HashMap::new();
                 let mut thread_memory_injection_states = HashMap::new();
                 let mut thread_structural_memories = HashMap::new();
@@ -188,6 +187,9 @@ impl AgentEngine {
                         parse_thread_metadata(thread_row.metadata_json.as_deref());
                     if let Some(client_surface) = thread_metadata.client_surface {
                         thread_client_surfaces.insert(thread_id.clone(), client_surface);
+                    }
+                    if let Some(execution_profile) = thread_metadata.execution_profile.clone() {
+                        thread_execution_profiles.insert(thread_id.clone(), execution_profile);
                     }
                     if let Some(latest_skill_discovery_state) =
                         thread_metadata.latest_skill_discovery_state.clone()
@@ -280,6 +282,7 @@ impl AgentEngine {
                 *self.thread_participants.write().await = thread_participants;
                 *self.thread_participant_suggestions.write().await = thread_participant_suggestions;
                 *self.thread_client_surfaces.write().await = thread_client_surfaces;
+                *self.thread_execution_profiles.write().await = thread_execution_profiles;
                 *self.thread_skill_discovery_states.write().await = thread_skill_discovery_states;
                 *self.thread_memory_injection_state_map().write().await =
                     thread_memory_injection_states;
@@ -309,6 +312,7 @@ impl AgentEngine {
             }
             Ok(_) => {
                 *self.thread_message_hydration_pending.write().await = HashSet::new();
+                *self.thread_execution_profiles.write().await = HashMap::new();
             }
             Err(e) => tracing::warn!("failed to load agent threads from sqlite: {e}"),
         }
@@ -797,8 +801,9 @@ impl AgentEngine {
 
         tracing::info!("agent engine hydrated from {:?}", self.data_dir);
 
-        // Initialize gateway runtime ownership and spawn the standalone gateway when enabled.
-        self.maybe_spawn_gateway().await;
+        // Initialize gateway runtime ownership and spawn the standalone gateway
+        // after hydrate returns so gateway startup does not block daemon readiness.
+        self.schedule_gateway_startup();
 
         match startup_repo_roots.as_slice() {
             [repo_root] => self.schedule_aline_startup_reconciliation(repo_root.clone()),

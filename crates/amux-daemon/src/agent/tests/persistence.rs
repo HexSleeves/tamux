@@ -206,6 +206,36 @@ async fn hydrate_async_syncs_seeded_builtin_skills_into_catalog() {
 }
 
 #[tokio::test]
+async fn hydrate_returns_before_background_gateway_init_finishes() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.gateway.enabled = true;
+    config.gateway.telegram_token = "telegram-token".to_string();
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .set_gateway_init_test_delay(std::time::Duration::from_millis(300))
+        .await;
+
+    tokio::time::timeout(std::time::Duration::from_millis(100), engine.hydrate())
+        .await
+        .expect("hydrate should not block on gateway init")
+        .expect("hydrate should succeed");
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if engine.gateway_state.lock().await.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("background gateway init should eventually complete");
+}
+
+#[tokio::test]
 async fn hydrate_does_not_wait_for_goal_run_projection_persistence() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;

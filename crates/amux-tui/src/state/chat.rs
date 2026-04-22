@@ -1309,6 +1309,19 @@ impl ChatState {
                     if incoming.agent_name.is_some() {
                         existing.agent_name = incoming.agent_name;
                     }
+                    if incoming.profile_provider.is_some() {
+                        existing.profile_provider = incoming.profile_provider;
+                    }
+                    if incoming.profile_model.is_some() {
+                        existing.profile_model = incoming.profile_model;
+                    }
+                    if incoming.profile_reasoning_effort.is_some() {
+                        existing.profile_reasoning_effort = incoming.profile_reasoning_effort;
+                    }
+                    if incoming.profile_context_window_tokens.is_some() {
+                        existing.profile_context_window_tokens =
+                            incoming.profile_context_window_tokens;
+                    }
                     if !incoming.title.is_empty() {
                         existing.title = incoming.title;
                     }

@@ -168,13 +168,13 @@ impl AgentEngine {
         let stats = runtime.get(&task.id)?;
         Some(crate::agent::subagent::supervisor::SubagentSnapshot {
             task_id: stats.task_id.clone(),
-            last_tool_call_at: stats.last_tool_call_at,
+            last_tool_call_at: stats.last_tool_call_at.map(|ts| ts / 1000),
             tool_calls_total: stats.tool_calls_total,
             tool_calls_failed: stats.tool_calls_failed,
             consecutive_errors: stats.consecutive_errors,
             recent_tool_names: stats.recent_tool_names.iter().cloned().collect(),
             context_utilization_pct: stats.context_utilization_pct,
-            started_at: stats.started_at,
+            started_at: stats.started_at / 1000,
             max_duration_secs: stats.max_duration_secs,
         })
     }

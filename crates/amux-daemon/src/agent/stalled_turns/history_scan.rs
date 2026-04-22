@@ -1,6 +1,11 @@
 use super::analysis::classify_stalled_turn;
 use super::types::{StalledTurnClass, ThreadStallObservation, TurnEvidence};
 use super::*;
+use crate::agent::liveness::stuck_detection::{DetectionSnapshot, StuckDetector};
+use crate::agent::types::StuckReason;
+use crate::history::SubagentMetrics;
+
+const RECENT_THREAD_ACTIVITY_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 
 impl AgentEngine {
     pub(super) async fn collect_stalled_turn_observations(&self) -> Vec<ThreadStallObservation> {
@@ -15,14 +20,17 @@ impl AgentEngine {
             .iter()
             .map(|(thread_id, _)| thread_id.clone())
             .collect::<HashSet<_>>();
-        let threads = self.threads.read().await;
-        let goal_runs = self.goal_runs.lock().await;
-        let tasks = self.tasks.lock().await;
+        let threads = self.threads.read().await.clone();
+        let goal_runs = self.goal_runs.lock().await.clone();
+        let tasks = self.tasks.lock().await.clone();
+        let subagent_runtime = self.subagent_runtime.read().await.clone();
         let now = now_millis();
+        let recent_cutoff = now.saturating_sub(RECENT_THREAD_ACTIVITY_WINDOW_MS);
 
         let mut observations = threads
             .values()
             .filter(|thread| !active_stream_ids.contains(&thread.id))
+            .filter(|thread| latest_thread_activity_at(thread) >= recent_cutoff)
             .filter_map(|thread| latest_stalled_turn_observation(thread, &tasks, &goal_runs))
             .collect::<Vec<_>>();
 
@@ -33,8 +41,116 @@ impl AgentEngine {
                 return None;
             }
             let thread = threads.get(&thread_id)?;
+            if latest_stream_activity_at(thread, &entry) < recent_cutoff {
+                return None;
+            }
             idle_stream_stall_observation(thread, &tasks, &goal_runs, &entry)
         }));
+
+        let observed_ids = observations
+            .iter()
+            .map(|observation| observation.thread_id.clone())
+            .collect::<HashSet<_>>();
+        observations.extend(
+            self.runtime_stall_observations(
+                &threads,
+                &tasks,
+                &goal_runs,
+                &subagent_runtime,
+                now,
+                &observed_ids,
+            )
+            .await,
+        );
+
+        observations
+    }
+
+    async fn runtime_stall_observations(
+        &self,
+        threads: &HashMap<String, AgentThread>,
+        tasks: &VecDeque<AgentTask>,
+        goal_runs: &VecDeque<GoalRun>,
+        subagent_runtime: &HashMap<String, SubagentRuntimeStats>,
+        now_ms: u64,
+        observed_ids: &HashSet<String>,
+    ) -> Vec<ThreadStallObservation> {
+        let mut observations = Vec::new();
+        let mut seen_thread_ids = observed_ids.clone();
+        let now_secs = now_ms / 1000;
+
+        for task in tasks.iter().rev() {
+            if !matches!(
+                task.status,
+                TaskStatus::InProgress | TaskStatus::Blocked | TaskStatus::AwaitingApproval
+            ) {
+                continue;
+            }
+
+            let Some(thread_id) = task.thread_id.as_deref() else {
+                continue;
+            };
+            let thread_id = thread_id.trim();
+            if thread_id.is_empty() || seen_thread_ids.contains(thread_id) {
+                continue;
+            }
+
+            let Some(thread) = threads.get(thread_id) else {
+                continue;
+            };
+
+            let persisted_metrics = if subagent_runtime.contains_key(&task.id) {
+                None
+            } else {
+                self.history
+                    .get_subagent_metrics(&task.id)
+                    .await
+                    .ok()
+                    .flatten()
+            };
+            let snapshot = build_task_detection_snapshot(
+                task,
+                thread,
+                subagent_runtime,
+                persisted_metrics.as_ref(),
+            );
+            let last_activity_at =
+                latest_task_activity_at(task, thread, subagent_runtime, persisted_metrics.as_ref());
+            if now_ms.saturating_sub(last_activity_at) > RECENT_THREAD_ACTIVITY_WINDOW_MS {
+                continue;
+            }
+
+            let mut detector = StuckDetector::default();
+            if let Some(config) = task.supervisor_config.as_ref() {
+                detector.no_progress_timeout_secs = config.stuck_timeout_secs;
+            }
+
+            let Some(analysis) = detector.analyze(&snapshot, now_secs) else {
+                continue;
+            };
+            let class = match analysis.reason {
+                StuckReason::ToolCallLoop => StalledTurnClass::ToolCallLoop,
+                StuckReason::NoProgress => StalledTurnClass::NoProgress,
+                _ => continue,
+            };
+            let class_label = match class {
+                StalledTurnClass::ToolCallLoop => "tool_call_loop",
+                StalledTurnClass::NoProgress => "no_progress",
+                _ => unreachable!("runtime stall observations only emit runtime-derived classes"),
+            };
+
+            seen_thread_ids.insert(thread_id.to_string());
+            observations.push(ThreadStallObservation {
+                thread_id: thread_id.to_string(),
+                last_message_id: format!("runtime:{}:{class_label}", task.id),
+                last_message_at: last_activity_at,
+                last_assistant_message: analysis.evidence,
+                class,
+                stream_progress_kind: None,
+                task_id: Some(task.id.clone()),
+                goal_run_id: goal_run_id_for_thread(thread_id, goal_runs),
+            });
+        }
 
         observations
     }
@@ -161,4 +277,122 @@ fn task_progressed_after(task: &AgentTask, message_timestamp: u64) -> bool {
         .any(|entry| entry.timestamp > message_timestamp);
 
     execution_started || lifecycle_advanced || logged_progress
+}
+
+fn latest_thread_activity_at(thread: &AgentThread) -> u64 {
+    thread
+        .messages
+        .last()
+        .map(|message| message.timestamp)
+        .unwrap_or(thread.updated_at)
+        .max(thread.updated_at)
+}
+
+fn latest_stream_activity_at(thread: &AgentThread, stream: &StreamCancellationEntry) -> u64 {
+    latest_thread_activity_at(thread).max(stream.last_progress_at)
+}
+
+fn latest_runtime_activity_at(thread: &AgentThread, stats: &SubagentRuntimeStats) -> u64 {
+    latest_thread_activity_at(thread)
+        .max(stats.updated_at)
+        .max(stats.last_tool_call_at.unwrap_or(0))
+        .max(stats.last_progress_at.unwrap_or(0))
+        .max(stats.started_at)
+}
+
+fn latest_task_activity_at(
+    task: &AgentTask,
+    thread: &AgentThread,
+    subagent_runtime: &HashMap<String, SubagentRuntimeStats>,
+    persisted_metrics: Option<&SubagentMetrics>,
+) -> u64 {
+    let base_task_activity = latest_thread_activity_at(thread)
+        .max(task.started_at.unwrap_or(task.created_at))
+        .max(task.created_at);
+
+    let live_activity = subagent_runtime
+        .get(&task.id)
+        .map(|stats| latest_runtime_activity_at(thread, stats))
+        .unwrap_or(0);
+
+    let persisted_activity = persisted_metrics
+        .map(|metrics| {
+            latest_thread_activity_at(thread)
+                .max(metrics.updated_at)
+                .max(metrics.last_progress_at.unwrap_or(0))
+                .max(task.started_at.unwrap_or(task.created_at))
+        })
+        .unwrap_or(0);
+
+    base_task_activity
+        .max(live_activity)
+        .max(persisted_activity)
+}
+
+fn build_task_detection_snapshot(
+    task: &AgentTask,
+    thread: &AgentThread,
+    subagent_runtime: &HashMap<String, SubagentRuntimeStats>,
+    persisted_metrics: Option<&SubagentMetrics>,
+) -> DetectionSnapshot {
+    let live_stats = subagent_runtime.get(&task.id);
+    let fallback_last_progress_at = latest_thread_activity_at(thread);
+    let total_tool_calls = live_stats
+        .map(|stats| stats.tool_calls_total)
+        .or_else(|| {
+            persisted_metrics
+                .map(|metrics| metrics.tool_calls_total.max(0).min(u32::MAX as i64) as u32)
+        })
+        .unwrap_or(0);
+    let total_errors = live_stats
+        .map(|stats| stats.tool_calls_failed)
+        .or_else(|| {
+            persisted_metrics
+                .map(|metrics| metrics.tool_calls_failed.max(0).min(u32::MAX as i64) as u32)
+        })
+        .unwrap_or(0);
+    let context_utilization_pct = live_stats
+        .map(|stats| stats.context_utilization_pct)
+        .or_else(|| {
+            persisted_metrics.and_then(|metrics| {
+                task.context_budget_tokens.and_then(|budget| {
+                    if budget == 0 {
+                        Some(0)
+                    } else {
+                        Some(
+                            (((metrics.tokens_consumed.max(0) as u64) * 100) / budget as u64)
+                                .min(100) as u32,
+                        )
+                    }
+                })
+            })
+        })
+        .unwrap_or(0);
+
+    DetectionSnapshot {
+        entity_id: task.id.clone(),
+        entity_type: "task".to_string(),
+        last_progress_at: if let Some(stats) = live_stats {
+            stats.last_progress_at.map(|timestamp| timestamp / 1000)
+        } else {
+            persisted_metrics
+                .and_then(|metrics| metrics.last_progress_at.map(|ts| ts / 1000))
+                .or(Some(fallback_last_progress_at / 1000))
+        },
+        started_at: live_stats
+            .map(|stats| stats.started_at / 1000)
+            .unwrap_or_else(|| task.started_at.unwrap_or(task.created_at) / 1000),
+        max_duration_secs: live_stats
+            .and_then(|stats| stats.max_duration_secs)
+            .or(task.max_duration_secs),
+        consecutive_errors: live_stats
+            .map(|stats| stats.consecutive_errors)
+            .unwrap_or(0),
+        total_errors,
+        total_tool_calls,
+        recent_tool_names: live_stats
+            .map(|stats| stats.recent_tool_names.iter().cloned().collect())
+            .unwrap_or_default(),
+        context_utilization_pct,
+    }
 }

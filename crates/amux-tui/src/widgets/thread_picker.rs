@@ -332,6 +332,14 @@ pub(crate) fn is_weles_thread(thread: &AgentThread) -> bool {
             }))
 }
 
+fn is_svarog_thread(thread: &AgentThread) -> bool {
+    thread
+        .agent_name
+        .as_deref()
+        .and_then(normalize_agent_tab_id)
+        .is_none()
+}
+
 pub(crate) fn thread_display_title(thread: &AgentThread) -> String {
     if thread.id == "concierge" || thread.title.eq_ignore_ascii_case("concierge") {
         AGENT_NAME_RAROG.to_string()
@@ -356,6 +364,7 @@ pub(crate) fn filtered_threads<'a>(
                     && !is_gateway_thread(thread)
                     && !is_weles_thread(thread)
                     && !is_playground_thread(thread)
+                    && is_svarog_thread(thread)
             }
             ThreadPickerTab::Rarog => is_rarog_thread(thread),
             ThreadPickerTab::Weles => !is_playground_thread(thread) && is_weles_thread(thread),
@@ -1021,6 +1030,31 @@ mod tests {
 
         assert_eq!(threads.len(), 1);
         assert_eq!(threads[0].id, "regular-thread");
+    }
+
+    #[test]
+    fn filtered_threads_swarog_tab_excludes_dynamic_subagent_threads() {
+        let chat = make_chat(vec![
+            AgentThread {
+                id: "thread-svarog".into(),
+                agent_name: Some("Svarog".into()),
+                title: "Root planning".into(),
+                ..Default::default()
+            },
+            AgentThread {
+                id: "thread-domowoj".into(),
+                agent_name: Some("Domowoj".into()),
+                title: "Spawned child execution".into(),
+                ..Default::default()
+            },
+        ]);
+        let subagents = make_subagents(vec![sample_subagent("domowoj", "Domowoj", false)]);
+        let modal = ModalState::new();
+
+        let threads = filtered_threads(&chat, &modal, &subagents);
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, "thread-svarog");
     }
 
     #[test]

@@ -924,14 +924,37 @@ impl TuiModel {
         self.bootstrap_pending_activity_threads.remove(thread_id);
     }
 
-    fn should_preserve_bootstrap_activity_on_reload(&self, thread_id: &str) -> bool {
-        self.bootstrap_pending_activity_threads.contains(thread_id)
+    fn should_preserve_pending_thinking_activity_on_reload(&self, thread_id: &str) -> bool {
+        if self
+            .thread_agent_activity
+            .get(thread_id)
+            .map(String::as_str)
+            != Some("thinking")
+            || self.chat.is_streaming()
+        {
+            return false;
+        }
+
+        if self.bootstrap_pending_activity_threads.contains(thread_id) {
+            return true;
+        }
+
+        self.chat.active_thread_id() == Some(thread_id)
             && self
-                .thread_agent_activity
-                .get(thread_id)
-                .map(String::as_str)
-                == Some("thinking")
-            && !self.chat.is_streaming()
+                .chat
+                .active_thread()
+                .and_then(|thread| {
+                    thread
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|message| {
+                            !message.content.trim().is_empty()
+                                && !matches!(message.role, chat::MessageRole::System)
+                        })
+                        .map(|message| message.role == chat::MessageRole::User)
+                })
+                .unwrap_or(false)
     }
 
     fn clear_agent_activity_for(&mut self, thread_id: Option<&str>) {

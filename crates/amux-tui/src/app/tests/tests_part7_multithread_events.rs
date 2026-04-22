@@ -190,7 +190,7 @@ fn background_done_finalizes_origin_thread_without_clearing_selected_thread_busy
 }
 
 #[test]
-fn active_thread_reload_required_clears_busy_state_and_requests_refresh() {
+fn active_thread_reload_required_preserves_thinking_when_waiting_for_first_response() {
     let (mut model, mut daemon_rx) = make_model_with_daemon_rx_for_multithread_tests();
     model.config.tui_chat_history_page_size = 123;
     model.connected = true;
@@ -204,13 +204,14 @@ fn active_thread_reload_required_clears_busy_state_and_requests_refresh() {
         thread_id: "thread-user".to_string(),
     });
 
-    assert!(
-        model.footer_activity_text().is_none(),
-        "reload fallback for the selected thread must clear stale busy UI"
+    assert_eq!(
+        model.footer_activity_text().as_deref(),
+        Some("thinking"),
+        "reload before the first assistant event should preserve pending thinking"
     );
     assert!(
-        !model.assistant_busy(),
-        "reload fallback should not leave the selected thread busy forever"
+        model.assistant_busy(),
+        "reload before the first assistant event should keep the thread marked busy"
     );
 
     let commands = drain_daemon_commands(&mut daemon_rx);
@@ -238,6 +239,41 @@ fn active_thread_reload_required_clears_busy_state_and_requests_refresh() {
             DaemonCommand::RequestThreadWorkContext(thread_id) if thread_id == "thread-user"
         )),
         "reload should request fresh work context"
+    );
+}
+
+#[test]
+fn active_thread_reload_required_clears_stale_busy_state_without_pending_first_response() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx_for_multithread_tests();
+    model.config.tui_chat_history_page_size = 123;
+    model.connected = true;
+    seed_two_visible_threads(&mut model);
+    model.set_active_thread_activity("thinking");
+
+    model.handle_client_event(ClientEvent::ThreadReloadRequired {
+        thread_id: "thread-user".to_string(),
+    });
+
+    assert!(
+        model.footer_activity_text().is_none(),
+        "reload fallback for the selected thread must clear stale busy UI"
+    );
+    assert!(
+        !model.assistant_busy(),
+        "reload fallback should not leave the selected thread busy forever"
+    );
+
+    let commands = drain_daemon_commands(&mut daemon_rx);
+    assert!(
+        commands.iter().any(|command| matches!(
+            command,
+            DaemonCommand::RequestThread {
+                thread_id,
+                message_limit: Some(123),
+                message_offset: Some(0),
+            } if thread_id == "thread-user"
+        )),
+        "reload should request fresh thread detail"
     );
 }
 

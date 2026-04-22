@@ -783,3 +783,711 @@ async fn supervise_stalled_turns_escalates_after_third_retry_window() {
         .expect("task should remain present");
     assert_eq!(task.blocked_reason.as_deref(), Some("stuck_needs_recovery"));
 }
+
+#[tokio::test]
+async fn collect_stalled_turn_observations_detects_recent_subagent_tool_loop() {
+    let engine = build_test_engine("Acknowledged.").await;
+    let now = super::now_millis();
+    let thread_id = "thread-subagent-tool-loop";
+    let task_id = "task-subagent-tool-loop";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            AgentThread {
+                id: thread_id.to_string(),
+                agent_name: Some("Dazhbog".to_string()),
+                title: "Spawned worker".to_string(),
+                messages: vec![AgentMessage::user(
+                    "Keep working until the bug is fixed.",
+                    now.saturating_sub(120_000),
+                )],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: now.saturating_sub(120_000),
+                updated_at: now.saturating_sub(60_000),
+            },
+        );
+    }
+
+    {
+        let mut tasks = engine.tasks.lock().await;
+        tasks.push_back(AgentTask {
+            id: task_id.to_string(),
+            title: "Spawned worker".to_string(),
+            description: "Fix the stalled worker".to_string(),
+            status: TaskStatus::InProgress,
+            priority: TaskPriority::Normal,
+            progress: 0,
+            created_at: now.saturating_sub(120_000),
+            started_at: Some(now.saturating_sub(120_000)),
+            completed_at: None,
+            error: None,
+            result: None,
+            thread_id: Some(thread_id.to_string()),
+            source: "subagent".to_string(),
+            notify_on_complete: false,
+            notify_channels: Vec::new(),
+            dependencies: Vec::new(),
+            command: None,
+            session_id: None,
+            goal_run_id: None,
+            goal_run_title: None,
+            goal_step_id: None,
+            goal_step_title: None,
+            parent_task_id: Some("task-parent".to_string()),
+            parent_thread_id: Some("thread-parent".to_string()),
+            runtime: "daemon".to_string(),
+            retry_count: 0,
+            max_retries: 0,
+            next_retry_at: None,
+            scheduled_at: None,
+            blocked_reason: None,
+            awaiting_approval_id: None,
+            policy_fingerprint: None,
+            approval_expires_at: None,
+            containment_scope: None,
+            compensation_status: None,
+            compensation_summary: None,
+            lane_id: None,
+            last_error: None,
+            logs: Vec::new(),
+            tool_whitelist: None,
+            tool_blacklist: None,
+            override_provider: None,
+            override_model: None,
+            override_system_prompt: None,
+            context_budget_tokens: None,
+            context_overflow_action: None,
+            termination_conditions: None,
+            success_criteria: None,
+            max_duration_secs: None,
+            supervisor_config: None,
+            sub_agent_def_id: None,
+        });
+    }
+
+    let task = {
+        let tasks = engine.tasks.lock().await;
+        tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .cloned()
+            .expect("subagent task should exist")
+    };
+    engine
+        .record_subagent_tool_result(&task, thread_id, "read_file", false, 100)
+        .await;
+    engine
+        .record_subagent_tool_result(&task, thread_id, "search_files", false, 110)
+        .await;
+    engine
+        .record_subagent_tool_result(&task, thread_id, "read_file", false, 120)
+        .await;
+    engine
+        .record_subagent_tool_result(&task, thread_id, "search_files", false, 130)
+        .await;
+    {
+        let mut runtime = engine.subagent_runtime.write().await;
+        let stats = runtime
+            .get_mut(task_id)
+            .expect("subagent runtime should exist after tool loop");
+        stats.last_tool_call_at = Some(now.saturating_sub(31_000));
+        stats.last_progress_at = Some(now.saturating_sub(31_000));
+        stats.updated_at = now.saturating_sub(31_000);
+    }
+
+    let observations = engine.collect_stalled_turn_observations().await;
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].class, StalledTurnClass::ToolCallLoop);
+    assert_eq!(observations[0].task_id.as_deref(), Some(task_id));
+}
+
+#[tokio::test]
+async fn collect_stalled_turn_observations_ignores_threads_inactive_for_over_24_hours() {
+    let engine = build_test_engine("Acknowledged.").await;
+    let now = super::now_millis();
+    let day_ms = 24 * 60 * 60 * 1000;
+    let thread_id = "thread-subagent-too-old";
+    let task_id = "task-subagent-too-old";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            AgentThread {
+                id: thread_id.to_string(),
+                agent_name: Some("Dazhbog".to_string()),
+                title: "Old spawned worker".to_string(),
+                messages: vec![AgentMessage::user(
+                    "This request is stale now.",
+                    now.saturating_sub(day_ms + 60_000),
+                )],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: now.saturating_sub(day_ms + 120_000),
+                updated_at: now.saturating_sub(day_ms + 60_000),
+            },
+        );
+    }
+
+    let task = AgentTask {
+        id: task_id.to_string(),
+        title: "Old spawned worker".to_string(),
+        description: "Too old for stalled-turn retry".to_string(),
+        status: TaskStatus::InProgress,
+        priority: TaskPriority::Normal,
+        progress: 0,
+        created_at: now.saturating_sub(day_ms + 120_000),
+        started_at: Some(now.saturating_sub(day_ms + 120_000)),
+        completed_at: None,
+        error: None,
+        result: None,
+        thread_id: Some(thread_id.to_string()),
+        source: "subagent".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: None,
+        goal_run_id: None,
+        goal_run_title: None,
+        goal_step_id: None,
+        goal_step_title: None,
+        parent_task_id: Some("task-parent".to_string()),
+        parent_thread_id: Some("thread-parent".to_string()),
+        runtime: "daemon".to_string(),
+        retry_count: 0,
+        max_retries: 0,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: None,
+        awaiting_approval_id: None,
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        lane_id: None,
+        last_error: None,
+        logs: Vec::new(),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        override_provider: None,
+        override_model: None,
+        override_system_prompt: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        sub_agent_def_id: None,
+    };
+    {
+        let mut tasks = engine.tasks.lock().await;
+        tasks.push_back(task.clone());
+    }
+    engine.ensure_subagent_runtime(&task, Some(thread_id)).await;
+    {
+        let mut runtime = engine.subagent_runtime.write().await;
+        let stats = runtime
+            .get_mut(task_id)
+            .expect("subagent runtime should exist after initialization");
+        stats.started_at = now.saturating_sub(day_ms + 120_000);
+        stats.updated_at = now.saturating_sub(day_ms + 60_000);
+        stats.last_tool_call_at = Some(now.saturating_sub(day_ms + 60_000));
+        stats.last_progress_at = Some(now.saturating_sub(day_ms + 60_000));
+    }
+
+    let observations = engine.collect_stalled_turn_observations().await;
+    assert!(
+        observations.is_empty(),
+        "threads inactive for more than 24 hours should be ignored by stalled-turn"
+    );
+}
+
+#[tokio::test]
+async fn collect_stalled_turn_observations_detects_recent_subagent_no_progress() {
+    let engine = build_test_engine("Acknowledged.").await;
+    let now = super::now_millis();
+    let thread_id = "thread-subagent-no-progress";
+    let task_id = "task-subagent-no-progress";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            AgentThread {
+                id: thread_id.to_string(),
+                agent_name: Some("Dazhbog".to_string()),
+                title: "Spawned worker".to_string(),
+                messages: vec![AgentMessage::user(
+                    "Keep working until it is fixed.",
+                    now.saturating_sub(600_000),
+                )],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: now.saturating_sub(600_000),
+                updated_at: now.saturating_sub(31_000),
+            },
+        );
+    }
+
+    let task = AgentTask {
+        id: task_id.to_string(),
+        title: "Spawned worker".to_string(),
+        description: "Waiting with no progress".to_string(),
+        status: TaskStatus::InProgress,
+        priority: TaskPriority::Normal,
+        progress: 0,
+        created_at: now.saturating_sub(600_000),
+        started_at: Some(now.saturating_sub(600_000)),
+        completed_at: None,
+        error: None,
+        result: None,
+        thread_id: Some(thread_id.to_string()),
+        source: "subagent".to_string(),
+        notify_on_complete: false,
+        notify_channels: Vec::new(),
+        dependencies: Vec::new(),
+        command: None,
+        session_id: None,
+        goal_run_id: None,
+        goal_run_title: None,
+        goal_step_id: None,
+        goal_step_title: None,
+        parent_task_id: Some("task-parent".to_string()),
+        parent_thread_id: Some("thread-parent".to_string()),
+        runtime: "daemon".to_string(),
+        retry_count: 0,
+        max_retries: 0,
+        next_retry_at: None,
+        scheduled_at: None,
+        blocked_reason: None,
+        awaiting_approval_id: None,
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        lane_id: None,
+        last_error: None,
+        logs: Vec::new(),
+        tool_whitelist: None,
+        tool_blacklist: None,
+        override_provider: None,
+        override_model: None,
+        override_system_prompt: None,
+        context_budget_tokens: None,
+        context_overflow_action: None,
+        termination_conditions: None,
+        success_criteria: None,
+        max_duration_secs: None,
+        supervisor_config: None,
+        sub_agent_def_id: None,
+    };
+    {
+        let mut tasks = engine.tasks.lock().await;
+        tasks.push_back(task.clone());
+    }
+    engine.ensure_subagent_runtime(&task, Some(thread_id)).await;
+    {
+        let mut runtime = engine.subagent_runtime.write().await;
+        let stats = runtime
+            .get_mut(task_id)
+            .expect("subagent runtime should exist after initialization");
+        stats.started_at = now.saturating_sub(600_000);
+        stats.updated_at = now.saturating_sub(31_000);
+        stats.last_tool_call_at = Some(now.saturating_sub(31_000));
+        stats.last_progress_at = None;
+    }
+
+    let observations = engine.collect_stalled_turn_observations().await;
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].class, StalledTurnClass::NoProgress);
+    assert_eq!(observations[0].task_id.as_deref(), Some(task_id));
+}
+
+#[tokio::test]
+async fn collect_stalled_turn_observations_detects_recent_subagent_no_progress_without_runtime() {
+    let engine = build_test_engine("Acknowledged.").await;
+    let now = super::now_millis();
+    let thread_id = "thread-subagent-no-runtime";
+    let task_id = "task-subagent-no-runtime";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            AgentThread {
+                id: thread_id.to_string(),
+                agent_name: Some("Dazhbog".to_string()),
+                title: "Spawned worker".to_string(),
+                messages: vec![AgentMessage::user(
+                    "Continue until the issue is resolved.",
+                    now.saturating_sub(601_000),
+                )],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: now.saturating_sub(601_000),
+                updated_at: now.saturating_sub(601_000),
+            },
+        );
+    }
+
+    {
+        let mut tasks = engine.tasks.lock().await;
+        tasks.push_back(AgentTask {
+            id: task_id.to_string(),
+            title: "Spawned worker".to_string(),
+            description: "Lost runtime state".to_string(),
+            status: TaskStatus::InProgress,
+            priority: TaskPriority::Normal,
+            progress: 0,
+            created_at: now.saturating_sub(601_000),
+            started_at: Some(now.saturating_sub(601_000)),
+            completed_at: None,
+            error: None,
+            result: None,
+            thread_id: Some(thread_id.to_string()),
+            source: "subagent".to_string(),
+            notify_on_complete: false,
+            notify_channels: Vec::new(),
+            dependencies: Vec::new(),
+            command: None,
+            session_id: None,
+            goal_run_id: None,
+            goal_run_title: None,
+            goal_step_id: None,
+            goal_step_title: None,
+            parent_task_id: Some("task-parent".to_string()),
+            parent_thread_id: Some("thread-parent".to_string()),
+            runtime: "daemon".to_string(),
+            retry_count: 0,
+            max_retries: 0,
+            next_retry_at: None,
+            scheduled_at: None,
+            blocked_reason: None,
+            awaiting_approval_id: None,
+            policy_fingerprint: None,
+            approval_expires_at: None,
+            containment_scope: None,
+            compensation_status: None,
+            compensation_summary: None,
+            lane_id: None,
+            last_error: None,
+            logs: Vec::new(),
+            tool_whitelist: None,
+            tool_blacklist: None,
+            override_provider: None,
+            override_model: None,
+            override_system_prompt: None,
+            context_budget_tokens: None,
+            context_overflow_action: None,
+            termination_conditions: None,
+            success_criteria: None,
+            max_duration_secs: None,
+            supervisor_config: None,
+            sub_agent_def_id: None,
+        });
+    }
+
+    assert!(
+        engine.subagent_runtime.read().await.get(task_id).is_none(),
+        "test requires missing live subagent runtime"
+    );
+
+    let observations = engine.collect_stalled_turn_observations().await;
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].class, StalledTurnClass::NoProgress);
+    assert_eq!(observations[0].task_id.as_deref(), Some(task_id));
+}
+
+#[tokio::test]
+async fn supervise_stalled_turns_recovers_recent_subagent_tool_loop_via_task_retry() {
+    let engine = build_test_engine("Recovered child thread.").await;
+    let now = super::now_millis();
+    let thread_id = "thread-subagent-recovery";
+    let task_id = "task-subagent-recovery";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            AgentThread {
+                id: thread_id.to_string(),
+                agent_name: Some("Dazhbog".to_string()),
+                title: "Spawned worker".to_string(),
+                messages: vec![AgentMessage::user(
+                    "Investigate the regression and continue until fixed.",
+                    now.saturating_sub(120_000),
+                )],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: now.saturating_sub(120_000),
+                updated_at: now.saturating_sub(60_000),
+            },
+        );
+    }
+
+    {
+        let mut tasks = engine.tasks.lock().await;
+        tasks.push_back(AgentTask {
+            id: task_id.to_string(),
+            title: "Spawned worker".to_string(),
+            description: "Investigate the regression".to_string(),
+            status: TaskStatus::InProgress,
+            priority: TaskPriority::Normal,
+            progress: 0,
+            created_at: now.saturating_sub(120_000),
+            started_at: Some(now.saturating_sub(120_000)),
+            completed_at: None,
+            error: None,
+            result: None,
+            thread_id: Some(thread_id.to_string()),
+            source: "subagent".to_string(),
+            notify_on_complete: false,
+            notify_channels: Vec::new(),
+            dependencies: Vec::new(),
+            command: None,
+            session_id: None,
+            goal_run_id: None,
+            goal_run_title: None,
+            goal_step_id: None,
+            goal_step_title: None,
+            parent_task_id: Some("task-parent".to_string()),
+            parent_thread_id: Some("thread-parent".to_string()),
+            runtime: "daemon".to_string(),
+            retry_count: 0,
+            max_retries: 0,
+            next_retry_at: None,
+            scheduled_at: None,
+            blocked_reason: None,
+            awaiting_approval_id: None,
+            policy_fingerprint: None,
+            approval_expires_at: None,
+            containment_scope: None,
+            compensation_status: None,
+            compensation_summary: None,
+            lane_id: None,
+            last_error: None,
+            logs: Vec::new(),
+            tool_whitelist: None,
+            tool_blacklist: None,
+            override_provider: None,
+            override_model: None,
+            override_system_prompt: None,
+            context_budget_tokens: None,
+            context_overflow_action: None,
+            termination_conditions: None,
+            success_criteria: None,
+            max_duration_secs: None,
+            supervisor_config: None,
+            sub_agent_def_id: None,
+        });
+    }
+
+    let task = {
+        let tasks = engine.tasks.lock().await;
+        tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .cloned()
+            .expect("subagent task should exist")
+    };
+    engine
+        .record_subagent_tool_result(&task, thread_id, "read_file", false, 100)
+        .await;
+    engine
+        .record_subagent_tool_result(&task, thread_id, "search_files", false, 110)
+        .await;
+    engine
+        .record_subagent_tool_result(&task, thread_id, "read_file", false, 120)
+        .await;
+    engine
+        .record_subagent_tool_result(&task, thread_id, "search_files", false, 130)
+        .await;
+    {
+        let mut runtime = engine.subagent_runtime.write().await;
+        let stats = runtime
+            .get_mut(task_id)
+            .expect("subagent runtime should exist after tool loop");
+        stats.last_tool_call_at = Some(now.saturating_sub(31_000));
+        stats.last_progress_at = Some(now.saturating_sub(31_000));
+        stats.updated_at = now.saturating_sub(31_000);
+    }
+
+    engine
+        .supervise_stalled_turns()
+        .await
+        .expect("stalled-turn supervision should recover subagent thread");
+
+    let threads = engine.threads.read().await;
+    let thread = threads
+        .get(thread_id)
+        .expect("subagent thread should remain present");
+    assert!(thread.messages.iter().any(|message| {
+        message.role == MessageRole::System
+            && message.content.contains("WELES stalled-turn recovery")
+            && message.content.contains("tool loop")
+    }));
+    assert!(
+        !thread
+            .messages
+            .iter()
+            .any(|message| message.role == MessageRole::User && message.content == "continue"),
+        "stalled-turn retries should not append a synthetic visible continue turn"
+    );
+    assert!(thread.messages.iter().any(|message| {
+        message.role == MessageRole::Assistant
+            && message.content.contains("Recovered child thread.")
+    }));
+}
+
+#[tokio::test]
+async fn supervise_stalled_turns_recovers_recent_subagent_no_progress_without_runtime() {
+    let engine = build_test_engine("Recovered missing runtime child thread.").await;
+    let now = super::now_millis();
+    let thread_id = "thread-subagent-recovery-no-runtime";
+    let task_id = "task-subagent-recovery-no-runtime";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(
+            thread_id.to_string(),
+            AgentThread {
+                id: thread_id.to_string(),
+                agent_name: Some("Dazhbog".to_string()),
+                title: "Spawned worker".to_string(),
+                messages: vec![AgentMessage::user(
+                    "Keep going until it is fixed.",
+                    now.saturating_sub(601_000),
+                )],
+                pinned: false,
+                upstream_thread_id: None,
+                upstream_transport: None,
+                upstream_provider: None,
+                upstream_model: None,
+                upstream_assistant_id: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                created_at: now.saturating_sub(601_000),
+                updated_at: now.saturating_sub(601_000),
+            },
+        );
+    }
+
+    {
+        let mut tasks = engine.tasks.lock().await;
+        tasks.push_back(AgentTask {
+            id: task_id.to_string(),
+            title: "Spawned worker".to_string(),
+            description: "Recover without runtime state".to_string(),
+            status: TaskStatus::InProgress,
+            priority: TaskPriority::Normal,
+            progress: 0,
+            created_at: now.saturating_sub(601_000),
+            started_at: Some(now.saturating_sub(601_000)),
+            completed_at: None,
+            error: None,
+            result: None,
+            thread_id: Some(thread_id.to_string()),
+            source: "subagent".to_string(),
+            notify_on_complete: false,
+            notify_channels: Vec::new(),
+            dependencies: Vec::new(),
+            command: None,
+            session_id: None,
+            goal_run_id: None,
+            goal_run_title: None,
+            goal_step_id: None,
+            goal_step_title: None,
+            parent_task_id: Some("task-parent".to_string()),
+            parent_thread_id: Some("thread-parent".to_string()),
+            runtime: "daemon".to_string(),
+            retry_count: 0,
+            max_retries: 0,
+            next_retry_at: None,
+            scheduled_at: None,
+            blocked_reason: None,
+            awaiting_approval_id: None,
+            policy_fingerprint: None,
+            approval_expires_at: None,
+            containment_scope: None,
+            compensation_status: None,
+            compensation_summary: None,
+            lane_id: None,
+            last_error: None,
+            logs: Vec::new(),
+            tool_whitelist: None,
+            tool_blacklist: None,
+            override_provider: None,
+            override_model: None,
+            override_system_prompt: None,
+            context_budget_tokens: None,
+            context_overflow_action: None,
+            termination_conditions: None,
+            success_criteria: None,
+            max_duration_secs: None,
+            supervisor_config: None,
+            sub_agent_def_id: None,
+        });
+    }
+
+    assert!(
+        engine.subagent_runtime.read().await.get(task_id).is_none(),
+        "test requires missing live subagent runtime"
+    );
+
+    engine
+        .supervise_stalled_turns()
+        .await
+        .expect("stalled-turn supervision should recover subagent thread without runtime");
+
+    let threads = engine.threads.read().await;
+    let thread = threads
+        .get(thread_id)
+        .expect("subagent thread should remain present");
+    assert!(thread.messages.iter().any(|message| {
+        message.role == MessageRole::System
+            && message.content.contains("appears stalled with no progress")
+    }));
+    assert!(thread.messages.iter().any(|message| {
+        message.role == MessageRole::Assistant
+            && message
+                .content
+                .contains("Recovered missing runtime child thread.")
+    }));
+}

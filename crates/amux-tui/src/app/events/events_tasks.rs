@@ -521,7 +521,7 @@ impl TuiModel {
         // Reload is the authoritative replacement for any live stream state that was
         // truncated or otherwise downgraded before reaching the TUI.
         self.chat.reduce(chat::ChatAction::ResetStreaming);
-        if !self.should_preserve_bootstrap_activity_on_reload(thread_id.as_str()) {
+        if !self.should_preserve_pending_thinking_activity_on_reload(thread_id.as_str()) {
             self.clear_agent_activity_for(Some(thread_id.as_str()));
         }
         self.clear_pending_stop();

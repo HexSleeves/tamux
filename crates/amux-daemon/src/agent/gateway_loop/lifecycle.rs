@@ -1,6 +1,11 @@
 use super::*;
 
 impl AgentEngine {
+    #[cfg(test)]
+    pub(crate) async fn set_gateway_init_test_delay(&self, delay: Duration) {
+        *self.gateway_init_test_delay.lock().await = Some(delay);
+    }
+
     pub(super) async fn persist_gateway_fast_path_exchange(
         &self,
         channel_key: &str,
@@ -55,6 +60,13 @@ impl AgentEngine {
         Ok(thread_id)
     }
 
+    pub(crate) fn schedule_gateway_startup(self: &Arc<Self>) {
+        let engine = self.clone();
+        tokio::spawn(async move {
+            engine.maybe_spawn_gateway().await;
+        });
+    }
+
     pub async fn enqueue_gateway_message(&self, msg: gateway::IncomingMessage) -> Result<()> {
         let enabled = {
             let guard = self.gateway_state.lock().await;
@@ -77,6 +89,16 @@ impl AgentEngine {
     }
 
     pub(crate) async fn init_gateway(&self) {
+        let _init_guard = self.gateway_init_lock.lock().await;
+        if self.gateway_state.lock().await.is_some() {
+            return;
+        }
+
+        #[cfg(test)]
+        if let Some(delay) = *self.gateway_init_test_delay.lock().await {
+            tokio::time::sleep(delay).await;
+        }
+
         let config = self.config.read().await.clone();
         let gw = &config.gateway;
 

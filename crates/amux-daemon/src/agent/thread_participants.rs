@@ -126,6 +126,14 @@ fn is_participant_remove_action(action: &str) -> bool {
 }
 
 impl AgentEngine {
+    async fn task_id_for_thread(&self, thread_id: &str) -> Option<String> {
+        let tasks = self.tasks.lock().await;
+        tasks
+            .iter()
+            .find(|task| task.thread_id.as_deref() == Some(thread_id))
+            .map(|task| task.id.clone())
+    }
+
     async fn set_thread_participant_always_auto_response(
         &self,
         thread_id: &str,
@@ -525,13 +533,20 @@ impl AgentEngine {
             .unwrap_or_else(|| llm_user_content.to_string());
         let mut current_thread_id = thread_id.to_string();
         let mut current_llm_user_content = llm_user_content.to_string();
-        let mut current_agent_scope_id = canonical_agent_id(agent_id).to_string();
+        let task_id_for_thread = self.task_id_for_thread(thread_id).await;
+        let mut current_agent_scope_id = if task_id_for_thread.is_some() {
+            self.agent_scope_id_for_turn(Some(thread_id), task_id_for_thread.as_deref())
+                .await
+        } else {
+            canonical_agent_id(agent_id).to_string()
+        };
 
         loop {
             let thread_for_turn = current_thread_id.clone();
             let stored_user_content_for_turn = stored_user_content.clone();
             let llm_user_content_for_turn = current_llm_user_content.clone();
             let client_surface_for_turn = self.get_thread_client_surface(&thread_for_turn).await;
+            let task_id_for_turn = task_id_for_thread.clone();
             let outcome = Box::pin(run_with_agent_scope(
                 current_agent_scope_id.clone(),
                 async move {
@@ -540,7 +555,7 @@ impl AgentEngine {
                         &stored_user_content_for_turn,
                         &[],
                         &llm_user_content_for_turn,
-                        None,
+                        task_id_for_turn.as_deref(),
                         preferred_session_hint,
                         None,
                         client_surface_for_turn,
@@ -556,7 +571,10 @@ impl AgentEngine {
                 current_thread_id = outcome.thread_id.clone();
                 current_llm_user_content = restart.llm_user_content;
                 current_agent_scope_id = self
-                    .agent_scope_id_for_turn(Some(&current_thread_id), None)
+                    .agent_scope_id_for_turn(
+                        Some(&current_thread_id),
+                        task_id_for_thread.as_deref(),
+                    )
                     .await;
                 continue;
             }
@@ -1022,6 +1040,12 @@ impl AgentEngine {
             }
             let participants = self.list_thread_participants(thread_id).await;
             let suggestions = self.list_thread_participant_suggestions(thread_id).await;
+            let execution_profile = self
+                .thread_execution_profiles
+                .read()
+                .await
+                .get(thread_id)
+                .cloned();
             detail.insert(
                 "thread_participants".to_string(),
                 serde_json::to_value(participants).unwrap_or(serde_json::Value::Array(Vec::new())),
@@ -1029,6 +1053,38 @@ impl AgentEngine {
             detail.insert(
                 "queued_participant_suggestions".to_string(),
                 serde_json::to_value(suggestions).unwrap_or(serde_json::Value::Array(Vec::new())),
+            );
+            detail.insert(
+                "profile_provider".to_string(),
+                execution_profile
+                    .as_ref()
+                    .and_then(|profile| profile.provider.clone())
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null),
+            );
+            detail.insert(
+                "profile_model".to_string(),
+                execution_profile
+                    .as_ref()
+                    .and_then(|profile| profile.model.clone())
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null),
+            );
+            detail.insert(
+                "profile_reasoning_effort".to_string(),
+                execution_profile
+                    .as_ref()
+                    .and_then(|profile| profile.reasoning_effort.clone())
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null),
+            );
+            detail.insert(
+                "profile_context_window_tokens".to_string(),
+                execution_profile
+                    .as_ref()
+                    .and_then(|profile| profile.context_window_tokens)
+                    .map(serde_json::Value::from)
+                    .unwrap_or(serde_json::Value::Null),
             );
         }
 
