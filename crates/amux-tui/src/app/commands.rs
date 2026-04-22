@@ -968,6 +968,16 @@ impl TuiModel {
             crate::widgets::goal_workspace::GoalWorkspaceAction::RerunFromStep => {
                 self.request_selected_goal_step_rerun_confirmation()
             }
+            crate::widgets::goal_workspace::GoalWorkspaceAction::RefreshGoal => {
+                let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { goal_run_id, .. }) =
+                    &self.main_pane_view
+                else {
+                    return false;
+                };
+                self.request_authoritative_goal_run_refresh(goal_run_id.clone());
+                self.status_line = "Refreshing goal metadata".to_string();
+                true
+            }
         }
     }
 

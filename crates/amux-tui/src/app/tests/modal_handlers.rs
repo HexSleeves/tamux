@@ -4772,7 +4772,7 @@ fn goal_view_retry_uses_current_step_without_explicit_step_selection() {
 }
 
 #[test]
-fn goal_view_shift_r_requests_authoritative_goal_refresh() {
+fn goal_view_ctrl_r_requests_authoritative_goal_refresh() {
     let (mut model, mut daemon_rx) = make_model();
     model.focus = FocusArea::Chat;
     model
@@ -4787,7 +4787,7 @@ fn goal_view_shift_r_requests_authoritative_goal_refresh() {
         step_id: None,
     });
 
-    let handled = model.handle_key(KeyCode::Char('R'), KeyModifiers::SHIFT);
+    let handled = model.handle_key(KeyCode::Char('r'), KeyModifiers::CONTROL);
 
     assert!(!handled);
     assert_eq!(
@@ -4801,7 +4801,7 @@ fn goal_view_shift_r_requests_authoritative_goal_refresh() {
 }
 
 #[test]
-fn goal_view_shift_r_lowercase_key_requests_authoritative_goal_refresh() {
+fn goal_workspace_refresh_action_requests_authoritative_goal_refresh() {
     let (mut model, mut daemon_rx) = make_model();
     model.focus = FocusArea::Chat;
     model
@@ -4816,9 +4816,11 @@ fn goal_view_shift_r_lowercase_key_requests_authoritative_goal_refresh() {
         step_id: None,
     });
 
-    let handled = model.handle_key(KeyCode::Char('r'), KeyModifiers::SHIFT);
+    let handled = model.activate_goal_workspace_action(
+        crate::widgets::goal_workspace::GoalWorkspaceAction::RefreshGoal,
+    );
 
-    assert!(!handled);
+    assert!(handled);
     assert_eq!(
         next_goal_run_detail_request(&mut daemon_rx).as_deref(),
         Some("goal-1")

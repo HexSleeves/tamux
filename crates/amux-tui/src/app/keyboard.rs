@@ -490,7 +490,21 @@ impl TuiModel {
                 }
             }
             KeyCode::Char('r') if ctrl => {
-                if self
+                if self.focus == FocusArea::Chat
+                    && matches!(
+                        self.main_pane_view,
+                        MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
+                    )
+                {
+                    if let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
+                        ref goal_run_id,
+                        ..
+                    }) = self.main_pane_view
+                    {
+                        self.request_authoritative_goal_run_refresh(goal_run_id.clone());
+                        self.status_line = "Refreshing goal metadata".to_string();
+                    }
+                } else if self
                     .input_notice
                     .as_ref()
                     .is_some_and(|notice| notice.text.contains("operator profile"))
@@ -923,28 +937,11 @@ impl TuiModel {
             }
             KeyCode::Char('r')
                 if self.focus == FocusArea::Chat
-                    && !modifiers.contains(KeyModifiers::SHIFT)
+                    && modifiers.is_empty()
                     && matches!(self.main_pane_view, MainPaneView::Task(_)) =>
             {
                 if self.request_selected_goal_step_retry_confirmation() {
                     self.status_line = "Retry selected goal step?".to_string();
-                }
-            }
-            KeyCode::Char(ch)
-                if self.focus == FocusArea::Chat
-                    && Self::matches_shift_char(KeyCode::Char(ch), modifiers, 'r')
-                    && matches!(
-                        self.main_pane_view,
-                        MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun { .. })
-                    ) =>
-            {
-                if let MainPaneView::Task(sidebar::SidebarItemTarget::GoalRun {
-                    ref goal_run_id,
-                    ..
-                }) = self.main_pane_view
-                {
-                    self.request_authoritative_goal_run_refresh(goal_run_id.clone());
-                    self.status_line = "Refreshing goal metadata".to_string();
                 }
             }
             KeyCode::Char(ch)
