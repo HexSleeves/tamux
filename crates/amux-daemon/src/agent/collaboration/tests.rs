@@ -2,7 +2,7 @@ use super::participants::apply_vote_to_disagreement;
 use super::*;
 use crate::session_manager::SessionManager;
 use tempfile::tempdir;
-use tokio::time::{Duration, timeout};
+use tokio::time::{timeout, Duration};
 
 #[test]
 fn apply_vote_to_disagreement_accumulates_votes_before_resolving() {
@@ -1196,11 +1196,9 @@ async fn dispatch_via_bid_protocol_persists_call_metadata_in_collaboration_sessi
         Some(2)
     );
     assert!(persisted["call_metadata"]["called_at"].as_u64().is_some());
-    assert!(
-        persisted["bids"]
-            .as_array()
-            .is_some_and(|bids| { bids.iter().all(|bid| bid["created_at"].as_u64().is_some()) })
-    );
+    assert!(persisted["bids"]
+        .as_array()
+        .is_some_and(|bids| { bids.iter().all(|bid| bid["created_at"].as_u64().is_some()) }));
 }
 
 #[tokio::test]
@@ -1603,14 +1601,12 @@ async fn seeded_bid_debate_advances_completes_and_persists_winning_assignment() 
     assert_eq!(completion["winner_task_id"], child_a.id);
     assert_eq!(completion["reviewer_task_id"], child_b.id);
     assert_eq!(completion["status"], "completed");
-    assert!(
-        completion["verdict"]["recommended_action"]
-            .as_str()
-            .is_some_and(|text| {
-                text.contains(&format!("primary={}", child_a.id))
-                    && text.contains(&format!("reviewer={}", child_b.id))
-            })
-    );
+    assert!(completion["verdict"]["recommended_action"]
+        .as_str()
+        .is_some_and(|text| {
+            text.contains(&format!("primary={}", child_a.id))
+                && text.contains(&format!("reviewer={}", child_b.id))
+        }));
 
     let debate_payload = engine
         .get_debate_session_payload(&debate_session_id)
@@ -1627,14 +1623,12 @@ async fn seeded_bid_debate_advances_completes_and_persists_winning_assignment() 
             text.contains("confidence=0.84") && text.contains("availability=available")
         })
     }));
-    assert!(
-        debate_payload["verdict"]["recommended_action"]
-            .as_str()
-            .is_some_and(|text| {
-                text.contains(&format!("primary={}", child_a.id))
-                    && text.contains(&format!("reviewer={}", child_b.id))
-            })
-    );
+    assert!(debate_payload["verdict"]["recommended_action"]
+        .as_str()
+        .is_some_and(|text| {
+            text.contains(&format!("primary={}", child_a.id))
+                && text.contains(&format!("reviewer={}", child_b.id))
+        }));
 
     let persisted = engine
         .collaboration_sessions_json(Some(&parent.id))
@@ -1644,15 +1638,13 @@ async fn seeded_bid_debate_advances_completes_and_persists_winning_assignment() 
     assert_eq!(persisted["role_assignment"]["reviewer_task_id"], child_b.id);
     assert_eq!(persisted["disagreements"][0]["resolution"], "resolved");
     assert_eq!(persisted["consensus"]["winner"], child_a.id);
-    assert!(
-        persisted["consensus"]["rationale"]
-            .as_str()
-            .is_some_and(|text| {
-                text == completion["verdict"]["recommended_action"]
-                    .as_str()
-                    .unwrap_or_default()
-            })
-    );
+    assert!(persisted["consensus"]["rationale"]
+        .as_str()
+        .is_some_and(|text| {
+            text == completion["verdict"]["recommended_action"]
+                .as_str()
+                .unwrap_or_default()
+        }));
     assert_eq!(
         persisted["resolution_outcome"]["status"].as_str(),
         Some("resolved")
@@ -1669,14 +1661,12 @@ async fn seeded_bid_debate_advances_completes_and_persists_winning_assignment() 
         persisted["resolution_outcome"]["topic"].as_str(),
         Some("bid resolution for choose the best owner for the next workstream")
     );
-    assert!(
-        persisted["resolution_outcome"]["rationale"]
-            .as_str()
-            .is_some_and(|text| {
-                text.contains(&format!("primary={}", child_a.id))
-                    && text.contains(&format!("reviewer={}", child_b.id))
-            })
-    );
+    assert!(persisted["resolution_outcome"]["rationale"]
+        .as_str()
+        .is_some_and(|text| {
+            text.contains(&format!("primary={}", child_a.id))
+                && text.contains(&format!("reviewer={}", child_b.id))
+        }));
 }
 
 #[tokio::test]
@@ -1781,15 +1771,13 @@ async fn dispatch_via_bid_protocol_auto_completes_seeded_bid_debate_on_contest()
 
     assert_eq!(persisted["disagreements"][0]["resolution"], "resolved");
     assert_eq!(persisted["consensus"]["winner"], child_a.id);
-    assert!(
-        persisted["consensus"]["rationale"]
-            .as_str()
-            .is_some_and(|text| {
-                text == report["debate"]["verdict"]["recommended_action"]
-                    .as_str()
-                    .unwrap_or_default()
-            })
-    );
+    assert!(persisted["consensus"]["rationale"]
+        .as_str()
+        .is_some_and(|text| {
+            text == report["debate"]["verdict"]["recommended_action"]
+                .as_str()
+                .unwrap_or_default()
+        }));
 
     let debate_payload = engine
         .get_debate_session_payload(&debate_session_id)

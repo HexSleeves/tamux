@@ -3,7 +3,7 @@ use crate::agent::consensus::bid_engine::{build_persisted_bid, consensus_round_i
 use crate::agent::consensus::bid_priors::effective_bid_confidence;
 use crate::agent::consensus::outcome_feedback::build_quality_metric;
 use crate::agent::consensus::role_assigner::build_role_assignment;
-use crate::agent::explanation::{ExplanationResult, confidence_band, generate_explanation};
+use crate::agent::explanation::{confidence_band, generate_explanation, ExplanationResult};
 use crate::history::AuditEntryRow;
 
 const MIN_CONSENSUS_BID_CONFIDENCE: f64 = 0.3;

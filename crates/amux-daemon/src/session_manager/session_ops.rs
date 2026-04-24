@@ -208,10 +208,7 @@ async fn persist_managed_command_governance_trace(
         }),
         arguments_hash: Some(crate::agent::learning::traces::hash_context_blob(&format!(
             "{}|{}|{}|{}",
-            request.command,
-            request.rationale,
-            session_id,
-            verdict.policy_fingerprint
+            request.command, request.rationale, session_id, verdict.policy_fingerprint
         ))),
     };
 
