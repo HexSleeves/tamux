@@ -130,6 +130,7 @@ pub(super) async fn execute_semantic_query(
         "infra" => Ok(render_infra(&root, &graph, limit)),
         "service_dependencies" => render_service_dependencies(&root, &graph, target),
         "service_dependents" => render_service_dependents(&root, &graph, target),
+        "infra_dependents" => render_infra_dependents(&root, &graph, target),
         "imports" => render_imports(&root, &graph, target, limit),
         "imported_by" => render_imported_by(&root, &graph, target, limit),
         "conventions" => {
@@ -137,7 +138,7 @@ pub(super) async fn execute_semantic_query(
         }
         "temporal" => render_temporal(&root, history, target, limit).await,
         other => Err(anyhow::anyhow!(
-            "invalid semantic query kind `{other}`; expected summary, packages, dependencies, dependents, services, infra, service_dependencies, service_dependents, imports, imported_by, conventions, or temporal"
+            "invalid semantic query kind `{other}`; expected summary, packages, dependencies, dependents, services, infra, service_dependencies, service_dependents, infra_dependents, imports, imported_by, conventions, or temporal"
         )),
     }
 }

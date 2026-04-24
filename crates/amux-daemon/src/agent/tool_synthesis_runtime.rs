@@ -551,4 +551,8 @@ impl AgentEngine {
     pub async fn retire_generated_tool_json(&self, tool_name: &str) -> Result<String> {
         retire_generated_tool(&self.data_dir, tool_name)
     }
+
+    pub async fn restore_generated_tool_json(&self, tool_name: &str) -> Result<String> {
+        restore_generated_tool(&self.data_dir, tool_name)
+    }
 }

@@ -45,12 +45,12 @@ The current codebase ships a set of optional higher-level capabilities layered o
 - **M2 — Anticipatory Runtime**: Morning briefs, thread hydration hints, stuck-work detection, collaboration disagreement surfacing.
 - **M3 — Causal Traces**: Records why decisions were made, which paths failed, blast radius analysis.
 - **M4 — Genetic Skill Evolution**: Skills have variant metadata, usage tracking, success/failure settlement, promotion/deprecation/archive, automatic branching and merge.
-- **M5 — Semantic Environment Model**: Inspects local workspace — Rust crates, Node packages, Compose services, Terraform/K8s resources, imports, conventions, temporal history.
+- **M5 — Semantic Environment Model**: Inspects local workspace — Rust crates, Node packages, Compose services, Terraform/K8s resources, imports, conventions, temporal history, plus bounded reverse-edge infra queries like `infra_dependents` for resources depending on a target service.
 - **M6 — Deep Storage / Provenance-backed Memory**: Every memory write tracked in SQLite with contradiction checking, confidence aging, operator confirm/retract, and persisted `retracts` relationships.
 - **M7 — Collaboration Protocol**: Sub-agents coordinate through explicit sessions with contributions, disagreement records, voting, and persisted shared state.
 - **M8 — Trusted Provenance**: Goal/task/tool execution emits events into signed or hash-linked audit trails for integrity verification.
 - **M9 — Implicit Feedback Learning**: Learns from fast denials, correction messages, tool fallbacks, attention transitions.
-- **M10 — Runtime Tool Synthesis**: Synthesizes guarded tools from conservative CLI/OpenAPI surfaces, maintains a registry, promotes proven tools into reusable assets.
+- **M10 — Runtime Tool Synthesis**: Synthesizes guarded tools from conservative CLI/OpenAPI surfaces, maintains a registry, promotes proven tools into reusable assets, and supports conservative lifecycle transitions including archive/restore without bypassing review gates.
 
 ## Memory Model
 

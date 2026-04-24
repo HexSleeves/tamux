@@ -492,3 +492,96 @@ fn retire_generated_tool_marks_tool_archived_and_removes_promoted_skill_artifact
     let _ = std::fs::remove_dir_all(&test_root);
     Ok(())
 }
+#[test]
+fn restore_generated_tool_reactivates_archived_tool_without_repromoting() -> Result<()> {
+    let test_root = std::env::temp_dir().join(format!(
+        "amux-generated-tools-restore-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let agent_data_dir = test_root.join("agent");
+    std::fs::create_dir_all(&agent_data_dir)?;
+
+    save_generated_tool(
+        &agent_data_dir,
+        &GeneratedToolRecord {
+            id: "tool-restore".to_string(),
+            name: "tool-restore".to_string(),
+            description: "Archived generated tool".to_string(),
+            kind: GeneratedToolKind::Cli,
+            parameters: Vec::new(),
+            status: "archived".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            last_used_at: None,
+            calls_total: 0,
+            calls_success: 0,
+            calls_failure: 0,
+            calls_timeout: 0,
+            sessions_used: 0,
+            last_session_key: None,
+            promoted_skill_path: None,
+            cli: Some(GeneratedCliSpec {
+                invocation: vec!["echo".to_string()],
+                help_source: "help".to_string(),
+            }),
+            openapi: None,
+        },
+    )?;
+
+    let restored_json = restore_generated_tool(&agent_data_dir, "tool-restore")?;
+    let restored: serde_json::Value = serde_json::from_str(&restored_json)?;
+    assert_eq!(restored["status"], "active");
+    assert!(restored["promoted_skill_path"].is_null());
+
+    let saved = load_generated_tool(&agent_data_dir, "tool-restore")?
+        .expect("restored tool should remain in registry");
+    assert_eq!(saved.status, "active");
+    assert!(saved.promoted_skill_path.is_none());
+
+    let _ = std::fs::remove_dir_all(&test_root);
+    Ok(())
+}
+
+#[test]
+fn restore_generated_tool_rejects_non_archived_status() -> Result<()> {
+    let test_root = std::env::temp_dir().join(format!(
+        "amux-generated-tools-restore-invalid-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let agent_data_dir = test_root.join("agent");
+    std::fs::create_dir_all(&agent_data_dir)?;
+
+    save_generated_tool(
+        &agent_data_dir,
+        &GeneratedToolRecord {
+            id: "tool-active".to_string(),
+            name: "tool-active".to_string(),
+            description: "Active generated tool".to_string(),
+            kind: GeneratedToolKind::Cli,
+            parameters: Vec::new(),
+            status: "active".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            last_used_at: None,
+            calls_total: 0,
+            calls_success: 0,
+            calls_failure: 0,
+            calls_timeout: 0,
+            sessions_used: 0,
+            last_session_key: None,
+            promoted_skill_path: None,
+            cli: Some(GeneratedCliSpec {
+                invocation: vec!["echo".to_string()],
+                help_source: "help".to_string(),
+            }),
+            openapi: None,
+        },
+    )?;
+
+    let error = restore_generated_tool(&agent_data_dir, "tool-active")
+        .expect_err("non-archived generated tools should not be restorable");
+    assert!(error.to_string().contains("only archived generated tools can be restored"));
+
+    let _ = std::fs::remove_dir_all(&test_root);
+    Ok(())
+}

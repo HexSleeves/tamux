@@ -1877,6 +1877,13 @@ async fn dispatch_tool_execution(
             .filter(|value| !value.is_empty())
             .ok_or_else(|| anyhow::anyhow!("missing 'tool' argument"))
             .and_then(|tool| activate_generated_tool(agent_data_dir, tool)),
+        "restore_generated_tool" => args
+            .get("tool")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("missing 'tool' argument"))
+            .and_then(|tool| restore_generated_tool(agent_data_dir, tool)),
         "web_search" => {
             let config = agent.config.read().await;
             let search_provider = config

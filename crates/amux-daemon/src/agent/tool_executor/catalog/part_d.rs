@@ -358,6 +358,13 @@ fn add_available_tools_part_d(
             },
             "required": ["tool"]
         })));
+        tools.push(tool_def("restore_generated_tool", "Restore an archived generated runtime tool back to active status without promoting it.", serde_json::json!({
+            "type": "object",
+            "properties": {
+                "tool": { "type": "string", "description": "Generated tool ID" }
+            },
+            "required": ["tool"]
+        })));
         tools.extend(generated_tool_definitions(config, agent_data_dir));
     }
 
