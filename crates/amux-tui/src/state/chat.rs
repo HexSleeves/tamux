@@ -191,7 +191,9 @@ fn message_snapshot_matches(existing: &AgentMessage, incoming: &AgentMessage) ->
                 && existing.message_kind == incoming.message_kind
                 && existing.tool_call_id == incoming.tool_call_id
                 && existing.tool_name == incoming.tool_name
-                && existing.timestamp == incoming.timestamp
+                && (existing.timestamp == incoming.timestamp
+                    || existing.id.is_none()
+                    || incoming.id.is_none())
         }
     }
 }

@@ -324,6 +324,7 @@ async fn persist_managed_command_governance_trace(
             trace.goal_run_id.as_deref(),
             trace.task_id.as_deref(),
             "governance_evaluation",
+            trace.decision_type.family_label(),
             &selected_json,
             &rejected_json,
             &trace.context_hash,

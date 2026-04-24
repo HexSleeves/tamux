@@ -627,6 +627,29 @@ pub(super) fn apply_schema_migrations(
     ensure_column(connection, "goal_run_events", "todo_snapshot_json", "TEXT")?;
     // BEAT-09: user_action column for dismissal tracking in action_audit.
     ensure_column(connection, "action_audit", "user_action", "TEXT")?;
+    ensure_column(
+        connection,
+        "causal_traces",
+        "trace_family",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_causal_traces_family ON causal_traces(trace_family, created_at DESC)",
+        [],
+    )?;
+    ensure_column(
+        connection,
+        "memory_provenance",
+        "entry_hash",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(connection, "memory_provenance", "signature", "TEXT")?;
+    ensure_column(
+        connection,
+        "memory_provenance",
+        "signature_scheme",
+        "TEXT",
+    )?;
     ensure_column(connection, "memory_provenance", "confirmed_at", "INTEGER")?;
     ensure_column(connection, "memory_provenance", "retracted_at", "INTEGER")?;
     connection.execute_batch(
@@ -640,6 +663,19 @@ pub(super) fn apply_schema_migrations(
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_provenance_rel_unique ON memory_provenance_relationships(source_entry_id, target_entry_id, relation_type, fact_key);
         CREATE INDEX IF NOT EXISTS idx_memory_provenance_rel_source ON memory_provenance_relationships(source_entry_id, created_at DESC);",
+    )?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS collaboration_agent_outcomes (
+            parent_task_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            failure_count INTEGER NOT NULL DEFAULT 0,
+            learned_score REAL NOT NULL DEFAULT 0.5,
+            last_outcome TEXT,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (parent_task_id, task_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_collaboration_agent_outcomes_parent_updated ON collaboration_agent_outcomes(parent_task_id, updated_at_ms DESC);",
     )?;
     connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_tasks_goal_run ON agent_tasks(goal_run_id, created_at DESC)",

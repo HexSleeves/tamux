@@ -1,4 +1,5 @@
 use super::participants::{apply_vote_to_disagreement, normalize_position, normalize_topic};
+use rusqlite::OptionalExtension;
 use crate::agent::consensus::bid_engine::{build_persisted_bid, consensus_round_id};
 use crate::agent::consensus::bid_priors::effective_bid_confidence;
 use crate::agent::consensus::outcome_feedback::build_quality_metric;
@@ -19,6 +20,12 @@ fn bid_sort_key(availability: &BidAvailability) -> u8 {
         BidAvailability::Busy => 1,
         BidAvailability::Unavailable => 2,
     }
+}
+
+fn clamp_collaboration_learned_score(success_count: u64, failure_count: u64) -> f64 {
+    let attempts = (success_count + failure_count) as f64;
+    let successes = success_count as f64;
+    ((successes + 1.0) / (attempts + 2.0)).clamp(0.1, 0.95)
 }
 
 fn bid_availability_label(availability: &BidAvailability) -> &'static str {
@@ -375,6 +382,86 @@ fn seed_debate_from_bid_resolution(
 }
 
 impl AgentEngine {
+    async fn collaboration_outcome_scores(
+        &self,
+        parent_task_id: &str,
+        task_ids: &[String],
+    ) -> Result<HashMap<String, f64>> {
+        let parent_task_id = parent_task_id.to_string();
+        let task_ids = task_ids.to_vec();
+        self.history
+            .read_conn
+            .call(move |conn| {
+                let mut scores = HashMap::new();
+                let mut stmt = conn.prepare(
+                    "SELECT task_id, learned_score FROM collaboration_agent_outcomes WHERE parent_task_id = ?1 AND task_id = ?2",
+                )?;
+                for task_id in task_ids {
+                    if let Some(score) = stmt
+                        .query_row(rusqlite::params![&parent_task_id, &task_id], |row| row.get::<_, f64>(1))
+                        .optional()?
+                    {
+                        scores.insert(task_id, score);
+                    }
+                }
+                Ok(scores)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    async fn record_collaboration_agent_outcome(
+        &self,
+        parent_task_id: &str,
+        task_id: &str,
+        outcome: &str,
+    ) -> Result<()> {
+        let parent_task_id = parent_task_id.to_string();
+        let task_id = task_id.to_string();
+        let outcome = outcome.to_string();
+        let updated_at_ms = now_millis();
+        self.history
+            .conn
+            .call(move |conn| {
+                let existing = conn
+                    .query_row(
+                        "SELECT success_count, failure_count FROM collaboration_agent_outcomes WHERE parent_task_id = ?1 AND task_id = ?2",
+                        rusqlite::params![&parent_task_id, &task_id],
+                        |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
+                    )
+                    .optional()?;
+                let (mut success_count, mut failure_count) = existing.unwrap_or((0, 0));
+                match outcome.as_str() {
+                    "success" | "completed" | "accepted" => success_count += 1,
+                    _ => failure_count += 1,
+                }
+                let learned_score = clamp_collaboration_learned_score(success_count, failure_count);
+                conn.execute(
+                    "INSERT INTO collaboration_agent_outcomes (
+                        parent_task_id, task_id, success_count, failure_count, learned_score, last_outcome, updated_at_ms
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT(parent_task_id, task_id) DO UPDATE SET
+                        success_count = excluded.success_count,
+                        failure_count = excluded.failure_count,
+                        learned_score = excluded.learned_score,
+                        last_outcome = excluded.last_outcome,
+                        updated_at_ms = excluded.updated_at_ms",
+                    rusqlite::params![
+                        parent_task_id,
+                        task_id,
+                        success_count as i64,
+                        failure_count as i64,
+                        learned_score,
+                        outcome,
+                        updated_at_ms as i64,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     async fn ensure_task_collaboration_session(
         &self,
         task: &AgentTask,
@@ -728,6 +815,7 @@ impl AgentEngine {
                 trace.goal_run_id.as_deref(),
                 trace.task_id.as_deref(),
                 "collaboration_resolution",
+                trace.decision_type.family_label(),
                 &selected_json,
                 &rejected_json,
                 &trace.context_hash,
@@ -890,6 +978,7 @@ impl AgentEngine {
                 trace.goal_run_id.as_deref(),
                 trace.task_id.as_deref(),
                 "collaboration_outcome",
+                trace.decision_type.family_label(),
                 &selected_json,
                 &rejected_json,
                 &trace.context_hash,
@@ -1139,6 +1228,12 @@ impl AgentEngine {
             anyhow::bail!("at least two bids are required to assign primary and reviewer roles");
         }
         let mut ranked = session.bids.clone();
+        let learned_outcomes = self
+            .collaboration_outcome_scores(
+                parent_task_id,
+                &ranked.iter().map(|bid| bid.task_id.clone()).collect::<Vec<_>>(),
+            )
+            .await?;
         let agent_confidence_by_task = session
             .agents
             .iter()
@@ -1166,11 +1261,22 @@ impl AgentEngine {
             let left_effective_confidence = effective_bid_confidence(left.confidence, left_prior);
             let right_effective_confidence =
                 effective_bid_confidence(right.confidence, right_prior);
+            let left_outcome_score = learned_outcomes.get(&left.task_id).copied().unwrap_or(0.5);
+            let right_outcome_score = learned_outcomes.get(&right.task_id).copied().unwrap_or(0.5);
+            let left_learned_confidence =
+                (left_effective_confidence + ((left_outcome_score - 0.5) * 0.15)).clamp(0.0, 1.0);
+            let right_learned_confidence =
+                (right_effective_confidence + ((right_outcome_score - 0.5) * 0.15)).clamp(0.0, 1.0);
             bid_sort_key(&left.availability)
                 .cmp(&bid_sort_key(&right.availability))
                 .then_with(|| {
-                    right_effective_confidence
-                        .partial_cmp(&left_effective_confidence)
+                    right_learned_confidence
+                        .partial_cmp(&left_learned_confidence)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| {
+                    right_outcome_score
+                        .partial_cmp(&left_outcome_score)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .then_with(|| {
@@ -1242,6 +1348,7 @@ impl AgentEngine {
             "reviewer_task_id": assignment.reviewer_task_id,
             "bids": ranked,
             "consensus_priors": prior_by_role,
+            "collaboration_outcome_learning": learned_outcomes,
         });
         drop(collaboration);
         self.persist_collaboration_session(&snapshot).await?;
@@ -1750,6 +1857,16 @@ impl AgentEngine {
                 task_id = %task.id,
                 role = %inferred_role,
                 "failed to record consensus prior outcome: {error}"
+            );
+        }
+        if let Err(error) = self
+            .record_collaboration_agent_outcome(parent_task_id, &task.id, outcome)
+            .await
+        {
+            tracing::warn!(
+                task_id = %task.id,
+                parent_task_id = %parent_task_id,
+                "failed to record collaboration outcome learning: {error}"
             );
         }
         let session_snapshot = {

@@ -908,6 +908,55 @@ async fn slow_approval_latency_tightens_predictive_hydration_to_active_attention
 }
 
 #[tokio::test]
+async fn awaiting_approval_thread_overrides_tightened_predictive_hydration_target() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    config.anticipatory.predictive_hydration = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    engine
+        .record_operator_attention("conversation:chat", Some("thread-focus"), None)
+        .await
+        .unwrap();
+
+    let now = now_millis();
+    let mut focus_goal = sample_goal_run("goal-focus", Some("thread-focus"));
+    focus_goal.status = GoalRunStatus::Running;
+    focus_goal.updated_at = now;
+    engine.goal_runs.lock().await.push_back(focus_goal);
+
+    let mut approval_goal = sample_goal_run("goal-approval", Some("thread-approval"));
+    approval_goal.status = GoalRunStatus::Running;
+    approval_goal.updated_at = now.saturating_sub(1_000);
+    engine.goal_runs.lock().await.push_back(approval_goal);
+
+    let mut approval_task = sample_task("task-awaiting", Some("thread-approval"), None);
+    approval_task.status = TaskStatus::AwaitingApproval;
+    engine.tasks.lock().await.push_back(approval_task);
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.implicit_feedback.tool_hesitation_count = 1;
+        refresh_operator_satisfaction(&mut model);
+    }
+
+    engine.run_anticipatory_tick().await;
+
+    let hydration = engine.anticipatory.read().await.hydration_by_thread.clone();
+    assert!(
+        hydration.contains_key("thread-approval"),
+        "awaiting approval thread should be hydrated even when tightening is active"
+    );
+    assert!(
+        !hydration.contains_key("thread-focus"),
+        "approval-gated thread should override ordinary attention-target tightening"
+    );
+}
+
+#[tokio::test]
 async fn predictive_hydration_populates_prewarm_cache_for_hydrated_thread() {
     let root = tempdir().unwrap();
     let repo_root = root.path().join("repo-predictive-cache");
@@ -962,6 +1011,63 @@ async fn predictive_hydration_populates_prewarm_cache_for_hydrated_thread() {
         .expect("prewarm cache snapshot for hydrated thread");
     assert!(snapshot.summary.contains("branch"));
     assert!(snapshot.summary.contains("context entries 1"));
+}
+
+#[tokio::test]
+async fn predictive_hydration_records_causal_trace_family() {
+    let root = tempdir().unwrap();
+    let repo_root = root.path().join("repo-predictive-trace");
+    std::fs::create_dir_all(&repo_root).unwrap();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("git init");
+    std::fs::write(
+        repo_root.join("Cargo.toml"),
+        "[package]\nname='demo'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.anticipatory.enabled = true;
+    config.anticipatory.predictive_hydration = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let mut goal = sample_goal_run("goal-trace", Some("thread-trace"));
+    goal.status = GoalRunStatus::Running;
+    goal.updated_at = now_millis();
+    engine.goal_runs.lock().await.push_back(goal);
+    engine.thread_work_contexts.write().await.insert(
+        "thread-trace".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-trace".to_string(),
+            entries: vec![WorkContextEntry {
+                path: "Cargo.toml".to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "repo_scan".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some(repo_root.to_string_lossy().to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+
+    engine.run_anticipatory_tick().await;
+
+    let traces = engine
+        .history
+        .list_recent_causal_trace_records("predictive_hydration", 1)
+        .await
+        .expect("list predictive hydration traces");
+    assert_eq!(traces.len(), 1);
+    assert_eq!(traces[0].trace_family, "predictive_hydration");
 }
 
 #[tokio::test]

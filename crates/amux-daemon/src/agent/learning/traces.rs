@@ -67,6 +67,24 @@ pub enum DecisionType {
     GovernanceEvaluation,
     CollaborationResolution,
     CollaborationOutcome,
+    PredictiveHydration,
+}
+
+impl DecisionType {
+    pub fn family_label(&self) -> &'static str {
+        match self {
+            Self::ToolSelection => "tool_selection",
+            Self::PlanSelection => "plan_selection",
+            Self::ReplanSelection => "replan_selection",
+            Self::Recovery => "recovery",
+            Self::ContextCompression => "context_compression",
+            Self::SkillSelection => "skill_selection",
+            Self::GovernanceEvaluation => "governance_evaluation",
+            Self::CollaborationResolution => "collaboration_resolution",
+            Self::CollaborationOutcome => "collaboration_outcome",
+            Self::PredictiveHydration => "predictive_hydration",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

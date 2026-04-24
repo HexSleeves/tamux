@@ -750,14 +750,15 @@ async fn memory_provenance_write_round_trips() -> Result<()> {
             task_id: Some("task-1"),
             goal_run_id: None,
             created_at: 42,
+            sign: true,
         })
         .await?;
 
     let row = store.conn.call(|conn| {
         conn.query_row(
-            "SELECT target, mode, source_kind, content, fact_keys_json FROM memory_provenance WHERE id = 'mem-1'",
+            "SELECT target, mode, source_kind, content, fact_keys_json, entry_hash, signature_scheme FROM memory_provenance WHERE id = 'mem-1'",
             [],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?)),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?, row.get::<_, Option<String>>(6)?)),
         ).map_err(Into::into)
     }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
     assert_eq!(row.0, "USER.md");
@@ -768,6 +769,8 @@ async fn memory_provenance_write_round_trips() -> Result<()> {
         serde_json::from_str::<Vec<String>>(&row.4)?,
         vec!["shell".to_string(), "editor".to_string()]
     );
+    assert!(!row.5.is_empty());
+    assert_eq!(row.6.as_deref(), Some("ed25519"));
 
     fs::remove_dir_all(root)?;
     Ok(())
@@ -796,6 +799,7 @@ async fn memory_provenance_report_marks_old_entries_uncertain() -> Result<()> {
             task_id: None,
             goal_run_id: None,
             created_at: now_ms,
+            sign: true,
         })
         .await?;
     store
@@ -810,6 +814,7 @@ async fn memory_provenance_report_marks_old_entries_uncertain() -> Result<()> {
             task_id: None,
             goal_run_id: None,
             created_at: now_ms.saturating_sub(40 * 86_400_000),
+            sign: true,
         })
         .await?;
 
@@ -844,6 +849,7 @@ async fn confirm_uncertain_memory_provenance_updates_status() -> Result<()> {
             task_id: None,
             goal_run_id: None,
             created_at: now_ms.saturating_sub(40 * 86_400_000),
+            sign: true,
         })
         .await?;
 
@@ -887,6 +893,7 @@ async fn retract_memory_provenance_entry_updates_status() -> Result<()> {
             task_id: None,
             goal_run_id: None,
             created_at: now_ms,
+            sign: true,
         })
         .await?;
 
@@ -928,6 +935,7 @@ async fn remove_memory_provenance_records_retract_relationship() -> Result<()> {
             task_id: None,
             goal_run_id: None,
             created_at: now_ms.saturating_sub(1000),
+            sign: true,
         })
         .await?;
 
@@ -943,6 +951,7 @@ async fn remove_memory_provenance_records_retract_relationship() -> Result<()> {
             task_id: None,
             goal_run_id: None,
             created_at: now_ms,
+            sign: true,
         })
         .await?;
 
@@ -965,6 +974,60 @@ async fn remove_memory_provenance_records_retract_relationship() -> Result<()> {
         remove_entry.relationships[0].fact_key.as_deref(),
         Some("editor")
     );
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn confirm_memory_provenance_entry_rejects_tampered_signed_record() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    store.init_schema().await?;
+    let fact_keys = vec!["editor".to_string()];
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    store
+        .record_memory_provenance(&MemoryProvenanceRecord {
+            id: "tampered-memory-entry",
+            target: "MEMORY.md",
+            mode: "append",
+            source_kind: "goal_reflection",
+            content: "- editor: helix",
+            fact_keys: &fact_keys,
+            thread_id: None,
+            task_id: None,
+            goal_run_id: None,
+            created_at: now_ms,
+            sign: true,
+        })
+        .await?;
+
+    store.conn.call(|conn| {
+        conn.execute(
+            "UPDATE memory_provenance SET entry_hash = 'tampered' WHERE id = 'tampered-memory-entry'",
+            [],
+        )?;
+        Ok(())
+    }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let error = store
+        .confirm_memory_provenance_entry("tampered-memory-entry", now_ms.saturating_add(1))
+        .await
+        .expect_err("tampered signed record should be rejected");
+    assert!(error.to_string().contains("integrity validation"));
+
+    let report = store.memory_provenance_report(Some("MEMORY.md"), 10).await?;
+    let entry = report
+        .entries
+        .iter()
+        .find(|entry| entry.id == "tampered-memory-entry")
+        .expect("tampered memory entry should be visible in report");
+    assert_eq!(entry.status, "invalid");
+    assert!(!entry.hash_valid);
+    assert!(!entry.signature_valid);
 
     fs::remove_dir_all(root)?;
     Ok(())

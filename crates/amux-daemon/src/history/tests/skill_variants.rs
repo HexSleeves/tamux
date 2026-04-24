@@ -639,6 +639,62 @@ async fn rebalance_skill_variants_promotes_strong_variant() -> Result<()> {
 }
 
 #[tokio::test]
+async fn rebalance_skill_variants_requires_recent_success_streak_for_promotion() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    store.init_schema().await?;
+    let canonical = root.join("skills/generated/build-pipeline.md");
+    let frontend = root.join("skills/generated/build-pipeline--frontend.md");
+    fs::write(&canonical, "# Build pipeline\nRun cargo build.\n")?;
+    fs::write(
+        &frontend,
+        "# Frontend build pipeline\nUse react build checks.\n",
+    )?;
+
+    let canonical_record = store.register_skill_document(&canonical).await?;
+    let frontend_record = store.register_skill_document(&frontend).await?;
+    let cv = canonical_record.variant_id.clone();
+    let fv = frontend_record.variant_id.clone();
+    store.conn.call(move |conn| {
+        let now = now_ts() as i64;
+        conn.execute(
+            "UPDATE skill_variants SET use_count = 5, success_count = 2, failure_count = 3, last_used_at = ?2 WHERE variant_id = ?1",
+            params![cv, now],
+        )?;
+        conn.execute(
+            "UPDATE skill_variants SET use_count = 5, success_count = 5, failure_count = 0, last_used_at = ?2 WHERE variant_id = ?1",
+            params![fv.clone(), now],
+        )?;
+        for (id, recorded_at, outcome, fitness_score) in [
+            ("hist-1", now - 3, "success", 1.0),
+            ("hist-2", now - 2, "failure", 0.0),
+            ("hist-3", now - 1, "success", 1.0),
+        ] {
+            conn.execute(
+                "INSERT INTO skill_variant_history (id, variant_id, recorded_at, outcome, fitness_score) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id, fv.clone(), recorded_at, outcome, fitness_score],
+            )?;
+        }
+        Ok(())
+    }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let variants = store.rebalance_skill_variants("build-pipeline").await?;
+    let frontend_variant = variants
+        .iter()
+        .find(|variant| variant.variant_id == frontend_record.variant_id)
+        .expect("frontend variant should exist");
+    let canonical_variant = variants
+        .iter()
+        .find(|variant| variant.variant_id == canonical_record.variant_id)
+        .expect("canonical variant should exist");
+
+    assert_eq!(frontend_variant.status, "active");
+    assert_eq!(canonical_variant.status, "active");
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn successful_context_mismatch_branches_new_variant() -> Result<()> {
     let (store, root) = make_test_store().await?;
     store.init_schema().await?;

@@ -671,6 +671,7 @@ async fn fail_goal_run_settles_unresolved_goal_replan_trace() {
             Some(goal_run_id),
             None,
             "replan_selection",
+            crate::agent::learning::traces::DecisionType::ReplanSelection.family_label(),
             &selected_json,
             "[]",
             "ctx_hash",
@@ -778,6 +779,7 @@ async fn fail_goal_run_appends_failure_factor_to_goal_replan_trace() {
             Some(goal_run_id),
             None,
             "replan_selection",
+            crate::agent::learning::traces::DecisionType::ReplanSelection.family_label(),
             &selected_json,
             "[]",
             "ctx_hash",
@@ -3949,6 +3951,116 @@ async fn final_review_completion_accepts_pass_verdict_from_thread_summary() {
         .await
         .expect("final review marker should be written from thread summary verdict");
     assert!(marker.starts_with("VERDICT: PASS"), "{marker}");
+}
+
+#[tokio::test]
+async fn final_review_pass_ignores_unbound_review_todos_at_completion() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let recorded_bodies =
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+    let mut config = AgentConfig::default();
+    config.provider = "openai".to_string();
+    config.base_url = crate::agent::tests::spawn_goal_recording_server(
+        recorded_bodies,
+        serde_json::json!({
+            "summary": "Goal finished after reviewer pass.",
+            "stable_memory_update": null,
+            "generate_skill": false,
+            "skill_title": null,
+            "activate_skill": null
+        })
+        .to_string(),
+    )
+    .await;
+    config.model = "gpt-4o-mini".to_string();
+    config.api_key = "test-key".to_string();
+    config.api_transport = ApiTransport::ChatCompletions;
+    config.auto_retry = false;
+    config.max_retries = 0;
+    config.max_tool_loops = 1;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+    let goal_run_id = "goal-final-review-unbound-todos";
+    let thread_id = "thread-final-review-unbound-todos";
+    engine.get_or_create_thread(Some(thread_id), "goal").await;
+
+    let mut goal_run = sample_goal_run_with_kind(
+        goal_run_id,
+        GoalRunStepKind::Command,
+        "Finish the only step",
+    );
+    goal_run.thread_id = Some(thread_id.to_string());
+    goal_run.steps[0].status = GoalRunStepStatus::Completed;
+    goal_run.steps[0].summary = Some("done".to_string());
+    goal_run.current_step_index = goal_run.steps.len();
+    goal_run.current_step_title = None;
+    goal_run.current_step_kind = None;
+    engine.goal_runs.lock().await.push_back(goal_run);
+    write_step_completion_marker(&engine, goal_run_id, 0).await;
+
+    engine
+        .complete_goal_run(goal_run_id)
+        .await
+        .expect("goal completion should queue a final review");
+
+    let review_task = engine
+        .tasks
+        .lock()
+        .await
+        .iter()
+        .find(|task| task.source == "goal_final_review")
+        .cloned()
+        .expect("final review task should exist");
+    engine
+        .replace_thread_todos(
+            thread_id,
+            vec![
+                TodoItem {
+                    id: "review-todo-1".to_string(),
+                    content: "Check goal run state and todo completion".to_string(),
+                    status: TodoStatus::Pending,
+                    position: 0,
+                    step_index: None,
+                    created_at: 0,
+                    updated_at: 0,
+                },
+                TodoItem {
+                    id: "review-todo-2".to_string(),
+                    content: "Decide final verdict and submit it".to_string(),
+                    status: TodoStatus::Pending,
+                    position: 1,
+                    step_index: None,
+                    created_at: 0,
+                    updated_at: 0,
+                },
+            ],
+            Some(review_task.id.as_str()),
+        )
+        .await;
+
+    let mut completed_review = review_task.clone();
+    completed_review.status = TaskStatus::Completed;
+    completed_review.thread_id = Some(thread_id.to_string());
+    completed_review.result = Some("VERDICT: PASS\nreviewer confirms goal closure".to_string());
+    {
+        let mut tasks = engine.tasks.lock().await;
+        let stored = tasks
+            .iter_mut()
+            .find(|task| task.id == completed_review.id)
+            .expect("stored final review task should exist");
+        *stored = completed_review.clone();
+    }
+
+    engine
+        .handle_goal_run_final_review_completion(goal_run_id, &completed_review)
+        .await
+        .expect("final review pass should not be blocked by review-local todos");
+
+    let updated = engine
+        .get_goal_run(goal_run_id)
+        .await
+        .expect("goal run should still exist");
+    assert_eq!(updated.status, GoalRunStatus::Completed);
 }
 
 #[tokio::test]

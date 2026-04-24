@@ -32,7 +32,6 @@ impl ConciergeEngine {
         detail_level: ConciergeDetailLevel,
         persisted_recent_threads: &[ThreadSummary],
     ) -> WelcomeContext {
-        let threads_guard = threads.read().await;
         let thread_limit = match detail_level {
             ConciergeDetailLevel::Minimal | ConciergeDetailLevel::ContextSummary => 1,
             ConciergeDetailLevel::ProactiveTriage | ConciergeDetailLevel::DailyBriefing => 5,
@@ -44,9 +43,25 @@ impl ConciergeEngine {
             | ConciergeDetailLevel::DailyBriefing => 5,
         };
 
+        let goal_runs_guard = goal_runs.lock().await;
+        let goal_thread_ids = goal_thread_ids(goal_runs_guard.iter());
+        let latest_goal_run = latest_goal_run(goal_runs_guard.iter());
+        let running_goal_total = goal_runs_guard
+            .iter()
+            .filter(|goal_run| goal_run.status == GoalRunStatus::Running)
+            .count();
+        let paused_goal_total = goal_runs_guard
+            .iter()
+            .filter(|goal_run| goal_run.status == GoalRunStatus::Paused)
+            .count();
+        drop(goal_runs_guard);
+
+        let threads_guard = threads.read().await;
         let mut recent_threads: Vec<ThreadSummary> = threads_guard
             .values()
-            .filter(|thread| include_thread_in_concierge_context(thread))
+            .filter(|thread| {
+                include_thread_in_concierge_context(thread) && !goal_thread_ids.contains(&thread.id)
+            })
             .map(|thread| {
                 let opening_message = thread
                     .messages
@@ -91,7 +106,10 @@ impl ConciergeEngine {
             recent_threads.extend(
                 persisted_recent_threads
                     .iter()
-                    .filter(|thread| !present_thread_ids.contains(&thread.id))
+                    .filter(|thread| {
+                        !present_thread_ids.contains(&thread.id)
+                            && !goal_thread_ids.contains(&thread.id)
+                    })
                     .take(missing_count)
                     .cloned(),
             );
@@ -99,17 +117,6 @@ impl ConciergeEngine {
         recent_threads.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         recent_threads.truncate(thread_limit);
         drop(threads_guard);
-
-        let goal_runs_guard = goal_runs.lock().await;
-        let latest_goal_run = latest_goal_run(goal_runs_guard.iter());
-        let running_goal_total = goal_runs_guard
-            .iter()
-            .filter(|goal_run| goal_run.status == GoalRunStatus::Running)
-            .count();
-        let paused_goal_total = goal_runs_guard
-            .iter()
-            .filter(|goal_run| goal_run.status == GoalRunStatus::Paused)
-            .count();
 
         WelcomeContext {
             recent_threads,
@@ -124,10 +131,25 @@ impl ConciergeEngine {
         threads: &RwLock<std::collections::HashMap<String, AgentThread>>,
         goal_runs: &tokio::sync::Mutex<std::collections::VecDeque<GoalRun>>,
     ) -> WelcomeContext {
+        let goal_runs_guard = goal_runs.lock().await;
+        let goal_thread_ids = goal_thread_ids(goal_runs_guard.iter());
+        let latest_goal_run = latest_goal_run(goal_runs_guard.iter());
+        let running_goal_total = goal_runs_guard
+            .iter()
+            .filter(|goal_run| goal_run.status == GoalRunStatus::Running)
+            .count();
+        let paused_goal_total = goal_runs_guard
+            .iter()
+            .filter(|goal_run| goal_run.status == GoalRunStatus::Paused)
+            .count();
+        drop(goal_runs_guard);
+
         let threads_guard = threads.read().await;
         let recent_threads = threads_guard
             .values()
-            .filter(|thread| include_thread_in_concierge_context(thread))
+            .filter(|thread| {
+                include_thread_in_concierge_context(thread) && !goal_thread_ids.contains(&thread.id)
+            })
             .max_by_key(|thread| thread.updated_at)
             .map(|thread| {
                 vec![ThreadSummary {
@@ -141,17 +163,6 @@ impl ConciergeEngine {
             })
             .unwrap_or_default();
         drop(threads_guard);
-
-        let goal_runs_guard = goal_runs.lock().await;
-        let latest_goal_run = latest_goal_run(goal_runs_guard.iter());
-        let running_goal_total = goal_runs_guard
-            .iter()
-            .filter(|goal_run| goal_run.status == GoalRunStatus::Running)
-            .count();
-        let paused_goal_total = goal_runs_guard
-            .iter()
-            .filter(|goal_run| goal_run.status == GoalRunStatus::Paused)
-            .count();
 
         WelcomeContext {
             recent_threads,
@@ -235,9 +246,11 @@ fn goal_run_label(goal_run: &GoalRun) -> String {
 fn goal_run_summary(goal_run: &GoalRun) -> GoalRunSummary {
     GoalRunSummary {
         label: goal_run_label(goal_run),
+        prompt: non_empty_string(goal_run.goal.trim()),
         status: goal_run.status,
         updated_at: goal_run.updated_at,
         summary: goal_run_summary_excerpt(goal_run),
+        latest_step_result: goal_run_latest_step_result(goal_run),
     }
 }
 
@@ -254,6 +267,34 @@ fn goal_run_summary_excerpt(goal_run: &GoalRun) -> Option<String> {
     .map(ToOwned::to_owned)
 }
 
+fn goal_run_latest_step_result(goal_run: &GoalRun) -> Option<String> {
+    goal_run
+        .steps
+        .iter()
+        .filter_map(|step| {
+            let result = step
+                .summary
+                .as_deref()
+                .or(step.error.as_deref())
+                .and_then(|value| non_empty_string(value.trim()))?;
+            let timestamp = step
+                .completed_at
+                .or(step.started_at)
+                .unwrap_or(step.position as u64);
+            Some((timestamp, step.position, result))
+        })
+        .max_by_key(|(timestamp, position, _)| (*timestamp, *position))
+        .map(|(_, _, result)| result)
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
 fn latest_goal_run<'a, I>(goal_runs: I) -> Option<GoalRunSummary>
 where
     I: IntoIterator<Item = &'a GoalRun>,
@@ -262,4 +303,30 @@ where
         .into_iter()
         .max_by_key(|goal_run| goal_run.updated_at)
         .map(goal_run_summary)
+}
+
+fn goal_thread_ids<'a, I>(goal_runs: I) -> std::collections::HashSet<String>
+where
+    I: IntoIterator<Item = &'a GoalRun>,
+{
+    let mut ids = std::collections::HashSet::new();
+    for goal_run in goal_runs {
+        insert_goal_thread_id(&mut ids, goal_run.thread_id.as_deref());
+        insert_goal_thread_id(&mut ids, goal_run.root_thread_id.as_deref());
+        insert_goal_thread_id(&mut ids, goal_run.active_thread_id.as_deref());
+        for thread_id in &goal_run.execution_thread_ids {
+            insert_goal_thread_id(&mut ids, Some(thread_id));
+        }
+    }
+    ids
+}
+
+fn insert_goal_thread_id(ids: &mut std::collections::HashSet<String>, thread_id: Option<&str>) {
+    let Some(thread_id) = thread_id
+        .map(str::trim)
+        .filter(|thread_id| !thread_id.is_empty())
+    else {
+        return;
+    };
+    ids.insert(thread_id.to_string());
 }

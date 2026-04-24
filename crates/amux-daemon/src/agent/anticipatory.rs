@@ -180,11 +180,17 @@ impl AgentEngine {
 
         let now = now_millis();
         let attention_target = self.current_attention_target().await;
+        let approval_gate_thread = self
+            .predictive_hydration_approval_gate_thread(attention_target.as_deref())
+            .await;
         let tightened_to_active_attention =
             adaptation_mode == AnticipatoryAdaptationMode::Tightened;
         let due_threads = {
             let runtime = self.anticipatory.read().await;
             let mut ordered = Vec::new();
+            if let Some(thread_id) = approval_gate_thread.as_ref() {
+                ordered.push((thread_id.clone(), u64::MAX - 1));
+            }
             if let Some(thread_id) = attention_target.as_ref() {
                 ordered.push((thread_id.clone(), u64::MAX));
             }
@@ -194,7 +200,12 @@ impl AgentEngine {
                 .into_iter()
                 .filter(|(thread_id, _)| seen.insert(thread_id.clone()))
                 .filter(|(thread_id, _)| {
-                    !tightened_to_active_attention || attention_target.as_ref() == Some(thread_id)
+                    if let Some(gated_thread) = approval_gate_thread.as_ref() {
+                        thread_id == gated_thread
+                    } else {
+                        !tightened_to_active_attention
+                            || attention_target.as_ref() == Some(thread_id)
+                    }
                 })
                 .filter(|(thread_id, _)| {
                     runtime
@@ -209,12 +220,58 @@ impl AgentEngine {
         for (thread_id, _) in due_threads {
             self.refresh_thread_repo_context(&thread_id).await;
             self.refresh_anticipatory_prewarm_cache(&thread_id).await;
+            self.persist_predictive_hydration_causal_trace(&thread_id).await;
             self.anticipatory
                 .write()
                 .await
                 .hydration_by_thread
                 .insert(thread_id, now);
         }
+    }
+
+    async fn predictive_hydration_approval_gate_thread(
+        &self,
+        attention_target: Option<&str>,
+    ) -> Option<String> {
+        let awaiting_task_threads = {
+            let tasks = self.tasks.lock().await;
+            tasks.iter()
+                .filter(|task| task.status == TaskStatus::AwaitingApproval)
+                .filter_map(|task| task.thread_id.clone().or_else(|| task.parent_thread_id.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        if let Some(attention_target) = attention_target {
+            if awaiting_task_threads
+                .iter()
+                .any(|thread_id| thread_id == attention_target)
+            {
+                return Some(attention_target.to_string());
+            }
+        }
+        if let Some(thread_id) = awaiting_task_threads.into_iter().next() {
+            return Some(thread_id);
+        }
+
+        let awaiting_goal_threads = {
+            let goal_runs = self.goal_runs.lock().await;
+            goal_runs
+                .iter()
+                .filter(|goal_run| goal_run.status == GoalRunStatus::AwaitingApproval)
+                .filter_map(|goal_run| goal_run.thread_id.clone())
+                .collect::<Vec<_>>()
+        };
+
+        if let Some(attention_target) = attention_target {
+            if awaiting_goal_threads
+                .iter()
+                .any(|thread_id| thread_id == attention_target)
+            {
+                return Some(attention_target.to_string());
+            }
+        }
+
+        awaiting_goal_threads.into_iter().next()
     }
 
     async fn compute_anticipatory_items(
@@ -1171,6 +1228,89 @@ impl AgentEngine {
                     precomputation_id,
                 },
             );
+    }
+
+    async fn persist_predictive_hydration_causal_trace(&self, thread_id: &str) {
+        let snapshot = {
+            let runtime = self.anticipatory.read().await;
+            runtime.prewarm_cache_by_thread.get(thread_id).cloned()
+        };
+
+        let Some(snapshot) = snapshot else {
+            return;
+        };
+
+        let selected = crate::agent::learning::traces::DecisionOption {
+            option_type: "predictive_hydration".to_string(),
+            reasoning: format!(
+                "Prewarmed thread context ahead of demand using snapshot: {}",
+                crate::agent::summarize_text(&snapshot.summary, 220)
+            ),
+            rejection_reason: None,
+            estimated_success_prob: Some(0.74),
+            arguments_hash: Some(crate::agent::learning::traces::hash_context_blob(
+                &snapshot.summary,
+            )),
+        };
+        let mut factors = vec![crate::agent::learning::traces::CausalFactor {
+            factor_type: crate::agent::learning::traces::FactorType::PatternMatch,
+            description: format!(
+                "predictive hydration snapshot: {}",
+                crate::agent::summarize_text(&snapshot.summary, 180)
+            ),
+            weight: 0.7,
+        }];
+        if let Some(precomputation_id) = snapshot.precomputation_id {
+            factors.push(crate::agent::learning::traces::CausalFactor {
+                factor_type: crate::agent::learning::traces::FactorType::ResourceConstraint,
+                description: format!("precomputation prepared cache entry #{precomputation_id}"),
+                weight: 0.35,
+            });
+        }
+
+        let trace = crate::agent::learning::traces::CausalTrace {
+            trace_id: format!("causal_{}", uuid::Uuid::new_v4()),
+            thread_id: Some(thread_id.to_string()),
+            goal_run_id: None,
+            task_id: None,
+            decision_type: crate::agent::learning::traces::DecisionType::PredictiveHydration,
+            selected,
+            rejected_options: Vec::new(),
+            context_hash: crate::agent::learning::traces::hash_context_blob(&format!(
+                "{thread_id}|{}",
+                snapshot.summary
+            )),
+            causal_factors: factors,
+            outcome: crate::agent::learning::traces::CausalTraceOutcome::Success,
+            model_used: Some(self.config.read().await.model.clone()),
+            created_at: now_millis(),
+        };
+
+        let selected_json = serde_json::to_string(&trace.selected).unwrap_or_default();
+        let rejected_json = serde_json::to_string(&trace.rejected_options).unwrap_or_default();
+        let factors_json = serde_json::to_string(&trace.causal_factors).unwrap_or_default();
+        let outcome_json = serde_json::to_string(&trace.outcome).unwrap_or_default();
+        if let Err(error) = self
+            .history
+            .insert_causal_trace(
+                &trace.trace_id,
+                trace.thread_id.as_deref(),
+                None,
+                None,
+                "predictive_hydration",
+                trace.decision_type.family_label(),
+                &selected_json,
+                &rejected_json,
+                &trace.context_hash,
+                &factors_json,
+                &outcome_json,
+                trace.model_used.as_deref(),
+                trace.created_at,
+            )
+            .await
+        {
+            tracing::warn!(thread_id = %thread_id, "failed to persist predictive hydration causal trace: {error}");
+        }
     }
 }
 

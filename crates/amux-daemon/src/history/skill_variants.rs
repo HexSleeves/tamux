@@ -362,6 +362,8 @@ impl HistoryStore {
                         && variant.success_count >= SKILL_PROMOTION_MIN_SUCCESS_COUNT
                         && variant.success_rate() >= SKILL_PROMOTION_SUCCESS_RATE_THRESHOLD
                         && variant.success_rate() > canonical_success_rate + SKILL_PROMOTION_MARGIN
+                        && recent_skill_variant_outcomes_allow_promotion(conn, &variant.variant_id, 3)
+                            .unwrap_or(false)
                 })
                 .max_by(|left, right| compare_skill_variants(left, right, &[], &trend_by_variant))
                 .map(|variant| variant.variant_id.clone())

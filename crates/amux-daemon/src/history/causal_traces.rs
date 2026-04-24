@@ -112,6 +112,7 @@ impl HistoryStore {
         goal_run_id: Option<&str>,
         task_id: Option<&str>,
         decision_type: &str,
+        trace_family: &str,
         selected_json: &str,
         rejected_options_json: &str,
         context_hash: &str,
@@ -125,6 +126,7 @@ impl HistoryStore {
         let goal_run_id = goal_run_id.map(str::to_string);
         let task_id = task_id.map(str::to_string);
         let decision_type = decision_type.to_string();
+        let trace_family = trace_family.to_string();
         let selected_json = selected_json.to_string();
         let rejected_options_json = rejected_options_json.to_string();
         let context_hash = context_hash.to_string();
@@ -133,13 +135,14 @@ impl HistoryStore {
         let model_used = model_used.map(str::to_string);
         self.conn.call(move |conn| {
         conn.execute(
-            "INSERT OR REPLACE INTO causal_traces (id, thread_id, goal_run_id, task_id, decision_type, selected_json, rejected_options_json, context_hash, causal_factors_json, outcome_json, model_used, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT OR REPLACE INTO causal_traces (id, thread_id, goal_run_id, task_id, decision_type, trace_family, selected_json, rejected_options_json, context_hash, causal_factors_json, outcome_json, model_used, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 id,
                 thread_id,
                 goal_run_id,
                 task_id,
                 decision_type,
+                trace_family,
                 selected_json,
                 rejected_options_json,
                 context_hash,
@@ -185,7 +188,7 @@ impl HistoryStore {
         self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT selected_json, causal_factors_json, outcome_json, created_at
+                    "SELECT trace_family, selected_json, causal_factors_json, outcome_json, created_at
              FROM causal_traces
              WHERE json_extract(selected_json, '$.option_type') = ?1
              ORDER BY created_at DESC
@@ -193,10 +196,11 @@ impl HistoryStore {
                 )?;
                 let rows = stmt.query_map(params![option_type, limit], |row| {
                     Ok(CausalTraceRecord {
-                        selected_json: row.get(0)?,
-                        causal_factors_json: row.get(1)?,
-                        outcome_json: row.get(2)?,
-                        created_at: row.get::<_, i64>(3)? as u64,
+                        trace_family: row.get(0)?,
+                        selected_json: row.get(1)?,
+                        causal_factors_json: row.get(2)?,
+                        outcome_json: row.get(3)?,
+                        created_at: row.get::<_, i64>(4)? as u64,
                     })
                 })?;
                 rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -217,7 +221,7 @@ impl HistoryStore {
         self.read_conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, thread_id, goal_run_id, task_id, decision_type,
+                    "SELECT id, thread_id, goal_run_id, task_id, decision_type, trace_family,
                             selected_json, rejected_options_json, context_hash,
                             causal_factors_json, outcome_json, model_used, created_at
                      FROM causal_traces
@@ -232,13 +236,14 @@ impl HistoryStore {
                         goal_run_id: row.get(2)?,
                         task_id: row.get(3)?,
                         decision_type: row.get(4)?,
-                        selected_json: row.get(5)?,
-                        rejected_options_json: row.get(6)?,
-                        context_hash: row.get(7)?,
-                        causal_factors_json: row.get(8)?,
-                        outcome_json: row.get(9)?,
-                        model_used: row.get(10)?,
-                        created_at: row.get::<_, i64>(11)? as u64,
+                        trace_family: row.get(5)?,
+                        selected_json: row.get(6)?,
+                        rejected_options_json: row.get(7)?,
+                        context_hash: row.get(8)?,
+                        causal_factors_json: row.get(9)?,
+                        outcome_json: row.get(10)?,
+                        model_used: row.get(11)?,
+                        created_at: row.get::<_, i64>(12)? as u64,
                     })
                 })?;
                 rows.collect::<std::result::Result<Vec<_>, _>>()

@@ -14,9 +14,11 @@ fn welcome_signature_changes_when_context_changes() {
         }],
         latest_goal_run: Some(GoalRunSummary {
             label: "Goal A".to_string(),
+            prompt: Some("Prompt A".to_string()),
             status: GoalRunStatus::Running,
             updated_at: 150,
             summary: Some("Initial summary".to_string()),
+            latest_step_result: Some("Step result A".to_string()),
         }),
         running_goal_total: 1,
         paused_goal_total: 0,
@@ -32,18 +34,22 @@ fn welcome_signature_changes_when_context_changes() {
         }],
         latest_goal_run: Some(GoalRunSummary {
             label: "Goal A".to_string(),
+            prompt: Some("Prompt A".to_string()),
             status: GoalRunStatus::Running,
             updated_at: 150,
             summary: Some("Initial summary".to_string()),
+            latest_step_result: Some("Step result A".to_string()),
         }),
         running_goal_total: 1,
         paused_goal_total: 0,
     };
     changed_context.latest_goal_run = Some(GoalRunSummary {
         label: "Goal A".to_string(),
+        prompt: Some("Prompt A".to_string()),
         status: GoalRunStatus::Paused,
         updated_at: 200,
         summary: Some("Paused summary".to_string()),
+        latest_step_result: Some("Step result B".to_string()),
     });
     changed_context.running_goal_total = 0;
     changed_context.paused_goal_total = 1;
@@ -72,9 +78,11 @@ async fn minimal_welcome_mentions_latest_goal_work_not_just_threads() {
         }],
         latest_goal_run: Some(GoalRunSummary {
             label: "Investigate ingenix.ai".to_string(),
+            prompt: Some("Find and validate a promising lead".to_string()),
             status: GoalRunStatus::Queued,
             updated_at: 200,
             summary: Some("Validate the lead".to_string()),
+            latest_step_result: Some("Lead source identified".to_string()),
         }),
         running_goal_total: 1,
         paused_goal_total: 0,
@@ -89,6 +97,8 @@ async fn minimal_welcome_mentions_latest_goal_work_not_just_threads() {
         "minimal welcome should mention the latest goal work"
     );
     assert!(content.contains("Validate the lead"));
+    assert!(content.contains("Find and validate a promising lead"));
+    assert!(content.contains("Lead source identified"));
 }
 
 #[test]

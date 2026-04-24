@@ -6536,3 +6536,110 @@ async fn submit_goal_step_verdict_records_structured_verdict_for_current_goal_ve
     );
     assert_eq!(record.explanation, "all proof checks passed");
 }
+
+#[tokio::test]
+async fn execute_tool_records_timeout_adaptation_in_weles_review_for_fetch_url() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.operator_satisfaction.label = "strained".to_string();
+        model.operator_satisfaction.score = 0.18;
+    }
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-fetch-url-adapted-timeout".to_string(),
+        ToolFunction {
+            name: "fetch_url".to_string(),
+            arguments: serde_json::json!({
+                "url": "https://example.com",
+                "max_length": 64
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        "thread-fetch-url-adapted-timeout",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    let reasons = result
+        .weles_review
+        .as_ref()
+        .expect("weles review should exist")
+        .reasons
+        .clone();
+    assert!(
+        reasons.iter().any(|reason| reason == "adapted_runtime:timeout:fetch_url:180"),
+        "expected timeout adaptation reason, got {reasons:?}"
+    );
+}
+
+#[tokio::test]
+async fn execute_tool_records_timeout_adaptation_in_weles_review_for_search_files_under_fragile_feedback() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    {
+        let mut model = engine.operator_model.write().await;
+        model.cognitive_style.message_count = 1;
+        model.implicit_feedback.tool_hesitation_count = 1;
+        model.implicit_feedback.correction_message_count = 1;
+        crate::agent::operator_model::refresh_operator_satisfaction(&mut model);
+        assert_eq!(model.operator_satisfaction.label, "fragile");
+    }
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-search-files-adapted-timeout".to_string(),
+        ToolFunction {
+            name: "search_files".to_string(),
+            arguments: serde_json::json!({
+                "path": root.path(),
+                "pattern": "needle"
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        "thread-search-files-adapted-timeout",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    let reasons = result
+        .weles_review
+        .as_ref()
+        .expect("weles review should exist")
+        .reasons
+        .clone();
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason == "adapted_runtime:timeout:search_files:90"),
+        "expected search_files timeout adaptation reason, got {reasons:?}"
+    );
+}

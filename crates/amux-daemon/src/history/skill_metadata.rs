@@ -196,6 +196,24 @@ pub(super) fn load_skill_variant_trends(
     Ok(trends)
 }
 
+pub(super) fn recent_skill_variant_outcomes_allow_promotion(
+    conn: &Connection,
+    variant_id: &str,
+    limit: usize,
+) -> rusqlite::Result<bool> {
+    let limit = limit.max(1) as i64;
+    let mut stmt = conn.prepare(
+        "SELECT outcome FROM skill_variant_history WHERE variant_id = ?1 \
+         ORDER BY recorded_at DESC, rowid DESC LIMIT ?2",
+    )?;
+    let outcomes = stmt
+        .query_map(params![variant_id, limit], |row| row.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(outcomes
+        .iter()
+        .all(|outcome| outcome.eq_ignore_ascii_case("success")))
+}
+
 pub(super) fn compare_skill_variants(
     left: &SkillVariantRecord,
     right: &SkillVariantRecord,

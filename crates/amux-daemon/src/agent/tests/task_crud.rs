@@ -760,6 +760,7 @@ async fn cancelling_goal_run_settles_unresolved_goal_plan_trace() {
             Some(goal_run_id),
             None,
             "plan_selection",
+            crate::agent::learning::traces::DecisionType::PlanSelection.family_label(),
             &selected_json,
             "[]",
             "ctx_hash",

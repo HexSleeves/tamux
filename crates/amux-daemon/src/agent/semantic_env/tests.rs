@@ -375,6 +375,11 @@ fn convention_entry_matches_fact_keys_and_content() {
         age_days: 0.0,
         confidence: 1.0,
         status: "active".to_string(),
+        entry_hash: None,
+        signature: None,
+        signature_scheme: None,
+        hash_valid: false,
+        signature_valid: false,
         relationships: Vec::new(),
     };
 
