@@ -292,6 +292,47 @@ pub(super) fn render_service_dependents(
     ))
 }
 
+pub(super) fn render_infra_dependents(
+    root: &Path,
+    graph: &SemanticGraph,
+    target: Option<&str>,
+) -> Result<String> {
+    let Some(target) = target
+        .map(normalize_package_name)
+        .filter(|value| !value.is_empty())
+    else {
+        anyhow::bail!("infra_dependents queries require a non-empty `target` service name");
+    };
+
+    let dependency_key = format!("service:{target}");
+    let dependents = graph
+        .infra_resources
+        .iter()
+        .filter(|resource| resource.dependencies.iter().any(|dep| dep == &dependency_key))
+        .collect::<Vec<_>>();
+
+    if dependents.is_empty() {
+        return Ok(format!(
+            "No infra resources under {} depend on service {}.",
+            root.display(),
+            target
+        ));
+    }
+
+    Ok(format!(
+        "Infra resources depending on service {}:\n{}",
+        target,
+        dependents
+            .into_iter()
+            .map(|resource| format!(
+                "- [{}] {} {} ({})",
+                resource.system, resource.kind, resource.name, resource.source_path
+            ))
+            .collect::<Vec<_>>()
+            .join("\n")
+    ))
+}
+
 pub(super) fn render_imports(
     root: &Path,
     graph: &SemanticGraph,

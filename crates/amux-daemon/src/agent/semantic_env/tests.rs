@@ -251,6 +251,60 @@ fn render_service_dependents_lists_reverse_service_edges() {
 }
 
 #[test]
+fn render_infra_dependents_lists_resources_pointing_at_target_service() {
+    let graph = SemanticGraph {
+        packages: Vec::new(),
+        services: vec![SemanticService {
+            name: "api".to_string(),
+            compose_path: "/tmp/docker-compose.yml".to_string(),
+            dependencies: vec![],
+        }],
+        infra_resources: vec![
+            SemanticInfraResource {
+                system: "kubernetes",
+                kind: "Ingress".to_string(),
+                name: "public".to_string(),
+                source_path: "/tmp/k8s.yaml".to_string(),
+                namespace: Some("default".to_string()),
+                dependencies: vec!["service:api".to_string()],
+            },
+            SemanticInfraResource {
+                system: "terraform",
+                kind: "aws_lb_target_group".to_string(),
+                name: "tg".to_string(),
+                source_path: "/tmp/main.tf".to_string(),
+                namespace: None,
+                dependencies: vec!["service:worker".to_string()],
+            },
+        ],
+        import_files: Vec::new(),
+    };
+
+    let rendered = render_infra_dependents(Path::new("/tmp"), &graph, Some("api")).unwrap();
+    assert!(rendered.contains("Ingress"));
+    assert!(rendered.contains("public"));
+    assert!(rendered.contains("/tmp/k8s.yaml"));
+    assert!(!rendered.contains("aws_lb_target_group"));
+}
+
+#[test]
+fn render_infra_dependents_reports_empty_result_cleanly() {
+    let graph = SemanticGraph {
+        packages: Vec::new(),
+        services: vec![SemanticService {
+            name: "db".to_string(),
+            compose_path: "/tmp/docker-compose.yml".to_string(),
+            dependencies: vec![],
+        }],
+        infra_resources: Vec::new(),
+        import_files: Vec::new(),
+    };
+
+    let rendered = render_infra_dependents(Path::new("/tmp"), &graph, Some("db")).unwrap();
+    assert!(rendered.contains("No infra resources under /tmp depend on service db."));
+}
+
+#[test]
 fn render_imported_by_lists_matching_files() {
     let graph = SemanticGraph {
         packages: Vec::new(),

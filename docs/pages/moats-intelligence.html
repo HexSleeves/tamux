@@ -30,9 +30,9 @@
         <div class="callout info">
           <strong>Short version:</strong> the moat is not “we call a strong model.” The moat is “the runtime compounds intelligence across work, time, tools, and operators.”
         </div>
-        <p>As of the 2026-04-24 code-first closure audit, the strongest fresh implementation proof now covers the eight in-scope moats <strong>M1, M2, M3, M4, M6, M7, M8, and M9</strong>: each is backed by landed code plus fresh focused runtime proof under one audited inventory. <strong>M5</strong> and <strong>M10</strong> were intentionally left out of scope for that pass because their current bounded claims were not widened. The remaining work is mostly about scope breadth, automation depth, and client productization rather than whether the core capabilities exist at all.</p>
+        <p>As of the 2026-04-24 code-first closure audit, the strongest single-audit implementation proof covers the eight originally in-scope moats <strong>M1, M2, M3, M4, M6, M7, M8, and M9</strong>: each is backed by landed code plus fresh focused runtime proof under one audited inventory. A follow-up widened implementation pass then landed concrete additive slices for <strong>M5</strong> and <strong>M10</strong> as well, so all ten moats now have current shipped code behind their bounded claims even though the proof history is split across the original closure audit and the later focused widening work.</p>
         <div class="callout success">
-          <strong>Implementation update (2026-04-24):</strong> the latest code-first closure audit passed for all eight in-scope moats — <strong>M1, M2, M3, M4, M6, M7, M8, and M9</strong> — with landed code and fresh focused proof for each. The enclosing goal run itself did not auto-close cleanly because final bookkeeping todos remained open, so the authoritative source here is the closure audit report rather than the raw goal-run terminal status.
+          <strong>Implementation update:</strong> the original 2026-04-24 code-first closure audit passed for <strong>M1, M2, M3, M4, M6, M7, M8, and M9</strong>, and a follow-up widening pass landed fresh concrete slices for <strong>M5</strong> and <strong>M10</strong>. Specifically, M5 now exposes the bounded <code>infra_dependents</code> reverse-edge semantic query, and M10 now supports explicit restore of archived generated tools back to active status without bypassing review or promotion gates.
         </div>
       </section>
 
@@ -107,7 +107,7 @@
             </tr>
             <tr>
               <td><strong>M5</strong><br/>Semantic Environment</td>
-              <td>Builds bounded workspace topology and history understanding across packages, services, dependencies, imports, conventions, and temporal signals.</td>
+              <td>Builds bounded workspace topology and history understanding across packages, services, dependencies, imports, conventions, temporal signals, and infra reverse-edge relations such as <code>infra_dependents</code> for resources depending on a target service.</td>
               <td>The agent reasons about a real project structure instead of a bag of files.</td>
               <td>Requires scanners, summarizers, import/dependency models, workspace conventions, and fast bounded query surfaces.</td>
               <td>Strongly implemented (bounded)</td>
@@ -142,7 +142,7 @@
             </tr>
             <tr>
               <td><strong>M10</strong><br/>Runtime Tool Synthesis</td>
-              <td>Generates guarded runtime tools from conservative CLI or OpenAPI surfaces, then activates, tracks, and promotes proven tools into reusable assets.</td>
+              <td>Generates guarded runtime tools from conservative CLI or OpenAPI surfaces, then activates, tracks, archives, restores, and promotes proven tools into reusable assets under conservative lifecycle rules.</td>
               <td>The action surface can expand safely over time instead of remaining frozen to the original hand-written tool set.</td>
               <td>Tool generation without safety is reckless. Safety without a promotion path is sterile. Combining both is the differentiator.</td>
               <td>Strongly implemented (conservative scope)</td>
@@ -150,7 +150,7 @@
           </tbody>
         </table>
         <div class="callout info">
-          <strong>Maturity note:</strong> the 2026-04-24 code-first closure audit freshly re-proved <strong>M1, M2, M3, M4, M6, M7, M8, and M9</strong> under one current-goal inventory. <strong>M5</strong> and <strong>M10</strong> were not widened in that pass, so their claims on this page should still be read as conservative shipped scope rather than re-proven by that specific audit. This still does <em>not</em> mean every moat has equal breadth, autonomous reach, or client-surface maturity.
+          <strong>Maturity note:</strong> the 2026-04-24 code-first closure audit freshly re-proved <strong>M1, M2, M3, M4, M6, M7, M8, and M9</strong> under one current-goal inventory, and a follow-up widening pass added concrete fresh proof for <strong>M5</strong> and <strong>M10</strong>. That still does <em>not</em> mean every moat has equal breadth, autonomous reach, or client-surface maturity; it means the conservative shipped claims now have current code-backed implementations across the full M1–M10 set.
         </div>
       </section>
 
@@ -159,7 +159,7 @@
         <div class="card-grid three-up">
           <article class="card">
             <h3>Final outcome</h3>
-            <p>The 2026-04-24 code-first closure audit passed all eight in-scope moats: <strong>M1, M2, M3, M4, M6, M7, M8, and M9</strong>.</p>
+            <p>The 2026-04-24 closure audit passed <strong>M1, M2, M3, M4, M6, M7, M8, and M9</strong>, and the follow-up widening pass landed fresh code-backed slices for <strong>M5</strong> and <strong>M10</strong>.</p>
           </article>
           <article class="card">
             <h3>Proof standard</h3>
@@ -167,10 +167,10 @@
           </article>
           <article class="card">
             <h3>Verification depth</h3>
-            <p>The closure inventory records fresh focused proofs across operator modeling, anticipation, causal traces, skill evolution, provenance-backed memory, collaboration, trusted provenance, and implicit feedback learning.</p>
+            <p>The proof trail now covers operator modeling, anticipation, causal traces, skill evolution, semantic environment widening, provenance-backed memory, collaboration, trusted provenance, implicit feedback learning, and runtime tool lifecycle widening.</p>
           </article>
         </div>
-        <p>This matters because the moat story is no longer just a directional architecture argument. It now has a single audited code-first closure bundle showing that the highest-risk in-scope implementation claims reached pass status under current implementation evidence.</p>
+        <p>This matters because the moat story is no longer just a directional architecture argument. It now has an audited closure bundle for the original eight-moat pass plus a concrete follow-up widening pass for M5 and M10, so the full M1–M10 story is grounded in current implementation evidence rather than aspirational framing.</p>
       </section>
 
       <section>
@@ -205,14 +205,14 @@
         <p>In a shallow shell-plus-LLM tool, that is mostly one model run plus some shell commands. In tamux, the runtime can layer much richer capability around the same objective:</p>
         <ul class="check-list">
           <li><strong>M1 Operator Model:</strong> knows whether the operator prefers concise action-first updates or fuller reasoning.</li>
-          <li><strong>M5 Semantic Environment:</strong> identifies likely packages, build graph edges, service boundaries, and repo conventions before random file spelunking begins.</li>
+          <li><strong>M5 Semantic Environment:</strong> identifies likely packages, build graph edges, service boundaries, repo conventions, and now bounded infra reverse-edge relations such as which infra resources depend on a target service.</li>
           <li><strong>Goal orchestration:</strong> if the work is big enough, it can become a durable goal instead of a fragile one-shot chat turn.</li>
           <li><strong>M3 Causal Traces:</strong> captures why the agent chose one diagnosis path first and which dead ends were ruled out.</li>
           <li><strong>M7 Collaboration:</strong> a reviewer or specialist can weigh in explicitly if the fix has broader risk.</li>
           <li><strong>M6 Deep Storage:</strong> if the root cause becomes a reusable project fact, it can be stored with provenance instead of vanishing into history.</li>
           <li><strong>M8 Trusted Provenance:</strong> the resulting execution history is more auditable than a plain chat transcript.</li>
           <li><strong>M9 Implicit Feedback:</strong> if the operator rejects a noisy or wrong workflow, the system can learn from that friction pattern.</li>
-          <li><strong>M10 Tool Synthesis:</strong> if a repeated CLI/API gap appears, the runtime can synthesize a guarded tool rather than rediscovering the workaround forever.</li>
+          <li><strong>M10 Tool Synthesis:</strong> if a repeated CLI/API gap appears, the runtime can synthesize a guarded tool rather than rediscovering the workaround forever, and it now supports conservative archive/restore lifecycle control instead of only a one-way retirement path.</li>
         </ul>
         <p>The point is not that every run must use every moat. The point is that the architecture supports them when they matter, and they compound over repeated real work.</p>
       </section>
@@ -246,6 +246,7 @@
           <li>What services are defined in this workspace and how do they relate?</li>
           <li>What import relationships exist around this file?</li>
           <li>What conventions does this repo appear to follow?</li>
+          <li>Which infra resources depend on this service?</li>
           <li>What changed recently in this workspace slice?</li>
         </ul>
         <p>That matters because agent quality in codebases is often bottlenecked less by raw model IQ than by fast, bounded access to the right structural context.</p>
@@ -303,12 +304,12 @@
               <li>daemon-owned durable runtime state</li>
               <li>operator-model adaptation shaping prompts, planning, and constrained runtime behavior</li>
               <li>anticipatory hydration, prediction, and governed trigger-driven intervention paths</li>
-              <li>semantic workspace queries across packages, services, imports, conventions, infra, and temporal history</li>
+              <li>semantic workspace queries across packages, services, imports, conventions, infra, temporal history, and bounded infra reverse-edge lookups such as <code>infra_dependents</code></li>
               <li>provenance-backed durable memory with contradiction handling and confirm/retract reporting</li>
               <li>causal trace persistence and reporting for important decision classes, including collaboration and governance slices</li>
               <li>collaboration sessions with disagreement tracking, voting, debate escalation, and persisted outcomes</li>
               <li>implicit-feedback signals shaping adaptation and runtime fallback ordering</li>
-              <li>guarded runtime tool synthesis with activation and promotion lifecycle</li>
+              <li>guarded runtime tool synthesis with activation, archive/restore, and promotion lifecycle</li>
             </ul>
           </article>
           <article class="card">
@@ -324,7 +325,7 @@
           </article>
         </div>
         <div class="callout info">
-          <strong>Documentation stance:</strong> as of the 2026-04-24 code-first closure audit, the right framing is “verified and still maturing,” not “aspirational and maybe someday.” For the freshly audited set, the remaining work is about coverage, breadth, automation quality, and product polish; for M5 and M10, the right stance is still conservative bounded claims until a wider code-first pass says more.
+          <strong>Documentation stance:</strong> the right framing is now “implemented, verified in bounded scope, and still maturing,” not “aspirational and maybe someday.” The original closure audit still matters for the eight-moat bundle, and the follow-up widening pass matters for M5 and M10. The remaining work is about coverage, breadth, automation quality, and product polish, not whether these capabilities exist in code at all.
         </div>
       </section>
 

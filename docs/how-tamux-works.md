@@ -349,6 +349,7 @@ The daemon can inspect the local workspace and answer bounded semantic questions
 - Compose service topology
 - Terraform resources and modules
 - Kubernetes resources and their local references
+- infra resources depending on a target service via the bounded `infra_dependents` reverse-edge query
 - import relationships
 - learned conventions
 - temporal history relevant to a target
@@ -391,7 +392,7 @@ The daemon can learn from non-explicit operator behavior such as:
 
 ### M10: Runtime Tool Synthesis
 
-When enabled, the daemon can synthesize guarded tools from conservative CLI/OpenAPI surfaces, keep them in a registry, and promote proven tools into reusable assets.
+When enabled, the daemon can synthesize guarded tools from conservative CLI/OpenAPI surfaces, keep them in a registry, promote proven tools into reusable assets, retire them to archived state, and explicitly restore archived tools back to active status without bypassing review or promotion gates.
 
 ## Safety Model
 

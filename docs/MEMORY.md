@@ -23,20 +23,20 @@
 - **Tool Execution**: Bounded loop with persisted tool messages, execution traces, causal traces, provenance events, operator feedback learning.
 - **Skill System**: Procedural memory with variant metadata, usage tracking, success/failure settlement, promotion/deprecation, automatic branching, merge/convergence.
 - **Collaboration Protocol**: Sub-agents coordinate via explicit sessions with contributions, disagreement records, voting, persisted shared state.
-- **Semantic Environment Model**: Can inspect workspace for Rust crates, Node packages, Compose services, Terraform/K8s resources, imports, conventions, temporal history.
-- **Runtime Tool Synthesis**: Generates guarded tools from CLI/OpenAPI surfaces, maintains registry, promotes proven tools.
+- **Semantic Environment Model**: Can inspect workspace for Rust crates, Node packages, Compose services, Terraform/K8s resources, imports, conventions, temporal history, and bounded reverse-edge infra queries like `infra_dependents`.
+- **Runtime Tool Synthesis**: Generates guarded tools from CLI/OpenAPI surfaces, maintains registry, promotes proven tools, and can restore archived tools back to active status without auto-promotion.
 
 ## Self-Orchestrating Capabilities (M1–M10)
 1. **M1 Operator Model**: Learns output density, risk tolerance, session rhythm, attention topology, implicit feedback.
 2. **M2 Anticipatory Runtime**: Morning briefs, thread hydration, stuck-work hints, collaboration disagreement surfacing.
 3. **M3 Causal Traces**: Records decision rationale, failed paths, blast radius.
 4. **M4 Genetic Skill Evolution**: Variant tracking, success/failure settlement, lifecycle management.
-5. **M5 Semantic Environment**: Workspace topology inspection across multiple ecosystems.
+5. **M5 Semantic Environment**: Workspace topology inspection across multiple ecosystems, including bounded infra reverse-edge queries.
 6. **M6 Deep Storage**: Provenance-backed memory with contradiction checking, confidence aging, operator confirm/retract.
 7. **M7 Collaboration Protocol**: Explicit multi-agent coordination with voting and shared state.
 8. **M8 Trusted Provenance**: Hash-chained or Ed25519-signed audit trails for execution integrity.
 9. **M9 Implicit Feedback Learning**: Learns from denials, corrections, fallbacks, attention shifts.
-10. **M10 Runtime Tool Synthesis**: CLI/OpenAPI to guarded tool generation with promotion path.
+10. **M10 Runtime Tool Synthesis**: CLI/OpenAPI to guarded tool generation with promotion path and a conservative archived-tool restore lifecycle.
 
 ## Safety & Approval Model
 - Managed command validation with risk labeling

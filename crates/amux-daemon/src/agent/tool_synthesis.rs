@@ -422,6 +422,22 @@ pub(super) fn retire_generated_tool(agent_data_dir: &Path, tool_name: &str) -> R
     Ok(serde_json::to_string_pretty(&record)?)
 }
 
+pub(super) fn restore_generated_tool(agent_data_dir: &Path, tool_name: &str) -> Result<String> {
+    let mut record = load_generated_tool(agent_data_dir, tool_name)?
+        .ok_or_else(|| anyhow::anyhow!("unknown generated tool `{tool_name}`"))?;
+    if record.status != "archived" {
+        anyhow::bail!(
+            "only archived generated tools can be restored; `{tool_name}` is currently `{}`",
+            record.status
+        );
+    }
+    record.status = "active".to_string();
+    record.updated_at = now_millis();
+    record.promoted_skill_path = None;
+    save_generated_tool(agent_data_dir, &record)?;
+    Ok(serde_json::to_string_pretty(&record)?)
+}
+
 fn load_generated_tools(agent_data_dir: &Path) -> Result<Vec<GeneratedToolRecord>> {
     let root = generated_tools_dir(agent_data_dir);
     if !root.exists() {
